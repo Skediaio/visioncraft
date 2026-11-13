@@ -284,7 +284,8 @@ fn folded(ui: &mut egui::Ui, id: &str) -> bool {
     let title: String = ctx
         .data(|d| d.get_temp(egui::Id::new(MODE_PANEL_TITLE)))
         .unwrap_or_default();
-    let label = format!("{} {title}", if folded { "▸" } else { "▾" });
+    // Plain signs: the panel font has no triangle glyphs.
+    let label = format!("{} {title}", if folded { "+" } else { "–" });
     if ui
         .add(egui::Button::new(RichText::new(label).small().strong()).frame(false))
         .on_hover_text(if folded {

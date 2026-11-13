@@ -286,6 +286,8 @@ pub struct DrawState {
     name_edit: Option<(String, String)>,
     /// The camera before Draw switched to the plan.
     camera_before: Option<crate::camera::Camera>,
+    /// The project had nothing in it when Draw opened.
+    started_empty: bool,
 }
 
 const ACCENT: [u8; 4] = [255, 200, 70, 255];
@@ -317,6 +319,8 @@ fn all_vertices(cx: &Cx, except: Option<&str>) -> Vec<P2> {
 impl DrawState {
     pub fn enter(&mut self, cx: &mut Cx) {
         self.camera_before = Some(cx.s.camera.clone());
+        let p = cx.s.project();
+        self.started_empty = p.shapes.is_empty() && p.models.is_empty();
         cx.s.camera.view = crate::camera::View::Top;
         self.points.clear();
     }
@@ -329,6 +333,10 @@ impl DrawState {
             None => cx.s.camera.view = crate::camera::View::Orbit,
         }
         (cx.s.camera.top_center, cx.s.camera.top_half_height) = (center, half);
+        // The first drawing of a new project: the 3D view shows all of it, not the empty start.
+        if std::mem::take(&mut self.started_empty) && !cx.s.project().shapes.is_empty() {
+            cx.s.frame_all();
+        }
         cx.s.set_draft(None);
         cx.s.extra = Default::default();
         self.points.clear();
