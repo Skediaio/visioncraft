@@ -75,6 +75,8 @@ pub struct LibraryUi {
     search: String,
     category: Option<Category>,
     recent: Vec<String>,
+    /// An imported object being renamed: (object id, the new name so far).
+    renaming: Option<(String, String)>,
 }
 
 impl Default for LibraryUi {
@@ -85,6 +87,7 @@ impl Default for LibraryUi {
             search: String::new(),
             category: None,
             recent: Vec::new(),
+            renaming: None,
         }
     }
 }
@@ -165,6 +168,25 @@ impl LibraryUi {
                 }
             });
         }
+        if let Some((id, name)) = &mut self.renaming {
+            let (mut ok, mut cancel) = (false, false);
+            ui.horizontal(|ui| {
+                let r = ui.text_edit_singleline(name);
+                ok = ui.button(t::RENAME).clicked()
+                    || (r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+                cancel = ui.button(t::CANCEL).clicked();
+            });
+            if ok && !name.trim().is_empty() {
+                cx.run(
+                    "object.rename",
+                    serde_json::json!({"id": id, "name": name.trim()}),
+                );
+                cancel = true;
+            }
+            if cancel {
+                self.renaming = None;
+            }
+        }
         egui::ScrollArea::vertical()
             .max_height(190.0)
             .id_salt("objects-library")
@@ -191,8 +213,28 @@ impl LibraryUi {
                                 egui::StrokeKind::Inside,
                             );
                         }
-                        if resp.on_hover_text(details(a)).clicked() {
+                        let user = a.id.strip_prefix("user:").map(str::to_string);
+                        let tip = if user.is_some() {
+                            format!("{}\n{}", details(a), t::OBJECT_MENU_HINT)
+                        } else {
+                            details(a)
+                        };
+                        let resp = resp.on_hover_text(tip);
+                        if resp.clicked() {
                             picked = Some(a.id.clone());
+                        }
+                        // Imported objects: rename or remove (refused, with the reason, in use).
+                        if let Some(id) = user {
+                            resp.context_menu(|ui| {
+                                if ui.button(t::RENAME).clicked() {
+                                    self.renaming = Some((id.clone(), a.name.clone()));
+                                    ui.close();
+                                }
+                                if ui.button(t::REMOVE).clicked() {
+                                    cx.run("object.remove", serde_json::json!({ "id": id }));
+                                    ui.close();
+                                }
+                            });
                         }
                     }
                 });

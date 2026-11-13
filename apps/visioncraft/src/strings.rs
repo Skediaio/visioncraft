@@ -311,3 +311,4 @@ pub const OBJECT_IMPORTED: &str = "is in the plant browser under Objects: place 
 pub const OBJECTS_MISSING: &str =
     "Imported objects without their file (open the .visioncraft.zip, or import the .glb again):";
 pub const OBJECT_UNREADABLE: &str = "the object file in the bundle cannot be read";
+pub const OBJECT_MENU_HINT: &str = "Right-click to rename or remove this imported object.";

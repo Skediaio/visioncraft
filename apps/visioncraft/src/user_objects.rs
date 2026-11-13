@@ -50,10 +50,92 @@ pub fn check_glb(bytes: &[u8]) -> Result<Checked, String> {
             size.max_element()
         ));
     }
+    let thumbnail = match glb.images.first() {
+        Some(img) => Some(img.clone()),
+        None => render_thumbnail(&glb, lo, hi),
+    };
     Ok(Checked {
         size_m: size.to_array(),
-        thumbnail: glb.images.first().cloned(),
+        thumbnail,
     })
+}
+
+/// Side of a rendered thumbnail, pixels.
+const THUMB_PX: usize = 128;
+
+/// A picture of a model without images: its triangles seen from the front left and a little
+/// above, shaded by one light, in their materials' base colours (a small software rasteriser,
+/// so the GPU and the scene are not involved). PNG bytes.
+pub fn render_thumbnail(glb: &gltf_load::Glb, lo: Vec3, hi: Vec3) -> Option<Vec<u8>> {
+    let n = THUMB_PX;
+    let centre = (lo + hi) * 0.5;
+    let rot = glam::Mat3::from_rotation_x(0.45) * glam::Mat3::from_rotation_y(-0.6);
+    let radius = ((hi - lo).length() * 0.5).max(1e-3);
+    let to_px = |v: Vec3| {
+        let q = rot * (v - centre) / radius;
+        // x right, y up, z towards the viewer
+        Vec3::new(
+            (q.x * 0.48 + 0.5) * n as f32,
+            (0.5 - q.y * 0.48) * n as f32,
+            q.z,
+        )
+    };
+    let light = Vec3::new(-0.4, 0.8, 0.45).normalize();
+    let mut depth = vec![f32::NEG_INFINITY; n * n];
+    let mut px = vec![0u8; n * n * 4];
+    for p in &glb.prims {
+        let base = glb
+            .materials
+            .get(p.material)
+            .map_or([0.8; 4], |m| m.base_color);
+        for t in p.indices.as_chunks::<3>().0 {
+            let (Some(a), Some(b), Some(c)) = (
+                p.positions.get(t[0] as usize),
+                p.positions.get(t[1] as usize),
+                p.positions.get(t[2] as usize),
+            ) else {
+                continue;
+            };
+            let (a, b, c) = (Vec3::from(*a), Vec3::from(*b), Vec3::from(*c));
+            let normal = (rot * (b - a).cross(c - a)).normalize_or_zero();
+            let shade = 0.35 + 0.65 * normal.dot(rot * light).abs();
+            let (pa, pb, pc) = (to_px(a), to_px(b), to_px(c));
+            let area = (pb.x - pa.x) * (pc.y - pa.y) - (pb.y - pa.y) * (pc.x - pa.x);
+            if area.abs() < 1e-6 {
+                continue;
+            }
+            let x0 = pa.x.min(pb.x).min(pc.x).floor().max(0.0) as usize;
+            let x1 = (pa.x.max(pb.x).max(pc.x).ceil() as usize).min(n - 1);
+            let y0 = pa.y.min(pb.y).min(pc.y).floor().max(0.0) as usize;
+            let y1 = (pa.y.max(pb.y).max(pc.y).ceil() as usize).min(n - 1);
+            for y in y0..=y1 {
+                for x in x0..=x1 {
+                    let (fx, fy) = (x as f32 + 0.5, y as f32 + 0.5);
+                    let w0 = ((pb.x - fx) * (pc.y - fy) - (pb.y - fy) * (pc.x - fx)) / area;
+                    let w1 = ((pc.x - fx) * (pa.y - fy) - (pc.y - fy) * (pa.x - fx)) / area;
+                    let w2 = 1.0 - w0 - w1;
+                    if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
+                        continue;
+                    }
+                    let z = w0 * pa.z + w1 * pb.z + w2 * pc.z;
+                    let i = y * n + x;
+                    if z <= depth[i] {
+                        continue;
+                    }
+                    depth[i] = z;
+                    // linear colour to sRGB-ish bytes
+                    let c = |v: f32| ((v * shade).clamp(0.0, 1.0).powf(1.0 / 2.2) * 255.0) as u8;
+                    px[i * 4..i * 4 + 4].copy_from_slice(&[
+                        c(base[0]),
+                        c(base[1]),
+                        c(base[2]),
+                        255,
+                    ]);
+                }
+            }
+        }
+    }
+    crate::studio::png_bytes(&px, n as u32, n as u32).ok()
 }
 
 /// Where an imported file's picture is held.
@@ -179,7 +261,15 @@ mod tests {
         let c = check_glb(&triangle_glb()).unwrap();
         assert_eq!(c.size_m[0], 2.0);
         assert_eq!(c.size_m[1], 1.0);
-        assert!(c.thumbnail.is_none());
+        // no image in the file: a rendered picture, with the triangle in it
+        let png = c.thumbnail.expect("a rendered thumbnail");
+        let mut d = png::Decoder::new(std::io::Cursor::new(png))
+            .read_info()
+            .unwrap();
+        let mut buf = vec![0; d.output_buffer_size()];
+        d.next_frame(&mut buf).unwrap();
+        let opaque = buf.chunks(4).filter(|p| p[3] == 255).count();
+        assert!(opaque > 500, "{opaque} pixels drawn");
         // and every truncation of it is refused, not a panic
         let g = triangle_glb();
         for n in 0..g.len() {

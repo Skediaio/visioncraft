@@ -218,6 +218,8 @@ pub struct Library {
     pub catalog_arrived: bool,
     /// The project's imported objects as catalogue assets (`user_objects`).
     pub(crate) user_assets: Vec<visioncraft_core::catalog::Asset>,
+    /// Metres each imported model file is raised by so its lowest point is on the ground.
+    pub ground_offsets: HashMap<String, f32>,
     indexes_asked: bool,
     models: HashMap<String, Model>,
     awaiting: HashSet<String>,
@@ -263,6 +265,7 @@ impl Library {
             skies: Vec::new(),
             catalog_arrived: false,
             user_assets: Vec::new(),
+            ground_offsets: HashMap::new(),
             indexes_asked: false,
             models: HashMap::new(),
             awaiting: HashSet::new(),
@@ -542,7 +545,38 @@ impl Library {
             materials: Vec::new(),
         };
         let mut made: HashMap<usize, MaterialId> = HashMap::new();
+        // An imported object stands on its lowest point, wherever its file put the origin; the
+        // offset is kept, the file is not changed.
+        let lift = if self
+            .user_assets
+            .iter()
+            .any(|a| a.lods.iter().any(|l| l.file == path))
+        {
+            let low = data
+                .glb
+                .prims
+                .iter()
+                .flat_map(|p| &p.positions)
+                .map(|q| q[1])
+                .filter(|y| y.is_finite())
+                .fold(f32::INFINITY, f32::min);
+            if low.is_finite() { -low } else { 0.0 }
+        } else {
+            0.0
+        };
+        self.ground_offsets.insert(path.clone(), lift);
         for p in &data.glb.prims {
+            let lifted: Vec<[f32; 3]>;
+            let positions = if lift == 0.0 {
+                &p.positions
+            } else {
+                lifted = p
+                    .positions
+                    .iter()
+                    .map(|q| [q[0], q[1] + lift, q[2]])
+                    .collect();
+                &lifted
+            };
             let mat = match made.get(&p.material) {
                 Some(m) => *m,
                 None => {
@@ -561,7 +595,7 @@ impl Library {
                 }
             };
             let mesh = r.add_mesh(&Mesh {
-                positions: &p.positions,
+                positions,
                 normals: &p.normals,
                 indices: &p.indices,
                 face_ids: None,
