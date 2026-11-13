@@ -93,12 +93,25 @@ pub fn tussock(
             (t.fans as usize).div_ceil(2),
         ][li]
     };
+    // Fan cards take at most half of the budget.
+    let n_fan = n_fan.min(budget / 4);
+    // Low arching cards radiating from the base, so the clump also reads in plan view.
+    let top_cost = if li == 0 { 4 } else { 2 };
+    let n_top = if budget < 12 || t.fans == 0 {
+        0
+    } else {
+        [10usize, 7, 5][li]
+    };
+    let n_top =
+        n_top.min(budget.saturating_sub(n_plume * plume_cost(li) + n_fan * 2) / 2 / top_cost);
     let n0 = t.blades as usize;
     let nk = if budget < 12 {
         0
     } else {
-        n0.min(budget.saturating_sub(n_plume * plume_cost(li) + n_fan * 2) / (2 * segs))
-            .max(1)
+        n0.min(
+            budget.saturating_sub(n_plume * plume_cost(li) + n_fan * 2 + n_top * top_cost)
+                / (2 * segs),
+        )
     };
     let ratio = n0 as f32 / nk.max(1) as f32;
     let fan = ratio > 3.0;
@@ -175,6 +188,26 @@ pub fn tussock(
             bend: 0.0,
             segments: 1,
             outward_mix: 0.65,
+        };
+        out.card(&card, &out_field);
+    }
+    for k in 0..n_top {
+        let az = TAU * (k as f32 + 0.5 * frng.f()) / n_top as f32;
+        let elev = deg(22.0 + 12.0 * frng.f());
+        let outd = v3(cos(az), 0.0, sin(az));
+        let card = Card {
+            base: UP * (hf * 0.12),
+            up: (outd * cos(elev) + UP * sin(elev)).norm(),
+            side: v3(-sin(az), 0.0, cos(az)),
+            length: w * 0.5,
+            width: w * 0.45,
+            cell: 4 + (k % 3) as u8,
+            material: Material::Foliage,
+            wind: (0.1, 1.0),
+            phase: frng.f(),
+            bend: 0.45,
+            segments: if li == 0 { 2 } else { 1 },
+            outward_mix: 0.55,
         };
         out.card(&card, &out_field);
     }
@@ -483,31 +516,41 @@ pub fn ground_cover(
     let grow = (n0 as f32 / nk as f32).sqrt();
     let c0 = p.leaves.card_m;
     let ck = c0 * grow;
-    let n_leaf =
-        ((nk as f32 * st.leaf_fraction).round() as usize).max(if p.deciduous { 0 } else { nk });
+    let flowers = p.flowers.as_ref().filter(|_| st.flowers);
+    let n_flower = flowers.map_or(0, |f| {
+        ((nk as f32 * f.density).round() as usize).min(nk / 2)
+    });
+    let n_leaf = if p.deciduous {
+        (((nk - n_flower) as f32) * st.leaf_fraction).round() as usize
+    } else {
+        nk - n_flower
+    };
     let order = shuffled(n0, &mut Rng::new(seed, 2));
     let mut out = Builder::default();
     let field = Outward::Dir(UP);
-    for (k, &i) in order.iter().take(n_leaf.min(nk)).enumerate() {
-        let mut r = Rng::new(seed, 100 + i as u64);
+    let place = |i: usize, size: f32, r: &mut Rng| {
         // Vogel's model gives an even, non-gridded spread over the disc.
         let rad = r_patch * ((i as f32 + 0.5) / n0 as f32).sqrt();
         let th = i as f32 * GOLDEN_ANGLE;
-        let rad = rad.min((r_patch - ck * 0.45).max(0.0));
-        let tilt = deg(15.0 + 30.0 * r.f()) / grow;
+        let rad = rad.min((r_patch - size * 0.45).max(0.0));
+        let tilt = deg(g.tilt_deg * r.range(0.35, 1.0)) / grow;
         let taz = r.f() * TAU;
         let n = (UP * cos(tilt) + v3(cos(taz), 0.0, sin(taz)) * sin(tilt)).norm();
         let up = n.perp().rotate(n, r.f() * TAU);
-        let side = up.cross(n).norm();
         let centre = v3(
             cos(th) * rad,
-            g.depth_m * p.age * r.range(0.3, 0.75) + ck * 0.25 * sin(tilt),
+            g.depth_m * p.age * r.range(0.3, 0.75) + size * 0.25 * sin(tilt),
             sin(th) * rad,
         );
+        (centre, n, up)
+    };
+    for (k, &i) in order.iter().take(n_leaf).enumerate() {
+        let mut r = Rng::new(seed, 100 + i as u64);
+        let (centre, n, up) = place(i, ck, &mut r);
         let card = Card {
             base: centre - up * (ck * 0.5),
             up,
-            side,
+            side: up.cross(n).norm(),
             length: ck,
             width: ck,
             cell: if grow > 1.6 {
@@ -523,6 +566,31 @@ pub fn ground_cover(
             outward_mix: 0.6,
         };
         out.card(&card, &field);
+    }
+    if let Some(f) = flowers {
+        let fk = f.card_m * grow.min(2.0);
+        for (k, &i) in order.iter().rev().take(n_flower).enumerate() {
+            let mut r = Rng::new(seed, 5000 + i as u64);
+            let (centre, _, _) = place(i, fk, &mut r);
+            // Flowers sit on top of the leaves, facing the sky and a little sideways.
+            let n = (UP + rand_dir(&mut r) * 0.4).norm();
+            let up = n.perp().rotate(n, r.f() * TAU);
+            let card = Card {
+                base: centre + UP * (fk * 0.3) - up * (fk * 0.5),
+                up,
+                side: up.cross(n).norm(),
+                length: fk,
+                width: fk,
+                cell: 8 + (k % 4) as u8,
+                material: Material::Flower,
+                wind: (0.05, 0.3),
+                phase: r.f(),
+                bend: 0.0,
+                segments: 1,
+                outward_mix: 0.4,
+            };
+            out.card(&card, &field);
+        }
     }
     out.fit_from(0, r_patch, g.depth_m * p.age + c0 * 0.4);
     out.finish()
@@ -578,39 +646,97 @@ pub fn climber(
         stems.push(nodes);
     }
     if li < 2 {
+        // Stems take at most a third of the budget.
         for s in &stems {
-            out.tube(s, 3, 0.0);
+            if out.tris() + Builder::tube_cost(s.len(), 3) <= budget / 3 {
+                out.tube(s, 3, 0.0);
+            }
+        }
+    }
+    // Backing layer: opaque leaf-mass quads just off the wall, so the patch reads as solid
+    // cover behind the cut-out leaf cards (only while in leaf).
+    let in_leaf = st.leaf_fraction > 0.5;
+    let (bx, by) = [(4usize, 5usize), (2, 3), (1, 2)][li];
+    let c0 = p.leaves.card_m;
+    if in_leaf {
+        let inset = c0 * 0.35;
+        for gy in 0..by {
+            for gx in 0..bx {
+                let x0 = -w * 0.5 + inset + (w - 2.0 * inset) * gx as f32 / bx as f32;
+                let x1 = -w * 0.5 + inset + (w - 2.0 * inset) * (gx + 1) as f32 / bx as f32;
+                let y0 = inset + (h - 2.0 * inset) * gy as f32 / by as f32;
+                let y1 = inset + (h - 2.0 * inset) * (gy + 1) as f32 / by as f32;
+                let n = v3(0.0, 0.0, 1.0);
+                let z = c.depth_m * 0.2;
+                let wv = |y: f32| (0.3 * y / h).min(1.0);
+                let a = out.vert(
+                    v3(x0, y0, z),
+                    n,
+                    crate::mesh::cell_uv(7, 0.0, 0.0),
+                    [wv(y0), 0.0],
+                );
+                let b = out.vert(
+                    v3(x1, y0, z),
+                    n,
+                    crate::mesh::cell_uv(7, 1.0, 0.0),
+                    [wv(y0), 0.0],
+                );
+                let cc = out.vert(
+                    v3(x1, y1, z),
+                    n,
+                    crate::mesh::cell_uv(7, 1.0, 1.0),
+                    [wv(y1), 0.0],
+                );
+                let d = out.vert(
+                    v3(x0, y1, z),
+                    n,
+                    crate::mesh::cell_uv(7, 0.0, 1.0),
+                    [wv(y1), 0.0],
+                );
+                out.quad(Material::Foliage, a, b, cc, d);
+            }
         }
     }
     let wood = out.tris();
-    let c0 = p.leaves.card_m;
     let desired = (p.leaves.density * w * h / (c0 * c0)).ceil() as usize;
     let wood0 = stems
         .iter()
         .map(|s| Builder::tube_cost(s.len(), 3))
-        .sum::<usize>();
+        .sum::<usize>()
+        .min(p.budget.triangles(Lod::Lod0) / 3)
+        + 40;
     let n0 = desired
         .min(p.budget.triangles(Lod::Lod0).saturating_sub(wood0) / 2)
         .max(1);
     let nk = n0.min(budget.saturating_sub(wood) / 2).max(1);
     let grow = (n0 as f32 / nk as f32).sqrt();
     let ck = c0 * grow;
+    let flowers = p.flowers.as_ref().filter(|_| st.flowers);
+    let n_flower = flowers.map_or(0, |f| {
+        ((nk as f32 * f.density).round() as usize).min(nk / 2)
+    });
     let n_leaf = if p.deciduous {
-        (nk as f32 * st.leaf_fraction).round() as usize
+        ((nk - n_flower) as f32 * st.leaf_fraction).round() as usize
     } else {
-        nk
+        nk - n_flower
     };
     // Jittered grid over the patch, visited in one fixed shuffled order.
     let cols = ((n0 as f32 * w / h).sqrt().ceil() as usize).max(1);
     let rows = n0.div_ceil(cols);
     let order = shuffled(cols * rows, &mut Rng::new(seed, 2));
     let field = Outward::Dir(v3(0.0, 0.0, 1.0));
-    for (k, &i) in order.iter().take(n_leaf.min(nk)).enumerate() {
-        let mut r = Rng::new(seed, 200 + i as u64);
+    let place = |i: usize, size: f32, r: &mut Rng| {
         let (gx, gy) = ((i % cols) as f32, (i / cols) as f32);
-        let half = ck * 0.5;
-        let x = (-w * 0.5 + (gx + r.f()) * w / cols as f32).clamp(-w * 0.5 + half, w * 0.5 - half);
+        let half = size * 0.5;
+        let x = (-w * 0.5 + (gx + r.f()) * w / cols as f32)
+            .clamp(-w * 0.5 + half.min(w * 0.5), w * 0.5 - half.min(w * 0.5));
         let y = ((gy + r.f()) * h / rows as f32).clamp(half, (h - half).max(half));
+        (x, y)
+    };
+    for (k, &i) in order.iter().take(n_leaf).enumerate() {
+        let mut r = Rng::new(seed, 200 + i as u64);
+        let (x, y) = place(i, ck, &mut r);
+        let half = ck * 0.5;
         let n = (v3(0.0, 0.0, 1.0) + rand_dir(&mut r) * (0.45 / grow) + UP * 0.15).norm();
         let up0 = (UP - n * UP.dot(n)).norm();
         let up = up0.rotate(n, deg(50.0) * r.sym());
@@ -637,6 +763,40 @@ pub fn climber(
             outward_mix: 0.6,
         };
         out.card(&card, &field);
+    }
+    if let Some(f) = flowers {
+        let fk = f.card_m * grow.min(2.0);
+        let hanging = matches!(f.shape, FlowerShape::Raceme | FlowerShape::Panicle);
+        for (k, &i) in order.iter().rev().take(n_flower).enumerate() {
+            let mut r = Rng::new(seed, 7000 + i as u64);
+            let (x, y) = place(i, fk, &mut r);
+            let n = (v3(0.0, 0.0, 1.0) + rand_dir(&mut r) * 0.3).norm();
+            // Racemes hang from their stalk: the card's tip points down.
+            let up = if hanging {
+                (-UP + rand_dir(&mut r) * 0.15).norm()
+            } else {
+                (UP - n * UP.dot(n)).norm().rotate(n, r.sym())
+            };
+            let side = up.cross(n).norm();
+            let up = n.cross(side).norm();
+            let centre = v3(x, y, c.depth_m * 1.1);
+            let wv = (0.5 * (y - fk * 0.5) / h).max(0.0);
+            let card = Card {
+                base: centre - up * (fk * 0.5),
+                up,
+                side,
+                length: fk,
+                width: if hanging { fk * 0.55 } else { fk },
+                cell: 8 + (k % 4) as u8,
+                material: Material::Flower,
+                wind: (wv, (wv + 0.3).min(1.0)),
+                phase: r.f(),
+                bend: 0.0,
+                segments: 1,
+                outward_mix: 0.5,
+            };
+            out.card(&card, &field);
+        }
     }
     out.finish()
 }

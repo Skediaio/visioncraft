@@ -30,12 +30,15 @@ mod texture;
 
 mod gen_branching;
 mod gen_clipped;
+mod gen_conifer;
 mod gen_herb;
 mod gen_palm;
+mod schema;
 
 use std::ops::Range;
 
 pub use params::*;
+pub use schema::{ParamInfo, get_param, param_schema, set_param};
 pub use species::{Category, Exposure, Species, species};
 pub use texture::{ATLAS_CELLS, ATLAS_SIZE, BARK_SIZE};
 
@@ -70,6 +73,28 @@ pub enum Material {
     Foliage,
     /// Like `Foliage` but not tinted by season.
     Flower,
+    /// Bare winter twig cards: alpha-cut, double-sided, sampled from the atlas (bark-coloured
+    /// twig cells), not tinted. Only present on deciduous trees out of leaf.
+    Twigs,
+}
+
+impl Material {
+    pub const ALL: [Material; 4] = [
+        Material::Bark,
+        Material::Foliage,
+        Material::Flower,
+        Material::Twigs,
+    ];
+}
+
+/// One material's share of a [`PlantMesh`], re-indexed to its own compact vertex arrays.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MeshPart {
+    pub positions: Vec<[f32; 3]>,
+    pub normals: Vec<[f32; 3]>,
+    pub uvs: Vec<[f32; 2]>,
+    pub wind: Vec<[f32; 2]>,
+    pub indices: Vec<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -101,6 +126,33 @@ pub struct PlantMesh {
 }
 
 impl PlantMesh {
+    /// One compact mesh per material (vertices shared between materials are duplicated, unused
+    /// ones dropped), in [`Material::ALL`] order, skipping empty materials.
+    pub fn split_parts(&self) -> Vec<(Material, MeshPart)> {
+        let mut out = Vec::new();
+        for m in Material::ALL {
+            let mut part = MeshPart::default();
+            let mut remap = vec![u32::MAX; self.positions.len()];
+            for p in self.parts.iter().filter(|p| p.material == m) {
+                for &i in &self.indices[p.index_range.start as usize..p.index_range.end as usize] {
+                    let i = i as usize;
+                    if remap[i] == u32::MAX {
+                        remap[i] = part.positions.len() as u32;
+                        part.positions.push(self.positions[i]);
+                        part.normals.push(self.normals[i]);
+                        part.uvs.push(self.uvs[i]);
+                        part.wind.push(self.wind[i]);
+                    }
+                    part.indices.push(remap[i]);
+                }
+            }
+            if !part.indices.is_empty() {
+                out.push((m, part));
+            }
+        }
+        out
+    }
+
     pub fn triangle_count(&self) -> usize {
         self.indices.len() / 3
     }
@@ -177,11 +229,17 @@ fn generate_in(params: &PlantParams, seed: u64, lod: Lod, season: Option<Season>
         Form::Rosette(r) => gen_herb::rosette(params, r, seed, lod, &state, budget),
         Form::GroundCover(g) => gen_herb::ground_cover(params, g, seed, lod, &state, budget),
         Form::Climber(c) => gen_herb::climber(params, c, seed, lod, &state, budget),
+        Form::Conifer(c) => gen_conifer::generate(params, c, seed, lod, &state, budget),
     };
     mesh.foliage_tint = state.tint;
     // Leaves and drooping cards near the base may dip below the ground plane: lay them on it.
-    for p in &mut mesh.positions {
+    // Anything resting on the ground does not sway: the bend weight is 0 below 2 mm and fades
+    // in up to 5 mm.
+    for (p, w) in mesh.positions.iter_mut().zip(mesh.wind.iter_mut()) {
         p[1] = p[1].max(0.0);
+        if p[1] < 0.005 {
+            w[0] *= ((p[1] - 0.002) / 0.003).clamp(0.0, 1.0);
+        }
     }
     debug_assert!(
         mesh.triangle_count() <= budget,

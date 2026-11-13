@@ -7,7 +7,7 @@
 //! L, so the end cross-sections are identical and segments tile end to end; cards near the ends
 //! may overhang into the neighbour, as real hedge shoots do.
 
-use crate::math::{Rng, TAU, UP, V3, cos, lerp, sin, tile_noise, v3};
+use crate::math::{Rng, TAU, UP, V3, cos, lerp, sin, tile_fbm, tile_noise, v3};
 use crate::mesh::{Builder, Card, Node, Outward};
 use crate::{ClipShape, ClippedParams, Lod, Material, PlantMesh, PlantParams, SeasonState};
 
@@ -67,19 +67,22 @@ pub fn generate(
         0.0
     };
     let y0 = c.stem_m * p.age;
-    let core_r = (w * 0.5 - tuft * 0.75).max(w * 0.2);
+    // Cards stand out by about tuft/2 plus a third of their size: keep the outer extent at w/2.
+    let core_r = (w * 0.5 - tuft * 0.45 - c0 * 0.3).max(w * 0.2);
     let rough = c.roughness;
     let surf = |a: f32, b: f32| -> V3 {
         // a: around (revolved) or along X (hedge), 0..1; b: up the profile, 0..1.
         match c.shape {
             ClipShape::HedgeSegment { .. } => {
                 let x = (a - 0.5) * length;
-                let (z, y) = hedge_profile(b, core_r, h - tuft * 0.6);
-                let nz = tile_noise(a, b, 4, 5, 77) - 0.5;
-                let (dz, dy) = hedge_normal(b, core_r, h - tuft * 0.6);
-                // No displacement at the foot, so the hedge stands exactly on the ground.
-                let k = nz * rough * 2.0 * (b * (1.0 - b) * 8.0).min(1.0);
-                v3(x, y + dy * k, z + dz * k)
+                let hh = h - y0 - tuft * 0.6;
+                let (z, y) = hedge_profile(b, core_r, hh);
+                // Two octaves, periodic along X so the end sections match; no grid-aligned lumps.
+                let nz = tile_fbm(a, b, 6, 9, 2, 77) - 0.5;
+                let (dz, dy) = hedge_normal(b, core_r, hh);
+                // No displacement at the foot, so the hedge stands exactly on its base.
+                let k = nz * rough * 2.5 * (b * (1.0 - b) * 8.0).min(1.0);
+                v3(x, y0 + y + dy * k, z + dz * k)
             }
             shape => {
                 let t = b;
@@ -110,11 +113,15 @@ pub fn generate(
         for j in 0..cols {
             let (a0, a1) = (j as f32 / cols as f32, (j + 1) as f32 / cols as f32);
             let (b0, b1) = (i as f32 / rows as f32, (i + 1) as f32 / rows as f32);
+            // Mirrored repeat of the tileable mass cell: seamless, and twice the period, so
+            // the rows of the core do not read as bands.
+            let ms = |v: f32| if j % 2 == 1 { 1.0 - v } else { v };
+            let mt = |v: f32| if i % 2 == 1 { 1.0 - v } else { v };
             let corners = [
-                (a0, b0, 0.0, 0.0),
-                (a1, b0, 1.0, 0.0),
-                (a1, b1, 1.0, 1.0),
-                (a0, b1, 0.0, 1.0),
+                (a0, b0, ms(0.0), mt(0.0)),
+                (a1, b0, ms(1.0), mt(0.0)),
+                (a1, b1, ms(1.0), mt(1.0)),
+                (a0, b1, ms(0.0), mt(1.0)),
             ];
             let is_revolved = !matches!(c.shape, ClipShape::HedgeSegment { .. });
             // Winding (0, 3, 2, 1) is counter-clockwise seen from outside for both layouts.
@@ -142,7 +149,7 @@ pub fn generate(
     if let ClipShape::HedgeSegment { .. } = c.shape {
         // End caps: fans over the exact same profile at x = -L/2 and x = +L/2.
         for (a, sgn) in [(0.0f32, -1.0f32), (1.0, 1.0)] {
-            let centre_pt = v3((a - 0.5) * length, h * 0.4, 0.0);
+            let centre_pt = v3((a - 0.5) * length, y0 + (h - y0) * 0.4, 0.0);
             let cid = out.vert(
                 centre_pt,
                 v3(sgn, 0.0, 0.0),
@@ -167,6 +174,27 @@ pub fn generate(
                 } else {
                     out.tri(Material::Foliage, cid, ring[k + 1], ring[k]);
                 }
+            }
+            if y0 > 0.0 {
+                // Raised (pleached) hedge: close the cap along the underside too.
+                if sgn > 0.0 {
+                    out.tri(Material::Foliage, cid, ring[rows], ring[0]);
+                } else {
+                    out.tri(Material::Foliage, cid, ring[0], ring[rows]);
+                }
+            }
+        }
+        if y0 > 0.0 {
+            // Underside of a raised hedge, facing down.
+            let down = v3(0.0, -1.0, 0.0);
+            for j in 0..cols {
+                let (a0, a1) = (j as f32 / cols as f32, (j + 1) as f32 / cols as f32);
+                let q = [surf(a0, 0.0), surf(a1, 0.0), surf(a1, 1.0), surf(a0, 1.0)];
+                let st = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+                let ids: Vec<u32> = (0..4)
+                    .map(|k| out.vert(q[k], down, uv(st[k].0, st[k].1), [wind_at(q[k].y), 0.0]))
+                    .collect();
+                out.quad(Material::Foliage, ids[0], ids[1], ids[2], ids[3]);
             }
         }
     }
@@ -196,7 +224,8 @@ pub fn generate(
     // Shell cards, sampled uniformly over the surface parameters (area-weighted by rejection).
     let core_tris = out.tris();
     let area_est = surface_area(&surf);
-    let desired = ((p.leaves.density * area_est / (c0 * c0)).ceil() as usize).max(4);
+    // Twice the nominal coverage: the shingled cards should hide the core's texture repeat.
+    let desired = ((2.0 * p.leaves.density * area_est / (c0 * c0)).ceil() as usize).max(4);
     let cap = |l: usize| {
         p.budget
             .triangles(Lod::ALL[l])
@@ -205,7 +234,9 @@ pub fn generate(
     };
     let n0 = desired.min(cap(0)).max(1);
     let nk = n0.min(budget.saturating_sub(core_tris) / 2).max(1);
-    let grow = (n0 as f32 / nk as f32).sqrt();
+    // Enlarged cards are capped: where fewer cards leave gaps, the solid core shows through,
+    // which reads correctly for a clipped surface.
+    let grow = (n0 as f32 / nk as f32).sqrt().min(1.8);
     let ck = c0 * grow;
     let n_leaf =
         (nk as f32 * st.leaf_fraction.max(if p.deciduous { 0.0 } else { 1.0 })).round() as usize;
@@ -228,10 +259,12 @@ pub fn generate(
     }
     for (k, sp) in samples.iter().take(n_leaf.min(nk)).enumerate() {
         let mut r = Rng::new(seed ^ 0xC11, 500 + k as u64);
+        // Varied size and lean so the shingled cards do not form regular rows.
+        let ck = ck * r.range(0.8, 1.2);
         let tangent = sp.n.perp().rotate(sp.n, r.f() * TAU);
-        let up = (tangent * 0.75 + sp.n * 0.65 + UP * 0.2).norm();
+        let up = (tangent * r.range(0.55, 0.95) + sp.n * r.range(0.45, 0.85) + UP * 0.2).norm();
         let side = up.cross(sp.n).norm();
-        let mut centre = sp.p + sp.n * (tuft * 0.45 - (ck - c0) * 0.35);
+        let mut centre = sp.p + sp.n * (tuft * 0.45 - (ck - c0) * 0.7);
         if let ClipShape::HedgeSegment { length_m } = c.shape {
             let lim = (length_m * 0.5 + c0 * 0.5 - ck * 0.5).max(0.0);
             centre.x = centre.x.clamp(-lim, lim);
@@ -274,7 +307,9 @@ fn core_cost(c: &ClippedParams, l: usize, rows: usize, cols: usize) -> usize {
         0
     };
     match c.shape {
-        ClipShape::HedgeSegment { .. } => rows * cols * 2 + 2 * rows + stem,
+        ClipShape::HedgeSegment { .. } => {
+            rows * cols * 2 + 2 * rows + stem + if c.stem_m > 0.0 { 2 + 2 * cols } else { 0 }
+        }
         shape => {
             let apex = |b: f32| profile(shape, b) < 1e-3;
             let mut t = 0;

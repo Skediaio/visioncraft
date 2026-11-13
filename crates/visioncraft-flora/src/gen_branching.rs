@@ -176,7 +176,7 @@ fn grow(
     if level >= b.leaf_level as usize {
         let spacing = c.p.leaves.card_m * 0.28;
         let span = total_len * (1.0 - b.leaf_start);
-        let count = (span / spacing).floor() as usize + 1;
+        let count = ((span / spacing).floor() as usize + 1).min(64);
         for i in 0..count {
             let t = if count == 1 {
                 1.0
@@ -248,22 +248,24 @@ fn calibrate(sk: &mut Skeleton, h: f32, w: f32, margin: f32) {
     let ext_h = (hi.x - lo.x).max(hi.z - lo.z).max(1e-3);
     let sh = ((w - 2.0 * margin).max(w * 0.3) / ext_h).clamp(0.3, 3.0);
     let sv = ((h - margin).max(h * 0.5) / hi.y.max(1e-3)).clamp(0.4, 2.5);
-    let floor = (h * 0.03).min(0.4);
+    let floor = (h * 0.05).min(0.8);
     let scale = |q: V3| v3(q.x * sh, q.y * sv, q.z * sh);
-    for b in &mut sk.branches {
-        for n in &mut b.nodes {
-            let y = n.p.y;
-            n.p = v3(n.p.x * sh, y * sv, n.p.z * sh);
-            if y > 0.0 && n.p.y < floor {
+    for (b, &lvl) in sk.branches.iter_mut().zip(&sk.levels) {
+        for (i, n) in b.nodes.iter_mut().enumerate() {
+            n.p = v3(n.p.x * sh, n.p.y * sv, n.p.z * sh);
+            // Hanging branches stop above the ground; only stem bases touch it.
+            if (lvl > 0 || i > 0) && n.p.y < floor {
                 n.p.y = floor;
             }
         }
     }
     for l in &mut sk.leaves {
         l.p = scale(l.p);
-        l.p.y = l.p.y.max(floor + margin * 1.2);
         l.d = v3(l.d.x * sh, l.d.y * sv, l.d.z * sh).norm();
     }
+    // Foliage that would end up on the ground (hanging shoots) is dropped rather than piled
+    // up along the floor.
+    sk.leaves.retain(|l| l.p.y >= floor + margin * 1.2);
 }
 
 const SIDES: [[u32; 4]; 3] = [[10, 6, 4, 3], [7, 4, 3, 3], [5, 3, 3, 3]];
@@ -353,10 +355,23 @@ pub fn generate(
     let li = lod.index();
     let h = p.height_m * p.age;
     let crown = ellipsoid(&sk, h);
-    let wood_share = |l: usize| ([0.32, 0.28, 0.22][l] + 0.55 * (1.0 - st.leaf_fraction)).min(0.92);
+    // Out of leaf, more of the budget goes to wood, the rest to bare-twig cards so the far
+    // winter crown still reads as a haze of twigs.
+    let wood_share =
+        |l: usize| [0.32, 0.28, 0.22][l] + [0.45, 0.25, 0.1][l] * (1.0 - st.leaf_fraction);
     let full_budget = |l: usize| p.budget.triangles(Lod::ALL[l]);
     let (_, wood0) = wood_plan(&sk, 0, (full_budget(0) as f32 * wood_share(0)) as usize);
-    let (chosen, wood) = wood_plan(&sk, li, (budget as f32 * wood_share(li)) as usize);
+    let stake = if b.stake_m > 0.0 {
+        Builder::tube_cost(2, 4)
+    } else {
+        0
+    };
+    let (chosen, wood) = wood_plan(
+        &sk,
+        li,
+        ((budget as f32 * wood_share(li)) as usize).saturating_sub(stake),
+    );
+    let wood = wood + stake;
 
     // Foliage card counts: coverage-driven at LOD0, budget-capped at every LOD.
     let card0 = p.leaves.card_m;
@@ -377,6 +392,11 @@ pub fn generate(
     let flowers = p.flowers.as_ref().filter(|_| st.flowers);
     let n_flower = flowers.map_or(0, |f| ((nk as f32 * f.density).round() as usize).min(nk));
     let n_leaf = ((nk as f32 * st.leaf_fraction).round() as usize).min(nk - n_flower.min(nk));
+    let n_twig = if p.deciduous {
+        ((nk - n_leaf - n_flower) as f32 * 0.9) as usize
+    } else {
+        0
+    };
 
     let mut out = Builder::default();
     for &i in &chosen {
@@ -387,6 +407,24 @@ pub fn generate(
             SIDES[li][lvl.min(3)],
             br.phase,
         );
+    }
+
+    if b.stake_m > 0.0 {
+        let r = (0.008 + 0.004 * b.stake_m).min(0.03);
+        let x = (h * b.trunk_radius_ratio * 1.5 + r).max(0.03);
+        let stake = [
+            Node {
+                p: v3(x, 0.0, 0.0),
+                r,
+                w: 0.0,
+            },
+            Node {
+                p: v3(x, b.stake_m * p.age, 0.0),
+                r: r * 0.8,
+                w: 0.0,
+            },
+        ];
+        out.tube(&stake, 4, 0.0);
     }
 
     let mut prng = Rng::new(seed, 2);
@@ -435,6 +473,17 @@ pub fn generate(
             Material::Foliage,
             -(ck - c0) * 0.5,
             b.leaf_up,
+        );
+    }
+    for (k, &idx) in order.iter().skip(n_leaf).take(n_twig).enumerate() {
+        emit(
+            &mut out,
+            idx,
+            ck * 0.9,
+            12 + (k % 2) as u8,
+            Material::Twigs,
+            -(ck * 0.9 - c0) * 0.5,
+            0.2,
         );
     }
     if let Some(f) = flowers {

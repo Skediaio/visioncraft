@@ -86,7 +86,7 @@ pub struct Builder {
     nrm: Vec<[f32; 3]>,
     uv: Vec<[f32; 2]>,
     wind: Vec<[f32; 2]>,
-    idx: [Vec<u32>; 3],
+    idx: [Vec<u32>; 4],
 }
 
 fn mat_index(m: Material) -> usize {
@@ -94,6 +94,7 @@ fn mat_index(m: Material) -> usize {
         Material::Bark => 0,
         Material::Foliage => 1,
         Material::Flower => 2,
+        Material::Twigs => 3,
     }
 }
 
@@ -139,10 +140,10 @@ impl Builder {
 
     /// Scale vertices from `start` on about the origin so each horizontal half-axis reaches
     /// `half_w` (per side, so the base stays at the origin and the bounds are symmetric) and
-    /// the top reaches `h`. Factors are clamped to [0.5, 2].
+    /// the top reaches `h`. Factors are clamped to [0.3, 2].
     pub fn fit_from(&mut self, start: usize, half_w: f32, h: f32) {
         let (lo, hi) = self.bounds_from(start);
-        let k = |ext: f32| (half_w / ext.max(1e-4)).clamp(0.5, 2.0);
+        let k = |ext: f32| (half_w / ext.max(1e-4)).clamp(0.3, 2.0);
         let (kxp, kxn, kzp, kzn) = (k(hi.x), k(-lo.x), k(hi.z), k(-lo.z));
         let ky = (h / hi.y.max(1e-4)).clamp(0.5, 2.0);
         for p in &mut self.pos[start..] {
@@ -288,10 +289,7 @@ impl Builder {
             wind: self.wind,
             ..Default::default()
         };
-        for (m, list) in [Material::Bark, Material::Foliage, Material::Flower]
-            .into_iter()
-            .zip(self.idx)
-        {
+        for (m, list) in Material::ALL.into_iter().zip(self.idx) {
             if list.is_empty() {
                 continue;
             }

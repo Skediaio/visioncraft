@@ -9,7 +9,8 @@
 //! * row 1 (cells 4-6): dense clumps for enlarged LOD1/LOD2 cards; cell 7 an opaque, tileable
 //!   leaf mass for topiary cores.
 //! * row 2 (cells 8-11): flowers.
-//! * row 3: a dead frond (palms, cells 12-13); cells 14-15 a fan of grass blades (grasses).
+//! * row 3: bare winter twigs (trees, cells 12-13) or a dead frond (palms, cells 12-13); cells
+//!   14-15 a fan of grass blades (grasses).
 //!
 //! Each cell keeps a transparent gutter of [`CELL_MARGIN`] px, and the colour of every
 //! transparent texel is bled from the nearest opaque one within its cell, so bilinear filtering
@@ -256,6 +257,26 @@ fn leaf_sd(shape: LeafShape, aspect: f32, serration: f32, u: f32, v: f32) -> f32
             let rr = 0.53 * ((1.0 - depth) + depth * pk) * teeth(th.abs() * 0.4, serration);
             rr - r
         }
+        LeafShape::Orbicular => {
+            // Round pad with a slit from the rim at the petiole side to the centre.
+            let r = ((u - 0.5) * (u - 0.5) + v * v).sqrt();
+            let disc = 0.5 * (1.0 + 0.02 * serration * sin(u * 60.0)) - r;
+            let slit = if u < 0.5 {
+                av - 0.012 - (0.5 - u) * 0.12
+            } else {
+                1.0
+            };
+            disc.min(slit)
+        }
+        LeafShape::Flabellate => {
+            // Fan (ginkgo): a sector from the petiole point with a shallow central notch.
+            let r = (u * u + v * v).sqrt();
+            let th = atan2(v, u).abs();
+            let notch = 0.12 * (1.0 - (th / 0.12).min(1.0));
+            let rim = 0.98 * (1.0 - notch) - r;
+            let sector = (1.05 - th) * r.max(0.05);
+            rim.min(sector).min(u + 0.02)
+        }
         _ => simple(prof(u, 0.45, 0.6, 0.4)),
     }
 }
@@ -276,7 +297,11 @@ fn draw_leaf(cv: &mut Canvas, base: (f32, f32), ang: f32, len: f32, st: LeafStyl
     }
     let (dx, dy) = (sin(ang), -cos(ang));
     let half_w = match st.shape {
-        LeafShape::Palmate { .. } | LeafShape::Cordate | LeafShape::Lobed { .. } => 0.62,
+        LeafShape::Palmate { .. }
+        | LeafShape::Cordate
+        | LeafShape::Lobed { .. }
+        | LeafShape::Orbicular => 0.62,
+        LeafShape::Flabellate => 0.92,
         _ => (st.aspect * 0.6).max(0.06),
     } * len
         + 1.5;
@@ -421,6 +446,25 @@ fn draw_unit(
                         jitter(col, 0.1, rng),
                     );
                 }
+            }
+        }
+        LeafShape::Digitate { leaflets } => {
+            // Palmately compound: obovate leaflets radiating from the petiole tip.
+            let pet = len * 0.3;
+            cv.line(base, at(0.3), 1.0, 0.8, twig);
+            let hub = (base.0 + dir.0 * pet, base.1 + dir.1 * pet);
+            let n = leaflets.max(3) as usize;
+            for k in 0..n {
+                let x = k as f32 / (n - 1) as f32 - 0.5;
+                let a = ang + x * deg_r(150.0);
+                let l = len * 0.68 * (1.0 - 0.45 * x.abs() * 2.0 * x.abs());
+                let lst = LeafStyle {
+                    shape: LeafShape::Elliptic,
+                    aspect: aspect.min(0.45),
+                    serration,
+                    veins: true,
+                };
+                draw_leaf(cv, hub, a, l, lst, jitter(col, 0.08, rng));
             }
         }
         LeafShape::Palmate { .. } => {
@@ -606,6 +650,53 @@ fn twig(
     }
 }
 
+/// A bare twig with alternating side twigs, recursively (winter twig cards).
+fn bare_twig(
+    cv: &mut Canvas,
+    a: (f32, f32),
+    ang: f32,
+    len: f32,
+    width: f32,
+    depth: u32,
+    col: Rgb,
+    rng: &mut Rng,
+) {
+    let b = (a.0 + sin(ang) * len, a.1 - cos(ang) * len);
+    cv.line(a, b, width, (width * 0.6).max(0.7), jitter(col, 0.1, rng));
+    if depth == 0 {
+        return;
+    }
+    for (k, t) in [0.3f32, 0.55, 0.8].into_iter().enumerate() {
+        let q = (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t);
+        let s = if (k + depth as usize).is_multiple_of(2) {
+            1.0
+        } else {
+            -1.0
+        };
+        let child = ang + s * deg_r(28.0 + 22.0 * rng.f());
+        bare_twig(
+            cv,
+            q,
+            child,
+            len * (0.62 - 0.2 * t),
+            (width * 0.62).max(0.75),
+            depth - 1,
+            col,
+            rng,
+        );
+    }
+    bare_twig(
+        cv,
+        b,
+        ang + 0.25 * rng.sym(),
+        len * 0.45,
+        (width * 0.6).max(0.75),
+        depth - 1,
+        col,
+        rng,
+    );
+}
+
 /// A twig spray filling a card: a twig branching `depth` times with foliage along every twig.
 /// `px_per_m` maps metres to cell pixels.
 fn spray(
@@ -627,6 +718,23 @@ fn spray(
     );
     if matches!(lf.shape, LeafShape::Scale) {
         scale_spray(cv, base, ang, len, (len * 0.035).max(2.0), col, rng, 2);
+        return;
+    }
+    if leaf_px > len * 0.6 {
+        // Leaves about the card's size (lily pads, rhubarb): one leaf fills the card.
+        let twig = mix(p.bark.colour, [0.35, 0.3, 0.2], 0.5);
+        draw_unit(
+            cv,
+            base,
+            ang,
+            len,
+            lf.shape,
+            lf.aspect,
+            lf.serration,
+            col,
+            twig,
+            rng,
+        );
         return;
     }
     // Branch more when a card holds many leaves (big tree cards), less for big leaves.
@@ -692,6 +800,7 @@ fn mass_tile(p: &PlantParams, rng: &mut Rng) -> Vec<[f32; 4]> {
     let simple = match p.leaves.shape {
         LeafShape::Needles { .. } | LeafShape::Scale => LeafShape::Linear,
         LeafShape::Pinnate { .. }
+        | LeafShape::Digitate { .. }
         | LeafShape::FernFrond
         | LeafShape::FanFrond
         | LeafShape::FeatherFrond => LeafShape::Elliptic,
@@ -992,6 +1101,76 @@ fn draw_flower(cv: &mut Canvas, p: &PlantParams, cell_var: u32, rng: &mut Rng) {
             }
             cv.disc(c, full * 0.15, f.centre);
         }
+        FlowerShape::Fruit => {
+            // A few clusters of glossy round fruits with a highlight.
+            for _ in 0..4 {
+                let q = (c.0 + full * 0.5 * rng.sym(), c.1 + full * 0.5 * rng.sym());
+                let n = 3 + rng.below(4);
+                for _ in 0..n {
+                    let r = full * (0.12 + 0.08 * rng.f());
+                    let o = (q.0 + full * 0.18 * rng.sym(), q.1 + full * 0.18 * rng.sym());
+                    let fc = jitter(col, 0.08, rng);
+                    cv.disc(o, r, mul(fc, 0.8));
+                    cv.disc((o.0 - r * 0.15, o.1 - r * 0.15), r * 0.8, fc);
+                    cv.disc(
+                        (o.0 - r * 0.35, o.1 - r * 0.35),
+                        r * 0.22,
+                        mix(fc, [1.0, 1.0, 1.0], 0.6),
+                    );
+                }
+            }
+        }
+        FlowerShape::Raceme => {
+            // Pendent raceme: attached at the bottom of the cell (the card hangs it downwards),
+            // widest near the attachment, tapering to the tip at the top.
+            let (bot, top) = (c.1 + full, c.1 - full);
+            cv.line((c.0, bot), (c.0, top), 1.2, 0.8, mix(f.centre, leafc, 0.5));
+            for i in 0..70 {
+                let t = i as f32 / 70.0;
+                let y = lerp(bot, top, t);
+                let wdt = full * 0.38 * (1.0 - 0.8 * t);
+                let q = (c.0 + wdt * rng.sym(), y + 2.0 * rng.sym());
+                let r = full * (0.1 - 0.04 * t);
+                let pc = mul(jitter(col, 0.1, rng), 0.85 + 0.25 * rng.f());
+                draw_leaf(
+                    cv,
+                    q,
+                    PI + 0.6 * rng.sym(),
+                    r * 1.4,
+                    petal(LeafShape::Ovate, 0.9),
+                    pc,
+                );
+                draw_leaf(
+                    cv,
+                    q,
+                    0.5 * rng.sym(),
+                    r,
+                    petal(LeafShape::Ovate, 1.0),
+                    mix(pc, [1.0, 1.0, 1.0], 0.2),
+                );
+            }
+        }
+        FlowerShape::Trumpet => {
+            for k in 0..6 {
+                let a = TAU * k as f32 / 6.0;
+                draw_leaf(
+                    cv,
+                    c,
+                    a,
+                    full * 0.95,
+                    LeafStyle {
+                        shape: LeafShape::Ovate,
+                        aspect: 0.7,
+                        serration: 0.0,
+                        veins: true,
+                    },
+                    jitter(col, 0.05, rng),
+                );
+            }
+            cv.disc(c, full * 0.42, mul(f.centre, 0.75));
+            cv.disc(c, full * 0.36, f.centre);
+            cv.disc(c, full * 0.14, mul(f.centre, 0.6));
+        }
         FlowerShape::Plume | FlowerShape::Bottlebrush => {
             plume(cv, p, (c.0, c.1 + full), (c.0, c.1 - full), rng, f.shape);
         }
@@ -1236,6 +1415,21 @@ pub fn generate(p: &PlantParams) -> PlantTextures {
                 );
             }
             Form::Tussock(t) if cell >= 14 => blade_fan(&mut cv, p, &mut rng, t.droop),
+            Form::Branching(_) | Form::Conifer(_) if cell < 14 => {
+                // Bare winter twigs: a fine branching silhouette in bark colours.
+                let col = mix(p.bark.colour, [0.27, 0.21, 0.17], 0.6); // fine twigs are darker than the trunk
+                let base = (cpx * 0.5 + 6.0 * rng.sym(), cpx - CELL_MARGIN as f32 - 1.0);
+                bare_twig(
+                    &mut cv,
+                    base,
+                    0.08 * rng.sym(),
+                    inner * 0.55,
+                    2.4,
+                    4,
+                    col,
+                    &mut rng,
+                );
+            }
             _ => {}
         }
     }

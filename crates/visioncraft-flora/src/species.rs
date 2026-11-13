@@ -7,9 +7,11 @@ use std::sync::OnceLock;
 
 use crate::{
     BarkParams, BarkPattern, BranchingParams, BudgetClass, ClimberParams, ClipShape, ClippedParams,
-    CrownShape, FlowerParams, FlowerShape, Form, GroundCoverParams, LeafParams, LeafShape,
-    LevelParams, PalmParams, PlantParams, RosetteParams, TussockParams,
+    ConiferParams, CrownShape, FlowerParams, FlowerShape, Form, GroundCoverParams, LeafParams,
+    LeafShape, LevelParams, PalmParams, PlantParams, RosetteParams, TussockParams,
 };
+
+mod more;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Category {
@@ -50,7 +52,18 @@ pub struct Species {
 /// The built-in library, in a fixed order.
 pub fn species() -> &'static [Species] {
     static LIB: OnceLock<Vec<Species>> = OnceLock::new();
-    LIB.get_or_init(build)
+    LIB.get_or_init(|| {
+        let mut v = build();
+        more::build(&mut v);
+        v
+    })
+}
+
+impl Species {
+    /// Look a built-in species up by its id.
+    pub fn by_id(id: &str) -> Option<&'static Species> {
+        species().iter().find(|s| s.id == id)
+    }
 }
 
 // ---- small constructors -------------------------------------------------------------------
@@ -148,6 +161,7 @@ struct Habit {
     flare: f32,
     wobble: f32,
     segs: u8,
+    stake: f32,
 }
 
 impl Habit {
@@ -173,6 +187,7 @@ impl Habit {
             flare: 0.35,
             wobble: 2.5,
             segs: 12,
+            stake: 0.0,
         }
     }
     fn multi(
@@ -215,6 +230,7 @@ impl Habit {
             leaf_level: self.leaf_level,
             leaf_start: self.leaf_start,
             leaf_up: self.leaf_up,
+            stake_m: self.stake,
         })
     }
 }
@@ -297,22 +313,27 @@ fn build() -> Vec<Species> {
         "Pedunculate oak",
         "Quercus robur",
         Tree,
-        25.0,
         22.0,
+        26.0,
         false,
         &[],
         Sun,
-        Habit::single(
-            0.026,
-            0.45,
-            0.18,
-            Spherical,
-            [
-                lv(9, 0.55, 55.0, 137.5, 1, 18.0, 10.0, 0.0, 6, 0.65, 0.35),
-                lv(9, 0.45, 45.0, 137.5, 1, -8.0, 10.0, -0.1, 4, 0.5, 0.2),
-                lv(6, 0.45, 40.0, 137.5, 1, 0.0, 12.0, 0.0, 2, 0.5, 0.25),
-            ],
-        )
+        // Open-grown: short massive trunk, heavy near-horizontal lower limbs, tortuous growth.
+        Habit {
+            wobble: 6.0,
+            flare: 0.5,
+            ..Habit::single(
+                0.032,
+                0.35,
+                0.14,
+                Hemispherical,
+                [
+                    lv(10, 0.62, 72.0, 137.5, 1, 22.0, 16.0, 0.0, 7, 0.7, 0.3),
+                    lv(9, 0.45, 50.0, 137.5, 1, -5.0, 16.0, -0.1, 4, 0.5, 0.15),
+                    lv(6, 0.45, 40.0, 137.5, 1, 0.0, 18.0, 0.0, 2, 0.5, 0.25),
+                ],
+            )
+        }
         .form(),
         leaf(
             Lobed { lobes: 4 },
@@ -382,9 +403,9 @@ fn build() -> Vec<Species> {
             0.25,
             Spherical,
             [
-                lv(16, 0.35, 45.0, 137.5, 1, 20.0, 5.0, 0.0, 5, 0.5, 0.25),
-                lv(8, 0.6, 35.0, 137.5, 1, -20.0, 6.0, -1.6, 4, 0.4, 0.2),
-                lv(5, 0.5, 25.0, 137.5, 1, 0.0, 6.0, -0.8, 2, 0.4, 0.25),
+                lv(14, 0.35, 42.0, 137.5, 1, 25.0, 5.0, 0.0, 5, 0.5, 0.25),
+                lv(10, 0.75, 40.0, 137.5, 1, -20.0, 6.0, -2.6, 5, 0.35, 0.2),
+                lv(5, 0.6, 20.0, 137.5, 1, 0.0, 6.0, -2.0, 3, 0.4, 0.25),
             ],
         )
         .form(),
@@ -395,8 +416,8 @@ fn build() -> Vec<Species> {
             0.6,
             [0.36, 0.5, 0.17],
             [0.8, 0.7, 0.2],
-            0.6,
-            1.8,
+            0.45,
+            0.9,
         ),
         None,
         bark(BarkPattern::Birch, [0.9, 0.89, 0.85], [0.12, 0.11, 0.1]),
@@ -530,16 +551,16 @@ fn build() -> Vec<Species> {
         Sun,
         Habit::single(
             0.035,
-            0.4,
-            0.2,
-            Spherical,
+            0.45,
+            0.25,
+            Hemispherical,
             [
-                lv(10, 0.6, 55.0, 137.5, 1, 30.0, 6.0, 0.0, 6, 0.65, 0.35),
-                lv(40, 1.0, 40.0, 137.5, 1, -20.0, 4.0, -4.0, 6, 0.25, 0.35),
+                lv(12, 0.55, 60.0, 137.5, 1, 35.0, 6.0, 0.2, 6, 0.65, 0.3),
+                lv(55, 1.6, 50.0, 137.5, 1, -10.0, 3.0, -6.0, 8, 0.22, 0.25),
                 NO,
             ],
         )
-        .leaves_on(2, 0.15)
+        .leaves_on(2, 0.1)
         .form(),
         leaf(
             Lanceolate,
@@ -949,19 +970,17 @@ fn build() -> Vec<Species> {
         true,
         &[],
         Sun,
-        Habit::single(
-            0.02,
-            1.0,
-            0.05,
-            Conical,
-            [
-                lv(72, 0.4, 80.0, 30.0, 4, 25.0, 4.0, -0.1, 5, 0.35, 0.04),
-                lv(14, 0.45, 75.0, 137.5, 1, 0.0, 5.0, -0.6, 3, 0.4, 0.15),
-                NO,
-            ],
-        )
-        .leaves_on(1, 0.5)
-        .form(),
+        Form::Conifer(ConiferParams {
+            tiers: 40,
+            per_whorl: 5,
+            crown_base: 0.04,
+            trunk_radius_ratio: 0.02,
+            taper: 1.05,
+            droop: 0.45,
+            upsweep: 0.7,
+            pendulous: 0.6,
+            layered: 0.2,
+        }),
         leaf(
             Needles {
                 length_m: 0.018,
@@ -988,19 +1007,17 @@ fn build() -> Vec<Species> {
         true,
         &[],
         HalfShade,
-        Habit::single(
-            0.02,
-            1.0,
-            0.03,
-            Conical,
-            [
-                lv(60, 0.4, 75.0, 30.0, 5, 15.0, 3.0, 0.0, 4, 0.35, 0.03),
-                lv(8, 0.4, 60.0, 180.0, 1, 0.0, 4.0, 0.0, 2, 0.4, 0.2),
-                NO,
-            ],
-        )
-        .leaves_on(1, 0.5)
-        .form(),
+        Form::Conifer(ConiferParams {
+            tiers: 30,
+            per_whorl: 6,
+            crown_base: 0.03,
+            trunk_radius_ratio: 0.02,
+            taper: 0.85,
+            droop: 0.08,
+            upsweep: 0.25,
+            pendulous: 0.0,
+            layered: 0.85,
+        }),
         leaf(
             Needles {
                 length_m: 0.025,
@@ -2050,6 +2067,7 @@ fn build() -> Vec<Species> {
         Form::GroundCover(GroundCoverParams {
             cards: 30,
             depth_m: 0.1,
+            tilt_deg: 45.0,
         }),
         ivy.clone(),
         None,
@@ -2071,8 +2089,8 @@ fn build() -> Vec<Species> {
             depth_m: 0.12,
         }),
         LeafParams {
-            card_m: 0.2,
-            density: 3.5,
+            card_m: 0.24,
+            density: 5.0,
             ..ivy
         },
         None,

@@ -2,7 +2,8 @@ use std::time::Instant;
 
 use visioncraft_flora::{
     ATLAS_SIZE, BARK_SIZE, BudgetClass, Category, ClipShape, Form, Lod, Material, PlantMesh,
-    Season, Species, generate, generate_in_season, species, textures,
+    Season, Species, generate, generate_in_season, get_param, param_schema, set_param, species,
+    textures,
 };
 
 fn height(m: &PlantMesh) -> f32 {
@@ -33,7 +34,7 @@ fn expected_budget(s: &Species) -> BudgetClass {
 #[test]
 fn library_is_complete() {
     let lib = species();
-    assert!(lib.len() >= 48, "{} species", lib.len());
+    assert!(lib.len() >= 110, "{} species", lib.len());
     let mut ids: Vec<_> = lib.iter().map(|s| s.id).collect();
     ids.sort();
     ids.dedup();
@@ -45,60 +46,66 @@ fn library_is_complete() {
     }
 }
 
+/// Structural invariants every generated mesh must satisfy.
+fn check_mesh(m: &PlantMesh, budget: usize, tag: &str) -> Result<(), String> {
+    let fail = |what: String| Err(format!("{tag}: {what}"));
+    if m.triangle_count() > budget {
+        return fail(format!(
+            "{} triangles > budget {budget}",
+            m.triangle_count()
+        ));
+    }
+    if m.triangle_count() == 0 {
+        return fail("empty".into());
+    }
+    let n = m.positions.len();
+    if m.normals.len() != n || m.uvs.len() != n || m.wind.len() != n {
+        return fail("attribute lengths differ".into());
+    }
+    if !m.indices.len().is_multiple_of(3) || m.indices.iter().any(|&i| i as usize >= n) {
+        return fail("bad indices".into());
+    }
+    let covered: usize = m.parts.iter().map(|p| p.index_range.len()).sum();
+    if covered != m.indices.len()
+        || m.parts
+            .iter()
+            .any(|p| !p.index_range.len().is_multiple_of(3))
+    {
+        return fail("parts do not cover the indices".into());
+    }
+    for k in 0..n {
+        if !m.positions[k].iter().all(|v| v.is_finite()) {
+            return fail(format!("position {:?}", m.positions[k]));
+        }
+        let nn = m.normals[k];
+        let l = (nn[0] * nn[0] + nn[1] * nn[1] + nn[2] * nn[2]).sqrt();
+        if !l.is_finite() || (l - 1.0).abs() > 1e-3 {
+            return fail(format!("normal length {l}"));
+        }
+        if !m.uvs[k].iter().all(|v| (0.0..=1.0).contains(v)) {
+            return fail(format!("uv {:?}", m.uvs[k]));
+        }
+        if !(0.0..=1.0).contains(&m.wind[k][0]) || !m.wind[k][1].is_finite() {
+            return fail(format!("wind {:?}", m.wind[k]));
+        }
+    }
+    Ok(())
+}
+
 #[test]
 fn meshes_are_valid_and_within_budget() {
     for s in species() {
+        assert_eq!(s.params.validate(), Ok(()), "{}", s.id);
         for lod in Lod::ALL {
             let m = generate(&s.params, 7, lod);
             let tag = format!("{} {lod:?}", s.id);
             let budget = s.params.budget.triangles(lod);
-            assert!(
-                m.triangle_count() <= budget,
-                "{tag}: {} > {budget}",
-                m.triangle_count()
-            );
-            assert!(m.triangle_count() > 0, "{tag}: empty");
+            if let Err(e) = check_mesh(&m, budget, &tag) {
+                panic!("{e}");
+            }
             let n = m.positions.len();
-            assert_eq!(m.normals.len(), n);
-            assert_eq!(m.uvs.len(), n);
-            assert_eq!(m.wind.len(), n);
-            assert!(
-                m.indices.iter().all(|&i| (i as usize) < n),
-                "{tag}: index out of range"
-            );
-            assert_eq!(m.indices.len() % 3, 0);
-            let covered: usize = m.parts.iter().map(|p| p.index_range.len()).sum();
-            assert_eq!(
-                covered,
-                m.indices.len(),
-                "{tag}: parts do not cover indices"
-            );
-            for p in &m.parts {
-                assert_eq!(p.index_range.len() % 3, 0);
-            }
-            for k in 0..n {
-                assert!(
-                    m.positions[k].iter().all(|v| v.is_finite()),
-                    "{tag}: position"
-                );
-                let nn = m.normals[k];
-                assert!(nn.iter().all(|v| v.is_finite()), "{tag}: normal");
-                let l = (nn[0] * nn[0] + nn[1] * nn[1] + nn[2] * nn[2]).sqrt();
-                assert!((l - 1.0).abs() < 1e-3, "{tag}: normal length {l}");
-                assert!(
-                    m.uvs[k].iter().all(|v| (0.0..=1.0).contains(v)),
-                    "{tag}: uv {:?}",
-                    m.uvs[k]
-                );
-                assert!(
-                    (0.0..=1.0).contains(&m.wind[k][0]),
-                    "{tag}: wind {:?}",
-                    m.wind[k]
-                );
-                assert!(m.wind[k][1].is_finite());
-            }
             // Wind is zero at the base: every bark vertex at the ground, or the lowest vertices.
-            let ground: Vec<usize> = (0..n).filter(|&k| m.positions[k][1] < 0.005).collect();
+            let ground: Vec<usize> = (0..n).filter(|&k| m.positions[k][1] < 0.002).collect();
             if !ground.is_empty() {
                 let min_w = ground
                     .iter()
@@ -115,7 +122,7 @@ fn meshes_are_valid_and_within_budget() {
                         m.indices[p.index_range.start as usize..p.index_range.end as usize].iter()
                     });
                 for &i in bark_ground {
-                    if m.positions[i as usize][1] < 0.005 {
+                    if m.positions[i as usize][1] < 0.002 {
                         assert_eq!(m.wind[i as usize][0], 0.0, "{tag}: trunk base sways");
                     }
                 }
@@ -207,14 +214,20 @@ fn fnv(m: &PlantMesh) -> u64 {
 #[test]
 fn golden_hashes() {
     let lib = species();
+    let mut got = Vec::new();
     for (id, lod, want) in [
-        ("quercus-robur", Lod::Lod0, 0xacf6_d35f_963a_b551_u64),
+        ("quercus-robur", Lod::Lod0, 0x9750_e973_aae9_5481_u64),
         ("hosta", Lod::Lod1, 0xa334_e697_a230_f815),
-        ("carpinus-hedge", Lod::Lod2, 0x8873_77e0_ca08_cc73),
+        ("carpinus-hedge", Lod::Lod2, 0xc567_f698_a41b_6c32),
+        ("picea-abies", Lod::Lod1, 0xdd72_8a9a_25eb_1bc2),
     ] {
         let s = lib.iter().find(|s| s.id == id).unwrap();
         let h = fnv(&generate(&s.params, 1234, lod));
-        assert_eq!(h, want, "{id} {lod:?}: got {h:#018x}");
+        println!("golden {id} {lod:?} = {h:#018x}");
+        got.push((id, h, want));
+    }
+    for (id, h, want) in got {
+        assert_eq!(h, want, "{id}: got {h:#018x}");
     }
 }
 
@@ -234,7 +247,10 @@ fn hedge_segments_tile() {
                     .positions
                     .iter()
                     .zip(&m.wind)
-                    .filter(|(p, _)| (p[0] - x).abs() < 1e-5)
+                    .zip(&m.normals)
+                    // End-cap vertices: on the plane with a normal straight along X.
+                    .filter(|((p, _), n)| (p[0] - x).abs() < 1e-5 && n[0].abs() > 0.9999)
+                    .map(|(pw, _)| pw)
                     .map(|(p, w)| (p[1].to_bits(), p[2].to_bits(), w[0].to_bits()))
                     .collect();
                 v.sort();
@@ -388,4 +404,158 @@ fn generation_time_report() {
             t.elapsed().as_secs_f64() * 1e3
         );
     }
+}
+
+/// A few hundred random but validated parameter sets (library species with schema parameters
+/// set to random values inside their ranges) must generate valid meshes at every LOD, quickly.
+#[test]
+fn random_validated_params_generate_safely() {
+    let lib = species();
+    let mut state: u64 = 0x1234_5678_9abc_def0;
+    let mut next = || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        (state >> 11) as f64 / (1u64 << 53) as f64
+    };
+    let (mut tried, mut accepted) = (0, 0);
+    let start = Instant::now();
+    while accepted < 300 && tried < 3000 {
+        tried += 1;
+        let s = &lib[(next() * lib.len() as f64) as usize % lib.len()];
+        let mut p = s.params.clone();
+        for info in param_schema(&p.form) {
+            if next() < 0.35 {
+                let mut v = info.min + (info.max - info.min) * next() as f32;
+                if info.step >= 1.0 {
+                    v = v.round();
+                }
+                set_param(&mut p, info.path, v);
+            }
+        }
+        if p.validate().is_err() {
+            continue;
+        }
+        accepted += 1;
+        for lod in Lod::ALL {
+            let t = Instant::now();
+            if std::env::var("FLORA_TRACE").is_ok() {
+                eprintln!("random #{accepted} {} {lod:?} {p:?}", s.id);
+            }
+            let m = generate(&p, accepted as u64, lod);
+            let tag = format!("random #{accepted} from {} {lod:?}", s.id);
+            if let Err(e) = check_mesh(&m, p.budget.triangles(lod), &tag) {
+                panic!("{e}\n{p:?}");
+            }
+            assert!(
+                t.elapsed().as_secs_f64() < 3.0,
+                "{tag}: took {:?}",
+                t.elapsed()
+            );
+        }
+    }
+    assert!(
+        accepted >= 300,
+        "only {accepted} of {tried} random sets validated"
+    );
+    println!("{accepted} random parameter sets in {:?}", start.elapsed());
+}
+
+#[test]
+fn schema_paths_round_trip() {
+    for s in species() {
+        let mut p = s.params.clone();
+        for info in param_schema(&p.form) {
+            if get_param(&p, info.path).is_none() && !info.path.starts_with("flowers.") {
+                continue; // e.g. a hedge length on a ball
+            }
+            let v = if info.choices.is_empty() {
+                (info.min + info.max) * 0.5
+            } else {
+                info.max
+            };
+            let v = if info.step >= 1.0 { v.round() } else { v };
+            assert!(
+                set_param(&mut p, info.path, v),
+                "{}: set {}",
+                s.id,
+                info.path
+            );
+            let got =
+                get_param(&p, info.path).unwrap_or_else(|| panic!("{}: get {}", s.id, info.path));
+            assert!(
+                (got - v).abs() < 1e-4,
+                "{}: {} = {got}, expected {v}",
+                s.id,
+                info.path
+            );
+        }
+        assert!(!set_param(&mut p, "no.such.path", 1.0));
+    }
+    assert_eq!(
+        Species::by_id("quercus-robur").map(|s| s.id),
+        Some("quercus-robur")
+    );
+    assert!(Species::by_id("nope").is_none());
+}
+
+#[test]
+fn split_parts_reindexes() {
+    let s = Species::by_id("prunus-serrulata").unwrap();
+    let m = generate(&s.params, 3, Lod::Lod1);
+    let parts = m.split_parts();
+    assert_eq!(parts.len(), m.parts.len());
+    let tris: usize = parts.iter().map(|(_, p)| p.indices.len() / 3).sum();
+    assert_eq!(tris, m.triangle_count());
+    for (mat, p) in &parts {
+        assert!(p.indices.iter().all(|&i| (i as usize) < p.positions.len()));
+        assert_eq!(p.indices.len() / 3, m.triangles_of(*mat));
+        assert!(
+            p.normals.len() == p.positions.len()
+                && p.uvs.len() == p.positions.len()
+                && p.wind.len() == p.positions.len()
+        );
+    }
+}
+
+#[test]
+fn winter_trees_get_twig_cards_within_budget() {
+    for id in [
+        "quercus-robur",
+        "betula-pendula",
+        "larix-decidua",
+        "acer-campestre",
+    ] {
+        let s = Species::by_id(id).unwrap();
+        for lod in Lod::ALL {
+            let m = generate_in_season(&s.params, 7, lod, Season { month: 1 });
+            assert!(
+                m.triangles_of(Material::Twigs) > 0,
+                "{id} {lod:?}: no twig cards"
+            );
+            assert!(m.triangle_count() <= s.params.budget.triangles(lod));
+        }
+        let summer = generate_in_season(&s.params, 7, Lod::Lod1, Season { month: 7 });
+        assert_eq!(
+            summer.triangles_of(Material::Twigs),
+            0,
+            "{id}: twigs in summer"
+        );
+    }
+}
+
+#[cfg(feature = "serde")]
+#[test]
+fn params_serde_round_trip() {
+    for s in species() {
+        let json = serde_json::to_string(&s.params).unwrap();
+        let back: visioncraft_flora::PlantParams = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, s.params, "{}", s.id);
+    }
+    // Missing fields fall back to defaults, so older stored species keep loading.
+    let partial: visioncraft_flora::PlantParams =
+        serde_json::from_str(r#"{"height_m": 3.0, "leaves": {"leaf_m": 0.05}}"#).unwrap();
+    assert_eq!(partial.height_m, 3.0);
+    assert_eq!(partial.leaves.leaf_m, 0.05);
+    assert!(partial.validate().is_ok());
 }

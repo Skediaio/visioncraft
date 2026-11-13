@@ -29,9 +29,10 @@ fn fnv(m: &PlantMesh) -> u64 {
 fn main() {
     let lib = species();
     for (id, lod, want) in [
-        ("quercus-robur", Lod::Lod0, 0xacf6_d35f_963a_b551_u64),
+        ("quercus-robur", Lod::Lod0, 0x9750_e973_aae9_5481_u64),
         ("hosta", Lod::Lod1, 0xa334_e697_a230_f815),
-        ("carpinus-hedge", Lod::Lod2, 0x8873_77e0_ca08_cc73),
+        ("carpinus-hedge", Lod::Lod2, 0xc567_f698_a41b_6c32),
+        ("picea-abies", Lod::Lod1, 0xdd72_8a9a_25eb_1bc2),
     ] {
         let s = lib.iter().find(|s| s.id == id).expect("species");
         assert_eq!(fnv(&generate(&s.params, 1234, lod)), want, "{id}");

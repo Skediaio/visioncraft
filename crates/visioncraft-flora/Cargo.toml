@@ -9,8 +9,15 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Serialize/Deserialize for PlantParams and everything in it (user-made species).
+serde = ["dep:serde"]
+
 [dependencies]
+serde = { version = "1", features = ["derive"], optional = true }
 
 [dev-dependencies]
 # MIT/Apache-2.0: only for writing the contact-sheet previews in the example.
 png = "0.18"
+# Only for the serde round-trip test (feature `serde`).
+serde_json = "1"

@@ -1,10 +1,13 @@
 //! Plain, documented parameter structs. Users and third parties create their own species by
-//! editing these; nothing here needs serde.
+//! editing these. With the optional `serde` feature they serialise; every struct has a
+//! `Default` and `#[serde(default)]`, so stored species survive fields added later.
 
 use crate::Lod;
 
 /// Everything that defines a species' look.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(default))]
 pub struct PlantParams {
     /// Mature height in metres (in flower, for perennials whose stalks rise above the leaves).
     pub height_m: f32,
@@ -30,10 +33,12 @@ pub struct PlantParams {
 }
 
 /// Hard triangle limits per level of detail.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum BudgetClass {
     LargeTree,
     /// Small trees, conifers and palms.
+    #[default]
     SmallTree,
     /// Shrubs, clipped forms, hedge segments, wall climbers.
     Shrub,
@@ -58,6 +63,7 @@ impl BudgetClass {
 
 /// The growth archetype, each with its own parameters.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Form {
     /// Trees, conifers, multi-stem shrubs, bamboo: recursive branching after Weber & Penn.
     Branching(BranchingParams),
@@ -74,13 +80,18 @@ pub enum Form {
     /// A rectangular patch of a self-clinging climber on a wall in the XY plane (wall at z = 0,
     /// leaves towards +Z).
     Climber(ClimberParams),
+    /// Excurrent conifer with whorled tiers (spruce, fir, larch): a dedicated cone builder so
+    /// the silhouette reads as a clean triangle at every distance.
+    Conifer(ConiferParams),
 }
 
 /// Crown envelopes of Weber & Penn (1995): the length of a primary branch as a function of its
 /// height in the crown.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum CrownShape {
     Conical,
+    #[default]
     Spherical,
     Hemispherical,
     Cylindrical,
@@ -119,6 +130,8 @@ impl CrownShape {
 
 /// One level of the branch hierarchy (children of the trunk, of the limbs, of the branches).
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(default))]
 pub struct LevelParams {
     /// Children per parent (0 ends the hierarchy).
     pub count: u16,
@@ -163,6 +176,8 @@ impl LevelParams {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(default))]
 pub struct BranchingParams {
     /// 1 for a single trunk; more for multi-stemmed shrubs and small trees.
     pub stems: u16,
@@ -193,9 +208,38 @@ pub struct BranchingParams {
     pub leaf_start: f32,
     /// How much foliage cards orient towards the sky (0 random, 1 flat).
     pub leaf_up: f32,
+    /// Height of a support stake next to the stem (tomato), metres; 0 for none.
+    pub stake_m: f32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(default))]
+pub struct ConiferParams {
+    /// Branch tiers (whorls) from the crown base to the top.
+    pub tiers: u16,
+    /// Branches per whorl.
+    pub per_whorl: u8,
+    /// Height fraction of the lowest live branches.
+    pub crown_base: f32,
+    /// Trunk base radius divided by height.
+    pub trunk_radius_ratio: f32,
+    /// Branch length along the crown is `(1 - f)^taper`: 1 a straight cone, < 1 a blunter,
+    /// fuller top (fir), > 1 a slender spire.
+    pub taper: f32,
+    /// Sag of the main branches, 0 horizontal to 1 strongly drooping.
+    pub droop: f32,
+    /// Upward sweep of the branch tips, 0..1.
+    pub upsweep: f32,
+    /// Hanging secondary branchlets (Norway spruce curtains), 0..1.
+    pub pendulous: f32,
+    /// Foliage in flat horizontal tiers (fir 1) rather than rounded sprays (0).
+    pub layered: f32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(default))]
 pub struct PalmParams {
     /// Number of living fronds.
     pub fronds: u16,
@@ -211,9 +255,11 @@ pub struct PalmParams {
     pub lean_deg: f32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ClipShape {
     /// Sphere of diameter `width_m`, resting on the ground.
+    #[default]
     Ball,
     /// Cone of base `width_m` and height `height_m`.
     Cone,
@@ -227,6 +273,8 @@ pub enum ClipShape {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(default))]
 pub struct ClippedParams {
     pub shape: ClipShape,
     /// Surface irregularity, metres (0.01 freshly clipped, 0.08 shaggy natural column).
@@ -238,6 +286,8 @@ pub struct ClippedParams {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(default))]
 pub struct TussockParams {
     /// Blades at LOD0.
     pub blades: u16,
@@ -264,6 +314,8 @@ pub struct TussockParams {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(default))]
 pub struct RosetteParams {
     /// Leaves (or leafy shoots) at LOD0.
     pub leaves: u16,
@@ -285,14 +337,20 @@ pub struct RosetteParams {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(default))]
 pub struct GroundCoverParams {
     /// Leaf cards at LOD0.
     pub cards: u16,
     /// Height of the leaf layer, metres.
     pub depth_m: f32,
+    /// Largest tilt of the leaf cards from horizontal, degrees (0 for floating pads).
+    pub tilt_deg: f32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(default))]
 pub struct ClimberParams {
     /// Patch width along X, metres (height is `height_m`).
     pub patch_width_m: f32,
@@ -303,9 +361,11 @@ pub struct ClimberParams {
 }
 
 /// Leaf silhouettes (standard botanical terms).
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum LeafShape {
     /// Egg-shaped, widest below the middle (beech, apple, cherry).
+    #[default]
     Ovate,
     /// Widest in the middle (box, laurel, rhododendron).
     Elliptic,
@@ -333,9 +393,17 @@ pub enum LeafShape {
     FeatherFrond,
     /// Bipinnate fern frond.
     FernFrond,
+    /// Round with a narrow slit to the centre (water lily pad, nasturtium-like).
+    Orbicular,
+    /// Palmately compound: `leaflets` leaflets radiating from one point (horse chestnut).
+    Digitate { leaflets: u8 },
+    /// Fan-shaped with a notched rim (ginkgo).
+    Flabellate,
 }
 
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(default))]
 pub struct LeafParams {
     pub shape: LeafShape,
     /// Length of one leaf (a whole compound leaf or frond for those shapes), metres.
@@ -359,11 +427,13 @@ pub struct LeafParams {
 }
 
 /// Flower and inflorescence types.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum FlowerShape {
     /// Ray florets around a disc (coneflower; `droop` the rays hang).
     Daisy { droop: bool },
     /// Clusters of small five-petalled flowers along a twig (cherry, apple, rowan corymbs).
+    #[default]
     Blossom,
     /// Dome of four-sepalled florets (mophead hydrangea).
     Mophead,
@@ -385,9 +455,17 @@ pub enum FlowerShape {
     Bottlebrush,
     /// Saucer of five petals (cranesbill).
     Saucer,
+    /// Round fruits in small clusters (tomato, holly and skimmia berries, strawberries).
+    Fruit,
+    /// Hanging raceme of pea-like flowers (wisteria, robinia, pieris).
+    Raceme,
+    /// Six tepals around a central trumpet (daffodil).
+    Trumpet,
 }
 
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(default))]
 pub struct FlowerParams {
     pub shape: FlowerShape,
     pub colour: [f32; 3],
@@ -400,13 +478,15 @@ pub struct FlowerParams {
 }
 
 /// Bark patterns.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum BarkPattern {
     /// Smooth grey (beech, young maple, magnolia).
     Smooth,
     /// White with dark horizontal lenticels and black fissured patches (birch).
     Birch,
     /// Deep vertical furrows and ridges (oak, walnut, lime, poplar, willow).
+    #[default]
     Furrowed,
     /// Flaking plates (Scots pine upper trunk, plane camouflage, yew).
     Flaky,
@@ -421,10 +501,409 @@ pub enum BarkPattern {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(default))]
 pub struct BarkParams {
     pub pattern: BarkPattern,
     /// Main colour, sRGB 0..1.
     pub colour: [f32; 3],
     /// Furrow / lenticel / accent colour.
     pub accent: [f32; 3],
+}
+
+// ---- defaults: a generic small deciduous tree and neutral archetype settings ---------------
+
+impl Default for PlantParams {
+    fn default() -> Self {
+        PlantParams {
+            height_m: 8.0,
+            width_m: 6.0,
+            age: 1.0,
+            deciduous: true,
+            marcescent: false,
+            bloom_months: Vec::new(),
+            budget: BudgetClass::SmallTree,
+            form: Form::default(),
+            leaves: LeafParams::default(),
+            flowers: None,
+            bark: BarkParams::default(),
+        }
+    }
+}
+
+impl Default for Form {
+    fn default() -> Self {
+        Form::Branching(BranchingParams::default())
+    }
+}
+
+impl Default for LevelParams {
+    fn default() -> Self {
+        LevelParams::NONE
+    }
+}
+
+impl Default for BranchingParams {
+    fn default() -> Self {
+        let lv = |count, length, down, segments| LevelParams {
+            count,
+            length,
+            down_angle_deg: down,
+            down_angle_var_deg: 10.0,
+            segments,
+            ..LevelParams::NONE
+        };
+        BranchingParams {
+            stems: 1,
+            stem_spread_deg: 0.0,
+            stem_base_radius_m: 0.0,
+            trunk_radius_ratio: 0.025,
+            trunk_flare: 0.3,
+            trunk_wobble_deg: 2.5,
+            leader: 0.6,
+            crown_base: 0.25,
+            crown_shape: CrownShape::Spherical,
+            trunk_segments: 10,
+            levels: [
+                lv(9, 0.5, 50.0, 5),
+                lv(8, 0.5, 45.0, 3),
+                lv(5, 0.4, 40.0, 2),
+            ],
+            leaf_level: 3,
+            leaf_start: 0.2,
+            leaf_up: 0.3,
+            stake_m: 0.0,
+        }
+    }
+}
+
+impl Default for ConiferParams {
+    fn default() -> Self {
+        ConiferParams {
+            tiers: 30,
+            per_whorl: 5,
+            crown_base: 0.05,
+            trunk_radius_ratio: 0.02,
+            taper: 1.0,
+            droop: 0.3,
+            upsweep: 0.4,
+            pendulous: 0.3,
+            layered: 0.3,
+        }
+    }
+}
+
+impl Default for PalmParams {
+    fn default() -> Self {
+        PalmParams {
+            fronds: 24,
+            dead_fronds: 6,
+            blade_m: 0.8,
+            petiole_m: 0.5,
+            trunk_radius_m: 0.15,
+            lean_deg: 5.0,
+        }
+    }
+}
+
+impl Default for ClippedParams {
+    fn default() -> Self {
+        ClippedParams {
+            shape: ClipShape::Ball,
+            roughness: 0.02,
+            tuft_m: 0.05,
+            stem_m: 0.0,
+        }
+    }
+}
+
+impl Default for TussockParams {
+    fn default() -> Self {
+        TussockParams {
+            blades: 50,
+            blade_width_m: 0.008,
+            base_radius_m: 0.1,
+            min_angle_deg: 10.0,
+            max_angle_deg: 55.0,
+            droop: 0.6,
+            foliage_height: 0.8,
+            fans: 10,
+            plumes: 0,
+            plume_m: 0.2,
+            plume_spread_deg: 15.0,
+        }
+    }
+}
+
+impl Default for RosetteParams {
+    fn default() -> Self {
+        RosetteParams {
+            leaves: 20,
+            leaf_m: 0.25,
+            min_elev_deg: 15.0,
+            max_elev_deg: 60.0,
+            arch_deg: 25.0,
+            shoots: false,
+            stalks: 0,
+            stalk_spread_deg: 15.0,
+            foliage_height: 0.6,
+        }
+    }
+}
+
+impl Default for GroundCoverParams {
+    fn default() -> Self {
+        GroundCoverParams {
+            cards: 30,
+            depth_m: 0.1,
+            tilt_deg: 45.0,
+        }
+    }
+}
+
+impl Default for ClimberParams {
+    fn default() -> Self {
+        ClimberParams {
+            patch_width_m: 2.0,
+            stems: 3,
+            depth_m: 0.12,
+        }
+    }
+}
+
+impl Default for LeafParams {
+    fn default() -> Self {
+        LeafParams {
+            shape: LeafShape::Ovate,
+            leaf_m: 0.08,
+            aspect: 0.6,
+            serration: 0.2,
+            colour: [0.3, 0.43, 0.16],
+            colour_var: 0.3,
+            autumn_colour: [0.75, 0.6, 0.2],
+            card_m: 0.6,
+            density: 2.2,
+        }
+    }
+}
+
+impl Default for FlowerParams {
+    fn default() -> Self {
+        FlowerParams {
+            shape: FlowerShape::Blossom,
+            colour: [0.95, 0.9, 0.92],
+            centre: [0.9, 0.8, 0.3],
+            card_m: 0.25,
+            density: 0.2,
+        }
+    }
+}
+
+impl Default for BarkParams {
+    fn default() -> Self {
+        BarkParams {
+            pattern: BarkPattern::Furrowed,
+            colour: [0.45, 0.4, 0.35],
+            accent: [0.22, 0.2, 0.17],
+        }
+    }
+}
+
+// ---- validation -------------------------------------------------------------------------------
+
+struct Check(Vec<String>);
+
+impl Check {
+    fn range(&mut self, name: &str, v: f32, lo: f32, hi: f32) {
+        if !v.is_finite() || v < lo || v > hi {
+            self.0.push(format!("{name} = {v} is outside [{lo}, {hi}]"));
+        }
+    }
+    fn count(&mut self, name: &str, v: u32, lo: u32, hi: u32) {
+        if v < lo || v > hi {
+            self.0.push(format!("{name} = {v} is outside [{lo}, {hi}]"));
+        }
+    }
+    fn colour(&mut self, name: &str, c: [f32; 3]) {
+        for (k, v) in c.into_iter().enumerate() {
+            self.range(&format!("{name}[{k}]"), v, 0.0, 1.0);
+        }
+    }
+}
+
+impl PlantParams {
+    /// Report every out-of-range value (nothing is clamped). Generation never panics or runs
+    /// away on parameters that pass; the ranges also bound the work per plant.
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut c = Check(Vec::new());
+        c.range("height_m", self.height_m, 0.02, 60.0);
+        c.range("width_m", self.width_m, 0.02, 40.0);
+        c.range("age", self.age, 0.05, 1.0);
+        for &m in &self.bloom_months {
+            c.count("bloom_months[]", m as u32, 1, 12);
+        }
+        let l = &self.leaves;
+        c.range("leaves.leaf_m", l.leaf_m, 0.003, 6.0);
+        c.range("leaves.aspect", l.aspect, 0.02, 2.0);
+        c.range("leaves.serration", l.serration, 0.0, 1.0);
+        c.colour("leaves.colour", l.colour);
+        c.colour("leaves.autumn_colour", l.autumn_colour);
+        c.range("leaves.colour_var", l.colour_var, 0.0, 1.0);
+        c.range("leaves.card_m", l.card_m, 0.03, 6.0);
+        c.range("leaves.density", l.density, 0.1, 8.0);
+        match l.shape {
+            LeafShape::Lobed { lobes } => c.count("leaves.shape.lobes", lobes as u32, 1, 9),
+            LeafShape::Palmate { lobes, depth } => {
+                c.count("leaves.shape.lobes", lobes as u32, 1, 11);
+                c.range("leaves.shape.depth", depth, 0.0, 1.0);
+            }
+            LeafShape::Pinnate { leaflets } | LeafShape::Digitate { leaflets } => {
+                c.count("leaves.shape.leaflets", leaflets as u32, 1, 31)
+            }
+            LeafShape::Needles { length_m, bundle } => {
+                c.range("leaves.shape.length_m", length_m, 0.003, 0.4);
+                c.count("leaves.shape.bundle", bundle as u32, 0, 5);
+            }
+            _ => {}
+        }
+        if let Some(f) = &self.flowers {
+            c.colour("flowers.colour", f.colour);
+            c.colour("flowers.centre", f.centre);
+            c.range("flowers.card_m", f.card_m, 0.01, 2.0);
+            c.range("flowers.density", f.density, 0.0, 10.0);
+        }
+        c.colour("bark.colour", self.bark.colour);
+        c.colour("bark.accent", self.bark.accent);
+        match &self.form {
+            Form::Branching(b) => {
+                c.count("branching.stems", b.stems as u32, 1, 60);
+                c.range("branching.stem_spread_deg", b.stem_spread_deg, 0.0, 80.0);
+                c.range(
+                    "branching.stem_base_radius_m",
+                    b.stem_base_radius_m,
+                    0.0,
+                    10.0,
+                );
+                c.range(
+                    "branching.trunk_radius_ratio",
+                    b.trunk_radius_ratio,
+                    0.001,
+                    0.2,
+                );
+                c.range("branching.trunk_flare", b.trunk_flare, 0.0, 2.0);
+                c.range("branching.trunk_wobble_deg", b.trunk_wobble_deg, 0.0, 30.0);
+                c.range("branching.leader", b.leader, 0.05, 1.0);
+                c.range("branching.crown_base", b.crown_base, 0.0, 0.95);
+                c.count("branching.trunk_segments", b.trunk_segments as u32, 2, 30);
+                c.count("branching.leaf_level", b.leaf_level as u32, 0, 3);
+                c.range("branching.leaf_start", b.leaf_start, 0.0, 1.0);
+                c.range("branching.leaf_up", b.leaf_up, 0.0, 2.0);
+                c.range("branching.stake_m", b.stake_m, 0.0, self.height_m * 1.5);
+                let maxc = [150, 60, 40];
+                let mut total: u64 = b.stems as u64;
+                for (k, lv) in b.levels.iter().enumerate() {
+                    let p = format!("branching.levels.{k}");
+                    c.count(&format!("{p}.count"), lv.count as u32, 0, maxc[k]);
+                    c.range(&format!("{p}.length"), lv.length, 0.0, 3.0);
+                    c.range(
+                        &format!("{p}.down_angle_deg"),
+                        lv.down_angle_deg,
+                        -180.0,
+                        180.0,
+                    );
+                    c.range(
+                        &format!("{p}.down_angle_var_deg"),
+                        lv.down_angle_var_deg,
+                        0.0,
+                        90.0,
+                    );
+                    c.range(&format!("{p}.rotate_deg"), lv.rotate_deg, -360.0, 360.0);
+                    c.count(&format!("{p}.whorl"), lv.whorl as u32, 1, 8);
+                    c.range(&format!("{p}.curve_deg"), lv.curve_deg, -360.0, 360.0);
+                    c.range(&format!("{p}.curve_var_deg"), lv.curve_var_deg, 0.0, 90.0);
+                    c.range(&format!("{p}.gravity"), lv.gravity, -10.0, 10.0);
+                    c.count(&format!("{p}.segments"), lv.segments as u32, 1, 20);
+                    c.range(&format!("{p}.radius_ratio"), lv.radius_ratio, 0.05, 1.0);
+                    c.range(&format!("{p}.start"), lv.start, 0.0, 1.0);
+                    total = total.saturating_mul((lv.count as u64).max(1));
+                }
+                if total > 60_000 {
+                    c.0.push(format!(
+                        "branching: stems x level counts = {total} branches, more than 60000"
+                    ));
+                }
+            }
+            Form::Conifer(k) => {
+                c.count("conifer.tiers", k.tiers as u32, 2, 200);
+                c.count("conifer.per_whorl", k.per_whorl as u32, 1, 12);
+                c.range("conifer.crown_base", k.crown_base, 0.0, 0.9);
+                c.range(
+                    "conifer.trunk_radius_ratio",
+                    k.trunk_radius_ratio,
+                    0.001,
+                    0.1,
+                );
+                c.range("conifer.taper", k.taper, 0.3, 3.0);
+                c.range("conifer.droop", k.droop, 0.0, 1.5);
+                c.range("conifer.upsweep", k.upsweep, 0.0, 1.5);
+                c.range("conifer.pendulous", k.pendulous, 0.0, 1.0);
+                c.range("conifer.layered", k.layered, 0.0, 1.0);
+            }
+            Form::Palm(p) => {
+                c.count("palm.fronds", p.fronds as u32, 1, 80);
+                c.count("palm.dead_fronds", p.dead_fronds as u32, 0, 60);
+                c.range("palm.blade_m", p.blade_m, 0.1, 6.0);
+                c.range("palm.petiole_m", p.petiole_m, 0.0, 5.0);
+                c.range("palm.trunk_radius_m", p.trunk_radius_m, 0.02, 1.0);
+                c.range("palm.lean_deg", p.lean_deg, 0.0, 45.0);
+            }
+            Form::Clipped(k) => {
+                if let ClipShape::HedgeSegment { length_m } = k.shape {
+                    c.range("clipped.length_m", length_m, 0.2, 10.0);
+                }
+                c.range("clipped.roughness", k.roughness, 0.0, 0.5);
+                c.range("clipped.tuft_m", k.tuft_m, 0.0, 1.0);
+                c.range("clipped.stem_m", k.stem_m, 0.0, self.height_m * 0.9);
+            }
+            Form::Tussock(t) => {
+                c.count("tussock.blades", t.blades as u32, 1, 400);
+                c.range("tussock.blade_width_m", t.blade_width_m, 0.0005, 0.5);
+                c.range(
+                    "tussock.base_radius_m",
+                    t.base_radius_m,
+                    0.0,
+                    self.width_m.max(0.02),
+                );
+                c.range("tussock.min_angle_deg", t.min_angle_deg, 0.0, 90.0);
+                c.range("tussock.max_angle_deg", t.max_angle_deg, 0.0, 90.0);
+                c.range("tussock.droop", t.droop, 0.0, 2.0);
+                c.range("tussock.foliage_height", t.foliage_height, 0.05, 1.0);
+                c.count("tussock.fans", t.fans as u32, 0, 64);
+                c.count("tussock.plumes", t.plumes as u32, 0, 200);
+                c.range("tussock.plume_m", t.plume_m, 0.0, 3.0);
+                c.range("tussock.plume_spread_deg", t.plume_spread_deg, 0.0, 80.0);
+            }
+            Form::Rosette(r) => {
+                c.count("rosette.leaves", r.leaves as u32, 1, 300);
+                c.range("rosette.leaf_m", r.leaf_m, 0.01, 5.0);
+                c.range("rosette.min_elev_deg", r.min_elev_deg, -30.0, 90.0);
+                c.range("rosette.max_elev_deg", r.max_elev_deg, -30.0, 90.0);
+                c.range("rosette.arch_deg", r.arch_deg, -90.0, 180.0);
+                c.count("rosette.stalks", r.stalks as u32, 0, 300);
+                c.range("rosette.stalk_spread_deg", r.stalk_spread_deg, 0.0, 80.0);
+                c.range("rosette.foliage_height", r.foliage_height, 0.05, 1.0);
+            }
+            Form::GroundCover(g) => {
+                c.count("ground_cover.cards", g.cards as u32, 1, 2000);
+                c.range("ground_cover.depth_m", g.depth_m, 0.0, 1.0);
+                c.range("ground_cover.tilt_deg", g.tilt_deg, 0.0, 90.0);
+            }
+            Form::Climber(k) => {
+                c.range("climber.patch_width_m", k.patch_width_m, 0.2, 20.0);
+                c.count("climber.stems", k.stems as u32, 0, 40);
+                c.range("climber.depth_m", k.depth_m, 0.0, 1.0);
+            }
+        }
+        if c.0.is_empty() { Ok(()) } else { Err(c.0) }
+    }
 }
