@@ -31,7 +31,14 @@ pub struct Thumbs {
 }
 
 /// Draws a library image at `rect` (a grey tile while it loads); asks for it only if `visible`.
-pub fn thumb(ui: &egui::Ui, cx: &mut Cx, path: &str, rect: egui::Rect, visible: bool, priority: f32) {
+pub fn thumb(
+    ui: &egui::Ui,
+    cx: &mut Cx,
+    path: &str,
+    rect: egui::Rect,
+    visible: bool,
+    priority: f32,
+) {
     let mut cache = std::mem::take(&mut cx.s.thumbs);
     let round = egui::CornerRadius::same(6);
     if !path.is_empty() && !cache.map.contains_key(path) {
@@ -40,7 +47,9 @@ pub fn thumb(ui: &egui::Ui, cx: &mut Cx, path: &str, rect: egui::Rect, visible: 
         if let Some(Loaded::Image(img)) = store.take(&key) {
             let image =
                 egui::ColorImage::from_rgba_unmultiplied([img.w as usize, img.h as usize], &img.px);
-            let tex = cx.ctx.load_texture(path, image, egui::TextureOptions::LINEAR);
+            let tex = cx
+                .ctx
+                .load_texture(path, image, egui::TextureOptions::LINEAR);
             cache.map.insert(path.to_string(), Thumb::Ready(tex));
         } else if store.state(&key) == State::Failed {
             cache.map.insert(path.to_string(), Thumb::Failed);
@@ -50,10 +59,13 @@ pub fn thumb(ui: &egui::Ui, cx: &mut Cx, path: &str, rect: egui::Rect, visible: 
     }
     match cache.map.get(path) {
         Some(Thumb::Ready(tex)) => {
-            egui::Image::new(tex).corner_radius(round).paint_at(ui, rect);
+            egui::Image::new(tex)
+                .corner_radius(round)
+                .paint_at(ui, rect);
         }
         _ => {
-            ui.painter().rect_filled(rect, round, Color32::from_white_alpha(20));
+            ui.painter()
+                .rect_filled(rect, round, Color32::from_white_alpha(20));
         }
     }
     cx.s.thumbs = cache;
@@ -113,7 +125,13 @@ impl LibraryUi {
         self.tab == Tab::Plants
     }
 
-    pub fn panel(&mut self, ui: &mut egui::Ui, cx: &mut Cx, palette: &mut Vec<(String, f32)>, tool: &mut Tool) {
+    pub fn panel(
+        &mut self,
+        ui: &mut egui::Ui,
+        cx: &mut Cx,
+        palette: &mut Vec<(String, f32)>,
+        tool: &mut Tool,
+    ) {
         if self.tab == Tab::Lights {
             self.lights.panel(ui, cx);
             return;
@@ -150,7 +168,9 @@ impl LibraryUi {
             ui.small(t::RECENT);
             ui.horizontal(|ui| {
                 for id in self.recent.clone() {
-                    let Some(a) = catalog.asset(&id) else { continue };
+                    let Some(a) = catalog.asset(&id) else {
+                        continue;
+                    };
                     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(34.0), Sense::click());
                     let vis = ui.is_rect_visible(rect);
                     thumb(ui, cx, &a.thumbnail, rect, vis, 0.0);
@@ -170,10 +190,13 @@ impl LibraryUi {
                     for (i, a) in catalog
                         .assets
                         .iter()
-                        .filter(|a| self.category.is_none_or(|c| c == a.category) && matches(a, &needle))
+                        .filter(|a| {
+                            self.category.is_none_or(|c| c == a.category) && matches(a, &needle)
+                        })
                         .enumerate()
                     {
-                        let (resp, painter) = ui.allocate_painter(Vec2::splat(tile), Sense::click());
+                        let (resp, painter) =
+                            ui.allocate_painter(Vec2::splat(tile), Sense::click());
                         let visible = ui.is_rect_visible(resp.rect);
                         thumb(ui, cx, &a.thumbnail, resp.rect, visible, i as f32);
                         if current.as_deref() == Some(a.id.as_str()) {

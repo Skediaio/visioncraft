@@ -745,7 +745,13 @@ impl Scene {
         }
         let month = project.time.month as u8;
         for g in &project.generators {
-            let key = (g.clone(), self.ground_rev, self.flora.rev, month, self.library.rev);
+            let key = (
+                g.clone(),
+                self.ground_rev,
+                self.flora.rev,
+                month,
+                self.library.rev,
+            );
             if self.gens.get(g.id()).is_some_and(|old| old.key == key) {
                 continue;
             }

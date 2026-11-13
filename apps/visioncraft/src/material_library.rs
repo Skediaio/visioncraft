@@ -116,11 +116,17 @@ pub fn ensure_material(s: &mut Studio, lib_id: &str) -> Result<String, String> {
 pub fn kind_payload(index: usize, current: &SurfaceKind) -> Value {
     match index {
         0 => match current {
-            SurfaceKind::StandardTriplanarPbr { .. } => serde_json::to_value(current).unwrap_or_default(),
-            _ => json!({"type": "standard_triplanar_pbr", "map_scale_m": 1.0, "relief": 0.5, "gloss": 0.0, "weathering": 0.0}),
+            SurfaceKind::StandardTriplanarPbr { .. } => {
+                serde_json::to_value(current).unwrap_or_default()
+            }
+            _ => {
+                json!({"type": "standard_triplanar_pbr", "map_scale_m": 1.0, "relief": 0.5, "gloss": 0.0, "weathering": 0.0})
+            }
         },
         1 => json!({"type": "architectural_glass", "tint": [0.55, 0.75, 0.75], "roughness": 0.05}),
-        2 => json!({"type": "animated_water", "flow_dir_deg": 0.0, "speed": 0.2, "tint": [0.02, 0.18, 0.20], "depth_m": 0.8}),
+        2 => {
+            json!({"type": "animated_water", "flow_dir_deg": 0.0, "speed": 0.2, "tint": [0.02, 0.18, 0.20], "depth_m": 0.8})
+        }
         _ => json!({"type": "lawn3d", "density_per_m2": 1500.0, "blade_height_m": 0.04, "seed": 1}),
     }
 }
@@ -145,10 +151,16 @@ impl MatLibUi {
     /// The tab switch; true while the project's own materials show.
     pub fn tabs(&mut self, ui: &mut egui::Ui) -> bool {
         ui.horizontal(|ui| {
-            if ui.selectable_label(!self.library_tab, t::TAB_PROJECT).clicked() {
+            if ui
+                .selectable_label(!self.library_tab, t::TAB_PROJECT)
+                .clicked()
+            {
                 self.library_tab = false;
             }
-            if ui.selectable_label(self.library_tab, t::TAB_LIBRARY).clicked() {
+            if ui
+                .selectable_label(self.library_tab, t::TAB_LIBRARY)
+                .clicked()
+            {
                 self.library_tab = true;
             }
         });
@@ -168,7 +180,10 @@ impl MatLibUi {
         );
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = Vec2::new(4.0, 2.0);
-            if ui.selectable_label(self.kind.is_none(), t::KIND_ALL).clicked() {
+            if ui
+                .selectable_label(self.kind.is_none(), t::KIND_ALL)
+                .clicked()
+            {
                 self.kind = None;
             }
             for k in KINDS {
@@ -178,27 +193,25 @@ impl MatLibUi {
             }
         });
         let needle = self.search.to_lowercase();
-        let items: Vec<LibMaterial> = cx
-            .s
-            .scene
-            .library
-            .materials
-            .iter()
-            .filter(|m| self.kind.is_none_or(|k| m.kind == k))
-            .filter(|m| {
-                needle.is_empty()
-                    || m.name.to_lowercase().contains(&needle)
-                    || m.tags.iter().any(|t| t.to_lowercase().contains(&needle))
-            })
-            .cloned()
-            .collect();
-        let used: Vec<Option<String>> = cx
-            .s
-            .project()
-            .materials
-            .iter()
-            .map(|m| m.maps.base_color.clone())
-            .collect();
+        let items: Vec<LibMaterial> =
+            cx.s.scene
+                .library
+                .materials
+                .iter()
+                .filter(|m| self.kind.is_none_or(|k| m.kind == k))
+                .filter(|m| {
+                    needle.is_empty()
+                        || m.name.to_lowercase().contains(&needle)
+                        || m.tags.iter().any(|t| t.to_lowercase().contains(&needle))
+                })
+                .cloned()
+                .collect();
+        let used: Vec<Option<String>> =
+            cx.s.project()
+                .materials
+                .iter()
+                .map(|m| m.maps.base_color.clone())
+                .collect();
         let mut clicked = None;
         egui::ScrollArea::vertical()
             .max_height(210.0)
@@ -207,7 +220,8 @@ impl MatLibUi {
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing = Vec2::splat(5.0);
                     for (i, m) in items.iter().enumerate() {
-                        let (resp, painter) = ui.allocate_painter(Vec2::splat(52.0), Sense::click());
+                        let (resp, painter) =
+                            ui.allocate_painter(Vec2::splat(52.0), Sense::click());
                         let visible = ui.is_rect_visible(resp.rect);
                         thumb(ui, cx, &m.thumbnail, resp.rect, visible, i as f32);
                         if used.contains(&m.maps.basecolor) {
@@ -218,10 +232,13 @@ impl MatLibUi {
                                 egui::StrokeKind::Inside,
                             );
                         }
-                        let size = m
-                            .size_m
-                            .map_or("size unknown (1 m)".to_string(), |s| format!("{} × {} m", s[0], s[1]));
-                        let tip = format!("{} ({})\n{size}\n{} · {}", m.name, m.kind, m.license, m.author);
+                        let size = m.size_m.map_or("size unknown (1 m)".to_string(), |s| {
+                            format!("{} × {} m", s[0], s[1])
+                        });
+                        let tip = format!(
+                            "{} ({})\n{size}\n{} · {}",
+                            m.name, m.kind, m.license, m.author
+                        );
                         if resp.on_hover_text(tip).clicked() {
                             clicked = Some(m.id.clone());
                         }
@@ -267,7 +284,10 @@ mod tests {
     #[test]
     fn palette_materials_get_a_library_look_only_while_unchanged() {
         let mut lib = Library::new();
-        let lawn = builtin_palette().into_iter().find(|m| m.id == "lawn").unwrap();
+        let lawn = builtin_palette()
+            .into_iter()
+            .find(|m| m.id == "lawn")
+            .unwrap();
         assert!(overlay(&lib, &lawn).is_none(), "no library, no look");
         lib.materials = vec![entry("grass001", Some([1.4, 1.4]))];
         let o = overlay(&lib, &lawn).expect("a grass look");
@@ -276,7 +296,10 @@ mod tests {
         let mut edited = lawn.clone();
         edited.base_color = [0.0, 0.5, 0.0, 1.0];
         assert!(overlay(&lib, &edited).is_none(), "the user's colour stays");
-        let glass = builtin_palette().into_iter().find(|m| m.id == "glass").unwrap();
+        let glass = builtin_palette()
+            .into_iter()
+            .find(|m| m.id == "glass")
+            .unwrap();
         assert!(overlay(&lib, &glass).is_none());
     }
 

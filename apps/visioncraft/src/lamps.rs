@@ -208,7 +208,9 @@ impl LightsTool {
             }
             LightKind::Point => None,
         });
-        let handle = spot.as_ref().map(|(_, p, d)| self.aiming.unwrap_or(*p + *d * HANDLE_M));
+        let handle = spot
+            .as_ref()
+            .map(|(_, p, d)| self.aiming.unwrap_or(*p + *d * HANDLE_M));
         let near_handle = handle
             .and_then(|h| cx.project(h))
             .zip(cx.input.hover)
@@ -235,7 +237,12 @@ impl LightsTool {
         }
         if let (Some((_, pos, _)), Some(h)) = (&spot, handle) {
             top.extend(line(*pos, h, [255, 214, 120, 255], 2.0));
-            top.extend(crate::draw::dot([h.x, h.z], h.y, [255, 255, 255, 255], 14.0));
+            top.extend(crate::draw::dot(
+                [h.x, h.z],
+                h.y,
+                [255, 255, 255, 255],
+                14.0,
+            ));
         }
         if self.aiming.is_none() && !near_handle {
             if let Some(g) = ground {
@@ -281,7 +288,11 @@ impl LightsTool {
             Kind::Spot => json!({"type": "spot", "direction": [0.0, -1.0, 0.0],
                                  "inner_cone_deg": self.inner, "outer_cone_deg": self.outer}),
         };
-        let name = if self.kind == Kind::Point { "Point light" } else { "Spot light" };
+        let name = if self.kind == Kind::Point {
+            "Point light"
+        } else {
+            "Spot light"
+        };
         let params = json!({"name": name, "position": at.to_array(), "kind": kind,
                             "color_temperature_k": self.kelvin, "lumens": self.lumens, "range_m": self.range});
         if let Some(r) = cx.run("light.add", params) {
@@ -298,10 +309,11 @@ impl LightsTool {
         // The values of the selected light (edits are committed on release), else the defaults
         // for the next one.
         let selected = self.light(cx).cloned();
-        let (mut k, mut lm, mut rg) = selected.as_ref().map_or(
-            (self.kelvin, self.lumens, self.range),
-            |l| (l.color_temperature_k, l.lumens, l.range_m),
-        );
+        let (mut k, mut lm, mut rg) = selected
+            .as_ref()
+            .map_or((self.kelvin, self.lumens, self.range), |l| {
+                (l.color_temperature_k, l.lumens, l.range_m)
+            });
         let edits = [
             slider_field(ui, t::KELVIN, &mut k, 1800.0..=6500.0),
             slider_field(ui, t::LUMENS, &mut lm, 50.0..=4000.0),
@@ -384,8 +396,11 @@ mod tests {
         assert_eq!(l.position, [1.0, 1.0, 2.0]);
         assert_eq!(run_all(&mut s), 0, "settled");
         // moving the fixture moves the light
-        s.run("planting.update", json!({"id": r["id"], "position": [4.0, 0.0, 2.0]}))
-            .unwrap();
+        s.run(
+            "planting.update",
+            json!({"id": r["id"], "position": [4.0, 0.0, 2.0]}),
+        )
+        .unwrap();
         assert_eq!(run_all(&mut s), 1);
         assert_eq!(s.project().lights.last().unwrap().position, [4.0, 1.0, 2.0]);
         // removing the fixture removes the light
@@ -405,16 +420,28 @@ mod tests {
         .unwrap();
         let n = run_all(&mut s);
         p.follow.insert(s.revision(), n);
-        assert_eq!((s.project().generators.len(), s.project().lights.len()), (1, 1));
+        assert_eq!(
+            (s.project().generators.len(), s.project().lights.len()),
+            (1, 1)
+        );
         p.undo(&mut s);
-        assert_eq!((s.project().generators.len(), s.project().lights.len()), (0, 0));
+        assert_eq!(
+            (s.project().generators.len(), s.project().lights.len()),
+            (0, 0)
+        );
         p.redo(&mut s);
-        assert_eq!((s.project().generators.len(), s.project().lights.len()), (1, 1));
+        assert_eq!(
+            (s.project().generators.len(), s.project().lights.len()),
+            (1, 1)
+        );
         p.undo(&mut s);
         assert!(s.project().generators.is_empty() && s.project().lights.is_empty());
         // an ordinary step is still a single step
-        s.run("light.add", json!({"name": "x", "position": [0.0, 1.0, 0.0]}))
-            .unwrap();
+        s.run(
+            "light.add",
+            json!({"name": "x", "position": [0.0, 1.0, 0.0]}),
+        )
+        .unwrap();
         p.undo(&mut s);
         assert!(s.project().lights.is_empty());
     }

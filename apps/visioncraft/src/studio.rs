@@ -145,7 +145,11 @@ pub fn demo_assets() -> Vec<Asset> {
 pub fn auto_ev(elevation_deg: f32, lamps: bool) -> f32 {
     const DAY: [(f32, f32); 4] = [(-12.0, 8.0), (-3.0, 9.0), (0.0, 11.5), (10.0, 13.5)];
     const LAMPS: [(f32, f32); 4] = [(-12.0, 4.0), (-6.0, 5.5), (-3.0, 8.0), (0.0, 11.5)];
-    let table: &[(f32, f32)] = if lamps && elevation_deg < 0.0 { &LAMPS } else { &DAY };
+    let table: &[(f32, f32)] = if lamps && elevation_deg < 0.0 {
+        &LAMPS
+    } else {
+        &DAY
+    };
     let e = elevation_deg;
     if e >= 45.0 {
         return 15.0;
@@ -405,7 +409,10 @@ impl Studio {
     fn apply_view(&mut self, elevation: f32) {
         let v = self.project().view.clone();
         let lamps = self.lights_on && self.project().lights.iter().any(|l| l.enabled);
-        let ev = v.exposure_ev.unwrap_or_else(|| self.sky.auto_ev(elevation, lamps)) - self.exposure;
+        let ev = v
+            .exposure_ev
+            .unwrap_or_else(|| self.sky.auto_ev(elevation, lamps))
+            - self.exposure;
         self.ev_used = (ev, elevation);
         self.renderer.set_exposure(ev);
         self.renderer.set_clay(self.project().style.clay);
@@ -526,7 +533,10 @@ impl Studio {
         self.renderer.set_sun(&sun);
         self.apply_view(elevation);
         crate::sky_panel::apply(self);
-        if elevation < 0.0 && !self.lights_on && !self.suggested && !self.project().lights.is_empty()
+        if elevation < 0.0
+            && !self.lights_on
+            && !self.suggested
+            && !self.project().lights.is_empty()
         {
             self.suggested = true;
             self.suggest_lights = true;

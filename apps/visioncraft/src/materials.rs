@@ -254,55 +254,60 @@ impl MaterialsState {
                             Ok(id) => {
                                 self.selected = Some(id.clone());
                                 let target = self.target(&pick);
-                                cx.run("material.assign", json!({"target": target, "material": id}));
+                                cx.run(
+                                    "material.assign",
+                                    json!({"target": target, "material": id}),
+                                );
                             }
                             Err(e) => cx.toasts.error(e),
                         }
                     }
                     if project_tab {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.spacing_mut().item_spacing = Vec2::splat(5.0);
-                        for m in &materials {
-                            let (r, painter) =
-                                ui.allocate_painter(Vec2::splat(34.0), Sense::click());
-                            let rr = egui::CornerRadius::same(7);
-                            match self.thumbs.get(&m.id) {
-                                Some(tex) => {
-                                    egui::Image::new(tex).corner_radius(rr).paint_at(ui, r.rect);
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing = Vec2::splat(5.0);
+                            for m in &materials {
+                                let (r, painter) =
+                                    ui.allocate_painter(Vec2::splat(34.0), Sense::click());
+                                let rr = egui::CornerRadius::same(7);
+                                match self.thumbs.get(&m.id) {
+                                    Some(tex) => {
+                                        egui::Image::new(tex)
+                                            .corner_radius(rr)
+                                            .paint_at(ui, r.rect);
+                                    }
+                                    None => {
+                                        let c = Color32::from_rgb(
+                                            to_srgb8(m.base_color[0]),
+                                            to_srgb8(m.base_color[1]),
+                                            to_srgb8(m.base_color[2]),
+                                        );
+                                        painter.rect_filled(r.rect, rr, c);
+                                    }
                                 }
-                                None => {
-                                    let c = Color32::from_rgb(
-                                        to_srgb8(m.base_color[0]),
-                                        to_srgb8(m.base_color[1]),
-                                        to_srgb8(m.base_color[2]),
-                                    );
-                                    painter.rect_filled(r.rect, rr, c);
-                                }
-                            }
-                            let sel = self.selected.as_ref() == Some(&m.id);
-                            painter.rect_stroke(
-                                r.rect,
-                                rr,
-                                egui::Stroke::new(
-                                    if sel { 3.0 } else { 1.0 },
-                                    if sel {
-                                        ACCENT
-                                    } else {
-                                        Color32::from_white_alpha(70)
-                                    },
-                                ),
-                                egui::StrokeKind::Inside,
-                            );
-                            if r.on_hover_text(&m.name).clicked() {
-                                self.selected = Some(m.id.clone());
-                                let target = self.target(&pick);
-                                cx.run(
-                                    "material.assign",
-                                    json!({"target": target, "material": m.id}),
+                                let sel = self.selected.as_ref() == Some(&m.id);
+                                painter.rect_stroke(
+                                    r.rect,
+                                    rr,
+                                    egui::Stroke::new(
+                                        if sel { 3.0 } else { 1.0 },
+                                        if sel {
+                                            ACCENT
+                                        } else {
+                                            Color32::from_white_alpha(70)
+                                        },
+                                    ),
+                                    egui::StrokeKind::Inside,
                                 );
+                                if r.on_hover_text(&m.name).clicked() {
+                                    self.selected = Some(m.id.clone());
+                                    let target = self.target(&pick);
+                                    cx.run(
+                                        "material.assign",
+                                        json!({"target": target, "material": m.id}),
+                                    );
+                                }
                             }
-                        }
-                    });
+                        });
                     }
                     if ui
                         .selectable_label(self.eyedropper, t::EYEDROPPER)
@@ -343,9 +348,19 @@ impl MaterialsState {
                 }
             }
         });
-        let mut variation = cx.s.scene.library.variation.get(&id).copied().unwrap_or(0.0);
+        let mut variation =
+            cx.s.scene
+                .library
+                .variation
+                .get(&id)
+                .copied()
+                .unwrap_or(0.0);
         if ui
-            .add(egui::Slider::new(&mut variation, 0.0..=1.0).text(t::VARIATION).max_decimals(2))
+            .add(
+                egui::Slider::new(&mut variation, 0.0..=1.0)
+                    .text(t::VARIATION)
+                    .max_decimals(2),
+            )
             .changed()
         {
             cx.s.scene.library.variation.insert(id.clone(), variation);

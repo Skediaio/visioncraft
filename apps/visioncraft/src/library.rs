@@ -5,7 +5,9 @@
 //! and materials, within the frame's upload budget, and decides what to ask for next from where
 //! the camera is. While a model is not resident the caller keeps its placeholder.
 
-use crate::assets::{AssetStore, Budget, GlbData, Key, Loaded, Rgba, State, now_ms, priority, texture_cost};
+use crate::assets::{
+    AssetStore, Budget, GlbData, Key, Loaded, Rgba, State, now_ms, priority, texture_cost,
+};
 use crate::gltf_load::{Alpha, Glb, GlbMaterial};
 use glam::{Mat4, Vec3};
 use serde::Deserialize;
@@ -364,35 +366,36 @@ impl Library {
             let spec = self.specs[self.textured[i].spec].clone();
             let mut m = self.textured[i].base;
             let mut pending = false;
-            let mut get = |this: &mut Self, src: &Option<TexSrc>, srgb: bool| -> Option<TextureId> {
-                match src {
-                    None => None,
-                    Some(TexSrc::Lib(p)) => {
-                        let id = this.store.texture(p, srgb, true, 10.0);
-                        pending |= id.is_none();
-                        id
-                    }
-                    Some(TexSrc::Mem(n)) => {
-                        if !this.mem_tex.contains_key(n)
-                            && let Some(img) = this.mem.get(n)
-                            && let Ok(id) = r.add_texture(&TextureDesc {
-                                width: img.w,
-                                height: img.h,
-                                rgba8: &img.px,
-                                color_space: if srgb {
-                                    ColorSpace::Srgb
-                                } else {
-                                    ColorSpace::Linear
-                                },
-                                repeat: true,
-                            })
-                        {
-                            this.mem_tex.insert(n.clone(), id);
+            let mut get =
+                |this: &mut Self, src: &Option<TexSrc>, srgb: bool| -> Option<TextureId> {
+                    match src {
+                        None => None,
+                        Some(TexSrc::Lib(p)) => {
+                            let id = this.store.texture(p, srgb, true, 10.0);
+                            pending |= id.is_none();
+                            id
                         }
-                        this.mem_tex.get(n).copied()
+                        Some(TexSrc::Mem(n)) => {
+                            if !this.mem_tex.contains_key(n)
+                                && let Some(img) = this.mem.get(n)
+                                && let Ok(id) = r.add_texture(&TextureDesc {
+                                    width: img.w,
+                                    height: img.h,
+                                    rgba8: &img.px,
+                                    color_space: if srgb {
+                                        ColorSpace::Srgb
+                                    } else {
+                                        ColorSpace::Linear
+                                    },
+                                    repeat: true,
+                                })
+                            {
+                                this.mem_tex.insert(n.clone(), id);
+                            }
+                            this.mem_tex.get(n).copied()
+                        }
                     }
-                }
-            };
+                };
             m.base_color_map = get(self, &spec.base, true);
             m.normal_map = get(self, &spec.normal, false);
             m.orm_map = get(self, &spec.orm, false);
@@ -421,13 +424,17 @@ impl Library {
                     self.catalog_arrived = true;
                     self.rev += 1;
                 }
-                Err(e) => self.messages.push(format!("The asset catalogue is unusable: {e}")),
+                Err(e) => self
+                    .messages
+                    .push(format!("The asset catalogue is unusable: {e}")),
             }
         }
         if let Some(Loaded::Bytes(b)) = self.store.take(&Key::Bytes("materials.json".into())) {
             match serde_json::from_slice::<MaterialsFile>(&b) {
                 Ok(f) => self.materials = f.materials,
-                Err(e) => self.messages.push(format!("materials.json is unusable: {e}")),
+                Err(e) => self
+                    .messages
+                    .push(format!("materials.json is unusable: {e}")),
             }
         }
         if let Some(Loaded::Bytes(b)) = self.store.take(&Key::Bytes("skies.json".into())) {
@@ -545,7 +552,8 @@ impl Library {
         }
         if model.parts.is_empty() {
             free(r, model);
-            self.store.fail_key(Key::Glb(path), "it has nothing to draw");
+            self.store
+                .fail_key(Key::Glb(path), "it has nothing to draw");
             return;
         }
         if !model.emitters.is_empty() {
@@ -756,6 +764,10 @@ pub fn spec_of(maps: &visioncraft_core::material::MaterialMaps) -> TexSpec {
         orm: if packed { src(&maps.roughness) } else { None },
         roughness: if packed { None } else { src(&maps.roughness) },
         metallic: if packed { None } else { src(&maps.metallic) },
-        ao: if packed { None } else { src(&maps.ambient_occlusion) },
+        ao: if packed {
+            None
+        } else {
+            src(&maps.ambient_occlusion)
+        },
     }
 }

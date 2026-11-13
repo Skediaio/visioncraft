@@ -186,13 +186,15 @@ pub fn parse(bytes: &[u8]) -> Result<Glb, String> {
             };
             let dst = &mut out.prims[at];
             let base = dst.positions.len() as u32;
-            dst.positions
-                .extend(pos.iter().map(|&q| xf.transform_point3(Vec3::from(q)).to_array()));
-            dst.normals.extend(normals.iter().map(|&n| {
-                (normal_xf * Vec3::from(n))
-                    .normalize_or(Vec3::Y)
-                    .to_array()
-            }));
+            dst.positions.extend(
+                pos.iter()
+                    .map(|&q| xf.transform_point3(Vec3::from(q)).to_array()),
+            );
+            dst.normals.extend(
+                normals
+                    .iter()
+                    .map(|&n| (normal_xf * Vec3::from(n)).normalize_or(Vec3::Y).to_array()),
+            );
             dst.uvs.extend(uvs);
             if flip {
                 for t in indices.chunks_exact_mut(3) {

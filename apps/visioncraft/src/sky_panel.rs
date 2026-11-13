@@ -92,7 +92,10 @@ impl Hdr {
 impl SkyState {
     /// The calibrated intensity of the loaded image of sky `id`, if it is the one loaded.
     pub fn calibrated(&self, id: &str) -> Option<f32> {
-        self.hdr.as_ref().filter(|h| h.id == id).map(|h| h.calibrated)
+        self.hdr
+            .as_ref()
+            .filter(|h| h.id == id)
+            .map(|h| h.calibrated)
     }
 
     /// The sun taken from the sky image, with its elevation, when "use this sky's sun" is on.
@@ -108,7 +111,13 @@ impl SkyState {
         if !self.use_sun {
             return None;
         }
-        let (Some(SkyChoice::Hdri { id, rotation_deg, .. }), Some(h)) = (choice, &self.hdr) else {
+        let (
+            Some(SkyChoice::Hdri {
+                id, rotation_deg, ..
+            }),
+            Some(h),
+        ) = (choice, &self.hdr)
+        else {
             return None;
         };
         if h.id != *id {
@@ -148,7 +157,14 @@ impl SkyState {
     pub fn auto_ev(&self, elevation: f32, lamps: bool) -> f32 {
         let overcast = matches!(self.applied, Some(SkyChoice::Hdri { .. }))
             && self.hdr.as_ref().is_some_and(|h| h.sun.is_none());
-        crate::studio::auto_ev(if overcast { elevation.min(10.0) } else { elevation }, lamps)
+        crate::studio::auto_ev(
+            if overcast {
+                elevation.min(10.0)
+            } else {
+                elevation
+            },
+            lamps,
+        )
     }
 }
 
@@ -157,7 +173,13 @@ pub fn apply(s: &mut Studio) {
     let choice = s.project().view.sky.clone();
     // A click on a sky waits for its image, then chooses the calibrated intensity.
     if let Some(id) = s.sky.pick.clone() {
-        let file = s.scene.library.skies.iter().find(|k| k.id == id).map(|k| k.file.clone());
+        let file = s
+            .scene
+            .library
+            .skies
+            .iter()
+            .find(|k| k.id == id)
+            .map(|k| k.file.clone());
         match file {
             Some(file) => {
                 if s.sky.hdr.as_ref().is_none_or(|h| h.id != id) {
@@ -186,7 +208,13 @@ pub fn apply(s: &mut Studio) {
             rotation_deg,
             intensity,
         } => {
-            let file = s.scene.library.skies.iter().find(|k| k.id == *id).map(|k| k.file.clone());
+            let file = s
+                .scene
+                .library
+                .skies
+                .iter()
+                .find(|k| k.id == *id)
+                .map(|k| k.file.clone());
             let Some(file) = file else { return };
             if s.sky.hdr.as_ref().is_none_or(|h| h.id != *id) {
                 take_or_ask(s, id, &file);
@@ -280,16 +308,28 @@ pub fn panel(ui: &mut egui::Ui, cx: &mut Cx) {
         let calibrated = cx.s.sky.calibrated(&id).unwrap_or(intensity.max(1.0));
         let (mut rot, mut stops) = (rotation_deg, (intensity / calibrated).max(1e-3).log2());
         let a = ui.add(egui::Slider::new(&mut rot, 0.0..=360.0).text(t::SKY_ROTATION));
-        let b = ui.add(egui::Slider::new(&mut stops, -3.0..=3.0).text(t::SKY_INTENSITY).max_decimals(1));
+        let b = ui.add(
+            egui::Slider::new(&mut stops, -3.0..=3.0)
+                .text(t::SKY_INTENSITY)
+                .max_decimals(1),
+        );
         if a.drag_stopped() || b.drag_stopped() || a.lost_focus() || b.lost_focus() {
             cx.run(
                 "view.set",
                 json!({"sky": {"type": "hdri", "id": id, "rotation_deg": rot, "intensity": calibrated * stops.exp2()}}),
             );
         }
-        let has_sun = cx.s.sky.hdr.as_ref().is_some_and(|h| h.id == id && h.sun.is_some());
+        let has_sun =
+            cx.s.sky
+                .hdr
+                .as_ref()
+                .is_some_and(|h| h.id == id && h.sun.is_some());
         if cx.s.sky.use_sun {
-            ui.small(if has_sun { t::SKY_SUN_FROM_IMAGE } else { t::SKY_NO_SUN });
+            ui.small(if has_sun {
+                t::SKY_SUN_FROM_IMAGE
+            } else {
+                t::SKY_NO_SUN
+            });
             if ui.button(t::SKY_BACK_TO_DATE).clicked() {
                 cx.s.sky.use_sun = false;
             }
@@ -311,15 +351,23 @@ fn ground_color(ui: &mut egui::Ui, cx: &mut Cx) {
         let r = ui.color_edit_button_srgb(&mut rgb);
         let linear = rgb.map(|b| {
             let c = f32::from(b) / 255.0;
-            if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+            if c <= 0.04045 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
         });
         if r.changed() {
             cx.s.sky.ground_draft = Some(linear);
         }
-        if cx.s.sky.ground_draft.is_some() && !ui.input(|i| i.pointer.any_down()) && !r.has_focus() {
+        if cx.s.sky.ground_draft.is_some() && !ui.input(|i| i.pointer.any_down()) && !r.has_focus()
+        {
             cx.s.sky.ground_draft = None;
             if linear != g.color {
-                cx.run("view.set", json!({"ground": {"height": g.height, "color": linear}}));
+                cx.run(
+                    "view.set",
+                    json!({"ground": {"height": g.height, "color": linear}}),
+                );
             }
         }
     });
@@ -372,7 +420,10 @@ mod tests {
         let hdr = Hdr::new("sunny".into(), HdrData { w, h, rgb });
         let dir = hdr.sun.expect("a sun");
         let (az, el) = az_el(dir);
-        assert!((az - 90.0).abs() < 8.0 && el > 25.0 && el < 55.0, "{az} {el}");
+        assert!(
+            (az - 90.0).abs() < 8.0 && el > 25.0 && el < 55.0,
+            "{az} {el}"
+        );
         assert!(hdr.calibrated > 0.0);
     }
 }

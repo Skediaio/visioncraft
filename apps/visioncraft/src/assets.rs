@@ -118,12 +118,8 @@ impl Queue {
 
     /// The most urgent entry; equal priorities leave in the order they came.
     pub fn pop(&mut self) -> Option<(Key, f32)> {
-        let best = (0..self.items.len()).min_by(|&a, &b| {
-            self.items[a]
-                .1
-                .total_cmp(&self.items[b].1)
-                .then(a.cmp(&b))
-        })?;
+        let best = (0..self.items.len())
+            .min_by(|&a, &b| self.items[a].1.total_cmp(&self.items[b].1).then(a.cmp(&b)))?;
         Some(self.items.remove(best))
     }
 
@@ -491,7 +487,13 @@ impl AssetStore {
     }
 
     /// The renderer texture of a library image when it is resident (marking it used); else asks.
-    pub fn texture(&mut self, path: &str, srgb: bool, repeat: bool, priority: f32) -> Option<TextureId> {
+    pub fn texture(
+        &mut self,
+        path: &str,
+        srgb: bool,
+        repeat: bool,
+        priority: f32,
+    ) -> Option<TextureId> {
         let key = Key::Image {
             path: path.to_string(),
             srgb,
