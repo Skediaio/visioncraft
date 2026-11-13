@@ -178,8 +178,9 @@ impl ObjectsState {
     pub fn panel(&mut self, ui: &mut egui::Ui, cx: &mut Cx) {
         self.species.window(cx.ctx, cx);
         if self.tools.lights {
-            self.tools.tool_row(ui, cx);
             self.library.lights.panel(ui, cx);
+            ui.separator();
+            self.tools.tool_row(ui, cx);
             return;
         }
         self.tools.panel(ui, cx);

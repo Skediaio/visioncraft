@@ -80,6 +80,15 @@ fn on_circle(c: Pos2, r: f32, az_deg: f64) -> Pos2 {
 
 /// Landscape & Sun: the sun and sky, or the terrain tools.
 pub fn panel(ui: &mut egui::Ui, cx: &mut Cx, terrain: &mut crate::terrain_tool::TerrainTool) {
+    // The floating panel around it scrolls. The tabs come last, next to the mode bar: the panel
+    // grows upwards, so they stay where they are when the tab changes.
+    if terrain.open {
+        terrain.panel(ui, cx);
+    } else {
+        panel_body(ui, cx);
+        crate::sky_panel::panel(ui, cx);
+    }
+    ui.separator();
     ui.horizontal(|ui| {
         if ui.selectable_label(!terrain.open, t::TAB_SUN).clicked() && terrain.open {
             terrain.leave(cx);
@@ -89,13 +98,6 @@ pub fn panel(ui: &mut egui::Ui, cx: &mut Cx, terrain: &mut crate::terrain_tool::
             terrain.open = true;
         }
     });
-    // The floating panel around it scrolls.
-    if terrain.open {
-        terrain.panel(ui, cx);
-    } else {
-        panel_body(ui, cx);
-        crate::sky_panel::panel(ui, cx);
-    }
 }
 
 fn panel_body(ui: &mut egui::Ui, cx: &mut Cx) {

@@ -379,8 +379,9 @@ impl PlantingTools {
         });
     }
 
+    /// The tool row comes last, next to the mode bar: the panel grows upwards from the bottom, so
+    /// the row stays put whatever the tool shows.
     pub fn panel(&mut self, ui: &mut egui::Ui, cx: &mut Cx) {
-        self.tool_row(ui, cx);
         // Room for the file bar above and the mode bar below.
         let max_h = (cx.input.rect.height() - 200.0).clamp(140.0, 640.0);
         let out = egui::ScrollArea::vertical()
@@ -401,6 +402,8 @@ impl PlantingTools {
         } else if !growing {
             self.grow = 0;
         }
+        ui.separator();
+        self.tool_row(ui, cx);
         self.help(cx);
     }
 
