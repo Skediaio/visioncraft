@@ -15,12 +15,18 @@ fn perez(cos_theta: f32, gamma: f32, cos_gamma: f32) -> vec3<f32> {
 
 // Pre-exposed linear sRGB radiance of the sky in direction `dir` (y up).
 fn sky_radiance(dir: vec3<f32>) -> vec3<f32> {
+    return sky_eval(dir, g.night.w, g.night.rgb);
+}
+
+// The sky with an explicit luminance scale (zenith Y is in kcd/m2) and night
+// radiance; the environment cube (env.wgsl) uses it without exposure.
+fn sky_eval(dir: vec3<f32>, y_scale: f32, night: vec3<f32>) -> vec3<f32> {
     // Below the horizon the model is undefined: use the horizon, dimmed.
     let cos_theta = max(dir.y, 0.001);
     let cos_gamma = clamp(dot(normalize(vec3<f32>(dir.x, cos_theta, dir.z)), g.sun_dir.xyz), -1.0, 1.0);
     let yxy = g.zenith.xyz * perez(cos_theta, acos(cos_gamma), cos_gamma);
     // CIE xyY -> XYZ -> linear sRGB (IEC 61966-2-1 matrix, D65).
-    let big_y = yxy.x * g.night.w;
+    let big_y = yxy.x * y_scale;
     let big_x = yxy.y / yxy.z * big_y;
     let big_z = (1.0 - yxy.y - yxy.z) / yxy.z * big_y;
     let rgb = mat3x3<f32>(
@@ -29,7 +35,7 @@ fn sky_radiance(dir: vec3<f32>) -> vec3<f32> {
         vec3<f32>(-0.4986, 0.0415, 1.0570),
     ) * vec3<f32>(big_x, big_y, big_z);
     let below = mix(1.0, 0.35, smoothstep(0.0, -0.15, dir.y));
-    return mix(g.night.rgb, max(rgb, vec3<f32>(0.0)) * below, g.zenith.w);
+    return night + max(rgb, vec3<f32>(0.0)) * below * g.zenith.w;
 }
 
 struct SkyOut {

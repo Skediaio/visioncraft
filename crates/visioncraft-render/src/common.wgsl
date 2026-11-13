@@ -20,8 +20,12 @@ struct Globals {
     effects: vec4<f32>,         // x AO samples, y contact shadows on, z AO radius (m), w AO intensity
     perez: array<vec4<f32>, 5>, // Preetham's Perez coefficients A..E for (Y, x, y)
     zenith: vec4<f32>,          // zenith (Y, x, y) / F(0, theta_sun); w day factor
-    night: vec4<f32>,           // rgb night fallback sky (pre-exposed); w Y scale (cd/m2 * exposure)
+    night: vec4<f32>,           // rgb night sky (pre-exposed); w Y scale (cd/m2 * exposure)
     highlight: vec4<u32>,       // x mesh id, y face id, z first on-top overlay segment
+    wind: vec4<f32>,            // xy direction (world x, z; unit), z strength, w gustiness
+    time: vec4<f32>,            // x seconds, y exposure, z env cube's last mip, w clay mode (0/1)
+    light_grid: vec4<f32>,      // xy grid origin (world x, z), z 1 / cell size, w light count
+    grid_dims: vec4<u32>,       // x, y cells along world x and z
 }
 @group(0) @binding(0) var<uniform> g: Globals;
 
@@ -55,4 +59,21 @@ fn ign(pixel: vec2<f32>) -> f32 {
 fn fullscreen(i: u32) -> vec4<f32> {
     let p = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
     return vec4<f32>(p * 2.0 - 1.0, 1.0, 1.0);
+}
+
+// 32-bit integer hash (Jarzynski & Olano, "Hash Functions for GPU Rendering",
+// JCGT 2020: the PCG variant), mapped to [0, 1).
+fn pcg(v: u32) -> u32 {
+    let state = v * 747796405u + 2891336453u;
+    let word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+
+fn hash3(p: vec3<i32>) -> f32 {
+    let h = pcg(u32(p.x) + pcg(u32(p.y) + pcg(u32(p.z))));
+    return f32(h >> 8u) / 16777216.0;
+}
+
+fn hash2(p: vec2<i32>) -> f32 {
+    return hash3(vec3<i32>(p, 0));
 }

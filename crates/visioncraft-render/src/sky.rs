@@ -19,8 +19,13 @@ pub const TURBIDITY: f32 = 2.5;
 /// so the disc reads at laptop resolutions.
 pub const SUN_DISC_RADIUS: f32 = 0.5 * std::f32::consts::PI / 180.0;
 
-/// Night fallback sky (display-relative linear RGB, applied after exposure).
-pub const NIGHT: Vec3 = Vec3::new(0.004, 0.008, 0.025);
+/// Night sky radiance (cd/m2, linear Rec.709), present day and night as a
+/// floor under the daylight model: a clear, moonlit night sky is of the
+/// order of 0.01-0.05 cd/m2 (moonlit ground ~0.1 lux). Absolute, not
+/// display-relative: at a daylight exposure it vanishes, and a night view
+/// needs a night exposure (see `Renderer::set_exposure`), there is no auto
+/// exposure.
+pub const NIGHT: Vec3 = Vec3::new(0.012, 0.018, 0.04);
 
 /// Directional sun light.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -77,7 +82,7 @@ pub struct Sky {
     pub perez: [Vec3; 5],
     pub zenith: Vec3,
     pub sun: Vec3,
-    /// 1 in daylight, fading to 0 (night fallback) as the sun sets.
+    /// 1 in daylight, fading to 0 (night floor) through twilight.
     pub day: f32,
 }
 
@@ -94,7 +99,7 @@ impl Sky {
         // The model is defined for the sun above the horizon only; below it,
         // keep the horizon sky and fade to night (civil twilight, -6 deg).
         let elevation = sun_dir.y.clamp(-1.0, 1.0).asin();
-        let day = smoothstep(-6f32.to_radians(), 0.0, elevation);
+        let day = twilight(elevation.to_degrees());
         let theta_s = (std::f32::consts::FRAC_PI_2 - elevation).clamp(0.0, 89.5f32.to_radians());
         let sun = Vec3::new(sun_dir.x, theta_s.cos(), sun_dir.z);
         let horizontal = (sun.x * sun.x + sun.z * sun.z).sqrt();
@@ -182,12 +187,35 @@ impl Sky {
         rgb.max(Vec3::ZERO) * below
     }
 
+    /// Radiance (cd/m2) of a flat grey ground (albedo 0.2) lit by the sun and
+    /// this sky: what the environment shows below the horizon.
+    pub fn ground_radiance(&self, sun: &Sun) -> Vec3 {
+        const GROUND_ALBEDO: f32 = 0.2;
+        let (n_theta, n_phi) = (16, 32);
+        let d_theta = std::f32::consts::FRAC_PI_2 / n_theta as f32;
+        let d_phi = 2.0 * std::f32::consts::PI / n_phi as f32;
+        let mut sky_on_ground = Vec3::ZERO;
+        for i in 0..n_theta {
+            for j in 0..n_phi {
+                let theta = (i as f32 + 0.5) * d_theta;
+                let phi = (j as f32 + 0.5) * d_phi;
+                let d = Vec3::new(
+                    theta.sin() * phi.cos(),
+                    theta.cos(),
+                    theta.sin() * phi.sin(),
+                );
+                sky_on_ground += self.radiance(d) * d.y * theta.sin() * d_theta * d_phi;
+            }
+        }
+        let sun_on_ground = sun.color * sun.illuminance * sun.direction.y.max(0.0);
+        (sky_on_ground * self.day + sun_on_ground) * GROUND_ALBEDO / std::f32::consts::PI
+    }
+
     /// Irradiance of the sky (plus a grey ground bouncing sun and sky) as L2
     /// spherical harmonics, already convolved with the clamped cosine
     /// (Ramamoorthi & Hanrahan 2001: A0 = pi, A1 = 2pi/3, A2 = pi/4), in
     /// cd/m2 * sr = lux. `night` is added as uniform radiance.
     pub fn irradiance_sh(&self, sun: &Sun, night: Vec3) -> [Vec3; 9] {
-        const GROUND_ALBEDO: f32 = 0.2;
         let (n_theta, n_phi) = (32, 64);
         let d_theta = std::f32::consts::PI / n_theta as f32;
         let d_phi = 2.0 * std::f32::consts::PI / n_phi as f32;
@@ -203,15 +231,7 @@ impl Sky {
                 (dir, theta.sin() * d_theta * d_phi)
             })
         });
-        // First the sky's own irradiance on the ground, for the bounce.
-        let sky_on_ground: Vec3 = dirs
-            .clone()
-            .filter(|(d, _)| d.y > 0.0)
-            .map(|(d, w)| self.radiance(d) * d.y * w)
-            .sum::<Vec3>()
-            * self.day;
-        let sun_on_ground = sun.color * sun.illuminance * sun.direction.y.max(0.0);
-        let ground = (sky_on_ground + sun_on_ground) * GROUND_ALBEDO / std::f32::consts::PI;
+        let ground = self.ground_radiance(sun);
         let mut sh = [Vec3::ZERO; 9];
         for (d, w) in dirs {
             let l = if d.y > 0.0 {
@@ -252,6 +272,18 @@ pub fn sh_basis(n: Vec3) -> [f32; 9] {
 
 pub fn sh_eval(sh: &[Vec3; 9], n: Vec3) -> Vec3 {
     sh.iter().zip(sh_basis(n)).map(|(c, y)| *c * y).sum()
+}
+
+/// Daylight factor of the sky for the sun's elevation in degrees: 1 above
+/// the horizon, then falling by a factor of 10 per 3 degrees of depression
+/// (outdoor illuminance drops from ~400 lux at sunset to a few lux at the
+/// end of civil twilight, -6 degrees, i.e. about two decades in 6 degrees),
+/// faded out completely by -12 degrees, where the night floor remains.
+pub fn twilight(elevation_deg: f32) -> f32 {
+    if elevation_deg >= 0.0 {
+        return 1.0;
+    }
+    10f32.powf(elevation_deg / 3.0) * smoothstep(-12.0, -4.0, elevation_deg)
 }
 
 fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {

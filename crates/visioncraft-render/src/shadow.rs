@@ -21,7 +21,8 @@ use glam::{Mat4, Vec3, Vec4Swizzles};
 pub const MAX_CASCADES: usize = 4;
 /// Blend between logarithmic (1) and uniform (0) splits. With only two
 /// cascades the near one has to reach across a garden (~20 m at 80 m), so
-/// it leans more towards uniform.
+/// it leans more towards uniform (a shorter near cascade measured no faster
+/// on the budget scene).
 fn lambda(count: usize) -> f32 {
     if count <= 2 { 0.5 } else { 0.8 }
 }

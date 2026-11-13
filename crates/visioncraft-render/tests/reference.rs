@@ -342,6 +342,155 @@ fn capture_any(r: &mut Renderer) {
         .expect("poll");
 }
 
+#[test]
+fn e_brick_walls_triplanar() {
+    let mut r = renderer(W, H);
+    demo::brick_walls(&mut r);
+    setup(
+        &mut r,
+        demo::brick_walls_camera(W as f32 / H as f32),
+        demo::afternoon_sun(),
+        15.0,
+    );
+    let px = capture(&mut r, W, H);
+    // Bricks are red-brown, not grey: the albedo map is applied.
+    let wall = mean(&px, 140, 100, 220, 160);
+    assert!(wall[0] > wall[2] + 15.0, "wall {wall:?}");
+    check("e_brick_walls_triplanar", &px);
+}
+
+/// The foliage tree under wind at two fixed times: the leaves (and their
+/// shadow on the wall) move between the two.
+#[test]
+fn f_foliage_wind() {
+    let mut r = renderer(W, H);
+    demo::foliage_tree(&mut r);
+    setup(
+        &mut r,
+        demo::foliage_camera(W as f32 / H as f32),
+        demo::foliage_sun(),
+        15.0,
+    );
+    r.set_time(0.0);
+    let a = capture(&mut r, W, H);
+    check("f_foliage_wind_t0", &a);
+    r.set_time(1.7);
+    let b = capture(&mut r, W, H);
+    check("f_foliage_wind_t1", &b);
+    let changed = a
+        .chunks(4)
+        .zip(b.chunks(4))
+        .filter(|(x, y)| x.iter().zip(y.iter()).any(|(p, q)| p.abs_diff(*q) > 20))
+        .count();
+    assert!(changed > 500, "wind moved only {changed} pixels");
+}
+
+#[test]
+fn g_lod_row() {
+    let mut r = renderer(W, H);
+    demo::lod_row(&mut r);
+    setup(
+        &mut r,
+        demo::lod_camera(W as f32 / H as f32),
+        demo::afternoon_sun(),
+        15.0,
+    );
+    let px = capture(&mut r, W, H);
+    check("g_lod_row", &px);
+}
+
+#[test]
+fn h_glass_room() {
+    let mut r = renderer(W, H);
+    demo::glass_room(&mut r);
+    setup(
+        &mut r,
+        demo::glass_camera(W as f32 / H as f32),
+        demo::afternoon_sun(),
+        15.0,
+    );
+    let px = capture(&mut r, W, H);
+    check("h_glass_room", &px);
+}
+
+#[test]
+fn i_pond() {
+    let mut r = renderer(W, H);
+    demo::pond(&mut r);
+    setup(
+        &mut r,
+        demo::pond_camera(W as f32 / H as f32),
+        demo::afternoon_sun(),
+        15.0,
+    );
+    r.set_time(3.0);
+    let px = capture(&mut r, W, H);
+    check("i_pond", &px);
+}
+
+/// The house at night: three point lights and a spot, manual exposure.
+#[test]
+fn j_night_lights() {
+    let mut r = renderer(W, H);
+    demo::house(&mut r);
+    assert_eq!(r.set_lights(&demo::house_lights()), 0, "no light dropped");
+    setup(
+        &mut r,
+        demo::house_camera(W as f32 / H as f32),
+        demo::night_sun(),
+        2.0,
+    );
+    let px = capture(&mut r, W, H);
+    // The lit wall is brighter than the unlit sky above the roof.
+    let wall = mean(&px, 150, 120, 330, 150);
+    let sky = mean(&px, 0, 0, W, 10);
+    assert!(wall[0] > sky[0] + 20.0, "wall {wall:?} sky {sky:?}");
+    check("j_night_lights", &px);
+}
+
+#[test]
+fn k_clay() {
+    let mut r = renderer(W, H);
+    demo::garden(&mut r);
+    r.set_clay(true);
+    setup(
+        &mut r,
+        demo::garden_camera(W as f32 / H as f32),
+        demo::afternoon_sun(),
+        15.0,
+    );
+    let px = capture(&mut r, W, H);
+    check("k_clay", &px);
+}
+
+/// Stills: arbitrary size at HIGH quality without disturbing the live view,
+/// errors (not panics) for impossible sizes.
+#[test]
+fn stills_leave_the_live_view_alone() {
+    let mut r = renderer(160, 90);
+    r.set_quality(Quality::LOW);
+    demo::house(&mut r);
+    let cam = demo::house_camera(16.0 / 9.0);
+    setup(&mut r, cam, demo::noon_sun(), 15.0);
+    let before = capture(&mut r, 160, 90);
+    let (view, proj, eye) = demo::spheres_camera(4.0 / 3.0);
+    let still = r
+        .render_still(400, 300, view, proj, eye)
+        .expect("still")
+        .wait()
+        .expect("pixels");
+    assert_eq!(still.len(), 400 * 300 * 4);
+    assert!(
+        still.chunks(4).any(|p| p[0] != still[0]),
+        "not a blank image"
+    );
+    let after = capture(&mut r, 160, 90);
+    assert_eq!(before, after, "the live frame changed");
+    assert_eq!(r.quality(), Quality::LOW);
+    assert!(r.render_still(5000, 100, view, proj, eye).is_err());
+    assert!(r.render_still(0, 100, view, proj, eye).is_err());
+}
+
 /// 1920x1080 beauty shots of scene (b), high and medium quality:
 /// `cargo test -p visioncraft-render -- --ignored beauty`.
 #[test]
