@@ -302,10 +302,10 @@ mod tests {
             let eye = Vec3::new(step as f32 * 0.013, 1.7, step as f32 * 0.007);
             let (view, proj) = camera(eye, eye + Vec3::new(1.0, -0.1, -1.0));
             let c = compute(view, proj, sun, 3, 1024, 60.0, bounds);
-            for i in 0..3 {
+            for (i, view_proj) in c.view_proj.iter().enumerate().take(3) {
                 // The world origin lands on the shadow map grid at a whole
                 // number of texels from the cascade centre.
-                let ndc = c.view_proj[i].transform_point3(Vec3::ZERO);
+                let ndc = view_proj.transform_point3(Vec3::ZERO);
                 let texels = ndc.x * 512.0;
                 assert!(
                     (texels - texels.round()).abs() < 2e-2,
@@ -313,8 +313,10 @@ mod tests {
                 );
             }
             if let Some(prev) = last {
-                for i in 0..3 {
-                    let shift = (c.view_proj[i].w_axis.x - prev.view_proj[i].w_axis.x).abs();
+                for (i, (now, before)) in
+                    c.view_proj.iter().zip(&prev.view_proj).enumerate().take(3)
+                {
+                    let shift = (now.w_axis.x - before.w_axis.x).abs();
                     let texel_ndc = 2.0 / 1024.0;
                     let n = shift / texel_ndc;
                     assert!((n - n.round()).abs() < 2e-2, "cascade {i} moved {n} texels");
