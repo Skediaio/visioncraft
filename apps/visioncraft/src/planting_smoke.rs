@@ -81,7 +81,7 @@ pub fn form_from_json(v: &Value) -> Result<Form, String> {
     set(&mut f.radius, "radius");
     set(&mut f.max_slope, "max_slope");
     if let Some([a, b]) = v.get("scale").and_then(pair) {
-        (f.scale_min, f.scale_max) = (a, b);
+        (f.scale_min, f.scale_max, f.single_scale) = (a, b, a);
     }
     if let Some(b) = v.get("spin").and_then(Value::as_bool) {
         f.spin = b;

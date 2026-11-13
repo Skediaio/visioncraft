@@ -156,6 +156,7 @@ pub const PT_NEW_BRUSH: &str = "New brush";
 pub const PT_NEW_BRUSH_NEXT: &str = "The next stroke starts a new brush";
 pub const PT_DUPLICATE: &str = "Duplicate";
 pub const PT_PAINT_MORE: &str = "Paint more";
+pub const PT_PLANT: &str = "plant";
 pub const PT_PLANTS: &str = "plants";
 pub const PT_CAPPED: &str =
     "Capped: more plants would not be drawn. Lower the density or the area.";
@@ -167,7 +168,8 @@ pub const PT_KEEP_POINTS: &str =
     "A line keeps two points, an area three. Esc, then Delete removes the whole planting";
 pub const PT_SELECT_HINT: &str =
     "Click a plant to select its planting; drag its handles to reshape it.";
-pub const PT_SINGLE_HINT: &str = "Click to place a plant, drag to turn it, Shift+wheel to scale.";
+pub const PT_SINGLE_HINT: &str =
+    "Click to place a plant, drag to turn it, Shift+wheel or + / - to scale.";
 pub const PT_LINE_HINT: &str = "Click points along the line, Enter or double-click finishes.";
 pub const PT_CLUSTER_HINT: &str = "Click the centre of the clump, drag out its radius.";
 pub const PT_AREA_HINT: &str = "Click the outline, Enter or the first point closes it.";
@@ -197,7 +199,7 @@ pub const PT_KEYS_SELECT: &[(&str, &str)] = &[
 pub const PT_KEYS_SINGLE: &[(&str, &str)] = &[
     ("Click", "Place a plant"),
     ("Drag", "Set its rotation"),
-    ("Shift+wheel", "Scale"),
+    ("Shift+wheel, + / -", "Scale"),
     ("Ctrl+drag", "Orbit the camera"),
 ];
 pub const PT_KEYS_LINE: &[(&str, &str)] = &[

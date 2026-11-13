@@ -224,9 +224,9 @@ fn form_ui(
                 ),
             );
             edit = merge(edit, checkbox(ui, &mut form.spin, t::PT_RANDOM_ROTATION));
-            let mut s = form.scale_min;
+            let mut s = form.single_scale;
             let e = drag_field(ui, t::PT_SCALE, &mut s, 0.01, 0.1..=6.0, "");
-            (form.scale_min, form.scale_max) = (s, s);
+            form.single_scale = s;
             edit = merge(edit, e);
         }
         Tool::Line => {
@@ -471,7 +471,14 @@ impl PlantingTools {
                 self.finish_edit(cx, e);
             }
             if let Some((n, truncated)) = self.readout(cx) {
-                ui.label(RichText::new(format!("{} {}", thousands(n), t::PT_PLANTS)).strong());
+                ui.label(
+                    RichText::new(format!(
+                        "{} {}",
+                        thousands(n),
+                        if n == 1 { t::PT_PLANT } else { t::PT_PLANTS }
+                    ))
+                    .strong(),
+                );
                 if truncated {
                     ui.colored_label(Color32::from_rgb(255, 170, 60), t::PT_CAPPED);
                 }

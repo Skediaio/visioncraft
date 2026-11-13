@@ -91,6 +91,8 @@ pub struct Form {
     pub density: f32,
     pub min_distance: f32,
     pub scale_min: f32,
+    /// A single plant's scale (its own, not a range).
+    pub single_scale: f32,
     pub scale_max: f32,
     pub spin: bool,
     pub seed: u64,
@@ -125,6 +127,7 @@ impl Default for Form {
             density: 0.5,
             min_distance: 0.0,
             scale_min: 0.85,
+            single_scale: 1.0,
             scale_max: 1.15,
             spin: true,
             seed: 1,
@@ -214,7 +217,7 @@ impl Form {
                     weight: 1.0,
                 }];
                 f.rotation = s.rotation_y_deg;
-                (f.scale_min, f.scale_max) = (s.scale, s.scale);
+                f.single_scale = s.scale;
             }
             Generator::SplineMass(s) => {
                 f.palette = s.asset_palette.clone();
@@ -276,7 +279,7 @@ impl Form {
                     s.asset.clone_from(&w.asset);
                 }
                 s.rotation_y_deg = self.rotation;
-                s.scale = self.scale_min;
+                s.scale = self.single_scale;
                 s.layer.clone_from(&self.layer);
             }
             Generator::SplineMass(s) => {
@@ -355,7 +358,7 @@ impl Form {
                     "asset": self.palette.first().map(|w| w.asset.clone()).unwrap_or_default(),
                     "position": position,
                     "rotation_y_deg": rotation_deg,
-                    "scale": self.scale_min,
+                    "scale": self.single_scale,
                 })),
             ),
             Geom::Line(points) => (
@@ -433,7 +436,7 @@ impl Form {
     /// and the fields a brush does not have (a cluster's radius, a single plant's rotation).
     pub fn signature(&self) -> String {
         let mut f = self.clone();
-        (f.seed, f.radius, f.rotation) = (0, 0.0, 0.0);
+        (f.seed, f.radius, f.rotation, f.single_scale) = (0, 0.0, 0.0, 0.0);
         format!("{f:?}")
     }
 
@@ -1074,6 +1077,14 @@ impl PlantingTools {
                 self.brush_radius = (self.brush_radius * 1.2).clamp(BRUSH_MIN, BRUSH_MAX);
             }
         }
+        if self.tool == Tool::Single {
+            // The same as Shift+wheel, for a keyboard or a wheel the browser keeps for itself.
+            let up = key_pressed(cx, Key::Plus) || key_pressed(cx, Key::Equals);
+            if up || key_pressed(cx, Key::Minus) {
+                let k = if up { 1.1 } else { 1.0 / 1.1 };
+                self.form.single_scale = (self.form.single_scale * k).clamp(0.1, 6.0);
+            }
+        }
         if ctrl && key_pressed(cx, Key::D) {
             self.duplicate(cx);
         }
@@ -1266,8 +1277,8 @@ impl PlantingTools {
             let wheel = cx.ctx.input(|i| i.smooth_scroll_delta);
             let d = wheel.x + wheel.y;
             if d != 0.0 {
-                let s = (self.form.scale_min * 1.1f32.powf(d.signum())).clamp(0.1, 6.0);
-                (self.form.scale_min, self.form.scale_max) = (s, s);
+                let s = (self.form.single_scale * 1.1f32.powf(d.signum())).clamp(0.1, 6.0);
+                self.form.single_scale = s;
             }
         }
         if input.drag_started
@@ -1296,7 +1307,7 @@ impl PlantingTools {
             pick_weighted(&self.form.palette, hash01(self.counter * 13 + 5)).map(str::to_string);
         if let (Some(at), Some(asset)) = (at, &asset) {
             let (h, r) = crate::plant_scene::plant_size(cx.s.project(), &cx.s.assets, asset);
-            let s = self.form.scale_min;
+            let s = self.form.single_scale;
             let base = Vec3::new(at.x, at.y + 0.1, at.z);
             top.extend(ring(
                 cx,
