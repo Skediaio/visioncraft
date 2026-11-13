@@ -481,7 +481,7 @@ impl DrawState {
             Tool::Block => (
                 "shape.add_extrusion",
                 "plaster",
-                json!({"name": name(t::TOOL_BLOCK), "outline": points, "closed": true, "height": 3.0}),
+                json!({"name": name(t::TOOL_BLOCK), "outline": points, "closed": true, "height": 6.0}),
             ),
             Tool::Wall => (
                 "shape.add_extrusion",
@@ -711,6 +711,14 @@ impl DrawState {
         let mut params = serde_json::Map::new();
         match &mut edited {
             Shape::Area(a) => {
+                let mut drape = a.drape;
+                if ui
+                    .checkbox(&mut drape, t::FOLLOW_GROUND)
+                    .on_hover_text(t::FOLLOW_GROUND_TIP)
+                    .changed()
+                {
+                    cx.run("shape.set_height", json!({"id": a.id, "drape": drape}));
+                }
                 let e = drag_field(ui, t::ELEVATION, &mut a.elevation, 0.05, -50.0..=50.0, " m");
                 if e != Edit::None {
                     params.insert("elevation".into(), json!(a.elevation));
@@ -727,6 +735,23 @@ impl DrawState {
                         params.insert(key.into(), json!(*v));
                         edit = e;
                     }
+                }
+                if x.closed {
+                    // Storeys of 3 m: a house is two clicks, not a typed number.
+                    ui.horizontal(|ui| {
+                        ui.label(t::STOREYS);
+                        for n in 1..=3u8 {
+                            let h = 3.0 * f32::from(n);
+                            if ui
+                                .selectable_label((x.height - h).abs() < 0.01, n.to_string())
+                                .clicked()
+                            {
+                                x.height = h;
+                                params.insert("height".into(), json!(h));
+                                edit = Edit::Done;
+                            }
+                        }
+                    });
                 }
                 if !x.closed {
                     let e = drag_field(ui, t::THICKNESS, &mut x.thickness, 0.01, 0.02..=5.0, " m");
