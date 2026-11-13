@@ -328,11 +328,12 @@ struct LawnGpu {
     items: Vec<ItemId>,
 }
 
-/// Tufts stop being drawn beyond this distance: far lawns are just the ground texture. They thin
-/// out towards it: each of `LAWN_BANDS` shares of the tufts stops at its own distance, so the
-/// edge is a gradient instead of a line.
+/// Tufts stop being drawn beyond this distance: far lawns are just the ground texture. The last
+/// `LAWN_FADE_BAND_M` dither out (`set_item_cull_fade`), so the edge is a gradient, not a line.
 const LAWN_FADE_M: f32 = 40.0;
-const LAWN_BANDS: usize = 4;
+const LAWN_FADE_BAND_M: f32 = 15.0;
+/// Shrubs, ground plants and small objects fade out over this share of their cull distance.
+const CULL_FADE_SHARE: f32 = 0.25;
 /// At most this many tufts per square metre are drawn, and this many per lawn.
 const LAWN_MAX_DENSITY: f32 = 300.0;
 const LAWN_MAX_TUFTS: usize = 60_000;
@@ -764,9 +765,8 @@ impl Scene {
                 self.flora.want(LAWN_SPECIES, class, month, &res.params);
                 continue;
             }
-            // One matrix list per variant (the lawn does not repeat one tuft) and fade band.
-            let lists = plants::VARIANTS as usize * LAWN_BANDS;
-            let mut by_variant: Vec<Vec<Mat4>> = vec![Vec::new(); lists];
+            // One matrix list per variant, so the lawn does not repeat one tuft.
+            let mut by_variant: Vec<Vec<Mat4>> = vec![Vec::new(); plants::VARIANTS as usize];
             let mut n = 0usize;
             // shortcut: one colour per lawn (its first lawn face's), fine until lawns mix colours
             let color = faces[0].2;
@@ -781,14 +781,11 @@ impl Scene {
                     }
                     let p = o.xf.transform_point3(Vec3::from(t.position));
                     let s = (t.height_m / 0.08).clamp(0.3, 2.5);
-                    // a scrambled band so that thinning has no pattern
-                    let band = (n.wrapping_mul(2_654_435_761) >> 7) % LAWN_BANDS;
-                    by_variant[band * plants::VARIANTS as usize + n % plants::VARIANTS as usize]
-                        .push(
-                            Mat4::from_translation(p)
-                                * Mat4::from_rotation_y(t.rotation_y_deg.to_radians())
-                                * Mat4::from_scale(Vec3::splat(s)),
-                        );
+                    by_variant[n % plants::VARIANTS as usize].push(
+                        Mat4::from_translation(p)
+                            * Mat4::from_rotation_y(t.rotation_y_deg.to_radians())
+                            * Mat4::from_scale(Vec3::splat(s)),
+                    );
                     n += 1;
                 }
             }
@@ -796,21 +793,22 @@ impl Scene {
                 old.items.into_iter().for_each(|i| r.remove_item(i));
             }
             let mut items = Vec::new();
-            for (i, matrices) in by_variant.iter().enumerate() {
-                let (band, v) = (i / plants::VARIANTS as usize, i as u32 % plants::VARIANTS);
+            for (v, matrices) in by_variant.iter().enumerate() {
+                let v = v as u32;
                 if matrices.is_empty() {
                     continue;
                 }
                 let Some(parts) = self.flora.tinted(r, LAWN_SPECIES, class, v, color) else {
                     continue;
                 };
-                // The coarsest level is the last one drawn, then nothing.
-                let end = LAWN_FADE_M * (band + 1) as f32 / LAWN_BANDS as f32;
+                // The coarsest level is the last one drawn, fading out, then nothing.
                 let parts: Vec<_> = parts
                     .iter()
-                    .map(|&(m, mat, d)| (m, mat, d.min(end)))
+                    .map(|&(m, mat, d)| (m, mat, d.min(LAWN_FADE_M)))
                     .collect();
-                items.push(r.add_lod_item(&parts, matrices));
+                let item = r.add_lod_item(&parts, matrices);
+                r.set_item_cull_fade(item, LAWN_FADE_BAND_M);
+                items.push(item);
             }
             self.lawns.insert(id, LawnGpu { key, items });
         }
@@ -993,9 +991,13 @@ impl Scene {
                     let class = plants::class(&res.params, month);
                     self.flora.impostor(asset, class, variant)
                 });
-            if let Some(imp) = impostor {
+            let last = parts.iter().map(|p| p.2).fold(0.0, f32::max);
+            match impostor {
                 // fails only for a removed impostor: the tree then stops at its far mesh
-                let _ = r.set_item_impostor(item, imp, plants::IMPOSTOR_MAX_M);
+                Some(imp) => drop(r.set_item_impostor(item, imp, plants::IMPOSTOR_MAX_M)),
+                // Culled at a finite distance (shrubs, small objects): dither out before it.
+                None if last.is_finite() => r.set_item_cull_fade(item, last * CULL_FADE_SHARE),
+                None => {}
             }
             return vec![item];
         }
