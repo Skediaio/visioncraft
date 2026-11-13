@@ -154,15 +154,15 @@ pub fn auto_ev(elevation_deg: f32, lamps: bool) -> f32 {
     const DAY: [(f32, f32); 5] = [
         (-12.0, 1.5),
         (-8.0, 2.8),
-        (-4.0, 6.0),
-        (0.0, 10.5),
+        (-4.0, 5.5),
+        (0.0, 9.5),
         (10.0, 13.5),
     ];
     const LAMPS: [(f32, f32); 5] = [
         (-12.0, 1.0),
         (-8.0, 2.0),
-        (-4.0, 5.0),
-        (0.0, 10.0),
+        (-4.0, 4.5),
+        (0.0, 9.0),
         (10.0, 13.5),
     ];
     let table: &[(f32, f32)] = if lamps && elevation_deg < 0.0 {
@@ -548,7 +548,7 @@ impl Studio {
         self.renderer.set_clay(self.project().style.clay);
         // Below the horizon the haze only scatters the dim, pink twilight sky back at the camera
         // and washes the garden out: thin it as the sun sinks, and no sun glow.
-        let night = (-elevation / 6.0).clamp(0.0, 1.0);
+        let night = ((1.0 - elevation) / 7.0).clamp(0.0, 1.0);
         self.renderer
             .set_atmosphere(&visioncraft_render::Atmosphere {
                 haze: v.haze * (1.0 - 0.7 * night),
@@ -681,7 +681,16 @@ impl Studio {
             self.suggested = true;
             self.suggest_lights = true;
         }
-        let q = self.current_quality();
+        let mut q = self.current_quality();
+        if self.camera.view == View::Top {
+            // The renderer takes the plan's height as the LOD distance, so shrubs and ground
+            // plants (culled at 15 m and up) would vanish from a plan of a garden. Scale the
+            // distances so that they stay, in steps of two so zooming does not rebuild targets.
+            // shortcut: until the renderer draws the last level instead of culling in plan views
+            let need = 2.0 * self.camera.top_half_height * 100.0 / 12.0;
+            let step = need.max(100.0).log2().ceil().exp2() as u32;
+            q.lod_distance_percent = q.lod_distance_percent.max(step);
+        }
         self.renderer.set_quality(q);
         let hl = self
             .highlight

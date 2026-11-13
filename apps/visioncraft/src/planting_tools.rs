@@ -905,7 +905,17 @@ impl PlantingTools {
         let Some(target) = self.add_to else {
             return;
         };
+        // A single plant has one asset: what was picked replaces it.
+        let single = self
+            .selected
+            .as_deref()
+            .and_then(|id| stored(cx, id))
+            .map_or(self.tool, |g| tool_of(&g))
+            == Tool::Single;
         let form = self.active_form();
+        if single && matches!(target, AddTarget::Palette) {
+            form.palette.clear();
+        }
         let palette = match target {
             AddTarget::Palette => &mut form.palette,
             AddTarget::Layer(i) => match form.layers.get_mut(i) {
@@ -969,7 +979,12 @@ impl PlantingTools {
             .palette
             .first()
             .map_or(String::new(), |w| display_name(cx, &w.asset));
-        form.name(tool.label(), &first)
+        // Lines, clusters and singles use the palette even when the form holds a preset's layers.
+        if tool.layered() {
+            form.name(tool.label(), &first)
+        } else {
+            format!("{} · {first}", tool.label())
+        }
     }
 
     fn place(&mut self, cx: &mut Cx, form: &Form, tool: Tool, geom: &Geom) -> Option<String> {

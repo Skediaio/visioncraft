@@ -170,7 +170,7 @@ impl ObjectsState {
             } else {
                 (
                     egui::Align2::LEFT_BOTTOM,
-                    egui::Vec2::new(10.0 + 380.0 + 10.0, -58.0),
+                    egui::Vec2::new(10.0 + 430.0 + 10.0, -58.0),
                 )
             };
             let (mut added, mut close) = (None, false);
