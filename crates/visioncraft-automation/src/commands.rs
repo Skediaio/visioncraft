@@ -3,7 +3,7 @@
 //! that are all-or-nothing.
 
 use crate::MAX_BATCH_STEPS;
-use crate::docs::{CommandDoc, Origin, ParamDoc, derive};
+use crate::docs::{CommandDoc, ParamDoc, from_spec};
 use crate::fields::{Fields, describe, shorten};
 use crate::host::{Host, RenderRequest, missing_json};
 use crate::inspect::{self, Verbosity};
@@ -73,9 +73,7 @@ fn host_doc(
         open: false,
         result: Some(result.into()),
         example: (!example.is_null()).then_some(example),
-        origin: Origin::Host,
         undoable,
-        derived: false,
     }
 }
 
@@ -84,6 +82,23 @@ pub fn host_docs() -> Vec<CommandDoc> {
     let time = "{year?, month?, day?, hour?}: local time at the site";
     let camera = "{position: [x, y, z], target: [x, y, z], fov_y_deg? = 50}";
     vec![
+        host_doc(
+            "agent.log",
+            "Agent log",
+            "What agents did in this session, newest first (at most limit, 1 to 500 of the last 500): entries {client, timeMs, command, label, ok, message, created, changed, intent}. Session state, not saved; reading commands (agent.log, document.inspect) are not in it.",
+            vec![p(
+                "limit",
+                "integer",
+                None,
+                false,
+                Some("50"),
+                &[],
+                "At most this many entries, 1 to 500",
+            )],
+            "{total, entries: [{client, timeMs, command, label, ok, message, created, changed, intent}]}",
+            json!({"limit": 5}),
+            false,
+        ),
         host_doc(
             "file.new",
             "New Project",
@@ -203,43 +218,6 @@ pub fn host_docs() -> Vec<CommandDoc> {
             false,
         ),
         host_doc(
-            "document.measure",
-            "Measure",
-            "Lengths, areas, heights and slopes. Give one or more of points, outline and path.",
-            vec![
-                p(
-                    "points",
-                    "[[x, y, z], ...]",
-                    Some("m"),
-                    false,
-                    None,
-                    &[],
-                    "A polyline: length_m, and from the first to the last point height_difference_m and slope_percent",
-                ),
-                p(
-                    "outline",
-                    "[[x, z], ...]",
-                    Some("m"),
-                    false,
-                    None,
-                    &[],
-                    "A polygon: area_m2",
-                ),
-                p(
-                    "path",
-                    "[[x, z], ...]",
-                    Some("m"),
-                    false,
-                    None,
-                    &[],
-                    "A walk over the ground (terrain, areas, models): ground_length_m",
-                ),
-            ],
-            "{length_m?, height_difference_m?, slope_percent?, area_m2?, ground_length_m?}",
-            json!({"outline": [[0, 0], [4, 0], [4, 2.5], [0, 2.5]]}),
-            false,
-        ),
-        host_doc(
             "query.raycast",
             "Ray Cast",
             "The nearest surface a ray hits: models, shapes and terrain on visible layers. Not a hit is {hit: false}.",
@@ -268,6 +246,23 @@ pub fn host_docs() -> Vec<CommandDoc> {
             false,
         ),
         host_doc(
+            "query.ground_length",
+            "Ground Length",
+            "The length of a walk along path as it runs over the ground (terrain, areas and models), sampled every 0.25 m; where there is no ground it counts as height 0.",
+            vec![p(
+                "path",
+                "[[x, z], ...]",
+                Some("m"),
+                true,
+                None,
+                &[],
+                "The walk, at least 2 points",
+            )],
+            "{ground_length_m}",
+            json!({"path": [[0, 0], [10, 0]]}),
+            false,
+        ),
+        host_doc(
             "query.ground_height",
             "Ground Height",
             "The height plants stand on at (x, z): terrain, areas and models, the highest.",
@@ -285,23 +280,6 @@ pub fn host_docs() -> Vec<CommandDoc> {
             ],
             "{x, z, height: number or null}",
             json!({"x": 0, "z": 0}),
-            false,
-        ),
-        host_doc(
-            "query.sun",
-            "Sun Position",
-            "Where the sun stands for the project's site and time (or the time given), with sunrise and sunset that day.",
-            vec![p(
-                "time",
-                "object",
-                None,
-                false,
-                Some("the project's time"),
-                &[],
-                time,
-            )],
-            "{azimuth_deg (clockwise from north), elevation_deg, direction, sunrise_hour, sunset_hour, above_horizon}",
-            json!({"time": {"hour": 21}}),
             false,
         ),
         host_doc(
@@ -501,9 +479,7 @@ pub fn host_docs() -> Vec<CommandDoc> {
 /// Every command, sorted by id: the host's and the core's.
 pub fn docs(session: &Session) -> Vec<CommandDoc> {
     let mut all = host_docs();
-    for (id, description) in session.commands() {
-        all.push(derive(id, description));
-    }
+    all.extend(session.command_specs().into_iter().map(from_spec));
     all.sort_by(|a, b| a.id.cmp(&b.id));
     all
 }
@@ -611,20 +587,6 @@ pub fn execute(host: &mut dyn Host, id: &str, params: &Value) -> Result<Value, S
             let (session, state) = host.parts();
             Ok(inspect::inspect(session, state, &v))
         }
-        "document.measure" => {
-            Fields::new(
-                id,
-                "parameter",
-                Some(params),
-                &["points", "outline", "path"],
-            )?;
-            let points = take::<Vec<[f32; 3]>>(id, params, "points")?;
-            let outline = take::<Vec<[f32; 2]>>(id, params, "outline")?;
-            let path = take::<Vec<[f32; 2]>>(id, params, "path")?;
-            let (session, state) = host.parts();
-            inspect::measure_json(session, state, points, outline, path)
-                .map_err(|e| format!("{id}: {e}"))
-        }
         "query.raycast" => {
             Fields::new(id, "parameter", Some(params), &["origin", "direction"])?;
             let origin = need::<[f32; 3]>(id, params, "origin")?;
@@ -635,24 +597,20 @@ pub fn execute(host: &mut dyn Host, id: &str, params: &Value) -> Result<Value, S
             let (session, state) = host.parts();
             Ok(inspect::raycast_json(session, state, origin, dir))
         }
+        "query.ground_length" => {
+            Fields::new(id, "parameter", Some(params), &["path"])?;
+            let path = need::<Vec<[f32; 2]>>(id, params, "path")?;
+            if path.len() < 2 {
+                return Err(format!("{id}: `path` needs at least 2 points"));
+            }
+            let (session, state) = host.parts();
+            Ok(inspect::ground_length_json(session, state, &path))
+        }
         "query.ground_height" => {
             Fields::new(id, "parameter", Some(params), &["x", "z"])?;
             let (x, z) = (need::<f32>(id, params, "x")?, need::<f32>(id, params, "z")?);
             let (session, state) = host.parts();
             Ok(inspect::ground_json(session, state, x, z))
-        }
-        "query.sun" => {
-            let a = Fields::new(id, "parameter", Some(params), &["time"])?;
-            let project = host.session().project().clone();
-            let time = match a.get("time") {
-                Some(t) => Some(
-                    with_time(&project, t)
-                        .map_err(|e| format!("{id}: {e}"))?
-                        .time,
-                ),
-                None => None,
-            };
-            Ok(inspect::sun_json(&project, time.as_ref()))
         }
         "catalog.search" => catalog_search(host, params),
         "species.list" => species_list(host, params),
@@ -665,6 +623,7 @@ pub fn execute(host: &mut dyn Host, id: &str, params: &Value) -> Result<Value, S
             Ok(json!({ "presets": presets }))
         }
         "view.render" => view_render(host, params),
+        "agent.log" => agent_log(host, params),
         _ => run_core(host, id, params),
     }?;
     Ok(result)
@@ -690,22 +649,8 @@ fn need<T: serde::de::DeserializeOwned>(id: &str, params: &Value, key: &str) -> 
 /// A core command: unknown keys refused (where the docs list them all), then `Session::run`.
 fn run_core(host: &mut dyn Host, id: &str, params: &Value) -> Result<Value, String> {
     let (session, state) = host.parts();
-    let all = docs(session);
-    let Some(doc) = all.iter().find(|d| d.id == id) else {
-        return Err(suggest(id, &all));
-    };
-    if !doc.open
-        && let Some(map) = params.as_object()
-        && let Some(unknown) = map
-            .keys()
-            .find(|k| doc.params.iter().all(|p| &p.name != *k))
-    {
-        let names: Vec<&str> = doc.params.iter().map(|p| p.name.as_str()).collect();
-        return Err(format!(
-            "{id}: unknown parameter `{}`; its parameters are: {}",
-            shorten(unknown),
-            names.join(", ")
-        ));
+    if session.command_spec(id).is_none() {
+        return Err(suggest(id, &docs(session)));
     }
     // A model whose file cannot be read is refused before it is added.
     let preloaded = if id == "model.add" {
@@ -1023,7 +968,7 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
     out.insert("width".into(), width.into());
     out.insert("height".into(), height.into());
     out.insert("time".into(), json!(project.time));
-    out.insert("sun".into(), inspect::sun_json(&project, None));
+    out.insert("sun".into(), inspect::sun_json(&project));
     match path {
         Some(path) => {
             std::fs::write(&path, &rendered.png)
@@ -1039,12 +984,100 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
     Ok(Value::Object(out))
 }
 
+// ------------------------------------------------------------------------- agent log
+
+/// Most entries the agent log keeps; the oldest go first (3dcraft's `MAX_ENTRIES`).
+pub const MAX_LOG_ENTRIES: usize = 500;
+/// Most characters of an intent; a longer one is cut with `…`.
+pub const MAX_INTENT_CHARS: usize = 300;
+
+/// An intent as the log keeps it: control characters and runs of white space become one space,
+/// direction marks and invisible characters go, at most 300 characters. `None` when empty.
+/// Ported from 3dcraft `crates/engine/src/agent_log.rs` (`clean_intent`, MIT).
+pub fn clean_intent(text: &str) -> Option<String> {
+    let invisible = |c: char| matches!(c, '\u{00AD}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}');
+    let mut out = String::new();
+    for c in text.chars().filter(|c| !invisible(*c)) {
+        if c.is_control() || c.is_whitespace() {
+            if !out.is_empty() && !out.ends_with(' ') {
+                out.push(' ');
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    let out = out.trim_end().to_string();
+    if out.is_empty() {
+        return None;
+    }
+    if out.chars().count() > MAX_INTENT_CHARS {
+        let cut: String = out.chars().take(MAX_INTENT_CHARS - 1).collect();
+        return Some(format!("{}…", cut.trim_end()));
+    }
+    Some(out)
+}
+
+/// Runs a command for an agent and notes it in the agent log (`agent.log`), as 3dcraft's
+/// window does: who (the MCP client's name), when, the command, how it went, what it made or
+/// changed, and the intent. Reading commands (`agent.log`, `document.inspect`) are not noted.
+pub fn execute_logged(
+    host: &mut dyn Host,
+    id: &str,
+    params: &Value,
+    intent: Option<&str>,
+) -> Result<Value, String> {
+    let outcome = execute(host, id, params);
+    if matches!(id, "agent.log" | "document.inspect") {
+        return outcome;
+    }
+    let label = docs(host.session())
+        .into_iter()
+        .find(|d| d.id == id)
+        .map_or_else(|| id.to_string(), |d| d.label);
+    let state = host.state();
+    let (ok, message) = match &outcome {
+        Ok(v) => (true, v.to_string()),
+        Err(e) => (false, e.clone()),
+    };
+    let message: String = message.chars().take(160).collect();
+    let created: Vec<&str> = outcome
+        .as_ref()
+        .ok()
+        .and_then(|v| v["id"].as_str())
+        .into_iter()
+        .collect();
+    let changed: Vec<&str> = params["id"].as_str().into_iter().collect();
+    let time_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64);
+    state.log.push_back(json!({
+        "client": state.client.clone().unwrap_or_else(|| "agent".into()),
+        "timeMs": if cfg!(target_arch = "wasm32") { 0 } else { time_ms },
+        "command": id, "label": label, "ok": ok, "message": message,
+        "created": created, "changed": changed, "intent": intent.and_then(clean_intent),
+    }));
+    while state.log.len() > MAX_LOG_ENTRIES {
+        state.log.pop_front();
+    }
+    outcome
+}
+
+fn agent_log(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
+    let a = Fields::new("agent.log", "parameter", Some(params), &["limit"])?;
+    let limit = a.integer("limit", 1, MAX_LOG_ENTRIES as u64)?.unwrap_or(50) as usize;
+    let log = &host.state().log;
+    let entries: Vec<Value> = log.iter().rev().take(limit).cloned().collect();
+    Ok(json!({"total": log.len(), "entries": entries}))
+}
+
 // ---------------------------------------------------------------------------- batches
 
 /// One step of a batch.
 pub struct Step {
     pub command: String,
     pub params: Value,
+    /// Why this step, when it differs from the batch's intent.
+    pub intent: Option<String>,
 }
 
 /// Reads and checks every step before any runs. `id_key` is what the protocol calls the
@@ -1073,13 +1106,40 @@ pub(crate) fn parse_steps(
                 describe(item)
             ));
         }
-        let step = Fields::new(&step_owner, noun, Some(item), &[id_key, "params"])?;
+        let step = Fields::new(&step_owner, noun, Some(item), &[id_key, "params", "intent"])?;
         steps.push(Step {
             command: step.required_str(id_key)?.to_string(),
             params: step.object("params")?,
+            intent: step.str("intent")?.map(str::to_string),
         });
     }
     Ok(steps)
+}
+
+/// How a batch runs (3dcraft's `BatchStops` and `terse`, plus `atomic`).
+#[derive(Clone, Copy)]
+pub struct BatchOptions<'a> {
+    /// Stop at the first command that returns an error (default true).
+    pub stop_on_error: bool,
+    /// Also stop at the first step that makes something fail. Accepted for 3dcraft's shape:
+    /// a VisionCraft project has no features that fail, so no step breaks anything.
+    pub stop_on_break: bool,
+    pub terse: bool,
+    /// All or nothing (VisionCraft's extra): see [`run_batch`].
+    pub atomic: bool,
+    pub intent: Option<&'a str>,
+}
+
+impl Default for BatchOptions<'_> {
+    fn default() -> Self {
+        Self {
+            stop_on_error: true,
+            stop_on_break: false,
+            terse: false,
+            atomic: false,
+            intent: None,
+        }
+    }
 }
 
 /// The outcome of a batch: the report both protocols return, and whether it failed.
@@ -1088,29 +1148,102 @@ pub struct BatchOutcome {
     pub failed: bool,
 }
 
-/// Runs the steps in order, all or nothing: on a scratch copy of the project, so that the
-/// first step that fails leaves the project, its history and the open file as they were
-/// (`rolledBack: true`). A batch that succeeds and changes the project is one undo step. Files
-/// written by a step (`file.save`, `view.render` with a path) stay written.
-pub fn run_batch(host: &mut dyn Host, steps: &[Step], terse: bool) -> BatchOutcome {
+/// Runs the steps in order, as 3dcraft does: not a transaction, each step its own undo step;
+/// `failed` counts the commands that returned an error, and `stop_on_error` stops at the first.
+/// Report: `{completed, failed, results: [{ok, result | error, ms}], ms}`, or with `terse`
+/// `{completed, failed, errors: [{step, error, ms}], last: {step, result, ms}, ms}`.
+///
+/// With `atomic` the steps run on a scratch copy of the project and the first failure stops
+/// the batch and takes back everything it did: the project, its history and the open file are
+/// as before (`rolledBack: true`). An atomic batch that succeeds is one undo step. Files written
+/// by a step (`file.save`, `view.render` with a path) stay written either way.
+pub fn run_batch(host: &mut dyn Host, steps: &[Step], options: &BatchOptions) -> BatchOutcome {
     let whole = Stopwatch::start();
-    let (session, state) = host.parts();
-    let scratch = Session::new(session.project().clone());
-    let original = std::mem::replace(session, scratch);
-    let saved_state = (
-        state.file.clone(),
-        state.models.clone(),
-        state.missing.clone(),
-        state.saved.clone(),
-    );
+    let mut report = if options.atomic {
+        atomic(host, steps, options)
+    } else {
+        run_steps(host, steps, options)
+    };
+    let failed = report["failed"].as_u64().unwrap_or(0) > 0;
+    report["ms"] = whole.ms();
+    BatchOutcome { report, failed }
+}
+
+/// Commands that replace the session or step through its history: they cannot be part of a
+/// transaction.
+const NOT_ATOMIC: [&str; 4] = ["file.new", "file.open", "edit.undo", "edit.redo"];
+
+/// The steps inside one core transaction (`Session::transaction`): the first failure takes back
+/// everything, success is one undo step, commands registered by extensions take part.
+fn atomic(host: &mut dyn Host, steps: &[Step], options: &BatchOptions) -> Value {
+    if let Some(step) = steps
+        .iter()
+        .find(|s| NOT_ATOMIC.contains(&s.command.as_str()))
+    {
+        let error = format!(
+            "{}: cannot be part of an atomic batch; run it on its own",
+            step.command
+        );
+        let mut report = json!({"completed": 0, "failed": 1, "rolledBack": true});
+        if options.terse {
+            report["errors"] = json!([{"step": 0, "error": error, "ms": Value::Null}]);
+            report["last"] = Value::Null;
+        } else {
+            report["results"] = json!([{"ok": false, "error": error, "ms": Value::Null}]);
+        }
+        return report;
+    }
+    let saved = {
+        let state = host.state();
+        (
+            state.file.clone(),
+            state.models.clone(),
+            state.missing.clone(),
+            state.saved.clone(),
+        )
+    };
+    // The session leaves the host for the transaction and comes back inside it, so the steps
+    // run on the host as always.
+    let mut session = std::mem::replace(host.session(), Session::new(Project::default()));
+    let mut report = Value::Null;
+    let _ = session.transaction(|inside| {
+        std::mem::swap(host.session(), inside);
+        report = run_steps(
+            host,
+            steps,
+            &BatchOptions {
+                stop_on_error: true,
+                ..*options
+            },
+        );
+        std::mem::swap(host.session(), inside);
+        if report["failed"].as_u64().unwrap_or(0) > 0 {
+            Err(visioncraft_core::CommandError::Failed("rolled back".into()))
+        } else {
+            Ok(())
+        }
+    });
+    *host.session() = session;
+    let rolled_back = report["failed"].as_u64().unwrap_or(0) > 0;
+    if rolled_back {
+        let state = host.state();
+        (state.file, state.models, state.missing, state.saved) = saved;
+        let project = host.session().project().clone();
+        host.state().sync_models(&project);
+    }
+    report["rolledBack"] = rolled_back.into();
+    report
+}
+
+fn run_steps(host: &mut dyn Host, steps: &[Step], options: &BatchOptions) -> Value {
     let (mut results, mut errors, mut last) = (Vec::new(), Vec::new(), Value::Null);
-    let mut completed = 0usize;
-    let mut failed = false;
+    let (mut completed, mut failed) = (0usize, 0usize);
     for (index, step) in steps.iter().enumerate() {
         let clock = Stopwatch::start();
-        // A panic must not leave the scratch session in place of the real one.
+        let intent = step.intent.as_deref().or(options.intent);
+        // A panic must not leave the session out of the host (atomic batches).
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            execute(host, &step.command, &step.params)
+            execute_logged(host, &step.command, &step.params, intent)
         }))
         .unwrap_or_else(|payload| {
             Err(format!(
@@ -1123,39 +1256,31 @@ pub fn run_batch(host: &mut dyn Host, steps: &[Step], terse: bool) -> BatchOutco
         match outcome {
             Ok(result) => {
                 completed += 1;
-                if terse {
+                if options.terse {
                     last = json!({"step": index, "result": result, "ms": ms});
                 } else {
                     results.push(json!({"ok": true, "result": result, "ms": ms}));
                 }
             }
             Err(error) => {
-                failed = true;
-                let error = format!("step {index}: {error}");
-                if terse {
+                failed += 1;
+                if options.terse {
                     errors.push(json!({"step": index, "error": error, "ms": ms}));
                 } else {
                     results.push(json!({"ok": false, "error": error, "ms": ms}));
                 }
-                break;
+                if options.stop_on_error {
+                    break;
+                }
             }
         }
     }
-    let (session, state) = host.parts();
-    let done = std::mem::replace(session, original);
-    if failed {
-        (state.file, state.models, state.missing, state.saved) = saved_state;
-    } else if done.project() != session.project() {
-        session.replace_project(done.project().clone());
-    }
-    let mut report =
-        json!({"completed": completed, "failed": usize::from(failed), "rolledBack": failed});
-    if terse {
+    let mut report = json!({"completed": completed, "failed": failed});
+    if options.terse {
         report["errors"] = errors.into();
         report["last"] = last;
     } else {
         report["results"] = results.into();
     }
-    report["ms"] = whole.ms();
-    BatchOutcome { report, failed }
+    report
 }

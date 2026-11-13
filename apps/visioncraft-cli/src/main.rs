@@ -34,7 +34,7 @@ Usage: visioncraft-cli <subcommand> [options]
 Subcommands:
   commands   List the commands: id, params, summary
   run        Open or create a project, run --script and --cmd, save with --out
-  batch      Like run, all or nothing: the script's steps as one batch
+  batch      Run a script as one batch (the method batch); --atomic: all or nothing
   info       Print a project's state as JSON
   render     Render a project to a PNG (on the GPU)
   export     Render the viewpoints at the export presets (Screen, HD, 4K, ...)
@@ -57,8 +57,8 @@ Options:
   --filter TEXT   Only commands whose id or label contains TEXT (any case)";
 
 const HELP_RUN: &str = "\
-Usage: visioncraft-cli run [FILE] [--script SCRIPT] [--cmd ID [--params JSON]]...
-                           [--out FILE] [--keep-going]
+Usage: visioncraft-cli run [FILE] [--new JSON] [--script SCRIPT]
+                           [--cmd ID [--params JSON]]... [--out FILE] [--keep-going]
 
 Opens the project FILE (a .visioncraft file, as file.open opens it, with the
 models it refers to) or starts a new one, runs the steps of the script, then
@@ -67,8 +67,12 @@ first command that fails, with exit code 1 and nothing saved, unless
 --keep-going is given.
 
 Options:
+  --new JSON      Params of file.new for the new project ({} is all it takes).
+                  Not with FILE
   --script SCRIPT A JSON file: an array of steps, each [\"id\", {params}] or
-                  {\"command\": \"id\", \"params\": {...}} (or {\"steps\": [...]})
+                  {\"command\": \"id\", \"params\": {...}, \"agent\": name} (or
+                  {\"steps\": [...]}); with an agent, the step is noted as that
+                  agent's in the agent log (agent.log)
   --cmd ID        A command to run; may be repeated
   --params JSON   The params of the --cmd before it, as a JSON object
   --out FILE      Save the project afterwards, as file.save does
@@ -79,16 +83,19 @@ Options:
 Example:
   visioncraft-cli run --cmd shape.add_area \\
       --params '{\"name\": \"Lawn\", \"outline\": [[0,0],[10,0],[10,8],[0,8]]}' \\
-      --cmd document.measure --params '{\"outline\": [[0,0],[10,0],[10,8],[0,8]]}' \\
+      --cmd query.measure --params '{\"kind\": \"area\", \"outline\": [[0,0],[10,0],[10,8],[0,8]]}' \\
       --out garden.visioncraft";
 
 const HELP_BATCH: &str = "\
 Usage: visioncraft-cli batch [FILE] --script SCRIPT [--out FILE] [--terse]
+                             [--keep-going] [--atomic]
 
-Opens FILE (or starts a new project) and runs the script's steps as one batch,
-all or nothing: the first step that fails takes back the steps before it and
-nothing is saved. Prints the batch report as one line of JSON. A batch that
-succeeds is one undo step. Exit code 1 when a step failed.";
+Opens FILE (or starts a new project) and runs the script's steps as the method
+`batch` does, printing its report as one line of JSON: in order, stopping at
+the first step that fails, with nothing saved (--keep-going: going on, and
+--out saves what was built), each step applied on its own. With --atomic it is
+all or nothing: the first step that fails takes back every step. Exit code 1
+when a step failed.";
 
 const HELP_INFO: &str = "\
 Usage: visioncraft-cli info FILE [--no-faces] [--placements] [--full]
@@ -329,9 +336,16 @@ fn open_or_new(host: &mut Headless, file: Option<&String>) -> Res {
     Ok(())
 }
 
-/// Steps from a script file: `["id", {params}]` or `{"command", "params"}`, in an array or
-/// under `steps`.
-fn read_script(path: &str) -> Result<Vec<(String, Value)>, CliError> {
+/// One step of a script: the command, its params, and the agent it is noted for (`agent`).
+struct ScriptStep {
+    id: String,
+    params: Value,
+    agent: Option<String>,
+}
+
+/// Steps from a script file: `["id", {params}]` or `{"command", "params", "agent"}`, in an
+/// array or under `steps` (craft3d-cli's script format).
+fn read_script(path: &str) -> Result<Vec<ScriptStep>, CliError> {
     let text = std::fs::read_to_string(path)
         .map_err(|e| CliError::Failed(format!("cannot read the script `{path}`: {e}")))?;
     let v: Value = serde_json::from_str(&text)
@@ -355,14 +369,19 @@ fn read_script(path: &str) -> Result<Vec<(String, Value)>, CliError> {
             match s {
                 Value::Array(a) => {
                     let id = a.first().and_then(Value::as_str).ok_or_else(bad)?;
-                    Ok((id.to_string(), a.get(1).cloned().unwrap_or(Value::Null)))
+                    Ok(ScriptStep { id: id.to_string(), params: a.get(1).cloned().unwrap_or(Value::Null), agent: None })
                 }
                 Value::Object(o) => {
                     let id = o.get("command").and_then(Value::as_str).ok_or_else(bad)?;
-                    if let Some(k) = o.keys().find(|k| !matches!(k.as_str(), "command" | "params")) {
+                    if let Some(k) = o.keys().find(|k| !matches!(k.as_str(), "command" | "params" | "agent")) {
                         return Err(CliError::Failed(format!("{path}: step {i} has unknown key `{k}`")));
                     }
-                    Ok((id.to_string(), o.get("params").cloned().unwrap_or(Value::Null)))
+                    let agent = match o.get("agent") {
+                        None | Some(Value::Null) => None,
+                        Some(Value::String(a)) => Some(a.clone()),
+                        Some(_) => return Err(CliError::Failed(format!("{path}: step {i}: `agent` must be a string"))),
+                    };
+                    Ok(ScriptStep { id: id.to_string(), params: o.get("params").cloned().unwrap_or(Value::Null), agent })
                 }
                 _ => Err(bad()),
             }
@@ -406,7 +425,7 @@ fn cmd_commands(raw: &[String]) -> Res {
 fn cmd_run(raw: &[String]) -> Res {
     let a = Args::parse(
         raw,
-        &["--script", "--cmd", "--params", "--out"],
+        &["--new", "--script", "--cmd", "--params", "--out"],
         &["--keep-going"],
     )?;
     if a.help() {
@@ -421,7 +440,11 @@ fn cmd_run(raw: &[String]) -> Res {
     for (name, value) in &a.flags {
         match (name.as_str(), value) {
             ("--cmd", Some(id)) => {
-                steps.push((id.clone(), Value::Null));
+                steps.push(ScriptStep {
+                    id: id.clone(),
+                    params: Value::Null,
+                    agent: None,
+                });
                 after_cmd = true;
             }
             ("--params", Some(p)) => {
@@ -429,10 +452,10 @@ fn cmd_run(raw: &[String]) -> Res {
                     .last_mut()
                     .filter(|_| after_cmd)
                     .ok_or_else(|| CliError::Usage("`--params` must follow a `--cmd`".into()))?;
-                if !last.1.is_null() {
+                if !last.params.is_null() {
                     return Err(CliError::Usage("one `--params` per `--cmd`".into()));
                 }
-                last.1 = serde_json::from_str(p)
+                last.params = serde_json::from_str(p)
                     .map_err(|e| CliError::Usage(format!("`--params` is not JSON: {e}")))?;
             }
             _ => {}
@@ -440,10 +463,26 @@ fn cmd_run(raw: &[String]) -> Res {
     }
     let keep_going = a.has("--keep-going");
     let mut host = local_host();
-    open_or_new(&mut host, a.positionals.first())?;
+    match (a.value("--new")?, a.positionals.first()) {
+        (Some(_), Some(_)) => {
+            return Err(CliError::Usage(
+                "`--new` starts a new project; it does not go with FILE".into(),
+            ));
+        }
+        (Some(new), None) => {
+            let params: Value = serde_json::from_str(new)
+                .map_err(|e| CliError::Usage(format!("`--new` is not JSON: {e}")))?;
+            exec(&mut host, "file.new", params)?;
+        }
+        (None, file) => open_or_new(&mut host, file)?,
+    }
     let mut failed: Vec<String> = Vec::new();
-    for (index, (id, params)) in steps.iter().enumerate() {
-        match exec(&mut host, id, params.clone()) {
+    for (index, ScriptStep { id, params, agent }) in steps.iter().enumerate() {
+        // A step with an agent is noted as that agent's in the agent log.
+        host.state.client = agent.clone();
+        let outcome =
+            commands::execute_logged(&mut host, id, params, None).map_err(CliError::Failed);
+        match outcome {
             Ok(result) => print_json(&result)?,
             Err(CliError::Failed(error)) if keep_going => {
                 print_json(&json!({"failed": id, "step": index, "error": error}))?;
@@ -470,7 +509,11 @@ fn cmd_run(raw: &[String]) -> Res {
 }
 
 fn cmd_batch(raw: &[String]) -> Res {
-    let a = Args::parse(raw, &["--script", "--out"], &["--terse"])?;
+    let a = Args::parse(
+        raw,
+        &["--script", "--out"],
+        &["--terse", "--atomic", "--keep-going"],
+    )?;
     if a.help() {
         return print(HELP_BATCH);
     }
@@ -480,19 +523,33 @@ fn cmd_batch(raw: &[String]) -> Res {
         .ok_or_else(|| CliError::Usage("missing `--script`".into()))?;
     let steps: Vec<commands::Step> = read_script(script)?
         .into_iter()
-        .map(|(command, params)| commands::Step {
-            command,
-            params: if params.is_null() { json!({}) } else { params },
+        .map(|s| commands::Step {
+            command: s.id,
+            params: if s.params.is_null() {
+                json!({})
+            } else {
+                s.params
+            },
+            intent: None,
         })
         .collect();
     let mut host = local_host();
     open_or_new(&mut host, a.positionals.first())?;
-    let outcome = commands::run_batch(&mut host, &steps, a.has("--terse"));
+    let options = commands::BatchOptions {
+        stop_on_error: !a.has("--keep-going"),
+        terse: a.has("--terse"),
+        atomic: a.has("--atomic"),
+        ..Default::default()
+    };
+    let outcome = commands::run_batch(&mut host, &steps, &options);
     print_json(&outcome.report)?;
-    if outcome.failed {
-        return Err(CliError::Failed(
-            "the batch failed and was rolled back; nothing was saved".into(),
-        ));
+    if outcome.failed && options.stop_on_error {
+        let why = if options.atomic {
+            "the batch failed and was rolled back"
+        } else {
+            "a step of the batch failed"
+        };
+        return Err(CliError::Failed(format!("{why}; nothing was saved")));
     }
     if let Some(out) = a.value("--out")? {
         exec(
@@ -500,6 +557,9 @@ fn cmd_batch(raw: &[String]) -> Res {
             "file.save",
             json!({"path": out, "overwrite": true}),
         )?;
+    }
+    if outcome.failed {
+        return Err(CliError::Failed("a step of the batch failed".into()));
     }
     Ok(())
 }

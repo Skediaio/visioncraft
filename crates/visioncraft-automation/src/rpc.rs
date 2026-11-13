@@ -31,8 +31,8 @@ pub struct Method {
 pub const METHODS: &[Method] = &[
     Method {
         name: "engine.execute",
-        params: r#"{"command": string, "params": object = {}}"#,
-        summary: "Runs a command by id and returns its result; the reply has ms, the wall-clock milliseconds it took.",
+        params: r#"{"command": string, "params": object = {}, "intent": string}"#,
+        summary: "Runs a command by id and returns its result; the reply has ms, the wall-clock milliseconds it took. intent (optional, at most 300 characters, one line): why, in the agent's own words; agent.log keeps it.",
     },
     Method {
         name: "engine.commands",
@@ -41,8 +41,8 @@ pub const METHODS: &[Method] = &[
     },
     Method {
         name: "batch",
-        params: r#"{"steps": [{"command": string, "params": object = {}}], "terse": boolean = false}"#,
-        summary: "Runs up to 256 commands in order, all or nothing: the first step that fails takes back the steps before it (rolledBack: true). Returns {completed, failed, rolledBack, results: [{ok, result | error, ms}], ms}; terse gives {completed, failed, rolledBack, errors, last, ms}. A batch that changes the project is one undo step.",
+        params: r#"{"steps": [{"command": string, "params": object = {}, "intent": string}], "stopOnError": boolean = true, "stopOnBreak": boolean = false, "terse": boolean = false, "intent": string, "atomic": boolean = false}"#,
+        summary: "Runs up to 256 commands in order and returns {completed, failed, results: [{ok, result | error, ms}], ms}; with terse, {completed, failed, errors: [{step, error, ms}], last: {step, result, ms}, ms}. failed counts commands that returned an error (stopOnError stops at the first). Not a transaction: earlier steps stay applied, each its own undo step. stopOnBreak is accepted; nothing in a VisionCraft project breaks. atomic: true makes it all or nothing instead: the first failure takes back every step (rolledBack: true), and a batch that succeeds is one undo step.",
     },
     Method {
         name: "methods",
@@ -182,10 +182,15 @@ pub(crate) fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
 fn dispatch(host: &mut dyn Host, method: &str, params: Option<&Value>) -> Result<Value, String> {
     match method {
         "engine.execute" => {
-            let p = Fields::new(method, "parameter", params, &["command", "params"])?;
+            let p = Fields::new(
+                method,
+                "parameter",
+                params,
+                &["command", "params", "intent"],
+            )?;
             let command = p.required_str("command")?;
             let command_params = p.object("params")?;
-            commands::execute(host, command, &command_params)
+            commands::execute_logged(host, command, &command_params, p.str("intent")?)
         }
         "engine.commands" => {
             let p = Fields::new(method, "parameter", params, &["filter", "id", "brief"])?;
@@ -198,10 +203,28 @@ fn dispatch(host: &mut dyn Host, method: &str, params: Option<&Value>) -> Result
             Ok(commands::command_list(host.session(), &query))
         }
         "batch" => {
-            let p = Fields::new(method, "parameter", params, &["steps", "terse"])?;
-            let terse = p.bool("terse")?.unwrap_or(false);
+            let p = Fields::new(
+                method,
+                "parameter",
+                params,
+                &[
+                    "steps",
+                    "stopOnError",
+                    "stopOnBreak",
+                    "terse",
+                    "intent",
+                    "atomic",
+                ],
+            )?;
+            let options = commands::BatchOptions {
+                stop_on_error: p.bool("stopOnError")?.unwrap_or(true),
+                stop_on_break: p.bool("stopOnBreak")?.unwrap_or(false),
+                terse: p.bool("terse")?.unwrap_or(false),
+                atomic: p.bool("atomic")?.unwrap_or(false),
+                intent: p.str("intent")?,
+            };
             let steps = commands::parse_steps(method, "parameter", &p, "command")?;
-            Ok(commands::run_batch(host, &steps, terse).report)
+            Ok(commands::run_batch(host, &steps, &options).report)
         }
         "methods" => {
             Fields::new(method, "parameter", params, &[])?;

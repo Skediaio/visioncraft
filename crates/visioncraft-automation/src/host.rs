@@ -172,6 +172,10 @@ pub struct HostState {
     pub catalog: Catalog,
     /// The project as it was last opened or saved, for `dirty`.
     pub saved: Option<Project>,
+    /// The agent's name (MCP `clientInfo.name`), for the agent log.
+    pub client: Option<String>,
+    /// What agents did, oldest first (`agent.log`); session state, not saved.
+    pub log: std::collections::VecDeque<Value>,
 }
 
 impl HostState {

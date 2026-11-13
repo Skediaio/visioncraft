@@ -1,6 +1,6 @@
 # Control protocol and MCP
 
-> **Status (2026-11-13):** built and tested: the JSON-lines server (`visioncraft-cli serve`), the
+> **Status (2026-11-13, second pass):** built and tested: the JSON-lines server (`visioncraft-cli serve`), the
 > MCP server (`visioncraft-cli mcp`), the loopback control channel (server side
 > `visioncraft_automation::control::serve_control`, used by `visioncraft-cli serve --control`;
 > the desktop window does not call it yet) and the MCP bridge (`visioncraft-cli mcp --bridge`).
@@ -36,47 +36,65 @@ Each request is one JSON line; each reply is one JSON line with the same `id`:
 
 | Method | Params | Result |
 |---|---|---|
-| `engine.execute` | `{command, params?}` | the command's result |
+| `engine.execute` | `{command, params?, intent?}` | the command's result |
 | `engine.commands` | `{filter?, id?, brief? = false}` | `{commands: [...]}` (below) |
-| `batch` | `{steps: [{command, params?}], terse? = false}` | `{completed, failed, rolledBack, results: [{ok, result \| error, ms}], ms}`; terse: `{completed, failed, rolledBack, errors: [{step, error, ms}], last: {step, result, ms}, ms}` |
+| `batch` | `{steps: [{command, params?, intent?}], stopOnError? = true, stopOnBreak? = false, terse? = false, intent?, atomic? = false}` | `{completed, failed, results: [{ok, result \| error, ms}], ms}`; terse: `{completed, failed, errors: [{step, error, ms}], last: {step, result, ms}, ms}`; with `atomic` also `rolledBack` |
 | `methods` | `{}` | `{methods: [{name, params, summary}], limits: {requestBytes, replyBytes, batchSteps}}` |
 
 On the control channel also: `auth`, `challenge`, `bye` (below), `mcp.message {line}` →
 `{reply}` (the bridge's), and the host's own methods (a window's `ui.*`, listed by `methods`).
 
-**A batch is all or nothing.** Its steps run on a scratch copy of the project; the first step
-that fails stops it and nothing it did stays: the project, the history and the open file are as
-before (`rolledBack: true`; the failing step's error starts with `step N:`). A batch that
-succeeds and changes the project is **one** undo step. Every step is checked (its shape, at most
-256 steps) before the first runs. Files a step wrote (`file.save`, `view.render` with a path)
-stay written. Inside a batch, `edit.undo` takes back earlier steps of the same batch only.
+**A batch runs as in 3DCraft**: in order, checked as a whole (its shape, at most 256 steps)
+before the first step runs; `failed` counts the commands that returned an error and
+`stopOnError` (default true) stops at the first. **Not a transaction**: steps that ran stay
+applied, each its own undo step; `edit.undo` takes back the last applied step, once per step.
+`stopOnBreak` is accepted for 3DCraft's shape; a VisionCraft project has no features that fail,
+so no step "breaks" anything and there is no `broke` or `featuresFailed`.
+
+**`atomic: true`** (VisionCraft's extra) makes a batch all or nothing, inside one core transaction
+(`Session::transaction`): the first step that fails stops it and takes back every step; the
+project, the history and the open file are as before (`rolledBack: true`). An atomic batch that
+succeeds and changes the project is **one** undo step. `file.new`, `file.open`, `edit.undo` and
+`edit.redo` cannot be part of one. Files a step wrote (`file.save`, `view.render` with a path)
+stay written either way.
+
+**`intent`** (as 3DCraft): why the agent runs the command, in a short sentence; on
+`engine.execute`, `batch` and each batch step (MCP: `command_run`, `command_batch`). Control
+characters become spaces, direction marks and invisible characters go, at most 300 characters
+(cut with `…`); not a string is an error naming `intent`. Every command an agent runs (but
+`agent.log` and `document.inspect`) is noted in the session's **agent log**, with the intent:
+the command `agent.log {limit? = 50}` → `{total, entries: [{client, timeMs, command, label, ok,
+message, created, changed, intent}]}`, newest first, the last 500. `client` is the MCP client's
+`clientInfo.name` (`agent` otherwise; a `run --script` step's `agent`). Session state: not saved,
+not undone.
 
 ### The command list
 
-`engine.commands` (MCP: `command_list`) gives per command:
+`engine.commands` (MCP: `command_list`) gives per command, from the core's command specs
+(`Session::command_specs()`) and the host's own:
 
 ```json
-{"id": "viewpoint.add", "label": "Save a camera",
+{"id": "viewpoint.add", "label": "Add Viewpoint",
  "params": "{\"name\": string, \"position\": [x, y, z] (m), \"target\": [x, y, z] (m), \"fov_y_deg\": number (deg) = 60, \"time\": object = not set}",
- "summary": "Save a camera: {name, position, target, fov_y_deg? (60), time?}; returns {id}",
- "parameters": [{"name": "fov_y_deg", "type": "number", "unit": "deg", "required": false, "default": "60", "allowed": [], "doc": ""}, "..."],
- "openParams": false, "result": "{id}", "example": {"name": "From the gate", "position": [0, 1.7, 14], "target": [0, 1.5, 0]},
- "undoable": true, "derivedDocs": true, "enabled": true, "disabledReason": null}
+ "summary": "Saves a camera position and target, optionally with a time of day.",
+ "parameters": [{"name": "fov_y_deg", "type": "number", "unit": "deg", "required": false, "default": "60", "allowed": [], "doc": "..."}, "..."],
+ "openParams": false, "result": "{id}", "example": {"...": "..."},
+ "undoable": true, "enabled": true, "disabledReason": null}
 ```
 
 `brief: true` gives `{id, params, summary (its first sentence), enabled}`; `filter` is a
 case-insensitive part of the id or label; `id` picks one command. `params` is 3DCraft's
-notation; `parameters` the same as structured data. `derivedDocs: true` marks a core command
-whose parameter docs were read from its one-line description (types and units then follow the
-naming conventions: `_m` metres, `_deg` degrees, `position` `[x, y, z]`, `outline` `[[x, z], ...]`).
-Unknown parameter keys are refused for every command whose parameters are all listed
-(`openParams: false`).
+notation; `parameters` the same as structured data; `example` runs (the core tests it on its
+example project). The core checks every command's parameters against its spec before it runs:
+unknown keys are refused with the nearest name, unless `openParams` is true.
 
 ### Commands
 
 The core's commands (`model.*`, `shape.*`, `material.*`, `planting.*`, `species.add|update|remove`,
 `light.*`, `viewpoint.*`, `layer.*`, `terrain.*`, `site.set`, `time.set`, `view.set`,
-`style.set`) change the project; each is one undo step. The host adds:
+`style.set`) change the project, each one undo step; its queries (`query.sun {time?}`,
+`query.measure {kind, points?, outline?}`) never do. The host adds what needs files, history,
+loaded geometry or a GPU:
 
 | Command | Params | Result |
 |---|---|---|
@@ -85,10 +103,10 @@ The core's commands (`model.*`, `shape.*`, `material.*`, `planting.*`, `species.
 | `file.save` | `{path?, overwrite? = false}` | `{path, bytes}`; model paths follow the file to a new folder |
 | `edit.undo`, `edit.redo` | `{}` | `{can_undo, can_redo}` |
 | `document.inspect` | `{faces? = true, measures? = true, placements? = false, full? = false}` | below |
-| `document.measure` | `{points?, outline?, path?}` | `{length_m, height_difference_m, slope_percent}` / `{area_m2}` / `{ground_length_m}` |
+| `query.ground_length` | `{path}` | `{ground_length_m}`: a walk over terrain, areas and models |
 | `query.raycast` | `{origin, direction}` | `{hit, owner, kind, face, body, point, normal, distance}` or `{hit: false}` |
 | `query.ground_height` | `{x, z}` | `{x, z, height}` (terrain, areas and models; `null` over nothing) |
-| `query.sun` | `{time?}` | `{azimuth_deg, elevation_deg, direction, sunrise_hour, sunset_hour, above_horizon}` |
+| `agent.log` | `{limit? = 50}` | `{total, entries}` (above) |
 | `catalog.search` | `{query?, category?, exposure?, max_height_m?, limit? = 50}` | `{total, assets: [{id, name, category, size_m, license, author, plant}]}` |
 | `species.list` | `{filter?, category?}` | `{species: [{asset: "flora:<id>", common_name, ...}], custom: [{asset, name, base}]}` |
 | `planting.list_presets` | `{}` | `{presets: [{id, name, layers}]}` |
@@ -146,8 +164,8 @@ these, else the latest); capabilities `tools`, `resources`, `prompts`; `initiali
 | Tool | Arguments | Notes |
 |---|---|---|
 | `command_list` | `brief?`, `id?`, `filter?`, `enabled_only?` | as `engine.commands` |
-| `command_run` | `id`, `params?` | one command; `_meta.ms`; a refused command is `isError: true` with a message that starts with its id |
-| `command_batch` | `steps: [{id, params?}]` (≤ 256), `terse?` | as `batch`: all or nothing; `isError` when a step failed, the report is the content |
+| `command_run` | `id`, `params?`, `intent?` | one command; `_meta.ms`; a refused command is `isError: true` with a message that starts with its id |
+| `command_batch` | `steps: [{id, params?, intent?}]` (≤ 256), `stop_on_error? = true`, `stop_on_break? = false`, `terse? = false`, `intent?`, `atomic? = false` | as `batch`; `isError` when a command failed, the report is the content; not atomic unless `atomic` |
 | `doc_inspect` | `faces?`, `measures?`, `placements?`, `full?` | `document.inspect` |
 | `doc_render_preview` | `viewpoint?`, `camera?`, `time?`, `quality?`, `max_side?` (16..2048, default 1024) | an image block (PNG, 4:3) and the render's JSON as text |
 | `control_call` (only when the host has methods, i.e. a window) | `method`, `params?` | a window method; a picture comes back as an image block |
@@ -206,16 +224,18 @@ steps per batch, previews 16 to 2048 px with at most 5 MiB of PNG, renders 16 to
 
 ## Differences from 3DCraft
 
+Only what the domain or a missing part forces:
+
 | 3DCraft | VisionCraft | Why |
 |---|---|---|
-| `batch`/`command_batch` is not atomic; each step one undo step; `stopOnError`, `stopOnBreak` | all or nothing, one undo step, always stops at the first failure; only `terse` | asked for (all-or-nothing batches); there are no failing features to judge |
-| `intent` on `engine.execute`, `batch`, `command_run`, `command_batch` | none | no window agent log yet |
-| `doc_inspect` takes no arguments | takes `faces`, `measures`, `placements`, `full` | a 3dcraft house has hundreds of face names; agents need to turn them off |
-| `selection_get`, resource `craft3d://selection` | none; resources `visioncraft://project` and `visioncraft://guide` | the core has no selection; the guide replaces 3DCraft's skill text |
-| no prompts | `prompts/list`, `prompts/get` with `build_garden` | asked for |
-| `doc_render_preview {view, mode, projection, zoom, box, tolerance, max_side}` | `{viewpoint, camera, time, quality, max_side}` | the domain: viewpoints and the sun instead of views of a part |
-| commands `document.measure` (bodies) | `document.measure` (polylines, areas, walks over the ground), plus `query.*`, `catalog.search`, `species.list` | the domain |
-| `file.close`, tabs, several documents | one project per session | the app has one project |
+| batch `broke`, `featuresFailed`, `stopOnBreak` stops | `stopOnBreak` accepted, never stops; no `broke`/`featuresFailed` | a project has no features that fail |
+| — | batch `atomic: true` (`rolledBack`) | an extra, off by default |
+| agent log only in the window (headless `craft3d-cli mcp` keeps none); `madeBy`/`lastChangedBy` written into the document; `features` in `agent.log` | kept headless too; nothing written into the project; no `features` | the project format is the core's; nothing records who made an item |
+| `doc_inspect` takes no arguments | takes `faces`, `measures`, `placements`, `full` (all optional; none gives the defaults) | a 3dcraft house has hundreds of face names |
+| `selection_get`, resource `craft3d://selection` | none; resources `visioncraft://project`, `visioncraft://guide`; prompt `build_garden` | the core has no selection; the guide is the MCP-served agent guidance (3DCraft serves only `instructions`) |
+| `doc_render_preview {view, mode, projection, zoom, box, tolerance, max_side}` | `{viewpoint, camera, time, quality, max_side}` | viewpoints and the sun instead of views of a part |
+| `document.measure` (bodies), `view.pick`, `view.replay` | `query.measure`, `query.raycast`, `query.ground_*`, `query.sun`, `catalog.search`, `species.list`; replay is a viewpoint tour (`visioncraft-cli replay`) | the domain |
+| `file.close`, tabs, several documents; `file.export` | one project per session; pictures only (`view.render`, `visioncraft-cli export`) | the app has one project; the core has no mesh exporter |
 | recovery, autosave | none | not built |
 | ports 7878–7897, roles `3dcraft window/client`, state folder `3dcraft/` | 7920–7939, `visioncraft window/client`, `visioncraft/` | both apps run side by side |
-| `agents.json` preference, consent prompts, `ui.*` methods | not here | the window's part, not built yet |
+| `agents.json` switch, consent prompts, `ui.*` methods | not here | the window's part, not built yet |

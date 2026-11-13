@@ -57,10 +57,10 @@ fn a_command_that_succeeds() {
         execute(
             &mut h,
             3,
-            "document.measure",
-            json!({"outline": [[0, 0], [10, 0], [10, 8], [0, 8]]})
+            "query.measure",
+            json!({"kind": "area", "outline": [[0, 0], [10, 0], [10, 8], [0, 8]]})
         ),
-        json!({"id": 3, "ok": true, "result": {"area_m2": 80.0}})
+        json!({"id": 3, "ok": true, "result": {"kind": "area", "value": 80.0, "unit": "m2"}})
     );
 }
 
@@ -82,7 +82,7 @@ fn bad_parameters_are_refused_and_named() {
     let mut h = Headless::new(Access::default());
     assert_eq!(
         execute(&mut h, 1, "shape.add_area", json!({"name": "Lawn"})),
-        json!({"id": 1, "ok": false, "error": "shape.add_area: bad parameters: missing field `outline`"})
+        json!({"id": 1, "ok": false, "error": "shape.add_area: bad parameters: `shape.add_area` needs the parameter `outline` ([[x, z], ...])"})
     );
     // A misspelt key is refused, not ignored.
     assert_eq!(
@@ -92,7 +92,7 @@ fn bad_parameters_are_refused_and_named() {
             "light.add",
             json!({"name": "Lamp", "position": [0, 2, 0], "lumen": 900})
         ),
-        json!({"id": 2, "ok": false, "error": "light.add: unknown parameter `lumen`; its parameters are: name, position, kind, color_temperature_k, lumens, range_m, enabled, layer, source"})
+        json!({"id": 2, "ok": false, "error": "light.add: bad parameters: unknown parameter `lumen` for `light.add`; did you mean `lumens`?"})
     );
     assert_eq!(
         execute(&mut h, 3, "document.inspect", json!({"face": false})),
@@ -128,12 +128,64 @@ fn bad_parameters_are_refused_and_named() {
 }
 
 #[test]
-fn a_batch_is_all_or_nothing() {
+fn a_batch_runs_as_in_3dcraft() {
+    let mut h = Headless::new(Access::default());
+    let steps = json!([
+        {"command": "shape.add_area", "params": {"name": "Lawn", "outline": [[0, 0], [10, 0], [10, 8], [0, 8]]}},
+        {"command": "light.add", "params": {"name": "Lamp", "position": [0, 2, 0], "layer": "nope"}},
+        {"command": "time.set", "params": {"hour": 12}}
+    ]);
+    // Stops at the first error; what ran stays applied, each its own undo step.
+    assert_eq!(
+        ask(
+            &mut h,
+            json!({"id": 1, "method": "batch", "params": {"steps": steps}})
+        ),
+        json!({"id": 1, "ok": true, "result": {
+            "completed": 1, "failed": 1,
+            "results": [
+                {"ok": true, "result": {"id": "S1"}},
+                {"ok": false, "error": "light.add: no layer `nope`"}
+            ]
+        }})
+    );
+    let after = execute(&mut h, 2, "document.inspect", json!({"faces": false}));
+    assert_eq!(after["result"]["shapes"][0]["id"], json!("S1"));
+    assert_eq!(after["result"]["time"]["hour"], json!(14.0));
+    // stopOnError: false goes on; terse reports the errors and the last result.
+    assert_eq!(
+        ask(
+            &mut h,
+            json!({"id": 3, "method": "batch", "params": {"steps": steps, "stopOnError": false, "stopOnBreak": false, "terse": true}})
+        ),
+        json!({"id": 3, "ok": true, "result": {
+            "completed": 2, "failed": 1,
+            "errors": [{"step": 1, "error": "light.add: no layer `nope`"}],
+            "last": {"step": 2, "result": null}
+        }})
+    );
+    // Not a transaction: edit.undo takes back the last step only.
+    execute(&mut h, 4, "edit.undo", json!({}));
+    let undone = execute(&mut h, 5, "document.inspect", json!({"faces": false}));
+    assert_eq!(undone["result"]["shapes"].as_array().unwrap().len(), 2);
+    assert_eq!(undone["result"]["time"]["hour"], json!(14.0));
+    // A malformed step refuses the whole batch before anything runs.
+    assert_eq!(
+        ask(
+            &mut h,
+            json!({"id": 6, "method": "batch", "params": {"steps": [{"command": "time.set"}, {"cmd": "x"}]}})
+        ),
+        json!({"id": 6, "ok": false, "error": "batch: steps[1]: unknown parameter `cmd`; its parameters are: command, params, intent"})
+    );
+}
+
+#[test]
+fn an_atomic_batch_is_all_or_nothing() {
     let mut h = Headless::new(Access::default());
     execute(&mut h, 1, "time.set", json!({"hour": 9}));
     let reply = ask(
         &mut h,
-        json!({"id": 2, "method": "batch", "params": {"steps": [
+        json!({"id": 2, "method": "batch", "params": {"atomic": true, "stopOnError": false, "steps": [
             {"command": "shape.add_area", "params": {"name": "Lawn", "outline": [[0, 0], [10, 0], [10, 8], [0, 8]]}},
             {"command": "light.add", "params": {"name": "Lamp", "position": [0, 2, 0], "layer": "nope"}},
             {"command": "time.set", "params": {"hour": 12}}
@@ -145,23 +197,21 @@ fn a_batch_is_all_or_nothing() {
             "completed": 1, "failed": 1, "rolledBack": true,
             "results": [
                 {"ok": true, "result": {"id": "S1"}},
-                {"ok": false, "error": "step 1: light.add: no layer `nope`"}
+                {"ok": false, "error": "light.add: no layer `nope`"}
             ]
         }})
     );
     let after = execute(&mut h, 3, "document.inspect", json!({"faces": false}));
     assert_eq!(after["result"]["shapes"], json!([]));
     assert_eq!(after["result"]["time"]["hour"], json!(9.0));
-    // The batch left the history as it was: one undo step, the time.set.
     assert_eq!(
         after["result"]["history"],
         json!({"can_undo": true, "can_redo": false})
     );
-
-    // A batch that succeeds is one undo step.
+    // An atomic batch that succeeds is one undo step.
     let ok = ask(
         &mut h,
-        json!({"id": 4, "method": "batch", "params": {"terse": true, "steps": [
+        json!({"id": 4, "method": "batch", "params": {"atomic": true, "terse": true, "steps": [
             {"command": "shape.add_area", "params": {"name": "Lawn", "outline": [[0, 0], [10, 0], [10, 8], [0, 8]]}},
             {"command": "shape.add_extrusion", "params": {"name": "House", "outline": [[0, -8], [6, -8], [6, -1], [0, -1]], "height": 6}}
         ]}}),
@@ -174,13 +224,42 @@ fn a_batch_is_all_or_nothing() {
     let undone = execute(&mut h, 6, "document.inspect", json!({"faces": false}));
     assert_eq!(undone["result"]["shapes"], json!([]));
     assert_eq!(undone["result"]["time"]["hour"], json!(9.0));
-    // A malformed step refuses the whole batch before anything runs.
+}
+
+#[test]
+fn intents_go_to_the_agent_log() {
+    let mut h = Headless::new(Access::default());
+    let r = ask(
+        &mut h,
+        json!({"id": 1, "method": "engine.execute", "params": {"command": "light.add", "params": {"name": "Lamp", "position": [0, 2, 0]}, "intent": "  light the\n terrace\u{202E}  "}}),
+    );
+    assert_eq!(r["ok"], json!(true));
+    ask(
+        &mut h,
+        json!({"id": 2, "method": "batch", "params": {"intent": "the lawn", "steps": [
+            {"command": "shape.add_area", "params": {"name": "Lawn", "outline": [[0, 0], [1, 0], [1, 1]]}},
+            {"command": "time.set", "params": {"hour": 99}, "intent": "a wrong hour"}
+        ]}}),
+    );
+    execute(&mut h, 3, "document.inspect", json!({}));
     assert_eq!(
         ask(
             &mut h,
-            json!({"id": 7, "method": "batch", "params": {"steps": [{"command": "time.set"}, {"cmd": "x"}]}})
+            json!({"id": 4, "method": "engine.execute", "params": {"command": "light.add", "intent": 5}})
         ),
-        json!({"id": 7, "ok": false, "error": "batch: steps[1]: unknown parameter `cmd`; its parameters are: command, params"})
+        json!({"id": 4, "ok": false, "error": "engine.execute: `intent` must be a string, got a number"})
+    );
+    let mut log = execute(&mut h, 5, "agent.log", json!({"limit": 10}))["result"].clone();
+    for e in log["entries"].as_array_mut().unwrap() {
+        e.as_object_mut().unwrap().remove("timeMs");
+    }
+    assert_eq!(
+        log,
+        json!({"total": 3, "entries": [
+            {"client": "agent", "command": "time.set", "label": "Set Time", "ok": false, "message": "time.set: bad parameters: not a valid date and local time", "created": [], "changed": [], "intent": "a wrong hour"},
+            {"client": "agent", "command": "shape.add_area", "label": "Add Area", "ok": true, "message": "{\"id\":\"S1\"}", "created": ["S1"], "changed": [], "intent": "the lawn"},
+            {"client": "agent", "command": "light.add", "label": "Add Light", "ok": true, "message": "{\"id\":\"li1\"}", "created": ["li1"], "changed": [], "intent": "light the terrace"}
+        ]})
     );
 }
 
@@ -243,7 +322,7 @@ fn listing_and_describing_commands() {
         json!({
             "id": "viewpoint.add",
             "params": "{\"name\": string, \"position\": [x, y, z] (m), \"target\": [x, y, z] (m), \"fov_y_deg\": number (deg) = 60, \"time\": object = not set}",
-            "summary": "Save a camera: {name, position, target, fov_y_deg? (60), time?}; returns {id}",
+            "summary": "Saves a camera position and target, optionally with a time of day.",
             "enabled": true
         })
     );
@@ -280,7 +359,7 @@ fn every_documented_example_runs() {
     let list = ask(&mut h, json!({"id": 1, "method": "engine.commands"}));
     for c in list["result"]["commands"].as_array().unwrap() {
         let (id, example) = (c["id"].as_str().unwrap(), &c["example"]);
-        // Files, history and pictures need a file, a step and a GPU.
+        // Files, history and pictures need a file, a step and a GPU; model.add a model file.
         if example.is_null()
             || id.starts_with("file.")
             || id.starts_with("edit.")
@@ -289,15 +368,9 @@ fn every_documented_example_runs() {
         {
             continue;
         }
-        if id == "material.assign" {
-            execute(
-                &mut h,
-                2,
-                "shape.add_extrusion",
-                json!({"name": "Wall", "outline": [[0, 0], [4, 0], [4, 1], [0, 1]], "height": 2}),
-            );
-        }
-        let r = execute(&mut h, 3, id, example.clone());
+        let mut h = Headless::new(Access::default());
+        h.session = visioncraft_core::Session::new(visioncraft_core::example_project(id));
+        let r = execute(&mut h, 2, id, example.clone());
         assert_eq!(r["ok"], json!(true), "{id}: {r}");
     }
 }

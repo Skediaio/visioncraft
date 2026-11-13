@@ -17,8 +17,8 @@ JSON lines (`visioncraft-cli serve`), MCP (`visioncraft-cli mcp`), the command l
 | Module | Does |
 |---|---|
 | `host` | `Host` (a core `Session`, its `HostState`: open file, file roots, model geometry, catalogue; optional pictures) and `Headless`, the CLI's host |
-| `commands` | `execute`: the core's commands plus the host's (`file.*`, `edit.*`, `document.inspect`, `document.measure`, `query.*`, `catalog.search`, `species.list`, `planting.list_presets`, `view.render`); the command list; all-or-nothing batches |
-| `docs` | `CommandDoc`, the per-command documentation, and the adapter that derives it from the core's descriptions |
+| `commands` | `execute`: the core's commands plus the host's (`file.*`, `edit.*`, `document.inspect`, `query.raycast`, `query.ground_height`, `query.ground_length`, `catalog.search`, `species.list`, `planting.list_presets`, `view.render`, `agent.log`); the command list; batches as in 3DCraft, `atomic` on request; intents and the agent log |
+| `docs` | `CommandDoc`: the core's specs and the host's commands in one shape |
 | `rpc`, `mcp` | the two line protocols: `handle_line(host, line)` and `serve(host, input, output)` |
 | `control`, `bridge`, `discovery`, `proof` | the loopback control channel (native only): server, MCP bridge client, finding a window, the HMAC challenge |
 
@@ -40,8 +40,19 @@ there; clocks report `ms: null`).
 }
 ```
 
-To work in a running window instead (once the window hosts the control channel):
-`"args": ["mcp", "--bridge"]`. The same with the command line:
+To work in a running window instead (once the window hosts the control channel), or in a
+`visioncraft-cli serve --control PORT` started by hand:
+
+```json
+{
+  "mcpServers": {
+    "visioncraft": {
+      "command": "visioncraft-cli",
+      "args": ["mcp", "--bridge"]
+    }
+  }
+}
+``` The same with the command line:
 `claude mcp add visioncraft -- visioncraft-cli mcp --automation-read-root . --automation-write-root .`
 
 ## What the desktop window must call to host the bridge
@@ -62,36 +73,13 @@ control.focused();
 with the window's own renderer; `methods`/`call` add the window's `ui.*` methods (they become the
 MCP tool `control_call`).
 
-## Command documentation wanted from the core
+## What comes from the core
 
-Today `Session::commands()` gives `(name, description)` only; `docs::derive` reads the rest from
-the description text. When `visioncraft-core` gives the following, `derive` and its tables go
-and `commands::docs` maps the core's specs one to one:
-
-```rust
-pub enum ParamType { String, Number, Integer, Boolean, Point3, Point2, Outline, Object, Array, Any }
-pub struct ParamSpec {
-    pub name: &'static str,
-    pub ty: ParamType,
-    pub unit: Option<&'static str>,        // "m", "deg", "K", "lm", "h", "1/m2"
-    pub required: bool,
-    pub default: Option<&'static str>,      // as JSON text: "0.5", "true", "\"point\""
-    pub allowed: &'static [&'static str],   // enum values, e.g. ["3dcraft", "obj"]
-    pub doc: &'static str,                  // one line
-}
-pub struct CommandSpec {
-    pub name: &'static str,
-    pub label: &'static str,                // "Add Area"
-    pub summary: &'static str,              // one or two sentences
-    pub params: &'static [ParamSpec],
-    pub open: bool,                         // takes keys not listed (planting.update)
-    pub result: &'static str,               // "{id}" or "null"
-    pub example: &'static str,              // params as JSON, run by a core test
-}
-impl Session { pub fn command_specs(&self) -> Vec<&CommandSpec>; }
-// and `Session::register` taking a `CommandSpec` (or `register_with_spec`), and handlers that
-// refuse unknown keys themselves (`#[serde(deny_unknown_fields)]`).
-```
+Command documentation is the core's own (`Session::command_specs()`: per parameter type, unit,
+required, default, allowed values, doc; result; a tested example; `undoable`), parameters are
+checked by the core before a command runs, `query.sun` and `query.measure` are core commands, and
+atomic batches run in `Session::transaction`. This crate adds only what needs files, history,
+loaded geometry, the catalogue, the flora library or a GPU (see `commands::host_docs`).
 
 ## Attribution
 

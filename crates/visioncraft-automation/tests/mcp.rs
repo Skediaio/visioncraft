@@ -41,7 +41,7 @@ fn a_whole_conversation() {
             call(
                 4,
                 "command_batch",
-                json!({"steps": [
+                json!({"atomic": true, "steps": [
                     {"id": "shape.add_area", "params": {"name": "Lawn", "outline": [[-10, -2], [10, -2], [10, 10], [-10, 10]], "material": "lawn"}},
                     {"id": "light.add", "params": {"name": "Lamp", "position": [3, 2.2, -1]}}
                 ]}),
@@ -121,7 +121,7 @@ fn a_whole_conversation() {
     );
     assert_eq!(
         replies[8]["error"]["message"],
-        "command_run: unknown argument `parms`; its arguments are: id, params"
+        "command_run: unknown argument `parms`; its arguments are: id, params, intent"
     );
     // No GPU in this host: the preview says so as a tool error.
     assert_eq!(replies[9]["result"]["isError"], true);

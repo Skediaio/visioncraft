@@ -42,7 +42,7 @@ pub const WINDOW_TOOL: &str = "control_call";
 const INSTRUCTIONS: &str = "VisionCraft visualises houses and gardens: models, drawn shapes, materials, plants, lights and viewpoints, \
 seen in real time under the sun of a site and a date. Every action is a command with a stable id and JSON params. \
 Start with command_list {\"brief\": true} (then {\"id\": ...} for one command's parameter docs) and doc_inspect. \
-Build with command_batch (all or nothing; one undo step), check with doc_inspect and look with doc_render_preview. \
+Build with command_batch (add atomic: true for all or nothing), check with doc_inspect and look with doc_render_preview. \
 Units are metres, Y is up, +X east, -Z north; outlines are [[x, z], ...]. Plants are flora:<species id> (species.list). \
 Open and save with command_run file.open / file.save; undo with edit.undo. The resource visioncraft://guide is the agent guide.";
 
@@ -202,7 +202,16 @@ fn dispatch(host: &mut dyn Host, method: &str, params: Option<&Value>) -> Result
         }
     };
     match method {
-        "initialize" => initialize(params),
+        "initialize" => {
+            if let Some(client) = params
+                .and_then(|p| p.get("clientInfo"))
+                .and_then(|c| c.get("name"))
+                .and_then(Value::as_str)
+            {
+                host.state().client = commands::clean_intent(client);
+            }
+            initialize(params)
+        }
         "ping" => Ok(json!({})),
         "tools/list" => {
             let mut list = tools();
@@ -349,21 +358,27 @@ fn tools() -> Vec<Value> {
         }),
         json!({
             "name": "command_run",
-            "description": "Runs one command by id and returns its JSON result (its wall-clock milliseconds in the tool result's _meta.ms). A failed command returns isError with a message that starts with the command's id and names the parameter. Files: file.new, file.open, file.save; history: edit.undo, edit.redo; queries: document.measure, query.raycast, query.ground_height, query.sun, catalog.search, species.list.",
+            "description": "Runs one command by id and returns its JSON result (its wall-clock milliseconds in the tool result's _meta.ms). A failed command returns isError with a message that starts with the command's id and names the parameter. Files: file.new, file.open, file.save; history: edit.undo, edit.redo; queries: query.measure, query.sun, query.raycast, query.ground_height, query.ground_length, catalog.search, species.list; agent.log.",
             "inputSchema": {"type": "object", "properties": {
                 "id": {"type": "string", "description": "A command id from command_list, e.g. \"shape.add_area\"."},
-                "params": {"type": "object", "description": "The command's parameters, as command_list documents them. Omit for none."}
+                "params": {"type": "object", "description": "The command's parameters, as command_list documents them. Omit for none."},
+                "intent": {"type": "string", "maxLength": 300, "description": "Why you run it, in a short sentence of your own (\"a hornbeam hedge along the south boundary\"). Optional but asked for: agent.log keeps it, and a window shows it."}
             }, "required": ["id"], "additionalProperties": false}
         }),
         json!({
             "name": "command_batch",
-            "description": "Runs up to 256 commands in order, all or nothing: the first step that fails takes back the steps before it, and the report says rolledBack: true and which step failed (isError). Returns {completed, failed, rolledBack, results: [{ok, result | error, ms}], ms}; terse gives {completed, failed, rolledBack, errors: [{step, error, ms}], last: {step, result, ms}, ms}. A batch that changes the project is one undo step. Ids made by a step (S1, li1, v1) can be used by later steps when you know them: ids are the prefix and the lowest free number.",
+            "description": "Runs up to 256 commands in order and returns {completed, failed, results: [{ok, result | error, ms}], ms}. failed counts the commands that returned an error; stop_on_error (default true) stops at the first, and the batch is then an error (isError) with the report as its content. Not atomic: steps that ran stay applied, each its own undo step; edit.undo takes back the last applied step, once per step. terse reports {completed, failed, errors: [{step, error, ms}], last: {step, result, ms}, ms}. stop_on_break is accepted for 3DCraft's shape (nothing in a VisionCraft project breaks). atomic: true makes it all or nothing: the first failure takes back every step (rolledBack: true), and a batch that succeeds is one undo step. Ids made by a step (S1, g1, li1, v1) are the prefix and the lowest free number, so later steps can use them.",
             "inputSchema": {"type": "object", "properties": {
                 "steps": {"type": "array", "maxItems": MAX_BATCH_STEPS, "items": {"type": "object", "properties": {
                     "id": {"type": "string", "description": "A command id."},
-                    "params": {"type": "object", "description": "The command's parameters."}
+                    "params": {"type": "object", "description": "The command's parameters."},
+                    "intent": {"type": "string", "maxLength": 300, "description": "Why this step, if it differs from the batch's intent."}
                 }, "required": ["id"], "additionalProperties": false}},
-                "terse": {"type": "boolean", "description": "Report only the failure and the last result. Default false."}
+                "stop_on_error": {"type": "boolean", "description": "Stop at the first command that returns an error. Default true."},
+                "stop_on_break": {"type": "boolean", "description": "Accepted for 3DCraft's shape; nothing breaks in a VisionCraft project. Default false."},
+                "terse": {"type": "boolean", "description": "Report only the failures and the last result. Default false."},
+                "atomic": {"type": "boolean", "description": "All or nothing: the first failure takes back every step; success is one undo step. Default false."},
+                "intent": {"type": "string", "maxLength": 300, "description": "Why you run these steps, in a short sentence of your own (\"a hornbeam hedge along the south boundary\"). Optional but asked for: agent.log keeps it, and a window shows it."}
             }, "required": ["steps"], "additionalProperties": false}
         }),
         json!({
@@ -450,18 +465,36 @@ fn call_tool(host: &mut dyn Host, params: Option<&Map<String, Value>>) -> Result
             )))])
         })(),
         "command_run" => (|| {
-            let a = Fields::new(name, "argument", args, &["id", "params"])?;
+            let a = Fields::new(name, "argument", args, &["id", "params", "intent"])?;
             let id = a.required_str("id")?;
             let p = a.object("params")?;
-            commands::execute(host, id, &p)
+            commands::execute_logged(host, id, &p, a.str("intent")?)
                 .map(|r| vec![text_block(serialize(&r))])
                 .map_err(Failure::Failed)
         })(),
         "command_batch" => (|| {
-            let a = Fields::new(name, "argument", args, &["steps", "terse"])?;
-            let terse = a.bool("terse")?.unwrap_or(false);
+            let a = Fields::new(
+                name,
+                "argument",
+                args,
+                &[
+                    "steps",
+                    "stop_on_error",
+                    "stop_on_break",
+                    "terse",
+                    "intent",
+                    "atomic",
+                ],
+            )?;
+            let options = commands::BatchOptions {
+                stop_on_error: a.bool("stop_on_error")?.unwrap_or(true),
+                stop_on_break: a.bool("stop_on_break")?.unwrap_or(false),
+                terse: a.bool("terse")?.unwrap_or(false),
+                atomic: a.bool("atomic")?.unwrap_or(false),
+                intent: a.str("intent")?,
+            };
             let steps = commands::parse_steps(name, "argument", &a, "id")?;
-            let outcome = commands::run_batch(host, &steps, terse);
+            let outcome = commands::run_batch(host, &steps, &options);
             let block = text_block(serialize(&outcome.report));
             if outcome.failed {
                 Err(Failure::Failed(

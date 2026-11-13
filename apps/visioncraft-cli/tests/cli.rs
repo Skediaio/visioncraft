@@ -120,7 +120,14 @@ fn a_failing_batch_saves_nothing_and_exit_codes_say_why() {
     let d = dir("codes");
     std::fs::write(d.join("bad.json"), r#"[["shape.add_area", {"name": "Lawn", "outline": [[0,0],[1,0],[1,1]]}], ["light.add", {"name": "x"}]]"#).unwrap();
     let out = cli(
-        &["batch", "--script", "bad.json", "--out", "x.visioncraft"],
+        &[
+            "batch",
+            "--script",
+            "bad.json",
+            "--atomic",
+            "--out",
+            "x.visioncraft",
+        ],
         &d,
     );
     assert_eq!(out.status.code(), Some(1));
@@ -130,6 +137,37 @@ fn a_failing_batch_saves_nothing_and_exit_codes_say_why() {
         (Some(1), Some(true))
     );
     assert!(!d.join("x.visioncraft").exists());
+    // As 3dcraft's batch: not atomic; --keep-going saves what was built.
+    let kept = cli(
+        &[
+            "batch",
+            "--script",
+            "bad.json",
+            "--keep-going",
+            "--out",
+            "y.visioncraft",
+        ],
+        &d,
+    );
+    assert_eq!(kept.status.code(), Some(1));
+    let report = &lines(&kept)[0];
+    assert_eq!(
+        (report["completed"].as_u64(), report["failed"].as_u64()),
+        (Some(1), Some(1))
+    );
+    assert!(report.get("rolledBack").is_none());
+    assert!(d.join("y.visioncraft").exists());
+    // run --new, and a step noted for an agent.
+    std::fs::write(d.join("agent.json"), r#"[{"command": "time.set", "params": {"hour": 8}, "agent": "planner"}, ["agent.log", {}]]"#).unwrap();
+    let ran = cli(&["run", "--new", "{}", "--script", "agent.json"], &d);
+    assert!(
+        ran.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ran.stderr)
+    );
+    let log = &lines(&ran)[1];
+    assert_eq!(log["entries"][0]["client"], "planner");
+    assert_eq!(log["entries"][0]["command"], "time.set");
     let usage = cli(&["render"], &d);
     assert_eq!(usage.status.code(), Some(2));
     assert!(
@@ -238,5 +276,69 @@ fn render_draws_a_picture_that_is_not_blank() {
     assert!(colours.len() > 50, "only {} colours: blank", colours.len());
     if let Ok(target) = std::env::var("VISIONCRAFT_RENDER_OUT") {
         std::fs::write(target, &bytes).unwrap();
+    }
+}
+
+/// Every recipe of the agent guide through `visioncraft-cli mcp`, pictures included. Needs a
+/// GPU: `cargo test -p visioncraft-cli -- --ignored`.
+#[test]
+#[ignore]
+fn recipes_render_through_the_mcp_server() {
+    use std::io::{BufRead, BufReader, Write};
+    let guide = include_str!("../../../crates/visioncraft-automation/docs/agent.md");
+    let recipes: Vec<Value> = guide
+        .split("```json recipe\n")
+        .skip(1)
+        .map(|b| serde_json::from_str(&b[..b.find("```").unwrap()]).unwrap())
+        .collect();
+    for (n, recipe) in recipes.iter().enumerate() {
+        let d = dir(&format!("recipe-{n}"));
+        std::fs::copy(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../crates/visioncraft-core/tests/data/plate.3dcraft"
+            ),
+            d.join("plate.3dcraft"),
+        )
+        .unwrap();
+        let mut child = Command::new(env!("CARGO_BIN_EXE_visioncraft-cli"))
+            .args([
+                "mcp",
+                "--automation-read-root",
+                ".",
+                "--automation-write-root",
+                ".",
+            ])
+            .current_dir(&d)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        let mut out = BufReader::new(child.stdout.take().unwrap());
+        writeln!(stdin, "{}", json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "command_batch", "arguments": recipe}})).unwrap();
+        let mut line = String::new();
+        out.read_line(&mut line).unwrap();
+        drop(stdin);
+        child.wait().unwrap();
+        let reply: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(
+            reply["result"]["isError"],
+            false,
+            "recipe {}: {line}",
+            n + 1
+        );
+        for step in recipe["steps"].as_array().unwrap() {
+            if let Some(path) = step["params"]["path"].as_str() {
+                assert!(d.join(path).exists(), "recipe {}: {path}", n + 1);
+                if let Ok(to) = std::env::var("VISIONCRAFT_RECIPES_OUT") {
+                    let _ = std::fs::copy(
+                        d.join(path),
+                        Path::new(&to).join(format!("recipe{}-{path}", n + 1)),
+                    );
+                }
+            }
+        }
     }
 }

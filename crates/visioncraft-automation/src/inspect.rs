@@ -1,10 +1,9 @@
 //! The project as an agent reads it (`document.inspect`), and the queries on its geometry
-//! (`query.raycast`, `query.ground_height`, `document.measure`), in world space.
+//! (`query.raycast`, `query.ground_height`, `query.ground_length`), in world space.
 
 use crate::host::{HostState, missing_json};
 use serde_json::{Map, Value, json};
 use std::sync::Arc;
-use visioncraft_core::sun::{sun_position, sunrise_sunset};
 use visioncraft_core::{
     Generator, ImportedModel, Project, Session, Shape, Transform, evaluate, evaluate_surface_fill,
     measure, raycast, shape_mesh_on,
@@ -371,7 +370,7 @@ pub(crate) fn inspect(session: &Session, state: &HostState, v: &Verbosity) -> Va
     out.insert("revision".into(), session.revision().into());
     out.insert("site".into(), json!(p.site));
     out.insert("time".into(), json!(p.time));
-    out.insert("sun".into(), sun_json(p, None));
+    out.insert("sun".into(), sun_json(p));
     out.insert("view".into(), json!(p.view));
     out.insert("style".into(), json!(p.style));
     out.insert("layers".into(), layers.into());
@@ -395,15 +394,11 @@ pub(crate) fn inspect(session: &Session, state: &HostState, v: &Verbosity) -> Va
     Value::Object(out)
 }
 
-/// The sun for the project's site and time, or `time` (a `SunTime`) instead.
-pub(crate) fn sun_json(p: &Project, time: Option<&visioncraft_core::SunTime>) -> Value {
-    let t = time.unwrap_or(&p.time);
-    let s = sun_position(&p.site, t);
-    let (rise, set) = sunrise_sunset(&p.site, t).map_or((None, None), |(r, s)| (Some(r), Some(s)));
-    json!({
-        "azimuth_deg": s.azimuth_deg, "elevation_deg": s.elevation_deg, "direction": s.direction,
-        "sunrise_hour": rise, "sunset_hour": set, "above_horizon": s.elevation_deg > 0.0,
-    })
+/// The sun for the project's site and time: the core's `query.sun`.
+pub(crate) fn sun_json(p: &Project) -> Value {
+    Session::new(p.clone())
+        .run("query.sun", json!({}))
+        .unwrap_or(Value::Null)
 }
 
 pub(crate) fn raycast_json(
@@ -427,49 +422,11 @@ pub(crate) fn ground_json(session: &Session, state: &HostState, x: f32, z: f32) 
     json!({"x": x, "z": z, "height": ground_at(p, &owners(p, state), x, z)})
 }
 
-/// `document.measure`: lengths, areas, heights and slopes.
-pub(crate) fn measure_json(
-    session: &Session,
-    state: &HostState,
-    points: Option<Vec<[f32; 3]>>,
-    outline: Option<Vec<[f32; 2]>>,
-    path: Option<Vec<[f32; 2]>>,
-) -> Result<Value, String> {
-    let mut out = Map::new();
-    if let Some(pts) = points {
-        out.insert("length_m".into(), measure::polyline_length(&pts).into());
-        if let (Some(a), Some(b)) = (pts.first(), pts.last())
-            && pts.len() >= 2
-        {
-            out.insert(
-                "height_difference_m".into(),
-                measure::height_difference(*a, *b).into(),
-            );
-            out.insert(
-                "slope_percent".into(),
-                measure::slope_percent(*a, *b).into(),
-            );
-        }
-    }
-    if let Some(o) = outline {
-        if o.len() < 3 {
-            return Err("`outline` needs at least 3 points".into());
-        }
-        out.insert("area_m2".into(), measure::polygon_area(&o).into());
-    }
-    if let Some(path) = path {
-        let p = session.project();
-        let owners = owners(p, state);
-        let len = measure::polyline_length_on_ground(&path, &|x, z| ground_at(p, &owners, x, z));
-        out.insert("ground_length_m".into(), len.into());
-    }
-    if out.is_empty() {
-        return Err(
-            "give `points` (a polyline), `outline` (an area) or `path` (a walk over the ground)"
-                .into(),
-        );
-    }
-    Ok(Value::Object(out))
+/// `query.ground_length`: a walk over the ground.
+pub(crate) fn ground_length_json(session: &Session, state: &HostState, path: &[[f32; 2]]) -> Value {
+    let p = session.project();
+    let owners = owners(p, state);
+    json!({"ground_length_m": measure::polyline_length_on_ground(path, &|x, z| ground_at(p, &owners, x, z))})
 }
 
 #[cfg(test)]
