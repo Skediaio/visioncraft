@@ -651,6 +651,19 @@ impl DrawState {
         if self.shape_panel(ui, cx) {
             ui.separator();
         }
+        // Above the tools, so they stay put.
+        if self.tool == Tool::Area {
+            ui.horizontal_wrapped(|ui| {
+                for kind in AreaKind::ALL {
+                    if ui
+                        .selectable_label(self.area_kind == kind, kind.spec().0)
+                        .clicked()
+                    {
+                        self.area_kind = kind;
+                    }
+                }
+            });
+        }
         ui.horizontal(|ui| {
             for (tool, label) in [
                 (Tool::Select, t::TOOL_SELECT),
@@ -664,18 +677,6 @@ impl DrawState {
                 }
             }
         });
-        if self.tool == Tool::Area {
-            ui.horizontal_wrapped(|ui| {
-                for kind in AreaKind::ALL {
-                    if ui
-                        .selectable_label(self.area_kind == kind, kind.spec().0)
-                        .clicked()
-                    {
-                        self.area_kind = kind;
-                    }
-                }
-            });
-        }
         ui.small(match self.tool {
             Tool::Select => t::SELECT_HINT,
             Tool::Wall => t::WALL_HINT,
