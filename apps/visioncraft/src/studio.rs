@@ -758,16 +758,7 @@ impl Studio {
             self.suggested = true;
             self.suggest_lights = true;
         }
-        let mut q = self.current_quality();
-        if self.camera.view == View::Top {
-            // The renderer takes the plan's height as the LOD distance, so shrubs and ground
-            // plants (culled at 15 m and up) would vanish from a plan of a garden. Scale the
-            // distances so that they stay, in steps of two so zooming does not rebuild targets.
-            // shortcut: until the renderer draws the last level instead of culling in plan views
-            let need = 2.0 * self.camera.top_half_height * 100.0 / 12.0;
-            let step = need.max(100.0).log2().ceil().exp2() as u32;
-            q.lod_distance_percent = q.lod_distance_percent.max(step);
-        }
+        let q = self.current_quality();
         self.renderer.set_quality(q);
         let hl = self
             .highlight
