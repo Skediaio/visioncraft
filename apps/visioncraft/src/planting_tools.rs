@@ -1920,4 +1920,33 @@ mod tests {
         t.switch_form(Tool::Line);
         assert_eq!(t.form.palette[0].asset, "flora:carpinus-hedge");
     }
+
+    /// The same strokes give the same plants: two sessions, two evaluations each, a duplicate
+    /// (its own seed) and a layered preset.
+    #[test]
+    fn a_brush_is_deterministic() {
+        let ground = |_: f32, _: f32| Some(0.0);
+        let mut forms = vec![oak()];
+        let mut layered = oak();
+        layered.layers = planting_presets()[2].layers.clone();
+        forms.push(layered);
+        for form in forms {
+            let run = || {
+                let mut s = Session::new(Project::default());
+                let mut target = None;
+                for x in [0.0, 7.0, 30.0] {
+                    commit_stroke(&mut s, &mut target, &form, stroke(x, false), "b").unwrap();
+                }
+                commit_stroke(&mut s, &mut target, &form, stroke(7.0, true), "b").unwrap();
+                s.project().generators[0].clone()
+            };
+            let (a, b) = (run(), run());
+            assert_eq!(a, b);
+            let pa = visioncraft_core::evaluate(&a, &ground).placements;
+            let pb = visioncraft_core::evaluate(&b, &ground).placements;
+            assert!(!pa.is_empty());
+            assert_eq!(pa, pb);
+            assert_eq!(pa, visioncraft_core::evaluate(&a, &ground).placements);
+        }
+    }
 }

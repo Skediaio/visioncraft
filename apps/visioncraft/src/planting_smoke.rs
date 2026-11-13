@@ -325,16 +325,25 @@ mod native {
                     }
                 }
                 let mut each = Vec::new();
+                // Where a frame goes: app prepare, recording, submit, waiting for the GPU.
+                let mut phases = [0.0f64; 4];
                 for _ in 0..frames + 3 {
                     let t0 = now_ms();
                     s.prepare();
+                    let t1 = now_ms();
                     let mut enc = device.create_command_encoder(&Default::default());
                     s.renderer.render(&mut enc);
+                    let t2 = now_ms();
                     queue.submit([enc.finish()]);
+                    let t3 = now_ms();
                     device
                         .poll(wgpu::PollType::wait_indefinitely())
                         .map_err(|e| e.to_string())?;
-                    let ms = now_ms() - t0;
+                    let t4 = now_ms();
+                    for (p, d) in phases.iter_mut().zip([t1 - t0, t2 - t1, t3 - t2, t4 - t3]) {
+                        *p += d;
+                    }
+                    let ms = t4 - t0;
                     s.record_frame(ms as f32); // Auto adapts as in the window
                     each.push(ms);
                 }
@@ -345,6 +354,40 @@ mod native {
                     "plant bench {w}x{h}: {} frames, average {avg:.1} ms ({:.1} fps), worst {max:.1} ms",
                     each.len(),
                     1000.0 / avg
+                );
+                // The same frames as a window runs them: the CPU records frame n while the GPU
+                // draws frame n - 1 (two in flight, as a swapchain).
+                let mut prev: Option<wgpu::SubmissionIndex> = None;
+                let t0 = now_ms();
+                for _ in 0..frames {
+                    s.prepare();
+                    let mut enc = device.create_command_encoder(&Default::default());
+                    s.renderer.render(&mut enc);
+                    let idx = queue.submit([enc.finish()]);
+                    if let Some(p) = prev.replace(idx) {
+                        device
+                            .poll(wgpu::PollType::Wait {
+                                submission_index: Some(p),
+                                timeout: None,
+                            })
+                            .map_err(|e| e.to_string())?;
+                    }
+                }
+                device
+                    .poll(wgpu::PollType::wait_indefinitely())
+                    .map_err(|e| e.to_string())?;
+                let piped = (now_ms() - t0) / frames as f64;
+                println!(
+                    "plant bench pipelined: {piped:.1} ms ({:.1} fps)",
+                    1000.0 / piped
+                );
+                let n = (frames + 3) as f64;
+                println!(
+                    "plant bench phases: prepare {:.1} ms, record {:.1} ms, submit {:.1} ms, gpu wait {:.1} ms",
+                    phases[0] / n,
+                    phases[1] / n,
+                    phases[2] / n,
+                    phases[3] / n
                 );
                 let st = s.renderer.stats();
                 let q = s.current_quality();
