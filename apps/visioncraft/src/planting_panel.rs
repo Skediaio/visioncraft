@@ -260,6 +260,7 @@ fn form_ui(
                 drag_field(ui, t::PT_OFFSET, &mut form.offset, 0.05, -50.0..=50.0, " m"),
             );
             edit = merge(edit, checkbox(ui, &mut form.closed, t::PT_CLOSED));
+            edit = merge(edit, checkbox(ui, &mut form.straight, t::PT_STRAIGHT));
         }
         Tool::Cluster => {
             let mut c = form.count as f32;

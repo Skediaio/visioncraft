@@ -113,6 +113,8 @@ pub struct Form {
     pub rotation: f32,
     /// A cluster's radius, metres.
     pub radius: f32,
+    /// Line: straight from point to point (a hedge along a plot) instead of a smooth curve.
+    pub straight: bool,
     /// Brush: plants stay inside the area the stroke starts on.
     pub keep_inside: bool,
     /// Brush: the outline they stay inside (the area under the stroke's start), empty for none.
@@ -146,6 +148,7 @@ impl Default for Form {
             max_slope: 45.0,
             rotation: 0.0,
             radius: 2.0,
+            straight: false,
             keep_inside: true,
             clip: Vec::new(),
         }
@@ -163,6 +166,7 @@ impl Form {
         match tool {
             Tool::Line => Form {
                 palette: vec![w("flora:carpinus-hedge")],
+                straight: true,
                 jitter: 0.0,
                 scale_min: 1.0,
                 scale_max: 1.0,
@@ -267,6 +271,7 @@ impl Form {
                     Spacing::Every(d) => (false, f.count, d),
                 };
                 (f.jitter, f.offset, f.closed) = (s.spacing_jitter, s.offset_m, s.closed);
+                f.straight = s.straight;
                 (f.scale_min, f.scale_max, f.spin, f.seed) =
                     (s.scale_min, s.scale_max, s.random_rotation, s.seed);
             }
@@ -332,6 +337,7 @@ impl Form {
                     Spacing::Every(self.every)
                 };
                 (s.spacing_jitter, s.offset_m, s.closed) = (self.jitter, self.offset, self.closed);
+                s.straight = self.straight;
                 (s.scale_min, s.scale_max, s.random_rotation, s.seed) =
                     (self.scale_min, self.scale_max, self.spin, self.seed);
                 s.layer.clone_from(&self.layer);
@@ -412,6 +418,7 @@ impl Form {
                     "points": points,
                     "spacing": if self.by_count { json!({"count": self.count.max(1)}) } else { json!({"every": self.every}) },
                     "closed": self.closed,
+                    "straight": self.straight,
                     "spacing_jitter": self.jitter,
                     "offset_m": self.offset,
                     "scale_min": self.scale_min,
