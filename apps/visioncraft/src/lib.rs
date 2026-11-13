@@ -32,6 +32,8 @@ pub mod smoke;
 pub mod strings;
 pub mod studio;
 pub mod sun;
+pub mod terrain_gpu;
+pub mod terrain_tool;
 pub mod ui;
 pub mod views;
 
@@ -88,6 +90,7 @@ pub struct App {
     draw: draw::DrawState,
     materials: materials::MaterialsState,
     objects: objects::ObjectsState,
+    terrain: terrain_tool::TerrainTool,
     views: views::ViewsState,
     modelui: modelui::ModelUi,
     loading: Option<Job>,
@@ -151,6 +154,7 @@ impl App {
             draw: Default::default(),
             materials: Default::default(),
             objects: Default::default(),
+            terrain: Default::default(),
             views: Default::default(),
             modelui: Default::default(),
             loading: None,
@@ -464,6 +468,7 @@ impl App {
             Some(Mode::Draw) => self.draw.leave(&mut cx),
             Some(Mode::Materials) => self.materials.leave(&mut cx),
             Some(Mode::Objects) => self.objects.leave(&mut cx),
+            Some(Mode::Sun) => self.terrain.leave(&mut cx),
             Some(Mode::Views) => self.views.leave(),
             _ => {}
         }
@@ -851,6 +856,7 @@ impl eframe::App for App {
             Some(Mode::Draw) => self.draw.update(&mut cx),
             Some(Mode::Materials) => self.materials.update(&mut cx),
             Some(Mode::Objects) => self.objects.update(&mut cx),
+            Some(Mode::Sun) => self.terrain.update(&mut cx),
             _ => {}
         }
         self.views.pump(&mut cx, &self.device, &self.queue);
@@ -961,7 +967,7 @@ impl eframe::App for App {
                 Vec2::new(10.0, -58.0),
                 panel_width.max(300.0).min(w - 20.0),
                 |ui| {
-                    sun::panel(ui, &mut cx);
+                    sun::panel(ui, &mut cx, &mut self.terrain);
                 },
             ),
             Some(Mode::Views) => {

@@ -28,6 +28,8 @@ pub enum Draft {
     Material(Material),
     Shape(Shape),
     Generator(Generator),
+    /// A terrain being sculpted, before its stroke is committed.
+    Terrain(Arc<visioncraft_core::Terrain>),
 }
 
 pub struct Studio {
@@ -540,6 +542,7 @@ impl Studio {
                     *slot = g.clone();
                 }
             }
+            Some(Draft::Terrain(t)) => p.to_mut().terrain = Some(t.clone()),
             None => {}
         }
         p
@@ -731,6 +734,8 @@ impl Studio {
         }
         self.take_catalog();
         self.sync();
+        self.scene
+            .sync_terrain_layers(&mut self.renderer, self.session.project());
         let (view, proj, eye) = self.camera.matrices(self.aspect());
         self.renderer.set_camera(view, proj, eye);
         let (sun, elevation) = self.sun();

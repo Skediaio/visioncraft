@@ -78,14 +78,28 @@ fn on_circle(c: Pos2, r: f32, az_deg: f64) -> Pos2 {
     c + Vec2::new(a.sin() as f32, -a.cos() as f32) * r
 }
 
-pub fn panel(ui: &mut egui::Ui, cx: &mut Cx) {
-    let max = (cx.ctx.content_rect().height() - 90.0).max(200.0);
+/// Landscape & Sun: the sun and sky, or the terrain tools.
+pub fn panel(ui: &mut egui::Ui, cx: &mut Cx, terrain: &mut crate::terrain_tool::TerrainTool) {
+    ui.horizontal(|ui| {
+        if ui.selectable_label(!terrain.open, t::TAB_SUN).clicked() && terrain.open {
+            terrain.leave(cx);
+            terrain.open = false;
+        }
+        if ui.selectable_label(terrain.open, t::TAB_TERRAIN).clicked() {
+            terrain.open = true;
+        }
+    });
+    let max = (cx.ctx.content_rect().height() - 120.0).max(200.0);
     egui::ScrollArea::vertical()
         .max_height(max)
         .id_salt("sunpanel")
         .show(ui, |ui| {
-            panel_body(ui, cx);
-            crate::sky_panel::panel(ui, cx);
+            if terrain.open {
+                terrain.panel(ui, cx);
+            } else {
+                panel_body(ui, cx);
+                crate::sky_panel::panel(ui, cx);
+            }
         });
 }
 

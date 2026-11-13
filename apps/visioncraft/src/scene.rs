@@ -413,6 +413,7 @@ pub struct Scene {
     /// Where the ground changed since which stamp: generators depend on it.
     dirty: DirtyLog,
     terrain: Option<Arc<Terrain>>,
+    terrain_gpu: crate::terrain_gpu::TerrainGpu,
     pub timings: Timings,
     pub flora: Flora,
     /// The asset library: models, textures and lamps streamed in.
@@ -504,6 +505,8 @@ impl Scene {
         for (_, l) in self.lawns.drain() {
             l.items.into_iter().for_each(|i| r.remove_item(i));
         }
+        self.terrain_gpu.clear(r);
+        self.terrain = None;
         self.dirty.mark(EVERYTHING);
     }
 
@@ -535,17 +538,32 @@ impl Scene {
     ) -> Vec<String> {
         let mut problems = Vec::new();
         let mut live: Vec<String> = Vec::new();
-        // A new terrain (every terrain edit makes one) moves the ground under its whole extent.
-        let same = match (&self.terrain, &project.terrain) {
-            (None, None) => true,
-            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-            _ => false,
-        };
-        if !same {
-            let extents = [&self.terrain, &project.terrain].map(|t| t.as_ref().map(|t| t.extent()));
-            self.ground_changed(extents);
-            self.terrain.clone_from(&project.terrain);
+        // The terrain: chunks remade where it changed, and generators there re-evaluated.
+        let old = self.terrain.clone();
+        self.pinned.insert(CLAY.key());
+        let any = self.material(r, &CLAY); // terrain items ignore their material
+        if let Some(d) = self.terrain_gpu.sync(r, project.terrain.as_ref(), any) {
+            match (&old, &project.terrain) {
+                (Some(a), Some(b))
+                    if a.origin == b.origin
+                        && a.cell_m == b.cell_m
+                        && (a.width, a.depth) == (b.width, b.depth) =>
+                {
+                    let at = |x: u32, z: u32| {
+                        [
+                            b.origin[0] + x as f32 * b.cell_m,
+                            b.origin[1] + z as f32 * b.cell_m,
+                        ]
+                    };
+                    self.dirty.mark([at(d.x0, d.z0), at(d.x1, d.z1)]);
+                }
+                (a, b) => {
+                    let extents = [a, b].map(|t| t.as_ref().map(|t| t.extent()));
+                    self.ground_changed(extents);
+                }
+            }
         }
+        self.terrain.clone_from(&project.terrain);
         let clay = false; // the renderer's own clay mode handles it (`Renderer::set_clay`)
 
         // Owners: models, then shapes.
@@ -1115,6 +1133,12 @@ impl Scene {
             insts,
             truncated,
         }
+    }
+
+    /// The terrain's painted layers from their materials (pictures arrive over time).
+    pub fn sync_terrain_layers(&mut self, r: &mut Renderer, project: &Project) {
+        self.terrain_gpu
+            .sync_layers(r, project, &mut self.library, &mut |m, lib| look_of(m, lib));
     }
 
     /// One step of lazy plant generation; true when a generation finished (the scene must sync again).

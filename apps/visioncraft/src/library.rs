@@ -227,7 +227,7 @@ pub struct Library {
     lamps_applied: Option<bool>,
     /// Bumps whenever something a scene item is built from changed.
     pub rev: u64,
-    specs: Vec<TexSpec>,
+    pub(crate) specs: Vec<TexSpec>,
     textured: Vec<Textured>,
     mem: HashMap<String, Rgba>,
     mem_tex: HashMap<String, TextureId>,

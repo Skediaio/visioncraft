@@ -276,3 +276,25 @@ pub const AGENT_LAST: &str = "agent:";
 pub const PT_UNDO_STROKE: &str = "Remove last stroke";
 pub const PT_UNDO_STROKE_TIP: &str =
     "Takes back this brush's most recent stroke, even after other changes.";
+
+pub const TAB_SUN: &str = "Sun & sky";
+pub const TAB_TERRAIN: &str = "Terrain";
+pub const TR_RAISE: &str = "Raise";
+pub const TR_LOWER: &str = "Lower";
+pub const TR_SMOOTH: &str = "Smooth";
+pub const TR_FLATTEN: &str = "Flatten";
+pub const TR_PAINT: &str = "Paint";
+pub const TR_POND: &str = "Pond";
+pub const TR_BRUSH_HINT: &str = "Drag over the ground; release to apply. Ctrl+drag turns the view.";
+pub const TR_FLATTEN_HINT: &str =
+    "Drag from the height you want: the ground under the first point.";
+pub const TR_POND_HINT: &str = "Click the pond's outline, then Enter or click the first point: the ground is dug out and filled with water.";
+pub const TR_POND_NAME: &str = "Pond";
+pub const TR_NONE: &str = "This project has no terrain yet: the ground is flat.";
+pub const TR_CREATE: &str = "Make terrain";
+pub const TR_REMOVE: &str = "Remove terrain";
+pub const TR_STRENGTH: &str = "Strength";
+pub const TR_DEPTH: &str = "Depth";
+pub const TR_LAYERS: &str = "Paint with";
+pub const TR_ADD_LAYER: &str = "+ Material from the library";
+pub const TR_CELLS: &str = "cells";

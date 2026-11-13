@@ -68,6 +68,21 @@ pub fn overlay(lib: &Library, m: &Material) -> Option<Overlay> {
 /// The project material that shows library material `lib_id`: an existing one with the same
 /// pictures, else a new one (`material.add`).
 pub fn ensure_material(s: &mut Studio, lib_id: &str) -> Result<String, String> {
+    match material_for(s, lib_id)? {
+        Ok(id) => Ok(id),
+        Err(params) => {
+            let r = s
+                .session
+                .run("material.add", params)
+                .map_err(|e| e.to_string())?;
+            Ok(r["id"].as_str().unwrap_or_default().to_string())
+        }
+    }
+}
+
+/// The project material that shows library material `lib_id`: `Ok(id)` when there is one,
+/// else `Err(params)` of the `material.add` that makes it (to run inside a transaction).
+pub fn material_for(s: &Studio, lib_id: &str) -> Result<Result<String, Value>, String> {
     let entry = s
         .scene
         .library
@@ -82,26 +97,18 @@ pub fn ensure_material(s: &mut Studio, lib_id: &str) -> Result<String, String> {
             && m.maps.base_color == base
             && matches!(m.kind, SurfaceKind::StandardTriplanarPbr { .. })
     }) {
-        return Ok(m.id.clone());
+        return Ok(Ok(m.id.clone()));
     }
-    let orm = entry.maps.orm.clone();
-    let r = s
-        .session
-        .run(
-            "material.add",
-            json!({
-                "name": entry.name,
-                "kind": {"type": "standard_triplanar_pbr", "map_scale_m": scale_of(&entry),
-                         "relief": 1.0, "gloss": 0.0, "weathering": 0.0},
-                // the maps scale the factors: 1 lets the pictures decide
-                "base_color": [1.0, 1.0, 1.0, 1.0], "metallic": 1.0, "roughness": 1.0,
-                "maps": {"base_color": base, "normal": entry.maps.normal, "orm": orm,
-                         "height": entry.maps.height},
-                "variation": if entry.kind == "paving" { 0.4 } else { 0.25 },
-            }),
-        )
-        .map_err(|e| e.to_string())?;
-    Ok(r["id"].as_str().unwrap_or_default().to_string())
+    Ok(Err(json!({
+        "name": entry.name,
+        "kind": {"type": "standard_triplanar_pbr", "map_scale_m": scale_of(&entry),
+                 "relief": 1.0, "gloss": 0.0, "weathering": 0.0},
+        // the maps scale the factors: 1 lets the pictures decide
+        "base_color": [1.0, 1.0, 1.0, 1.0], "metallic": 1.0, "roughness": 1.0,
+        "maps": {"base_color": base, "normal": entry.maps.normal, "orm": entry.maps.orm,
+                 "height": entry.maps.height},
+        "variation": if entry.kind == "paving" { 0.4 } else { 0.25 },
+    })))
 }
 
 /// The surface kinds of the selector, as `material.update` payloads (keeping a standard
