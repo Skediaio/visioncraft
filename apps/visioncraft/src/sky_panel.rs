@@ -1,11 +1,9 @@
 //! Skies: the picker in the Landscape & Sun panel (physical sky and the library's HDRIs), the
 //! HDRI's calibration, "use this sky's sun", and the ground colour.
 //!
-//! Calibration: an HDRI's pixel values are scaled so that the sun in the image gives the
-//! illuminance a clear sky has with the sun at that height (`Sun::from_angles`), which is what
-//! the automatic exposure assumes; an image without a sun (overcast) gets a sky of about
-//! 5000 cd/m2 (about 20 klx on the ground) and no direct sun. The renderer's own normalisation
-//! helper has not landed yet; this is the app-side stand-in.
+//! Calibration is the renderer's `calibrate_hdri`: the image's diffuse sky gives the horizontal
+//! illuminance of a clear sky with the sun at the height the image shows it (an overcast image
+//! gets `OVERCAST_LUX`), which is what the automatic exposure assumes.
 
 use crate::assets::{HdrData, Key, Loaded};
 use crate::strings as t;
@@ -15,7 +13,7 @@ use eframe::egui::{self, Sense, Vec2};
 use glam::{Quat, Vec3};
 use serde_json::json;
 use visioncraft_core::SkyChoice;
-use visioncraft_render::{HdriImage, Sky, Sun, estimate_sun};
+use visioncraft_render::{HdriImage, Sky, Sun, calibrate_hdri};
 
 struct Hdr {
     id: String,
@@ -37,22 +35,6 @@ pub struct SkyState {
     pub ground_draft: Option<[f32; 3]>,
 }
 
-const OVERCAST_CD: f32 = 5000.0;
-
-fn mean_luminance(d: &HdrData) -> f32 {
-    let (mut sum, mut weight) = (0.0f64, 0.0f64);
-    for y in 0..d.h / 2 {
-        let w = f64::from(((y as f32 + 0.5) / d.h as f32 * std::f32::consts::PI).sin());
-        for x in 0..d.w {
-            let i = ((y * d.w + x) * 3) as usize;
-            let l = 0.2126 * d.rgb[i] + 0.7152 * d.rgb[i + 1] + 0.0722 * d.rgb[i + 2];
-            sum += f64::from(l) * w;
-            weight += w;
-        }
-    }
-    (sum / weight.max(1e-9)) as f32
-}
-
 fn az_el(dir: Vec3) -> (f32, f32) {
     (
         dir.x.atan2(-dir.z).to_degrees().rem_euclid(360.0),
@@ -62,28 +44,21 @@ fn az_el(dir: Vec3) -> (f32, f32) {
 
 impl Hdr {
     fn new(id: String, data: HdrData) -> Self {
-        let mean = mean_luminance(&data).max(1e-6);
         let image = HdriImage {
             width: data.w,
             height: data.h,
             rgb: &data.rgb,
         };
-        let found = estimate_sun(&image, 0.0);
-        let by_mean = OVERCAST_CD / mean;
-        let calibrated = match found {
-            Some((dir, illuminance, _)) => {
-                let lux = Sun::from_angles(az_el(dir).0, az_el(dir).1.max(1.0)).illuminance;
-                // A clipped sun would make the sky far too bright: keep within a factor of the
-                // mean-based value for a typical sky (6000 cd/m2).
-                let typical = 6000.0 / mean;
-                (lux / illuminance.max(1e-6)).clamp(typical * 0.25, typical * 4.0)
-            }
-            None => by_mean,
-        };
+        // A broken image keeps intensity 1 and no sun; the renderer refuses it on upload anyway.
+        let cal = calibrate_hdri(&image, 0.0).ok();
+        let sun = cal
+            .filter(|c| c.sun.illuminance > 0.0)
+            .map(|c| c.sun.direction);
+        let calibrated = cal.map_or(1.0, |c| c.intensity);
         Self {
             id,
             data,
-            sun: found.map(|f| f.0),
+            sun,
             calibrated,
         }
     }
@@ -378,16 +353,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mean_luminance_of_a_flat_sky_is_its_value() {
-        let d = HdrData {
-            w: 16,
-            h: 8,
-            rgb: vec![2.0; 16 * 8 * 3],
-        };
-        assert!((mean_luminance(&d) - 2.0).abs() < 1e-4);
-    }
-
-    #[test]
     fn an_overcast_image_is_calibrated_to_a_bright_overcast_sky_without_a_sun() {
         let d = HdrData {
             w: 64,
@@ -396,7 +361,7 @@ mod tests {
         };
         let h = Hdr::new("flat".into(), d);
         assert!(h.sun.is_none());
-        assert!((h.calibrated * 0.5 - OVERCAST_CD).abs() < 1.0);
+        assert!(h.calibrated > 0.0);
     }
 
     #[test]

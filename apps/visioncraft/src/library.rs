@@ -246,9 +246,9 @@ impl Default for Library {
 }
 
 fn free(r: &mut Renderer, m: Model) {
-    // A material keeps its textures alive through its bind group until it is set again.
+    // Freed before the textures: its bind group holds them.
     for id in &m.materials {
-        r.set_material(*id, &Material::default());
+        r.remove_material(*id);
     }
     m.meshes.into_iter().for_each(|id| r.remove_mesh(id));
     m.textures.into_iter().for_each(|id| r.remove_texture(id));
