@@ -233,8 +233,50 @@ pub enum Tool {
     Wall,
 }
 
+/// What an area is: decides its name and its material, so a terrace drawn on a lawn shows at once.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum AreaKind {
+    #[default]
+    Lawn,
+    Terrace,
+    Path,
+    Border,
+    Water,
+}
+
+impl AreaKind {
+    pub const ALL: [AreaKind; 5] = [
+        AreaKind::Lawn,
+        AreaKind::Terrace,
+        AreaKind::Path,
+        AreaKind::Border,
+        AreaKind::Water,
+    ];
+
+    /// (label and name, project material).
+    pub fn spec(self) -> (&'static str, &'static str) {
+        match self {
+            AreaKind::Lawn => (t::KIND_LAWN, "lawn"),
+            AreaKind::Terrace => (t::KIND_TERRACE, "paving"),
+            AreaKind::Path => (t::KIND_PATH, "gravel"),
+            AreaKind::Border => (t::KIND_BORDER, "soil"),
+            AreaKind::Water => (t::KIND_WATER, "water"),
+        }
+    }
+}
+
+/// `"{base} {n}"` with the first `n` from 1 that no shape uses yet: names count per kind.
+pub fn next_name(project: &visioncraft_core::Project, base: &str) -> String {
+    (1..)
+        .map(|n| format!("{base} {n}"))
+        .find(|name| !project.shapes.iter().any(|s| s.name() == name))
+        .expect("an unused number")
+}
+
 #[derive(Default)]
 pub struct DrawState {
+    /// What the Area tool draws.
+    pub area_kind: AreaKind,
     pub tool: Tool,
     pub points: Vec<P2>,
     pub selected: Option<String>,
@@ -242,6 +284,8 @@ pub struct DrawState {
     dragging: Option<usize>,
     /// (shape id, text) of the name field while it has the keyboard.
     name_edit: Option<(String, String)>,
+    /// The camera before Draw switched to the plan.
+    camera_before: Option<crate::camera::Camera>,
 }
 
 const ACCENT: [u8; 4] = [255, 200, 70, 255];
@@ -272,12 +316,19 @@ fn all_vertices(cx: &Cx, except: Option<&str>) -> Vec<P2> {
 
 impl DrawState {
     pub fn enter(&mut self, cx: &mut Cx) {
+        self.camera_before = Some(cx.s.camera.clone());
         cx.s.camera.view = crate::camera::View::Top;
         self.points.clear();
     }
 
+    /// Back to the camera there was before Draw (the plan's own pan and zoom stay for next time).
     pub fn leave(&mut self, cx: &mut Cx) {
-        cx.s.camera.view = crate::camera::View::Orbit;
+        let (center, half) = (cx.s.camera.top_center, cx.s.camera.top_half_height);
+        match self.camera_before.take() {
+            Some(c) => cx.s.camera = c,
+            None => cx.s.camera.view = crate::camera::View::Orbit,
+        }
+        (cx.s.camera.top_center, cx.s.camera.top_half_height) = (center, half);
         cx.s.set_draft(None);
         cx.s.extra = Default::default();
         self.points.clear();
@@ -330,6 +381,8 @@ impl DrawState {
         }
         if cx.input.escape && self.tool != Tool::Select && self.points.is_empty() {
             self.tool = Tool::Select;
+            self.selected = None;
+            self.vertex = None;
         }
         cx.s.extra = (depth, top);
         self.scale_bar(cx);
@@ -415,22 +468,25 @@ impl DrawState {
 
     fn finish(&mut self, cx: &mut Cx) {
         let points = std::mem::take(&mut self.points);
-        let n = cx.s.project().shapes.len() + 1;
+        let name = |base: &str| next_name(cx.s.project(), base);
         let (cmd, material, params) = match self.tool {
-            Tool::Area => (
-                "shape.add_area",
-                "lawn",
-                json!({"name": format!("Area {n}"), "outline": points}),
-            ),
+            Tool::Area => {
+                let (label, material) = self.area_kind.spec();
+                (
+                    "shape.add_area",
+                    material,
+                    json!({"name": name(label), "outline": points}),
+                )
+            }
             Tool::Block => (
                 "shape.add_extrusion",
                 "plaster",
-                json!({"name": format!("Block {n}"), "outline": points, "closed": true, "height": 3.0}),
+                json!({"name": name(t::TOOL_BLOCK), "outline": points, "closed": true, "height": 3.0}),
             ),
             Tool::Wall => (
                 "shape.add_extrusion",
                 "timber",
-                json!({"name": format!("Wall {n}"), "outline": points, "closed": false, "height": 1.8, "thickness": 0.1}),
+                json!({"name": name(t::TOOL_WALL), "outline": points, "closed": false, "height": 1.8, "thickness": 0.1}),
             ),
             Tool::Select => return,
         };
@@ -608,6 +664,18 @@ impl DrawState {
                 }
             }
         });
+        if self.tool == Tool::Area {
+            ui.horizontal_wrapped(|ui| {
+                for kind in AreaKind::ALL {
+                    if ui
+                        .selectable_label(self.area_kind == kind, kind.spec().0)
+                        .clicked()
+                    {
+                        self.area_kind = kind;
+                    }
+                }
+            });
+        }
         ui.small(match self.tool {
             Tool::Select => t::SELECT_HINT,
             Tool::Wall => t::WALL_HINT,
@@ -709,6 +777,30 @@ impl DrawState {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn names_count_per_kind() {
+        let mut s = visioncraft_core::Session::new(visioncraft_core::Project::default());
+        let sq = serde_json::json!([[0, 0], [1, 0], [1, 1]]);
+        assert_eq!(super::next_name(s.project(), "Terrace"), "Terrace 1");
+        s.run(
+            "shape.add_area",
+            serde_json::json!({"name": "Terrace 1", "outline": sq}),
+        )
+        .unwrap();
+        s.run(
+            "shape.add_area",
+            serde_json::json!({"name": "Lawn 1", "outline": sq}),
+        )
+        .unwrap();
+        assert_eq!(super::next_name(s.project(), "Terrace"), "Terrace 2");
+        assert_eq!(super::next_name(s.project(), "Block"), "Block 1");
+        for k in super::AreaKind::ALL {
+            let m = k.spec().1;
+            assert!(s.project().materials.iter().any(|x| x.id == m), "{m}");
+        }
+    }
+
     use super::*;
 
     #[test]

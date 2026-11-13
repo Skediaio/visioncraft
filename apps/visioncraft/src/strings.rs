@@ -74,6 +74,17 @@ pub const TOOL_SELECT: &str = "Select";
 pub const TOOL_AREA: &str = "Area";
 pub const TOOL_BLOCK: &str = "Block";
 pub const TOOL_WALL: &str = "Wall";
+pub const LIGHT_FIXTURES: &str = "Lamps (click one, then click where it goes)";
+pub const BARE_LIGHTS: &str = "Bare lights";
+pub const IN_BLOOM_NOW: &str = "in bloom";
+pub const PLAN_VIEW: &str = "Plan";
+pub const PLAN_VIEW_TIP: &str =
+    "Look straight down, as in Draw: what you place lands exactly under the pointer";
+pub const KIND_LAWN: &str = "Lawn";
+pub const KIND_TERRACE: &str = "Terrace";
+pub const KIND_PATH: &str = "Path";
+pub const KIND_BORDER: &str = "Border";
+pub const KIND_WATER: &str = "Water";
 pub const DRAW_HINT: &str = "Click to add points. Click the first point or press Enter to close, Esc cancels, Backspace undoes a point. Alt turns the grid snap off.";
 pub const WALL_HINT: &str = "Click to add points. Enter finishes, Esc cancels, Backspace undoes a point. Alt turns the grid snap off.";
 pub const SELECT_HINT: &str = "Click a shape to select it. Drag a corner to move it, click an edge to add a corner, Delete removes the selected corner.";
