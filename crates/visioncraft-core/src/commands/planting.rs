@@ -24,7 +24,7 @@ pub(super) fn register(s: &mut Session) {
         let p = param(
             "asset_palette",
             T::Array,
-            "Species to pick from by weight: [{asset, weight >= 0}]. An asset is a catalogue asset id, `flora:<species id>` or a custom species id (`sp1`...).",
+            "Species to pick from by weight: [{asset, weight >= 0}]. An asset is a catalogue asset id, `flora:<species id>` a custom species id (`sp1`...) or `user:<object id>`.",
         );
         if required {
             p.required()
@@ -98,7 +98,7 @@ pub(super) fn register(s: &mut Session) {
                 param(
                     "asset",
                     T::String,
-                    "Catalogue asset id, `flora:<species id>` or custom species id.",
+                    "Catalogue asset id, `flora:<species id>`, custom species id or `user:<object id>`.",
                 )
                 .required(),
                 param("position", T::Point3, "[x, y, z] of its base.")

@@ -2,6 +2,7 @@
 
 use crate::light::Light;
 use crate::material::{Assignment, Material, builtin_palette};
+use crate::object::UserObject;
 use crate::planting::Generator;
 use crate::shape::Shape;
 use crate::terrain::Terrain;
@@ -263,6 +264,9 @@ pub struct Project {
     pub style: RenderStyle,
     #[serde(default)]
     pub species: Vec<CustomSpecies>,
+    /// The user's own models, placed as the asset `user:<id>`.
+    #[serde(default)]
+    pub objects: Vec<UserObject>,
     #[serde(default)]
     pub view: ViewState,
     /// Behind an `Arc`: undo snapshots share it, and a command that edits it copies it once.
@@ -288,6 +292,7 @@ impl Default for Project {
             viewpoints: Vec::new(),
             style: RenderStyle::default(),
             species: Vec::new(),
+            objects: Vec::new(),
             view: ViewState::default(),
             terrain: None,
             extensions: Extensions::new(),

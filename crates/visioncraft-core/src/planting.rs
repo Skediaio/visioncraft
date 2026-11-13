@@ -29,8 +29,8 @@ pub struct Placement {
 }
 
 /// One species of a palette. `asset` is, by convention, one of: a catalogue asset id, `flora:<id>`
-/// for a built-in procedural species, or the id of a custom species of the project (`sp1`...).
-/// The core does not check which.
+/// for a built-in procedural species, the id of a custom species of the project (`sp1`...), or
+/// `user:<id>` for one of the user's own objects. The core does not check which.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Weighted {
     pub asset: String,

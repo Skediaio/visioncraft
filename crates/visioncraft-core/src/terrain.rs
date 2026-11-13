@@ -1086,8 +1086,24 @@ pub fn terrain_chunks(t: &Terrain) -> (u32, u32) {
 /// Mesh of chunk `(chunk_x, chunk_z)`. `lod` is the vertex step: 1, 2, 4 or 8 (other values are
 /// rounded up to a power of two and capped at 8). Normals are central differences on the full
 /// grid, so they agree across chunks and LODs; a skirt hangs down every chunk edge so that two
-/// neighbours at different LODs show no crack. An out-of-range chunk is empty.
+/// neighbours at different LODs show no crack. An out-of-range chunk is empty. Same as
+/// [`terrain_chunk_mesh_on`] without a ground, so every edge gets its skirt.
 pub fn terrain_chunk_mesh(t: &Terrain, chunk_x: u32, chunk_z: u32, lod: u32) -> TerrainChunk {
+    terrain_chunk_mesh_on(t, chunk_x, chunk_z, lod, None)
+}
+
+/// [`terrain_chunk_mesh`] for a terrain that sits in an infinite ground plane at `ground`
+/// (the project's `view.ground` height): a stretch of the terrain's outer border whose edge is at
+/// that height gets no skirt, so the terrain does not read as a slab against the ground. Skirts
+/// between chunks (which hide cracks between LODs) are always kept, and so are outer ones where
+/// the terrain stands above or below the ground.
+pub fn terrain_chunk_mesh_on(
+    t: &Terrain,
+    chunk_x: u32,
+    chunk_z: u32,
+    lod: u32,
+    ground: Option<f32>,
+) -> TerrainChunk {
     let mut m = TerrainChunk::default();
     let (cx, cz) = terrain_chunks(t);
     if chunk_x >= cx || chunk_z >= cz {
@@ -1147,27 +1163,38 @@ pub fn terrain_chunk_mesh(t: &Terrain, chunk_x: u32, chunk_z: u32, lod: u32) -> 
     }
     // Skirts: a copy of each edge vertex, lowered, joined by a strip facing outwards.
     let drop = step as f32 * t.cell_m + 0.25;
-    let edge = |m: &mut TerrainChunk, ring: Vec<(usize, usize)>, flip: bool| {
+    let edge = |m: &mut TerrainChunk, ring: Vec<(usize, usize)>, flip: bool, outer: bool| {
         let top: Vec<u32> = ring.iter().map(|&(i, j)| at(i, j)).collect();
-        let low: Vec<u32> = ring
-            .iter()
-            .zip(&top)
-            .map(|(_, &v)| {
-                let (p, nrm, w, uv) = (
-                    m.positions[v as usize],
-                    m.normals[v as usize],
-                    m.weights[v as usize],
-                    m.uv[v as usize],
-                );
-                m.positions.push([p[0], p[1] - drop, p[2]]);
-                m.normals.push(nrm);
-                m.weights.push(w);
-                m.uv.push(uv);
-                m.positions.len() as u32 - 1
-            })
+        // A stretch on the outer border at ground height needs no skirt.
+        let flush = |m: &TerrainChunk, v: u32| {
+            ground.is_some_and(|g| (m.positions[v as usize][1] - g).abs() <= 1e-3)
+        };
+        let keep: Vec<bool> = (0..top.len() - 1)
+            .map(|k| !(outer && flush(m, top[k]) && flush(m, top[k + 1])))
             .collect();
+        let mut low: Vec<Option<u32>> = vec![None; top.len()];
         for k in 0..top.len() - 1 {
-            let (a, b, a2, b2) = (top[k], top[k + 1], low[k], low[k + 1]);
+            if !keep[k] {
+                continue;
+            }
+            for e in [k, k + 1] {
+                if low[e].is_none() {
+                    let v = top[e];
+                    let (p, nrm, w, uv) = (
+                        m.positions[v as usize],
+                        m.normals[v as usize],
+                        m.weights[v as usize],
+                        m.uv[v as usize],
+                    );
+                    m.positions.push([p[0], p[1] - drop, p[2]]);
+                    m.normals.push(nrm);
+                    m.weights.push(w);
+                    m.uv.push(uv);
+                    low[e] = Some(m.positions.len() as u32 - 1);
+                }
+            }
+            let (a, b) = (top[k], top[k + 1]);
+            let (a2, b2) = (low[k].unwrap(), low[k + 1].unwrap());
             if flip {
                 m.indices.extend([a, b2, b, a, a2, b2]);
             } else {
@@ -1176,10 +1203,12 @@ pub fn terrain_chunk_mesh(t: &Terrain, chunk_x: u32, chunk_z: u32, lod: u32) -> 
         }
     };
     let (nx, nz) = (xs.len() - 1, zs.len() - 1);
-    edge(&mut m, (0..=nx).map(|i| (i, 0)).collect(), false);
-    edge(&mut m, (0..=nx).map(|i| (i, nz)).collect(), true);
-    edge(&mut m, (0..=nz).map(|j| (0, j)).collect(), true);
-    edge(&mut m, (0..=nz).map(|j| (nx, j)).collect(), false);
+    let (west, east) = (xs[0] == 0, xs[nx] == t.width);
+    let (north, south) = (zs[0] == 0, zs[nz] == t.depth);
+    edge(&mut m, (0..=nx).map(|i| (i, 0)).collect(), false, north);
+    edge(&mut m, (0..=nx).map(|i| (i, nz)).collect(), true, south);
+    edge(&mut m, (0..=nz).map(|j| (0, j)).collect(), true, west);
+    edge(&mut m, (0..=nz).map(|j| (nx, j)).collect(), false, east);
     m
 }
 
@@ -1460,6 +1489,47 @@ mod tests {
         });
         assert!(up);
         assert!(terrain_chunk_mesh(&t, 9, 0, 1).positions.is_empty());
+    }
+
+    #[test]
+    fn outer_skirts_at_ground_height_are_dropped() {
+        let mut t = Terrain::flat([0.0, 0.0], 100.0, 40.0, 0.5, "lawn").unwrap();
+        // Raise a hill touching the west border only.
+        let mut s = stroke(Tool::Raise, vec![[0.0, 20.0]]);
+        s.radius_m = 6.0;
+        s.strength = 2.0;
+        s.falloff = 0.0;
+        apply_stroke(&mut t, &s);
+        let skirt_vertices = |m: &TerrainChunk| m.positions.iter().filter(|p| p[1] < -0.2).count();
+        let all = terrain_chunk_mesh(&t, 0, 0, 1);
+        let on_ground = terrain_chunk_mesh_on(&t, 0, 0, 1, Some(0.0));
+        // The west edge crosses the hill, so its skirt stays; north and south (flat, at 0) go; the
+        // east edge of chunk (0, 0) is a border with chunk (1, 0) and stays.
+        assert!(skirt_vertices(&on_ground) < skirt_vertices(&all));
+        assert!(skirt_vertices(&on_ground) > 0);
+        assert_eq!(terrain_chunk_mesh_on(&t, 0, 0, 1, None), all);
+        // Chunk (3, 0) is the north-east corner: its west and south sides border other chunks
+        // (kept), its north and east sides are outer and flat (dropped).
+        let corner = terrain_chunk_mesh_on(&t, 3, 0, 1, Some(0.0));
+        let low: Vec<_> = corner.positions.iter().filter(|p| p[1] < -0.2).collect();
+        assert!(!low.is_empty() && low.iter().all(|p| p[0] == 96.0 || p[2] == 32.0));
+        // Terrain above the ground keeps every skirt.
+        assert_eq!(
+            terrain_chunk_mesh_on(&t, 3, 0, 1, Some(-1.0)),
+            terrain_chunk_mesh(&t, 3, 0, 1)
+        );
+    }
+
+    #[test]
+    fn changed_since_finds_the_edited_vertices() {
+        let before = hill();
+        let mut after = before.clone();
+        assert_eq!(after.changed_since(&before), None);
+        let d = apply_stroke(&mut after, &stroke(Tool::Raise, vec![[3.0, 3.0]]));
+        let c = after.changed_since(&before).unwrap();
+        assert!(c.x0 >= d.x0 && c.x1 <= d.x1 && c.z0 >= d.z0 && c.z1 <= d.z1);
+        after.add_layer("gravel");
+        assert_eq!(after.changed_since(&before), Some(after.whole()));
     }
 
     #[test]

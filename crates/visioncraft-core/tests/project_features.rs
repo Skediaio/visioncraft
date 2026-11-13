@@ -672,3 +672,79 @@ fn layered_planting_commands_and_presets() {
             .is_ok()
     );
 }
+
+#[test]
+fn user_objects_add_rename_refuse_removal_and_round_trip() {
+    let mut s = Session::new(Project::default());
+    let start = s.project().clone();
+    let o = id(s
+        .run(
+            "object.add",
+            json!({"name": "Bench", "file": "objects/bench.glb", "size_m": [1.8, 0.9, 0.6]}),
+        )
+        .unwrap());
+    assert_eq!(o, "uo1");
+    assert!(
+        s.run(
+            "object.add",
+            json!({"name": "Bad", "file": "x.glb", "size_m": [1.0, 0.0, 1.0]})
+        )
+        .is_err()
+    );
+    assert!(
+        s.run(
+            "object.add",
+            json!({"name": "", "file": "x.glb", "size_m": [1.0, 1.0, 1.0]})
+        )
+        .is_err()
+    );
+    s.run("object.rename", json!({"id": o, "name": "Garden bench"}))
+        .unwrap();
+    let asset = format!("user:{o}");
+    // A single placement, a palette and a layer palette all count as uses.
+    let single = id(s
+        .run(
+            "planting.add_single",
+            json!({"name": "Bench", "asset": asset, "position": [1.0, 0.0, 1.0]}),
+        )
+        .unwrap());
+    let err = s.run("object.remove", json!({"id": o})).unwrap_err();
+    assert!(err.to_string().contains(&single), "{err}");
+    s.run("planting.remove", json!({"id": single})).unwrap();
+    let cluster = id(s.run("planting.add_cluster", json!({"name": "C", "asset_palette": [{"asset": asset, "weight": 1.0}], "center": [0.0, 0.0], "radius_m": 1.0, "count": 3})).unwrap());
+    assert!(s.run("object.remove", json!({"id": o})).is_err());
+    s.run("planting.remove", json!({"id": cluster})).unwrap();
+    let area = id(s.run("planting.add_area", json!({"name": "A", "outline": square(), "layers": [{"name": "l", "asset_palette": [{"asset": asset, "weight": 1.0}], "density_per_m2": 1.0, "min_distance_m": 0.0, "scale_min": 1.0, "scale_max": 1.0, "random_rotation": false, "keep_clear_m": 0.0}]})).unwrap());
+    let err = s.run("object.remove", json!({"id": o})).unwrap_err();
+    assert!(
+        err.to_string().contains("g1") && err.to_string().contains(&o),
+        "{err}"
+    );
+    let listed = s.run("object.list", json!({})).unwrap();
+    assert_eq!(listed[0]["used_by"], json!([area.clone()]));
+    assert_eq!(listed[0]["asset"], "user:uo1");
+    let revision = s.revision();
+    s.run("planting.remove", json!({"id": area})).unwrap();
+    s.run("object.remove", json!({"id": o})).unwrap();
+    assert!(s.project().objects.is_empty());
+    assert!(s.run("object.remove", json!({"id": o})).is_err());
+    assert!(s.undo() && s.undo());
+    assert_eq!(s.project().objects[0].name, "Garden bench");
+    assert!(s.redo() && s.redo());
+    assert!(s.revision() > revision);
+    while s.undo() {}
+    assert_eq!(*s.project(), start);
+    while s.redo() {}
+    s.undo();
+    s.undo();
+    let again = Project::from_json_bytes(&s.project().to_json_bytes()).unwrap();
+    assert_eq!(&again, s.project());
+    assert_eq!(again.objects.len(), 1);
+    // Old projects have no objects.
+    assert!(
+        Project::from_json_bytes(br#"{"format_version": 1}"#)
+            .unwrap()
+            .objects
+            .is_empty()
+    );
+}

@@ -10,6 +10,7 @@ use serde_json::Value;
 mod layers;
 mod lights;
 mod materials;
+mod objects;
 mod planting;
 mod queries;
 mod shapes;
@@ -21,6 +22,7 @@ pub(crate) fn register(s: &mut Session) {
     layers::register(s);
     shapes::register(s);
     species::register(s);
+    objects::register(s);
     queries::register(s);
     terrain::register(s);
     materials::register(s);

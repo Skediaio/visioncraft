@@ -12,6 +12,7 @@ pub mod light;
 pub mod material;
 pub mod measure;
 mod model;
+pub mod object;
 pub mod planting;
 pub mod presets;
 pub mod project;
@@ -33,7 +34,8 @@ pub use material::{
     Assignment, Material, McMat, McMatError, SurfaceKind, Target, builtin_palette,
     dangling_assignments, read_mcmat, resolve_materials,
 };
-pub use model::{Body, Face, ImportError, ImportedModel};
+pub use model::{Body, Face, ImportError, ImportedModel, ModelCodecError};
+pub use object::UserObject;
 pub use planting::{
     Evaluation, Generator, Placement, PlantLayer, Tuft, evaluate, evaluate_surface_fill,
     lawn_scatter,
@@ -49,6 +51,6 @@ pub use shape::{Shape, ShapeError, shape_mesh, shape_mesh_on};
 pub use spec::{CommandSpec, ParamSpec, ParamType, example_project};
 pub use terrain::{
     BrushStroke, DirtyRect, Terrain, TerrainChunk, Tool, apply_stroke, ground_height_over,
-    terrain_chunk_mesh, terrain_chunks,
+    terrain_chunk_mesh, terrain_chunk_mesh_on, terrain_chunks,
 };
 pub use viewpoint::{Viewpoint, interpolate};

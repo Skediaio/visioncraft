@@ -297,7 +297,7 @@ fn edit_distance(a: &str, b: &str) -> usize {
 
 /// A small project the examples of [`CommandSpec::example`] run on: model `m1`; layer `l1` (empty);
 /// shapes `S1` (area, material `lawn`), `S2` (closed extrusion "House") and `S3` (open extrusion);
-/// an unassigned material `mat1`; generators `g1` (brush) and `g2` (single); custom species `sp1`;
+/// an unassigned material `mat1`; generators `g1` (brush) and `g2` (single); custom species `sp1`; user object `uo1`;
 /// light `li1`; viewpoints `v1` and `v2`; a 40 by 30 m terrain with layers `lawn` and `gravel`.
 /// For `terrain.create` the terrain is left out.
 pub fn example_project(command: &str) -> crate::project::Project {
@@ -334,6 +334,10 @@ pub fn example_project(command: &str) -> crate::project::Project {
         (
             "species.add",
             json!({"name": "Tall birch", "base": "betula-pendula", "params": {"height": 14.0}}),
+        ),
+        (
+            "object.add",
+            json!({"name": "Bench", "file": "objects/bench.glb", "size_m": [1.8, 0.9, 0.6]}),
         ),
         ("light.add", json!({"name": "Lamp", "position": [3, 2, 1]})),
         (

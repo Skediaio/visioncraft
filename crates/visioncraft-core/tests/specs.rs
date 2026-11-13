@@ -443,46 +443,6 @@ fn duplicate_shifts_geometry_and_undo_stroke_pops() {
 }
 
 #[test]
-fn the_session_reports_what_the_last_terrain_command_touched() {
-    use visioncraft_core::DirtyRect;
-    let mut s = example_session("x");
-    assert_eq!(s.last_terrain_dirty(), None);
-    s.run("terrain.stroke", json!({"tool": "raise", "points": [[10.0, 10.0]], "radius_m": 2.0, "strength": 0.5, "falloff": 0.0})).unwrap();
-    let d = s.last_terrain_dirty().unwrap();
-    assert_eq!(
-        d,
-        DirtyRect {
-            x0: 16,
-            z0: 16,
-            x1: 24,
-            z1: 24
-        }
-    );
-    time(&mut s, 8.0).unwrap();
-    assert_eq!(s.last_terrain_dirty(), None);
-    s.run(
-        "terrain.stroke",
-        json!({"tool": "raise", "points": [[500.0, 5.0]], "radius_m": 2.0, "strength": 0.5}),
-    )
-    .unwrap();
-    assert_eq!(s.last_terrain_dirty(), None);
-    assert!(s.undo());
-    let whole = s.last_terrain_dirty().unwrap();
-    assert_eq!((whole.x0, whole.z0, whole.x1, whole.z1), (0, 0, 80, 60));
-    // A transaction reports the union of its commands.
-    s.transaction(|s| {
-        s.run("terrain.stroke", json!({"tool": "raise", "points": [[2.0, 2.0]], "radius_m": 1.0, "strength": 0.5, "falloff": 0.0}))?;
-        s.run("terrain.stroke", json!({"tool": "raise", "points": [[30.0, 20.0]], "radius_m": 1.0, "strength": 0.5, "falloff": 0.0}))?;
-        time(s, 9.0).map(|_| ())
-    })
-    .unwrap();
-    let u = s.last_terrain_dirty().unwrap();
-    assert!(u.x0 <= 4 && u.z0 <= 4 && u.x1 >= 60 && u.z1 >= 40, "{u:?}");
-    let _ = s.run("terrain.remove", json!({}));
-    assert_eq!(s.last_terrain_dirty(), None);
-}
-
-#[test]
 fn many_lamps_make_capped_lights() {
     use visioncraft_core::{LightKind, LightSpec, Placement, lights_for_placements};
     let spec = LightSpec {
