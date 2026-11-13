@@ -18,12 +18,18 @@ fn position_at(p: vec2<i32>) -> vec3<f32> {
 // centre's plane best (1/z is linear across a plane in screen space), so
 // silhouettes and inner corners do not bend the normal (Yuwen Wu, "Accurate
 // Normal Reconstruction from Depth Buffer", 2021 blog post, 5-tap variant).
+// The quantity that is linear in screen space across a plane: 1 / depth
+// for a perspective camera, depth itself for an orthographic one.
+fn planar(d: f32) -> f32 {
+    return select(1.0 / d, d, is_ortho());
+}
+
 fn side_error(p: vec2<i32>, step: vec2<i32>, inv_c: f32) -> f32 {
-    return abs(2.0 / depth_at(p + step) - 1.0 / depth_at(p + 2 * step) - inv_c);
+    return abs(2.0 * planar(depth_at(p + step)) - planar(depth_at(p + 2 * step)) - inv_c);
 }
 
 fn tangent(p: vec2<i32>, step: vec2<i32>, c: vec3<f32>) -> vec3<f32> {
-    let inv_c = -1.0 / c.z;
+    let inv_c = planar(-c.z);
     if side_error(p, step, inv_c) < side_error(p, -step, inv_c) {
         return position_at(p + step) - c;
     }
@@ -34,7 +40,8 @@ fn view_normal(p: vec2<i32>, c: vec3<f32>) -> vec3<f32> {
     let dx = tangent(p, vec2<i32>(1, 0), c);
     let dy = tangent(p, vec2<i32>(0, 1), c);
     var n = normalize(cross(dy, dx));
-    if dot(n, -c) < 0.0 {
+    let towards = select(-c, vec3<f32>(0.0, 0.0, 1.0), is_ortho());
+    if dot(n, towards) < 0.0 {
         n = -n;
     }
     return n;
@@ -50,7 +57,7 @@ fn ambient_occlusion(p: vec2<i32>, c: vec3<f32>, n: vec3<f32>, noise: f32) -> f3
     let samples = i32(g.effects.x);
     let radius = g.effects.z;
     // Pixels per metre at depth 1 is P00 * width / 2.
-    let disc = min(radius * g.proj[0][0] * 0.5 * g.viewport.x / -c.z, 96.0);
+    let disc = min(radius * pixels_per_metre(-c.z), 96.0);
     if samples <= 0 || disc < 1.0 {
         return 1.0;
     }
@@ -100,8 +107,10 @@ fn contact_shadow(c: vec3<f32>, n: vec3<f32>, noise: f32) -> f32 {
             break;
         }
         let scene = depth_at(vec2<i32>(pixel));
-        let delta = q.w - scene;
-        if delta > 0.002 * q.w && delta < thickness {
+        // Clip w is the view depth for a perspective camera only.
+        let ray = select(q.w, -mix(start.z, end.z, t), is_ortho());
+        let delta = ray - scene;
+        if delta > 0.002 * ray && delta < thickness {
             // Fade with distance along the ray so the shadow end is soft.
             shadow = 1.0 - t * t;
             break;

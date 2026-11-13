@@ -120,6 +120,33 @@ fn shots() -> Vec<Shot> {
                 (cam, demo::afternoon_sun(), 14.7)
             },
         },
+        // Orthographic: a plan view and the south elevation.
+        Shot {
+            name: "garden_plan",
+            size: (1920, 1080),
+            build: |r, aspect| {
+                demo::garden(r);
+                r.set_time(2.0);
+                (
+                    demo::garden_plan_camera(aspect),
+                    demo::afternoon_sun(),
+                    14.7,
+                )
+            },
+        },
+        Shot {
+            name: "garden_elevation",
+            size: (1920, 1080),
+            build: |r, aspect| {
+                demo::garden(r);
+                r.set_time(2.0);
+                (
+                    demo::garden_elevation_camera(aspect),
+                    demo::afternoon_sun(),
+                    14.7,
+                )
+            },
+        },
         // A long view over the field to the horizon: haze and the ground.
         Shot {
             name: "garden_long",
@@ -133,6 +160,200 @@ fn shots() -> Vec<Shot> {
                     aspect,
                 );
                 (cam, demo::afternoon_sun(), 14.7)
+            },
+        },
+        Shot {
+            name: "terrain_noon",
+            size: (1920, 1080),
+            build: |r, aspect| {
+                demo::terrain(r, false);
+                (demo::terrain_camera(aspect), demo::noon_sun(), 15.0)
+            },
+        },
+        Shot {
+            name: "terrain_low_sun",
+            size: (1920, 1080),
+            build: |r, aspect| {
+                demo::terrain(r, false);
+                (demo::terrain_camera(aspect), demo::golden_sun(), 12.7)
+            },
+        },
+        Shot {
+            name: "terrain_pond",
+            size: (1920, 1080),
+            build: |r, aspect| {
+                demo::terrain(r, true);
+                r.set_time(3.0);
+                let cam = demo::camera(
+                    Vec3::new(10.0, 2.5, 26.0),
+                    Vec3::new(18.0, -0.5, 6.0),
+                    aspect,
+                );
+                (cam, demo::afternoon_sun(), 14.7)
+            },
+        },
+        Shot {
+            name: "terrain_clay",
+            size: (1920, 1080),
+            build: |r, aspect| {
+                demo::terrain(r, true);
+                r.set_clay(true);
+                (demo::terrain_camera(aspect), demo::afternoon_sun(), 14.7)
+            },
+        },
+        Shot {
+            name: "forest_inside",
+            size: (1920, 1080),
+            build: |r, aspect| {
+                demo::forest(r, 6000, 15000, 100.0);
+                r.set_time(1.0);
+                (
+                    demo::forest_inside_camera(aspect),
+                    demo::afternoon_sun(),
+                    14.7,
+                )
+            },
+        },
+        Shot {
+            name: "forest_above",
+            size: (1920, 1080),
+            build: |r, aspect| {
+                demo::forest(r, 6000, 15000, 100.0);
+                r.set_time(1.0);
+                (
+                    demo::forest_above_camera(aspect),
+                    demo::afternoon_sun(),
+                    14.7,
+                )
+            },
+        },
+        Shot {
+            name: "forest_dusk",
+            size: (1920, 1080),
+            build: |r, aspect| {
+                demo::forest(r, 6000, 15000, 100.0);
+                r.set_time(1.0);
+                (demo::forest_inside_camera(aspect), demo::dusk_sun(), 7.0)
+            },
+        },
+        Shot {
+            name: "forest_transition_0",
+            size: (1280, 720),
+            build: |r, aspect| {
+                demo::forest(r, 300, 600, 60.0);
+                let a = (0.0f32).to_radians();
+                let eye = Vec3::new(a.sin() * 40.0, 2.0, a.cos() * 40.0);
+                (
+                    demo::camera(eye, Vec3::new(0.0, 2.5, 0.0), aspect),
+                    demo::afternoon_sun(),
+                    14.7,
+                )
+            },
+        },
+        Shot {
+            name: "forest_transition_120",
+            size: (1280, 720),
+            build: |r, aspect| {
+                demo::forest(r, 300, 600, 60.0);
+                let a = (120.0f32).to_radians();
+                let eye = Vec3::new(a.sin() * 40.0, 2.0, a.cos() * 40.0);
+                (
+                    demo::camera(eye, Vec3::new(0.0, 2.5, 0.0), aspect),
+                    demo::afternoon_sun(),
+                    14.7,
+                )
+            },
+        },
+        Shot {
+            name: "forest_transition_240",
+            size: (1280, 720),
+            build: |r, aspect| {
+                demo::forest(r, 300, 600, 60.0);
+                let a = (240.0f32).to_radians();
+                let eye = Vec3::new(a.sin() * 40.0, 2.0, a.cos() * 40.0);
+                (
+                    demo::camera(eye, Vec3::new(0.0, 2.5, 0.0), aspect),
+                    demo::afternoon_sun(),
+                    14.7,
+                )
+            },
+        },
+        Shot {
+            name: "forest_move_0",
+            size: (1280, 720),
+            build: |r, aspect| {
+                demo::forest(r, 300, 600, 60.0);
+                let eye = Vec3::new(0.0, 1.7, 10.0 - 0.0 * 1.5);
+                (
+                    demo::camera(eye, eye + Vec3::new(0.3, 0.0, -1.0), aspect),
+                    demo::afternoon_sun(),
+                    14.7,
+                )
+            },
+        },
+        Shot {
+            name: "forest_move_1",
+            size: (1280, 720),
+            build: |r, aspect| {
+                demo::forest(r, 300, 600, 60.0);
+                let eye = Vec3::new(0.0, 1.7, 10.0 - 1.0 * 1.5);
+                (
+                    demo::camera(eye, eye + Vec3::new(0.3, 0.0, -1.0), aspect),
+                    demo::afternoon_sun(),
+                    14.7,
+                )
+            },
+        },
+        Shot {
+            name: "forest_move_2",
+            size: (1280, 720),
+            build: |r, aspect| {
+                demo::forest(r, 300, 600, 60.0);
+                let eye = Vec3::new(0.0, 1.7, 10.0 - 2.0 * 1.5);
+                (
+                    demo::camera(eye, eye + Vec3::new(0.3, 0.0, -1.0), aspect),
+                    demo::afternoon_sun(),
+                    14.7,
+                )
+            },
+        },
+        Shot {
+            name: "forest_move_3",
+            size: (1280, 720),
+            build: |r, aspect| {
+                demo::forest(r, 300, 600, 60.0);
+                let eye = Vec3::new(0.0, 1.7, 10.0 - 3.0 * 1.5);
+                (
+                    demo::camera(eye, eye + Vec3::new(0.3, 0.0, -1.0), aspect),
+                    demo::afternoon_sun(),
+                    14.7,
+                )
+            },
+        },
+        Shot {
+            name: "forest_move_4",
+            size: (1280, 720),
+            build: |r, aspect| {
+                demo::forest(r, 300, 600, 60.0);
+                let eye = Vec3::new(0.0, 1.7, 10.0 - 4.0 * 1.5);
+                (
+                    demo::camera(eye, eye + Vec3::new(0.3, 0.0, -1.0), aspect),
+                    demo::afternoon_sun(),
+                    14.7,
+                )
+            },
+        },
+        Shot {
+            name: "forest_move_5",
+            size: (1280, 720),
+            build: |r, aspect| {
+                demo::forest(r, 300, 600, 60.0);
+                let eye = Vec3::new(0.0, 1.7, 10.0 - 5.0 * 1.5);
+                (
+                    demo::camera(eye, eye + Vec3::new(0.3, 0.0, -1.0), aspect),
+                    demo::afternoon_sun(),
+                    14.7,
+                )
             },
         },
         Shot {
@@ -254,7 +475,9 @@ fn main() {
         let (px, name) = match preset {
             Some((preset, quality)) => {
                 r.resize(w, h);
-                r.set_quality(*quality);
+                // VC_FXAA=0 switches FXAA off, to compare crops.
+                let fxaa = std::env::var("VC_FXAA").map_or(quality.fxaa, |v| v != "0");
+                r.set_quality(Quality { fxaa, ..*quality });
                 r.set_camera(view, proj, eye);
                 let px = live_frame(&device, &queue, &mut r, w, h);
                 (px, format!("{}_{preset}", shot.name))

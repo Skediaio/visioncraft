@@ -54,6 +54,8 @@ pub(crate) fn format(space: ColorSpace) -> wgpu::TextureFormat {
 pub(crate) struct Mipmapper {
     layout: wgpu::BindGroupLayout,
     pipelines: [wgpu::RenderPipeline; 3],
+    /// Resampling into terrain layers: sRGB, linear.
+    resample: [wgpu::RenderPipeline; 2],
     sampler: wgpu::Sampler,
 }
 
@@ -97,6 +99,26 @@ impl Mipmapper {
                 },
             )
         });
+        let size = crate::terrain::LAYER_SIZE as f64;
+        let resample = [format(ColorSpace::Srgb), format(ColorSpace::Linear)].map(|fmt| {
+            crate::pipeline(
+                device,
+                crate::PipelineDesc {
+                    label: "resample",
+                    module,
+                    vs: "vs_fullscreen",
+                    fs: Some("fs_resample"),
+                    groups: &[Some(&layout)],
+                    buffers: &[],
+                    target: Some(fmt.into()),
+                    depth: None,
+                    cull: None,
+                    samples: 1,
+                    constants: &[("TARGET", size)],
+                    front_cw: false,
+                },
+            )
+        });
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("mip"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -106,6 +128,7 @@ impl Mipmapper {
         Self {
             layout,
             pipelines,
+            resample,
             sampler,
         }
     }
@@ -137,6 +160,99 @@ impl Mipmapper {
             repeat: desc.repeat,
             bytes: mip_bytes(w, h, 4),
         })
+    }
+
+    /// Resamples `source` into one layer of a `LAYER_SIZE`-square array
+    /// texture and draws that layer's mip chain.
+    pub fn blit_into_layer(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        source: &wgpu::TextureView,
+        target: &wgpu::Texture,
+        layer: u32,
+        linear: bool,
+    ) {
+        let view = |mip| {
+            target.create_view(&wgpu::TextureViewDescriptor {
+                dimension: Some(wgpu::TextureViewDimension::D2),
+                base_mip_level: mip,
+                mip_level_count: Some(1),
+                base_array_layer: layer,
+                array_layer_count: Some(1),
+                ..Default::default()
+            })
+        };
+        let pass = |encoder: &mut wgpu::CommandEncoder,
+                    pipeline: &wgpu::RenderPipeline,
+                    src: &wgpu::TextureView,
+                    dst: &wgpu::TextureView| {
+            let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("blit"),
+                layout: &self.layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(src),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    },
+                ],
+            });
+            let mut pass = crate::color_pass(encoder, "blit", dst, None, None, None);
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &bind, &[]);
+            pass.draw(0..3, 0..1);
+        };
+        pass(encoder, &self.resample[linear as usize], source, &view(0));
+        for mip in 1..target.mip_level_count() {
+            pass(
+                encoder,
+                &self.pipelines[linear as usize],
+                &view(mip - 1),
+                &view(mip),
+            );
+        }
+    }
+
+    /// Draws the mip chain of an RGBA8 texture from its level 0.
+    pub fn generate(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        texture: &wgpu::Texture,
+        linear: bool,
+    ) {
+        let view = |mip| {
+            texture.create_view(&wgpu::TextureViewDescriptor {
+                base_mip_level: mip,
+                mip_level_count: Some(1),
+                ..Default::default()
+            })
+        };
+        for mip in 1..texture.mip_level_count() {
+            let src = view(mip - 1);
+            let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("mip"),
+                layout: &self.layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&src),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    },
+                ],
+            });
+            let mut pass = crate::color_pass(encoder, "mip", &view(mip), None, None, None);
+            pass.set_pipeline(&self.pipelines[linear as usize]);
+            pass.set_bind_group(0, &bind, &[]);
+            pass.draw(0..3, 0..1);
+        }
     }
 
     /// An RGBA16F image (`HALF`, four u16 per pixel) with its mip chain.

@@ -10,7 +10,7 @@
 
 use glam::Vec3;
 
-use crate::sky::luminance;
+use crate::sky::{Sun, luminance};
 
 /// Linear RGB, three f32 per pixel, rows from the zenith down.
 #[derive(Clone, Copy, Debug)]
@@ -115,6 +115,106 @@ pub fn estimate_sun(image: &HdriImage, rotation_deg: f32) -> Option<(Vec3, f32, 
     let dir = weighted.normalize();
     let rotated = glam::Quat::from_rotation_y(-rotation_deg.to_radians()) * dir;
     Some((rotated, illuminance, energy / illuminance))
+}
+
+/// How to light the scene with an HDRI whose absolute scale is unknown
+/// (Poly Haven's files are scene-referred with an arbitrary scale): see
+/// `calibrate_hdri`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HdriCalibration {
+    /// For `Sky::Hdri { intensity }`: pixel values to cd/m2.
+    pub intensity: f32,
+    /// The analytic sun to pair with it (for `set_sun`): the image's sun
+    /// direction with the illuminance and colour of a clear-sky sun at that
+    /// elevation, or zero illuminance when the image has no sun.
+    pub sun: Sun,
+    /// A starting exposure for `set_exposure`: an incident-light meter
+    /// reading of the horizontal illuminance (EV100 = log2(E / 2.5), ISO
+    /// 2720 incident calibration constant C = 250).
+    pub ev100: f32,
+}
+
+/// Diffuse illuminance on a horizontal surface from the sky an overcast day
+/// gives (lux) when the image shows no sun.
+pub const OVERCAST_LUX: f32 = 10_000.0;
+
+/// Horizontal illuminance (image units) of the upper half, with the same
+/// clamp as the GPU copy (`prepare`), so the sun is not counted.
+fn diffuse_horizontal(image: &HdriImage) -> f32 {
+    let (w, h) = (image.width, image.height);
+    let (mut sum, mut weight) = (0.0, 0.0);
+    for y in 0..h / 2 {
+        let d_omega = solid_angle(w, h, y);
+        for x in 0..w {
+            sum += luminance(image.pixel(x, y)) * d_omega;
+            weight += d_omega;
+        }
+    }
+    let limit = 50.0 * sum / weight.max(1e-12);
+    let mut e = 0.0;
+    for y in 0..h / 2 {
+        let d_omega = solid_angle(w, h, y);
+        let cos = direction(w, h, 0, y, 0.0).y;
+        for x in 0..w {
+            e += luminance(image.pixel(x, y)).min(limit) * cos * d_omega;
+        }
+    }
+    e
+}
+
+/// Normalises an HDRI to the analytic daylight model: the intensity makes
+/// the image's diffuse sky (sun clamped out) give the horizontal
+/// illuminance of Preetham's clear sky at the elevation of the sun it shows
+/// (sky.rs), or `OVERCAST_LUX` without a sun. Matching the sky rather than
+/// the sun's own pixels keeps it right for files whose sun is clipped. The
+/// direct light then comes from the analytic sun in that direction.
+pub fn calibrate_hdri(image: &HdriImage, rotation_deg: f32) -> Result<HdriCalibration, String> {
+    image.check()?;
+    let e_image = diffuse_horizontal(image).max(1e-9);
+    let found = estimate_sun(image, rotation_deg);
+    let (sun, e_sky) = match found {
+        Some((dir, _, _)) if dir.y > -0.03 => {
+            let azimuth = dir.x.atan2(-dir.z).to_degrees();
+            let elevation = dir.y.clamp(-1.0, 1.0).asin().to_degrees();
+            let sun = Sun {
+                direction: dir,
+                ..Sun::from_angles(azimuth, elevation)
+            };
+            let sky = crate::sky::Sky::new(dir);
+            let (n_theta, n_phi) = (16, 32);
+            let (d_theta, d_phi) = (
+                std::f32::consts::FRAC_PI_2 / n_theta as f32,
+                std::f32::consts::TAU / n_phi as f32,
+            );
+            let mut e = 0.0;
+            for i in 0..n_theta {
+                let theta = (i as f32 + 0.5) * d_theta;
+                for j in 0..n_phi {
+                    let phi = (j as f32 + 0.5) * d_phi;
+                    let d = Vec3::new(
+                        theta.sin() * phi.cos(),
+                        theta.cos(),
+                        theta.sin() * phi.sin(),
+                    );
+                    e += luminance(sky.radiance(d)) * d.y * theta.sin() * d_theta * d_phi;
+                }
+            }
+            (sun, e * sky.day)
+        }
+        _ => (
+            Sun {
+                illuminance: 0.0,
+                ..Sun::from_angles(180.0, 45.0)
+            },
+            OVERCAST_LUX,
+        ),
+    };
+    let total = e_sky + sun.illuminance * sun.direction.y.max(0.0);
+    Ok(HdriCalibration {
+        intensity: e_sky / e_image,
+        sun,
+        ev100: (total.max(1e-3) / 2.5).log2(),
+    })
 }
 
 /// RGBA16F texels for the GPU (alpha 1) with the luminance of every pixel
@@ -253,6 +353,12 @@ mod tests {
         let (texels, mean) = prepare(&image).expect("prepare");
         assert_eq!(texels.len(), (w * h * 4) as usize);
         assert!(mean.z > mean.x && mean.z < 1.5, "{mean}");
+        // Calibrated against the analytic sky at 35 degrees: daylight
+        // exposure, the sun where the image has it.
+        let cal = calibrate_hdri(&image, 0.0).expect("calibration");
+        assert!(cal.sun.direction.dot(sun_dir) > 0.999, "{:?}", cal.sun);
+        assert!((12.0..16.0).contains(&cal.ev100), "{}", cal.ev100);
+        assert!(cal.sun.illuminance > 50_000.0, "{}", cal.sun.illuminance);
         // An overcast sky has no sun.
         let flat = vec![1.0; (w * h * 3) as usize];
         let overcast = HdriImage {
@@ -260,5 +366,9 @@ mod tests {
             ..image
         };
         assert!(estimate_sun(&overcast, 0.0).is_none());
+        let cal = calibrate_hdri(&overcast, 0.0).expect("calibration");
+        assert_eq!(cal.sun.illuminance, 0.0);
+        // A uniform sky of radiance 1 gives pi on a horizontal surface.
+        assert!((cal.intensity * std::f32::consts::PI / OVERCAST_LUX - 1.0).abs() < 0.02);
     }
 }

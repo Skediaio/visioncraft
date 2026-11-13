@@ -207,14 +207,14 @@ fn edge_fade(world: vec3<f32>, dir: vec3<f32>) -> f32 {
 // sample mask turns early depth testing off on some GPUs.
 @fragment
 fn fs_depth_cutout_1x(in: DepthOut) {
-    if cutout_alpha(in.uv) * edge_fade(in.world, normalize(g.camera.xyz - in.world)) < material.alpha.x {
+    if cutout_alpha(in.uv) * edge_fade(in.world, normalize(to_eye(in.world))) < material.alpha.x {
         discard;
     }
 }
 
 @fragment
 fn fs_depth_cutout(in: DepthOut) -> @builtin(sample_mask) u32 {
-    let a = cutout_alpha(in.uv) * edge_fade(in.world, normalize(g.camera.xyz - in.world));
+    let a = cutout_alpha(in.uv) * edge_fade(in.world, normalize(to_eye(in.world)));
     let cutoff = material.alpha.x;
     let sharp = (a - cutoff) / max(fwidth(a), 1e-4) + 0.5;
     let n = u32(clamp(round(sharp * f32(SAMPLES)), 0.0, f32(SAMPLES)));
@@ -621,15 +621,21 @@ fn surface(in: Varying, front: bool) -> Surface {
         }
     }
     s.emissive = material.emissive.rgb;
-    let variation = bitcast<f32>(material.flags.z);
+    return macro_variation(s, in.world, bitcast<f32>(material.flags.z));
+}
+
+// Macro variation against the carpet look of large single-material
+// surfaces: two octaves of world-space value noise (features of ~5 and
+// ~15 m) modulate brightness and roughness, a third paints drier, yellower
+// patches, and fields of ~100 m keep a large ground from being one flat
+// colour in the middle distance where the finer octaves average out.
+fn macro_variation(surf: Surface, world: vec3<f32>, variation: f32) -> Surface {
+    var s = surf;
     if variation > 0.0 {
-        // Macro variation against the carpet look of large single-material
-        // surfaces: two octaves of world-space value noise (features of ~5
-        // and ~15 m) modulate brightness and roughness, and a third paints
-        // drier, yellower patches.
-        let m = value_noise(in.world * 0.21) * 0.65 + value_noise(in.world * 0.067 + 31.0) * 0.35 - 0.5;
-        let dry = smoothstep(0.45, 0.8, value_noise(in.world * 0.13 + 7.0)) * variation;
-        var c = s.base.rgb * (1.0 + m * 0.6 * variation);
+        let m = value_noise(world * 0.21) * 0.65 + value_noise(world * 0.067 + 31.0) * 0.35 - 0.5;
+        let big = value_noise(world * 0.011 + 3.0) - 0.5;
+        let dry = smoothstep(0.45, 0.8, value_noise(world * 0.13 + 7.0)) * variation;
+        var c = s.base.rgb * (1.0 + m * 0.6 * variation) * (1.0 + big * 0.6 * variation);
         c = mix(c, c * vec3<f32>(1.3, 1.08, 0.55), dry * 0.6);
         s.base = vec4<f32>(c, s.base.a);
         s.roughness = clamp(s.roughness + m * 0.2 * variation, 0.045, 1.0);
@@ -640,8 +646,7 @@ fn surface(in: Varying, front: bool) -> Surface {
 // Weathering: a procedural look, not a physical model. Occluded and
 // downward-facing areas darken and desaturate (grime), up-facing ones take a
 // greenish tint (algae, moss), both modulated by low-frequency noise.
-fn weather(base: vec3<f32>, world: vec3<f32>, n: vec3<f32>, ao: f32) -> vec3<f32> {
-    let amount = material.emissive.w;
+fn weather(base: vec3<f32>, world: vec3<f32>, n: vec3<f32>, ao: f32, amount: f32) -> vec3<f32> {
     if amount <= 0.0 {
         return base;
     }
@@ -712,7 +717,13 @@ struct Shaded {
 // and contact shadows (not for transparent surfaces, which are not in the
 // depth pre-pass).
 fn shade(in: Varying, front: bool, screen_effects: bool) -> Shaded {
-    var s = surface(in, front);
+    return light(in, surface(in, front), material.alpha.w > 0.0, material.emissive.w, screen_effects);
+}
+
+// Lighting of a surface (any source: a material, the terrain layers, an
+// impostor atlas), without reading the material uniform.
+fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, screen_effects: bool) -> Shaded {
+    var s = surf;
     let clay = g.time.w > 0.5;
     if clay {
         s.base = vec4<f32>(0.8, 0.8, 0.8, s.base.a);
@@ -727,10 +738,8 @@ fn shade(in: Varying, front: bool, screen_effects: bool) -> Shaded {
         base = mix(base, vec3<f32>(0.25, 0.55, 1.0), 0.35);
     }
     let n = s.n;
-    let to_eye = g.camera.xyz - in.world;
-    let v = normalize(to_eye);
+    let v = normalize(to_eye(in.world));
     let l = g.sun_dir.xyz;
-    let foliage = material.alpha.w > 0.0;
     // Bent leaf normals often face away from the viewer; clamping n.v keeps
     // those cards from turning into grazing-angle mirrors of the sky.
     let nov = select(max(dot(n, v), 1e-4), max(abs(dot(n, v)), 0.35), foliage);
@@ -743,7 +752,7 @@ fn shade(in: Varying, front: bool, screen_effects: bool) -> Shaded {
     }
     let ao = screen.r * s.ao;
     if !clay {
-        base = weather(base, in.world, s.geometric, ao);
+        base = weather(base, in.world, s.geometric, ao, weathering);
     }
     let f0 = mix(vec3<f32>(0.04), base, s.metallic);
     let diffuse_color = base * (1.0 - s.metallic);
@@ -829,9 +838,37 @@ fn vs_ground(@builtin(vertex_index) vi: u32) -> Varying {
     return out;
 }
 
+// Past ~40 m the ground fades into the colour the sky has
+// just above the horizon (by day, at dusk and at night alike), so there is
+// never a line between a dark field and the sky, haze or no haze. A plan or
+// elevation view has no horizon: the ground stays as it is.
 @fragment
 fn fs_ground(in: Varying) -> @location(0) vec4<f32> {
-    return vec4<f32>(shade(in, true, false).color, 1.0);
+    let c = shade(in, true, false).color;
+    if is_ortho() {
+        return vec4<f32>(c, 1.0);
+    }
+    let to = in.world - g.camera.xyz;
+    let dist = length(to);
+    // The horizon colour in this pixel's own view direction (from the
+    // pixel, not the interpolated position: see below).
+    let ndc = vec2<f32>(in.clip.x * g.viewport.z * 2.0 - 1.0, 1.0 - in.clip.y * g.viewport.w * 2.0);
+    let p = g.inv_view_proj * vec4<f32>(ndc, 0.5, 1.0);
+    let ray = p.xyz / p.w - g.camera.xyz;
+    let flat = vec3<f32>(ray.x, 0.0, ray.z);
+    let horizon = fog_inscatter(flat / max(length(flat), 1e-6), 1.0);
+    // Over log distance from 40 m to 2 km: seen from eye height that spans a
+    // few degrees below the horizon, wide enough not to read as a line.
+    let fade = smoothstep(0.0, 1.0, log2(max(dist, 1.0) / 40.0) / log2(2000.0 / 40.0));
+    // Fully faded, take the horizon as is: with MSAA a pixel on the far rim
+    // shades at its centre, which may lie past the horizon, where the
+    // interpolated position (and so the shading) runs off to huge values
+    // that even a mix by 1 would not cancel.
+    let ahead = dot(to, -normalize(vec3<f32>(g.view[0][2], g.view[1][2], g.view[2][2]))) > 0.0;
+    if fade > 0.999 || !ahead || !(dist < 30000.0) {
+        return vec4<f32>(horizon, 1.0);
+    }
+    return vec4<f32>(mix(c, horizon, fade), 1.0);
 }
 
 // ---- planar reflection -----------------------------------------------------
@@ -859,22 +896,32 @@ fn fog_premultiplied(c: vec4<f32>, world: vec3<f32>) -> vec4<f32> {
     if g.fog.x <= 0.0 {
         return c;
     }
-    let to = world - g.camera.xyz;
+    let to = -to_eye(world);
     let t = length(to);
     let dir = to / max(t, 1e-6);
     let transmit = fog_transmittance(g.camera.y, dir.y, t);
     return vec4<f32>(c.rgb * transmit + fog_inscatter(dir, 1.0) * fog_near(transmit) * (1.0 - transmit) * c.a, c.a);
 }
 
-// Thin architectural glass: two interfaces of a thin slab (reflectance
-// R' = 2R / (1 + R), from the geometric series of inter-reflections),
-// Fresnel-weighted environment, sun and lamp reflections, and the
-// transmitted part blended with premultiplied alpha. base_color.rgb tints
-// the pane's own (scattered) light, base_color.a is its opacity; a fixed
-// 35 % absorption keeps rooms behind windows visibly darker than outside.
-// No refraction offset.
-fn glass(in: Varying) -> vec4<f32> {
-    let v = normalize(g.camera.xyz - in.world);
+// Thin architectural glass, drawn in two passes (lib.rs): first the
+// transmitted light, multiplying what is behind per channel (blend Zero,
+// Src): 50 % at normal incidence for the two faces' absorption and an
+// interior that reads as an interior in daylight, times the soda-lime
+// green-blue tint raised to the path length through the pane (Beer-Lambert:
+// 1 / cos theta, so edges and grazing views turn greener and darker); then
+// the reflected light added on top (blend One, One): two interfaces of a
+// thin slab (reflectance R' = 2R / (1 + R), from the geometric series of
+// inter-reflections) with a floor of 10 % so a window shows a little sky
+// even head-on, reflecting the environment cube, the sun and the lamps.
+// base_color.rgb tints the pane's own scattered light, base_color.a is its
+// opacity (frosted / opaque panes). No refraction offset.
+struct GlassTerms {
+    reflected: vec3<f32>,
+    transmitted: vec3<f32>,
+}
+
+fn glass_terms(in: Varying) -> GlassTerms {
+    let v = normalize(to_eye(in.world));
     var n = normalize(in.normal);
     if dot(n, v) < 0.0 {
         n = -n;
@@ -882,7 +929,7 @@ fn glass(in: Varying) -> vec4<f32> {
     let nov = max(dot(n, v), 1e-4);
     let roughness = clamp(material.params.y - material.params.w, 0.02, 1.0);
     let f = f_schlick(nov, vec3<f32>(0.04)).r;
-    let fr = 2.0 * f / (1.0 + f);
+    let fr = max(2.0 * f / (1.0 + f), 0.1);
     let depth = -(g.view * vec4<f32>(in.world, 1.0)).z;
     let l = g.sun_dir.xyz;
     let nol = max(dot(n, l), 0.0);
@@ -893,12 +940,35 @@ fn glass(in: Varying) -> vec4<f32> {
         sun = specular(n, v, l, nol, nov, vec3<f32>(0.04), a) * nol * g.sun_light.rgb * shadow * 2.0;
     }
     let lamps = local_lights(in.world, n, v, nov, vec3<f32>(0.0), vec3<f32>(0.04), a, false) * 2.0;
-    let reflected = fr * environment(reflect(-v, n), roughness) + sun + lamps;
     let opacity = clamp(material.base_color.a, 0.0, 1.0);
     let lit = material.base_color.rgb * (sh_irradiance(n) / PI + g.sun_light.rgb * nol / PI);
-    let transmit = (1.0 - fr) * (1.0 - opacity) * 0.65;
-    let color = reflected + (1.0 - fr) * opacity * lit;
-    return fog_premultiplied(vec4<f32>(color, 1.0 - transmit), in.world);
+    var out: GlassTerms;
+    out.reflected = fr * environment(reflect(-v, n), roughness) + sun + lamps + (1.0 - fr) * opacity * lit;
+    let tint = pow(vec3<f32>(0.88, 0.96, 0.94), vec3<f32>(1.0 / max(nov, 0.15)));
+    out.transmitted = tint * ((1.0 - fr) * (1.0 - opacity) * 0.5);
+    return out;
+}
+
+// Pass 1: what shows through (multiplied into the target).
+@fragment
+fn fs_glass_transmit(in: Varying) -> @location(0) vec4<f32> {
+    if g.time.w > 0.5 {
+        return vec4<f32>(0.65); // clay: a pale veil
+    }
+    return vec4<f32>(glass_terms(in).transmitted, 1.0);
+}
+
+// Pass 2: the reflection, plus the haze in front of the pane in proportion
+// to how much the pane blocks.
+@fragment
+fn fs_glass_reflect(in: Varying, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    if g.time.w > 0.5 {
+        return vec4<f32>(shade(in, front, false).color * 0.35, 0.0);
+    }
+    let t = glass_terms(in);
+    let block = 1.0 - dot(t.transmitted, vec3<f32>(1.0 / 3.0));
+    let c = fog_premultiplied(vec4<f32>(t.reflected, block), in.world);
+    return vec4<f32>(c.rgb, 0.0);
 }
 
 // Value noise in 2D with its analytic gradient (Inigo Quilez, "Value Noise
@@ -943,9 +1013,9 @@ fn water_transmittance(path: f32, turbidity: f32) -> f32 {
 // when it rendered this water's plane, distorted by the ripples' slope,
 // otherwise the environment cube.
 fn water(in: Varying) -> vec4<f32> {
-    let to_eye = g.camera.xyz - in.world;
-    let dist = length(to_eye);
-    let v = to_eye / dist;
+    let eye_vec = to_eye(in.world);
+    let dist = length(eye_vec);
+    let v = eye_vec / dist;
     let depth = -(g.view * vec4<f32>(in.world, 1.0)).z;
     let below = textureLoad(linear_depth, vec2<i32>(in.clip.xy), 0).r;
     let path = max(below - depth, 0.0) * dist / max(depth, 1e-3);
@@ -995,15 +1065,11 @@ fn fs_transparent(in: Varying, @builtin(front_facing) front: bool) -> @location(
     // Branches on uniforms only, so shade() may take derivatives.
     let kind = material.alpha.z;
     if g.time.w > 0.5 {
-        // Clay: water as a pale matte surface, glass as a pale veil.
-        let alpha = select(1.0, 0.35, kind > 0.5 && kind < 1.5);
-        return vec4<f32>(shade(in, front, false).color * alpha, alpha);
+        // Clay: water as a pale matte surface (glass has its own passes).
+        return vec4<f32>(shade(in, front, false).color, 1.0);
     }
     if kind > 1.5 {
         return water(in);
-    }
-    if kind > 0.5 {
-        return glass(in);
     }
     let shaded = shade(in, front, false);
     let alpha = clamp(shaded.alpha, 0.0, 1.0);

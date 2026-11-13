@@ -76,14 +76,15 @@ fn fs_bloom_up(in: Out) -> @location(0) vec4<f32> {
 // search walks along the edge in both directions (growing steps) until the
 // luma change ends, and the pixel is resampled half a pixel across the edge
 // in proportion to its position along the edge span; a sub-pixel term
-// smooths single-pixel features (kept at 0.5 so texture detail survives).
+// smooths single-pixel features (kept at 0.25: at 0.5 brick mortar lines
+// visibly softened in 100 % crops).
 // Written from that description for this renderer, on sRGB-encoded colour;
 // the 3x3 neighbourhood comes from two gathers of the luma the tone map
 // stored in alpha, and the edge search takes at most six steps (1-8 px).
 
 const FXAA_EDGE_MIN: f32 = 0.0625;
 const FXAA_EDGE: f32 = 0.166;
-const FXAA_SUBPIX: f32 = 0.5;
+const FXAA_SUBPIX: f32 = 0.25;
 
 // Luma (of the sRGB-encoded colour) is in alpha: the tone map wrote it.
 fn luma(uv: vec2<f32>) -> f32 {

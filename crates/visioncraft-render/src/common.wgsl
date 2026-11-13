@@ -46,14 +46,44 @@ struct Globals {
 const PI: f32 = 3.14159265;
 const SKY_DEPTH: f32 = 1e9; // linear depth written where nothing was drawn
 
-// Pixel -> view-space position at linear depth `d` (metres along -Z). Valid for
-// any perspective projection (also off-centre); orthographic cameras are not
-// supported by the screen-space passes.
+// An orthographic projection has no perspective divide (its w row is
+// (0, 0, 0, 1)); plan and elevation views use one.
+fn is_ortho() -> bool {
+    return abs(g.proj[2][3]) < 1e-7;
+}
+
+// From a world position towards the eye: the eye itself for a perspective
+// camera, straight back along the view axis (to the view plane) for an
+// orthographic one, so view vectors, distances and paths stay meaningful.
+fn to_eye(world: vec3<f32>) -> vec3<f32> {
+    if is_ortho() {
+        let back = normalize(vec3<f32>(g.view[0][2], g.view[1][2], g.view[2][2]));
+        return back * max(-(g.view * vec4<f32>(world, 1.0)).z, 1e-3);
+    }
+    return g.camera.xyz - world;
+}
+
+// Pixel -> view-space position at linear depth `d` (metres along -Z), for
+// any perspective (also off-centre) or orthographic projection.
 fn view_position(pixel: vec2<f32>, d: f32) -> vec3<f32> {
     let ndc = vec2<f32>(pixel.x * g.viewport.z * 2.0 - 1.0, 1.0 - pixel.y * g.viewport.w * 2.0);
+    if is_ortho() {
+        return vec3<f32>((ndc.x - g.proj[3][0]) / g.proj[0][0], (ndc.y - g.proj[3][1]) / g.proj[1][1], -d);
+    }
     let x = d * (ndc.x + g.proj[2][0]) / g.proj[0][0];
     let y = d * (ndc.y + g.proj[2][1]) / g.proj[1][1];
     return vec3<f32>(x, y, -d);
+}
+
+// Screen pixels per metre at view depth `d` (horizontally).
+fn pixels_per_metre(d: f32) -> f32 {
+    return g.proj[0][0] * 0.5 * g.viewport.x / select(d, 1.0, is_ortho());
+}
+
+// Linear view depth (metres) from a depth-buffer value, any projection:
+// solves d = (P22 z + P32) / (P23 z + P33) for z (P[column][row]).
+fn linear_depth_of(d: f32) -> f32 {
+    return -(g.proj[3][2] - d * g.proj[3][3]) / (d * g.proj[2][3] - g.proj[2][2]);
 }
 
 // View-space position -> pixel (top-left origin).
@@ -124,10 +154,11 @@ fn fog_transmittance(origin_y: f32, dir_y: f32, t: f32) -> f32 {
 // just above the horizon in the view's azimuth from the environment cube (a
 // mildly blurred mip whose lobe stays clear of the ground: the direction is
 // lifted to at least 7 degrees, so the haze never takes the colour of the
-// ground), plus single scattering of the sun with a Henyey-Greenstein phase
+// ground; above that it is the true direction, so a bright feature of the
+// sky never shows up displaced in the haze), plus single scattering of the sun with a Henyey-Greenstein phase
 // (g = 0.6, forward-scattering aerosol).
 fn fog_inscatter(dir: vec3<f32>, sun_visibility: f32) -> vec3<f32> {
-    let h = normalize(vec3<f32>(dir.x, max(dir.y, 0.0) * 0.5 + 0.12, dir.z));
+    let h = normalize(vec3<f32>(dir.x, max(dir.y, 0.12), dir.z));
     let sky = textureSampleLevel(env_map, env_sampler, h, g.time.z * 0.3).rgb * g.night.w;
     let c = dot(dir, g.sun_dir.xyz);
     let hg = 0.64 / (4.0 * PI * pow(1.36 - 1.2 * c, 1.5));
@@ -140,7 +171,7 @@ fn apply_fog(color: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
     if g.fog.x <= 0.0 {
         return color;
     }
-    let to = world - g.camera.xyz;
+    let to = -to_eye(world);
     let t = length(to);
     let dir = to / max(t, 1e-6);
     let transmit = fog_transmittance(g.camera.y, dir.y, t);

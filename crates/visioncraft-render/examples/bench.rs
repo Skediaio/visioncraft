@@ -14,7 +14,8 @@
 //! `--garden`: the beauty-shot garden (house, pond with planar reflection,
 //! infinite ground, haze, lamps on) instead of the budget scene, with
 //! `--no-haze` `--no-ground` `--no-bloom` `--no-reflection` `--no-fxaa` to
-//! price each realism feature.
+//! price each realism feature. `--forest`: 20 000 trees and 60 000
+//! understory plants over 4 ha, meshes near and impostors far.
 //! With a device that has timestamp queries, GPU ms per pass are printed.
 
 use glam::Vec3;
@@ -85,7 +86,12 @@ fn main() {
         r.resize(w, h);
         r.set_quality(quality);
         let garden = has("--garden");
-        let (tris, instanced) = if garden {
+        let forest = has("--forest");
+        let (tris, instanced) = if forest {
+            // 20 000 trees and 60 000 understory plants over 4 ha.
+            let per = demo::forest(&mut r, 20_000, 60_000, 100.0);
+            (0, per * 20_000)
+        } else if garden {
             let lights = demo::garden(&mut r);
             r.set_lights(&lights);
             (0, 0)
@@ -128,7 +134,15 @@ fn main() {
             let encode = std::cell::Cell::new(0.0);
             let mut frame = |i: u32| {
                 let aspect = w as f32 / h as f32;
-                let (view, proj, eye) = if garden && path == "orbit" {
+                let (view, proj, eye) = if forest && path == "orbit" {
+                    let yaw = i as f32 * 0.01;
+                    let eye = Vec3::new(yaw.sin() * 110.0, 60.0, yaw.cos() * 110.0);
+                    demo::camera(eye, Vec3::ZERO, aspect)
+                } else if forest {
+                    let t = i as f32 * 0.05;
+                    let eye = Vec3::new(-20.0 + t, 1.7, 5.0 + 3.0 * (t * 0.1).sin());
+                    demo::camera(eye, eye + Vec3::new(1.0, 0.05, -0.4), aspect)
+                } else if garden && path == "orbit" {
                     // Around the house and pond at 22 m.
                     let yaw = 0.3 + i as f32 * 0.01;
                     let target = Vec3::new(2.0, 1.0, 4.0);

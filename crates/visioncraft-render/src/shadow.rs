@@ -15,6 +15,10 @@
 //! view direction at all, so the renderer keeps it until the camera has moved
 //! more than `margin`, or the sun or the scene changed. That skips the most
 //! expensive cascade (it holds the whole scene) on most frames.
+//!
+//! An orthographic camera (plan, elevation) gets one cascade fitted to the
+//! sphere around its view box, with the box's depth range clipped to the
+//! scene; the shadow distance does not apply.
 
 use glam::{Mat4, Vec3, Vec4Swizzles};
 
@@ -76,6 +80,97 @@ pub fn light_rotation(sun_dir: Vec3) -> Mat4 {
 /// `sun_dir` towards the sun, shadow `resolution`, how far shadows reach, and
 /// the scene's world bounds (casters outside the view must still be in the
 /// light's depth range).
+/// True for an orthographic projection (no perspective divide: the w row is
+/// (0, 0, 0, 1)).
+pub fn is_orthographic(proj: Mat4) -> bool {
+    proj.x_axis.w.abs() < 1e-7
+        && proj.y_axis.w.abs() < 1e-7
+        && proj.z_axis.w.abs() < 1e-7
+        && (proj.w_axis.w - 1.0).abs() < 1e-6
+}
+
+/// The light-space matrix of one cascade around a world-space sphere,
+/// snapped to whole texels, with depth reaching every scene corner.
+fn fit(
+    rot: Mat4,
+    center: Vec3,
+    r: f32,
+    resolution: u32,
+    corners: Option<&[f32; 8]>,
+) -> (Mat4, f32) {
+    let texel = 2.0 * r / resolution as f32;
+    let ls = rot.transform_point3(center);
+    let snapped_x = (ls.x / texel).round() * texel;
+    let snapped_y = (ls.y / texel).round() * texel;
+    // Light space looks down -Z: near/far are distances along -Z.
+    let (mut z_lo, mut z_hi) = (ls.z - r, ls.z + r);
+    for z in corners.into_iter().flatten() {
+        z_lo = z_lo.min(*z);
+        z_hi = z_hi.max(*z);
+    }
+    let z_margin = 1.0;
+    let ortho = Mat4::orthographic_rh(
+        snapped_x - r,
+        snapped_x + r,
+        snapped_y - r,
+        snapped_y + r,
+        -(z_hi + z_margin),
+        -(z_lo - z_margin),
+    );
+    (ortho * rot, texel)
+}
+
+fn box_corners((lo, hi): (Vec3, Vec3)) -> [Vec3; 8] {
+    std::array::from_fn(|i| {
+        Vec3::new(
+            if i & 1 == 0 { lo.x } else { hi.x },
+            if i & 2 == 0 { lo.y } else { hi.y },
+            if i & 4 == 0 { lo.z } else { hi.z },
+        )
+    })
+}
+
+/// One cascade around an orthographic camera's view box.
+fn compute_orthographic(
+    view: Mat4,
+    proj: Mat4,
+    sun_dir: Vec3,
+    resolution: u32,
+    bounds: Option<(Vec3, Vec3)>,
+) -> Cascades {
+    let (hw, hh) = (1.0 / proj.x_axis.x.abs(), 1.0 / proj.y_axis.y.abs());
+    let (cx, cy) = (-proj.w_axis.x * hw, -proj.w_axis.y * hh);
+    // glam's orthographic_rh: z_axis.z = 1 / (near - far), w_axis.z = near * that.
+    let near = proj.w_axis.z / proj.z_axis.z;
+    let far = near - 1.0 / proj.z_axis.z;
+    let (mut n, mut f) = (near, far);
+    if let Some(b) = bounds {
+        let depths = box_corners(b).map(|c| -view.transform_point3(c).z);
+        let lo = depths.iter().cloned().fold(f32::INFINITY, f32::min);
+        let hi = depths.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+        if lo.max(near) < hi.min(far) {
+            (n, f) = (lo.max(near), hi.min(far));
+        }
+    }
+    let rot = light_rotation(sun_dir);
+    let corners = bounds.map(|b| box_corners(b).map(|c| rot.transform_point3(c).z));
+    let r = (hw * hw + hh * hh + 0.25 * (f - n) * (f - n)).sqrt();
+    let center = view
+        .inverse()
+        .transform_point3(Vec3::new(cx, cy, -0.5 * (n + f)));
+    let (matrix, texel) = fit(rot, center, r, resolution, corners.as_ref());
+    let mut out = Cascades {
+        count: 1,
+        ..Default::default()
+    };
+    out.view_proj[0] = matrix;
+    out.texel[0] = texel;
+    // Past the scene: the shader's fade band at the end of the last
+    // cascade must not reach anything drawn.
+    out.splits = [f + (f - n) + 1.0; MAX_CASCADES];
+    out
+}
+
 pub fn compute(
     view: Mat4,
     proj: Mat4,
@@ -85,6 +180,9 @@ pub fn compute(
     distance: f32,
     bounds: Option<(Vec3, Vec3)>,
 ) -> Cascades {
+    if is_orthographic(proj) {
+        return compute_orthographic(view, proj, sun_dir, resolution, bounds);
+    }
     let count = count.clamp(1, MAX_CASCADES);
     let (near, far) = near_far(proj);
     let far = far.min(distance).max(near * 2.0);
@@ -94,16 +192,7 @@ pub fn compute(
     let inv_view = view.inverse();
     let rot = light_rotation(sun_dir);
     let splits = split_distances(near, far, count);
-    let corners = bounds.map(|(lo, hi)| {
-        (0..8).map(move |i| {
-            let p = Vec3::new(
-                if i & 1 == 0 { lo.x } else { hi.x },
-                if i & 2 == 0 { lo.y } else { hi.y },
-                if i & 4 == 0 { lo.z } else { hi.z },
-            );
-            rot.transform_point3(p).z
-        })
-    });
+    let corners = bounds.map(|b| box_corners(b).map(|c| rot.transform_point3(c).z));
     let mut out = Cascades {
         splits,
         count,
@@ -121,28 +210,8 @@ pub fn compute(
             ((inv_view * glam::Vec4::new(0.0, 0.0, -c, 1.0)).xyz(), r)
         };
         start = split;
-        let texel = 2.0 * r / resolution as f32;
-        let ls = rot.transform_point3(center);
-        let snapped_x = (ls.x / texel).round() * texel;
-        let snapped_y = (ls.y / texel).round() * texel;
-        // Light space looks down -Z: near/far are distances along -Z.
-        let (mut z_lo, mut z_hi) = (ls.z - r, ls.z + r);
-        if let Some(zs) = corners.clone() {
-            for z in zs {
-                z_lo = z_lo.min(z);
-                z_hi = z_hi.max(z);
-            }
-        }
-        let z_margin = 1.0;
-        let ortho = Mat4::orthographic_rh(
-            snapped_x - r,
-            snapped_x + r,
-            snapped_y - r,
-            snapped_y + r,
-            -(z_hi + z_margin),
-            -(z_lo - z_margin),
-        );
-        out.view_proj[i] = ortho * rot;
+        let (matrix, texel) = fit(rot, center, r, resolution, corners.as_ref());
+        out.view_proj[i] = matrix;
         out.texel[i] = texel;
     }
     out
@@ -269,6 +338,32 @@ mod tests {
             c.view_proj[2].transform_point3(eye + Vec3::new(91.0, 0.0, 0.0).normalize() * 91.0);
         assert!(far.x.abs() <= 1.0 && far.y.abs() <= 1.0, "{far}");
         assert_eq!(compute(view, proj, sun, 1, 2048, 80.0, None).margin, 0.0);
+    }
+
+    /// A plan view: one cascade whose map covers the whole visible part of
+    /// the scene, and the orthographic matrix is recognised.
+    #[test]
+    fn orthographic_plan_view_gets_one_covering_cascade() {
+        let proj = Mat4::orthographic_rh(-20.0, 20.0, -12.0, 12.0, 0.1, 500.0);
+        assert!(is_orthographic(proj));
+        assert!(!is_orthographic(Mat4::perspective_rh(1.0, 1.5, 0.1, 100.0)));
+        let eye = Vec3::new(3.0, 100.0, -2.0);
+        let view = Mat4::look_at_rh(eye, Vec3::new(3.0, 0.0, -2.0), Vec3::NEG_Z);
+        let bounds = Some((Vec3::new(-30.0, -1.0, -30.0), Vec3::new(30.0, 10.0, 30.0)));
+        let sun = Vec3::new(0.4, 0.7, 0.3).normalize();
+        let c = compute(view, proj, sun, 4, 2048, 80.0, bounds);
+        assert_eq!(c.count, 1);
+        for corner in [
+            Vec3::new(-17.0, 0.0, -14.0 + 2.0),
+            Vec3::new(23.0, 9.0, 10.0 - 2.0),
+            Vec3::new(3.0, -1.0, -2.0),
+        ] {
+            let p = c.view_proj[0].transform_point3(corner);
+            assert!(p.x.abs() <= 1.0 && p.y.abs() <= 1.0, "{corner}: {p}");
+            assert!((0.0..=1.0).contains(&p.z), "{corner}: depth {}", p.z);
+        }
+        // The fade at the end of the cascade lies beyond the scene's depth.
+        assert!(c.splits[0] > 111.0, "{}", c.splits[0]);
     }
 
     #[test]

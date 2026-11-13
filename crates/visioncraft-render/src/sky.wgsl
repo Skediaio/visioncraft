@@ -131,7 +131,11 @@ fn vs_sky(@builtin(vertex_index) i: u32) -> SkyOut {
 fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
     let ndc = vec2<f32>(in.clip.x * g.viewport.z * 2.0 - 1.0, 1.0 - in.clip.y * g.viewport.w * 2.0);
     let p = g.inv_view_proj * vec4<f32>(ndc, 0.5, 1.0);
-    let dir = normalize(p.xyz / p.w - g.camera.xyz);
+    var dir = normalize(p.xyz / p.w - g.camera.xyz);
+    if is_ortho() {
+        // A plan or elevation: one plain backdrop along the view axis.
+        dir = -normalize(vec3<f32>(g.view[0][2], g.view[1][2], g.view[2][2]));
+    }
     var color = background(dir);
     // Sun disc with a soft, slightly limb-darkened edge. Its luminance is the
     // sun's illuminance over the disc's solid angle (clamped on the CPU).

@@ -66,7 +66,7 @@ fn vs_main(s: Segment, @builtin(vertex_index) vi: u32, @builtin(instance_index) 
     out.local = vec2<f32>(along, side * reach);
     out.extent = vec2<f32>(len, half_width);
     out.color = mix(s.a_color, s.b_color, end);
-    out.view_depth = c.w; // clip w is view depth for perspective projections
+    out.view_depth = linear_depth_of(c.z / c.w);
     out.on_top = u32(ii >= g.highlight.z);
     return out;
 }

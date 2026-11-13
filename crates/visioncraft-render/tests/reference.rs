@@ -768,6 +768,422 @@ fn r_macro_variation() {
     assert!(spreads[1] > spreads[0] + 4.0, "block spread {spreads:?}");
 }
 
+/// An orthographic plan view of the garden: shadows work (the house's
+/// shadow falls to the north-east of it), no haze, LOD by view height.
+#[test]
+fn s_plan_view() {
+    let mut r = renderer(W, H);
+    demo::garden(&mut r);
+    r.set_time(2.0);
+    setup(
+        &mut r,
+        demo::garden_plan_camera(W as f32 / H as f32),
+        demo::afternoon_sun(),
+        14.7,
+    );
+    let px = capture(&mut r, W, H);
+    let at = |p: Vec3| {
+        let q = r.project(p).expect("in view");
+        mean(
+            &px,
+            q.x as u32 - 2,
+            q.y as u32 - 2,
+            q.x as u32 + 3,
+            q.y as u32 + 3,
+        )
+    };
+    let shadow = at(Vec3::new(6.0, 0.0, -4.5));
+    let lit = at(Vec3::new(-6.5, 0.0, -1.0));
+    assert!(
+        lit[1] > shadow[1] + 20.0,
+        "lit lawn {lit:?}, house shadow {shadow:?}"
+    );
+    check("s_plan_view", &px);
+}
+
+/// An orthographic elevation (side-on) of the house: a plain sky backdrop,
+/// the brick facade, shadows.
+#[test]
+fn t_elevation_view() {
+    let mut r = renderer(W, H);
+    demo::garden(&mut r);
+    r.set_time(2.0);
+    setup(
+        &mut r,
+        demo::garden_elevation_camera(W as f32 / H as f32),
+        demo::afternoon_sun(),
+        14.7,
+    );
+    let px = capture(&mut r, W, H);
+    let left = mean(&px, 0, 0, 20, 10);
+    let right = mean(&px, W - 20, 0, W, 10);
+    let d = (0..3)
+        .map(|i| (left[i] - right[i]).abs())
+        .fold(0.0, f32::max);
+    assert!(d < 3.0, "the backdrop is one colour: {left:?} {right:?}");
+    let wall = r.project(Vec3::new(-3.8, 1.6, 3.5)).expect("wall in view");
+    let c = mean(
+        &px,
+        wall.x as u32 - 3,
+        wall.y as u32 - 3,
+        wall.x as u32 + 3,
+        wall.y as u32 + 3,
+    );
+    assert!(c[0] > c[2] + 15.0, "brick facade {c:?}");
+    check("t_elevation_view", &px);
+}
+
+/// Linear scene luminance behind an output pixel, by inverting the tone map
+/// (AgX on grey, bisection) for a near-neutral surface.
+fn scene_luminance(c: [f32; 3]) -> f32 {
+    let decode = |v: f32| {
+        let v = v / 255.0;
+        if v <= 0.04045 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let target = 0.2126 * decode(c[0]) + 0.7152 * decode(c[1]) + 0.0722 * decode(c[2]);
+    let (mut lo, mut hi) = (1e-6f32, 100.0f32);
+    for _ in 0..60 {
+        let mid = (lo * hi).sqrt();
+        if visioncraft_render::tonemap::agx(Vec3::splat(mid)).y < target {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+/// Open shade at noon under the physical sky: a white wall facing away from
+/// the sun sits 1.5 to 3 stops below the sunlit side (sky light plus the
+/// light the ground bounces), not five.
+#[test]
+fn u_open_shade_ratio() {
+    let mut r = renderer(W, H);
+    let mut ground = MeshData::default();
+    ground.add_box(Vec3::new(-40.0, -0.1, -40.0), Vec3::new(40.0, 0.0, 40.0));
+    let ground = r.add_mesh(&ground.mesh()).expect("ground");
+    let grass = r.add_material(&Material {
+        base_color: [0.2, 0.2, 0.2, 1.0],
+        roughness: 0.95,
+        ..Default::default()
+    });
+    r.add_item(ground, grass, &[Mat4::IDENTITY]);
+    r.set_ground(Some(visioncraft_render::Ground {
+        color: [0.2, 0.2, 0.2],
+        variation: 0.0,
+        ..Default::default()
+    }));
+    let mut block = MeshData::default();
+    block.add_box(Vec3::new(-3.0, 0.0, -3.0), Vec3::new(3.0, 6.0, 3.0));
+    let block = r.add_mesh(&block.mesh()).expect("block");
+    let white = r.add_material(&Material {
+        base_color: [0.8, 0.8, 0.8, 1.0],
+        roughness: 0.9,
+        ..Default::default()
+    });
+    r.add_item(block, white, &[Mat4::IDENTITY]);
+    // Sun from the south-south-east, high: the south face (+Z) is lit, the
+    // west face (-X) in open shade.
+    let aspect = W as f32 / H as f32;
+    let cam = demo::camera(
+        Vec3::new(-14.0, 3.0, 14.0),
+        Vec3::new(0.0, 3.0, 0.0),
+        aspect,
+    );
+    setup(&mut r, cam, Sun::from_angles(160.0, 60.0), 15.0);
+    let px = capture(&mut r, W, H);
+    let face = |p: Vec3| {
+        let q = r.project(p).expect("face in view");
+        scene_luminance(mean(
+            &px,
+            q.x as u32 - 4,
+            q.y as u32 - 4,
+            q.x as u32 + 5,
+            q.y as u32 + 5,
+        ))
+    };
+    let lit = face(Vec3::new(0.0, 3.5, 3.0));
+    let shade = face(Vec3::new(-3.0, 3.5, 0.0));
+    let stops = (lit / shade).log2();
+    eprintln!("sunlit {lit}, shade {shade}: {stops:.2} stops");
+    assert!(
+        (1.5..=3.0).contains(&stops),
+        "{stops:.2} stops between sun and open shade"
+    );
+    check("u_open_shade", &px);
+}
+
+/// Edge cases the app hits: an empty scene, only overlay lines, 1x1 and
+/// zero-sized outputs, every preset.
+#[test]
+fn empty_and_tiny_scenes_render() {
+    for q in [Quality::LOW, Quality::MEDIUM, Quality::HIGH] {
+        let mut r = renderer(1, 1);
+        r.set_quality(q);
+        capture_any(&mut r);
+        r.resize(0, 0);
+        capture_any(&mut r);
+        r.resize(3, 1);
+        r.set_overlay_lines(&demo::grid_lines(2, 1.0, [255, 255, 255, 255], 1.0));
+        capture_any(&mut r);
+        r.set_overlay_lines(&[]);
+        r.resize(64, 36);
+        capture_any(&mut r);
+        let s = r.stats();
+        assert_eq!(s.instances, 0);
+        let (view, proj, eye) = demo::garden_plan_camera(1.0);
+        r.set_camera(view, proj, eye);
+        capture_any(&mut r);
+    }
+}
+
+/// Terrain: rolling hills with four painted layers (lawn, dirt, paving with
+/// the dirt in its joints by height blending, rock on slopes) at noon and
+/// at a low sun, fading into the infinite ground at its edge.
+#[test]
+fn v_terrain() {
+    let mut r = renderer(W, H);
+    demo::terrain(&mut r, false);
+    let cam = demo::terrain_camera(W as f32 / H as f32);
+    setup(&mut r, cam, demo::noon_sun(), 15.0);
+    let noon = capture(&mut r, W, H);
+    check("v_terrain_noon", &noon);
+    setup(&mut r, cam, demo::golden_sun(), 12.7);
+    settle(&mut r);
+    let low = capture(&mut r, W, H);
+    check("v_terrain_low_sun", &low);
+    // Low sun: darker overall, long shadows behind the hills.
+    let m = |px: &[u8]| mean(px, 0, H / 2, W, H)[1];
+    assert!(
+        m(&low) < m(&noon),
+        "low sun {} vs noon {}",
+        m(&low),
+        m(&noon)
+    );
+}
+
+/// Sculpting replaces chunks often: a 65 x 65 vertex chunk (4225 vertices
+/// plus its skirt) must re-upload in a few milliseconds.
+#[test]
+fn terrain_chunk_replace_is_cheap() {
+    let mut r = renderer(64, 36);
+    let ids = demo::terrain(&mut r, false);
+    let data = demo::terrain_chunk(
+        glam::Vec2::new(0.0, -6.0),
+        64,
+        0.5,
+        1,
+        &|x, z| demo::hills_height(x, z, false) + 0.3,
+        &demo::hills_weights,
+    );
+    let start = std::time::Instant::now();
+    for _ in 0..20 {
+        r.replace_terrain_chunk(ids[4], &data.chunk())
+            .expect("replace");
+    }
+    let ms = start.elapsed().as_secs_f64() * 1000.0 / 20.0;
+    eprintln!(
+        "replace_terrain_chunk: {ms:.2} ms for {} vertices",
+        data.positions.len()
+    );
+    assert!(ms < 10.0, "{ms} ms");
+    capture_any(&mut r);
+}
+
+/// Two neighbouring chunks at different levels of detail (every vertex
+/// and every fourth): no crack shows the background along their border,
+/// and normals from the height function keep the lighting continuous.
+#[test]
+fn w_terrain_lod_seam() {
+    let mut r = renderer(W, H);
+    demo::terrain_layers(&mut r);
+    let any = r.add_material(&Material::default());
+    let height = |x: f32, z: f32| demo::hills_height(x, z, false);
+    for (x0, step) in [(-32.0, 1), (0.0, 4)] {
+        let data = demo::terrain_chunk(
+            glam::Vec2::new(x0, -16.0),
+            64,
+            0.5,
+            step,
+            &height,
+            &demo::hills_weights,
+        );
+        let id = r.add_terrain_chunk(&data.chunk()).expect("chunk");
+        r.add_item(id, any, &[Mat4::IDENTITY]);
+    }
+    let aspect = W as f32 / H as f32;
+    let cam = demo::camera(Vec3::new(0.0, 9.0, 30.0), Vec3::new(0.0, 0.0, 0.0), aspect);
+    setup(&mut r, cam, demo::afternoon_sun(), 14.7);
+    let px = capture(&mut r, W, H);
+    check("w_terrain_lod_seam", &px);
+    // Along the border x = 0, every pixel is terrain (green-brown), not the
+    // blue-grey sky below the horizon.
+    for k in 0..12 {
+        let z = -14.0 + k as f32 * 2.5;
+        let p = r
+            .project(Vec3::new(0.0, height(0.0, z), z))
+            .expect("border in view");
+        let c = mean(
+            &px,
+            p.x as u32 - 1,
+            p.y as u32 - 1,
+            p.x as u32 + 2,
+            p.y as u32 + 2,
+        );
+        assert!(c[2] < c[1] + 8.0, "border at z {z}: {c:?} looks like sky");
+    }
+}
+
+/// A pond carved into the terrain: water plane, planar reflection of the
+/// trees on the bank, and clay mode.
+#[test]
+fn x_terrain_pond_and_clay() {
+    let mut r = renderer(W, H);
+    demo::terrain(&mut r, true);
+    let aspect = W as f32 / H as f32;
+    let cam = demo::camera(
+        Vec3::new(10.0, 2.5, 26.0),
+        Vec3::new(18.0, -0.5, 6.0),
+        aspect,
+    );
+    setup(&mut r, cam, demo::afternoon_sun(), 14.7);
+    r.set_time(3.0);
+    let px = capture(&mut r, W, H);
+    check("x_terrain_pond", &px);
+    r.set_clay(true);
+    let clay = capture(&mut r, W, H);
+    check("y_terrain_clay", &clay);
+}
+
+/// Pixels that differ from a background render (the plant's silhouette).
+fn silhouette(px: &[u8], bg: &[u8]) -> Vec<bool> {
+    px.chunks(4)
+        .zip(bg.chunks(4))
+        .map(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 12))
+        .collect()
+}
+
+/// An impostor next to its source mesh at the hand-over distance, from
+/// three azimuths: same silhouette (intersection over union), size (height
+/// of the bounding box) and overall brightness, within tolerances.
+#[test]
+fn z_impostor_matches_its_mesh() {
+    let aspect = W as f32 / H as f32;
+    let lods = demo::plant_lods(&PlantShape::tree(), 42);
+    let build = |impostor: bool| {
+        // No ground: shadows would differ (a quad's from a crown's) and are
+        // not what is compared here.
+        let mut r = renderer(W, H);
+        let mats = demo::plant_materials(&mut r, Vec3::new(0.16, 0.3, 0.07), 5);
+        let at = [Mat4::from_translation(Vec3::ZERO)];
+        if impostor {
+            demo::add_plants_with_impostor(&mut r, &lods, &mats, [0.5, 1.0, f32::INFINITY], &at);
+        } else {
+            demo::add_plants(&mut r, &lods, &mats, [f32::INFINITY; 3], &at);
+        }
+        r
+    };
+    let mut mesh = build(false);
+    let mut imp = build(true);
+    let mut bg = renderer(W, H);
+    for (k, azimuth) in [20.0f32, 140.0, 260.0].into_iter().enumerate() {
+        let a = azimuth.to_radians();
+        let eye = Vec3::new(a.sin() * 22.0, 2.0, a.cos() * 22.0);
+        let cam = demo::camera(eye, Vec3::new(0.0, 2.6, 0.0), aspect);
+        let shots: Vec<Vec<u8>> = [&mut bg, &mut mesh, &mut imp]
+            .into_iter()
+            .map(|r| {
+                setup(r, cam, demo::afternoon_sun(), 14.7);
+                settle(r);
+                capture(r, W, H)
+            })
+            .collect();
+        let (sm, si) = (
+            silhouette(&shots[1], &shots[0]),
+            silhouette(&shots[2], &shots[0]),
+        );
+        let both = sm.iter().zip(&si).filter(|(a, b)| **a && **b).count();
+        let either = sm.iter().zip(&si).filter(|(a, b)| **a || **b).count();
+        let iou = both as f32 / either.max(1) as f32;
+        let rows = |m: &[bool]| {
+            let r: Vec<usize> = (0..H as usize)
+                .filter(|y| m[y * W as usize..(y + 1) * W as usize].iter().any(|v| *v))
+                .collect();
+            (r[r.len() - 1] - r[0]) as f32
+        };
+        let (hm, hi) = (rows(&sm), rows(&si));
+        let bright = |px: &[u8], m: &[bool]| {
+            let (mut s, mut n) = (0.0, 0.0);
+            for (p, on) in px.chunks(4).zip(m) {
+                if *on {
+                    s += p[1] as f32;
+                    n += 1.0;
+                }
+            }
+            s / n
+        };
+        let (bm, bi) = (bright(&shots[1], &sm), bright(&shots[2], &si));
+        eprintln!("azimuth {azimuth}: IoU {iou:.2}, height {hm} vs {hi}, green {bm:.1} vs {bi:.1}");
+        // A crown of 200 cards at ~65 px against a flat atlas: the leaves'
+        // exact gaps differ, the outline and size must not.
+        assert!(
+            iou > 0.55,
+            "azimuth {azimuth}: silhouettes overlap {iou:.2}"
+        );
+        assert!(
+            (hi / hm - 1.0).abs() < 0.15,
+            "azimuth {azimuth}: height {hm} vs {hi}"
+        );
+        assert!(
+            (bi - bm).abs() < 15.0,
+            "azimuth {azimuth}: brightness {bm} vs {bi}"
+        );
+        if k == 0 {
+            let mut pair = shots[1].clone();
+            // Left half mesh, right half impostor, for the reference.
+            for y in 0..H as usize {
+                for x in W as usize / 2..W as usize {
+                    let i = (y * W as usize + x) * 4;
+                    pair[i..i + 4].copy_from_slice(&shots[2][i..i + 4]);
+                }
+            }
+            check("z_impostor_vs_mesh", &pair);
+        }
+    }
+}
+
+/// A forest of meshes near the camera and impostors beyond, from inside
+/// at eye level and from above.
+#[test]
+fn z_forest() {
+    let aspect = W as f32 / H as f32;
+    let mut r = renderer(W, H);
+    demo::forest(&mut r, 1500, 3000, 60.0);
+    r.set_time(1.0);
+    setup(
+        &mut r,
+        demo::forest_inside_camera(aspect),
+        demo::afternoon_sun(),
+        14.7,
+    );
+    settle(&mut r);
+    check("z_forest_inside", &capture(&mut r, W, H));
+    setup(
+        &mut r,
+        demo::forest_above_camera(aspect),
+        demo::afternoon_sun(),
+        14.7,
+    );
+    settle(&mut r);
+    let above = capture(&mut r, W, H);
+    check("z_forest_above", &above);
+    assert!(r.stats().instances > 1000, "{:?}", r.stats());
+}
+
 /// The renderer's own counters: draws and triangles of a frame, visible
 /// lights, memory, render size.
 #[test]

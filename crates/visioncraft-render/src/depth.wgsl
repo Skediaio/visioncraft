@@ -9,13 +9,7 @@ fn linearize(d: f32) -> f32 {
     if d >= 1.0 {
         return SKY_DEPTH;
     }
-    // Only the projection's z and w rows matter: solve
-    // d = (P22 z + P32) / (P23 z + P33) for view z (P[column][row]).
-    let p22 = g.proj[2][2];
-    let p32 = g.proj[3][2];
-    let p23 = g.proj[2][3];
-    let p33 = g.proj[3][3];
-    return -(p32 - d * p33) / (d * p23 - p22);
+    return linear_depth_of(d);
 }
 
 struct Out {

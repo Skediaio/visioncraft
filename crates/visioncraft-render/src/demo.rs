@@ -341,6 +341,28 @@ pub fn brick_textures(size: u32) -> (Image, Image, Image) {
 }
 
 /// Paving: 50 cm square slabs, light grey, with joints. (albedo, normal).
+/// The paving's height (stones 1, joints 0) for a 1 m tile of two slabs.
+fn paving_height(size: u32) -> Image {
+    let s = size as f32;
+    Image::from_fn(size, size, |x, y| {
+        let (u, v) = ((x as f32 + 0.5) / s * 2.0, (y as f32 + 0.5) / s * 2.0);
+        let (fu, fv) = (u.fract(), v.fract());
+        let e = fu.min(1.0 - fu).min(fv.min(1.0 - fv)) / 2.0;
+        let h = ((e - 0.004) / 0.008).clamp(0.0, 1.0);
+        [h, h, h, 1.0]
+    })
+}
+
+/// Packed ORM for the paving whose occlusion channel is its height (the
+/// terrain's height blend fills the joints with the neighbouring layer).
+pub fn paving_orm(size: u32) -> Image {
+    let h = paving_height(size);
+    Image::from_fn(size, size, |x, y| {
+        let v = h.rgba[((y * size + x) * 4) as usize] as f32 / 255.0;
+        [0.3 + 0.7 * v, 1.0, 0.0, 1.0]
+    })
+}
+
 pub fn paving_textures(size: u32) -> (Image, Image) {
     let s = size as f32;
     let slabs = 2.0;
@@ -354,11 +376,7 @@ pub fn paving_textures(size: u32) -> (Image, Image) {
             v.floor() as i32,
         )
     };
-    let height = Image::from_fn(size, size, |x, y| {
-        let (e, _, _) = edge(x, y);
-        let h = ((e - joint * 0.5) / joint).clamp(0.0, 1.0);
-        [h, h, h, 1.0]
-    });
+    let height = paving_height(size);
     let albedo = Image::from_fn(size, size, |x, y| {
         let (e, a, b) = edge(x, y);
         let n = tile_noise(x as f32 / 4.0, y as f32 / 4.0, (size / 4) as i32, 5) * 0.6
@@ -634,6 +652,114 @@ pub fn add_plants(
         parts.push((add(r, &lod.foliage), materials.foliage, d));
     }
     r.add_lod_item(&parts, instances)
+}
+
+/// A plant with mesh levels 0 and 1 up to `distances[0..2]` and an
+/// impostor (baked from level 0, 12 views) up to `distances[2]`.
+pub fn add_plants_with_impostor(
+    r: &mut Renderer,
+    lods: &[PlantLod; 3],
+    materials: &PlantMaterials,
+    distances: [f32; 3],
+    instances: &[Mat4],
+) -> (crate::ItemId, crate::ImpostorId) {
+    let mut parts = Vec::new();
+    for (lod, d) in lods.iter().zip(&distances[..2]) {
+        parts.push((add(r, &lod.bark), materials.bark, *d));
+        parts.push((add(r, &lod.foliage), materials.foliage, *d));
+    }
+    let impostor = r
+        .bake_impostor(
+            &[
+                (parts[0].0, materials.bark),
+                (parts[1].0, materials.foliage),
+            ],
+            None,
+            12,
+        )
+        .expect("impostor");
+    let item = r.add_lod_item(&parts, instances);
+    r.set_item_impostor(item, impostor, distances[2])
+        .expect("impostor level");
+    (item, impostor)
+}
+
+/// A forest: `trees` trees and `understory` shrubs scattered over a square
+/// of `half` metres around the origin, on a flat lawn with the infinite
+/// ground, trees as meshes up to 6 / 12 m and impostors beyond, shrubs up to
+/// 3 / 8 m (times the quality's LOD scale: a few dozen trees stay meshes). Returns the triangle count of a tree at LOD 0.
+pub fn forest(r: &mut Renderer, trees: usize, understory: usize, half: f32) -> usize {
+    let mut floor = MeshData::default();
+    floor.add_box(
+        Vec3::new(-half - 5.0, -0.3, -half - 5.0),
+        Vec3::new(half + 5.0, 0.0, half + 5.0),
+    );
+    let floor = add(r, &floor);
+    let lawn = lawn_texture(256).upload(r, ColorSpace::Srgb, true);
+    let grass = r.add_material(&Material {
+        base_color_map: Some(lawn),
+        roughness: 0.95,
+        projection: Projection::Triplanar { scale_m: 2.0 },
+        variation: 0.6,
+        ..Default::default()
+    });
+    r.add_item(floor, grass, &[Mat4::IDENTITY]);
+    r.set_ground(Some(Ground {
+        color: LAWN_ALBEDO,
+        height: 0.0,
+        ..Default::default()
+    }));
+    let mut rng = Rng::new(0x5eed);
+    let mut scatter = |count: usize, scale: (f32, f32)| -> Vec<Mat4> {
+        (0..count)
+            .map(|_| {
+                let (x, z) = (
+                    (rng.unit() * 2.0 - 1.0) * half,
+                    (rng.unit() * 2.0 - 1.0) * half,
+                );
+                let s = scale.0 + rng.unit() * (scale.1 - scale.0);
+                Mat4::from_scale_rotation_translation(
+                    Vec3::splat(s),
+                    Quat::from_rotation_y(rng.unit() * std::f32::consts::TAU),
+                    Vec3::new(x, 0.0, z),
+                )
+            })
+            .collect()
+    };
+    let tree_at = scatter(trees, (0.8, 1.6));
+    let shrub_at = scatter(understory, (0.6, 1.4));
+    let tree = plant_lods(&PlantShape::tree(), 42);
+    let tree_mats = plant_materials(r, Vec3::new(0.16, 0.30, 0.07), 5);
+    // In a forest this dense nothing is seen past ~150 m (and the haze
+    // takes the rest): cull there, and the understory much sooner.
+    add_plants_with_impostor(r, &tree, &tree_mats, [6.0, 12.0, 300.0], &tree_at);
+    let shrub = plant_lods(&PlantShape::shrub(), 9);
+    let shrub_mats = plant_materials(r, Vec3::new(0.14, 0.26, 0.06), 3);
+    add_plants_with_impostor(r, &shrub, &shrub_mats, [3.0, 8.0, 80.0], &shrub_at);
+    r.set_wind(&crate::Wind {
+        direction: Vec3::new(1.0, 0.0, 0.4),
+        strength: 0.6,
+        gustiness: 0.5,
+    });
+    tree[0].triangles()
+}
+
+/// Inside the forest at eye level.
+pub fn forest_inside_camera(aspect: f32) -> Camera {
+    camera(
+        Vec3::new(0.5, 1.7, 0.5),
+        Vec3::new(20.0, 2.5, -14.0),
+        aspect,
+    )
+}
+
+/// Above the forest, looking over it.
+pub fn forest_above_camera(aspect: f32) -> Camera {
+    camera(
+        Vec3::new(-60.0, 45.0, 70.0),
+        Vec3::new(10.0, 0.0, -10.0),
+        aspect,
+    )
 }
 
 fn material(r: &mut Renderer, rgb: [f32; 3], metallic: f32, roughness: f32) -> MaterialId {
@@ -1544,6 +1670,290 @@ pub fn garden_camera(aspect: f32) -> Camera {
         Mat4::look_at_rh(Vec3::new(7.0, 2.1, 19.0), Vec3::new(0.5, 1.4, 3.0), Vec3::Y),
         Mat4::perspective_rh(55f32.to_radians(), aspect, 0.1, 1000.0),
         Vec3::new(7.0, 2.1, 19.0),
+    )
+}
+
+/// A terrain chunk's data (see `terrain_chunk`).
+#[derive(Clone, Debug, Default)]
+pub struct TerrainData {
+    pub positions: Vec<[f32; 3]>,
+    pub normals: Vec<[f32; 3]>,
+    pub indices: Vec<u32>,
+    pub weights: Vec<[u8; 8]>,
+}
+
+impl TerrainData {
+    pub fn chunk(&self) -> crate::TerrainChunk<'_> {
+        crate::TerrainChunk {
+            positions: &self.positions,
+            normals: &self.normals,
+            indices: &self.indices,
+            weights: &self.weights,
+        }
+    }
+}
+
+/// Rolling hills with a pond basin around (16, 10) when `pond`.
+pub fn hills_height(x: f32, z: f32, pond: bool) -> f32 {
+    let mut h =
+        2.2 * (x / 9.0).sin() * (z / 11.0).cos() + 0.9 * (x / 4.3 + z / 5.7).sin() + 0.02 * x;
+    if pond {
+        let d = ((x - 16.0) / 7.0).powi(2) + ((z - 10.0) / 5.0).powi(2);
+        h = h * d.min(1.0) - 2.4 * (1.0 - d).max(0.0);
+    }
+    h
+}
+
+/// Layer weights for the demo terrain: grass, dirt on medium slopes and in
+/// the path's joints, paving along a path, rock on steep slopes.
+pub fn hills_weights(x: f32, z: f32, n: Vec3) -> [u8; 8] {
+    let slope = 1.0 - n.y;
+    let rock = smooth(0.12, 0.3, slope);
+    let path = 1.0 - smooth(1.2, 1.8, (z - 0.35 * x - 2.0).abs());
+    let dirt = smooth(0.05, 0.14, slope) * (1.0 - rock) + 0.3 * path;
+    let paving = 0.7 * path;
+    let grass = (1.0 - rock - dirt - paving).max(0.0);
+    let w = [grass, dirt.max(0.0), paving, rock];
+    let sum: f32 = w.iter().sum::<f32>().max(1e-6);
+    let mut out = [0u8; 8];
+    let mut left = 255i32;
+    for i in 0..4 {
+        let v = if i == 3 {
+            left
+        } else {
+            (w[i] / sum * 255.0).round() as i32
+        };
+        let v = v.clamp(0, left);
+        out[i] = v as u8;
+        left -= v;
+    }
+    out
+}
+
+fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
+    let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// One square chunk of `cells` x `cells` at `cell_m`, from `origin` (x, z),
+/// keeping every `step`-th vertex (the core's LOD), with a 0.6 m skirt
+/// hanging down along the border so neighbours at other LODs leave no
+/// cracks. Normals come from the height function, so they agree across
+/// chunk borders whatever the LOD.
+pub fn terrain_chunk(
+    origin: Vec2,
+    cells: u32,
+    cell_m: f32,
+    step: u32,
+    height: &dyn Fn(f32, f32) -> f32,
+    weights: &dyn Fn(f32, f32, Vec3) -> [u8; 8],
+) -> TerrainData {
+    let n = cells / step;
+    let mut t = TerrainData::default();
+    let normal = |x: f32, z: f32| {
+        let e = 0.1;
+        Vec3::new(
+            height(x - e, z) - height(x + e, z),
+            2.0 * e,
+            height(x, z - e) - height(x, z + e),
+        )
+        .normalize()
+    };
+    let vertex = |t: &mut TerrainData, x: f32, z: f32, drop: f32| {
+        let nn = normal(x, z);
+        t.positions.push([x, height(x, z) - drop, z]);
+        t.normals.push(nn.to_array());
+        t.weights.push(weights(x, z, nn));
+        t.positions.len() as u32 - 1
+    };
+    let at = |i: u32, j: u32| {
+        (
+            origin.x + (j * step) as f32 * cell_m,
+            origin.y + (i * step) as f32 * cell_m,
+        )
+    };
+    for i in 0..=n {
+        for j in 0..=n {
+            let (x, z) = at(i, j);
+            vertex(&mut t, x, z, 0.0);
+        }
+    }
+    let row = n + 1;
+    for i in 0..n {
+        for j in 0..n {
+            let a = i * row + j;
+            t.indices
+                .extend([a, a + row, a + 1, a + 1, a + row, a + row + 1]);
+        }
+    }
+    // Skirt: a strip down from every border edge, both windings so it shows
+    // from either side.
+    let border: Vec<(u32, u32)> = (0..n)
+        .map(|j| (0, j))
+        .chain((0..n).map(|i| (i, n)))
+        .chain((0..n).map(|j| (n, n - j)))
+        .chain((0..n).map(|i| (n - i, 0)))
+        .collect();
+    for k in 0..border.len() {
+        let (i0, j0) = border[k];
+        let (i1, j1) = border[(k + 1) % border.len()];
+        let (a, b) = (i0 * row + j0, i1 * row + j1);
+        let (x0, z0) = at(i0, j0);
+        let (x1, z1) = at(i1, j1);
+        let c = vertex(&mut t, x0, z0, 0.6);
+        let d = vertex(&mut t, x1, z1, 0.6);
+        t.indices.extend([a, c, b, b, c, d, a, b, c, b, d, c]);
+    }
+    t
+}
+
+/// The demo terrain's four layers: lawn, dirt, paving (with height in its
+/// ORM), rock.
+pub fn terrain_layers(r: &mut Renderer) {
+    let lawn = lawn_texture(256).upload(r, ColorSpace::Srgb, true);
+    let dirt = Image::from_fn(256, 256, |x, y| {
+        let n = tile_noise(x as f32 / 3.0, y as f32 / 3.0, 85, 31) * 0.6
+            + tile_noise(x as f32 / 20.0, y as f32 / 20.0, 12, 32) * 0.4;
+        let c = Vec3::new(0.30, 0.24, 0.17) * (0.7 + 0.5 * n);
+        [c.x, c.y, c.z, 1.0]
+    })
+    .upload(r, ColorSpace::Srgb, true);
+    let (pave, pave_n) = paving_textures(512);
+    let pave = pave.upload(r, ColorSpace::Srgb, true);
+    let pave_n = pave_n.upload(r, ColorSpace::Linear, true);
+    let pave_orm = paving_orm(512).upload(r, ColorSpace::Linear, true);
+    let stone = Image::from_fn(256, 256, |x, y| {
+        let (fx, fy) = (x as f32, y as f32);
+        let n = tile_noise(fx / 6.0, fy / 6.0, 42, 41) * 0.5
+            + tile_noise(fx / 24.0, fy / 24.0, 10, 42) * 0.35
+            + tile_noise(fx / 1.5, fy / 1.5, 170, 43) * 0.15;
+        let c = Vec3::new(0.46, 0.44, 0.41) * (0.55 + 0.7 * n);
+        [c.x, c.y, c.z, 1.0]
+    });
+    let rock_n = stone
+        .normal_from_height(4.0)
+        .upload(r, ColorSpace::Linear, true);
+    let rock = stone.upload(r, ColorSpace::Srgb, true);
+    let layer = crate::TerrainLayer::default;
+    r.set_terrain_layers(&[
+        crate::TerrainLayer {
+            base_color_map: Some(lawn),
+            scale_m: 2.0,
+            variation: 0.6,
+            ..layer()
+        },
+        crate::TerrainLayer {
+            base_color_map: Some(dirt),
+            scale_m: 1.5,
+            ..layer()
+        },
+        crate::TerrainLayer {
+            base_color_map: Some(pave),
+            normal_map: Some(pave_n),
+            orm_map: Some(pave_orm),
+            scale_m: 1.0,
+            roughness: 0.75,
+            variation: 0.2,
+            ..layer()
+        },
+        crate::TerrainLayer {
+            base_color_map: Some(rock),
+            normal_map: Some(rock_n),
+            base_color: [0.75, 0.72, 0.7, 1.0],
+            scale_m: 3.0,
+            variation: 0.3,
+            ..layer()
+        },
+    ])
+    .expect("terrain layers");
+}
+
+/// A hilly 96 m terrain of 3 x 3 chunks (64 cells of 0.5 m), four layers,
+/// the infinite ground beyond; with a pond (water at y = -0.35) when
+/// `pond`. Returns the chunk meshes.
+pub fn terrain(r: &mut Renderer, pond: bool) -> Vec<MeshId> {
+    terrain_layers(r);
+    let any = material(r, [0.5; 3], 0.0, 0.9);
+    let mut ids = Vec::new();
+    for cz in -1..2 {
+        for cx in -1..2 {
+            let origin =
+                Vec2::new(cx as f32 * 32.0 - 16.0, cz as f32 * 32.0 - 16.0) + Vec2::new(16.0, 10.0);
+            let data = terrain_chunk(
+                origin,
+                64,
+                0.5,
+                1,
+                &|x, z| hills_height(x, z, pond),
+                &hills_weights,
+            );
+            let id = r.add_terrain_chunk(&data.chunk()).expect("chunk");
+            r.add_item(id, any, &[Mat4::IDENTITY]);
+            ids.push(id);
+        }
+    }
+    r.set_ground(Some(Ground {
+        color: LAWN_ALBEDO,
+        height: -1.0,
+        ..Default::default()
+    }));
+    if pond {
+        let mut water = MeshData::default();
+        water.add_quad(
+            [
+                Vec3::new(9.5, -0.35, 5.5),
+                Vec3::new(9.5, -0.35, 14.5),
+                Vec3::new(22.5, -0.35, 14.5),
+                Vec3::new(22.5, -0.35, 5.5),
+            ],
+            [[0.0; 2]; 4],
+        );
+        let water = add(r, &water);
+        let mat = r.add_material(&Material {
+            base_color: [0.02, 0.04, 0.03, 0.45],
+            roughness: 0.05,
+            surface: Surface::Water,
+            ..Default::default()
+        });
+        r.add_item(water, mat, &[Mat4::IDENTITY]);
+        let lods = plant_lods(&PlantShape::tree(), 4);
+        let mats = plant_materials(r, Vec3::new(0.16, 0.3, 0.07), 6);
+        let trees: Vec<Mat4> = [(14.0, 2.0), (22.0, 1.5), (27.0, 9.0)]
+            .iter()
+            .map(|&(x, z)| Mat4::from_translation(Vec3::new(x, hills_height(x, z, true), z)))
+            .collect();
+        add_plants(r, &lods, &mats, [20.0, 45.0, f32::INFINITY], &trees);
+    }
+    ids
+}
+
+pub fn terrain_camera(aspect: f32) -> Camera {
+    camera(
+        Vec3::new(-8.0, 6.0, 40.0),
+        Vec3::new(16.0, 0.0, 10.0),
+        aspect,
+    )
+}
+
+/// The garden from above: an orthographic plan view, 44 m tall, north up.
+pub fn garden_plan_camera(aspect: f32) -> Camera {
+    let eye = Vec3::new(2.0, 80.0, 4.0);
+    let h = 22.0;
+    (
+        Mat4::look_at_rh(eye, Vec3::new(2.0, 0.0, 4.0), Vec3::NEG_Z),
+        Mat4::orthographic_rh(-h * aspect, h * aspect, -h, h, 0.1, 200.0),
+        eye,
+    )
+}
+
+/// The house's south elevation: orthographic, looking north, 14 m tall.
+pub fn garden_elevation_camera(aspect: f32) -> Camera {
+    let eye = Vec3::new(1.0, 4.0, 60.0);
+    let h = 7.0;
+    (
+        Mat4::look_at_rh(eye, Vec3::new(1.0, 4.0, 0.0), Vec3::Y),
+        Mat4::orthographic_rh(-h * aspect, h * aspect, -h, h, 0.1, 200.0),
+        eye,
     )
 }
 

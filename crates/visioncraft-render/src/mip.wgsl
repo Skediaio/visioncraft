@@ -22,3 +22,13 @@ fn fs_main(in: Out) -> @location(0) vec4<f32> {
     let size = vec2<f32>(max(textureDimensions(source) / 2u, vec2<u32>(1u)));
     return textureSampleLevel(source, linear_sampler, in.clip.xy / size, 0.0);
 }
+
+// Resampling any texture into a TARGET x TARGET image (terrain layer
+// arrays): read from the source mip whose size is nearest the target.
+override TARGET: f32 = 512.0;
+
+@fragment
+fn fs_resample(in: Out) -> @location(0) vec4<f32> {
+    let lod = max(log2(f32(textureDimensions(source).x) / TARGET), 0.0);
+    return textureSampleLevel(source, linear_sampler, in.clip.xy / TARGET, lod);
+}
