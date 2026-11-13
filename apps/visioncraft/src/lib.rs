@@ -475,6 +475,12 @@ impl App {
         }
     }
 
+    /// Re-imports watched model files that changed on disk (natively; a page sees no files, and
+    /// the web build must not link the importer: it lives in the import worker's wasm).
+    #[cfg(target_arch = "wasm32")]
+    fn reload_changed(&mut self, _now: f64) {}
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn reload_changed(&mut self, now: f64) {
         let due: Vec<String> = self
             .changed

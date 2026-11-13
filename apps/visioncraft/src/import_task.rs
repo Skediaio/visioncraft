@@ -2,7 +2,7 @@
 //! the `import_worker` binary (the same crate built a second time, see `index.html`), so the page
 //! keeps painting while the geometry kernel meshes a `.3dcraft`. Without SharedArrayBuffer the
 //! model travels back as bytes ([`encode`] / [`decode`]). When the worker cannot start, the import
-//! runs inline as before.
+//! fails with a message: the page's own wasm leaves the importer (the geometry kernel) out.
 
 use std::sync::{Arc, Mutex};
 use visioncraft_core::{Body, Face, ImportedModel, ModelKind};
@@ -43,12 +43,13 @@ fn run(kind: ModelKind, bytes: Arc<[u8]>, slot: Slot, wake: eframe::egui::Contex
 fn run(kind: ModelKind, bytes: Arc<[u8]>, slot: Slot, wake: eframe::egui::Context) {
     use wasm_bindgen::JsCast;
     use wasm_bindgen::prelude::Closure;
-    let inline = {
-        let bytes = bytes.clone();
-        move |slot: &Slot| {
-            if let Ok(mut s) = slot.lock() {
-                *s = Some(crate::studio::Studio::import(kind, &bytes));
-            }
+    // The page's own wasm does not carry the importer (the geometry kernel is megabytes): only
+    // the worker does. Without a worker the import fails with a message.
+    let inline = |slot: &Slot| {
+        if let Ok(mut s) = slot.lock() {
+            *s = Some(Err(
+                "the import worker could not start, so this browser cannot open models".into(),
+            ));
         }
     };
     let Ok(worker) = web_sys::Worker::new("./import_worker_loader.js") else {
