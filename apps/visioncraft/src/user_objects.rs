@@ -284,6 +284,7 @@ mod tests {
             name: "x".into(),
             file: f.into(),
             size_m: [1.0; 3],
+            extensions: Default::default(),
         };
         assert_eq!(file_for("Garden shed", &[]), "objects/Garden-shed.glb");
         assert_eq!(
