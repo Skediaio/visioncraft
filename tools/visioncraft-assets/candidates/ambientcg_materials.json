@@ -637,7 +637,7 @@
  },
  {
   "category": "material",
-  "kind": "paving",
+  "kind": "asphalt",
   "name": "Asphalt 020 L",
   "source": "ambientCG",
   "page_url": "https://ambientcg.com/a/Asphalt020L",
@@ -649,7 +649,7 @@
  },
  {
   "category": "material",
-  "kind": "paving",
+  "kind": "asphalt",
   "name": "Asphalt 021",
   "source": "ambientCG",
   "page_url": "https://ambientcg.com/a/Asphalt021",
@@ -661,7 +661,7 @@
  },
  {
   "category": "material",
-  "kind": "paving",
+  "kind": "asphalt",
   "name": "Asphalt 022",
   "source": "ambientCG",
   "page_url": "https://ambientcg.com/a/Asphalt022",

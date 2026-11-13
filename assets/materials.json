@@ -14,7 +14,7 @@
       "license": "CC0-1.0",
       "author": "ambientCG (Lennart Demes)",
       "source_url": "https://ambientcg.com/a/Asphalt020L",
-      "kind": "paving",
+      "kind": "asphalt",
       "size_m": [
         4.6,
         4.6
@@ -42,7 +42,7 @@
       "license": "CC0-1.0",
       "author": "ambientCG (Lennart Demes)",
       "source_url": "https://ambientcg.com/a/Asphalt021",
-      "kind": "paving",
+      "kind": "asphalt",
       "size_m": [
         1.85,
         1.85
@@ -70,7 +70,7 @@
       "license": "CC0-1.0",
       "author": "ambientCG (Lennart Demes)",
       "source_url": "https://ambientcg.com/a/Asphalt022",
-      "kind": "paving",
+      "kind": "asphalt",
       "size_m": [
         1.85,
         1.85

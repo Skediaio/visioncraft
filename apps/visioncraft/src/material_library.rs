@@ -12,9 +12,9 @@ use serde_json::{Value, json};
 use visioncraft_core::material::SurfaceKind;
 use visioncraft_core::{Material, builtin_palette};
 
-pub const KINDS: [&str; 13] = [
-    "brick", "plaster", "concrete", "wood", "paving", "gravel", "roof", "stone", "tile", "metal",
-    "ground", "fabric", "other",
+pub const KINDS: [&str; 14] = [
+    "brick", "plaster", "concrete", "wood", "paving", "asphalt", "gravel", "roof", "stone", "tile",
+    "metal", "ground", "fabric", "other",
 ];
 
 /// Which library material each plain palette material shows while the library is there

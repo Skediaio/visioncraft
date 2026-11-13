@@ -16,9 +16,9 @@ use std::{
 use visioncraft_core::{Asset, Catalog, attribution_markdown, validate_open_licences};
 
 /// What `materials.json` may call a kind.
-const KINDS: [&str; 13] = [
-    "brick", "plaster", "concrete", "wood", "paving", "gravel", "roof", "stone", "tile", "metal",
-    "ground", "fabric", "other",
+const KINDS: [&str; 14] = [
+    "brick", "plaster", "concrete", "wood", "paving", "asphalt", "gravel", "roof", "stone", "tile",
+    "metal", "ground", "fabric", "other",
 ];
 const MAX_FILE_BYTES: u64 = 8 * 1024 * 1024;
 
