@@ -27,6 +27,8 @@ pub struct MaterialsState {
     thumbs: HashMap<String, egui::TextureHandle>,
     /// Map bytes of imported `.mcmat` materials, kept for when the renderer can show textures.
     pub maps: HashMap<String, Vec<McMatMap>>,
+    /// The Project | Library tabs of the swatch panel.
+    lib: crate::material_library::MatLibUi,
 }
 
 pub fn to_srgb8(c: f32) -> u8 {
@@ -119,9 +121,39 @@ impl MaterialsState {
             }
             None => ([0.5, 0.5, 0.5, 1.0], None),
         };
+        // Every map becomes a texture (the pictures decide, so the factors are neutral).
+        let stamp = cx.s.project().materials.len();
+        let mut maps = serde_json::Map::new();
+        for m in &mat.maps {
+            let key = match m.usage {
+                MapUsage::BaseColor => "base_color",
+                MapUsage::Normal => "normal",
+                MapUsage::Roughness => "roughness",
+                MapUsage::Metallic => "metallic",
+                MapUsage::AmbientOcclusion => "ambient_occlusion",
+                MapUsage::Height => "height",
+            };
+            if m.usage != MapUsage::Height
+                && let Some((w, h, px)) = decode_png(&m.png)
+            {
+                let name = format!("mcmat:{}#{stamp}/{key}", mat.name);
+                cx.s.scene
+                    .library
+                    .add_memory_image(name.clone(), crate::assets::Rgba { w, h, px });
+                maps.insert(key.into(), json!(name));
+            }
+        }
+        let has = |k: &str| maps.contains_key(k);
+        let color = if has("base_color") { [1.0; 4] } else { color };
+        let (rough, metal) = (
+            if has("roughness") { 1.0 } else { 0.8 },
+            if has("metallic") { 1.0 } else { 0.0 },
+        );
         let Some(r) = cx.run(
             "material.add",
-            json!({"name": mat.name, "base_color": color, "roughness": 0.8}),
+            json!({"name": mat.name, "base_color": color, "roughness": rough, "metallic": metal,
+                   "kind": {"type": "standard_triplanar_pbr", "map_scale_m": 1.0, "relief": 1.0, "gloss": 0.0, "weathering": 0.0},
+                   "maps": maps}),
         ) else {
             return;
         };
@@ -216,6 +248,18 @@ impl MaterialsState {
                         }
                     });
                     let materials = cx.s.project().materials.clone();
+                    let project_tab = self.lib.tabs(ui);
+                    if !project_tab && let Some(lib_id) = self.lib.grid(ui, cx) {
+                        match crate::material_library::ensure_material(cx.s, &lib_id) {
+                            Ok(id) => {
+                                self.selected = Some(id.clone());
+                                let target = self.target(&pick);
+                                cx.run("material.assign", json!({"target": target, "material": id}));
+                            }
+                            Err(e) => cx.toasts.error(e),
+                        }
+                    }
+                    if project_tab {
                     ui.horizontal_wrapped(|ui| {
                         ui.spacing_mut().item_spacing = Vec2::splat(5.0);
                         for m in &materials {
@@ -259,6 +303,7 @@ impl MaterialsState {
                             }
                         }
                     });
+                    }
                     if ui
                         .selectable_label(self.eyedropper, t::EYEDROPPER)
                         .clicked()
@@ -287,6 +332,25 @@ impl MaterialsState {
         let Some(mut m) = current else { return };
         ui.separator();
         ui.label(egui::RichText::new(&m.name).strong());
+        // Surface kind: standard, glass, water or lawn.
+        let current_kind = crate::material_library::kind_index(&m.kind);
+        ui.horizontal(|ui| {
+            ui.label(t::SURFACE);
+            for (i, name) in t::SURFACE_KINDS.iter().enumerate() {
+                if ui.selectable_label(current_kind == i, *name).clicked() && current_kind != i {
+                    let kind = crate::material_library::kind_payload(i, &m.kind);
+                    cx.run("material.update", json!({"id": id, "kind": kind}));
+                }
+            }
+        });
+        let mut variation = cx.s.scene.library.variation.get(&id).copied().unwrap_or(0.0);
+        if ui
+            .add(egui::Slider::new(&mut variation, 0.0..=1.0).text(t::VARIATION).max_decimals(2))
+            .changed()
+        {
+            cx.s.scene.library.variation.insert(id.clone(), variation);
+            cx.s.force_sync();
+        }
         let SurfaceKind::StandardTriplanarPbr {
             map_scale_m,
             relief,

@@ -105,25 +105,36 @@ pub fn reconcile_commands(
 }
 
 /// Runs once per project change: creates, moves and removes the lights of placed fixtures.
-pub fn reconcile(cx: &mut Cx) {
-    let rev = cx.s.session.revision();
-    if cx.s.pairing.reconciled == rev {
-        return;
+/// Returns what went wrong, in words.
+pub fn reconcile_studio(s: &mut crate::studio::Studio) -> Vec<String> {
+    let rev = s.session.revision();
+    let mut errors = Vec::new();
+    if s.pairing.reconciled == rev {
+        return errors;
     }
-    let Some(catalog) = cx.s.scene.library.catalog.clone() else {
-        return; // fixtures are unknown until the catalogue is there; try again then
+    let Some(catalog) = s.scene.library.catalog.clone() else {
+        return errors; // fixtures are unknown until the catalogue is there; try again then
     };
     let spec = |id: &str| catalog.asset(id).and_then(|a| a.light);
-    let commands = reconcile_commands(cx.s.project(), &spec);
+    let commands = reconcile_commands(s.project(), &spec);
     let n = commands.len() as u32;
     for (name, params) in commands {
-        cx.run(name, params);
+        if let Err(e) = s.session.run(name, params) {
+            errors.push(e.to_string());
+        }
     }
     if n > 0 {
-        let after = cx.s.session.revision();
-        cx.s.pairing.follow.insert(after, n);
+        let after = s.session.revision();
+        s.pairing.follow.insert(after, n);
     }
-    cx.s.pairing.reconciled = cx.s.session.revision();
+    s.pairing.reconciled = s.session.revision();
+    errors
+}
+
+pub fn reconcile(cx: &mut Cx) {
+    for e in reconcile_studio(cx.s) {
+        cx.toasts.error(e);
+    }
 }
 
 // ---- the Lights tool ----

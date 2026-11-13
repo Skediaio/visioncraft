@@ -220,6 +220,11 @@ impl Studio {
         self.pairing.redo(&mut self.session);
     }
 
+    /// Makes the next `sync` look at the scene again although the project did not change.
+    pub fn force_sync(&mut self) {
+        self.draft_serial += 1;
+    }
+
     pub fn set_draft(&mut self, d: Option<Draft>) {
         self.draft = d;
         self.draft_serial += 1;

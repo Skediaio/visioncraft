@@ -30,7 +30,7 @@ struct Hdr {
 pub struct SkyState {
     hdr: Option<Hdr>,
     /// Sky id asked for by a click, waiting for its image to choose the intensity.
-    pick: Option<String>,
+    pub pick: Option<String>,
     applied: Option<SkyChoice>,
     pub use_sun: bool,
     /// The ground colour while its picker is being dragged.

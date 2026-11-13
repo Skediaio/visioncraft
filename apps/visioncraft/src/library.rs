@@ -222,6 +222,8 @@ pub struct Library {
     /// Where each generator's library assets stand, to see how near the camera they are.
     wants: HashMap<String, Vec<(String, Vec<Vec3>)>>,
     pub lamps_on: bool,
+    /// Large-scale variation per project material (not stored in the project yet).
+    pub variation: HashMap<String, f32>,
     lamps_applied: Option<bool>,
     /// Bumps whenever something a scene item is built from changed.
     pub rev: u64,
@@ -265,6 +267,7 @@ impl Library {
             garbage: Vec::new(),
             wants: HashMap::new(),
             lamps_on: false,
+            variation: HashMap::new(),
             lamps_applied: None,
             rev: 0,
             specs: vec![TexSpec::default()],
