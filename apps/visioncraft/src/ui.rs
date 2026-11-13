@@ -329,12 +329,16 @@ pub enum Action {
     Mode(Option<Mode>),
     ReloadModel(String),
     Relink(String),
+    SelectModel(String),
+    New,
+    Export(usize),
 }
 
 pub struct Hud {
     pub mode: Option<Mode>,
     pub show_fps: bool,
     pub layers_open: bool,
+    pub export_open: bool,
 }
 
 impl Default for Hud {
@@ -343,6 +347,7 @@ impl Default for Hud {
             mode: None,
             show_fps: true,
             layers_open: false,
+            export_open: false,
         }
     }
 }
@@ -445,24 +450,45 @@ impl Hud {
                 if ui.selectable_label(clay, t::CLAY).clicked() {
                     cx.run("style.set", serde_json::json!({"clay": !clay}));
                 }
+                let name = if cx.s.quality_auto {
+                    t::AUTO
+                } else {
+                    Quality::PRESETS[cx.s.quality].0
+                };
                 egui::ComboBox::from_id_salt("quality")
                     .selected_text(if compact {
-                        Quality::PRESETS[cx.s.quality].0.to_string()
+                        name.to_string()
                     } else {
-                        format!("{} {}", t::QUALITY, Quality::PRESETS[cx.s.quality].0)
+                        format!("{} {name}", t::QUALITY)
                     })
                     .show_ui(ui, |ui| {
+                        if ui.selectable_label(cx.s.quality_auto, t::AUTO).clicked() {
+                            cx.s.quality_auto = true;
+                        }
                         for (i, (name, _)) in Quality::PRESETS.iter().enumerate() {
-                            ui.selectable_value(&mut cx.s.quality, i, *name);
+                            if ui
+                                .selectable_label(!cx.s.quality_auto && cx.s.quality == i, *name)
+                                .clicked()
+                            {
+                                cx.s.quality = i;
+                                cx.s.quality_auto = false;
+                            }
                         }
                     });
+                if ui.selectable_label(self.export_open, t::EXPORT).clicked() {
+                    self.export_open = !self.export_open;
+                }
                 if ui.selectable_label(walking, t::WALK).clicked() {
                     actions.push(Action::ToggleWalk);
                 }
                 if self.show_fps {
                     if ui
                         .small_button(format!("{fps:.0} {}", t::FPS))
-                        .on_hover_text(t::HIDE_FPS)
+                        .on_hover_text(format!(
+                            "{} (render scale {:.0}%)",
+                            t::HIDE_FPS,
+                            cx.s.current_quality().render_scale * 100.0
+                        ))
                         .clicked()
                     {
                         self.show_fps = false;
@@ -473,6 +499,22 @@ impl Hud {
             });
         });
 
+        if self.export_open {
+            let (a, o) = if narrow(&ctx) {
+                (Align2::LEFT_TOP, Vec2::new(10.0, 150.0))
+            } else {
+                (Align2::RIGHT_TOP, Vec2::new(-10.0, 270.0))
+            };
+            floating(&ctx, "export", a, o, 260.0, |ui| {
+                ui.label(RichText::new(t::EXPORT).strong());
+                for (i, (name, w, h)) in visioncraft_core::export_presets().iter().enumerate() {
+                    if ui.button(format!("{name}  {w} × {h}")).clicked() {
+                        actions.push(Action::Export(i));
+                        self.export_open = false;
+                    }
+                }
+            });
+        }
         if self.layers_open {
             let (a, o) = if narrow(&ctx) {
                 (Align2::LEFT_TOP, Vec2::new(10.0, 104.0))
@@ -521,12 +563,20 @@ impl Hud {
                     )
                 })
                 .collect();
+        ui.separator();
+        ui.checkbox(&mut cx.s.show_people, t::PERSON);
+        if ui.button(t::PLACE_PERSON).clicked() {
+            cx.s.show_people = true;
+            cx.s.placing_person = true;
+        }
         if !models.is_empty() {
             ui.separator();
             ui.label(RichText::new(t::MODELS).strong());
             for (id, name, loaded) in models {
                 ui.horizontal(|ui| {
-                    ui.label(name);
+                    if ui.link(name).clicked() {
+                        actions.push(Action::SelectModel(id.clone()));
+                    }
                     let label = if loaded { t::RELOAD_MODEL } else { t::RELINK };
                     // Natively a changed file reloads by itself; the button is the way on the web.
                     if ui.small_button(label).clicked() {

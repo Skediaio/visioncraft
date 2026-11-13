@@ -6,8 +6,10 @@ pub mod camera;
 pub mod draw;
 pub mod files;
 pub mod materials;
+pub mod modelui;
 pub mod objects;
 pub mod placeholder;
+pub mod plants;
 pub mod scene;
 pub mod smoke;
 pub mod strings;
@@ -39,6 +41,21 @@ struct Job {
     shown: bool,
 }
 
+struct ExportJob {
+    still: visioncraft_render::Still,
+    idx: usize,
+}
+
+/// A project replacement waiting for the user to confirm that unsaved work may go.
+enum Replace {
+    Open {
+        name: String,
+        bytes: Vec<u8>,
+        path: Option<PathBuf>,
+    },
+    New,
+}
+
 pub struct App {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -53,7 +70,10 @@ pub struct App {
     materials: materials::MaterialsState,
     objects: objects::ObjectsState,
     views: views::ViewsState,
+    modelui: modelui::ModelUi,
     loading: Option<Job>,
+    export: Option<ExportJob>,
+    pending_replace: Option<Replace>,
     /// Models whose file changed, with the time to re-import them (debounce).
     changed: HashMap<String, f64>,
     project_name: Option<String>,
@@ -109,7 +129,10 @@ impl App {
             materials: Default::default(),
             objects: Default::default(),
             views: Default::default(),
+            modelui: Default::default(),
             loading: None,
+            export: None,
+            pending_replace: None,
             changed: HashMap::new(),
             project_name: cc.storage.and_then(|s| s.get_string(KEY_NAME)),
             saved_revision: 0,
@@ -174,6 +197,9 @@ impl App {
         target: Option<String>,
     ) {
         match extension(&name).as_str() {
+            "visioncraft" | "json" if self.dirty() => {
+                self.pending_replace = Some(Replace::Open { name, bytes, path });
+            }
             "visioncraft" | "json" => self.open_project(&name, &bytes, path.as_deref()),
             "3dcraft" | "obj" => {
                 self.loading = Some(Job {
@@ -199,6 +225,81 @@ impl App {
         }
     }
 
+    fn new_project(&mut self) {
+        self.watcher.forget_all();
+        self.studio.replace_project(Project::default());
+        self.studio.people.clear();
+        self.project_name = None;
+        self.saved_revision = self.studio.session.revision();
+        self.hud.mode = None;
+        self.modelui = Default::default();
+    }
+
+    /// Renders the current view at preset `idx` (a still at HIGH quality); falls back to the next smaller preset on failure.
+    fn start_export(&mut self, idx: usize) {
+        let presets = visioncraft_core::export_presets();
+        let (name, w, h) = presets[idx];
+        self.studio.prepare();
+        let (view, proj, eye) = self.studio.camera.matrices(w as f32 / h as f32);
+        match self.studio.renderer.render_still(w, h, view, proj, eye) {
+            Ok(still) => {
+                self.toasts.info(format!("Rendering {name} {w} × {h}…"));
+                self.export = Some(ExportJob { still, idx });
+            }
+            Err(e) => self.export_retry(idx, &e),
+        }
+    }
+
+    fn export_retry(&mut self, idx: usize, error: &str) {
+        let presets = visioncraft_core::export_presets();
+        let pixels = |i: usize| u64::from(presets[i].1) * u64::from(presets[i].2);
+        let next = (0..presets.len())
+            .filter(|&i| pixels(i) < pixels(idx))
+            .max_by_key(|&i| pixels(i));
+        match next {
+            Some(n) => {
+                self.toasts
+                    .warn(format!("{error}. Trying {} instead.", presets[n].0));
+                self.start_export(n);
+            }
+            None => self.toasts.error(format!("Export failed: {error}")),
+        }
+    }
+
+    fn poll_export(&mut self, ctx: &egui::Context) -> bool {
+        let Some(job) = &mut self.export else {
+            return false;
+        };
+        let Some(result) = job.still.try_take() else {
+            return true;
+        };
+        let (idx, (w, h)) = (job.idx, job.still.size());
+        self.export = None;
+        match result {
+            Ok(rgba) => {
+                let mut png_bytes = Vec::new();
+                let mut enc = png::Encoder::new(&mut png_bytes, w, h);
+                enc.set_color(png::ColorType::Rgba);
+                enc.set_depth(png::BitDepth::Eight);
+                match enc
+                    .write_header()
+                    .and_then(|mut wr| wr.write_image_data(&rgba))
+                {
+                    Ok(()) => files::save_as(
+                        &self.inbox,
+                        ctx,
+                        format!("visioncraft-{w}x{h}.png"),
+                        png_bytes,
+                        "png",
+                    ),
+                    Err(e) => self.toasts.error(format!("PNG encoding failed: {e}")),
+                }
+            }
+            Err(e) => self.export_retry(idx, &e),
+        }
+        false
+    }
+
     fn open_project(&mut self, name: &str, bytes: &[u8], path: Option<&Path>) {
         match Project::from_json_bytes(bytes) {
             Ok(p) => {
@@ -215,7 +316,7 @@ impl App {
         }
     }
 
-    fn run_job(&mut self, job: Job) {
+    fn run_job(&mut self, ctx: &egui::Context, job: Job) {
         let Job {
             name,
             bytes,
@@ -251,6 +352,15 @@ impl App {
                 warnings.into_iter().for_each(|w| self.toasts.warn(w));
                 if let Some(p) = path {
                     self.watcher.watch(&id, p);
+                }
+                if target.is_none() {
+                    let mut cx = Cx {
+                        s: &mut self.studio,
+                        toasts: &mut self.toasts,
+                        input: &Input::default(),
+                        ctx,
+                    };
+                    self.modelui.after_import(&mut cx, &id);
                 }
             }
             Err(e) => self.toasts.error(format!("{name}: {e}")),
@@ -355,6 +465,9 @@ impl App {
                     self.studio.project().to_json_bytes(),
                 );
             }
+            Action::New if self.dirty() => self.pending_replace = Some(Replace::New),
+            Action::New => self.new_project(),
+            Action::Export(i) => self.start_export(i),
             Action::Undo => {
                 self.studio.set_draft(None);
                 self.studio.session.undo();
@@ -365,6 +478,7 @@ impl App {
             }
             Action::ToggleWalk => self.toggle_walk(),
             Action::Mode(m) => self.set_mode(ctx, m),
+            Action::SelectModel(id) => self.modelui.selected = Some(id),
             Action::ReloadModel(id) | Action::Relink(id) => {
                 files::pick(&self.inbox, ctx, Some(id), &["3dcraft", "obj"])
             }
@@ -446,7 +560,7 @@ impl eframe::App for App {
         if self.loading.as_ref().is_some_and(|j| j.shown)
             && let Some(job) = self.loading.take()
         {
-            self.run_job(job); // shortcut: import blocks the UI thread, move to a worker when a model takes over a second
+            self.run_job(&ctx, job); // shortcut: import blocks the UI thread, move to a worker when a model takes over a second
         }
         for m in self.inbox.take() {
             match m {
@@ -582,6 +696,27 @@ impl eframe::App for App {
             input: &input,
             ctx: &ctx,
         };
+        if cx.s.placing_person && input.clicked {
+            if let Some(h) = input.hover {
+                let (o, d) = cx.s.pointer_ray(glam::Vec2::new(h.x, h.y), cx.size());
+                let at =
+                    cx.s.scene
+                        .raycast(o, d, false)
+                        .map(|p| p.point)
+                        .or_else(|| camera::ray_plane(o, d, 0.0));
+                if let Some(at) = at {
+                    cx.s.people = vec![at];
+                    cx.s.placing_person = false;
+                }
+            }
+        } else if self.hud.mode.is_none()
+            && input.clicked
+            && let Some(h) = input.hover
+            && let Some(p) = cx.s.pick(glam::Vec2::new(h.x, h.y), cx.size(), false)
+            && !p.is_shape
+        {
+            self.modelui.selected = Some(p.owner);
+        }
         match self.hud.mode {
             Some(Mode::Draw) => self.draw.update(&mut cx),
             Some(Mode::Materials) => self.materials.update(&mut cx),
@@ -599,6 +734,8 @@ impl eframe::App for App {
         let quality_changed =
             Quality::PRESETS[self.studio.quality].1 != self.studio.renderer.quality();
         let rebuilt = self.studio.resize(size[0], size[1]) || quality_changed;
+        self.studio.clock = now;
+        busy |= self.studio.animating() || self.studio.plants_pending() > 0;
         self.studio.prepare();
         let mut encoder = self.device.create_command_encoder(&Default::default());
         let view = self.studio.renderer.render(&mut encoder);
@@ -631,6 +768,11 @@ impl eframe::App for App {
 
         // fps over the last second.
         // Smoothed rate of consecutive frames; a pause between repaints (idle) does not count.
+        if raw_dt > 0.0 && raw_dt < 0.1 {
+            self.studio.record_frame(raw_dt as f32 * 1000.0);
+        } else {
+            self.studio.frame_ms.clear();
+        }
         if raw_dt > 0.0 && raw_dt < 0.25 {
             self.fps = if self.fps == 0.0 {
                 1.0 / raw_dt
@@ -646,7 +788,8 @@ impl eframe::App for App {
             input: &input,
             ctx: &ctx,
         };
-        let actions = self.hud.show(&mut cx, self.fps, walking);
+        let mut actions = self.hud.show(&mut cx, self.fps, walking);
+        self.modelui.show(&mut cx, &mut actions);
         let (w, _h) = (rect.width(), rect.height());
         let panel_width = (w - 20.0).min(380.0);
         match self.hud.mode {
@@ -762,6 +905,36 @@ impl eframe::App for App {
                 });
             job.shown = true;
             busy = true;
+        }
+        busy |= self.poll_export(&ctx);
+        let mut confirm = None;
+        if self.pending_replace.is_some() {
+            ui::floating(
+                &ctx,
+                "confirm",
+                Align2::CENTER_CENTER,
+                Vec2::ZERO,
+                340.0,
+                |ui| {
+                    ui.label(strings::REPLACE_PROJECT);
+                    ui.horizontal(|ui| {
+                        if ui.button(strings::REPLACE_ANYWAY).clicked() {
+                            confirm = Some(true);
+                        }
+                        if ui.button(strings::CANCEL).clicked() {
+                            confirm = Some(false);
+                        }
+                    });
+                },
+            );
+        }
+        match (confirm, self.pending_replace.take()) {
+            (Some(true), Some(Replace::Open { name, bytes, path })) => {
+                self.open_project(&name, &bytes, path.as_deref())
+            }
+            (Some(true), Some(Replace::New)) => self.new_project(),
+            (None, pending) => self.pending_replace = pending,
+            _ => {}
         }
         for a in actions {
             self.act(&ctx, a);

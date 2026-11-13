@@ -17,6 +17,36 @@ pub fn days_in_month(year: i32, month: u32) -> u32 {
     }
 }
 
+/// 0 = Sunday (Sakamoto).
+pub fn day_of_week(y: i32, m: u32, d: u32) -> u32 {
+    const T: [i32; 12] = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
+    let y = if m < 3 { y - 1 } else { y };
+    ((y + y / 4 - y / 100 + y / 400 + T[m as usize - 1] + d as i32).rem_euclid(7)) as u32
+}
+
+/// The last Sunday of a month.
+pub fn last_sunday(y: i32, m: u32) -> u32 {
+    let last = days_in_month(y, m);
+    last - day_of_week(y, m, last)
+}
+
+/// Whether EU summer time is in force on a local date and hour (it starts at 02:00 CET on the last
+/// Sunday of March and ends at 03:00 CEST on the last Sunday of October).
+pub fn eu_summer_time(y: i32, m: u32, d: u32, hour: f32) -> bool {
+    let (start, end) = (last_sunday(y, 3), last_sunday(y, 10));
+    match m {
+        4..=9 => true,
+        3 => d > start || (d == start && hour >= 2.0),
+        10 => d < end || (d == end && hour < 3.0),
+        _ => false,
+    }
+}
+
+/// The UTC offset of a place whose winter offset is `base`, on a date.
+pub fn offset_for(base: f64, t: &SunTime) -> f64 {
+    base + f64::from(u8::from(eu_summer_time(t.year, t.month, t.day, t.hour)))
+}
+
 fn angle_diff(a: f64, b: f64) -> f64 {
     let d = (a - b).rem_euclid(360.0);
     d.min(360.0 - d)
@@ -231,6 +261,7 @@ pub fn panel(ui: &mut egui::Ui, cx: &mut Cx) {
             cx.s.time_draft = None;
             if time != committed {
                 cx.run("time.set", json!({"year": time.year, "month": time.month, "day": time.day, "hour": time.hour.min(23.99)}));
+                follow_summer_time(cx);
             }
         }
         Edit::None => {}
@@ -258,8 +289,13 @@ pub fn panel(ui: &mut egui::Ui, cx: &mut Cx) {
             };
         f(ui, t::LATITUDE, &mut s.latitude, -90.0..=90.0);
         f(ui, t::LONGITUDE, &mut s.longitude, -180.0..=180.0);
+        let before = s.utc_offset_hours;
         f(ui, t::UTC_OFFSET, &mut s.utc_offset_hours, -14.0..=14.0);
+        if s.utc_offset_hours != before {
+            cx.s.auto_dst = false; // typed by hand: stays as typed
+        }
     });
+    ui.checkbox(&mut cx.s.auto_dst, t::SUMMER_TIME);
     match site_edit {
         Edit::Live => cx.s.site_draft = Some(s),
         Edit::Done => {
@@ -276,16 +312,93 @@ pub fn panel(ui: &mut egui::Ui, cx: &mut Cx) {
             .show_ui(ui, |ui| {
                 for (name, lat, lon, off) in t::CITIES {
                     if ui.selectable_label(false, name).clicked() {
+                        cx.s.base_offset = off;
+                        let offset = if cx.s.auto_dst {
+                            offset_for(off, &cx.s.project().time)
+                        } else {
+                            off
+                        };
                         cx.run(
                             "site.set",
-                            json!({"latitude": lat, "longitude": lon, "utc_offset_hours": off}),
+                            json!({"latitude": lat, "longitude": lon, "utc_offset_hours": offset}),
                         );
                     }
                 }
             });
-        ui.label(t::EXPOSURE);
-        ui.add(egui::Slider::new(&mut cx.s.exposure, -3.0..=3.0).max_decimals(1));
     });
+    view_fields(ui, cx);
+}
+
+/// Keeps the UTC offset on the summer-time rule when the date changes.
+fn follow_summer_time(cx: &mut Cx) {
+    if !cx.s.auto_dst {
+        return;
+    }
+    let want = offset_for(cx.s.base_offset, &cx.s.project().time);
+    if (want - cx.s.project().site.utc_offset_hours).abs() > 1e-6 {
+        cx.run("site.set", json!({"utc_offset_hours": want}));
+    }
+}
+
+/// Exposure, haze, wind and ground: stored with the project through `view.set`.
+fn view_fields(ui: &mut egui::Ui, cx: &mut Cx) {
+    let v = cx.s.project().view.clone();
+    ui.separator();
+    ui.horizontal(|ui| {
+        let mut auto = v.exposure_ev.is_none();
+        if ui.checkbox(&mut auto, t::EXPOSURE_AUTO).changed() {
+            cx.run(
+                "view.set",
+                json!({"exposure_ev": if auto { None } else { Some(13.0) }}),
+            );
+        }
+        if let Some(mut ev) = v.exposure_ev {
+            if ui
+                .add(
+                    egui::Slider::new(&mut ev, 6.0..=18.0)
+                        .text(t::EXPOSURE)
+                        .max_decimals(1),
+                )
+                .drag_stopped()
+            {
+                cx.run("view.set", json!({"exposure_ev": ev}));
+            }
+        }
+    });
+    let mut field = |ui: &mut egui::Ui,
+                     label: &str,
+                     key: &str,
+                     mut value: f32,
+                     range: std::ops::RangeInclusive<f32>| {
+        if ui
+            .add(
+                egui::Slider::new(&mut value, range)
+                    .text(label)
+                    .max_decimals(1),
+            )
+            .drag_stopped()
+        {
+            cx.run("view.set", json!({ key: value }));
+        }
+    };
+    field(ui, t::HAZE, "haze", v.haze, 0.0..=20.0);
+    field(ui, t::WIND, "wind_strength", v.wind_strength, 0.0..=2.0);
+    field(
+        ui,
+        t::WIND_DIRECTION,
+        "wind_direction_deg",
+        v.wind_direction_deg,
+        0.0..=360.0,
+    );
+    let mut ground = v.ground.is_some();
+    if ui.checkbox(&mut ground, t::GROUND).changed() {
+        let g = if ground {
+            json!({"height": 0.0, "color": [0.10, 0.17, 0.08]})
+        } else {
+            serde_json::Value::Null
+        };
+        cx.run("view.set", json!({"ground": g}));
+    }
 }
 
 #[cfg(test)]
@@ -301,6 +414,26 @@ mod tests {
         assert!(morning < h && morning > 6.0, "{morning}");
         let evening = hour_for_azimuth(&site, &time, 270.0);
         assert!(evening > h && evening < 21.5, "{evening}");
+    }
+
+    #[test]
+    fn summer_time_follows_the_eu_rule() {
+        assert_eq!(last_sunday(2026, 3), 29);
+        assert_eq!(last_sunday(2026, 10), 25);
+        assert_eq!(last_sunday(2024, 3), 31);
+        assert!(!eu_summer_time(2026, 3, 29, 1.5));
+        assert!(eu_summer_time(2026, 3, 29, 2.0));
+        assert!(eu_summer_time(2026, 10, 25, 2.5));
+        assert!(!eu_summer_time(2026, 10, 25, 3.0));
+        assert!(!eu_summer_time(2026, 1, 15, 12.0));
+        let t = SunTime {
+            year: 2026,
+            month: 6,
+            day: 21,
+            hour: 14.0,
+        };
+        assert_eq!(offset_for(1.0, &t), 2.0);
+        assert_eq!(offset_for(0.0, &t), 1.0);
     }
 
     #[test]

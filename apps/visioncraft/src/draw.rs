@@ -432,12 +432,10 @@ impl DrawState {
             ),
             Tool::Select => return,
         };
+        let mut params = params;
+        params["material"] = json!(material); // one command: one undo step
         if let Some(r) = cx.run(cmd, params) {
             let id = r["id"].as_str().unwrap_or_default().to_string();
-            cx.run(
-                "material.assign",
-                json!({"target": {"type": "owner", "owner": id}, "material": material}),
-            );
             self.selected = Some(id);
             self.vertex = None;
             self.tool = Tool::Select;

@@ -43,11 +43,40 @@ fn main() {
     setup.instance_descriptor.backends = wgpu::Backends::BROWSER_WEBGPU;
     options.wgpu_options.wgpu_setup = egui_wgpu::WgpuSetup::CreateNew(setup);
     wasm_bindgen_futures::spawn_local(async move {
+        // index.html checks WebGPU and shows the message itself when it is unusable.
+        let window = web_sys::window().expect("window");
+        if let Ok(ready) = js_sys::Reflect::get(&window, &"__vcReady".into())
+            && let Ok(promise) = ready.dyn_into::<js_sys::Promise>()
+            && wasm_bindgen_futures::JsFuture::from(promise).await.is_err()
+        {
+            return;
+        }
         let started = eframe::WebRunner::new()
             .start(canvas, options, Box::new(|cc| Ok(Box::new(App::new(cc)))))
             .await;
-        if let Err(e) = started {
-            web_sys::console::error_1(&format!("VisionCraft needs WebGPU: {e:?}").into());
+        let report = |name: &str, args: &[wasm_bindgen::JsValue]| {
+            if let Ok(f) = js_sys::Reflect::get(&window, &name.into())
+                && let Ok(f) = f.dyn_into::<js_sys::Function>()
+            {
+                let _ = match args {
+                    [a] => f.call1(&window, a),
+                    [a, b] => f.call2(&window, a, b),
+                    _ => f.call0(&window),
+                };
+            }
+        };
+        match started {
+            Ok(()) => report("vcHide", &[]),
+            Err(e) => {
+                web_sys::console::error_1(&format!("VisionCraft needs WebGPU: {e:?}").into());
+                report(
+                    "vcFail",
+                    &[
+                        "VisionCraft could not start".into(),
+                        format!("{e:?}").into(),
+                    ],
+                );
+            }
         }
     });
 }

@@ -276,6 +276,7 @@ mod native {
                             &path,
                         )
                         .map_err(at)?;
+                    s.person_near(&id);
                     for w in warnings {
                         eprintln!("warning: {w}");
                     }
@@ -402,6 +403,13 @@ mod native {
                 }
                 Step::Screenshot { name, w, h } => {
                     s.resize(w, h);
+                    // plants are generated one step per frame: let them finish
+                    for _ in 0..600 {
+                        s.prepare();
+                        if s.plants_pending() == 0 {
+                            break;
+                        }
+                    }
                     s.prepare();
                     let rb = Readback::start(&mut s, &device, &queue);
                     device

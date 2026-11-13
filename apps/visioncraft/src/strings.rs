@@ -101,3 +101,26 @@ pub const VIEWS_FULL: &str = "Eight viewpoints are saved. Delete one to add anot
 
 pub const UNSAVED_PROJECT: &str = "Untitled";
 pub const RELINK_PROMPT: &str = "needs its file";
+
+pub const KEEP: &str = "Keep";
+pub const SCALE: &str = "Scale";
+pub const ROTATION: &str = "Rotation";
+pub const DROP_TO_GROUND: &str = "Drop to ground";
+pub const PERSON: &str = "Person (1.8 m)";
+pub const PLACE_PERSON: &str = "Place person";
+pub const SUMMER_TIME: &str = "Summer time follows the date";
+pub const EXPOSURE_AUTO: &str = "Auto exposure";
+pub const HAZE: &str = "Haze";
+pub const WIND: &str = "Wind";
+pub const WIND_DIRECTION: &str = "Wind direction";
+pub const GROUND: &str = "Ground plane";
+pub const EXPORT: &str = "Export";
+pub const NEW: &str = "New";
+pub const AUTO: &str = "auto";
+pub const REPLACE_PROJECT: &str = "Replace the current project? Unsaved changes are lost.";
+pub const REPLACE_ANYWAY: &str = "Replace";
+pub const CANCEL: &str = "Cancel";
+pub const SEARCH: &str = "Search";
+pub const EVERGREEN: &str = "Evergreen";
+pub const IN_BLOOM: &str = "In bloom now";
+pub const PALETTE: &str = "Palette";

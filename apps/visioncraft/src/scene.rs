@@ -8,9 +8,12 @@ use visioncraft_core::{
     Asset, Generator, ImportedModel, Material, ModelRef, Project, Shape, SurfaceKind, evaluate,
     evaluate_surface_fill, ground_height, raycast, resolve_materials, shape_mesh,
 };
-use visioncraft_render::{ItemId, LineVertex, MaterialId, MeshId, Renderer};
+use visioncraft_flora as flora;
+use visioncraft_render::{ItemId, LineVertex, Renderer};
+pub use visioncraft_render::{MaterialId, MeshId};
 
 use crate::placeholder::{self, MeshData};
+use crate::plants::{self, Flora};
 
 /// A loaded or generated design, with a counter that changes when its triangles do.
 #[derive(Clone)]
@@ -19,7 +22,7 @@ pub struct Loaded {
     pub version: u64,
 }
 
-pub type LookKey = [u32; 9];
+pub type LookKey = [u32; 12];
 
 /// What a surface looks like to the renderer.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -31,6 +34,11 @@ pub struct Look {
     pub relief: f32,
     pub gloss: f32,
     pub weathering: f32,
+    /// 0 standard, 1 glass, 2 water.
+    pub surface: u32,
+    pub variation: f32,
+    /// Metres per texture repeat.
+    pub scale_m: f32,
 }
 
 impl Look {
@@ -42,6 +50,9 @@ impl Look {
             relief: 0.0,
             gloss: 0.0,
             weathering: 0.0,
+            surface: 0,
+            variation: 0.0,
+            scale_m: 1.0,
         }
     }
 
@@ -57,6 +68,9 @@ impl Look {
             self.relief,
             self.gloss,
             self.weathering,
+            self.surface as f32,
+            self.variation,
+            self.scale_m,
         ]
         .map(f32::to_bits)
     }
@@ -66,7 +80,6 @@ const CLAY: Look = Look::plain(0.85, 0.85, 0.85, 0.9);
 const UNASSIGNED: Look = Look::plain(0.6, 0.6, 0.6, 0.8);
 
 fn look_of(m: &Material) -> Look {
-    let [r, g, b, a] = m.base_color;
     let plain = Look {
         color: m.base_color,
         metallic: m.metallic,
@@ -74,28 +87,35 @@ fn look_of(m: &Material) -> Look {
         ..Look::plain(0.0, 0.0, 0.0, 0.0)
     };
     match &m.kind {
-        // shortcut: glass and water are plain PBR until the app uses the renderer's glass and water surfaces
-        SurfaceKind::ArchitecturalGlass { .. } => Look {
-            color: [r * 0.8, g * 0.95, b, a],
+        SurfaceKind::ArchitecturalGlass { tint, roughness } => Look {
+            color: [tint[0], tint[1], tint[2], 0.25],
+            roughness: *roughness,
+            surface: 1,
             ..plain
         },
         SurfaceKind::AnimatedWater { tint, .. } => Look {
-            color: [tint[0] * 0.7, tint[1] + 0.05, tint[2] + 0.15, 1.0],
-            roughness: 0.08,
+            color: [tint[0] * 0.25, tint[1] * 0.25, tint[2] * 0.25, 0.3],
+            roughness: 0.05,
+            surface: 2,
             ..plain
         },
         SurfaceKind::StandardTriplanarPbr {
+            map_scale_m,
             relief,
             gloss,
             weathering,
-            ..
         } => Look {
             relief: *relief,
             gloss: *gloss,
             weathering: *weathering,
+            scale_m: *map_scale_m,
             ..plain
         },
-        SurfaceKind::Lawn3d(_) => plain,
+        // shortcut: 3D grass is not scattered yet; the lawn is a green surface with large-scale variation
+        SurfaceKind::Lawn3d(_) => Look {
+            variation: 0.6,
+            ..plain
+        },
     }
 }
 
@@ -109,8 +129,88 @@ fn gpu_material(look: &Look) -> visioncraft_render::Material {
         relief: look.relief,
         gloss: look.gloss,
         weathering: look.weathering,
+        variation: look.variation,
+        projection: visioncraft_render::Projection::Triplanar {
+            scale_m: look.scale_m.max(0.01),
+        },
+        surface: match look.surface {
+            1 => visioncraft_render::Surface::Glass,
+            2 => visioncraft_render::Surface::Water,
+            _ => visioncraft_render::Surface::Standard,
+        },
         ..Default::default()
     }
+}
+
+/// A plant mesh part (positions, normals, UVs, wind) into the renderer.
+pub fn upload_plant_mesh(r: &mut Renderer, p: &flora::MeshPart) -> Option<MeshId> {
+    let mesh = visioncraft_render::Mesh {
+        positions: &p.positions,
+        normals: &p.normals,
+        indices: &p.indices,
+        face_ids: None,
+        uvs: Some(&p.uvs),
+        wind: Some(&p.wind),
+    };
+    r.add_mesh(&mesh).ok()
+}
+
+pub fn upload_texture(
+    r: &mut Renderer,
+    w: u32,
+    h: u32,
+    rgba: &[u8],
+    srgb: bool,
+    repeat: bool,
+) -> Option<visioncraft_render::TextureId> {
+    r.add_texture(&visioncraft_render::TextureDesc {
+        width: w,
+        height: h,
+        rgba8: rgba,
+        color_space: if srgb {
+            visioncraft_render::ColorSpace::Srgb
+        } else {
+            visioncraft_render::ColorSpace::Linear
+        },
+        repeat,
+    })
+    .ok()
+}
+
+/// Material of one plant part: bark with its normal map, cutout double-sided foliage with the season's tint.
+pub fn plant_material(
+    r: &mut Renderer,
+    kind: flora::Material,
+    tex: (
+        visioncraft_render::TextureId,
+        visioncraft_render::TextureId,
+        visioncraft_render::TextureId,
+    ),
+    tint: [f32; 3],
+) -> MaterialId {
+    use visioncraft_render::{AlphaMode, Material as M};
+    let (atlas, bark, bark_normal) = tex;
+    let leaf = |color: [f32; 4], foliage: bool| M {
+        base_color: color,
+        base_color_map: Some(atlas),
+        roughness: 0.6,
+        alpha_mode: AlphaMode::Cutout { threshold: 0.5 },
+        double_sided: true,
+        foliage,
+        ..Default::default()
+    };
+    let m = match kind {
+        flora::Material::Bark => M {
+            base_color_map: Some(bark),
+            normal_map: Some(bark_normal),
+            roughness: 0.9,
+            ..Default::default()
+        },
+        flora::Material::Foliage => leaf([tint[0], tint[1], tint[2], 1.0], true),
+        flora::Material::Flower => leaf([1.0; 4], true),
+        flora::Material::Twigs => leaf([1.0; 4], false),
+    };
+    r.add_material(&m)
 }
 
 /// The one place a `visioncraft_render::Mesh` is built.
@@ -177,7 +277,7 @@ struct Owner {
 type Wanted = (String, Geom, Arc<ImportedModel>, Mat4, bool, bool, bool);
 
 struct GenGpu {
-    key: (Generator, u64, bool),
+    key: (Generator, u64, u64, u8),
     items: Vec<ItemId>,
 }
 
@@ -197,6 +297,8 @@ pub struct Scene {
     protos: HashMap<String, Vec<(MeshId, MaterialId)>>,
     /// Bumps whenever any owner's geometry or placement changes: generators depend on the ground.
     ground_rev: u64,
+    pub flora: Flora,
+    people: Option<ItemId>,
 }
 
 #[derive(Clone, Debug)]
@@ -258,7 +360,7 @@ impl Scene {
     ) -> Vec<String> {
         let mut problems = Vec::new();
         let mut live: Vec<String> = Vec::new();
-        let clay = project.style.clay;
+        let clay = false; // the renderer's own clay mode handles it (`Renderer::set_clay`)
 
         // Owners: models, then shapes.
         let mut wanted: Vec<Wanted> = Vec::new();
@@ -381,7 +483,7 @@ impl Scene {
             }
         }
 
-        self.sync_generators(r, project, assets, clay);
+        self.sync_generators(r, project, assets);
         problems
     }
 
@@ -453,13 +555,7 @@ impl Scene {
         }
     }
 
-    fn sync_generators(
-        &mut self,
-        r: &mut Renderer,
-        project: &Project,
-        assets: &[Asset],
-        clay: bool,
-    ) {
+    fn sync_generators(&mut self, r: &mut Renderer, project: &Project, assets: &[Asset]) {
         let ids: Vec<&str> = project.generators.iter().map(Generator::id).collect();
         let gone: Vec<String> = self
             .gens
@@ -472,8 +568,9 @@ impl Scene {
                 g.items.into_iter().for_each(|i| r.remove_item(i));
             }
         }
+        let month = project.time.month as u8;
         for g in &project.generators {
-            let key = (g.clone(), self.ground_rev, clay);
+            let key = (g.clone(), self.ground_rev, self.flora.rev, month);
             if self.gens.get(g.id()).is_some_and(|old| old.key == key) {
                 continue;
             }
@@ -482,9 +579,22 @@ impl Scene {
             }
             let mut items = Vec::new();
             if project.layer_visible(g.layer()) {
-                for (asset, matrices) in self.placements(g) {
+                for (asset, variant, matrices) in self.placements(g) {
+                    if let Some(res) = plants::resolve(project, &asset) {
+                        let class = plants::class(&res.params, month);
+                        if let Some(parts) = self.flora.parts(&asset, class, variant) {
+                            items.push(r.add_lod_item(parts, &matrices));
+                            continue;
+                        }
+                        self.flora.want(&asset, class, month, &res.params);
+                        let stand_in = placeholder::flora_asset(&asset, &res);
+                        for (mesh, mat) in self.proto(r, &asset, Some(&stand_in)) {
+                            items.push(r.add_item(mesh, mat, &matrices));
+                        }
+                        continue;
+                    }
                     let asset_def = assets.iter().find(|a| a.id == asset);
-                    for (mesh, mat) in self.proto(r, &asset, asset_def, clay) {
+                    for (mesh, mat) in self.proto(r, &asset, asset_def) {
                         items.push(r.add_item(mesh, mat, &matrices));
                     }
                 }
@@ -493,8 +603,13 @@ impl Scene {
         }
     }
 
-    /// Instance matrices per asset id for one generator.
-    fn placements(&self, g: &Generator) -> Vec<(String, Vec<Mat4>)> {
+    /// One step of lazy plant generation; true when a generation finished (the scene must sync again).
+    pub fn pump(&mut self, r: &mut Renderer) -> bool {
+        self.flora.pump(r)
+    }
+
+    /// Instance matrices per (asset id, variant) for one generator.
+    fn placements(&self, g: &Generator) -> Vec<(String, u32, Vec<Mat4>)> {
         let placements = match g {
             Generator::SurfaceFill(f) => match self.owners.get(&f.owner) {
                 Some(o) => evaluate_surface_fill(f, &o.geom)
@@ -509,40 +624,56 @@ impl Scene {
             },
             _ => evaluate(g, &self.ground_fn()).placements,
         };
-        let mut out: Vec<(String, Vec<Mat4>)> = Vec::new();
+        let mut out: Vec<(String, u32, Vec<Mat4>)> = Vec::new();
         for p in placements {
             let m = Mat4::from_translation(Vec3::from(p.position))
                 * Mat4::from_rotation_y(p.rotation_y_deg.to_radians())
                 * Mat4::from_scale(Vec3::splat(p.scale));
-            match out.iter_mut().find(|(a, _)| *a == p.asset) {
-                Some((_, v)) => v.push(m),
-                None => out.push((p.asset, vec![m])),
+            let variant = p.variant % plants::VARIANTS;
+            match out
+                .iter_mut()
+                .find(|(a, v, _)| *a == p.asset && *v == variant)
+            {
+                Some((_, _, v)) => v.push(m),
+                None => out.push((p.asset, variant, vec![m])),
             }
         }
         out
     }
 
-    /// Placeholder meshes of an asset, built once per asset and clay setting.
+    /// Placeholder meshes of an asset, built once per asset.
     fn proto(
         &mut self,
         r: &mut Renderer,
         id: &str,
         asset: Option<&Asset>,
-        clay: bool,
     ) -> Vec<(MeshId, MaterialId)> {
-        let cache_key = format!("{id}{}", if clay { "#clay" } else { "" });
-        if let Some(p) = self.protos.get(&cache_key) {
+        if let Some(p) = self.protos.get(id) {
             return p.clone();
         }
         let mut out = Vec::new();
         for (data, look) in placeholder::parts(asset) {
-            let look = if clay { CLAY } else { look };
             if let Some(mesh) = upload(r, &data, false) {
                 out.push((mesh, self.material(r, &look)));
             }
         }
-        self.protos.insert(cache_key, out.clone());
+        self.protos.insert(id.to_string(), out.clone());
         out
+    }
+
+    /// The scale figure(s): one shared mesh, one instance per figure.
+    pub fn set_people(&mut self, r: &mut Renderer, at: &[Mat4]) {
+        match self.people {
+            Some(item) => r.set_instances(item, at),
+            None if at.is_empty() => {}
+            None => {
+                let data = placeholder::person();
+                if let Some(mesh) = upload(r, &data, false) {
+                    let mat = self.material(r, &Look::plain(0.05, 0.05, 0.06, 0.9));
+                    self.people = Some(r.add_item(mesh, mat, at));
+                }
+            }
+        }
     }
 
     // ---- queries ----
@@ -661,20 +792,20 @@ mod tests {
 
     #[test]
     fn classify_picks_the_cheapest_update() {
-        let a = key(1, vec![[0; 9]], true);
+        let a = key(1, vec![[0; 12]], true);
         let (i, t) = (Mat4::IDENTITY, Mat4::from_translation(Vec3::X));
         assert_eq!(classify(&a, &a.clone(), &i, &i), Change::Keep);
         assert_eq!(classify(&a, &a.clone(), &i, &t), Change::Transform);
         assert_eq!(
-            classify(&a, &key(2, vec![[0; 9]], true), &i, &i),
+            classify(&a, &key(2, vec![[0; 12]], true), &i, &i),
             Change::Rebuild
         );
         assert_eq!(
-            classify(&a, &key(1, vec![[1; 9]], true), &i, &i),
+            classify(&a, &key(1, vec![[1; 12]], true), &i, &i),
             Change::Rebuild
         );
         assert_eq!(
-            classify(&a, &key(1, vec![[0; 9]], false), &i, &t),
+            classify(&a, &key(1, vec![[0; 12]], false), &i, &t),
             Change::Rebuild
         );
     }

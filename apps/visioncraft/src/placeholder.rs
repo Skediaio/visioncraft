@@ -157,6 +157,38 @@ impl MeshData {
     }
 }
 
+/// A 1.8 m standing figure: legs, body, arms, head.
+pub fn person() -> MeshData {
+    let mut m = MeshData::default();
+    m.cuboid([-0.17, 0.0, -0.07], [-0.02, 0.85, 0.07]);
+    m.cuboid([0.02, 0.0, -0.07], [0.17, 0.85, 0.07]);
+    m.cuboid([-0.2, 0.85, -0.1], [0.2, 1.47, 0.1]);
+    m.cuboid([-0.3, 0.85, -0.06], [-0.2, 1.42, 0.06]);
+    m.cuboid([0.2, 0.85, -0.06], [0.3, 1.42, 0.06]);
+    m.ellipsoid(
+        [0.0, 1.66, 0.0],
+        [0.1, 0.13, 0.11],
+        (-FRAC_PI_2, FRAC_PI_2),
+        10,
+        6,
+    );
+    m
+}
+
+/// A stand-in asset for a generated species while its plant is not ready.
+pub fn flora_asset(id: &str, r: &crate::plants::Resolved) -> Asset {
+    use visioncraft_flora::Category as F;
+    let (category, tags): (Category, &[&str]) = match r.category {
+        F::Tree | F::Palm => (Category::Tree, &[]),
+        F::Conifer => (Category::Tree, &["conifer"]),
+        F::Shrub | F::Hedge => (Category::Shrub, &[]),
+        F::Grass => (Category::Grass, &[]),
+        _ => (Category::Perennial, &[]),
+    };
+    let (h, w) = (r.params.height_m, r.params.width_m);
+    crate::studio::make_asset(id, id, category, tags, [w, h, w])
+}
+
 const BARK: Look = Look::plain(0.12, 0.07, 0.035, 0.9);
 const LEAF: Look = Look::plain(0.05, 0.19, 0.04, 0.8);
 const CONIFER: Look = Look::plain(0.02, 0.10, 0.05, 0.85);

@@ -11,6 +11,7 @@ workspace = true
 # and the bin trunk builds for wasm32; `src/lib.rs` holds the app.
 [dependencies]
 visioncraft-core = { path = "../../crates/visioncraft-core" }
+visioncraft-flora = { path = "../../crates/visioncraft-flora", features = ["serde"] }
 visioncraft-render = { path = "../../crates/visioncraft-render" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -34,5 +35,6 @@ notify = "8"
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "=0.2.129"
 wasm-bindgen-futures = "0.4.79"
+js-sys = "0.3"
 web-sys = { version = "0.3.106", features = ["Document", "Window", "HtmlCanvasElement", "Storage"] }
 log = "0.4"

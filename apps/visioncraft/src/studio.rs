@@ -40,12 +40,28 @@ pub struct Studio {
     pub bounds_hint: HashMap<String, [[f32; 3]; 2]>,
     pub assets: Vec<Asset>,
     pub quality: usize,
+    /// Follow `suggest_quality` instead of the preset in `quality`.
+    pub quality_auto: bool,
+    auto_quality: Quality,
+    pub frame_ms: Vec<f32>,
+    /// UTC offset follows the EU summer-time rule for the chosen date.
+    pub auto_dst: bool,
+    pub base_offset: f64,
     /// Exposure offset in stops on top of the automatic exposure: positive is brighter.
     pub exposure: f32,
     pub draft: Option<Draft>,
     pub time_draft: Option<SunTime>,
     pub site_draft: Option<Site>,
     pub highlight: Option<(String, usize)>,
+    /// Seconds since start, for the wind animation.
+    pub clock: f64,
+    /// A 1.8 m figure for scale (positions on the ground).
+    pub people: Vec<Vec3>,
+    pub show_people: bool,
+    pub placing_person: bool,
+    pub lights_on: bool,
+    pub dropped_lights: usize,
+    last_lights: Vec<visioncraft_render::Light>,
     /// Extra overlay lines from tools: (depth tested, on top).
     pub extra: (Vec<LineVertex>, Vec<LineVertex>),
     pub size: [u32; 2],
@@ -55,8 +71,14 @@ pub struct Studio {
     pub problems: Vec<String>,
 }
 
-pub fn demo_assets() -> Vec<Asset> {
-    let a = |id: &str, name: &str, category, tags: &[&str], size: [f32; 3]| Asset {
+pub fn make_asset(
+    id: &str,
+    name: &str,
+    category: Category,
+    tags: &[&str],
+    size: [f32; 3],
+) -> Asset {
+    Asset {
         id: id.into(),
         name: name.into(),
         category,
@@ -70,7 +92,11 @@ pub fn demo_assets() -> Vec<Asset> {
         thumbnail: String::new(),
         plant: None,
         light: None,
-    };
+    }
+}
+
+pub fn demo_assets() -> Vec<Asset> {
+    let a = make_asset;
     vec![
         a("demo-tree", "Tree", Category::Tree, &[], [5.0, 7.0, 5.0]),
         a(
@@ -121,11 +147,23 @@ impl Studio {
             bounds_hint: HashMap::new(),
             assets: demo_assets(),
             quality,
+            quality_auto: true,
+            auto_quality: Quality::MEDIUM,
+            frame_ms: Vec::new(),
+            auto_dst: true,
+            base_offset: 1.0,
             exposure: 0.0,
             draft: None,
             time_draft: None,
             site_draft: None,
             highlight: None,
+            clock: 0.0,
+            people: Vec::new(),
+            show_people: true,
+            placing_person: false,
+            lights_on: true,
+            dropped_lights: 0,
+            last_lights: Vec::new(),
             extra: (Vec::new(), Vec::new()),
             size: [0, 0],
             draft_serial: 0,
@@ -146,7 +184,7 @@ impl Studio {
 
     /// Replaces the whole project (open, restore): clears history and the scene.
     pub fn replace_project(&mut self, project: Project) {
-        self.session = Session::new(project);
+        self.session.replace_project(project);
         self.scene.clear(&mut self.renderer);
         self.loaded.clear();
         self.sources.clear();
@@ -306,16 +344,127 @@ impl Studio {
         true
     }
 
+    /// Sky, haze, ground, wind, exposure and lights from the project's view state.
+    fn apply_view(&mut self, elevation: f32) {
+        let v = self.project().view.clone();
+        let ev = v.exposure_ev.unwrap_or_else(|| auto_ev(elevation)) - self.exposure;
+        self.renderer.set_exposure(ev);
+        self.renderer.set_clay(self.project().style.clay);
+        self.renderer
+            .set_atmosphere(&visioncraft_render::Atmosphere {
+                haze: v.haze,
+                ..Default::default()
+            });
+        self.renderer
+            .set_ground(v.ground.map(|g| visioncraft_render::Ground {
+                height: g.height,
+                color: g.color,
+                ..Default::default()
+            }));
+        let d = v.wind_direction_deg.to_radians();
+        self.renderer.set_wind(&visioncraft_render::Wind {
+            direction: Vec3::new(d.sin(), 0.0, -d.cos()),
+            strength: v.wind_strength,
+            ..Default::default()
+        });
+        self.renderer.set_time(self.clock);
+        let lights = if self.lights_on {
+            render_lights(self.project())
+        } else {
+            Vec::new()
+        };
+        if lights != self.last_lights {
+            self.dropped_lights = self.renderer.set_lights(&lights);
+            self.last_lights = lights;
+        }
+        let people: Vec<glam::Mat4> = if self.show_people {
+            self.people
+                .iter()
+                .map(|p| glam::Mat4::from_translation(*p))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        self.scene.set_people(&mut self.renderer, &people);
+    }
+
+    /// Whether anything on screen moves by itself (wind with plants in view).
+    pub fn current_quality(&self) -> Quality {
+        if self.quality_auto {
+            self.auto_quality
+        } else {
+            Quality::PRESETS[self.quality].1
+        }
+    }
+
+    /// Feeds one frame time (ms); every 45 frames of continuous drawing Auto may change the quality.
+    pub fn record_frame(&mut self, ms: f32) {
+        if !self.quality_auto {
+            self.frame_ms.clear();
+            return;
+        }
+        self.frame_ms.push(ms);
+        if self.frame_ms.len() >= 45 {
+            let next = visioncraft_render::suggest_quality(&self.frame_ms, self.auto_quality);
+            if next != self.auto_quality {
+                self.auto_quality = next;
+            }
+            self.frame_ms.clear();
+        }
+    }
+
+    /// Plants still being generated.
+    pub fn plants_pending(&self) -> usize {
+        self.scene.flora.pending()
+    }
+
+    pub fn animating(&self) -> bool {
+        let p = self.project();
+        p.view.wind_strength > 0.0 && !p.generators.is_empty()
+    }
+
+    /// Lowest point of a model in its own space, and its local bounds.
+    pub fn model_bounds(&self, id: &str) -> Option<([f32; 3], [f32; 3])> {
+        let l = self.loaded.get(id)?;
+        let (mut lo, mut hi) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
+        for b in &l.model.bodies {
+            for k in 0..3 {
+                lo[k] = lo[k].min(b.bounds[0][k]);
+                hi[k] = hi[k].max(b.bounds[1][k]);
+            }
+        }
+        lo[0].is_finite().then_some((lo, hi))
+    }
+
+    /// Puts the figure just in front (+Z side) of a model, on the ground.
+    pub fn person_near(&mut self, id: &str) {
+        let Some((lo, hi)) = self.model_bounds(id) else {
+            return;
+        };
+        let xf = self.world_matrix(id);
+        let c = xf.transform_point3(Vec3::new((lo[0] + hi[0]) / 2.0, lo[1], hi[2]));
+        let s = xf.transform_vector3(Vec3::Z).length();
+        let ground = self.project().view.ground.map_or(0.0, |g| g.height);
+        self.people = vec![Vec3::new(
+            c.x,
+            ground.max(c.y),
+            c.z + 1.0 + 0.5 * s * (hi[2] - lo[2]).min(1.0),
+        )];
+    }
+
     /// Sets everything the renderer needs for the next frame.
     pub fn prepare(&mut self) {
+        if self.scene.pump(&mut self.renderer) {
+            self.draft_serial += 1;
+        }
         self.sync();
         let (view, proj, eye) = self.camera.matrices(self.aspect());
         self.renderer.set_camera(view, proj, eye);
         let (sun, elevation) = self.sun();
         self.renderer.set_sun(&sun);
-        self.renderer
-            .set_exposure(auto_ev(elevation) - self.exposure);
-        self.renderer.set_quality(Quality::PRESETS[self.quality].1);
+        self.apply_view(elevation);
+        let q = self.current_quality();
+        self.renderer.set_quality(q);
         let hl = self
             .highlight
             .as_ref()
@@ -448,4 +597,35 @@ impl Readback {
                 .collect(),
         )
     }
+}
+
+/// The project's lights as the renderer wants them.
+pub fn render_lights(p: &Project) -> Vec<visioncraft_render::Light> {
+    use visioncraft_core::{LightKind, kelvin_to_linear_rgb};
+    p.lights
+        .iter()
+        .filter(|l| l.enabled && p.layer_visible(&l.layer))
+        .map(|l| {
+            let c = kelvin_to_linear_rgb(l.color_temperature_k);
+            let m = c[0].max(c[1]).max(c[2]).max(1e-3);
+            visioncraft_render::Light {
+                position: Vec3::from(l.position),
+                kind: match l.kind {
+                    LightKind::Point => visioncraft_render::LightKind::Point,
+                    LightKind::Spot {
+                        direction,
+                        inner_cone_deg,
+                        outer_cone_deg,
+                    } => visioncraft_render::LightKind::Spot {
+                        direction: Vec3::from(direction).normalize_or_zero(),
+                        inner: inner_cone_deg.to_radians(),
+                        outer: outer_cone_deg.to_radians(),
+                    },
+                },
+                color: Vec3::new(c[0] / m, c[1] / m, c[2] / m),
+                intensity: l.lumens,
+                range_m: l.range_m,
+            }
+        })
+        .collect()
 }

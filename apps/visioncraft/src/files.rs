@@ -81,11 +81,22 @@ pub fn pick(
 
 /// Saves `bytes` through a dialog (a download on the web).
 pub fn save(inbox: &Inbox, ctx: &egui::Context, suggested: String, bytes: Vec<u8>) {
+    save_as(inbox, ctx, suggested, bytes, "visioncraft");
+}
+
+/// Saves through a dialog with the given file extension filter.
+pub fn save_as(
+    inbox: &Inbox,
+    ctx: &egui::Context,
+    suggested: String,
+    bytes: Vec<u8>,
+    extension: &'static str,
+) {
     let (inbox, ctx) = (inbox.clone(), ctx.clone());
     spawn(async move {
         let Some(h) = rfd::AsyncFileDialog::new()
             .set_file_name(suggested)
-            .add_filter("VisionCraft project", &["visioncraft"])
+            .add_filter("File", &[extension])
             .save_file()
             .await
         else {

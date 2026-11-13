@@ -7,6 +7,7 @@ use crate::ui::Cx;
 use eframe::egui;
 use glam::Vec3;
 use serde_json::json;
+use visioncraft_flora as flora;
 use visioncraft_render::LineVertex;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -16,10 +17,34 @@ pub enum Tool {
     Scatter,
 }
 
+/// Weights as whole percentages that add up to 100 (largest remainder), for the palette readout.
+pub fn percentages(weights: &[f32]) -> Vec<u32> {
+    let total: f32 = weights.iter().sum();
+    if total <= 0.0 || weights.is_empty() {
+        return vec![0; weights.len()];
+    }
+    let exact: Vec<f32> = weights.iter().map(|w| w / total * 100.0).collect();
+    let mut out: Vec<u32> = exact.iter().map(|e| *e as u32).collect();
+    let mut order: Vec<usize> = (0..exact.len()).collect();
+    order.sort_by(|&a, &b| (exact[b] - exact[b].floor()).total_cmp(&(exact[a] - exact[a].floor())));
+    for i in order
+        .into_iter()
+        .take((100 - out.iter().sum::<u32>()) as usize)
+    {
+        out[i] += 1;
+    }
+    out
+}
+
 pub struct ObjectsState {
     pub tool: Tool,
-    pub asset: usize,
+    /// The chosen assets (catalogue id, `flora:<id>` or custom species id) and their weights.
+    pub palette: Vec<(String, f32)>,
     pub density: f32,
+    search: String,
+    category: Option<flora::Category>,
+    evergreen: bool,
+    in_bloom: bool,
     points: Vec<[f32; 2]>,
     placed: u64,
 }
@@ -28,12 +53,29 @@ impl Default for ObjectsState {
     fn default() -> Self {
         Self {
             tool: Tool::Single,
-            asset: 0,
+            palette: vec![("flora:prunus-serrulata".into(), 1.0)],
             density: 0.6,
+            search: String::new(),
+            category: None,
+            evergreen: false,
+            in_bloom: false,
             points: Vec::new(),
             placed: 0,
         }
     }
+}
+
+fn display_name(cx: &Cx, id: &str) -> String {
+    if let Some(s) = id.strip_prefix("flora:").and_then(flora::Species::by_id) {
+        return s.common_name.to_string();
+    }
+    if let Some(c) = cx.s.project().species.iter().find(|c| c.id == id) {
+        return c.name.clone();
+    }
+    cx.s.assets
+        .iter()
+        .find(|a| a.id == id)
+        .map_or_else(|| id.to_string(), |a| a.name.clone())
 }
 
 impl ObjectsState {
@@ -52,10 +94,19 @@ impl ObjectsState {
         }
     }
 
+    fn palette_json(&self) -> serde_json::Value {
+        json!(
+            self.palette
+                .iter()
+                .map(|(a, w)| json!({"asset": a, "weight": w}))
+                .collect::<Vec<_>>()
+        )
+    }
+
     pub fn update(&mut self, cx: &mut Cx) {
         let mut top: Vec<LineVertex> = Vec::new();
         let ground = Self::ground(cx);
-        let Some(asset) = cx.s.assets.get(self.asset).cloned() else {
+        let Some(first) = self.palette.first().map(|p| p.0.clone()) else {
             return;
         };
         match self.tool {
@@ -64,20 +115,19 @@ impl ObjectsState {
                     top.extend(dot([g.x, g.z], g.y + 0.05, [255, 255, 255, 230], 10.0));
                     if cx.input.clicked {
                         self.placed += 1;
+                        let name = display_name(cx, &first);
                         cx.run(
                             "planting.add_single",
-                            json!({"name": asset.name, "asset": asset.id, "position": [g.x, g.y, g.z], "rotation_y_deg": (self.placed * 137 % 360) as f32}),
+                            json!({"name": name, "asset": first, "position": [g.x, g.y, g.z], "rotation_y_deg": (self.placed * 137 % 360) as f32}),
                         );
                     }
                 }
             }
             Tool::Scatter => {
-                if cx.input.escape || cx.input.backspace {
-                    if cx.input.escape {
-                        self.points.clear()
-                    } else {
-                        self.points.pop();
-                    }
+                if cx.input.escape {
+                    self.points.clear();
+                } else if cx.input.backspace {
+                    self.points.pop();
                 }
                 let radius = 0.4 * (cx.s.camera.eye().length().max(5.0) / 20.0);
                 let snap = ground
@@ -86,13 +136,13 @@ impl ObjectsState {
                     && let Some(s) = snap
                 {
                     if closes(&self.points, s.pos, radius) {
-                        self.finish(cx, &asset);
+                        self.finish(cx);
                     } else {
                         self.points.push(s.pos);
                     }
                 }
                 if cx.input.enter && self.points.len() >= 3 {
-                    self.finish(cx, &asset);
+                    self.finish(cx);
                 }
                 let mut pts = self.points.clone();
                 pts.extend(snap.map(|s| s.pos));
@@ -105,14 +155,15 @@ impl ObjectsState {
         cx.s.extra = (Vec::new(), top);
     }
 
-    fn finish(&mut self, cx: &mut Cx, asset: &visioncraft_core::Asset) {
+    fn finish(&mut self, cx: &mut Cx) {
         let outline = std::mem::take(&mut self.points);
         self.placed += 1;
+        let name = format!("{} scatter", display_name(cx, &self.palette[0].0));
         cx.run(
             "planting.add_area",
             json!({
-                "name": format!("{} scatter", asset.name),
-                "asset_palette": [{"asset": asset.id, "weight": 1.0}],
+                "name": name,
+                "asset_palette": self.palette_json(),
                 "outline": outline,
                 "density_per_m2": self.density,
                 "scale_min": 0.8, "scale_max": 1.2,
@@ -121,12 +172,117 @@ impl ObjectsState {
         );
     }
 
-    pub fn panel(&mut self, ui: &mut egui::Ui, cx: &mut Cx) {
-        ui.horizontal_wrapped(|ui| {
-            for (i, a) in cx.s.assets.iter().enumerate() {
-                ui.selectable_value(&mut self.asset, i, &a.name);
-            }
+    /// The plant browser: a searchable, filterable list of the built-in species and the project's own.
+    fn browser(&mut self, ui: &mut egui::Ui, cx: &mut Cx) {
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut self.search)
+                    .hint_text(t::SEARCH)
+                    .desired_width(120.0),
+            );
+            egui::ComboBox::from_id_salt("plantcat")
+                .selected_text(
+                    self.category
+                        .map_or("All".to_string(), |c| format!("{c:?}")),
+                )
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.category, None, "All");
+                    for c in [
+                        flora::Category::Tree,
+                        flora::Category::Conifer,
+                        flora::Category::Palm,
+                        flora::Category::Shrub,
+                        flora::Category::Hedge,
+                        flora::Category::Perennial,
+                        flora::Category::Fern,
+                        flora::Category::Grass,
+                        flora::Category::GroundCover,
+                        flora::Category::Climber,
+                    ] {
+                        ui.selectable_value(&mut self.category, Some(c), format!("{c:?}"));
+                    }
+                });
         });
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut self.evergreen, t::EVERGREEN);
+            ui.checkbox(&mut self.in_bloom, t::IN_BLOOM);
+        });
+        let month = cx.s.project().time.month as u8;
+        let needle = self.search.to_lowercase();
+        let mut add: Option<String> = None;
+        egui::ScrollArea::vertical()
+            .max_height(170.0)
+            .id_salt("plants")
+            .show(ui, |ui| {
+                for c in &cx.s.project().species {
+                    if needle.is_empty() || c.name.to_lowercase().contains(&needle) {
+                        let r = ui.button(format!("{} (own)", c.name));
+                        if r.clicked() {
+                            add = Some(c.id.clone());
+                        }
+                    }
+                }
+                for s in flora::species() {
+                    if self.category.is_some_and(|c| c != s.category)
+                        || (self.evergreen && !s.evergreen)
+                        || (self.in_bloom && !s.bloom_months.contains(&month))
+                        || !(needle.is_empty()
+                            || s.common_name.to_lowercase().contains(&needle)
+                            || s.botanical_name.to_lowercase().contains(&needle))
+                    {
+                        continue;
+                    }
+                    let r = ui
+                        .button(format!("{}  ·  {:.1} m", s.common_name, s.mature_height_m))
+                        .on_hover_text(format!(
+                            "{}\n{:.1} × {:.1} m, {}{}",
+                            s.botanical_name,
+                            s.mature_height_m,
+                            s.mature_width_m,
+                            if s.evergreen {
+                                "evergreen"
+                            } else {
+                                "deciduous"
+                            },
+                            if s.bloom_months.is_empty() {
+                                String::new()
+                            } else {
+                                format!(", blooms {:?}", s.bloom_months)
+                            },
+                        ));
+                    if r.clicked() {
+                        add = Some(format!("flora:{}", s.id));
+                    }
+                }
+            });
+        if let Some(id) = add
+            && !self.palette.iter().any(|p| p.0 == id)
+        {
+            self.palette.push((id, 1.0));
+        }
+    }
+
+    pub fn panel(&mut self, ui: &mut egui::Ui, cx: &mut Cx) {
+        self.browser(ui, cx);
+        ui.separator();
+        ui.label(egui::RichText::new(t::PALETTE).strong());
+        let pct = percentages(&self.palette.iter().map(|p| p.1).collect::<Vec<_>>());
+        let mut remove = None;
+        for (i, (id, w)) in self.palette.iter_mut().enumerate() {
+            ui.horizontal(|ui| {
+                ui.label(format!("{}%", pct[i]));
+                ui.add(egui::Slider::new(w, 0.0..=10.0).show_value(false));
+                ui.label(display_name(cx, id));
+                if ui.small_button("x").clicked() {
+                    remove = Some(i);
+                }
+            });
+        }
+        if let Some(i) = remove
+            && self.palette.len() > 1
+        {
+            self.palette.remove(i);
+        }
         ui.horizontal(|ui| {
             for (tool, label) in [
                 (Tool::Single, t::TOOL_SINGLE),
@@ -163,7 +319,8 @@ impl ObjectsState {
             ui.separator();
             ui.label(egui::RichText::new(t::PLANTINGS).strong());
             egui::ScrollArea::vertical()
-                .max_height(110.0)
+                .max_height(90.0)
+                .id_salt("placed")
                 .show(ui, |ui| {
                     for (id, name) in list {
                         ui.horizontal(|ui| {
@@ -175,5 +332,26 @@ impl ObjectsState {
                     }
                 });
         }
+        if cx.s.plants_pending() > 0 {
+            ui.small(format!("generating plants… {}", cx.s.plants_pending()));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::percentages;
+
+    #[test]
+    fn percentages_add_up_to_100() {
+        assert_eq!(percentages(&[1.0, 1.0, 1.0]).iter().sum::<u32>(), 100);
+        assert_eq!(percentages(&[3.0, 1.0]), vec![75, 25]);
+        assert_eq!(percentages(&[0.0, 0.0]), vec![0, 0]);
+        assert_eq!(
+            percentages(&[1.0, 2.0, 4.0, 8.0, 16.0, 32.0])
+                .iter()
+                .sum::<u32>(),
+            100
+        );
     }
 }
