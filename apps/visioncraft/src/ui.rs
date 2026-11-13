@@ -239,6 +239,11 @@ pub fn panel_frame() -> egui::Frame {
         })
 }
 
+/// Whether the viewport says that clay view hides the materials.
+pub fn clay_notice(p: &visioncraft_core::Project) -> bool {
+    p.style.clay
+}
+
 /// A floating panel for content that scrolls by itself (the planting panel sizes its own
 /// scroll area from the window height).
 pub fn floating_own_scroll(
@@ -653,5 +658,23 @@ impl Hud {
                 });
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use visioncraft_core::{Project, Session};
+
+    #[test]
+    fn clay_view_is_off_by_default_and_announced_when_on() {
+        let mut s = Session::new(Project::default());
+        assert!(!super::clay_notice(s.project()));
+        let restored = Project::from_json_bytes(&s.project().to_json_bytes()).unwrap();
+        assert!(!super::clay_notice(&restored));
+        s.run("style.set", serde_json::json!({"clay": true}))
+            .unwrap();
+        assert!(super::clay_notice(s.project()));
+        s.undo();
+        assert!(!super::clay_notice(s.project()));
     }
 }

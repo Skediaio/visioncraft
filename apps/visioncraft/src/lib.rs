@@ -1106,6 +1106,27 @@ impl eframe::App for App {
         let toast_top = (if narrow { 150.0 } else { 56.0 })
             + 44.0 * missing.len() as f32 * f32::from(u8::from(narrow));
         busy |= cx.toasts.show(&ctx, toast_top);
+        // Clay is saved with the project (and restored on the next visit): say so, with the
+        // way back, so a white garden is never a mystery.
+        if ui::clay_notice(cx.s.project()) {
+            let mut off = false;
+            ui::floating(
+                &ctx,
+                "clay-notice",
+                Align2::CENTER_BOTTOM,
+                Vec2::new(0.0, -64.0),
+                360.0,
+                |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(strings::CLAY_NOTICE);
+                        off = ui.button(strings::CLAY_OFF).clicked();
+                    });
+                },
+            );
+            if off {
+                cx.run("style.set", serde_json::json!({"clay": false}));
+            }
+        }
         if cx.s.project().models.is_empty()
             && cx.s.project().shapes.is_empty()
             && self.hud.mode.is_none()
