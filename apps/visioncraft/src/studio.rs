@@ -86,6 +86,11 @@ pub struct Studio {
     last_lights: Vec<visioncraft_render::Light>,
     /// Extra overlay lines from tools: (depth tested, on top).
     pub extra: (Vec<LineVertex>, Vec<LineVertex>),
+    /// Pictures (`render_png`) show the editor's overlays (light markers, tool lines, highlight).
+    pub overlays_in_pictures: bool,
+    /// The renderer's targets were made anew outside the window's frame (`render_png`): the
+    /// window must hand the new view to egui.
+    pub targets_changed: bool,
     pub size: [u32; 2],
     draft_serial: u64,
     version: u64,
@@ -234,6 +239,8 @@ impl Studio {
             thumbs: Default::default(),
             last_lights: Vec::new(),
             extra: (Vec::new(), Vec::new()),
+            overlays_in_pictures: false,
+            targets_changed: false,
             size: [0, 0],
             draft_serial: 0,
             version: 0,
@@ -430,6 +437,60 @@ impl Studio {
             self.frame_all();
         }
         Ok((id, warnings))
+    }
+
+    /// Installs geometry loaded elsewhere (automation, a loader) for model `id`, replacing what
+    /// was there; the next `sync` draws it.
+    pub fn install_model(&mut self, id: &str, model: Arc<ImportedModel>) {
+        self.version += 1;
+        self.draft_serial += 1;
+        self.bounds_hint.remove(id);
+        self.loaded.insert(
+            id.to_string(),
+            Loaded {
+                model,
+                version: self.version,
+            },
+        );
+    }
+
+    /// One picture of `w` x `h` from the current camera at the current quality, as PNG bytes,
+    /// with the editor's overlays left out unless `overlays_in_pictures`. Plants still being
+    /// generated get frames to finish. The live size is restored afterwards.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn render_png(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        w: u32,
+        h: u32,
+    ) -> Result<Vec<u8>, String> {
+        if w == 0 || h == 0 || w > 8192 || h > 8192 {
+            return Err(format!("picture size {w}x{h} outside 1x1..=8192x8192"));
+        }
+        let live = self.size;
+        self.resize(w, h);
+        for _ in 0..600 {
+            self.prepare();
+            if self.plants_pending() == 0 {
+                break;
+            }
+        }
+        self.prepare();
+        if !self.overlays_in_pictures {
+            self.renderer.set_overlay_lines(&[]);
+            self.renderer.set_overlay_lines_on_top(&[]);
+            self.renderer.set_highlight(None);
+        }
+        let rb = Readback::start(self, device, queue);
+        let polled = device.poll(wgpu::PollType::wait_indefinitely());
+        let pixels = rb.take(device);
+        if live != [0, 0] && live != [w, h] {
+            self.resize(live[0], live[1]);
+            self.targets_changed = true;
+        }
+        polled.map_err(|e| format!("the GPU did not finish: {e}"))?;
+        png_bytes(&pixels.ok_or("reading the picture back failed")?, w, h)
     }
 
     /// Swaps the geometry of an existing model, touching nothing else. Returns warnings and the
@@ -847,6 +908,18 @@ impl Readback {
                 .collect(),
         )
     }
+}
+
+/// RGBA8 rows as a PNG file.
+pub fn png_bytes(rgba: &[u8], w: u32, h: u32) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    let mut enc = png::Encoder::new(&mut out, w, h);
+    enc.set_color(png::ColorType::Rgba);
+    enc.set_depth(png::BitDepth::Eight);
+    enc.write_header()
+        .and_then(|mut wr| wr.write_image_data(rgba))
+        .map_err(|e| format!("cannot encode the PNG: {e}"))?;
+    Ok(out)
 }
 
 /// The project's lights as the renderer wants them.

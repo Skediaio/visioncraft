@@ -861,6 +861,16 @@ impl PlantingTools {
         self.edit_rev = cx.s.session.revision();
     }
 
+    /// Selects `g` (or nothing) without a `Cx`, as automation does.
+    pub fn select_stored(&mut self, g: Option<&Generator>, revision: u64) {
+        self.lights = false;
+        self.tool = Tool::Select;
+        self.vertex = None;
+        self.edit = g.map(Form::from_generator);
+        self.selected = g.map(|g| g.id().to_string());
+        self.edit_rev = revision;
+    }
+
     /// The form the panel edits: the selected planting's, else the new-planting settings.
     pub fn active_form(&mut self) -> &mut Form {
         match (&self.selected, &mut self.edit) {

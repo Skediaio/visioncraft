@@ -269,3 +269,7 @@ pub const PT_KEYS_BRUSH: &[(&str, &str)] = &[
 
 /// "<n> lamps have no light: at most <cap> fixtures shine."
 pub const LAMPS_OVER_CAP: &str = "lamps have no light: at most this many fixtures shine:";
+
+pub const ALLOW_AGENTS: &str = "Allow AI agents";
+pub const ALLOW_AGENTS_TIP: &str = "Lets visioncraft-cli mcp --bridge (an AI agent on this computer) change this project while you watch; Ctrl+Z undoes its steps. Untick to disconnect.";
+pub const AGENT_LAST: &str = "agent:";

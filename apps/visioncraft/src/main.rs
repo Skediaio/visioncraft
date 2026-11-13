@@ -3,6 +3,21 @@ use visioncraft::App;
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result {
     let args: Vec<String> = std::env::args().collect();
+    if let Some(i) = args.iter().position(|a| a == "--agents-headless") {
+        let (Some(port), Some(token), Some(secs)) = (
+            args.get(i + 1).and_then(|p| p.parse().ok()),
+            args.get(i + 2),
+            args.get(i + 3).and_then(|s| s.parse().ok()),
+        ) else {
+            eprintln!("usage: visioncraft --agents-headless PORT TOKEN_FILE SECONDS");
+            std::process::exit(2);
+        };
+        if let Err(e) = visioncraft::agents::serve_headless(port, token, secs) {
+            eprintln!("agents failed: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     if let Some(i) = args.iter().position(|a| a == "--smoke") {
         let (Some(script), Some(o)) = (
             args.get(i + 1),

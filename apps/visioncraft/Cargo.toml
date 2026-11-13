@@ -37,6 +37,8 @@ pollster = "1.0.1"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 # CC0-1.0: watches the linked model file.
 notify = "8"
+# The control channel AI agents drive the window through (`visioncraft-cli mcp --bridge`).
+visioncraft-automation = { path = "../../crates/visioncraft-automation" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "=0.2.129"

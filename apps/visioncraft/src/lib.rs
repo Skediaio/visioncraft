@@ -2,6 +2,8 @@
 //! the frame loop, input routing, files and persistence. The scene, the camera and the modes live
 //! in their own modules; `studio` is everything that does not need a window.
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod agents;
 pub mod assets;
 pub mod camera;
 #[cfg(test)]
@@ -46,6 +48,8 @@ use visioncraft_render::{Quality, Renderer};
 const KEY_PROJECT: &str = "project";
 const KEY_NAME: &str = "project_name";
 const KEY_BOUNDS: &str = "model_bounds";
+#[cfg(not(target_arch = "wasm32"))]
+const KEY_AGENTS: &str = "allow_agents";
 
 /// A model file being imported off the UI thread (`import_task`).
 struct Job {
@@ -99,6 +103,10 @@ pub struct App {
     fps: f64,
     last_title: String,
     settle: u8,
+    #[cfg(not(target_arch = "wasm32"))]
+    agents: agents::Agents,
+    #[cfg(not(target_arch = "wasm32"))]
+    focused: bool,
 }
 
 fn extension(name: &str) -> String {
@@ -157,7 +165,24 @@ impl App {
             fps: 0.0,
             last_title: String::new(),
             settle: 0,
+            #[cfg(not(target_arch = "wasm32"))]
+            agents: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            focused: false,
         };
+        // AI agents: the person's switch, or `--control [PORT]` for this run.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let args: Vec<String> = std::env::args().collect();
+            let flag = args.iter().position(|a| a == "--control");
+            let port = flag
+                .and_then(|i| args.get(i + 1))
+                .and_then(|p| p.parse().ok());
+            let stored = cc.storage.and_then(|s| s.get_string(KEY_AGENTS)).as_deref() == Some("1");
+            if flag.is_some() || stored {
+                app.agents.allow(true, &cc.egui_ctx, port);
+            }
+        }
         if was_restored {
             if let Some(b) = cc
                 .storage
@@ -450,6 +475,64 @@ impl App {
         self.hud.mode = mode;
     }
 
+    /// Answers AI agents (see `agents`): their commands run on the window's session.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn serve_agents(&mut self, ctx: &egui::Context, now: f64) -> bool {
+        let focused = ctx.input(|i| i.focused);
+        if focused && !self.focused {
+            self.agents.focused();
+        }
+        self.focused = focused;
+        let mut mode = self.hud.mode;
+        let host = agents::WindowHost {
+            studio: &mut self.studio,
+            device: &self.device,
+            queue: &self.queue,
+            mode: &mut mode,
+            planting: &mut self.objects.tools,
+            model_selected: &mut self.modelui.selected,
+            now,
+        };
+        let answered = self.agents.poll(host, now);
+        if mode != self.hud.mode {
+            self.set_mode(ctx, mode);
+        }
+        answered
+    }
+
+    /// The agents switch and what the last agent did, bottom right.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn agents_pill(&mut self, ctx: &egui::Context, now: f64) {
+        let narrow = ui::narrow(ctx);
+        let offset = if narrow {
+            Vec2::new(-10.0, -64.0)
+        } else {
+            Vec2::new(-10.0, -10.0)
+        };
+        let mut on = self.agents.allowed();
+        ui::floating(ctx, "agents", Align2::RIGHT_BOTTOM, offset, 300.0, |ui| {
+            ui.horizontal(|ui| {
+                let label = match self.agents.port() {
+                    Some(p) if !narrow => format!("{} · {p}", strings::ALLOW_AGENTS),
+                    _ => strings::ALLOW_AGENTS.to_string(),
+                };
+                ui.checkbox(&mut on, label)
+                    .on_hover_text(strings::ALLOW_AGENTS_TIP);
+                if let Some((cmd, t)) = &self.agents.last
+                    && now - t < 120.0
+                {
+                    ui.small(format!("{} {cmd}", strings::AGENT_LAST));
+                }
+            });
+            if let Some(e) = &self.agents.error {
+                ui.small(e.as_str());
+            }
+        });
+        if on != self.agents.allowed() {
+            self.agents.allow(on, ctx, None);
+        }
+    }
+
     fn toggle_walk(&mut self) {
         if self.hud.mode == Some(Mode::Draw) {
             return;
@@ -550,6 +633,11 @@ impl eframe::App for App {
             String::from_utf8_lossy(&self.studio.project().to_json_bytes()).into_owned(),
         );
         storage.set_string(KEY_BOUNDS, self.bounds_json());
+        #[cfg(not(target_arch = "wasm32"))]
+        storage.set_string(
+            KEY_AGENTS,
+            if self.agents.allowed() { "1" } else { "0" }.into(),
+        );
         if let Some(n) = &self.project_name {
             storage.set_string(KEY_NAME, n.clone());
         }
@@ -595,6 +683,10 @@ impl eframe::App for App {
                     }
                 }
             }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            busy |= self.serve_agents(&ctx, now);
         }
         for m in self.inbox.take() {
             match m {
@@ -772,7 +864,9 @@ impl eframe::App for App {
         ];
         let quality_changed =
             Quality::PRESETS[self.studio.quality].1 != self.studio.renderer.quality();
-        let rebuilt = self.studio.resize(size[0], size[1]) || quality_changed;
+        let rebuilt = self.studio.resize(size[0], size[1])
+            || quality_changed
+            || std::mem::take(&mut self.studio.targets_changed);
         self.studio.clock = now;
         busy |= self.studio.animating()
             || self.studio.plants_pending() > 0
@@ -956,6 +1050,8 @@ impl eframe::App for App {
                 });
             busy = true;
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        self.agents_pill(&ctx, now);
         busy |= self.poll_export(&ctx);
         let mut confirm = None;
         if self.pending_replace.is_some() {

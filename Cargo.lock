@@ -3349,6 +3349,8 @@ dependencies = [
  "egui",
  "egui-wgpu",
  "glam",
+ "gltf",
+ "image",
  "js-sys",
  "log",
  "notify",
@@ -3357,6 +3359,7 @@ dependencies = [
  "rfd",
  "serde",
  "serde_json",
+ "visioncraft-automation",
  "visioncraft-core",
  "visioncraft-flora",
  "visioncraft-render",
@@ -3381,6 +3384,33 @@ dependencies = [
  "ureq",
  "visioncraft-core",
  "zip",
+]
+
+[[package]]
+name = "visioncraft-automation"
+version = "0.0.0"
+dependencies = [
+ "craft3d-doc",
+ "getrandom 0.4.3",
+ "serde",
+ "serde_json",
+ "visioncraft-core",
+ "visioncraft-flora",
+]
+
+[[package]]
+name = "visioncraft-cli"
+version = "0.0.0"
+dependencies = [
+ "glam",
+ "png 0.17.16",
+ "pollster",
+ "serde_json",
+ "visioncraft",
+ "visioncraft-automation",
+ "visioncraft-core",
+ "visioncraft-render",
+ "wgpu",
 ]
 
 [[package]]
