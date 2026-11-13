@@ -143,6 +143,10 @@ pub struct MixedBrush {
     pub seed: u64,
     #[serde(default)]
     pub layers: Vec<PlantLayer>,
+    /// When given (3 points or more), plants only grow inside this outline: a border brushed
+    /// over its bed stays in the bed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub clip_outline: Vec<[f32; 2]>,
 }
 
 /// Fills named faces of a model or shape with plants; needs the owner's mesh, see
@@ -854,12 +858,14 @@ pub fn evaluate(generator: &Generator, ground: &dyn Fn(f32, f32) -> Option<f32>)
             if b[0][0] > b[1][0] {
                 b = [[0.0; 2]; 2]; // nothing painted: the walk below finds no coverage
             }
+            let clipped = g.clip_outline.len() >= 3;
             let covered = |p| {
-                g.strokes
-                    .iter()
-                    .rev()
-                    .find(|s| stroke_hits(s, p))
-                    .is_some_and(|s| !s.erase)
+                (!clipped || point_in_polygon(p, &g.clip_outline))
+                    && g.strokes
+                        .iter()
+                        .rev()
+                        .find(|s| stroke_hits(s, p))
+                        .is_some_and(|s| !s.erase)
             };
             let own = Tier {
                 palette: &g.asset_palette,
@@ -1257,9 +1263,16 @@ mod tests {
             min_distance_m: 0.0,
             seed: 9,
             layers: Vec::new(),
+            clip_outline: Vec::new(),
         };
         let all = evaluate(&Generator::MixedBrush(g.clone()), &flat).placements;
         assert!(all.len() > 100);
+        // Clipped to a bed: only what lies inside it stays.
+        let mut bed = g.clone();
+        bed.clip_outline = vec![[2.0, -3.0], [5.0, -3.0], [5.0, 3.0], [2.0, 3.0]];
+        let inside = evaluate(&Generator::MixedBrush(bed), &flat).placements;
+        assert!(!inside.is_empty() && inside.len() < all.len() / 2);
+        assert!(inside.iter().all(|p| (2.0..=5.0).contains(&p.position[0])));
         assert!(all.iter().all(|p| distance_to_segment(
             [p.position[0], p.position[2]],
             [0.0, 0.0],
@@ -1471,6 +1484,7 @@ mod layer_tests {
             min_distance_m: 0.0,
             seed: 4,
             layers,
+            clip_outline: Vec::new(),
         })
     }
 

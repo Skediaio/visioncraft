@@ -179,6 +179,7 @@ pub(super) fn register(s: &mut Session) {
                 min_distance(),
                 layers(),
                 param("strokes", T::Array, "Initial strokes [{points: [[x, z]..], radius_m, erase}].").default(json!([])),
+                param("clip_outline", T::Outline, "Plants only grow inside this outline (an area's), when given.").default(json!([])),
                 scale_min(),
                 scale_max(),
                 seed(),
@@ -500,6 +501,8 @@ fn add_brush(project: &mut Project, params: &Value) -> Result<Value, CommandErro
         scale_max: f32,
         seed: Option<u64>,
         layer: Option<String>,
+        #[serde(default)]
+        clip_outline: Vec<[f32; 2]>,
     }
     let p: P = parse(params)?;
     add(project, p.layer, |id, layer, seed| {
@@ -515,6 +518,7 @@ fn add_brush(project: &mut Project, params: &Value) -> Result<Value, CommandErro
             min_distance_m: p.min_distance_m,
             seed: p.seed.unwrap_or(seed),
             layers: p.layers,
+            clip_outline: p.clip_outline,
         })
     })
 }
@@ -649,7 +653,8 @@ fn brush_stroke(project: &mut Project, params: &Value) -> Result<Value, CommandE
 
 fn update(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
     let g = find(project, params)?;
-    let updated: Generator = merge_update(g, params, &[])?;
+    // Fields that are not written while empty can still be given.
+    let updated: Generator = merge_update(g, params, &["clip_outline"])?;
     updated.validate().map_err(|e| bad(&e))?;
     let layer = updated.layer().to_string();
     *g = updated;
