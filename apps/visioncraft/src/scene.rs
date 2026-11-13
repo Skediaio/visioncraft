@@ -6,8 +6,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use visioncraft_core::{
     Asset, Evaluation, Generator, ImportedModel, Material, ModelRef, Project, Shape, SurfaceKind,
-    Terrain, area_lifts, areas_over, evaluate, evaluate_surface_fill, footing, ground_height,
-    inside_outline, lawn_scatter, raycast, resolve_materials, shape_mesh, shape_mesh_on_terrain,
+    Terrain, area_lifts, areas_over, blocked_by_buildings, evaluate_avoiding,
+    evaluate_surface_fill, footing, ground_height, inside_outline, lawn_scatter, raycast,
+    resolve_materials, shape_mesh, shape_mesh_on_terrain,
 };
 use visioncraft_flora as flora;
 use visioncraft_render::{ImpostorId, ItemId, LineVertex, Renderer};
@@ -410,6 +411,8 @@ pub fn model_matrix(m: &ModelRef) -> Mat4 {
 pub struct Scene {
     owners: HashMap<String, Owner>,
     gens: HashMap<String, GenGpu>,
+    /// Height and crown radius of the project's own species, for the building rule.
+    custom_sizes: HashMap<String, (f32, f32)>,
     lawns: HashMap<String, LawnGpu>,
     materials: HashMap<LookKey, MaterialId>,
     /// Looks made for placeholders and the figure: never pruned.
@@ -596,6 +599,22 @@ impl Scene {
         let lifts: HashMap<String, f32> = area_lifts(&project.shapes).into_iter().collect();
         let terrain = project.terrain.clone();
         let ground = |x: f32, z: f32| terrain.as_ref().and_then(|t| t.height_at(x, z));
+        // Water areas: the areas under them are cut out there (the pond's bed is the terrain's).
+        let water: Vec<String> = project
+            .shapes
+            .iter()
+            .filter(|s| {
+                matches!(s, Shape::Area(_))
+                    && shape_mesh(s).is_ok_and(|m| {
+                        resolve_materials(project, s.id(), &m).into_iter().any(|i| {
+                            i.and_then(|i| project.materials.get(i)).is_some_and(|m| {
+                                matches!(m.kind, SurfaceKind::AnimatedWater { .. })
+                            })
+                        })
+                    })
+            })
+            .map(|s| s.id().to_string())
+            .collect();
         // shortcut: the terrain's address tells versions apart; an edit makes a new Arc
         let terrain_key = terrain.as_ref().map_or(0, |t| Arc::as_ptr(t) as usize);
         for s in &project.shapes {
@@ -613,17 +632,37 @@ impl Scene {
                 }
                 Shape::Extrusion(_) => {}
             }
-            let geom = Geom::Shape(
-                Box::new(placed.clone()),
-                if draped { terrain_key } else { 0 },
-            );
+            let holes: Vec<&[[f32; 2]]> = if draped {
+                areas_over(&project.shapes, &id)
+                    .into_iter()
+                    .zip(over_ids(&project.shapes, &id))
+                    .filter(|(_, o)| water.contains(o))
+                    .map(|(h, _)| h)
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            // What the mesh depends on besides the shape: the terrain and the water on top.
+            let depends = if draped {
+                holes
+                    .iter()
+                    .flat_map(|h| h.iter())
+                    .fold(terrain_key, |k, p| {
+                        k.rotate_left(7)
+                            ^ (p[0].to_bits() as usize)
+                            ^ ((p[1].to_bits() as usize) << 1)
+                    })
+            } else {
+                0
+            };
+            let geom = Geom::Shape(Box::new(placed.clone()), depends);
             let visible = project.layer_visible(s.layer());
             // The mesh is only rebuilt when the shape (or the terrain it lies on) changed.
             let model = match self.owners.get(&id) {
                 Some(o) if o.key.geom == geom => o.geom.clone(),
                 _ => match match terrain.as_deref() {
                     // Cut along the terrain's own triangles: no hill edge pokes through.
-                    Some(t) => shape_mesh_on_terrain(&placed, t),
+                    Some(t) => shape_mesh_on_terrain(&placed, t, &holes),
                     None => shape_mesh(&placed),
                 } {
                     Ok(m) => Arc::new(m),
@@ -941,6 +980,16 @@ impl Scene {
     }
 
     fn sync_generators(&mut self, r: &mut Renderer, project: &Project, assets: &[Asset]) {
+        self.custom_sizes = project
+            .species
+            .iter()
+            .map(|c| {
+                (
+                    c.id.clone(),
+                    plant_scene::plant_size(project, assets, &c.id),
+                )
+            })
+            .collect();
         let ids: Vec<&str> = project.generators.iter().map(Generator::id).collect();
         let gone: Vec<String> = self
             .gens
@@ -1242,8 +1291,76 @@ impl Scene {
                     truncated: false,
                 },
             },
-            _ => evaluate(g, &self.ground_fn()),
+            _ => evaluate_avoiding(g, &self.ground_fn(), &|p| {
+                let (h, r) = self.plant_dims(&p.asset);
+                self.in_building(Vec3::from(p.position), h * p.scale, r * p.scale)
+            }),
         }
+    }
+
+    /// Height and crown radius of an asset at scale 1.
+    pub fn plant_dims(&self, asset: &str) -> (f32, f32) {
+        if let Some(s) = asset.strip_prefix("flora:").and_then(flora::Species::by_id) {
+            return (s.mature_height_m, s.mature_width_m / 2.0);
+        }
+        if let Some(d) = self.custom_sizes.get(asset) {
+            return *d;
+        }
+        self.library
+            .catalog
+            .as_ref()
+            .and_then(|c| c.asset(asset))
+            .map_or((1.0, 0.3), |a| {
+                (a.size_m[1], a.size_m[0].max(a.size_m[2]) / 2.0)
+            })
+    }
+
+    /// The building rule (`visioncraft_core::blocked_by_buildings`) against this scene: the
+    /// open ground is the terrain and the areas, the buildings are models and blocks.
+    pub fn in_building(&self, at: Vec3, height: f32, radius: f32) -> bool {
+        let open = self.open_ground(at.x, at.z).unwrap_or(0.0);
+        blocked_by_buildings(at.to_array(), height, radius, open, &|p| {
+            self.up_to_building(p)
+        })
+    }
+
+    /// Only the overhead part of the rule, for a plant placed by hand where the pointer is: a
+    /// pot on a roof is fine, a tree under a canopy lower than itself is not.
+    pub fn under_building(&self, at: Vec3, height: f32, radius: f32) -> bool {
+        blocked_by_buildings(at.to_array(), height, radius, at.y, &|p| {
+            self.up_to_building(p)
+        })
+    }
+
+    /// The terrain and areas at `(x, z)`, models and blocks left out.
+    pub fn open_ground(&self, x: f32, z: f32) -> Option<f32> {
+        let terrain = self.terrain.as_ref().and_then(|t| t.height_at(x, z));
+        self.owners
+            .values()
+            .filter(|o| o.is_area && o.key.visible)
+            .filter_map(|o| {
+                let inv = o.xf.inverse();
+                let local = inv.transform_point3(Vec3::new(x, 0.0, z));
+                ground_height(&o.geom, local.x, local.z)
+                    .map(|y| o.xf.transform_point3(Vec3::new(local.x, y, local.z)).y)
+            })
+            .fold(terrain, |a: Option<f32>, y| Some(a.map_or(y, |a| a.max(y))))
+    }
+
+    /// Distance straight up from `p` to the nearest model or block, if any.
+    fn up_to_building(&self, p: [f32; 3]) -> Option<f32> {
+        self.owners
+            .values()
+            .filter(|o| !o.is_area && o.key.visible)
+            .filter_map(|o| {
+                let inv = o.xf.inverse();
+                let lo = inv.transform_point3(Vec3::from(p));
+                let ld = inv.transform_vector3(Vec3::Y);
+                let h = raycast::raycast(&o.geom, lo.to_array(), ld.to_array())?;
+                let hit = o.xf.transform_point3(Vec3::from(h.point));
+                Some(hit.y - p[1])
+            })
+            .reduce(f32::min)
     }
 
     pub fn gen_stats(&self, id: &str) -> Option<GenStats> {
@@ -1467,6 +1584,27 @@ pub fn light_markers(project: &Project) -> Vec<LineVertex> {
         out.extend(line(p, p, c, 7.0));
     }
     out
+}
+
+/// Ids of the areas `areas_over` returns for `id`, in the same order.
+fn over_ids(shapes: &[Shape], id: &str) -> Vec<String> {
+    let Some(i) = shapes.iter().position(|s| s.id() == id) else {
+        return Vec::new();
+    };
+    let Shape::Area(a) = &shapes[i] else {
+        return Vec::new();
+    };
+    shapes[i + 1..]
+        .iter()
+        .filter_map(|s| match s {
+            Shape::Area(b)
+                if areas_over(&[Shape::Area(a.clone()), s.clone()], &a.id).len() == 1 =>
+            {
+                Some(b.id.clone())
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 #[cfg(test)]

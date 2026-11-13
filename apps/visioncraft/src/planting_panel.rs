@@ -303,6 +303,12 @@ fn form_ui(
         Tool::Select => {}
     }
     // Size spread, turning, reshuffle and layer: folded, they are rarely changed.
+    if matches!(kind, Tool::Line | Tool::Area | Tool::Brush) {
+        edit = merge(
+            edit,
+            checkbox(ui, &mut form.avoid_buildings, t::AVOID_BUILDINGS),
+        );
+    }
     egui::CollapsingHeader::new(RichText::new(t::PT_MORE).small())
         .id_salt(("planting-more", kind.label()))
         .default_open(false)

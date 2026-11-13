@@ -117,8 +117,13 @@ pub struct Form {
     pub straight: bool,
     /// Brush: plants stay inside the area the stroke starts on.
     pub keep_inside: bool,
-    /// Brush: the outline they stay inside (the area under the stroke's start), empty for none.
+    /// Line, area and brush: no plants on or in a building (the core's `avoid_buildings`); a
+    /// planting being edited gets it too.
+    pub avoid_buildings: bool,
+    /// Brush: the outline they stay inside (the area under the stroke's start), empty for none,
+    /// and the areas lying on it they stay off.
     pub clip: Vec<[f32; 2]>,
+    pub clip_holes: Vec<Vec<[f32; 2]>>,
 }
 
 impl Default for Form {
@@ -150,7 +155,9 @@ impl Default for Form {
             radius: 2.0,
             straight: false,
             keep_inside: true,
+            avoid_buildings: true,
             clip: Vec::new(),
+            clip_holes: Vec::new(),
         }
     }
 }
@@ -305,6 +312,7 @@ impl Form {
                 f.preset = preset_of(&f.layers);
                 (f.scale_min, f.scale_max, f.seed) = (b.scale_min, b.scale_max, b.seed);
                 f.clip.clone_from(&b.clip_outline);
+                f.clip_holes.clone_from(&b.clip_holes);
             }
         }
         f
@@ -341,6 +349,7 @@ impl Form {
                 (s.scale_min, s.scale_max, s.random_rotation, s.seed) =
                     (self.scale_min, self.scale_max, self.spin, self.seed);
                 s.layer.clone_from(&self.layer);
+                s.avoid_buildings = self.avoid_buildings;
             }
             Generator::Cluster(c) => {
                 c.asset_palette.clone_from(&self.palette);
@@ -357,6 +366,7 @@ impl Form {
                     (self.pos_jitter, self.spin, self.seed);
                 (a.scale_min, a.scale_max) = (self.scale_min, self.scale_max);
                 a.layer.clone_from(&self.layer);
+                a.avoid_buildings = self.avoid_buildings;
             }
             Generator::SurfaceFill(s) => {
                 s.asset_palette = pal(self);
@@ -374,6 +384,7 @@ impl Form {
                     (self.layers.clone(), self.density, self.min_distance);
                 (b.scale_min, b.scale_max, b.seed) = (self.scale_min, self.scale_max, self.seed);
                 b.layer.clone_from(&self.layer);
+                b.avoid_buildings = self.avoid_buildings;
             }
         }
         g
@@ -419,6 +430,7 @@ impl Form {
                     "spacing": if self.by_count { json!({"count": self.count.max(1)}) } else { json!({"every": self.every}) },
                     "closed": self.closed,
                     "straight": self.straight,
+                    "avoid_buildings": self.avoid_buildings,
                     "spacing_jitter": self.jitter,
                     "offset_m": self.offset,
                     "scale_min": self.scale_min,
@@ -449,6 +461,7 @@ impl Form {
                     "scale_min": self.scale_min,
                     "scale_max": self.scale_max,
                     "random_rotation": self.spin,
+                    "avoid_buildings": self.avoid_buildings,
                     "min_distance_m": self.min_distance,
                 })),
             ),
@@ -479,6 +492,8 @@ impl Form {
                     "scale_min": self.scale_min,
                     "scale_max": self.scale_max,
                     "clip_outline": self.clip,
+                    "clip_holes": self.clip_holes,
+                    "avoid_buildings": self.avoid_buildings,
                 })),
             ),
         }
@@ -728,7 +743,8 @@ impl Default for PlantingTools {
             add_to: None,
             show_help: false,
             vertex: None,
-            brush_radius: 4.0,
+            // Border-sized: a 2 m wide strip; [ and ] or the slider for woodland.
+            brush_radius: 1.0,
             erase: false,
             brush_target: None,
             points: Vec::new(),
@@ -1419,11 +1435,17 @@ impl PlantingTools {
             let (h, r) = crate::plant_scene::plant_size(cx.s.project(), &cx.s.assets, asset);
             let s = self.form.single_scale;
             let base = Vec3::new(at.x, at.y + 0.1, at.z);
+            // Red where a roof or canopy is lower than the plant (a pot on a roof is fine).
+            let blocked = cx.s.scene.under_building(at, h * s, r * s);
             top.extend(ring(
                 cx,
                 [at.x, at.z],
                 (r * 0.8).max(0.25) * s,
-                [255, 255, 255, 230],
+                if blocked {
+                    [255, 90, 80, 255]
+                } else {
+                    [255, 255, 255, 230]
+                },
                 2.0,
             ));
             top.extend(line(
@@ -1453,6 +1475,13 @@ impl PlantingTools {
             self.drag = Drag::None;
         }
         if let (Some(p), Some(asset)) = (place_at, asset) {
+            let (h, r) = crate::plant_scene::plant_size(cx.s.project(), &cx.s.assets, &asset);
+            let s = self.form.single_scale;
+            let shift = cx.ctx.input(|i| i.modifiers.shift);
+            if !shift && cx.s.scene.under_building(p, h * s, r * s) {
+                cx.toasts.warn(t::IN_BUILDING);
+                return;
+            }
             let mut f = self.form.clone();
             f.palette = vec![Weighted { asset, weight: 1.0 }];
             let y = cx.s.scene.ground_fn()(p.x, p.z).unwrap_or(p.y);
@@ -1645,19 +1674,24 @@ impl PlantingTools {
 
     /// With "Keep inside area": the outline of the topmost area under `p` (a border's bed, a
     /// lawn), else nothing.
-    fn clip_under(&self, cx: &Cx, p: [f32; 2]) -> Vec<[f32; 2]> {
+    /// The areas lying on it (a terrace on the lawn) are holes the plants stay out of.
+    fn clip_under(&self, cx: &Cx, p: [f32; 2]) -> (Vec<[f32; 2]>, Vec<Vec<[f32; 2]>>) {
         if !self.form.keep_inside {
-            return Vec::new();
+            return Default::default();
         }
-        cx.s.project()
-            .shapes
+        let shapes = &cx.s.project().shapes;
+        shapes
             .iter()
             .rev()
             .find_map(|s| match s {
                 visioncraft_core::Shape::Area(a)
                     if visioncraft_core::inside_outline(p, &a.outline) =>
                 {
-                    Some(a.outline.clone())
+                    let holes = visioncraft_core::areas_over(shapes, &a.id)
+                        .into_iter()
+                        .map(<[[f32; 2]]>::to_vec)
+                        .collect();
+                    Some((a.outline.clone(), holes))
                 }
                 _ => None,
             })
@@ -1709,7 +1743,7 @@ impl PlantingTools {
         }
         if let Some(points) = finished {
             if !self.stroke_erase {
-                self.form.clip = self.clip_under(cx, points[0]);
+                (self.form.clip, self.form.clip_holes) = self.clip_under(cx, points[0]);
             }
             let stroke = Stroke {
                 points,
@@ -1744,7 +1778,7 @@ impl PlantingTools {
             self.refresh_preview(cx, String::new(), None, now);
         } else {
             let mut f = self.form.clone();
-            f.clip = self.clip_under(cx, self.stroke[0]);
+            (f.clip, f.clip_holes) = self.clip_under(cx, self.stroke[0]);
             if let Some((id, _)) = &self.brush_target
                 && let Some(Generator::MixedBrush(b)) = stored(cx, id)
             {

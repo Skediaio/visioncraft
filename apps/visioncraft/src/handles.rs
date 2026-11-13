@@ -193,6 +193,7 @@ mod tests {
             min_distance_m: 0.0,
             seed: 3,
             layers: vec![],
+            avoid_buildings: false,
         })
     }
 
@@ -277,6 +278,7 @@ mod tests {
             random_rotation: false,
             seed: 1,
             straight: false,
+            avoid_buildings: false,
         });
         assert!(remove_point(&line, 0).is_none(), "a line keeps two points");
     }
