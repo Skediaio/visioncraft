@@ -1280,6 +1280,41 @@ pub fn light_markers(project: &Project) -> Vec<LineVertex> {
 mod tests {
     use super::*;
 
+    /// The core documents `rotation_y_deg` as counter-clockwise seen from above. With north
+    /// (-Z) up and east (+X) right in the plan view, a quarter turn takes an object's east side
+    /// to the north, and a fixture's light (the core's `LightSpec::light`) turns with it.
+    #[test]
+    fn rotation_is_counter_clockwise_seen_from_above_for_models_and_their_lights() {
+        let m: ModelRef = serde_json::from_value(serde_json::json!({"id": "m1", "name": "x",
+            "kind": "obj", "source": "x.obj", "transform": {"rotation_y_deg": 90.0}}))
+        .unwrap();
+        let east = model_matrix(&m).transform_vector3(Vec3::X);
+        assert!((east - Vec3::NEG_Z).length() < 1e-5, "{east}");
+        let spec = visioncraft_core::LightSpec {
+            kind: visioncraft_core::LightKind::Spot {
+                direction: [1.0, -1.0, 0.0],
+                inner_cone_deg: 10.0,
+                outer_cone_deg: 20.0,
+            },
+            color_temperature_k: 3000.0,
+            lumens: 100.0,
+            range_m: 5.0,
+            offset_m: [1.0, 2.0, 0.0],
+        };
+        let l = spec.light(Default::default(), [0.0; 3], 90.0, 1.0);
+        let at = Vec3::from(l.position);
+        assert!((at - model_matrix(&m).transform_point3(Vec3::new(1.0, 2.0, 0.0))).length() < 1e-5);
+        let visioncraft_core::LightKind::Spot { direction, .. } = l.kind else {
+            panic!("a spot")
+        };
+        assert!((Vec3::from(direction) - Vec3::new(0.0, -1.0, -1.0)).length() < 1e-5);
+        // the plan view shows north up: the turned light sits above the model's origin on screen
+        let mut c = crate::camera::Camera::default();
+        c.view = crate::camera::View::Top;
+        let (v, p, _) = c.matrices(1.0);
+        assert!((p * v).project_point3(at).y > (p * v).project_point3(Vec3::ZERO).y);
+    }
+
     fn key(version: u64, looks: Vec<LookKey>, visible: bool) -> OwnerKey {
         OwnerKey {
             geom: Geom::Model(version),

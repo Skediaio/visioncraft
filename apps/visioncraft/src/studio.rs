@@ -360,8 +360,8 @@ impl Studio {
 
     // ---- models ----
 
-    /// Parses and meshes model bytes. This blocks the caller.
-    // shortcut: import blocks the UI thread, move to a worker when a model takes over a second
+    /// Parses and meshes model bytes. This blocks the caller: the window runs it through
+    /// `import_task` (a thread, or a Web Worker).
     pub fn import(kind: ModelKind, bytes: &[u8]) -> Result<ImportedModel, String> {
         match kind {
             ModelKind::Craft3d => import_3dcraft(bytes),
@@ -395,6 +395,18 @@ impl Studio {
         source_name: &str,
     ) -> Result<(String, Vec<String>), String> {
         let model = Self::import(kind, &source.bytes)?;
+        self.add_imported(name, kind, model, source, source_name)
+    }
+
+    /// Adds a model imported elsewhere (`import_task`) with `model.add`.
+    pub fn add_imported(
+        &mut self,
+        name: &str,
+        kind: ModelKind,
+        model: ImportedModel,
+        source: Source,
+        source_name: &str,
+    ) -> Result<(String, Vec<String>), String> {
         let kind_name = if kind == ModelKind::Obj {
             "obj"
         } else {
@@ -420,13 +432,26 @@ impl Studio {
     /// Swaps the geometry of an existing model, touching nothing else. Returns warnings and the
     /// number of assignments that no longer match a face.
     pub fn reimport(&mut self, id: &str, source: Source) -> Result<(Vec<String>, usize), String> {
-        let m = self
-            .project()
+        let kind = self.model_kind(id).ok_or("no such model")?;
+        let model = Self::import(kind, &source.bytes)?;
+        self.reimport_imported(id, model, source)
+    }
+
+    pub fn model_kind(&self, id: &str) -> Option<ModelKind> {
+        self.project()
             .models
             .iter()
             .find(|m| m.id == id)
-            .ok_or("no such model")?;
-        let model = Self::import(m.kind, &source.bytes)?;
+            .map(|m| m.kind)
+    }
+
+    /// Swaps in geometry imported elsewhere (`import_task`).
+    pub fn reimport_imported(
+        &mut self,
+        id: &str,
+        model: ImportedModel,
+        source: Source,
+    ) -> Result<(Vec<String>, usize), String> {
         let dangling = visioncraft_core::dangling_assignments(self.project(), id, &model).len();
         Ok((self.install(id, model, source), dangling))
     }

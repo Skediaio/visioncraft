@@ -10,6 +10,7 @@ pub mod draw;
 pub mod files;
 pub mod gltf_load;
 pub mod handles;
+pub mod import_task;
 pub mod lamps;
 pub mod library;
 pub mod library_ui;
@@ -39,20 +40,20 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use studio::{Source, Studio};
 use ui::{Action, Cx, Hud, Input, Mode, Toasts};
-use visioncraft_core::{ModelKind, Project};
+use visioncraft_core::{ImportedModel, ModelKind, Project};
 use visioncraft_render::{Quality, Renderer};
 
 const KEY_PROJECT: &str = "project";
 const KEY_NAME: &str = "project_name";
 const KEY_BOUNDS: &str = "model_bounds";
 
-/// A model file waiting for its "Loading…" frame to be shown before the import blocks.
+/// A model file being imported off the UI thread (`import_task`).
 struct Job {
     name: String,
-    bytes: Vec<u8>,
+    bytes: Arc<[u8]>,
     path: Option<PathBuf>,
     target: Option<String>,
-    shown: bool,
+    task: Option<import_task::ImportTask>,
 }
 
 struct ExportJob {
@@ -218,10 +219,10 @@ impl App {
             "3dcraft" | "obj" => {
                 self.loading = Some(Job {
                     name,
-                    bytes,
+                    bytes: Arc::from(bytes),
                     path,
                     target,
-                    shown: false,
+                    task: None,
                 })
             }
             "mcmat" => {
@@ -330,7 +331,7 @@ impl App {
         }
     }
 
-    fn run_job(&mut self, ctx: &egui::Context, job: Job) {
+    fn run_job(&mut self, ctx: &egui::Context, job: Job, model: Result<ImportedModel, String>) {
         let Job {
             name,
             bytes,
@@ -347,11 +348,11 @@ impl App {
             ModelKind::Craft3d
         };
         let src = Source {
-            bytes: Arc::from(bytes),
+            bytes,
             path: path.clone(),
         };
-        let result = match &target {
-            Some(id) => self.studio.reimport(id, src).map(|(w, d)| {
+        let result = model.and_then(|model| match &target {
+            Some(id) => self.studio.reimport_imported(id, model, src).map(|(w, d)| {
                 self.toasts.info(strings::MODEL_UPDATED);
                 if d > 0 {
                     self.toasts
@@ -359,8 +360,10 @@ impl App {
                 }
                 (id.clone(), w)
             }),
-            None => self.studio.add_model(&stem(&name), kind, src, &source_name),
-        };
+            None => self
+                .studio
+                .add_imported(&stem(&name), kind, model, src, &source_name),
+        });
         match result {
             Ok((id, warnings)) => {
                 warnings.into_iter().for_each(|w| self.toasts.warn(w));
@@ -565,10 +568,33 @@ impl eframe::App for App {
         let mut busy = false;
 
         // Work that arrived since last frame.
-        if self.loading.as_ref().is_some_and(|j| j.shown)
-            && let Some(job) = self.loading.take()
-        {
-            self.run_job(&ctx, job); // shortcut: import blocks the UI thread, move to a worker when a model takes over a second
+        if let Some(job) = &mut self.loading {
+            match &job.task {
+                None => {
+                    let kind = match &job.target {
+                        Some(id) => self.studio.model_kind(id),
+                        None if extension(&job.name) == "obj" => Some(ModelKind::Obj),
+                        None => Some(ModelKind::Craft3d),
+                    };
+                    match kind {
+                        Some(kind) => {
+                            job.task = Some(import_task::ImportTask::start(
+                                kind,
+                                job.bytes.clone(),
+                                ctx.clone(),
+                            ));
+                        }
+                        None => self.loading = None,
+                    }
+                }
+                Some(task) => {
+                    if let Some(result) = task.take()
+                        && let Some(job) = self.loading.take()
+                    {
+                        self.run_job(&ctx, job, result);
+                    }
+                }
+            }
         }
         for m in self.inbox.take() {
             match m {
@@ -921,10 +947,13 @@ impl eframe::App for App {
                 .order(egui::Order::Tooltip)
                 .show(&ctx, |ui| {
                     ui::panel_frame().show(ui, |ui| {
-                        ui.label(egui::RichText::new(strings::LOADING).size(18.0))
+                        ui.horizontal(|ui| {
+                            ui.add(egui::Spinner::new());
+                            ui.label(egui::RichText::new(strings::LOADING).size(18.0));
+                            ui.weak(&job.name);
+                        })
                     });
                 });
-            job.shown = true;
             busy = true;
         }
         busy |= self.poll_export(&ctx);
