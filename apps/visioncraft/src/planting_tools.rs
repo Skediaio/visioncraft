@@ -146,6 +146,41 @@ impl Default for Form {
     }
 }
 
+impl Form {
+    /// What `tool` starts with: a closed hornbeam hedge for Line (1 m segments every metre, no
+    /// jitter, no size spread, no turning), a perennial mix for Brush, a tree for the rest.
+    pub fn for_tool(tool: Tool) -> Form {
+        let w = |asset: &str| Weighted {
+            asset: asset.into(),
+            weight: 1.0,
+        };
+        match tool {
+            Tool::Line => Form {
+                palette: vec![w("flora:carpinus-hedge")],
+                jitter: 0.0,
+                scale_min: 1.0,
+                scale_max: 1.0,
+                spin: false,
+                every: 1.0,
+                ..Default::default()
+            },
+            Tool::Brush => Form {
+                palette: [
+                    "flora:salvia-nemorosa",
+                    "flora:nepeta-faassenii",
+                    "flora:geranium-rozanne",
+                    "flora:echinacea-purpurea",
+                ]
+                .into_iter()
+                .map(w)
+                .collect(),
+                ..Default::default()
+            },
+            _ => Form::default(),
+        }
+    }
+}
+
 /// What a tool's gesture produced, in world metres.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Geom {
@@ -821,6 +856,10 @@ fn key_pressed(cx: &Cx, k: Key) -> bool {
 
 impl PlantingTools {
     pub fn leave(&mut self, cx: &mut Cx) {
+        // The plan was this mode's: other modes get the 3D view back.
+        if cx.s.camera.view == crate::camera::View::Top {
+            cx.s.camera.view = crate::camera::View::Orbit;
+        }
         self.points.clear();
         self.stroke.clear();
         self.drag = Drag::None;
@@ -869,7 +908,10 @@ impl PlantingTools {
         if tool == self.tool {
             return;
         }
-        let next = self.forms.remove(&tool).unwrap_or_default();
+        let next = self
+            .forms
+            .remove(&tool)
+            .unwrap_or_else(|| Form::for_tool(tool));
         let old = std::mem::replace(&mut self.form, next);
         self.forms.insert(self.tool, old);
         self.tool = tool;
@@ -937,10 +979,11 @@ impl PlantingTools {
             .map_or(self.tool, |g| tool_of(&g))
             == Tool::Single;
         let editing = self.editing();
+        let tool = self.tool;
         let form = self.active_form();
         // The starting palette is only a placeholder: the first pick replaces it (a hedge drawn
         // after picking hornbeam is not half cherry trees).
-        let placeholder = !editing && form.palette == Form::default().palette;
+        let placeholder = !editing && form.palette == Form::for_tool(tool).palette;
         if (single || placeholder) && matches!(target, AddTarget::Palette) {
             form.palette.clear();
         }
@@ -1909,6 +1952,22 @@ mod tests {
         assert_eq!(f.name("Brush", "Oak"), "Brush (layered)");
         f.preset = Some("Mixed woodland".into());
         assert_eq!(f.name("Brush", "Oak"), "Mixed woodland brush");
+    }
+
+    #[test]
+    fn tools_start_with_a_palette_that_suits_them() {
+        let mut t = PlantingTools::default();
+        t.switch_form(Tool::Line);
+        assert_eq!(t.form.palette[0].asset, "flora:carpinus-hedge");
+        assert_eq!(
+            (t.form.jitter, t.form.scale_min, t.form.scale_max),
+            (0.0, 1.0, 1.0)
+        );
+        assert!(!t.form.spin);
+        t.switch_form(Tool::Brush);
+        assert!(t.form.palette.len() >= 3);
+        t.switch_form(Tool::Single);
+        assert_eq!(t.form.palette, Form::default().palette);
     }
 
     #[test]
