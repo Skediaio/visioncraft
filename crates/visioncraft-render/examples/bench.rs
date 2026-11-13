@@ -9,12 +9,17 @@
 //! `--sun-every-frame` (re-renders the environment cube each frame)
 //! `--night` (sun below the horizon: no shadow passes)
 //! `--presets low,medium,high` `--frames N` `--size 1280x720`
-//! `--custom shadow,cascades,ao,contact,msaa,lod%` (e.g. `1024,2,8,1,0,75`): one
-//! extra preset named "custom".
+//! `--custom shadow,cascades,ao,contact,msaa,lod%[,scale%]` (e.g.
+//! `1024,2,8,1,0,75,80`): one extra preset named "custom" (the rest as MEDIUM).
+//! `--garden`: the beauty-shot garden (house, pond with planar reflection,
+//! infinite ground, haze, lamps on) instead of the budget scene, with
+//! `--no-haze` `--no-ground` `--no-bloom` `--no-reflection` `--no-fxaa` to
+//! price each realism feature.
+//! With a device that has timestamp queries, GPU ms per pass are printed.
 
 use glam::Vec3;
 use visioncraft_render::demo::{self, BudgetOptions};
-use visioncraft_render::{Light, LightKind, Quality, Renderer, Sun, headless_device};
+use visioncraft_render::{Atmosphere, Light, LightKind, Quality, Renderer, Sun};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -38,7 +43,7 @@ fn main() {
         .unwrap_or(150);
     let presets = value("--presets").unwrap_or_else(|| "low,medium,high,custom".into());
     let sun_every_frame = has("--sun-every-frame");
-    let (device, queue) = pollster::block_on(headless_device()).expect("device");
+    let (device, queue) = pollster::block_on(device_with_timestamps());
     let (w, h) = value("--size")
         .and_then(|v| {
             let (w, h) = v.split_once('x')?;
@@ -55,6 +60,8 @@ fn main() {
             contact_shadows: n[3] != 0,
             msaa: n[4] != 0,
             lod_distance_percent: n[5],
+            render_scale: n.get(6).map_or(100, |&p| p) as f32 / 100.0,
+            ..Quality::MEDIUM
         }
     });
     let mut list = Quality::PRESETS.to_vec();
@@ -65,10 +72,38 @@ fn main() {
         if !presets.split(',').any(|p| p == name) {
             continue;
         }
+        let quality = Quality {
+            water_reflection: if has("--no-reflection") {
+                0
+            } else {
+                quality.water_reflection
+            },
+            fxaa: quality.fxaa && !has("--no-fxaa"),
+            ..quality
+        };
         let mut r = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
         r.resize(w, h);
         r.set_quality(quality);
-        let (tris, instanced) = demo::budget_with(&mut r, &options);
+        let garden = has("--garden");
+        let (tris, instanced) = if garden {
+            let lights = demo::garden(&mut r);
+            r.set_lights(&lights);
+            (0, 0)
+        } else {
+            demo::budget_with(&mut r, &options)
+        };
+        if has("--no-ground") {
+            r.set_ground(None);
+        }
+        if has("--no-haze") {
+            r.set_atmosphere(&Atmosphere {
+                haze: 0.0,
+                ..Default::default()
+            });
+        }
+        if has("--no-bloom") {
+            r.set_bloom(0.0);
+        }
         // Lights scattered over the garden, 6 m range.
         let list: Vec<Light> = (0..lights)
             .map(|i| {
@@ -83,7 +118,7 @@ fn main() {
                 }
             })
             .collect();
-        let dropped = r.set_lights(&list);
+        let dropped = if garden { 0 } else { r.set_lights(&list) };
         let elevation = if has("--night") { -10.0 } else { 35.0 };
         r.set_sun(&Sun::from_angles(200.0, elevation));
         r.set_exposure(15.0);
@@ -93,7 +128,18 @@ fn main() {
             let encode = std::cell::Cell::new(0.0);
             let mut frame = |i: u32| {
                 let aspect = w as f32 / h as f32;
-                let (view, proj, eye) = if path == "orbit" {
+                let (view, proj, eye) = if garden && path == "orbit" {
+                    // Around the house and pond at 22 m.
+                    let yaw = 0.3 + i as f32 * 0.01;
+                    let target = Vec3::new(2.0, 1.0, 4.0);
+                    let eye = target + 22.0 * Vec3::new(yaw.sin() * 0.94, 0.33, yaw.cos() * 0.94);
+                    demo::camera(eye, target, aspect)
+                } else if garden {
+                    // Along the terrace and the pond, eye level.
+                    let t = i as f32 * 0.08;
+                    let eye = Vec3::new(-6.0 + t, 1.7, 15.0 - 0.3 * t);
+                    demo::camera(eye, eye + Vec3::new(0.5, -0.12, -1.0), aspect)
+                } else if path == "orbit" {
                     let (yaw, pitch, distance) = (i as f32 * 0.01, 0.35f32, 38.0);
                     let target = Vec3::new(0.0, 0.5, 0.0);
                     let eye = target
@@ -127,15 +173,25 @@ fn main() {
                 device
                     .poll(wgpu::PollType::wait_indefinitely())
                     .expect("poll");
+                r.stats().gpu_passes
             };
-            (0..20).for_each(&mut frame);
+            for i in 0..20 {
+                frame(i);
+            }
             encode.set(0.0);
+            let mut gpu: Vec<(&'static str, f32)> = Vec::new();
             let start = std::time::Instant::now();
             let mut worst = 0f64;
             for i in 0..frames {
                 let t = std::time::Instant::now();
-                frame(i);
+                let timings = frame(i);
                 worst = worst.max(t.elapsed().as_secs_f64() * 1000.0);
+                for (label, ms) in timings {
+                    match gpu.iter_mut().find(|(l, _)| *l == label) {
+                        Some(e) => e.1 += ms,
+                        None => gpu.push((label, ms)),
+                    }
+                }
             }
             let ms = start.elapsed().as_secs_f64() * 1000.0 / f64::from(frames);
             println!(
@@ -148,6 +204,33 @@ fn main() {
                     String::new()
                 }
             );
+            if !gpu.is_empty() {
+                let parts: Vec<String> = gpu
+                    .iter()
+                    .map(|(l, ms)| format!("{l} {:.2}", ms / frames as f32))
+                    .collect();
+                let total: f32 = gpu.iter().map(|(_, ms)| ms).sum::<f32>() / frames as f32;
+                println!("    GPU ms: {} (sum {total:.2})", parts.join(", "));
+            }
         }
     }
+}
+
+/// A headless device with timestamp queries when the adapter has them, so
+/// the renderer reports per-pass GPU times.
+async fn device_with_timestamps() -> (wgpu::Device, wgpu::Queue) {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter = instance
+        .request_adapter(&wgpu::RequestAdapterOptions::default())
+        .await
+        .expect("adapter");
+    eprintln!("adapter: {:?}", adapter.get_info());
+    let required_features = adapter.features() & wgpu::Features::TIMESTAMP_QUERY;
+    adapter
+        .request_device(&wgpu::DeviceDescriptor {
+            required_features,
+            ..Default::default()
+        })
+        .await
+        .expect("device")
 }

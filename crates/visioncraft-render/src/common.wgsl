@@ -1,8 +1,11 @@
-// Shared declarations. lib.rs prepends this file to every shader module (WGSL
-// has no includes); keep `Globals` in sync with `Renderer::write_globals`.
+// Shared declarations. lib.rs prepends this file to every shader module but
+// the atmosphere LUTs (WGSL has no includes); keep `Globals` in sync with
+// `Renderer::write_globals`.
 // Everything photometric is pre-exposed on the CPU (Frostbite's
 // pre-exposure, Lagarde & de Rousiers, "Moving Frostbite to PBR", 2014), so
-// the HDR target stays well inside f16 range.
+// the HDR target stays well inside f16 range. Sky and environment radiance
+// is kept in kcd/m2 without exposure and scaled by `night.w` where it is
+// used, so a new exposure never re-renders the environment.
 struct Globals {
     view_proj: mat4x4<f32>,
     view: mat4x4<f32>,
@@ -12,22 +15,33 @@ struct Globals {
     camera: vec4<f32>,          // xyz world position
     sun_dir: vec4<f32>,         // xyz towards the sun, w disc luminance (pre-exposed)
     sun_light: vec4<f32>,       // rgb sun illuminance (pre-exposed), w cos(disc radius)
-    sh: array<vec4<f32>, 9>,    // sky irradiance as L2 spherical harmonics (pre-exposed)
     splits: vec4<f32>,          // far view depth of each cascade
     texel: vec4<f32>,           // world size of one shadow texel per cascade
     shadow: vec4<f32>,          // x cascade count, y map size, z 1 / size, w shadow distance
-    viewport: vec4<f32>,        // width, height, 1 / width, 1 / height
+    viewport: vec4<f32>,        // render width, height, 1 / width, 1 / height (scaled)
     effects: vec4<f32>,         // x AO samples, y contact shadows on, z AO radius (m), w AO intensity
     perez: array<vec4<f32>, 5>, // Preetham's Perez coefficients A..E for (Y, x, y)
     zenith: vec4<f32>,          // zenith (Y, x, y) / F(0, theta_sun); w day factor
-    night: vec4<f32>,           // rgb night sky (pre-exposed); w Y scale (cd/m2 * exposure)
+    night: vec4<f32>,           // rgb night sky (kcd/m2); w kcd/m2 -> pre-exposed HDR (1000 * exposure)
     highlight: vec4<u32>,       // x mesh id, y face id, z first on-top overlay segment
     wind: vec4<f32>,            // xy direction (world x, z; unit), z strength, w gustiness
     time: vec4<f32>,            // x seconds, y exposure, z env cube's last mip, w clay mode (0/1)
     light_grid: vec4<f32>,      // xy grid origin (world x, z), z 1 / cell size, w light count
     grid_dims: vec4<u32>,       // x, y cells along world x and z
+    output: vec4<f32>,          // output width, height, render scale, 1 / render scale
+    fog: vec4<f32>,             // x extinction at fog.z (1/m), y height falloff (1/m), z base height (m), w sun glow
+    sky: vec4<f32>,             // x source (0 Preetham, 1 physical, 2 HDRI), y HDRI rotation (rad), z source -> kcd/m2, w HDRI mip count
+    ground: vec4<f32>,          // rgb radiance below the horizon (kcd/m2), w HDRI below the horizon (0/1)
+    options: vec4<f32>,         // x PCF taps (4 or 9), y bloom strength, z cascades refreshed this frame (bits), w unused
+    reflection: vec4<f32>,      // x planar reflection available (0/1), y water height (m), z clip below (0/1), w clip height (m)
+    sh: array<vec4<f32>, 9>,    // sky irradiance as L2 SH (kcd/m2 * sr), written on the GPU (env.wgsl)
 }
 @group(0) @binding(0) var<uniform> g: Globals;
+// The prefiltered environment cube and the sky source: the HDRI
+// (equirectangular, mipmapped) or the physical sky's sky-view LUT.
+@group(0) @binding(1) var env_map: texture_cube<f32>;
+@group(0) @binding(2) var env_sampler: sampler;
+@group(0) @binding(5) var sky_tex: texture_2d<f32>;
 
 const PI: f32 = 3.14159265;
 const SKY_DEPTH: f32 = 1e9; // linear depth written where nothing was drawn
@@ -76,4 +90,68 @@ fn hash3(p: vec3<i32>) -> f32 {
 
 fn hash2(p: vec2<i32>) -> f32 {
     return hash3(vec3<i32>(p, 0));
+}
+
+fn luminance(c: vec3<f32>) -> f32 {
+    return dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
+}
+
+// ---- distance haze ----------------------------------------------------------
+
+// Exponential height fog: extinction sigma(y) = a * exp(-b (y - y0)). Its
+// optical depth along a ray has a closed form (Wenzel, "Real-time
+// Atmospheric Effects in Games Revisited", GDC 2007; Quilez, "Better Fog",
+// 2010): tau = a e^{-b (o_y - y0)} (1 - e^{-b t d_y}) / (b d_y). lib.rs has
+// the same function (`fog_transmittance`), unit-tested against numerical
+// integration. The sky passes a very large `t` (1e9 m).
+fn fog_transmittance(origin_y: f32, dir_y: f32, t: f32) -> f32 {
+    let a = g.fog.x;
+    if a <= 0.0 {
+        return 1.0;
+    }
+    let b = g.fog.y;
+    let start = a * exp(-b * (origin_y - g.fog.z));
+    let k = b * dir_y;
+    var path = t;
+    if abs(k * t) > 1e-4 {
+        // (1 - e^{-k t}) / k; the exponent is clamped so it never overflows.
+        path = (1.0 - exp(min(-k * t, 80.0))) / k;
+    }
+    return exp(-start * path);
+}
+
+// Light scattered into the view ray by the haze, per unit (1 - T): the sky
+// just above the horizon in the view's azimuth from the environment cube (a
+// mildly blurred mip whose lobe stays clear of the ground: the direction is
+// lifted to at least 7 degrees, so the haze never takes the colour of the
+// ground), plus single scattering of the sun with a Henyey-Greenstein phase
+// (g = 0.6, forward-scattering aerosol).
+fn fog_inscatter(dir: vec3<f32>, sun_visibility: f32) -> vec3<f32> {
+    let h = normalize(vec3<f32>(dir.x, max(dir.y, 0.0) * 0.5 + 0.12, dir.z));
+    let sky = textureSampleLevel(env_map, env_sampler, h, g.time.z * 0.3).rgb * g.night.w;
+    let c = dot(dir, g.sun_dir.xyz);
+    let hg = 0.64 / (4.0 * PI * pow(1.36 - 1.2 * c, 1.5));
+    return sky + g.sun_light.rgb * hg * g.fog.w * sun_visibility;
+}
+
+// Haze between the camera and a surface at `world` (pre-exposed colour in
+// and out).
+fn apply_fog(color: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
+    if g.fog.x <= 0.0 {
+        return color;
+    }
+    let to = world - g.camera.xyz;
+    let t = length(to);
+    let dir = to / max(t, 1e-6);
+    let transmit = fog_transmittance(g.camera.y, dir.y, t);
+    return color * transmit + fog_inscatter(dir, 1.0) * fog_near(transmit) * (1.0 - transmit);
+}
+
+// Haze over a short path is lit by the whole sphere around it, darker
+// ground included, not only by the horizon sky it converges to over a long
+// path: a crude single-scattering correction (about half the horizon's
+// radiance for thin haze, all of it as the path becomes opaque) that keeps
+// dark hedges at dusk from turning milky.
+fn fog_near(transmit: f32) -> f32 {
+    return mix(1.0, 0.5, transmit);
 }

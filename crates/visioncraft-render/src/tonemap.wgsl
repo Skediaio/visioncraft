@@ -4,10 +4,10 @@
 // (Apache-2.0, google/filament PR 7236) with the 6th-order sigmoid fit from
 // Benjamin Wrensch, "Minimal AgX Implementation" (iolite engine blog, 2023).
 // tonemap.rs carries the same function on the CPU for unit tests.
-// The target is an sRGB format, so the hardware does the transfer function;
-// we only dither before its 8-bit quantisation to avoid banding in the sky.
-
-@group(0) @binding(0) var hdr: texture_2d<f32>;
+// The target is 8-bit unorm holding sRGB-encoded values (the output's
+// non-sRGB view, or the LDR image FXAA and the upscale read), dithered
+// before quantisation to avoid banding in the sky. Bloom is mixed in first.
+// Module: common.wgsl + post.wgsl (bindings: src = HDR, src2 = bloom) + this.
 
 const SRGB_TO_REC2020 = mat3x3<f32>(
     vec3<f32>(0.6274, 0.0691, 0.0164),
@@ -50,25 +50,21 @@ fn srgb_encode(c: vec3<f32>) -> vec3<f32> {
     return select(1.055 * pow(c, vec3<f32>(1.0 / 2.4)) - 0.055, c * 12.92, c <= vec3<f32>(0.0031308));
 }
 
-fn srgb_decode(c: vec3<f32>) -> vec3<f32> {
-    return select(pow((c + 0.055) / 1.055, vec3<f32>(2.4)), c / 12.92, c <= vec3<f32>(0.04045));
-}
-
-struct Out {
-    @builtin(position) clip: vec4<f32>,
-}
-
-@vertex
-fn vs_fullscreen(@builtin(vertex_index) i: u32) -> Out {
-    let p = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
-    return Out(vec4<f32>(p * 2.0 - 1.0, 0.0, 1.0));
-}
+override LUMA_IN_ALPHA: bool = false;
 
 @fragment
-fn fs_main(in: Out) -> @location(0) vec4<f32> {
-    let c = agx(textureLoad(hdr, vec2<i32>(in.clip.xy), 0).rgb);
+fn fs_tonemap(in: Out) -> @location(0) vec4<f32> {
+    var hdr = textureLoad(src, vec2<i32>(in.clip.xy), 0).rgb;
+    if g.options.y > 0.0 {
+        // Five summed bloom levels: their mean keeps the energy.
+        let bloom = textureSampleLevel(src2, smp, in.clip.xy * g.viewport.zw, 0.0).rgb * 0.2;
+        hdr = mix(hdr, bloom, g.options.y);
+    }
+    let c = agx(hdr);
     // Dither by +-0.5 LSB (interleaved gradient noise) in the encoded domain.
-    let n = fract(52.9829189 * fract(dot(in.clip.xy, vec2<f32>(0.06711056, 0.00583715)))) - 0.5;
-    let e = clamp(srgb_encode(c) + n / 255.0, vec3<f32>(0.0), vec3<f32>(1.0));
-    return vec4<f32>(srgb_decode(e), 1.0);
+    let n = ign(in.clip.xy) - 0.5;
+    let encoded = clamp(srgb_encode(c) + n / 255.0, vec3<f32>(0.0), vec3<f32>(1.0));
+    // Into the LDR image, alpha carries luma for FXAA; the output stays opaque.
+    let a = select(1.0, dot(encoded, vec3<f32>(0.299, 0.587, 0.114)), LUMA_IN_ALPHA);
+    return vec4<f32>(encoded, a);
 }

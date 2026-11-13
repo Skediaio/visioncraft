@@ -1,6 +1,7 @@
 //! Visual test bed: renders the demo scenes to PNG files for inspection,
-//! including the 1920x1080 garden beauty shots (afternoon, and dusk with the
-//! garden lights on), through `Renderer::render_still` (HIGH quality).
+//! including the 1920x1080 garden beauty shots (afternoon, golden hour, dusk
+//! and night with the garden lights on, overcast), through
+//! `Renderer::render_still` (HIGH quality).
 //!
 //! `cargo run --release -p visioncraft-render --example garden -- <out dir> [names...]`
 //! With `VC_LIVE=low|medium|high` the shots go through the live path
@@ -8,8 +9,9 @@
 
 use std::path::{Path, PathBuf};
 
+use glam::Vec3;
 use visioncraft_render::demo::{self, Camera};
-use visioncraft_render::{Quality, Renderer, Sun, headless_device};
+use visioncraft_render::{Atmosphere, HdriImage, Quality, Renderer, Sky, Sun, headless_device};
 
 fn write_png(path: &Path, pixels: &[u8], w: u32, h: u32) {
     let mut enc = png::Encoder::new(std::fs::File::create(path).expect("png file"), w, h);
@@ -40,13 +42,97 @@ fn shots() -> Vec<Shot> {
             },
         },
         Shot {
+            name: "garden_golden",
+            size: (1920, 1080),
+            build: |r, aspect| {
+                demo::garden(r);
+                r.set_time(2.0);
+                (demo::garden_camera(aspect), demo::golden_sun(), 12.7)
+            },
+        },
+        Shot {
             name: "garden_dusk",
             size: (1920, 1080),
             build: |r, aspect| {
                 let lights = demo::garden(r);
                 r.set_lights(&lights);
                 r.set_time(2.0);
-                (demo::garden_camera(aspect), demo::dusk_sun(), 4.0)
+                (demo::garden_camera(aspect), demo::dusk_sun(), 7.0)
+            },
+        },
+        Shot {
+            name: "garden_overcast",
+            size: (1920, 1080),
+            build: |r, aspect| {
+                demo::garden(r);
+                r.set_time(2.0);
+                let pixels = demo::overcast_hdri(512);
+                let image = HdriImage {
+                    width: 512,
+                    height: 256,
+                    rgb: &pixels,
+                };
+                r.set_sky(&Sky::Hdri {
+                    image,
+                    rotation_deg: 0.0,
+                    intensity: 6000.0,
+                })
+                .expect("overcast sky");
+                r.set_atmosphere(&Atmosphere {
+                    haze: 3.0,
+                    ..Default::default()
+                });
+                let sun = Sun {
+                    illuminance: 0.0,
+                    ..demo::afternoon_sun()
+                };
+                (demo::garden_camera(aspect), sun, 12.0)
+            },
+        },
+        Shot {
+            name: "garden_night",
+            size: (1920, 1080),
+            build: |r, aspect| {
+                let lights = demo::garden(r);
+                r.set_lights(&lights);
+                (demo::garden_camera(aspect), demo::night_sun(), 1.5)
+            },
+        },
+        // The planar reflection from two camera positions: the mirrored
+        // house and trees must stay put on the water as the camera moves.
+        Shot {
+            name: "garden_pond_a",
+            size: (1280, 720),
+            build: |r, aspect| {
+                demo::garden(r);
+                r.set_time(2.0);
+                let cam = demo::camera(Vec3::new(9.0, 1.6, 15.0), Vec3::new(4.0, 0.0, 6.0), aspect);
+                (cam, demo::afternoon_sun(), 14.7)
+            },
+        },
+        Shot {
+            name: "garden_pond_b",
+            size: (1280, 720),
+            build: |r, aspect| {
+                demo::garden(r);
+                r.set_time(2.0);
+                let cam = demo::camera(Vec3::new(1.0, 2.4, 15.5), Vec3::new(5.0, 0.0, 6.0), aspect);
+                (cam, demo::afternoon_sun(), 14.7)
+            },
+        },
+        // A long view over the field to the horizon: haze and the ground.
+        Shot {
+            name: "garden_long",
+            size: (1920, 1080),
+            build: |r, aspect| {
+                demo::garden(r);
+                r.set_time(2.0);
+                let cam = demo::camera(
+                    Vec3::new(-6.0, 1.7, -12.0),
+                    Vec3::new(-40.0, 1.2, -60.0),
+                    aspect,
+                );
+                (cam, demo::afternoon_sun(), 14.7)
             },
         },
         Shot {

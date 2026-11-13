@@ -1,4 +1,5 @@
-// Overlay lines and points, drawn on the tone-mapped output. Each instance is
+// Overlay lines and points, drawn on the tone-mapped output (full output
+// resolution, after any upscale). Each instance is
 // one segment (two LineVertex records), expanded to a screen-space quad with
 // round caps and a one-pixel anti-aliased edge; a segment with equal ends is
 // a round point. Depth-tested by hand against the linear scene depth, so it
@@ -25,7 +26,7 @@ struct Out {
 }
 
 fn to_pixels(c: vec4<f32>) -> vec2<f32> {
-    return c.xy / c.w * 0.5 * g.viewport.xy;
+    return c.xy / c.w * 0.5 * g.output.xy;
 }
 
 @vertex
@@ -61,7 +62,7 @@ fn vs_main(s: Segment, @builtin(vertex_index) vi: u32, @builtin(instance_index) 
     let p = pa + dir * along + normal * side * reach;
     let c = select(ca, cb, end > 0.5);
 
-    out.clip = vec4<f32>(p / (0.5 * g.viewport.xy) * c.w, c.z, c.w);
+    out.clip = vec4<f32>(p / (0.5 * g.output.xy) * c.w, c.z, c.w);
     out.local = vec2<f32>(along, side * reach);
     out.extent = vec2<f32>(len, half_width);
     out.color = mix(s.a_color, s.b_color, end);
@@ -73,7 +74,9 @@ fn vs_main(s: Segment, @builtin(vertex_index) vi: u32, @builtin(instance_index) 
 @fragment
 fn fs_main(in: Out) -> @location(0) vec4<f32> {
     if in.on_top == 0u {
-        let scene = textureLoad(depth_tex, vec2<i32>(in.clip.xy), 0).r;
+        // The scene may render at a lower resolution than the output.
+        let at = min(vec2<i32>(in.clip.xy * g.output.z), vec2<i32>(g.viewport.xy) - 1);
+        let scene = textureLoad(depth_tex, at, 0).r;
         // Tolerance lets lines lying on a surface (grid on the ground) win.
         if in.view_depth > scene * 1.002 + 0.01 {
             discard;

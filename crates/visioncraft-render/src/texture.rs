@@ -26,6 +26,15 @@ pub struct TextureId(pub(crate) u32);
 pub(crate) struct GpuTexture {
     pub view: wgpu::TextureView,
     pub repeat: bool,
+    /// With its mip chain, for the memory estimate.
+    pub bytes: u64,
+}
+
+/// Bytes of a full mip chain at `texel` bytes per pixel.
+pub(crate) fn mip_bytes(w: u32, h: u32, texel: u64) -> u64 {
+    (0..mip_count(w, h))
+        .map(|i| (w >> i).max(1) as u64 * (h >> i).max(1) as u64 * texel)
+        .sum()
 }
 
 /// Levels of a full mip chain down to 1x1.
@@ -40,12 +49,15 @@ pub(crate) fn format(space: ColorSpace) -> wgpu::TextureFormat {
     }
 }
 
-/// The mip blit: one pipeline per texture format.
+/// The mip blit: one pipeline per texture format (sRGB, linear RGBA8, and
+/// RGBA16F for HDRIs).
 pub(crate) struct Mipmapper {
     layout: wgpu::BindGroupLayout,
-    pipelines: [wgpu::RenderPipeline; 2],
+    pipelines: [wgpu::RenderPipeline; 3],
     sampler: wgpu::Sampler,
 }
+
+pub(crate) const HALF: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 impl Mipmapper {
     pub fn new(device: &wgpu::Device, module: &wgpu::ShaderModule) -> Self {
@@ -66,7 +78,7 @@ impl Mipmapper {
                 },
             ],
         });
-        let pipelines = [ColorSpace::Srgb, ColorSpace::Linear].map(|space| {
+        let pipelines = [format(ColorSpace::Srgb), format(ColorSpace::Linear), HALF].map(|fmt| {
             crate::pipeline(
                 device,
                 crate::PipelineDesc {
@@ -76,11 +88,12 @@ impl Mipmapper {
                     fs: Some("fs_main"),
                     groups: &[Some(&layout)],
                     buffers: &[],
-                    target: Some(format(space).into()),
+                    target: Some(fmt.into()),
                     depth: None,
                     cull: None,
                     samples: 1,
                     constants: &[],
+                    front_cw: false,
                 },
             )
         });
@@ -116,8 +129,41 @@ impl Mipmapper {
                 w * h * 4
             ));
         }
-        let levels = mip_count(w, h);
         let fmt = format(desc.color_space);
+        let pipeline = (desc.color_space == ColorSpace::Linear) as usize;
+        let view = self.upload_raw(device, queue, (w, h), fmt, desc.rgba8, 4, pipeline);
+        Ok(GpuTexture {
+            view,
+            repeat: desc.repeat,
+            bytes: mip_bytes(w, h, 4),
+        })
+    }
+
+    /// An RGBA16F image (`HALF`, four u16 per pixel) with its mip chain.
+    pub fn upload_half(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        (w, h): (u32, u32),
+        texels: &[u16],
+    ) -> (wgpu::TextureView, u32) {
+        let bytes: Vec<u8> = texels.iter().flat_map(|t| t.to_le_bytes()).collect();
+        let view = self.upload_raw(device, queue, (w, h), HALF, &bytes, 8, 2);
+        (view, mip_count(w, h))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn upload_raw(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        (w, h): (u32, u32),
+        fmt: wgpu::TextureFormat,
+        data: &[u8],
+        texel_bytes: u32,
+        pipeline: usize,
+    ) -> wgpu::TextureView {
+        let levels = mip_count(w, h);
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("material texture"),
             size: wgpu::Extent3d {
@@ -136,10 +182,10 @@ impl Mipmapper {
         });
         queue.write_texture(
             texture.as_image_copy(),
-            desc.rgba8,
+            data,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(w * 4),
+                bytes_per_row: Some(w * texel_bytes),
                 rows_per_image: Some(h),
             },
             wgpu::Extent3d {
@@ -156,7 +202,7 @@ impl Mipmapper {
                 ..Default::default()
             })
         };
-        let pipeline = &self.pipelines[(desc.color_space == ColorSpace::Linear) as usize];
+        let pipeline = &self.pipelines[pipeline];
         let mut encoder = device.create_command_encoder(&Default::default());
         for i in 1..levels {
             let source = level(i - 1);
@@ -175,16 +221,13 @@ impl Mipmapper {
                     },
                 ],
             });
-            let mut pass = crate::color_pass(&mut encoder, "mip", &target, None, None);
+            let mut pass = crate::color_pass(&mut encoder, "mip", &target, None, None, None);
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &bind, &[]);
             pass.draw(0..3, 0..1);
         }
         queue.submit([encoder.finish()]);
-        Ok(GpuTexture {
-            view: texture.create_view(&Default::default()),
-            repeat: desc.repeat,
-        })
+        texture.create_view(&Default::default())
     }
 }
 

@@ -2,21 +2,33 @@
 //! data in, a tone-mapped sRGB texture out. No UI, no window, WebGPU core
 //! features and default limits only.
 //!
-//! Passes per frame, in order (see `Renderer::render`):
-//! 0. when the sun changed: the environment cube, `Rgba16Float` 64^2 x 6
-//!    faces x 6 mips, prefiltered per roughness (env.rs)
+//! Passes per frame, in order (see `Renderer::render`); "render size" is
+//! the output size times `Quality::render_scale`:
+//! 0. when the sky changed: the physical sky's sky-view LUT (`Rgba16Float`
+//!    192x108, atmosphere.rs), the ambient SH (`Rgba32Float` 9x1, copied into
+//!    the globals) and, two mips per frame, the environment cube
+//!    (`Rgba16Float` 64^2 x 6 faces x 6 mips, prefiltered per roughness)
 //! 1. shadow cascades, depth only, `Depth32Float` 2D array (one layer each);
-//!    cutout materials alpha-test, wind animates (not in the cached far one)
+//!    cutout materials alpha-test, glass stipples, wind animates (not in the
+//!    cached far cascade); with 3+ cascades the middle ones alternate frames
 //! 2. depth pre-pass, `Depth32Float` (4x MSAA when enabled); cutout
 //!    materials write their coverage through the sample mask
 //! 3. depth resolve: sample 0 -> linear view depth, `R32Float`
-//! 4. AO + contact shadows at half resolution, `Rg8Unorm`, depth-aware blur (H, V)
-//! 5. forward PBR, `Rgba16Float` (MSAA, resolved into a 1x target): opaque
-//!    and cutout geometry (cutout with an Equal depth test), the sky, then
-//!    glass, water and alpha-blended materials sorted back to front (not in
-//!    the depth pre-pass, so not in AO and not depth-writing)
-//! 6. AgX tone map into the output format (`Rgba8UnormSrgb`)
-//! 7. overlay lines and points, alpha-blended onto the output
+//! 4. AO + contact shadows at half render size, `Rg8Unorm`, depth-aware blur (H, V)
+//! 5. planar reflection of the largest visible water plane (when enabled):
+//!    the scene mirrored, coarser LODs, no screen-space effects,
+//!    `Rgba16Float` + `Depth32Float` at render size / divisor
+//! 6. forward PBR, `Rgba16Float` (MSAA, resolved into a 1x target): opaque
+//!    and cutout geometry (cutout with an Equal depth test), the infinite
+//!    ground, the sky, then glass, water and alpha-blended materials sorted
+//!    back to front (not in the depth pre-pass, so not in AO and not
+//!    depth-writing); distance haze on everything
+//! 7. bloom: 5 half-size `Rgba16Float` levels down, then back up
+//! 8. AgX tone map (bloom mixed in) to 8-bit sRGB-encoded values: straight
+//!    into the output, or into an LDR target at render size for
+//! 9. FXAA (when enabled) and
+//! 10. the upscale to the output size with RCAS sharpening (render scale < 1)
+//! 11. overlay lines and points, alpha-blended onto the output (`Rgba8UnormSrgb`)
 //!
 //! MSAA: only the pre-pass and forward pass are multisampled. AO, contact
 //! shadows, water depth and the overlay's depth test use sample 0 of each
@@ -26,27 +38,32 @@
 //!
 //! Budget (bench: `examples/bench.rs`, 200k static triangles + 5000
 //! alpha-cut, textured, wind-animated 500-triangle shrubs at mixed levels of
-//! detail, 1920x1080, native offscreen, Intel UHD 620): see the report of
-//! that example; on a busy build box MEDIUM ran at 40-50 ms, about 1.1-1.35x
-//! the previous box-and-sphere renderer measured at the same moment, so
-//! MEDIUM does not hold 30 fps with foliage of this density.
+//! detail, 1920x1080, native offscreen, Intel UHD 620): see that example.
 
+use std::cell::Cell;
 use std::num::NonZeroU64;
 
 use glam::{Mat4, Vec2, Vec3, Vec4};
 
+mod atmosphere;
 pub mod demo;
 mod env;
+mod hdri;
 pub mod lights;
 pub mod lod;
 pub mod shadow;
 pub mod sky;
+mod stats;
 mod still;
 mod texture;
+mod timing;
 pub mod tonemap;
 
+pub use atmosphere::{Atmosphere, fog_transmittance};
+pub use hdri::{HdriImage, estimate_sun};
 pub use lights::{Light, LightKind};
 pub use sky::Sun;
+pub use stats::{RenderStats, suggest_quality};
 pub use still::Still;
 pub use texture::{ColorSpace, TextureDesc, TextureId, mip_count};
 
@@ -62,27 +79,41 @@ const MATERIAL_SIZE: u64 = 80;
 const CASCADE_SIZE: u64 = 80;
 const AO_RADIUS: f32 = 0.6; // metres
 const AO_INTENSITY: f32 = 1.5;
+/// Bloom levels (half size down to 1/32).
+const BLOOM_LEVELS: usize = 5;
+/// Solar illuminance at the top of the atmosphere (lux; Filament's
+/// documentation, "Physically based units"), in kcd/m2 per unit of the
+/// physical sky's LUTs.
+const SUN_TOP_KLX: f32 = 128.0;
 /// Instances are grouped into square ground cells of this size (metres) so
 /// shadow cascades and the camera can skip the ones they do not see, and
 /// levels of detail switch per cell.
 const CLUSTER_CELL: f32 = 8.0;
 /// `set_time` wraps here (seconds) to keep f32 precision in the shaders.
 const TIME_WRAP: f64 = 4096.0;
+/// Byte offset of the SH in the globals (written by the GPU, see env.rs).
+const SH_OFFSET: u64 = 8 * 64 + 26 * 16;
 
 const COMMON: &str = include_str!("common.wgsl");
 const SKY: &str = include_str!("sky.wgsl");
+const POST: &str = include_str!("post.wgsl");
 /// Every shader module as (name, source parts); WGSL has no includes, so the
 /// shared declarations are prepended. Also validated with naga in a unit test.
-const SHADERS: [(&str, &[&str]); 9] = [
+const SHADERS: [(&str, &[&str]); 11] = [
     ("scene", &[COMMON, include_str!("scene.wgsl")]),
     ("sky", &[COMMON, SKY]),
     ("depth", &[COMMON, include_str!("depth.wgsl")]),
     ("ssao", &[COMMON, include_str!("ssao.wgsl")]),
     ("blur", &[COMMON, include_str!("blur.wgsl")]),
-    ("tonemap", &[include_str!("tonemap.wgsl")]),
+    ("tonemap", &[COMMON, POST, include_str!("tonemap.wgsl")]),
     ("overlay", &[COMMON, include_str!("overlay.wgsl")]),
     ("env", &[COMMON, SKY, include_str!("env.wgsl")]),
     ("mip", &[include_str!("mip.wgsl")]),
+    (
+        "atmosphere",
+        &[COMMON, SKY, include_str!("atmosphere.wgsl")],
+    ),
+    ("post", &[COMMON, POST]),
 ];
 
 /// Triangle mesh in plain slices. `normals` match `positions`; `face_ids`
@@ -180,6 +211,10 @@ pub struct Material {
     /// normals are used as given on both sides (bent normals).
     pub foliage: bool,
     pub surface: Surface,
+    /// 0..1: large-scale variation in colour and roughness over several
+    /// metres (world-space noise), against the carpet look of big flat
+    /// single-material surfaces such as lawns and paving.
+    pub variation: f32,
 }
 
 impl Default for Material {
@@ -204,6 +239,7 @@ impl Default for Material {
             double_sided: false,
             foliage: false,
             surface: Surface::Standard,
+            variation: 0.0,
         }
     }
 }
@@ -274,7 +310,7 @@ pub struct LineVertex {
 }
 
 /// Effect switches so the app can fall back on slow GPUs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Quality {
     pub shadow_resolution: u32,
     /// 1..=4.
@@ -288,7 +324,23 @@ pub struct Quality {
     /// given to `add_lod_item`). Lower presets switch to coarser plants
     /// sooner.
     pub lod_distance_percent: u32,
+    /// 0.5..=1: the scene renders at this fraction of the output size and
+    /// is upscaled (bilinear plus RCAS sharpening) before the overlay.
+    pub render_scale: f32,
+    /// FXAA after tone mapping (meant for presets without MSAA).
+    pub fxaa: bool,
+    /// Bloom (strength: `Renderer::set_bloom`).
+    pub bloom: bool,
+    /// Planar reflection of water: resolution divisor of the render size (2
+    /// half, 4 quarter); 0 = off (water reflects the environment cube).
+    pub water_reflection: u32,
+    /// 3x3 PCF taps for sun shadows (otherwise 2x2: softer edges cost ~2x).
+    pub soft_shadows: bool,
 }
+
+// `render_scale` is clamped to 0.5..=1 everywhere it is used, never NaN, so
+// equality is total (presets are compared with `==`).
+impl Eq for Quality {}
 
 impl Default for Quality {
     fn default() -> Self {
@@ -303,17 +355,27 @@ impl Quality {
         ao_samples: 0,
         contact_shadows: false,
         msaa: false,
-        lod_distance_percent: 50,
+        lod_distance_percent: 40,
+        render_scale: 0.65,
+        fxaa: true,
+        bloom: false,
+        water_reflection: 0,
+        soft_shadows: false,
     };
     pub const MEDIUM: Quality = Quality {
-        shadow_resolution: 2048,
+        shadow_resolution: 1536,
         cascades: 2,
         ao_samples: 8,
         // Contact shadows (~2 ms) are HIGH only since foliage is alpha-cut;
         // plants also switch to coarser LODs sooner than on HIGH.
         contact_shadows: false,
         msaa: false,
-        lod_distance_percent: 60,
+        lod_distance_percent: 50,
+        render_scale: 0.75,
+        fxaa: true,
+        bloom: true,
+        water_reflection: 4,
+        soft_shadows: false,
     };
     pub const HIGH: Quality = Quality {
         shadow_resolution: 2048,
@@ -322,6 +384,11 @@ impl Quality {
         contact_shadows: true,
         msaa: true,
         lod_distance_percent: 100,
+        render_scale: 1.0,
+        fxaa: false,
+        bloom: true,
+        water_reflection: 2,
+        soft_shadows: true,
     };
     pub const PRESETS: [(&'static str, Quality); 3] = [
         ("low", Quality::LOW),
@@ -332,6 +399,51 @@ impl Quality {
     fn samples(&self) -> u32 {
         if self.msaa { MSAA_SAMPLES } else { 1 }
     }
+}
+
+/// An endless ground plane at `height`, drawn wherever no geometry covers
+/// the view below the horizon (a backdrop: it never hides or z-fights with
+/// the scene's own ground), lit, shadowed and hazed like any surface.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Ground {
+    pub height: f32,
+    /// Linear albedo.
+    pub color: [f32; 3],
+    pub roughness: f32,
+    /// Large-scale variation, as `Material::variation`.
+    pub variation: f32,
+}
+
+impl Default for Ground {
+    fn default() -> Self {
+        Self {
+            height: 0.0,
+            color: [0.1, 0.16, 0.05],
+            roughness: 0.95,
+            variation: 0.6,
+        }
+    }
+}
+
+/// Where the sky's light comes from.
+#[derive(Clone, Copy, Debug)]
+pub enum Sky<'a> {
+    /// Physical sky (Hillaire 2020): blue zenith, warm horizon, real
+    /// sunsets and twilight. The default.
+    Physical,
+    /// Preetham 1999 analytic sky: the earlier model, as a fallback.
+    Preetham,
+    /// A photograph of the sky (equirectangular HDRI) as background,
+    /// environment and ambient light. The sun (direct light, its disc) still
+    /// comes from `set_sun`: line it up with the image's sun (see
+    /// `estimate_sun`), or give it zero illuminance for an overcast image.
+    /// `intensity` scales pixel values to cd/m2 (unscaled daylight HDRIs
+    /// need ~10^4: match the image's sky to `set_exposure`).
+    Hdri {
+        image: HdriImage<'a>,
+        rotation_deg: f32,
+        intensity: f32,
+    },
 }
 
 /// Fraction of light left after `path_m` metres through water of
@@ -402,10 +514,15 @@ struct GpuMaterial {
 
 struct Layouts {
     /// Group 0 of every pass but the environment's: globals, environment
-    /// cube and sampler, light list and grid.
+    /// cube and sampler, light list and grid, sky source.
     globals: wgpu::BindGroupLayout,
-    /// Just the globals uniform (the environment pass renders the cube).
+    /// Just the globals uniform (the sky LUT passes).
     globals_only: wgpu::BindGroupLayout,
+    /// Globals, sampler and sky source (the environment passes, which
+    /// render the cube and so cannot bind it).
+    sky_source: wgpu::BindGroupLayout,
+    /// Post-processing input: texture, bilinear sampler, second texture.
+    post: wgpu::BindGroupLayout,
     material: wgpu::BindGroupLayout,
     draw: wgpu::BindGroupLayout,
     cascade: wgpu::BindGroupLayout,
@@ -423,50 +540,117 @@ struct SampledPipelines {
     depth: [wgpu::RenderPipeline; 4],
     forward: [wgpu::RenderPipeline; 4],
     transparent: [wgpu::RenderPipeline; 2],
+    ground: wgpu::RenderPipeline,
     sky: wgpu::RenderPipeline,
     resolve: wgpu::RenderPipeline,
 }
 
 struct Pipelines {
-    /// Opaque, cutout.
-    shadow: [wgpu::RenderPipeline; 2],
+    /// Opaque, cutout, glass (stippled).
+    shadow: [wgpu::RenderPipeline; 3],
+    /// The mirrored scene, by `Material::variant`, then its ground and sky.
+    reflect: [wgpu::RenderPipeline; 4],
+    reflect_ground: wgpu::RenderPipeline,
+    reflect_sky: wgpu::RenderPipeline,
     ssao: wgpu::RenderPipeline,
     blur_h: wgpu::RenderPipeline,
     blur_v: wgpu::RenderPipeline,
-    tonemap: wgpu::RenderPipeline,
+    /// First (Karis-weighted) and further downsamples, upsample.
+    bloom: [wgpu::RenderPipeline; 3],
+    /// Into the output (opaque), into the LDR image (luma in alpha).
+    tonemap: [wgpu::RenderPipeline; 2],
+    fxaa: wgpu::RenderPipeline,
+    upscale: wgpu::RenderPipeline,
     overlay: wgpu::RenderPipeline,
 }
 
 /// Everything sized by the viewport or the quality settings.
 struct Targets {
+    /// The scene's size (output size times the render scale).
+    size: (u32, u32),
     depth: wgpu::TextureView,
     hdr_msaa: Option<wgpu::TextureView>,
     hdr: wgpu::TextureView,
     linear_depth: wgpu::TextureView,
     occlusion: [wgpu::TextureView; 2],
     output: wgpu::Texture,
-    /// sRGB view the passes render through.
+    /// sRGB view the overlay renders through.
     output_view: wgpu::TextureView,
+    /// Non-sRGB view: post passes write sRGB-encoded values directly.
+    output_unorm: wgpu::TextureView,
     /// View in the texture's own format, returned by `render`.
     display_view: wgpu::TextureView,
+    /// Tone-mapped image at render size, and FXAA's output when an upscale
+    /// follows.
+    ldr: [wgpu::TextureView; 2],
+    bloom: Vec<wgpu::TextureView>,
+    reflection: wgpu::TextureView,
+    reflection_depth: wgpu::TextureView,
     shadow_layers: Vec<wgpu::TextureView>,
     resolve_bind: wgpu::BindGroup,
     ssao_bind: wgpu::BindGroup,
     blur_bind: [wgpu::BindGroup; 2],
+    /// HDR, then each level as the source of the next (down), then each
+    /// level as the source of the one above (up).
+    bloom_down_bind: Vec<wgpu::BindGroup>,
+    bloom_up_bind: Vec<wgpu::BindGroup>,
     tonemap_bind: wgpu::BindGroup,
+    fxaa_bind: wgpu::BindGroup,
+    /// Upscale from `ldr[0]` (no FXAA) or `ldr[1]`.
+    upscale_bind: [wgpu::BindGroup; 2],
     overlay_bind: wgpu::BindGroup,
     forward_bind: wgpu::BindGroup,
+    /// For the reflection pass: no screen-space inputs.
+    reflect_forward_bind: wgpu::BindGroup,
+    bytes: u64,
 }
 
 /// Which geometry pass `draw_items` records.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Pass {
-    /// `far`: the cached, camera-independent last cascade.
+    /// `far`: the cached, camera-independent last cascade; `coarse`: a
+    /// middle cascade (draws the coarsest level of detail).
     Shadow {
         far: bool,
+        coarse: bool,
     },
     Depth,
     Forward,
+    Reflection,
+}
+
+/// The sky source as set by `set_sky`.
+enum SkySource {
+    Physical,
+    Preetham,
+    Hdri {
+        view: wgpu::TextureView,
+        mips: u32,
+        /// Mean radiance of the upper half (image units, clamped).
+        mean: Vec3,
+        rotation: f32,
+        intensity: f32,
+        bytes: u64,
+    },
+}
+
+/// Per-frame counters for `stats` (`draw_items` takes `&self`).
+#[derive(Default)]
+struct Counters {
+    draws: Cell<u32>,
+    triangles: Cell<u64>,
+    instances: Cell<u32>,
+}
+
+impl Counters {
+    fn add(&self, triangles: u64, instances: u32, view: bool) {
+        self.draws.set(self.draws.get() + 1);
+        self.triangles
+            .set(self.triangles.get() + triangles * instances as u64);
+        if view {
+            self.instances.set(self.instances.get() + instances);
+        }
+    }
 }
 
 pub struct Renderer {
@@ -483,6 +667,12 @@ pub struct Renderer {
 
     globals: wgpu::Buffer,
     globals_bind: wgpu::BindGroup,
+    /// The mirrored camera's globals for the reflection pass.
+    reflect_globals: wgpu::Buffer,
+    reflect_globals_bind: wgpu::BindGroup,
+    globals_only_bind: wgpu::BindGroup,
+    /// Globals, sampler and sky source for the environment passes.
+    sky_bind: wgpu::BindGroup,
     cascade_buffer: wgpu::Buffer,
     cascade_bind: wgpu::BindGroup,
     draw_buffer: wgpu::Buffer,
@@ -495,12 +685,25 @@ pub struct Renderer {
     clamp_sampler: wgpu::Sampler,
     env_sampler: wgpu::Sampler,
     shadow_sampler: wgpu::Sampler,
+    post_sampler: wgpu::Sampler,
     mipmapper: texture::Mipmapper,
     env: env::Env,
+    physical: atmosphere::PhysicalSky,
+    sky_source: SkySource,
+    /// The sky-view LUT must follow the sun.
+    sky_view_dirty: bool,
+    /// Radiance below the horizon (kcd/m2) for the environment.
+    ground_kcd: Vec3,
+    atmosphere: Atmosphere,
+    ground: Option<Ground>,
+    ground_material: GpuMaterial,
+    ground_slot: u32,
+    bloom_strength: f32,
     light_buffer: wgpu::Buffer,
     grid_buffer: wgpu::Buffer,
     grid: lights::Grid,
     light_count: usize,
+    lights_cpu: Vec<Light>,
 
     meshes: Vec<Option<GpuMesh>>,
     materials: Vec<GpuMaterial>,
@@ -514,7 +717,6 @@ pub struct Renderer {
     eye: Vec3,
     sun: Sun,
     sky: sky::Sky,
-    sh: [Vec3; 9],
     ev100: f32,
     shadow_distance: f32,
     wind: Wind,
@@ -524,19 +726,26 @@ pub struct Renderer {
     /// The cached last shadow cascade (see `shadow`): where the camera was
     /// when it was rendered, and with which projection and light matrix.
     far_cache: Option<FarCache>,
+    /// The light matrix each cascade's map was last rendered with (middle
+    /// cascades are refreshed every other frame); `None` until rendered.
+    cascade_rendered: [Option<Mat4>; shadow::MAX_CASCADES],
+    frame: u64,
     /// Depth-tested and on-top segments; kept so either list can be
     /// replaced alone.
     overlay_cpu: (Vec<LineVertex>, Vec<LineVertex>),
     overlay: Option<wgpu::Buffer>,
     overlay_count: u32,
     overlay_on_top: u32,
+    timer: Option<timing::Timer>,
+    counters: Counters,
+    last_stats: RenderStats,
 }
 
 impl Renderer {
     /// `format` is the output texture's format: `Rgba8UnormSrgb`, or
     /// `Rgba8Unorm` for sRGB-encoded bytes in a plain texture (what egui
-    /// expects of user textures). Either way the passes write through an sRGB
-    /// view, so the encode and the overlay's blending happen in hardware.
+    /// expects of user textures). Either way the passes write sRGB-encoded
+    /// values (the overlay blends through an sRGB view, in hardware).
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
         let layouts = Layouts::new(device);
         let modules: Vec<_> = SHADERS
@@ -549,7 +758,7 @@ impl Renderer {
             })
             .collect();
         let quality = Quality::HIGH;
-        let pipelines = Pipelines::new(device, &layouts, &modules, format.add_srgb_suffix());
+        let pipelines = Pipelines::new(device, &layouts, &modules, format);
         let sampled = SampledPipelines::new(device, &layouts, &modules, quality.samples());
 
         let uniform = |label, size| {
@@ -561,11 +770,20 @@ impl Renderer {
             })
         };
         let globals = uniform("globals", globals_size());
-        let env = env::Env::new(
+        let reflect_globals = uniform("reflection globals", globals_size());
+        let env = env::Env::new(device, queue, module(&modules, "env"), &layouts.sky_source);
+        let globals_only_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("globals only"),
+            layout: &layouts.globals_only,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: globals.as_entire_binding(),
+            }],
+        });
+        let physical = atmosphere::PhysicalSky::new(
             device,
-            module(&modules, "env"),
+            module(&modules, "atmosphere"),
             &layouts.globals_only,
-            &globals,
         );
         let cascade_buffer = uniform("cascades", SLOT * shadow::MAX_CASCADES as u64);
         let cascade_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -608,6 +826,7 @@ impl Renderer {
                 depth_or_array_layers: 1,
             },
         );
+        let white = white_texture.create_view(&Default::default());
         // Material samplers: trilinear with 16x anisotropy (WebGPU core
         // allows up to 16 when all filters are linear).
         let material_sampler = |label, mode| {
@@ -624,8 +843,10 @@ impl Renderer {
         };
         let repeat_sampler = material_sampler("repeat", wgpu::AddressMode::Repeat);
         let clamp_sampler = material_sampler("clamp", wgpu::AddressMode::ClampToEdge);
+        // Repeats in u for the HDRI's azimuth seam (a cube ignores it).
         let env_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("environment"),
+            address_mode_u: wgpu::AddressMode::Repeat,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             mipmap_filter: wgpu::MipmapFilterMode::Linear,
@@ -636,6 +857,12 @@ impl Renderer {
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             compare: Some(wgpu::CompareFunction::LessEqual),
+            ..Default::default()
+        });
+        let post_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("post"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
         let storage = |label, size| {
@@ -658,11 +885,60 @@ impl Renderer {
             &env_sampler,
             &light_buffer,
             &grid_buffer,
+            &physical.sky_view,
         );
-        let targets = Targets::new(device, &layouts, format, quality, (1, 1), &shadow_sampler);
+        let reflect_globals_bind = globals_bind_group(
+            device,
+            &layouts.globals,
+            &reflect_globals,
+            &env.view,
+            &env_sampler,
+            &light_buffer,
+            &grid_buffer,
+            &physical.sky_view,
+        );
+        let sky_bind = sky_bind_group(
+            device,
+            &layouts.sky_source,
+            &globals,
+            &env_sampler,
+            &physical.sky_view,
+        );
+        let targets = Targets::new(
+            device,
+            &layouts,
+            format,
+            quality,
+            (1, 1),
+            &shadow_sampler,
+            &post_sampler,
+            &white,
+        );
         let mipmapper = texture::Mipmapper::new(device, module(&modules, "mip"));
         let sun = Sun::from_angles(180.0, 45.0);
         let sky = sky::Sky::new(sun.direction);
+        let ground_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("ground material"),
+            size: MATERIAL_SIZE,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        // The ground's material has no maps: white textures, repeat sampler.
+        let ground_entries: Vec<_> = (0..13)
+            .map(|b| wgpu::BindGroupEntry {
+                binding: b,
+                resource: match b {
+                    0 => ground_buffer.as_entire_binding(),
+                    1..=6 => wgpu::BindingResource::TextureView(&white),
+                    _ => wgpu::BindingResource::Sampler(&repeat_sampler),
+                },
+            })
+            .collect();
+        let ground_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("ground material"),
+            layout: &layouts.material,
+            entries: &ground_entries,
+        });
         let mut renderer = Self {
             device: device.clone(),
             queue: queue.clone(),
@@ -676,6 +952,10 @@ impl Renderer {
             quality,
             globals,
             globals_bind,
+            reflect_globals,
+            reflect_globals_bind,
+            globals_only_bind,
+            sky_bind,
             cascade_buffer,
             cascade_bind,
             draw_buffer,
@@ -683,17 +963,32 @@ impl Renderer {
             draw_capacity,
             next_slot: 0,
             free_slots: Vec::new(),
-            white: white_texture.create_view(&Default::default()),
+            white,
             repeat_sampler,
             clamp_sampler,
             env_sampler,
             shadow_sampler,
+            post_sampler,
             mipmapper,
             env,
+            physical,
+            sky_source: SkySource::Physical,
+            sky_view_dirty: true,
+            ground_kcd: Vec3::ZERO,
+            atmosphere: Atmosphere::default(),
+            ground: None,
+            ground_material: GpuMaterial {
+                buffer: ground_buffer,
+                bind: ground_bind,
+                cpu: Material::default(),
+            },
+            ground_slot: 0,
+            bloom_strength: 0.025,
             light_buffer,
             grid_buffer,
             grid,
             light_count: 0,
+            lights_cpu: Vec::new(),
             meshes: Vec::new(),
             materials: Vec::new(),
             textures: Vec::new(),
@@ -705,7 +1000,6 @@ impl Renderer {
             eye: Vec3::new(0.0, 1.7, 10.0),
             sun,
             sky,
-            sh: [Vec3::ZERO; 9],
             ev100: 15.0,
             shadow_distance: 80.0,
             wind: Wind::default(),
@@ -713,12 +1007,18 @@ impl Renderer {
             clay: false,
             highlight: None,
             far_cache: None,
+            cascade_rendered: [None; shadow::MAX_CASCADES],
+            frame: 0,
             overlay_cpu: (Vec::new(), Vec::new()),
             overlay: None,
             overlay_count: 0,
             overlay_on_top: 0,
+            timer: timing::Timer::new(device, queue),
+            counters: Counters::default(),
+            last_stats: RenderStats::default(),
         };
-        renderer.update_ambient();
+        renderer.ground_slot = renderer.alloc_slot(MeshId(u32::MAX - 1));
+        renderer.update_ambient(true);
         renderer
     }
 
@@ -736,6 +1036,11 @@ impl Renderer {
     pub fn set_quality(&mut self, quality: Quality) {
         let quality = Quality {
             cascades: quality.cascades.clamp(1, shadow::MAX_CASCADES as u32),
+            render_scale: if quality.render_scale.is_nan() {
+                1.0
+            } else {
+                quality.render_scale.clamp(0.5, 1.0)
+            },
             ..quality
         };
         if quality == self.quality {
@@ -771,10 +1076,9 @@ impl Renderer {
             return; // keeps the cached cascade, the ambient and the environment
         }
         self.sun = sun;
-        self.far_cache = None;
+        self.invalidate_shadows();
         self.sky = sky::Sky::new(self.sun.direction);
-        self.env.dirty = true;
-        self.update_ambient();
+        self.update_ambient(false);
     }
 
     /// Camera exposure as EV at ISO 100. Manual only: the renderer never
@@ -789,7 +1093,7 @@ impl Renderer {
     /// How far from the camera sun shadows reach (metres, default 80).
     pub fn set_shadow_distance(&mut self, metres: f32) {
         self.shadow_distance = metres.max(1.0);
-        self.far_cache = None;
+        self.invalidate_shadows();
     }
 
     /// Wind for vegetation (meshes with `wind` weights). Shadows move with
@@ -829,22 +1133,134 @@ impl Renderer {
             rebind = true;
         }
         if rebind {
-            self.globals_bind = globals_bind_group(
-                &self.device,
-                &self.layouts.globals,
-                &self.globals,
-                &self.env.view,
-                &self.env_sampler,
-                &self.light_buffer,
-                &self.grid_buffer,
-            );
+            self.rebind_globals();
         }
         self.queue.write_buffer(&self.light_buffer, 0, &light_bytes);
         self.queue.write_buffer(&self.grid_buffer, 0, &grid_bytes);
         self.light_count = list.len().min(lights::MAX_LIGHTS);
+        self.lights_cpu = list[..self.light_count].to_vec();
         let dropped = grid.dropped;
         self.grid = grid;
         dropped
+    }
+
+    /// Haze (distance fog); `Atmosphere::default()` is on, `haze: 0.0` off.
+    pub fn set_atmosphere(&mut self, atmosphere: &Atmosphere) {
+        self.atmosphere = Atmosphere {
+            haze: atmosphere.haze.max(0.0),
+            haze_height_m: atmosphere.haze_height_m.max(1.0),
+            sun_glow: atmosphere.sun_glow.clamp(0.0, 1.0),
+        };
+    }
+
+    /// The endless ground plane (off by default). Its colour also lights
+    /// the environment below the horizon.
+    pub fn set_ground(&mut self, ground: Option<Ground>) {
+        if ground == self.ground {
+            return;
+        }
+        self.ground = ground;
+        if let Some(g) = ground {
+            let material = Material {
+                base_color: [g.color[0], g.color[1], g.color[2], 1.0],
+                roughness: g.roughness,
+                variation: g.variation,
+                // Triplanar: no UVs needed (and none are sampled: no maps).
+                projection: Projection::Triplanar { scale_m: 1.0 },
+                ..Default::default()
+            };
+            self.queue.write_buffer(
+                &self.ground_material.buffer,
+                0,
+                &material_bytes(&material, 0),
+            );
+            self.ground_material.cpu = material;
+        }
+        self.update_ambient(true);
+    }
+
+    /// The sky's source of light: the physical model (default), the
+    /// Preetham fallback, or an HDRI (uploaded here; errors for an image
+    /// whose size does not match its data or the device limits).
+    pub fn set_sky(&mut self, sky: &Sky) -> Result<(), String> {
+        self.sky_source = match *sky {
+            Sky::Physical => SkySource::Physical,
+            Sky::Preetham => SkySource::Preetham,
+            Sky::Hdri {
+                image,
+                rotation_deg,
+                intensity,
+            } => {
+                let max = self.device.limits().max_texture_dimension_2d;
+                if image.width > max || image.height > max {
+                    return Err(format!(
+                        "HDRI {}x{} exceeds {max}",
+                        image.width, image.height
+                    ));
+                }
+                let (texels, mean) = hdri::prepare(&image)?;
+                let (view, mips) = self.mipmapper.upload_half(
+                    &self.device,
+                    &self.queue,
+                    (image.width, image.height),
+                    &texels,
+                );
+                SkySource::Hdri {
+                    view,
+                    mips,
+                    mean,
+                    rotation: rotation_deg.to_radians(),
+                    intensity: intensity.max(0.0),
+                    bytes: texture::mip_bytes(image.width, image.height, 8),
+                }
+            }
+        };
+        self.rebind_globals();
+        self.update_ambient(true);
+        Ok(())
+    }
+
+    /// Bloom strength: the fraction of the image replaced by its blurred
+    /// copy (0..1, default 0.025, subtle; `Quality::bloom` switches it).
+    pub fn set_bloom(&mut self, strength: f32) {
+        self.bloom_strength = strength.clamp(0.0, 1.0);
+    }
+
+    /// Counts and timings of the last recorded frame.
+    pub fn stats(&self) -> RenderStats {
+        self.last_stats.clone()
+    }
+
+    /// The globals bind groups and the environment's sky bind group, after
+    /// a buffer or the sky source changed.
+    fn rebind_globals(&mut self) {
+        let sky_view = match &self.sky_source {
+            SkySource::Hdri { view, .. } => view,
+            SkySource::Physical => &self.physical.sky_view,
+            SkySource::Preetham => &self.white,
+        };
+        for (buffer, bind) in [
+            (&self.globals, &mut self.globals_bind),
+            (&self.reflect_globals, &mut self.reflect_globals_bind),
+        ] {
+            *bind = globals_bind_group(
+                &self.device,
+                &self.layouts.globals,
+                buffer,
+                &self.env.view,
+                &self.env_sampler,
+                &self.light_buffer,
+                &self.grid_buffer,
+                sky_view,
+            );
+        }
+        self.sky_bind = sky_bind_group(
+            &self.device,
+            &self.layouts.sky_source,
+            &self.globals,
+            &self.env_sampler,
+            sky_view,
+        );
     }
 
     fn storage_buffer(&self, label: &str, size: u64) -> wgpu::Buffer {
@@ -968,40 +1384,8 @@ impl Renderer {
             .iter()
             .enumerate()
             .fold(0u32, |acc, (i, t)| acc | ((present(*t) as u32) << i));
-        let mut b = Bytes::default();
-        b.floats(&material.base_color);
-        b.floats(&[
-            material.metallic.clamp(0.0, 1.0),
-            material.roughness.clamp(0.0, 1.0),
-            material.relief.max(0.0),
-            material.gloss,
-        ]);
-        let e = Vec3::from(material.emissive) * material.emissive_strength.max(0.0);
-        b.floats(&e.extend(material.weathering.clamp(0.0, 1.0)).to_array());
-        let threshold = match material.alpha_mode {
-            AlphaMode::Cutout { threshold } => threshold.clamp(0.0, 1.0),
-            _ => 0.0,
-        };
-        let inv_scale = match material.projection {
-            Projection::Uv => 0.0,
-            Projection::Triplanar { scale_m } => 1.0 / scale_m.max(1e-3),
-        };
-        let surface = match material.surface {
-            Surface::Standard => 0.0,
-            Surface::Glass => 1.0,
-            Surface::Water => 2.0,
-        };
-        b.floats(&[
-            threshold,
-            inv_scale,
-            surface,
-            material.foliage as u32 as f32,
-        ]);
-        for u in [bits, material.double_sided as u32, 0, 0] {
-            b.0.extend_from_slice(&u.to_le_bytes());
-        }
-        debug_assert_eq!(b.0.len() as u64, MATERIAL_SIZE);
-        self.queue.write_buffer(&m.buffer, 0, &b.0);
+        self.queue
+            .write_buffer(&m.buffer, 0, &material_bytes(material, bits));
         let m = &mut self.materials[id.0 as usize];
         m.bind = bind;
         m.cpu = *material;
@@ -1069,6 +1453,11 @@ impl Renderer {
                 mapped_at_creation: false,
             });
             self.draw_bind = draw_bind_group(&self.device, &self.layouts.draw, &self.draw_buffer);
+            self.queue.write_buffer(
+                &self.draw_buffer,
+                self.ground_slot as u64 * SLOT,
+                &mesh_slot(MeshId(u32::MAX - 1)),
+            );
             for item in self.items.iter().flatten() {
                 for p in &item.parts {
                     self.queue.write_buffer(
@@ -1181,10 +1570,19 @@ impl Renderer {
         &self.targets.output
     }
 
-    /// Records every pass of a frame; returns the output view.
+    /// Records every pass of a frame; returns the output view. Submit the
+    /// encoder before the next `render` (GPU timings read back the previous
+    /// frame's queries then).
     pub fn render(&mut self, encoder: &mut wgpu::CommandEncoder) -> &wgpu::TextureView {
+        #[cfg(not(target_arch = "wasm32"))]
+        let cpu_start = std::time::Instant::now();
+        if let Some(t) = &mut self.timer {
+            t.begin();
+        }
+        self.counters = Counters::default();
+        self.frame += 1;
         if self.bounds_dirty {
-            self.far_cache = None; // the scene changed
+            self.invalidate_shadows(); // the scene changed
         }
         self.update_bounds();
         self.update_lods();
@@ -1214,7 +1612,57 @@ impl Renderer {
                 matrix: cascades.view_proj[last],
             });
         }
-        self.write_globals(&cascades);
+        // The near cascade every frame; with three or more, the middle ones
+        // on alternate frames (sampled with the matrix they were rendered
+        // with; points they no longer cover fall through to the next one).
+        let mut refresh = [false; shadow::MAX_CASCADES];
+        for (c, r) in refresh.iter_mut().enumerate().take(cascades.count) {
+            let far = cached && c == last;
+            *r = sun_lit
+                && if far {
+                    !reuse
+                } else {
+                    c == 0
+                        || cascades.count < 3
+                        || self.cascade_rendered[c].is_none()
+                        || (self.frame + c as u64).is_multiple_of(2)
+                };
+            if !*r
+                && !far
+                && let Some(m) = self.cascade_rendered[c]
+            {
+                cascades.view_proj[c] = m;
+            }
+        }
+        for (c, r) in refresh.iter().enumerate() {
+            if *r {
+                self.cascade_rendered[c] = Some(cascades.view_proj[c]);
+            }
+        }
+        let view_proj = self.proj * self.view;
+        let water = (self.quality.water_reflection > 0)
+            .then(|| self.water_plane(view_proj))
+            .flatten();
+        let t = &self.targets;
+        self.write_globals(
+            &self.globals,
+            &cascades,
+            (self.view, self.proj, self.eye),
+            t.size,
+            water,
+            None,
+        );
+        let mirror = water.map(mirror_matrix);
+        if let (Some(m), Some(h)) = (mirror, water) {
+            self.write_globals(
+                &self.reflect_globals,
+                &cascades,
+                (self.view * m, self.proj, m.transform_point3(self.eye)),
+                texture_size(&t.reflection),
+                water,
+                Some(h),
+            );
+        }
         let mut slots = vec![0u8; SLOT as usize * shadow::MAX_CASCADES];
         for (i, m) in cascades.view_proj.iter().enumerate() {
             let mut b = Bytes::default();
@@ -1224,20 +1672,31 @@ impl Renderer {
             slots[i * SLOT as usize..i * SLOT as usize + b.0.len()].copy_from_slice(&b.0);
         }
         self.queue.write_buffer(&self.cascade_buffer, 0, &slots);
-        if self.env.dirty {
-            let ground = self.sky.ground_radiance(&self.sun);
-            self.env.update(&self.queue, encoder, ground);
+        if self.sky_view_dirty && matches!(self.sky_source, SkySource::Physical) {
+            self.physical
+                .update(encoder, &self.globals_only_bind, self.timer.as_ref());
         }
+        self.sky_view_dirty = false;
+        self.env.update(
+            encoder,
+            &self.sky_bind,
+            &[&self.globals, &self.reflect_globals],
+            SH_OFFSET,
+            self.timer.as_ref(),
+        );
 
         let t = &self.targets;
         for (c, layer) in t.shadow_layers.iter().enumerate() {
-            if reuse && c == last {
+            if !refresh[c] {
                 continue;
             }
-            let mut pass = depth_pass(encoder, "shadow", layer, wgpu::StoreOp::Store);
-            if !sun_lit {
-                continue;
-            }
+            let mut pass = depth_pass(
+                encoder,
+                "shadow",
+                layer,
+                wgpu::StoreOp::Store,
+                self.ts("shadow"),
+            );
             pass.set_bind_group(0, &self.globals_bind, &[]);
             pass.set_bind_group(2, &self.cascade_bind, &[(c as u64 * SLOT) as u32]);
             let far = cached && c == last;
@@ -1245,23 +1704,43 @@ impl Renderer {
                 &mut pass,
                 cascades.view_proj[c],
                 false,
-                Pass::Shadow { far },
+                Pass::Shadow { far, coarse: c > 0 },
             );
         }
         {
-            let mut pass = depth_pass(encoder, "depth pre-pass", &t.depth, wgpu::StoreOp::Store);
+            let mut pass = depth_pass(
+                encoder,
+                "depth pre-pass",
+                &t.depth,
+                wgpu::StoreOp::Store,
+                self.ts("depth"),
+            );
             pass.set_bind_group(0, &self.globals_bind, &[]);
-            self.draw_items(&mut pass, self.proj * self.view, true, Pass::Depth);
+            self.draw_items(&mut pass, view_proj, true, Pass::Depth);
         }
         {
-            let mut pass = color_pass(encoder, "depth resolve", &t.linear_depth, None, None);
+            let mut pass = color_pass(
+                encoder,
+                "depth resolve",
+                &t.linear_depth,
+                None,
+                None,
+                self.ts("resolve"),
+            );
             pass.set_pipeline(&self.sampled.resolve);
             pass.set_bind_group(0, &self.globals_bind, &[]);
             pass.set_bind_group(1, &t.resolve_bind, &[]);
             pass.draw(0..3, 0..1);
         }
         if self.quality.ao_samples > 0 || self.quality.contact_shadows {
-            let mut pass = color_pass(encoder, "ssao", &t.occlusion[0], None, None);
+            let mut pass = color_pass(
+                encoder,
+                "ssao",
+                &t.occlusion[0],
+                None,
+                None,
+                self.ts("ssao"),
+            );
             pass.set_pipeline(&self.pipelines.ssao);
             pass.set_bind_group(0, &self.globals_bind, &[]);
             pass.set_bind_group(1, &t.ssao_bind, &[]);
@@ -1271,7 +1750,14 @@ impl Renderer {
                 .into_iter()
                 .enumerate()
             {
-                let mut pass = color_pass(encoder, "blur", &t.occlusion[1 - i], None, None);
+                let mut pass = color_pass(
+                    encoder,
+                    "blur",
+                    &t.occlusion[1 - i],
+                    None,
+                    None,
+                    self.ts("ssao"),
+                );
                 pass.set_pipeline(pipeline);
                 pass.set_bind_group(0, &self.globals_bind, &[]);
                 pass.set_bind_group(1, &t.blur_bind[i], &[]);
@@ -1284,7 +1770,41 @@ impl Renderer {
                 &t.occlusion[0],
                 Some(wgpu::Color::WHITE),
                 None,
+                None,
             );
+        }
+        if let Some(m) = mirror {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("reflection"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &t.reflection,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &t.reflection_depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Discard,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: self.ts("reflection"),
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_bind_group(0, &self.reflect_globals_bind, &[]);
+            pass.set_bind_group(3, &t.reflect_forward_bind, &[]);
+            self.draw_items(&mut pass, view_proj * m, true, Pass::Reflection);
+            if self.ground.is_some() {
+                self.draw_ground(&mut pass, &self.pipelines.reflect_ground);
+            }
+            pass.set_pipeline(&self.pipelines.reflect_sky);
+            pass.draw(0..3, 0..1);
         }
         {
             let (view, resolve) = match &t.hdr_msaa {
@@ -1314,38 +1834,195 @@ impl Renderer {
                     }),
                     stencil_ops: None,
                 }),
-                timestamp_writes: None,
+                timestamp_writes: self.ts("forward"),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
             pass.set_bind_group(0, &self.globals_bind, &[]);
             pass.set_bind_group(3, &t.forward_bind, &[]);
-            self.draw_items(&mut pass, self.proj * self.view, true, Pass::Forward);
+            self.draw_items(&mut pass, view_proj, true, Pass::Forward);
+            if self.ground.is_some() {
+                self.draw_ground(&mut pass, &self.sampled.ground);
+            }
             pass.set_pipeline(&self.sampled.sky);
             pass.draw(0..3, 0..1);
-            self.draw_transparent(&mut pass, self.proj * self.view);
+            self.draw_transparent(&mut pass, view_proj);
         }
-        {
-            let mut pass = color_pass(
-                encoder,
-                "tonemap",
-                &t.output_view,
-                Some(wgpu::Color::BLACK),
-                None,
-            );
-            pass.set_pipeline(&self.pipelines.tonemap);
-            pass.set_bind_group(0, &t.tonemap_bind, &[]);
+        let post = |encoder: &mut wgpu::CommandEncoder,
+                    label: &'static str,
+                    target: &wgpu::TextureView,
+                    load: Option<()>,
+                    pipeline: &wgpu::RenderPipeline,
+                    bind: &wgpu::BindGroup| {
+            let mut pass = color_pass(encoder, label, target, None, load, self.ts(label));
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &self.globals_bind, &[]);
+            pass.set_bind_group(1, bind, &[]);
             pass.draw(0..3, 0..1);
+            self.counters.add(1, 1, false);
+        };
+        if self.quality.bloom && self.bloom_strength > 0.0 {
+            for (i, target) in t.bloom.iter().enumerate() {
+                let p = &self.pipelines.bloom[(i > 0) as usize];
+                post(encoder, "bloom", target, None, p, &t.bloom_down_bind[i]);
+            }
+            for i in (0..t.bloom.len() - 1).rev() {
+                let p = &self.pipelines.bloom[2];
+                post(
+                    encoder,
+                    "bloom",
+                    &t.bloom[i],
+                    Some(()),
+                    p,
+                    &t.bloom_up_bind[i],
+                );
+            }
+        }
+        let upscale = t.size != self.size;
+        let fxaa = self.quality.fxaa;
+        let tonemap_target = if fxaa || upscale {
+            &t.ldr[0]
+        } else {
+            &t.output_unorm
+        };
+        let tonemap = &self.pipelines.tonemap[(fxaa || upscale) as usize];
+        post(
+            encoder,
+            "tonemap",
+            tonemap_target,
+            None,
+            tonemap,
+            &t.tonemap_bind,
+        );
+        if fxaa {
+            let target = if upscale { &t.ldr[1] } else { &t.output_unorm };
+            post(
+                encoder,
+                "fxaa",
+                target,
+                None,
+                &self.pipelines.fxaa,
+                &t.fxaa_bind,
+            );
+        }
+        if upscale {
+            let bind = &t.upscale_bind[fxaa as usize];
+            post(
+                encoder,
+                "upscale",
+                &t.output_unorm,
+                None,
+                &self.pipelines.upscale,
+                bind,
+            );
         }
         if let (Some(buffer), true) = (&self.overlay, self.overlay_count > 0) {
-            let mut pass = color_pass(encoder, "overlay", &t.output_view, None, Some(()));
+            let mut pass = color_pass(
+                encoder,
+                "overlay",
+                &t.output_view,
+                None,
+                Some(()),
+                self.ts("overlay"),
+            );
             pass.set_pipeline(&self.pipelines.overlay);
             pass.set_bind_group(0, &self.globals_bind, &[]);
             pass.set_bind_group(1, &t.overlay_bind, &[]);
             pass.set_vertex_buffer(0, buffer.slice(..));
             pass.draw(0..6, 0..self.overlay_count);
         }
+        if let Some(t) = &mut self.timer {
+            t.end(encoder);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        let cpu_encode_ms = cpu_start.elapsed().as_secs_f32() * 1000.0;
+        #[cfg(target_arch = "wasm32")]
+        let cpu_encode_ms = 0.0;
+        self.update_stats(view_proj, cpu_encode_ms);
         &self.targets.display_view
+    }
+
+    fn update_stats(&mut self, view_proj: Mat4, cpu_encode_ms: f32) {
+        let visible_lights = self
+            .lights_cpu
+            .iter()
+            .filter(|l| {
+                !outside(
+                    view_proj,
+                    (l.position - l.range_m, l.position + l.range_m),
+                    true,
+                )
+            })
+            .count() as u32;
+        let hdri = match &self.sky_source {
+            SkySource::Hdri { bytes, .. } => *bytes,
+            _ => 0,
+        };
+        let texture_bytes = self.textures.iter().flatten().map(|t| t.bytes).sum::<u64>()
+            + self.targets.bytes
+            + self.env.bytes
+            + hdri;
+        let gpu_passes = self.timer.as_ref().map_or(Vec::new(), |t| t.last.clone());
+        self.last_stats = RenderStats {
+            draw_calls: self.counters.draws.get(),
+            triangles: self.counters.triangles.get(),
+            instances: self.counters.instances.get(),
+            visible_lights,
+            texture_bytes,
+            cpu_encode_ms,
+            gpu_ms: (!gpu_passes.is_empty()).then(|| gpu_passes.iter().map(|p| p.1).sum()),
+            gpu_passes,
+            render_size: self.targets.size,
+        };
+    }
+
+    /// The infinite ground (scene.wgsl `vs_ground`) with its own material.
+    fn draw_ground(&self, pass: &mut wgpu::RenderPass, pipeline: &wgpu::RenderPipeline) {
+        const RINGS: u32 = 48;
+        const SEGMENTS: u32 = 64;
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(1, &self.ground_material.bind, &[]);
+        pass.set_bind_group(
+            2,
+            &self.draw_bind,
+            &[(self.ground_slot as u64 * SLOT) as u32],
+        );
+        pass.draw(0..RINGS * SEGMENTS * 6, 0..1);
+        self.counters.add((RINGS * SEGMENTS * 2) as u64, 1, false);
+    }
+
+    /// The height of the largest visible water surface (by the area of its
+    /// visible clusters' bounds), for the planar reflection.
+    fn water_plane(&self, cull: Mat4) -> Option<f32> {
+        let mut best: Option<(f32, f32)> = None;
+        for item in self.items.iter().flatten() {
+            if item.bounds.is_none_or(|b| outside(cull, b, true)) {
+                continue;
+            }
+            for part in &item.parts {
+                let water = self
+                    .materials
+                    .get(part.material.0 as usize)
+                    .is_some_and(|m| m.cpu.surface == Surface::Water);
+                if !water {
+                    continue;
+                }
+                let visible = item
+                    .clusters
+                    .iter()
+                    .filter(|c| Self::cluster_lod(item, c, Pass::Forward) == Some(part.lod))
+                    .filter_map(|c| c.bounds)
+                    .filter(|b| !outside(cull, *b, true))
+                    .reduce(union);
+                if let Some((lo, hi)) = visible {
+                    let area = (hi.x - lo.x) * (hi.z - lo.z);
+                    if best.is_none_or(|(a, _)| area > a) {
+                        best = Some((area, hi.y));
+                    }
+                }
+            }
+        }
+        best.map(|(_, h)| h)
     }
 
     /// The level of detail a cluster draws at in a pass (`None`: culled).
@@ -1356,18 +2033,25 @@ impl Renderer {
         }
         Some(match pass {
             Pass::Depth | Pass::Forward => cluster.lod,
-            Pass::Shadow { far: false } => (cluster.lod + 1).min(levels - 1),
-            Pass::Shadow { far: true } => levels - 1,
+            Pass::Reflection
+            | Pass::Shadow {
+                far: false,
+                coarse: false,
+            } => (cluster.lod + 1).min(levels - 1),
+            Pass::Shadow { .. } => levels - 1,
         })
     }
 
-    /// Draws every opaque and cutout part whose bounds overlap `cull` (a
-    /// view-projection), opaque parts first, clusters front to back.
-    /// `near_far` also culls on depth.
+    /// Draws every opaque and cutout part (and, into shadow maps, glass)
+    /// whose bounds overlap `cull` (a view-projection), opaque parts first,
+    /// clusters front to back. `near_far` also culls on depth.
     fn draw_items(&self, pass: &mut wgpu::RenderPass, cull: Mat4, near_far: bool, kind: Pass) {
         let mut current: Option<usize> = None;
-        let order = matches!(kind, Pass::Shadow { .. }) as usize;
-        for cutout in [false, true] {
+        let shadow = matches!(kind, Pass::Shadow { .. });
+        let shaded = matches!(kind, Pass::Forward | Pass::Reflection);
+        let order = shadow as usize;
+        // 0 opaque, 1 cutout, 2 glass (shadow maps only).
+        for category in 0..2 + shadow as usize {
             for item in self.items.iter().flatten() {
                 let Some(bounds) = item.bounds else { continue };
                 if outside(cull, bounds, near_far) {
@@ -1381,16 +2065,21 @@ impl Renderer {
                         continue;
                     };
                     let m = &material.cpu;
-                    if m.transparent() || m.cutout() != cutout {
+                    let this = if m.surface == Surface::Glass {
+                        2
+                    } else if m.transparent() {
+                        continue;
+                    } else {
+                        m.cutout() as usize
+                    };
+                    if this != category {
                         continue;
                     }
                     let (key, pipeline) = match kind {
-                        Pass::Shadow { .. } => {
-                            let i = cutout as usize;
-                            (i, &self.pipelines.shadow[i])
-                        }
+                        Pass::Shadow { .. } => (category, &self.pipelines.shadow[category]),
                         Pass::Depth => (m.variant(), &self.sampled.depth[m.variant()]),
                         Pass::Forward => (m.variant(), &self.sampled.forward[m.variant()]),
+                        Pass::Reflection => (m.variant(), &self.pipelines.reflect[m.variant()]),
                     };
                     let mut drawn = false;
                     let mut run: Option<std::ops::Range<u32>> = None;
@@ -1401,10 +2090,10 @@ impl Renderer {
                                 pass.set_pipeline(pipeline);
                                 current = Some(key);
                             }
-                            if kind == Pass::Forward || cutout {
+                            if shaded || category == 1 {
                                 pass.set_bind_group(1, &material.bind, &[]);
                             }
-                            if kind == Pass::Forward {
+                            if shaded {
                                 pass.set_bind_group(
                                     2,
                                     &self.draw_bind,
@@ -1418,6 +2107,11 @@ impl Renderer {
                                 wgpu::IndexFormat::Uint32,
                             );
                         }
+                        self.counters.add(
+                            mesh.index_count as u64 / 3,
+                            r.len() as u32,
+                            kind == Pass::Forward,
+                        );
                         pass.draw_indexed(0..mesh.index_count, 0, r);
                     };
                     // One draw per run of visible clusters adjacent both in
@@ -1495,6 +2189,8 @@ impl Renderer {
             pass.set_vertex_buffer(0, mesh.vertices.slice(..));
             pass.set_vertex_buffer(1, item.instances.slice(..));
             pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+            self.counters
+                .add(mesh.index_count as u64 / 3, range.len() as u32, true);
             pass.draw_indexed(0..mesh.index_count, 0, range);
         }
     }
@@ -1568,21 +2264,59 @@ impl Renderer {
         }
     }
 
+    /// Timestamp writes for one pass when timing is on.
+    fn ts(&self, label: &'static str) -> Option<wgpu::RenderPassTimestampWrites<'_>> {
+        self.timer.as_ref()?.pass(label)
+    }
+
     fn exposure(&self) -> f32 {
         // Lagarde & de Rousiers 2014, eq. 12: saturation-based sensitivity.
         1.0 / (1.2 * 2f32.powf(self.ev100))
     }
 
-    fn update_ambient(&mut self) {
-        self.sh = self.sky.irradiance_sh(&self.sun, sky::NIGHT);
+    /// The sun, sky or ground changed: the radiance below the horizon (CPU),
+    /// then the sky-view LUT, SH and environment cube (GPU; spread over a few
+    /// frames unless `all`).
+    fn update_ambient(&mut self, all: bool) {
+        let albedo = self
+            .ground
+            .map_or(Vec3::splat(0.2), |g| Vec3::from(g.color));
+        self.ground_kcd = match &self.sky_source {
+            SkySource::Hdri {
+                mean, intensity, ..
+            } => {
+                let sun = self.sun.color * self.sun.illuminance * self.sun.direction.y.max(0.0);
+                albedo * (sun / std::f32::consts::PI + *mean * *intensity) / 1000.0
+            }
+            // Preetham's estimate for both analytic skies (sky.rs).
+            _ => self.sky.ground_radiance(&self.sun) * (albedo / 0.2) / 1000.0,
+        };
+        self.env.invalidate(all);
+        self.sky_view_dirty = true;
     }
 
-    fn write_globals(&self, cascades: &shadow::Cascades) {
+    fn invalidate_shadows(&mut self) {
+        self.far_cache = None;
+        self.cascade_rendered = [None; shadow::MAX_CASCADES];
+    }
+
+    /// One globals block (common.wgsl `Globals`) without the SH, which the
+    /// GPU writes: for the camera, or (`clip`: the water height) for the
+    /// mirrored camera of the planar reflection.
+    fn write_globals(
+        &self,
+        buffer: &wgpu::Buffer,
+        cascades: &shadow::Cascades,
+        (view, proj, eye): (Mat4, Mat4, Vec3),
+        (w, h): (u32, u32),
+        water: Option<f32>,
+        clip: Option<f32>,
+    ) {
         let exposure = self.exposure();
-        let view_proj = self.proj * self.view;
+        let view_proj = proj * view;
         let q = &self.quality;
         let mut b = Bytes::default();
-        for m in [view_proj, self.view, self.proj, view_proj.inverse()] {
+        for m in [view_proj, view, proj, view_proj.inverse()] {
             b.floats(&m.to_cols_array());
         }
         for m in &cascades.view_proj {
@@ -1591,17 +2325,14 @@ impl Renderer {
         let sun_light = self.sun.color * self.sun.illuminance * exposure;
         let disc_solid_angle = std::f32::consts::PI * sky::SUN_DISC_RADIUS * sky::SUN_DISC_RADIUS;
         let disc = (self.sun.illuminance / disc_solid_angle * exposure).min(64.0);
-        b.floats(&[self.eye.x, self.eye.y, self.eye.z, 0.0]);
+        b.floats(&[eye.x, eye.y, eye.z, 0.0]);
         b.floats(&self.sun.direction.extend(disc).to_array());
         b.floats(&sun_light.extend(sky::SUN_DISC_RADIUS.cos()).to_array());
-        for c in &self.sh {
-            b.floats(&(*c * exposure).extend(0.0).to_array());
-        }
         b.floats(&cascades.splits);
         b.floats(&cascades.texel);
         let res = q.shadow_resolution as f32;
         b.floats(&[cascades.count as f32, res, 1.0 / res, self.shadow_distance]);
-        let (w, h) = (self.size.0 as f32, self.size.1 as f32);
+        let (w, h) = (w as f32, h as f32);
         b.floats(&[w, h, 1.0 / w, 1.0 / h]);
         b.floats(&[
             q.ao_samples as f32,
@@ -1613,7 +2344,7 @@ impl Renderer {
             b.floats(&p.extend(0.0).to_array());
         }
         b.floats(&self.sky.zenith.extend(self.sky.day).to_array());
-        b.floats(&(sky::NIGHT * exposure).extend(1000.0 * exposure).to_array());
+        b.floats(&(sky::NIGHT / 1000.0).extend(1000.0 * exposure).to_array());
         let (mesh, face) = self
             .highlight
             .map_or((u32::MAX, u32::MAX), |(m, f)| (m.0, f));
@@ -1643,8 +2374,50 @@ impl Renderer {
         for u in [g.dims.0, g.dims.1, 0, 0] {
             b.0.extend_from_slice(&u.to_le_bytes());
         }
-        debug_assert_eq!(b.0.len() as u64, globals_size());
-        self.queue.write_buffer(&self.globals, 0, &b.0);
+        let (ow, oh) = (self.size.0 as f32, self.size.1 as f32);
+        let scale = self.targets.size.0 as f32 / ow;
+        b.floats(&[ow, oh, scale, 1.0 / scale]);
+        let a = &self.atmosphere;
+        let ground_height = self.ground.map_or(0.0, |g| g.height);
+        b.floats(&[
+            a.haze / 1000.0,
+            1.0 / a.haze_height_m,
+            ground_height,
+            a.sun_glow,
+        ]);
+        let (source, rotation, scale, mips) = match &self.sky_source {
+            SkySource::Preetham => (0.0, 0.0, 1.0, 1.0),
+            SkySource::Physical => (1.0, 0.0, SUN_TOP_KLX, 1.0),
+            SkySource::Hdri {
+                rotation,
+                intensity,
+                mips,
+                ..
+            } => (2.0, *rotation, intensity / 1000.0, *mips as f32),
+        };
+        b.floats(&[source, rotation, scale, mips]);
+        let hdri_below = matches!(self.sky_source, SkySource::Hdri { .. }) && self.ground.is_none();
+        b.floats(
+            &self
+                .ground_kcd
+                .extend(if hdri_below { 1.0 } else { 0.0 })
+                .to_array(),
+        );
+        let bloom = if q.bloom { self.bloom_strength } else { 0.0 };
+        b.floats(&[
+            if q.soft_shadows { 9.0 } else { 4.0 },
+            bloom,
+            0.0,
+            ground_height,
+        ]);
+        b.floats(&[
+            if water.is_some() { 1.0 } else { 0.0 },
+            water.unwrap_or(0.0),
+            if clip.is_some() { 1.0 } else { 0.0 },
+            clip.unwrap_or(0.0),
+        ]);
+        debug_assert_eq!(b.0.len() as u64, SH_OFFSET);
+        self.queue.write_buffer(buffer, 0, &b.0);
     }
 
     fn upload_overlay(&mut self) {
@@ -1682,7 +2455,7 @@ impl Renderer {
     }
 
     fn rebuild_targets(&mut self) {
-        self.far_cache = None;
+        self.invalidate_shadows();
         self.targets = Targets::new(
             &self.device,
             &self.layouts,
@@ -1690,6 +2463,8 @@ impl Renderer {
             self.quality,
             self.size,
             &self.shadow_sampler,
+            &self.post_sampler,
+            &self.white,
         );
     }
 }
@@ -1806,6 +2581,46 @@ impl Bytes {
     }
 }
 
+/// The material uniform (scene.wgsl `Material`); `bits` flags the maps
+/// that are present.
+fn material_bytes(material: &Material, bits: u32) -> Vec<u8> {
+    let mut b = Bytes::default();
+    b.floats(&material.base_color);
+    b.floats(&[
+        material.metallic.clamp(0.0, 1.0),
+        material.roughness.clamp(0.0, 1.0),
+        material.relief.max(0.0),
+        material.gloss,
+    ]);
+    let e = Vec3::from(material.emissive) * material.emissive_strength.max(0.0);
+    b.floats(&e.extend(material.weathering.clamp(0.0, 1.0)).to_array());
+    let threshold = match material.alpha_mode {
+        AlphaMode::Cutout { threshold } => threshold.clamp(0.0, 1.0),
+        _ => 0.0,
+    };
+    let inv_scale = match material.projection {
+        Projection::Uv => 0.0,
+        Projection::Triplanar { scale_m } => 1.0 / scale_m.max(1e-3),
+    };
+    let surface = match material.surface {
+        Surface::Standard => 0.0,
+        Surface::Glass => 1.0,
+        Surface::Water => 2.0,
+    };
+    b.floats(&[
+        threshold,
+        inv_scale,
+        surface,
+        material.foliage as u32 as f32,
+    ]);
+    let variation = material.variation.clamp(0.0, 1.0).to_bits();
+    for u in [bits, material.double_sided as u32, variation, 0] {
+        b.0.extend_from_slice(&u.to_le_bytes());
+    }
+    debug_assert_eq!(b.0.len() as u64, MATERIAL_SIZE);
+    b.0
+}
+
 fn f32_bytes(f: &[f32]) -> Vec<u8> {
     let mut b = Bytes::default();
     b.floats(f);
@@ -1817,8 +2632,33 @@ fn u32_bytes(u: &[u32]) -> Vec<u8> {
 }
 
 fn globals_size() -> u64 {
-    // 8 matrices, 29 vec4s; see common.wgsl.
-    8 * 64 + 29 * 16
+    // 8 matrices, 26 vec4s, the 9 SH vec4s last; see common.wgsl.
+    SH_OFFSET + 9 * 16
+}
+
+/// The bloom levels: half the render size, halved again per level (the
+/// downsample pass maps each output pixel to a 2x2 block of its source).
+fn bloom_sizes((w, h): (u32, u32)) -> [(u32, u32); BLOOM_LEVELS] {
+    let mut size = (w, h);
+    std::array::from_fn(|_| {
+        size = ((size.0 / 2).max(1), (size.1 / 2).max(1));
+        size
+    })
+}
+
+/// Reflection about the horizontal plane y = h.
+fn mirror_matrix(h: f32) -> Mat4 {
+    Mat4::from_cols(
+        Vec4::X,
+        Vec4::NEG_Y,
+        Vec4::Z,
+        Vec4::new(0.0, 2.0 * h, 0.0, 1.0),
+    )
+}
+
+fn texture_size(view: &wgpu::TextureView) -> (u32, u32) {
+    let t = view.texture();
+    (t.width(), t.height())
 }
 
 fn mesh_slot(mesh: MeshId) -> [u8; 16] {
@@ -1850,6 +2690,7 @@ fn draw_bind_group(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn globals_bind_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
@@ -1858,6 +2699,7 @@ fn globals_bind_group(
     env_sampler: &wgpu::Sampler,
     lights: &wgpu::Buffer,
     grid: &wgpu::Buffer,
+    sky: &wgpu::TextureView,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("globals"),
@@ -1883,6 +2725,37 @@ fn globals_bind_group(
                 binding: 4,
                 resource: grid.as_entire_binding(),
             },
+            wgpu::BindGroupEntry {
+                binding: 5,
+                resource: wgpu::BindingResource::TextureView(sky),
+            },
+        ],
+    })
+}
+
+fn sky_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    globals: &wgpu::Buffer,
+    sampler: &wgpu::Sampler,
+    sky: &wgpu::TextureView,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("sky source"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: globals.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 5,
+                resource: wgpu::BindingResource::TextureView(sky),
+            },
         ],
     })
 }
@@ -1892,6 +2765,7 @@ fn depth_pass<'e>(
     label: &str,
     view: &wgpu::TextureView,
     store: wgpu::StoreOp,
+    timestamp_writes: Option<wgpu::RenderPassTimestampWrites>,
 ) -> wgpu::RenderPass<'e> {
     encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some(label),
@@ -1904,7 +2778,7 @@ fn depth_pass<'e>(
             }),
             stencil_ops: None,
         }),
-        timestamp_writes: None,
+        timestamp_writes,
         occlusion_query_set: None,
         multiview_mask: None,
     })
@@ -1918,6 +2792,7 @@ fn color_pass<'e>(
     view: &wgpu::TextureView,
     clear: Option<wgpu::Color>,
     load: Option<()>,
+    timestamp_writes: Option<wgpu::RenderPassTimestampWrites>,
 ) -> wgpu::RenderPass<'e> {
     let load = match (load, clear) {
         (Some(()), _) => wgpu::LoadOp::Load,
@@ -1936,7 +2811,7 @@ fn color_pass<'e>(
             },
         })],
         depth_stencil_attachment: None,
-        timestamp_writes: None,
+        timestamp_writes,
         occlusion_query_set: None,
         multiview_mask: None,
     })
@@ -2026,9 +2901,26 @@ impl Layouts {
                     sampler_entry(2, B::Filtering),
                     storage_entry(3),
                     storage_entry(4),
+                    texture_entry(5, filterable, D::D2, false),
                 ],
             ),
             globals_only: layout("globals only", &[uniform_entry(0, vfs, None)]),
+            sky_source: layout(
+                "sky source",
+                &[
+                    uniform_entry(0, vfs, None),
+                    sampler_entry(2, B::Filtering),
+                    texture_entry(5, filterable, D::D2, false),
+                ],
+            ),
+            post: layout(
+                "post",
+                &[
+                    texture_entry(0, filterable, D::D2, false),
+                    sampler_entry(1, B::Filtering),
+                    texture_entry(2, filterable, D::D2, false),
+                ],
+            ),
             material: layout("material", &material),
             draw: layout("draw", &[uniform_entry(0, fs, Some(16))]),
             cascade: layout(
@@ -2046,6 +2938,7 @@ impl Layouts {
                     sampler_entry(1, B::Comparison),
                     texture_entry(2, unfilterable, D::D2, false),
                     texture_entry(3, unfilterable, D::D2, false),
+                    texture_entry(4, filterable, D::D2, false),
                 ],
             ),
             depth_ms: layout("depth ms", &[texture_entry(0, S::Depth, D::D2, true)]),
@@ -2097,6 +2990,8 @@ struct PipelineDesc<'a> {
     cull: Option<wgpu::Face>,
     samples: u32,
     constants: &'a [(&'a str, f64)],
+    /// Clockwise front faces: the mirrored reflection view flips winding.
+    front_cw: bool,
 }
 
 fn pipeline(device: &wgpu::Device, d: PipelineDesc) -> wgpu::RenderPipeline {
@@ -2129,6 +3024,11 @@ fn pipeline(device: &wgpu::Device, d: PipelineDesc) -> wgpu::RenderPipeline {
         }),
         primitive: wgpu::PrimitiveState {
             cull_mode: d.cull,
+            front_face: if d.front_cw {
+                wgpu::FrontFace::Cw
+            } else {
+                wgpu::FrontFace::Ccw
+            },
             ..Default::default()
         },
         depth_stencil: d.depth,
@@ -2162,6 +3062,119 @@ fn module<'a>(modules: &'a [wgpu::ShaderModule], name: &str) -> &'a wgpu::Shader
         .expect("shader name")]
 }
 
+fn cull(double_sided: bool) -> Option<wgpu::Face> {
+    (!double_sided).then_some(wgpu::Face::Back)
+}
+
+/// A pipeline drawing scene meshes with the forward layout (groups 0-3).
+struct Forward<'a> {
+    label: &'a str,
+    fs: &'a str,
+    variant: usize,
+    target: wgpu::ColorTargetState,
+    depth: wgpu::DepthStencilState,
+    samples: u32,
+    front_cw: bool,
+}
+
+fn forward_pipeline(
+    device: &wgpu::Device,
+    l: &Layouts,
+    modules: &[wgpu::ShaderModule],
+    f: Forward,
+) -> wgpu::RenderPipeline {
+    let groups = [
+        Some(&l.globals),
+        Some(&l.material),
+        Some(&l.draw),
+        Some(&l.forward),
+    ];
+    pipeline(
+        device,
+        PipelineDesc {
+            label: f.label,
+            module: module(modules, "scene"),
+            vs: "vs_main",
+            fs: Some(f.fs),
+            groups: &groups,
+            buffers: &vertex_layouts(false),
+            target: Some(f.target),
+            depth: Some(f.depth),
+            cull: cull(f.variant % 2 == 1),
+            samples: f.samples,
+            constants: &[],
+            front_cw: f.front_cw,
+        },
+    )
+}
+
+/// The infinite ground (no vertex buffers, forward layout).
+fn ground_pipeline(
+    device: &wgpu::Device,
+    l: &Layouts,
+    modules: &[wgpu::ShaderModule],
+    fs: &str,
+    samples: u32,
+) -> wgpu::RenderPipeline {
+    pipeline(
+        device,
+        PipelineDesc {
+            label: "ground",
+            module: module(modules, "scene"),
+            vs: "vs_ground",
+            fs: Some(fs),
+            groups: &[
+                Some(&l.globals),
+                Some(&l.material),
+                Some(&l.draw),
+                Some(&l.forward),
+            ],
+            buffers: &[],
+            target: Some(HDR.into()),
+            // In front of the far plane only: fills what nothing covered,
+            // and writes depth so the sky leaves it alone.
+            depth: Some(depth_state(
+                true,
+                wgpu::CompareFunction::LessEqual,
+                Default::default(),
+            )),
+            cull: None,
+            samples,
+            constants: &[],
+            front_cw: false,
+        },
+    )
+}
+
+fn sky_pipeline(
+    device: &wgpu::Device,
+    l: &Layouts,
+    modules: &[wgpu::ShaderModule],
+    samples: u32,
+) -> wgpu::RenderPipeline {
+    pipeline(
+        device,
+        PipelineDesc {
+            label: "sky",
+            module: module(modules, "sky"),
+            vs: "vs_sky",
+            fs: Some("fs_sky"),
+            groups: &[Some(&l.globals)],
+            buffers: &[],
+            target: Some(HDR.into()),
+            depth: Some(depth_state(
+                false,
+                wgpu::CompareFunction::LessEqual,
+                Default::default(),
+            )),
+            cull: None,
+            samples,
+            constants: &[],
+            front_cw: false,
+        },
+    )
+}
+
 impl SampledPipelines {
     fn new(
         device: &wgpu::Device,
@@ -2170,9 +3183,7 @@ impl SampledPipelines {
         samples: u32,
     ) -> Self {
         let scene = module(modules, "scene");
-        let buffers = vertex_layouts(false);
         let depth_buffers = vertex_layouts(true);
-        let cull = |double_sided: bool| (!double_sided).then_some(wgpu::Face::Back);
         let samples_constant = [("SAMPLES", samples as f64)];
         let depth_groups = [Some(&l.globals), Some(&l.material)];
         let depth = std::array::from_fn(|variant| {
@@ -2203,15 +3214,10 @@ impl SampledPipelines {
                     } else {
                         &[]
                     },
+                    front_cw: false,
                 },
             )
         });
-        let scene_groups = [
-            Some(&l.globals),
-            Some(&l.material),
-            Some(&l.draw),
-            Some(&l.forward),
-        ];
         let forward = std::array::from_fn(|variant| {
             // Cutout: the pre-pass already decided coverage; Equal keeps
             // exactly those samples and needs no alpha test here.
@@ -2220,69 +3226,41 @@ impl SampledPipelines {
             } else {
                 wgpu::CompareFunction::LessEqual
             };
-            pipeline(
+            forward_pipeline(
                 device,
-                PipelineDesc {
+                l,
+                modules,
+                Forward {
                     label: "forward",
-                    module: scene,
-                    vs: "vs_main",
-                    fs: Some("fs_main"),
-                    groups: &scene_groups,
-                    buffers: &buffers,
-                    target: Some(HDR.into()),
-                    depth: Some(depth_state(false, compare, Default::default())),
-                    cull: cull(variant % 2 == 1),
+                    fs: "fs_main",
+                    variant,
+                    target: HDR.into(),
+                    depth: depth_state(false, compare, Default::default()),
                     samples,
-                    constants: &[],
+                    front_cw: false,
                 },
             )
         });
         let transparent = std::array::from_fn(|double_sided| {
-            pipeline(
+            forward_pipeline(
                 device,
-                PipelineDesc {
+                l,
+                modules,
+                Forward {
                     label: "transparent",
-                    module: scene,
-                    vs: "vs_main",
-                    fs: Some("fs_transparent"),
-                    groups: &scene_groups,
-                    buffers: &buffers,
-                    target: Some(wgpu::ColorTargetState {
+                    fs: "fs_transparent",
+                    variant: double_sided,
+                    target: wgpu::ColorTargetState {
                         format: HDR,
                         blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
                         write_mask: wgpu::ColorWrites::ALL,
-                    }),
-                    depth: Some(depth_state(
-                        false,
-                        wgpu::CompareFunction::LessEqual,
-                        Default::default(),
-                    )),
-                    cull: cull(double_sided == 1),
+                    },
+                    depth: depth_state(false, wgpu::CompareFunction::LessEqual, Default::default()),
                     samples,
-                    constants: &[],
+                    front_cw: false,
                 },
             )
         });
-        let sky = pipeline(
-            device,
-            PipelineDesc {
-                label: "sky",
-                module: module(modules, "sky"),
-                vs: "vs_sky",
-                fs: Some("fs_sky"),
-                groups: &[Some(&l.globals)],
-                buffers: &[],
-                target: Some(HDR.into()),
-                depth: Some(depth_state(
-                    false,
-                    wgpu::CompareFunction::LessEqual,
-                    Default::default(),
-                )),
-                cull: None,
-                samples,
-                constants: &[],
-            },
-        );
         let multisampled = samples > 1;
         let resolve = pipeline(
             device,
@@ -2309,13 +3287,15 @@ impl SampledPipelines {
                 cull: None,
                 samples: 1,
                 constants: &[],
+                front_cw: false,
             },
         );
         Self {
             depth,
             forward,
             transparent,
-            sky,
+            ground: ground_pipeline(device, l, modules, "fs_ground", samples),
+            sky: sky_pipeline(device, l, modules, samples),
             resolve,
         }
     }
@@ -2329,25 +3309,31 @@ impl Pipelines {
         format: wgpu::TextureFormat,
     ) -> Self {
         let buffers = vertex_layouts(true);
-        let fullscreen =
-            |label, name, groups: &[Option<&wgpu::BindGroupLayout>], target, constants| {
-                pipeline(
-                    device,
-                    PipelineDesc {
-                        label,
-                        module: module(modules, name),
-                        vs: "vs_fullscreen",
-                        fs: Some("fs_main"),
-                        groups,
-                        buffers: &[],
-                        target: Some(target),
-                        depth: None,
-                        cull: None,
-                        samples: 1,
-                        constants,
-                    },
-                )
-            };
+        let unorm = format.remove_srgb_suffix();
+        let fullscreen = |label,
+                          name,
+                          fs,
+                          groups: &[Option<&wgpu::BindGroupLayout>],
+                          target: wgpu::ColorTargetState,
+                          constants| {
+            pipeline(
+                device,
+                PipelineDesc {
+                    label,
+                    module: module(modules, name),
+                    vs: "vs_fullscreen",
+                    fs: Some(fs),
+                    groups,
+                    buffers: &[],
+                    target: Some(target),
+                    depth: None,
+                    cull: None,
+                    samples: 1,
+                    constants,
+                    front_cw: false,
+                },
+            )
+        };
         let segment = wgpu::VertexBufferLayout {
             array_stride: 40,
             step_mode: wgpu::VertexStepMode::Instance,
@@ -2355,17 +3341,17 @@ impl Pipelines {
                 0 => Float32x3, 1 => Unorm8x4, 2 => Float32, 3 => Float32x3, 4 => Unorm8x4, 5 => Float32
             ],
         };
-        let shadow = |cutout: bool| {
+        let shadow = |fs: Option<&str>, material: bool| {
             pipeline(
                 device,
                 PipelineDesc {
                     label: "shadow",
                     module: module(modules, "scene"),
                     vs: "vs_shadow",
-                    fs: cutout.then_some("fs_shadow_cutout"),
+                    fs,
                     groups: &[
                         Some(&l.globals),
-                        cutout.then_some(&l.material),
+                        material.then_some(&l.material),
                         Some(&l.cascade),
                     ],
                     buffers: &buffers,
@@ -2385,14 +3371,52 @@ impl Pipelines {
                     cull: None,
                     samples: 1,
                     constants: &[],
+                    front_cw: false,
                 },
             )
         };
+        let reflect = std::array::from_fn(|variant| {
+            forward_pipeline(
+                device,
+                l,
+                modules,
+                Forward {
+                    label: "reflection",
+                    fs: "fs_reflect",
+                    variant,
+                    target: HDR.into(),
+                    depth: depth_state(true, wgpu::CompareFunction::Less, Default::default()),
+                    samples: 1,
+                    front_cw: true,
+                },
+            )
+        });
+        let post = [Some(&l.globals), Some(&l.post)];
+        let add = wgpu::ColorTargetState {
+            format: HDR,
+            blend: Some(wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::One,
+                    dst_factor: wgpu::BlendFactor::One,
+                    operation: wgpu::BlendOperation::Add,
+                },
+                alpha: wgpu::BlendComponent::REPLACE,
+            }),
+            write_mask: wgpu::ColorWrites::ALL,
+        };
         Self {
-            shadow: [shadow(false), shadow(true)],
+            shadow: [
+                shadow(None, false),
+                shadow(Some("fs_shadow_cutout"), true),
+                shadow(Some("fs_shadow_glass"), false),
+            ],
+            reflect,
+            reflect_ground: ground_pipeline(device, l, modules, "fs_reflect", 1),
+            reflect_sky: sky_pipeline(device, l, modules, 1),
             ssao: fullscreen(
                 "ssao",
                 "ssao",
+                "fs_main",
                 &[Some(&l.globals), Some(&l.texture)],
                 OCCLUSION.into(),
                 &[],
@@ -2400,6 +3424,7 @@ impl Pipelines {
             blur_h: fullscreen(
                 "blur h",
                 "blur",
+                "fs_main",
                 &[Some(&l.globals), Some(&l.blur)],
                 OCCLUSION.into(),
                 &[("HORIZONTAL", 1.0)],
@@ -2407,17 +3432,36 @@ impl Pipelines {
             blur_v: fullscreen(
                 "blur v",
                 "blur",
+                "fs_main",
                 &[Some(&l.globals), Some(&l.blur)],
                 OCCLUSION.into(),
                 &[("HORIZONTAL", 0.0)],
             ),
-            tonemap: fullscreen(
-                "tonemap",
-                "tonemap",
-                &[Some(&l.texture)],
-                format.into(),
-                &[],
-            ),
+            bloom: [
+                fullscreen(
+                    "bloom",
+                    "post",
+                    "fs_bloom_down",
+                    &post,
+                    HDR.into(),
+                    &[("KARIS", 1.0)],
+                ),
+                fullscreen("bloom", "post", "fs_bloom_down", &post, HDR.into(), &[]),
+                fullscreen("bloom", "post", "fs_bloom_up", &post, add, &[]),
+            ],
+            tonemap: [
+                fullscreen("tonemap", "tonemap", "fs_tonemap", &post, unorm.into(), &[]),
+                fullscreen(
+                    "tonemap",
+                    "tonemap",
+                    "fs_tonemap",
+                    &post,
+                    unorm.into(),
+                    &[("LUMA_IN_ALPHA", 1.0)],
+                ),
+            ],
+            fxaa: fullscreen("fxaa", "post", "fs_fxaa", &post, unorm.into(), &[]),
+            upscale: fullscreen("upscale", "post", "fs_upscale", &post, unorm.into(), &[]),
             overlay: pipeline(
                 device,
                 PipelineDesc {
@@ -2428,7 +3472,7 @@ impl Pipelines {
                     groups: &[Some(&l.globals), Some(&l.texture)],
                     buffers: &[Some(segment)],
                     target: Some(wgpu::ColorTargetState {
-                        format,
+                        format: format.add_srgb_suffix(),
                         blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                         write_mask: wgpu::ColorWrites::ALL,
                     }),
@@ -2436,6 +3480,7 @@ impl Pipelines {
                     cull: None,
                     samples: 1,
                     constants: &[],
+                    front_cw: false,
                 },
             ),
         }
@@ -2443,31 +3488,43 @@ impl Pipelines {
 }
 
 impl Targets {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         device: &wgpu::Device,
         l: &Layouts,
         format: wgpu::TextureFormat,
         quality: Quality,
-        (width, height): (u32, u32),
+        (out_w, out_h): (u32, u32),
         shadow_sampler: &wgpu::Sampler,
+        post_sampler: &wgpu::Sampler,
+        white: &wgpu::TextureView,
     ) -> Self {
         let samples = quality.samples();
-        let texture_sized = |label, format, samples, usage, (width, height): (u32, u32)| {
-            device.create_texture(&wgpu::TextureDescriptor {
-                label: Some(label),
-                size: wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: samples,
-                dimension: wgpu::TextureDimension::D2,
-                format,
-                usage,
-                view_formats: &[],
-            })
-        };
+        let scale = quality.render_scale.clamp(0.5, 1.0);
+        let (width, height) = (
+            ((out_w as f32 * scale).round() as u32).clamp(1, out_w),
+            ((out_h as f32 * scale).round() as u32).clamp(1, out_h),
+        );
+        let bytes = Cell::new(0u64);
+        let texture_sized =
+            |label, format: wgpu::TextureFormat, samples, usage, (w, h): (u32, u32)| {
+                let block = format.block_copy_size(None).unwrap_or(4) as u64;
+                bytes.set(bytes.get() + w as u64 * h as u64 * block * samples as u64);
+                device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some(label),
+                    size: wgpu::Extent3d {
+                        width: w,
+                        height: h,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: samples,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage,
+                    view_formats: &[],
+                })
+            };
         let texture = |label, format, samples, usage| {
             texture_sized(label, format, samples, usage, (width, height))
         };
@@ -2482,12 +3539,38 @@ impl Targets {
         let half = (width.div_ceil(2), height.div_ceil(2));
         let occlusion =
             [0, 1].map(|_| view(texture_sized("occlusion", OCCLUSION, 1, sampled, half)));
+        let unorm = format.remove_srgb_suffix();
         let srgb = format.add_srgb_suffix();
+        let ldr = [0, 1].map(|_| view(texture("ldr", unorm, 1, sampled)));
+        let bloom: Vec<_> = bloom_sizes((width, height))
+            .into_iter()
+            .map(|size| view(texture_sized("bloom", HDR, 1, sampled, size)))
+            .collect();
+        let divisor = quality.water_reflection;
+        let reflection_size = width
+            .checked_div(divisor)
+            .zip(height.checked_div(divisor))
+            .map_or((1, 1), |(w, h)| (w.max(1), h.max(1)));
+        let reflection = view(texture_sized(
+            "reflection",
+            HDR,
+            1,
+            sampled,
+            reflection_size,
+        ));
+        let reflection_depth = view(texture_sized(
+            "reflection depth",
+            DEPTH,
+            1,
+            attach,
+            reflection_size,
+        ));
+        bytes.set(bytes.get() + out_w as u64 * out_h as u64 * 4);
         let output = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("output"),
             size: wgpu::Extent3d {
-                width,
-                height,
+                width: out_w,
+                height: out_h,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -2495,15 +3578,20 @@ impl Targets {
             dimension: wgpu::TextureDimension::D2,
             format,
             usage: sampled | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[srgb],
+            view_formats: &[srgb, unorm],
         });
         let output_view = output.create_view(&wgpu::TextureViewDescriptor {
             format: Some(srgb),
             ..Default::default()
         });
+        let output_unorm = output.create_view(&wgpu::TextureViewDescriptor {
+            format: Some(unorm),
+            ..Default::default()
+        });
         let display_view = output.create_view(&Default::default());
 
         let res = quality.shadow_resolution;
+        bytes.set(bytes.get() + res as u64 * res as u64 * 4 * quality.cascades as u64);
         let shadow = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("shadow map"),
             size: wgpu::Extent3d {
@@ -2550,12 +3638,39 @@ impl Targets {
             })
         };
         let tv = wgpu::BindingResource::TextureView;
+        let post = |a: &wgpu::TextureView, b: &wgpu::TextureView| {
+            bind(
+                "post",
+                &l.post,
+                &[
+                    (0, wgpu::BindingResource::TextureView(a)),
+                    (1, wgpu::BindingResource::Sampler(post_sampler)),
+                    (2, wgpu::BindingResource::TextureView(b)),
+                ],
+            )
+        };
         let resolve_bind = if samples > 1 {
             bind("resolve", &l.depth_ms, &[(0, tv(&depth))])
         } else {
             bind("resolve", &l.depth_1x, &[(1, tv(&depth))])
         };
+        let forward = |occlusion: &wgpu::TextureView,
+                       linear_depth: &wgpu::TextureView,
+                       reflection: &wgpu::TextureView| {
+            bind(
+                "forward",
+                &l.forward,
+                &[
+                    (0, wgpu::BindingResource::TextureView(&shadow_array)),
+                    (1, wgpu::BindingResource::Sampler(shadow_sampler)),
+                    (2, wgpu::BindingResource::TextureView(occlusion)),
+                    (3, wgpu::BindingResource::TextureView(linear_depth)),
+                    (4, wgpu::BindingResource::TextureView(reflection)),
+                ],
+            )
+        };
         Targets {
+            size: (width, height),
             ssao_bind: bind("ssao", &l.texture, &[(0, tv(&linear_depth))]),
             blur_bind: [
                 bind(
@@ -2569,18 +3684,18 @@ impl Targets {
                     &[(0, tv(&occlusion[1])), (1, tv(&linear_depth))],
                 ),
             ],
-            tonemap_bind: bind("tonemap", &l.texture, &[(0, tv(&hdr))]),
+            bloom_down_bind: (0..BLOOM_LEVELS)
+                .map(|i| post(if i == 0 { &hdr } else { &bloom[i - 1] }, white))
+                .collect(),
+            bloom_up_bind: (0..BLOOM_LEVELS - 1)
+                .map(|i| post(&bloom[i + 1], white))
+                .collect(),
+            tonemap_bind: post(&hdr, &bloom[0]),
+            fxaa_bind: post(&ldr[0], white),
+            upscale_bind: [post(&ldr[0], white), post(&ldr[1], white)],
             overlay_bind: bind("overlay", &l.texture, &[(0, tv(&linear_depth))]),
-            forward_bind: bind(
-                "forward",
-                &l.forward,
-                &[
-                    (0, tv(&shadow_array)),
-                    (1, wgpu::BindingResource::Sampler(shadow_sampler)),
-                    (2, tv(&occlusion[0])),
-                    (3, tv(&linear_depth)),
-                ],
-            ),
+            forward_bind: forward(&occlusion[0], &linear_depth, &reflection),
+            reflect_forward_bind: forward(white, white, white),
             resolve_bind,
             depth,
             hdr_msaa,
@@ -2589,8 +3704,14 @@ impl Targets {
             occlusion,
             output,
             output_view,
+            output_unorm,
             display_view,
+            ldr,
+            bloom,
+            reflection,
+            reflection_depth,
             shadow_layers,
+            bytes: bytes.get(),
         }
     }
 }
@@ -2628,6 +3749,51 @@ mod tests {
             .validate(&module)
             .unwrap_or_else(|e| panic!("{name}.wgsl: {}", e.emit_to_string(&source)));
         }
+    }
+
+    #[test]
+    fn mirror_reflects_about_the_water_plane() {
+        let h = -0.04;
+        let m = mirror_matrix(h);
+        let p = Vec3::new(1.5, 2.0, -3.0);
+        let q = m.transform_point3(p);
+        assert!(
+            (q - Vec3::new(1.5, 2.0 * h - 2.0, -3.0)).length() < 1e-6,
+            "{q}"
+        );
+        assert!((m * m).abs_diff_eq(Mat4::IDENTITY, 1e-6), "an involution");
+        assert!(
+            m.determinant() < 0.0,
+            "flips winding: front faces become clockwise"
+        );
+        // The mirrored camera sees the reflected point where the real camera
+        // sees the water point on the line to the mirror image.
+        let eye = Vec3::new(0.0, 1.7, 8.0);
+        let view = Mat4::look_at_rh(eye, Vec3::ZERO, Vec3::Y);
+        let proj = Mat4::perspective_rh(1.0, 1.5, 0.1, 100.0);
+        let real = (proj * view).project_point3(m.transform_point3(p));
+        let mirrored = (proj * view * m).project_point3(p);
+        assert!((real - mirrored).length() < 1e-5);
+        // The clip plane keeps what is above the water only.
+        assert!(p.y > h && q.y < h);
+    }
+
+    #[test]
+    fn bloom_levels_halve_down_to_one_pixel() {
+        assert_eq!(
+            bloom_sizes((1536, 864)),
+            [(768, 432), (384, 216), (192, 108), (96, 54), (48, 27)]
+        );
+        assert_eq!(bloom_sizes((3, 1)), [(1, 1); 5]);
+        assert_eq!(bloom_sizes((1921, 1081))[0], (960, 540));
+    }
+
+    #[test]
+    fn globals_match_the_shader_layout() {
+        // common.wgsl: 8 mat4, then 26 vec4 before the 9 SH vec4.
+        assert_eq!(SH_OFFSET, 8 * 64 + 26 * 16);
+        assert_eq!(SH_OFFSET % 16, 0, "SH copy needs 16-byte texel alignment");
+        assert_eq!(globals_size(), SH_OFFSET + 144);
     }
 
     #[test]

@@ -113,6 +113,8 @@ impl Renderer {
             quality,
             (width, height),
             &self.shadow_sampler,
+            &self.post_sampler,
+            &self.white,
         );
         let stride = (width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
         let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -135,6 +137,10 @@ impl Renderer {
         let live_sampled = sampled.map(|s| std::mem::replace(&mut self.sampled, s));
         let live = (self.size, self.quality, self.view, self.proj, self.eye);
         let live_cache = self.far_cache.take();
+        let live_cascades = std::mem::take(&mut self.cascade_rendered);
+        if let Some(t) = &self.timer {
+            t.paused.set(true);
+        }
         let live_lods: Vec<Vec<u8>> = self
             .items
             .iter_mut()
@@ -151,6 +157,7 @@ impl Renderer {
         (self.view, self.proj, self.eye) = (view, proj, eye);
 
         let mut encoder = self.device.create_command_encoder(&Default::default());
+        self.env.finish();
         self.render(&mut encoder);
         encoder.copy_texture_to_buffer(
             self.targets.output.as_image_copy(),
@@ -175,6 +182,10 @@ impl Renderer {
         }
         (self.size, self.quality, self.view, self.proj, self.eye) = live;
         self.far_cache = live_cache;
+        self.cascade_rendered = live_cascades;
+        if let Some(t) = &self.timer {
+            t.paused.set(false);
+        }
         for (item, lods) in self.items.iter_mut().flatten().zip(live_lods) {
             for (c, lod) in item.clusters.iter_mut().zip(lods) {
                 c.lod = lod;

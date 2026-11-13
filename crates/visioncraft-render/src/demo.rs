@@ -5,8 +5,8 @@
 use glam::{Mat4, Quat, Vec2, Vec3};
 
 use crate::{
-    AlphaMode, ColorSpace, Light, LightKind, LineVertex, Material, MaterialId, Mesh, MeshId,
-    Projection, Renderer, Sun, Surface, TextureDesc, TextureId,
+    AlphaMode, ColorSpace, Ground, Light, LightKind, LineVertex, Material, MaterialId, Mesh,
+    MeshId, Projection, Renderer, Sun, Surface, TextureDesc, TextureId,
 };
 
 /// An owned mesh under construction. Every box face and every sphere gets
@@ -373,7 +373,9 @@ pub fn paving_textures(size: u32) -> (Image, Image) {
     (albedo, height.normal_from_height(3.0))
 }
 
-/// Grass ground texture (sRGB albedo) for a 2 m tile.
+/// Grass ground texture (sRGB albedo) for a 2 m tile. Large-scale
+/// variation is left to `Material::variation`: a strong patch term inside a
+/// 2 m tile repeats visibly and read as dark blotches across the lawn.
 pub fn lawn_texture(size: u32) -> Image {
     let p = |d: u32| (size / d) as i32;
     Image::from_fn(size, size, |x, y| {
@@ -381,12 +383,15 @@ pub fn lawn_texture(size: u32) -> Image {
         let blades = tile_noise(fx / 1.5, fy / 1.5, p(1).max(1) * 2 / 3, 1);
         let clumps = tile_noise(fx / 24.0, fy / 24.0, p(24), 2);
         let patches = tile_noise(fx / 96.0, fy / 96.0, p(96), 3);
-        let c = Vec3::new(0.10, 0.20, 0.05)
-            .lerp(Vec3::new(0.24, 0.34, 0.09), blades * 0.6 + clumps * 0.4)
-            * (0.75 + 0.4 * patches);
+        let c = Vec3::new(0.13, 0.24, 0.06)
+            .lerp(Vec3::new(0.30, 0.40, 0.12), blades * 0.6 + clumps * 0.4)
+            * (0.92 + 0.12 * patches);
         [c.x, c.y, c.z, 1.0]
     })
 }
+
+/// The lawn texture's mean colour as linear albedo (for `Ground`).
+pub const LAWN_ALBEDO: [f32; 3] = [0.037, 0.083, 0.0085];
 
 /// A leafy twig on transparent ground for foliage cards: stem up the middle,
 /// alternating elliptic leaves. Colour outside the silhouette is the leaf
@@ -780,7 +785,37 @@ pub fn afternoon_sun() -> Sun {
 
 /// Late dusk: the sun 8 degrees below the horizon (nautical twilight).
 pub fn dusk_sun() -> Sun {
-    Sun::from_angles(300.0, -8.0)
+    Sun::from_angles(300.0, -4.0)
+}
+
+/// Low sun, warm light, long shadows.
+pub fn golden_sun() -> Sun {
+    Sun::from_angles(255.0, 6.0)
+}
+
+/// An overcast sky as an equirectangular HDRI (`width` x `width / 2`,
+/// linear RGB): the CIE standard overcast luminance distribution,
+/// L(theta) = Lz (1 + 2 cos theta) / 3 (Moon & Spencer 1942), with Lz = 1,
+/// slightly blue-grey, over a dark grey-green ground. Use with
+/// `Sky::Hdri { intensity: ~6000 }` (a bright overcast day, ~15 klx) and a
+/// sun of zero illuminance.
+pub fn overcast_hdri(width: u32) -> Vec<f32> {
+    let height = width / 2;
+    let mut out = Vec::with_capacity((width * height * 3) as usize);
+    for y in 0..height {
+        let cos_theta = (std::f32::consts::PI * (y as f32 + 0.5) / height as f32).cos();
+        for x in 0..width {
+            // Faint large-scale cloud structure so the sky is not a gradient.
+            let n = tile_noise(x as f32 / 24.0, y as f32 / 12.0, (width / 24) as i32, 7);
+            let c = if cos_theta >= 0.0 {
+                Vec3::new(0.94, 0.97, 1.0) * (1.0 + 2.0 * cos_theta) / 3.0 * (0.9 + 0.2 * n)
+            } else {
+                Vec3::new(0.05, 0.06, 0.045)
+            };
+            out.extend(c.to_array());
+        }
+    }
+    out
 }
 
 /// Night: the sun far below the horizon (only the night sky floor).
@@ -1198,9 +1233,16 @@ pub fn garden(r: &mut Renderer) -> Vec<Light> {
         base_color: [1.0; 4],
         roughness: 0.95,
         projection: Projection::Triplanar { scale_m: 2.0 },
+        variation: 0.6,
         ..Default::default()
     });
     r.add_item(terrain, grass, &[Mat4::IDENTITY]);
+    // The world goes on past the 60 m lawn: an endless field of the same
+    // colour, into the haze.
+    r.set_ground(Some(Ground {
+        color: LAWN_ALBEDO,
+        ..Default::default()
+    }));
 
     // House: 9 x 7 x 3.2 m with two window openings in the south wall.
     let (albedo, normal, orm) = brick_textures(512);
@@ -1303,6 +1345,7 @@ pub fn garden(r: &mut Renderer) -> Vec<Light> {
         roughness: 0.75,
         weathering: 0.3,
         projection: Projection::Triplanar { scale_m: 1.0 },
+        variation: 0.25,
         ..Default::default()
     });
     let mut terrace = MeshData::default();

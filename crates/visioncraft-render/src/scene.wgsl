@@ -34,11 +34,8 @@ struct DepthIn {
     @location(8) m3: vec4<f32>,
 }
 
-// Frame resources next to the globals (group 0): the prefiltered environment
-// cube and the light lists.
-@group(0) @binding(1) var env_map: texture_cube<f32>;
-@group(0) @binding(2) var env_sampler: sampler;
-
+// Frame resources next to the globals (group 0; the environment cube and
+// the sky source are declared in common.wgsl): the light lists.
 struct Light {
     position: vec4<f32>, // xyz world, w range (m)
     color: vec4<f32>,    // rgb linear colour * luminous intensity (cd)
@@ -55,7 +52,7 @@ struct Material {
     params: vec4<f32>,     // x metallic, y perceptual roughness, z relief, w gloss
     emissive: vec4<f32>,   // rgb emitted luminance (cd/m2), w weathering
     alpha: vec4<f32>,      // x cutout threshold, y 1 / triplanar scale (0: UVs), z surface (0 standard, 1 glass, 2 water), w foliage
-    flags: vec4<u32>,      // x texture bits (1 base, 2 normal, 4 orm, 8 roughness, 16 metallic, 32 occlusion), y double-sided
+    flags: vec4<u32>,      // x texture bits (1 base, 2 normal, 4 orm, 8 roughness, 16 metallic, 32 occlusion), y double-sided, z macro variation (f32 bits)
 }
 @group(1) @binding(0) var<uniform> material: Material;
 // Absent maps are bound to a 1x1 white texture (a neutral factor).
@@ -82,6 +79,8 @@ struct Draw {
 @group(3) @binding(1) var shadow_sampler: sampler_comparison;
 @group(3) @binding(2) var occlusion: texture_2d<f32>; // half res: r ambient occlusion, g contact shadow
 @group(3) @binding(3) var linear_depth: texture_2d<f32>;
+// The scene mirrored about the water plane (reflection pass), pre-exposed HDR.
+@group(3) @binding(4) var planar_reflection: texture_2d<f32>;
 
 // MSAA sample count of the pipeline (depth pre-pass coverage mask).
 override SAMPLES: u32 = 1u;
@@ -256,6 +255,18 @@ fn fs_shadow_cutout(in: DepthOut) {
     }
 }
 
+// Thin glass casts a faint shadow: it writes depth on two texels of every
+// five in a fixed stipple, which the 3x3 / 2x2 percentage-closer filter
+// averages to a ~40 % occluder (screen-door transparency in the shadow map;
+// a depth map cannot carry the tint).
+@fragment
+fn fs_shadow_glass(in: DepthOut) {
+    let p = vec2<u32>(in.clip.xy);
+    if (p.x + 2u * p.y) % 5u >= 2u {
+        discard;
+    }
+}
+
 // ---- forward pass --------------------------------------------------------
 
 struct Varying {
@@ -305,7 +316,8 @@ fn specular(n: vec3<f32>, v: vec3<f32>, l: vec3<f32>, nol: f32, nov: f32, f0: ve
 
 // Irradiance from L2 spherical harmonics: Ramamoorthi & Hanrahan, "An
 // Efficient Representation for Irradiance Environment Maps", SIGGRAPH 2001.
-// The CPU already folded the cosine-lobe convolution into the coefficients.
+// env.wgsl already folded the cosine-lobe convolution into the coefficients
+// (kcd/m2 * sr, so the result is scaled to pre-exposed lux here).
 fn sh_irradiance(n: vec3<f32>) -> vec3<f32> {
     var e = g.sh[0].rgb * 0.282095;
     e += g.sh[1].rgb * 0.488603 * n.y;
@@ -316,7 +328,7 @@ fn sh_irradiance(n: vec3<f32>) -> vec3<f32> {
     e += g.sh[6].rgb * 0.315392 * (3.0 * n.z * n.z - 1.0);
     e += g.sh[7].rgb * 1.092548 * n.x * n.z;
     e += g.sh[8].rgb * 0.546274 * (n.x * n.x - n.y * n.y);
-    return max(e, vec3<f32>(0.0));
+    return max(e, vec3<f32>(0.0)) * g.night.w;
 }
 
 // Split-sum environment BRDF, analytic fit: Karis, "Physically Based Shading
@@ -335,7 +347,10 @@ fn environment(r: vec3<f32>, roughness: f32) -> vec3<f32> {
     return textureSampleLevel(env_map, env_sampler, r, roughness * g.time.z).rgb * g.night.w;
 }
 
-// One cascade, 3x3 taps of hardware 2x2 PCF (smooth 4x4-texel footprint).
+// One cascade with hardware 2x2 PCF taps: 3x3 of them (smooth 4x4-texel
+// footprint) on HIGH, 2x2 at +-0.75 texel (3x3-texel footprint, less than
+// half the cost) below. -1 when the point is outside this cascade's map
+// (cascades refreshed every other frame lag the camera by a frame).
 // Normal offset: Holbert, "Saying Goodbye to Shadow Acne", GDC 2011 poster;
 // the slope-scaled raster bias is in the shadow pipeline.
 fn cascade_shadow(c: u32, world: vec3<f32>, n: vec3<f32>, nol: f32) -> f32 {
@@ -343,38 +358,53 @@ fn cascade_shadow(c: u32, world: vec3<f32>, n: vec3<f32>, nol: f32) -> f32 {
     let p = g.cascades[c] * vec4<f32>(world + offset, 1.0);
     let uv = vec2<f32>(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);
     if any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0)) || p.z > 1.0 {
-        return 1.0;
+        return -1.0;
     }
     var sum = 0.0;
-    for (var y = -1; y <= 1; y++) {
-        for (var x = -1; x <= 1; x++) {
-            let o = vec2<f32>(f32(x), f32(y)) * g.shadow.z * 1.5;
-            sum += textureSampleCompareLevel(shadow_map, shadow_sampler, uv + o, i32(c), p.z);
+    if g.options.x > 4.5 {
+        for (var y = -1; y <= 1; y++) {
+            for (var x = -1; x <= 1; x++) {
+                let o = vec2<f32>(f32(x), f32(y)) * g.shadow.z * 1.5;
+                sum += textureSampleCompareLevel(shadow_map, shadow_sampler, uv + o, i32(c), p.z);
+            }
         }
+        return sum / 9.0;
     }
-    return sum / 9.0;
+    for (var i = 0; i < 4; i++) {
+        let o = (vec2<f32>(f32(i & 1), f32(i >> 1u)) - 0.5) * g.shadow.z * 1.5;
+        sum += textureSampleCompareLevel(shadow_map, shadow_sampler, uv + o, i32(c), p.z);
+    }
+    return sum * 0.25;
 }
 
 // Cascade selection by view depth, blending into the next cascade over the
-// last 15% of each range and fading out at the end of the last one.
+// last 15% of each range and fading out at the end of the last one; a point
+// a cascade does not cover falls through to the next.
 fn sun_shadow(world: vec3<f32>, n: vec3<f32>, nol: f32, depth: f32) -> f32 {
     let count = u32(g.shadow.x);
     var c = 0u;
     while c < count && depth > g.splits[c] {
         c++;
     }
-    if c >= count {
+    var s = -1.0;
+    while c < count && s < 0.0 {
+        s = cascade_shadow(c, world, n, nol);
+        if s < 0.0 {
+            c++;
+        }
+    }
+    if s < 0.0 {
         return 1.0;
     }
     let start = select(0.0, g.splits[max(c, 1u) - 1u], c > 0u);
     let band = 0.15 * (g.splits[c] - start);
     let t = clamp((depth - (g.splits[c] - band)) / band, 0.0, 1.0);
-    let s = cascade_shadow(c, world, n, nol);
     if t <= 0.0 {
         return s;
     }
     if c + 1u < count {
-        return mix(s, cascade_shadow(c + 1u, world, n, nol), t);
+        let next = cascade_shadow(c + 1u, world, n, nol);
+        return mix(s, select(next, s, next < 0.0), t);
     }
     return mix(s, 1.0, t);
 }
@@ -521,9 +551,6 @@ fn value_noise(p: vec3<f32>) -> f32 {
     return mix(x0, x1, u.z);
 }
 
-fn luminance(c: vec3<f32>) -> f32 {
-    return dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
-}
 
 struct Surface {
     base: vec4<f32>,
@@ -594,6 +621,19 @@ fn surface(in: Varying, front: bool) -> Surface {
         }
     }
     s.emissive = material.emissive.rgb;
+    let variation = bitcast<f32>(material.flags.z);
+    if variation > 0.0 {
+        // Macro variation against the carpet look of large single-material
+        // surfaces: two octaves of world-space value noise (features of ~5
+        // and ~15 m) modulate brightness and roughness, and a third paints
+        // drier, yellower patches.
+        let m = value_noise(in.world * 0.21) * 0.65 + value_noise(in.world * 0.067 + 31.0) * 0.35 - 0.5;
+        let dry = smoothstep(0.45, 0.8, value_noise(in.world * 0.13 + 7.0)) * variation;
+        var c = s.base.rgb * (1.0 + m * 0.6 * variation);
+        c = mix(c, c * vec3<f32>(1.3, 1.08, 0.55), dry * 0.6);
+        s.base = vec4<f32>(c, s.base.a);
+        s.roughness = clamp(s.roughness + m * 0.2 * variation, 0.045, 1.0);
+    }
     return s;
 }
 
@@ -619,7 +659,9 @@ fn weather(base: vec3<f32>, world: vec3<f32>, n: vec3<f32>, ao: f32) -> vec3<f32
 // in Unreal Engine 4" (2013), eq. 9, with the distance clamp of Lagarde & de
 // Rousiers, "Moving Frostbite to PBR" (2014), eq. 26; spot cone attenuation
 // as in Filament's documentation (scale and offset on the cosine, squared).
-fn local_lights(world: vec3<f32>, n: vec3<f32>, v: vec3<f32>, nov: f32, diffuse_color: vec3<f32>, f0: vec3<f32>, a: f32) -> vec3<f32> {
+// Leaves get the sun's wrapped diffuse and translucency (see shade); glass
+// and water pass a black diffuse colour for the specular highlights only.
+fn local_lights(world: vec3<f32>, n: vec3<f32>, v: vec3<f32>, nov: f32, diffuse_color: vec3<f32>, f0: vec3<f32>, a: f32, foliage: bool) -> vec3<f32> {
     if g.light_grid.w <= 0.0 {
         return vec3<f32>(0.0);
     }
@@ -643,8 +685,19 @@ fn local_lights(world: vec3<f32>, n: vec3<f32>, v: vec3<f32>, nov: f32, diffuse_
         let nol = dot(n, l);
         let cone = clamp(dot(-l, light.spot.xyz) * light.spot.w + light.extra.x, 0.0, 1.0);
         let attenuation = window * window * cone * cone / max(dist2, 1e-4);
-        if nol > 0.0 && attenuation > 0.0 {
-            sum += (diffuse_color / PI + specular(n, v, l, nol, nov, f0, a)) * light.color.rgb * attenuation * nol;
+        var diffuse = max(nol, 0.0);
+        var through = 0.0;
+        if foliage {
+            diffuse = max((nol + 0.5) / 1.5, 0.0) / 1.5;
+            through = pow(clamp(dot(v, -normalize(l + n * 0.3)), 0.0, 1.0), 4.0) * 0.8 + 0.15 * max(-nol, 0.0);
+        }
+        if attenuation > 0.0 && (diffuse > 0.0 || through > 0.0) {
+            var spec = vec3<f32>(0.0);
+            if nol > 0.0 && (!foliage || dot(n, v) > 0.0) {
+                spec = specular(n, v, l, nol, nov, f0, a) * nol;
+            }
+            let leaf = diffuse_color * diffuse_color * 2.0 * through;
+            sum += (diffuse_color / PI * diffuse + spec + leaf) * light.color.rgb * attenuation;
         }
     }
     return sum * g.time.y;
@@ -729,9 +782,9 @@ fn shade(in: Varying, front: bool, screen_effects: bool) -> Shaded {
     // Specular occlusion from AO: Lagarde & de Rousiers 2014, section 4.10.2.
     let spec_ao = clamp(pow(nov + ao, exp2(-16.0 * s.roughness - 1.0)) - 1.0 + ao, 0.0, 1.0);
     let ambient_specular = env_brdf_approx(f0, s.roughness, nov) * environment(r, s.roughness) * spec_ao;
-    let local = local_lights(in.world, n, v, nov, diffuse_color, f0, a);
+    let local = local_lights(in.world, n, v, nov, diffuse_color, f0, a, foliage);
     let emitted = s.emissive * g.time.y;
-    return Shaded(sun + ambient_diffuse + ambient_specular + local + emitted, s.base.a);
+    return Shaded(apply_fog(sun + ambient_diffuse + ambient_specular + local + emitted, in.world), s.base.a);
 }
 
 @fragment
@@ -739,14 +792,87 @@ fn fs_main(in: Varying, @builtin(front_facing) front: bool) -> @location(0) vec4
     return vec4<f32>(shade(in, front, true).color, 1.0);
 }
 
+// ---- infinite ground -------------------------------------------------------
+
+// A backdrop, not geometry: a polar grid of rings around the camera's
+// position (radius 0.5 m growing by a constant factor to ~40 km) at the
+// ground height, drawn after the opaque scene at a depth just in front of
+// the far plane, so it only fills pixels nothing else covered: it can never
+// z-fight with or hide the user's own lawn, pond basin or basement. It is
+// shaded like any surface (its material is made from `Ground`), so it gets
+// sun, shadows of the near cascades, sky light, lamps and the haze.
+const GROUND_RINGS: u32 = 48u;
+const GROUND_SEGMENTS: u32 = 64u;
+const GROUND_GROWTH: f32 = 1.2716; // 0.5 m * 1.2716^47 = 40 km
+const GROUND_DEPTH: f32 = 0.999999;
+
+@vertex
+fn vs_ground(@builtin(vertex_index) vi: u32) -> Varying {
+    let tri = vi / 3u;
+    let quad = tri / 2u;
+    let ring = quad / GROUND_SEGMENTS;
+    let seg = quad % GROUND_SEGMENTS;
+    var dr = array<u32, 6>(0u, 1u, 1u, 0u, 1u, 0u);
+    var ds = array<u32, 6>(0u, 0u, 1u, 0u, 1u, 1u);
+    let k = vi % 3u + 3u * (tri & 1u);
+    let r = ring + dr[k];
+    let radius = select(0.0, 0.5 * pow(GROUND_GROWTH, f32(r) - 1.0), r > 0u);
+    let angle = f32(seg + ds[k]) * 2.0 * PI / f32(GROUND_SEGMENTS);
+    let world = vec3<f32>(g.camera.x + radius * cos(angle), g.options.w, g.camera.z + radius * sin(angle));
+    var out: Varying;
+    out.clip = g.view_proj * vec4<f32>(world, 1.0);
+    out.clip.z = out.clip.w * GROUND_DEPTH;
+    out.world = world;
+    out.normal = vec3<f32>(0.0, 1.0, 0.0);
+    out.face = 0xfffffffeu;
+    out.uv = world.xz;
+    return out;
+}
+
+@fragment
+fn fs_ground(in: Varying) -> @location(0) vec4<f32> {
+    return vec4<f32>(shade(in, true, false).color, 1.0);
+}
+
+// ---- planar reflection -----------------------------------------------------
+
+// The scene seen in the water plane: drawn with the mirrored camera (lib.rs
+// writes a second globals block), cut at the water height (a clip plane done
+// by discard), alpha-tested cutouts, no screen-space effects. Shading comes
+// first and the discard last, so derivatives stay in uniform control flow.
+@fragment
+fn fs_reflect(in: Varying, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    let shaded = shade(in, front, false);
+    let a = cutout_alpha(in.uv);
+    if (g.reflection.z > 0.5 && in.world.y < g.reflection.w) || (material.alpha.x > 0.0 && a < material.alpha.x) {
+        discard;
+    }
+    return vec4<f32>(shaded.color, 1.0);
+}
+
 // ---- transparent pass ------------------------------------------------------
+
+// Haze in front of a premultiplied transparent surface: its own colour is
+// attenuated and the in-scattered light added in proportion to its alpha;
+// what shows through already carries the haze of its own, longer path.
+fn fog_premultiplied(c: vec4<f32>, world: vec3<f32>) -> vec4<f32> {
+    if g.fog.x <= 0.0 {
+        return c;
+    }
+    let to = world - g.camera.xyz;
+    let t = length(to);
+    let dir = to / max(t, 1e-6);
+    let transmit = fog_transmittance(g.camera.y, dir.y, t);
+    return vec4<f32>(c.rgb * transmit + fog_inscatter(dir, 1.0) * fog_near(transmit) * (1.0 - transmit) * c.a, c.a);
+}
 
 // Thin architectural glass: two interfaces of a thin slab (reflectance
 // R' = 2R / (1 + R), from the geometric series of inter-reflections),
-// Fresnel-weighted environment and sun reflection, and the transmitted part
-// blended with premultiplied alpha. base_color.rgb tints the pane's own
-// (scattered) light, base_color.a is its opacity; a fixed 25 % absorption
-// keeps rooms behind windows darker than outside. No refraction offset.
+// Fresnel-weighted environment, sun and lamp reflections, and the
+// transmitted part blended with premultiplied alpha. base_color.rgb tints
+// the pane's own (scattered) light, base_color.a is its opacity; a fixed
+// 35 % absorption keeps rooms behind windows visibly darker than outside.
+// No refraction offset.
 fn glass(in: Varying) -> vec4<f32> {
     let v = normalize(g.camera.xyz - in.world);
     var n = normalize(in.normal);
@@ -760,17 +886,19 @@ fn glass(in: Varying) -> vec4<f32> {
     let depth = -(g.view * vec4<f32>(in.world, 1.0)).z;
     let l = g.sun_dir.xyz;
     let nol = max(dot(n, l), 0.0);
+    let a = roughness * roughness;
     var sun = vec3<f32>(0.0);
     if nol > 0.0 {
         let shadow = sun_shadow(in.world, n, nol, depth);
-        sun = specular(n, v, l, nol, nov, vec3<f32>(0.04), roughness * roughness) * nol * g.sun_light.rgb * shadow * 2.0;
+        sun = specular(n, v, l, nol, nov, vec3<f32>(0.04), a) * nol * g.sun_light.rgb * shadow * 2.0;
     }
-    let reflected = fr * environment(reflect(-v, n), roughness) + sun;
+    let lamps = local_lights(in.world, n, v, nov, vec3<f32>(0.0), vec3<f32>(0.04), a, false) * 2.0;
+    let reflected = fr * environment(reflect(-v, n), roughness) + sun + lamps;
     let opacity = clamp(material.base_color.a, 0.0, 1.0);
     let lit = material.base_color.rgb * (sh_irradiance(n) / PI + g.sun_light.rgb * nol / PI);
-    let transmit = (1.0 - fr) * (1.0 - opacity) * 0.75;
+    let transmit = (1.0 - fr) * (1.0 - opacity) * 0.65;
     let color = reflected + (1.0 - fr) * opacity * lit;
-    return vec4<f32>(color, 1.0 - transmit);
+    return fog_premultiplied(vec4<f32>(color, 1.0 - transmit), in.world);
 }
 
 // Value noise in 2D with its analytic gradient (Inigo Quilez, "Value Noise
@@ -806,11 +934,14 @@ fn water_transmittance(path: f32, turbidity: f32) -> f32 {
 }
 
 // Flat water (pond, pool): two scrolling procedural normal layers, Fresnel
-// reflection of the environment cube, the sun's glint, and instead of
-// refraction a depth-based absorption: the water path length comes from the
-// linear depth of the opaque scene below (shallow edges clear, deep water
-// takes base_color.rgb, the deep colour; base_color.a is the turbidity),
-// with a soft fade where the water meets the shore.
+// (looking down shows the tinted bottom, grazing angles the reflection),
+// the sun's and the lamps' glints, and instead of refraction a depth-based
+// absorption: the water path length comes from the linear depth of the
+// opaque scene below (shallow edges clear, deep water takes base_color.rgb,
+// the deep colour; base_color.a is the turbidity), with a soft fade where
+// the water meets the shore. The reflection is the planar reflection pass
+// when it rendered this water's plane, distorted by the ripples' slope,
+// otherwise the environment cube.
 fn water(in: Varying) -> vec4<f32> {
     let to_eye = g.camera.xyz - in.world;
     let dist = length(to_eye);
@@ -828,26 +959,34 @@ fn water(in: Varying) -> vec4<f32> {
     n = normalize(mix(n, vec3<f32>(0.0, 1.0, 0.0), clamp(depth / 120.0, 0.0, 0.8)));
     let nov = max(dot(n, v), 1e-4);
     let f = f_schlick(nov, vec3<f32>(0.02)).r;
-    // A garden pond reflects hedges, walls and trees near the horizon, not
-    // sky. Without screen-space reflections the environment reflection is
-    // darkened towards the horizon (a crude local-horizon term), which also
-    // lets the ripples show as they tilt the reflection up and down.
     let r = reflect(-v, n);
-    let reflected = environment(r, 0.04) * mix(0.3, 1.0, smoothstep(0.02, 0.4, r.y));
+    var reflected: vec3<f32>;
+    if g.reflection.x > 0.5 && abs(in.world.y - g.reflection.y) < 0.05 {
+        // The ripples' tilt in view space shifts the lookup, less with distance.
+        let tilt = (g.view * vec4<f32>(n.x, 0.0, n.z, 0.0)).xy;
+        let size = vec2<f32>(textureDimensions(planar_reflection));
+        let uv = in.clip.xy * g.viewport.zw + tilt * vec2<f32>(1.0, -1.0) * 0.6 / max(depth, 1.0);
+        reflected = textureSampleLevel(planar_reflection, env_sampler, clamp(uv, 0.5 / size, 1.0 - 0.5 / size), 0.0).rgb;
+    } else {
+        // A garden pond reflects hedges, walls and trees near the horizon,
+        // not sky: the cube's reflection is darkened towards the horizon (a
+        // crude local-horizon term), which also lets the ripples show.
+        reflected = environment(r, 0.04) * mix(0.3, 1.0, smoothstep(0.02, 0.4, r.y));
+    }
     let l = g.sun_dir.xyz;
     let nol = max(dot(n, l), 0.0);
-    var glint = vec3<f32>(0.0);
+    var glint = local_lights(in.world, n, v, nov, vec3<f32>(0.0), vec3<f32>(0.02), 0.01, false);
     var sun_on = 0.0;
     if nol > 0.0 {
         sun_on = sun_shadow(in.world, vec3<f32>(0.0, 1.0, 0.0), nol, depth);
-        glint = specular(n, v, l, nol, nov, vec3<f32>(0.02), 0.02) * nol * g.sun_light.rgb * sun_on;
+        glint += specular(n, v, l, nol, nov, vec3<f32>(0.02), 0.02) * nol * g.sun_light.rgb * sun_on;
     }
     let transmit = water_transmittance(path, material.base_color.a);
     let deep = material.base_color.rgb * (sh_irradiance(vec3<f32>(0.0, 1.0, 0.0)) + g.sun_light.rgb * max(l.y, 0.0) * sun_on) / PI;
     let shore = smoothstep(0.0, 0.12, path);
     let color = (f * reflected + glint + (1.0 - f) * (1.0 - transmit) * deep) * shore;
     let alpha = (f + (1.0 - f) * (1.0 - transmit)) * shore;
-    return vec4<f32>(color, alpha);
+    return fog_premultiplied(vec4<f32>(color, alpha), in.world);
 }
 
 // Premultiplied alpha out (blend: One, OneMinusSrcAlpha).
