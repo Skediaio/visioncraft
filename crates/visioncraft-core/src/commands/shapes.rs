@@ -26,7 +26,7 @@ pub(super) fn register(s: &mut Session) {
                 param("name", T::String, "Display name.").required(),
                 outline("Polygon as [x, z] pairs in metres, either winding, not self-intersecting."),
                 param("elevation", T::Number, "Height of the surface (above the ground when `drape`).").unit("m").default(json!(0)),
-                param("drape", T::Boolean, "Lie on the terrain: the surface follows the ground, `elevation` is the height above it.").default(json!(false)),
+                param("drape", T::Boolean, "Lie on the ground: the surface follows the terrain, `elevation` is the height above it. False: flat at `elevation` (a raised deck, a pond's water).").default(json!(true)),
                 layer(),
                 material(),
             ],
@@ -197,7 +197,7 @@ fn add_area(project: &mut Project, params: &Value) -> Result<Value, CommandError
         outline: Vec<[f32; 2]>,
         #[serde(default)]
         elevation: f32,
-        #[serde(default)]
+        #[serde(default = "yes")]
         drape: bool,
         layer: Option<String>,
         material: Option<String>,
@@ -451,4 +451,8 @@ fn rename(project: &mut Project, params: &Value) -> Result<Value, CommandError> 
         .ok_or_else(|| fail(format!("no shape `{}`", p.id)))?;
     *s.name_mut() = p.name;
     Ok(Value::Null)
+}
+
+fn yes() -> bool {
+    true
 }

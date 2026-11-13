@@ -1,5 +1,20 @@
 //! Shapes a private person draws instead of using CAD: flat areas and extruded outlines, meshed
 //! on demand with stable face names.
+//!
+//! # How shapes sit on the ground
+//!
+//! - An area with `drape` (the default for new areas; `terrain.create` turns it on for areas that
+//!   lay at height 0) lies on the ground: its surface follows the terrain, `elevation` above it.
+//!   Without a terrain the ground is height 0, so it is flat at `elevation`. An area without
+//!   `drape` is flat at `elevation` whatever the ground does (a raised deck, a pond's water).
+//! - Where areas overlap, the later one in the shape list is on top. Each area is lifted
+//!   [`AREA_LIFT_M`] above its surface plus [`STACK_STEP_M`] for every earlier area it overlaps
+//!   ([`area_lifts`]), so a terrace drawn on a lawn, or a path on the terrace, never fights with
+//!   what is under it; lawn grass does not grow where an area lies on top of it ([`areas_over`]).
+//!   Water is an area too: a pond drawn in a lawn covers the lawn's grass.
+//! - An extrusion (house block, wall) stands on the lowest ground under its outline
+//!   ([`footing`]): `base` is measured from there, so a house on a slope does not float on its
+//!   low side nor sink on its high side.
 
 use crate::project::Extensions;
 use crate::{Body, Face, ImportedModel};
@@ -469,6 +484,89 @@ pub fn shape_mesh_on(
     Ok(b.finish(&a.id, &a.name, vec![format!("{}:top", a.id)]))
 }
 
+/// Every area sits this far above its surface, so it never fights with the terrain under it.
+pub const AREA_LIFT_M: f32 = 0.02;
+/// And this much more for every earlier area it overlaps.
+pub const STACK_STEP_M: f32 = 0.01;
+
+fn overlaps(a: &[P2], b: &[P2]) -> bool {
+    let inside = |p: P2, poly: &[P2]| crate::planting::point_in_polygon(p, poly);
+    let crosses = |p: P2, q: P2, r: P2, s: P2| {
+        let o = |a: P2, b: P2, c: P2| (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+        (o(p, q, r) > 0.0) != (o(p, q, s) > 0.0) && (o(r, s, p) > 0.0) != (o(r, s, q) > 0.0)
+    };
+    let edges = |poly: &[P2]| {
+        let n = poly.len();
+        (0..n)
+            .map(move |i| (poly[i], poly[(i + 1) % n]))
+            .collect::<Vec<_>>()
+    };
+    a.iter().any(|p| inside(*p, b))
+        || b.iter().any(|p| inside(*p, a))
+        || edges(a)
+            .iter()
+            .any(|&(p, q)| edges(b).iter().any(|&(r, s)| crosses(p, q, r, s)))
+}
+
+/// How far each area is lifted over its surface (see the module docs): `(id, metres)` in shape
+/// order.
+pub fn area_lifts(shapes: &[Shape]) -> Vec<(String, f32)> {
+    let areas: Vec<&Area> = shapes
+        .iter()
+        .filter_map(|s| match s {
+            Shape::Area(a) => Some(a),
+            Shape::Extrusion(_) => None,
+        })
+        .collect();
+    areas
+        .iter()
+        .enumerate()
+        .map(|(i, a)| {
+            let under = areas[..i]
+                .iter()
+                .filter(|b| overlaps(&a.outline, &b.outline))
+                .count();
+            (a.id.clone(), AREA_LIFT_M + STACK_STEP_M * under as f32)
+        })
+        .collect()
+}
+
+/// The outlines of the areas on top of area `id` (later in the list and overlapping it): its
+/// grass does not grow under them.
+pub fn areas_over<'a>(shapes: &'a [Shape], id: &str) -> Vec<&'a [P2]> {
+    let Some(i) = shapes.iter().position(|s| s.id() == id) else {
+        return Vec::new();
+    };
+    let Shape::Area(a) = &shapes[i] else {
+        return Vec::new();
+    };
+    shapes[i + 1..]
+        .iter()
+        .filter_map(|s| match s {
+            Shape::Area(b) if overlaps(&a.outline, &b.outline) => Some(b.outline.as_slice()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Whether `p` lies inside `outline` (either winding).
+pub fn inside_outline(p: P2, outline: &[P2]) -> bool {
+    outline.len() >= 3 && crate::planting::point_in_polygon(p, outline)
+}
+
+/// The lowest ground under an outline (its corners and edge midpoints), 0 where there is none.
+pub fn footing(outline: &[P2], ground: &dyn Fn(f32, f32) -> Option<f32>) -> f32 {
+    let n = outline.len();
+    (0..n)
+        .flat_map(|i| {
+            let (a, b) = (outline[i], outline[(i + 1) % n]);
+            [a, [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0]]
+        })
+        .map(|p| ground(p[0], p[1]).unwrap_or(0.0))
+        .reduce(f32::min)
+        .unwrap_or(0.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -684,5 +782,56 @@ mod drape_tests {
             shape_mesh_on(&Shape::Area(a.clone()), &slope),
             shape_mesh(&Shape::Area(a))
         );
+    }
+}
+
+#[cfg(test)]
+mod stacking_tests {
+    use super::*;
+
+    fn area(id: &str, outline: Vec<P2>) -> Shape {
+        Shape::Area(Area {
+            id: id.into(),
+            name: id.into(),
+            layer: "shapes".into(),
+            outline,
+            elevation: 0.0,
+            drape: true,
+            extensions: Default::default(),
+        })
+    }
+
+    fn rect(x0: f32, z0: f32, x1: f32, z1: f32) -> Vec<P2> {
+        vec![[x0, z0], [x1, z0], [x1, z1], [x0, z1]]
+    }
+
+    #[test]
+    fn later_areas_lie_on_top_of_the_ones_they_overlap() {
+        let shapes = vec![
+            area("lawn", rect(0.0, 0.0, 30.0, 20.0)),
+            area("terrace", rect(5.0, 5.0, 17.0, 8.0)),
+            area("path", rect(10.0, 6.0, 12.0, 25.0)),
+            area("far", rect(40.0, 0.0, 50.0, 10.0)),
+            // A crossing with no corner inside the other still overlaps.
+            area("cross", rect(-5.0, 9.0, 35.0, 10.0)),
+        ];
+        let lifts: std::collections::HashMap<_, _> = area_lifts(&shapes).into_iter().collect();
+        let base = AREA_LIFT_M;
+        assert_eq!(lifts["lawn"], base);
+        assert_eq!(lifts["terrace"], base + STACK_STEP_M);
+        assert_eq!(lifts["path"], base + 2.0 * STACK_STEP_M);
+        assert_eq!(lifts["far"], base);
+        assert_eq!(lifts["cross"], base + 2.0 * STACK_STEP_M, "lawn and path");
+        let over = areas_over(&shapes, "lawn");
+        assert_eq!(over.len(), 3, "terrace, path, cross");
+        assert!(inside_outline([6.0, 6.0], over[0]));
+        assert!(areas_over(&shapes, "far").is_empty());
+    }
+
+    #[test]
+    fn an_extrusion_stands_on_the_lowest_ground_under_it() {
+        let slope = |x: f32, _: f32| Some(0.1 * x);
+        assert_eq!(footing(&rect(2.0, 0.0, 10.0, 5.0), &slope), 0.2);
+        assert_eq!(footing(&rect(2.0, 0.0, 10.0, 5.0), &|_, _| None), 0.0);
     }
 }

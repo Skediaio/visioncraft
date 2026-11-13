@@ -21,7 +21,7 @@ pub(super) fn register(s: &mut Session) {
         spec(
             "terrain.create",
             "Create Terrain",
-            "Creates a flat terrain at height 0 in the base material; refused if one exists. At most 1024 cells per side.",
+            "Creates a flat terrain at height 0 in the base material; refused if one exists. At most 1024 cells per side. Areas at height 0 start to lie on it (drape).",
             vec![
                 param("origin", T::Point2, "[x, z] of the corner with the smallest coordinates.").unit("m").required(),
                 param("width_m", T::Number, "Size along x, above zero.").unit("m").required(),
@@ -209,6 +209,15 @@ fn create(project: &mut Project, params: &Value) -> Result<Value, CommandError> 
     project.terrain = Some(Arc::new(
         Terrain::flat(p.origin, p.width_m, p.depth_m, p.cell_m, &p.base_material).map_err(terr)?,
     ));
+    // Areas that lay on the old flat ground lie on the new one (see `shape`'s module docs).
+    for s in &mut project.shapes {
+        if let crate::Shape::Area(a) = s
+            && !a.drape
+            && a.elevation == 0.0
+        {
+            a.drape = true;
+        }
+    }
     Ok(Value::Null)
 }
 

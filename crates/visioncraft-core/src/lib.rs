@@ -47,7 +47,10 @@ pub use project::{
 };
 pub use raycast::{Hit, ground_height, raycast};
 pub use session::{Command, CommandError, Session};
-pub use shape::{Shape, ShapeError, shape_mesh, shape_mesh_on};
+pub use shape::{
+    AREA_LIFT_M, STACK_STEP_M, Shape, ShapeError, area_lifts, areas_over, footing, inside_outline,
+    shape_mesh, shape_mesh_on,
+};
 pub use spec::{CommandSpec, ParamSpec, ParamType, example_project};
 pub use terrain::{
     BrushStroke, DirtyRect, Terrain, TerrainChunk, Tool, apply_stroke, ground_height_over,
