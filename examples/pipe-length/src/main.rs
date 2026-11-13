@@ -207,6 +207,10 @@ impl Extension for PipeLength {
         }
     }
 
+    fn leave(&mut self, _cx: &mut ExtensionCx) {
+        self.drawing.clear();
+    }
+
     fn panel(&mut self, ui: &mut egui::Ui, cx: &mut ExtensionCx) {
         ui.label("Click points on the ground; double click or Enter finishes the pipe.");
         let all = pipes(cx.project());

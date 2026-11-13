@@ -633,7 +633,15 @@ impl App {
             Some(Mode::Objects) => self.objects.leave(&mut cx),
             Some(Mode::Sun) => self.terrain.leave(&mut cx),
             Some(Mode::Views) => self.views.leave(),
-            Some(Mode::Extension(_)) => cx.s.double_click_captured = false,
+            Some(Mode::Extension(id)) => {
+                cx.s.double_click_captured = false;
+                if let Some(e) = self.extensions.iter_mut().find(|e| e.id() == id) {
+                    e.leave(&mut extension::ExtensionCx {
+                        cx: &mut cx,
+                        overlay: &mut Default::default(),
+                    });
+                }
+            }
             None => {}
         }
         if mode == Some(Mode::Draw) {
@@ -660,6 +668,7 @@ impl App {
             mode: &mut mode,
             planting: &mut self.objects.tools,
             model_selected: &mut self.modelui.selected,
+            extension_modes: &self.hud.extension_modes,
             now,
         };
         let answered = self.agents.poll(host, now);

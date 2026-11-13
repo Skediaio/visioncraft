@@ -8,11 +8,15 @@
 //!
 //! An extension
 //! - registers `Session` commands ([`Extension::register`]); every successful run is one undo
-//!   step, and agents reach them over MCP like the built-in ones;
+//!   step, and agents driving the window (`visioncraft --control`, `visioncraft-cli mcp --bridge`)
+//!   reach them over MCP like the built-in ones, and open its mode with `ui.set {"mode": id}`.
+//!   `visioncraft-cli` on its own and `visioncraft --agents-headless` build their own session
+//!   from the core commands: they cannot know a third-party build's commands, by design (no
+//!   runtime loading). Automate an extension through the window of the build that has it;
 //! - keeps its data under its own namespace ([`Extension::id`]) in the `extensions` maps of the
 //!   project (and of the models, materials and species that have one); other builds keep it as is;
 //! - may have a mode pill with a panel ([`Extension::mode`], [`Extension::panel`]) and a pointer
-//!   tool while that mode is open ([`Extension::update`]);
+//!   tool while that mode is open ([`Extension::update`], [`Extension::leave`]);
 //! - draws lines, points and labels over the scene ([`Extension::overlay`]), in the same overlay
 //!   pass as the Draw tool;
 //! - makes its own kinds of objects from the existing primitives: a command that writes core
@@ -40,6 +44,9 @@ pub trait Extension: 'static {
     /// Every frame while its mode is open: the pointer tool. Lines added to `cx.overlay` show
     /// for this frame only (a drawing in progress).
     fn update(&mut self, _cx: &mut ExtensionCx) {}
+
+    /// Its mode closes (another mode opens, or none): drop what the tool was in the middle of.
+    fn leave(&mut self, _cx: &mut ExtensionCx) {}
 
     /// The panel of its mode.
     fn panel(&mut self, _ui: &mut egui::Ui, _cx: &mut ExtensionCx) {}

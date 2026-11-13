@@ -130,6 +130,8 @@ pub struct WindowHost<'a> {
     pub mode: &'a mut Option<Mode>,
     pub planting: &'a mut PlantingTools,
     pub model_selected: &'a mut Option<String>,
+    /// Ids of the extensions' modes, which `ui.set` opens like the built-in ones.
+    pub extension_modes: &'a [(&'static str, &'static str)],
     pub now: f64,
 }
 
@@ -206,8 +208,12 @@ fn mode_id(m: Mode) -> &'static str {
     }
 }
 
-fn mode_of(s: &str) -> Option<Mode> {
-    crate::ui::MODES.into_iter().find(|m| mode_id(*m) == s)
+fn mode_of(s: &str, extensions: &[(&'static str, &'static str)]) -> Option<Mode> {
+    let extensions = extensions.iter().map(|(id, _)| Mode::Extension(id));
+    crate::ui::MODES
+        .into_iter()
+        .chain(extensions)
+        .find(|m| mode_id(*m) == s)
 }
 
 fn vec3(v: &Value) -> Option<glam::Vec3> {
@@ -227,7 +233,7 @@ const UI_METHODS: &[Method] = &[
     },
     Method {
         name: "ui.set",
-        params: r#"{"mode": "draw"|"materials"|"objects"|"sun"|"viewpoints"|null, "camera": {"position": [x, y, z], "target": [x, y, z], "fov_y_deg": number}, "lightsOn": boolean, "overlaysInPictures": boolean}"#,
+        params: r#"{"mode": "draw"|"materials"|"objects"|"sun"|"viewpoints"|extension id|null, "camera": {"position": [x, y, z], "target": [x, y, z], "fov_y_deg": number}, "lightsOn": boolean, "overlaysInPictures": boolean}"#,
         summary: "Switches the mode, places the camera (orbiting `target`), turns the lights on or off, and whether pictures show the editor's overlays.",
     },
     Method {
@@ -336,7 +342,7 @@ impl Host for Bound<'_, '_> {
                         Value::Null => None,
                         v => Some(
                             v.as_str()
-                                .and_then(mode_of)
+                                .and_then(|s| mode_of(s, h.extension_modes))
                                 .ok_or_else(|| format!("unknown mode {v}"))?,
                         ),
                     };
@@ -453,6 +459,7 @@ pub fn serve_headless(port: u16, token_file: &str, seconds: f64) -> Result<(), S
             mode: &mut mode,
             planting: &mut planting,
             model_selected: &mut model,
+            extension_modes: &[],
             now,
         };
         if agents.poll(host, now)
@@ -499,5 +506,16 @@ mod tests {
         assert_eq!(base64(b"fo"), "Zm8=");
         assert_eq!(base64(b"foo"), "Zm9v");
         assert_eq!(base64(b"foobar"), "Zm9vYmFy");
+    }
+
+    #[test]
+    fn ui_set_knows_extension_modes_by_id() {
+        use super::{Mode, mode_id, mode_of};
+        let ext = [("example.pipe-length", "Pipe")];
+        let m = mode_of("example.pipe-length", &ext);
+        assert_eq!(m, Some(Mode::Extension("example.pipe-length")));
+        assert_eq!(mode_id(m.unwrap()), "example.pipe-length");
+        assert_eq!(mode_of("draw", &ext), Some(Mode::Draw));
+        assert_eq!(mode_of("example.other", &ext), None);
     }
 }
