@@ -4,6 +4,8 @@
 
 pub mod assets;
 pub mod camera;
+#[cfg(test)]
+mod command_params;
 pub mod draw;
 pub mod files;
 pub mod gltf_load;
