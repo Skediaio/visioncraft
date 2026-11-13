@@ -2,73 +2,31 @@ use visioncraft::App;
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result {
-    if std::env::args().any(|a| a == "--bench") {
-        bench();
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(i) = args.iter().position(|a| a == "--smoke") {
+        let (Some(script), Some(o)) = (
+            args.get(i + 1),
+            args.iter()
+                .position(|a| a == "--out")
+                .and_then(|o| args.get(o + 1)),
+        ) else {
+            eprintln!("usage: visioncraft --smoke <script.json> --out <dir>");
+            std::process::exit(2);
+        };
+        if let Err(e) = visioncraft::smoke::run(script.as_ref(), o.as_ref()) {
+            eprintln!("smoke failed: {e}");
+            std::process::exit(1);
+        }
         return Ok(());
     }
     eframe::run_native(
         "VisionCraft",
-        eframe::NativeOptions::default(),
+        eframe::NativeOptions {
+            viewport: eframe::egui::ViewportBuilder::default().with_inner_size([1280.0, 800.0]),
+            ..Default::default()
+        },
         Box::new(|cc| Ok(Box::new(App::new(cc)))),
     )
-}
-
-/// Offscreen native bench of the budget scene (200k static triangles plus
-/// 5000 instances of a 500-triangle mesh) at 1920x1080, per quality preset,
-/// every frame submitted and waited for. Not a browser measurement.
-#[cfg(not(target_arch = "wasm32"))]
-fn bench() {
-    use visioncraft_render::{Quality, Renderer, Sun, demo};
-    let (device, queue) =
-        pollster::block_on(visioncraft_render::headless_device()).expect("device");
-    let (w, h) = (1920, 1080);
-    for (name, quality) in Quality::PRESETS {
-        let mut r = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
-        r.resize(w, h);
-        r.set_quality(quality);
-        let (tris, instanced) = demo::budget(&mut r);
-        r.set_sun(&Sun::from_angles(200.0, 35.0));
-        r.set_exposure(15.0);
-        // Two camera paths: an orbit that sees the whole garden (worst case,
-        // nothing to cull) and an eye-level walk through it (the product).
-        for path in ["orbit", "eye-level walk"] {
-            let mut frame = |i: u32| {
-                let aspect = w as f32 / h as f32;
-                let (view, proj, eye) = if path == "orbit" {
-                    visioncraft::orbit_camera(i as f32 * 0.01, 0.35, 38.0, aspect)
-                } else {
-                    let t = i as f32 * 0.25;
-                    let eye = glam::Vec3::new(-24.0 + t, 1.7, 2.0 * (t * 0.2).sin());
-                    demo::camera(
-                        eye,
-                        eye + glam::Vec3::new(1.0, -0.15, 0.3 * (t * 0.1).cos()),
-                        aspect,
-                    )
-                };
-                r.set_camera(view, proj, eye);
-                let mut encoder = device.create_command_encoder(&Default::default());
-                r.render(&mut encoder);
-                queue.submit([encoder.finish()]);
-                device
-                    .poll(wgpu::PollType::wait_indefinitely())
-                    .expect("poll");
-            };
-            (0..20).for_each(&mut frame);
-            let frames = 150;
-            let start = std::time::Instant::now();
-            let mut worst = 0f64;
-            for i in 0..frames {
-                let t = std::time::Instant::now();
-                frame(i);
-                worst = worst.max(t.elapsed().as_secs_f64() * 1000.0);
-            }
-            let ms = start.elapsed().as_secs_f64() * 1000.0 / f64::from(frames);
-            println!(
-                "offscreen native {w}x{h}, {tris} static + {instanced} instanced triangles, {name}, {path}: {ms:.2} ms/frame ({:.1} fps), worst {worst:.1} ms",
-                1000.0 / ms
-            );
-        }
-    }
 }
 
 #[cfg(target_arch = "wasm32")]

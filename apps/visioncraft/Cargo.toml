@@ -10,20 +10,29 @@ workspace = true
 # One crate, one `main` for both targets (as the eframe template): native bin,
 # and the bin trunk builds for wasm32; `src/lib.rs` holds the app.
 [dependencies]
+visioncraft-core = { path = "../../crates/visioncraft-core" }
 visioncraft-render = { path = "../../crates/visioncraft-render" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# MIT/Apache-2.0: decodes .mcmat base-colour PNGs (swatch thumbnails, average colour) and writes smoke screenshots.
+png = "0.17"
+# MIT: file dialogs; asynchronous, and the only option on wasm (upload, download).
+rfd = { version = "0.18", default-features = false, features = ["xdg-portal"] }
 glam = "0.30"
 egui = { version = "0.36", default-features = false, features = ["default_fonts"] }
 # `wgpu_no_default_features` instead of `wgpu`: the latter turns on wgpu's `webgl`
 # (a GLES backend in the wasm), and VisionCraft is WebGPU only.
-eframe = { version = "0.36", default-features = false, features = ["default_fonts", "wayland", "x11", "wgpu_no_default_features"] }
+eframe = { version = "0.36", default-features = false, features = ["default_fonts", "wayland", "x11", "wgpu_no_default_features", "persistence"] }
 egui-wgpu = { version = "0.36", default-features = false, features = ["fragile-send-sync-non-atomic-wasm"] }
 wgpu = "30.0.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pollster = "1.0.1"
+# CC0-1.0: watches the linked model file.
+notify = "8"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "=0.2.129"
 wasm-bindgen-futures = "0.4.79"
-web-sys = { version = "0.3.106", features = ["Document", "Window", "HtmlCanvasElement"] }
+web-sys = { version = "0.3.106", features = ["Document", "Window", "HtmlCanvasElement", "Storage"] }
 log = "0.4"
