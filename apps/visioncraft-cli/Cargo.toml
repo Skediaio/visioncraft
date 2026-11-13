@@ -1,0 +1,25 @@
+[package]
+name = "visioncraft-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "visioncraft-cli"
+path = "src/main.rs"
+
+[dependencies]
+visioncraft-automation = { path = "../../crates/visioncraft-automation" }
+visioncraft-core = { path = "../../crates/visioncraft-core" }
+# The window-free studio (session sync, scene, camera, readback) the pictures are drawn with.
+visioncraft = { path = "../visioncraft" }
+visioncraft-render = { path = "../../crates/visioncraft-render" }
+serde_json = "1"
+glam = "0.30"
+wgpu = "30.0.1"
+pollster = "1.0.1"
+png = "0.17"

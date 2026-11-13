@@ -29,3 +29,7 @@ Reads 3dcraft (`.3dcraft`) designs; other CAD sources may follow.
    from closed visualisation packages: no assets, shaders, UI designs or file formats.
 7. Assets are CC0 or CC-BY only, each with licence, author and source recorded.
 8. Everything in this repository is in English.
+9. Everything is a command. Any change a person can make in the app runs through a `Session`
+   command with JSON parameters, and every command is reachable from `visioncraft-cli` and over
+   MCP, in the same manner as 3dcraft (`crates/visioncraft-automation/docs/`). A feature that can
+   only be used with the mouse is not finished.

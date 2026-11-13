@@ -1,0 +1,9 @@
+[
+  ["site.set", {"latitude": 51.05, "longitude": 3.72, "utc_offset_hours": 2}],
+  ["time.set", {"year": 2026, "month": 6, "day": 21, "hour": 15}],
+  ["shape.add_area", {"name": "Lawn", "outline": [[-10, -2], [10, -2], [10, 10], [-10, 10]], "material": "lawn"}],
+  ["shape.add_extrusion", {"name": "House", "outline": [[-5, -10], [5, -10], [5, -3], [-5, -3]], "height": 6, "material": "brick"}],
+  ["planting.add_spline", {"name": "Hedge", "asset_palette": [{"asset": "flora:carpinus-hedge", "weight": 1}], "points": [[-10, 10], [10, 10]], "spacing": {"every": 0.8}}],
+  ["light.add", {"name": "Garden lamp", "position": [3, 2.2, -1], "lumens": 1200}],
+  ["viewpoint.add", {"name": "From the gate", "position": [12, 2.2, 16], "target": [0, 2, -4]}]
+]
