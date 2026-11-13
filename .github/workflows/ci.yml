@@ -25,6 +25,9 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+        env:
+          # No hardware GPU here: render the reference scenes, compare them on a real GPU.
+          VISIONCRAFT_RENDER_ONLY: 1
       # Native-only tools (visioncraft-assets, visioncraft-cli control channel) are left out.
       - run: cargo check --target wasm32-unknown-unknown -p visioncraft-core -p visioncraft-render -p visioncraft-automation -p visioncraft -p pipe-length
 

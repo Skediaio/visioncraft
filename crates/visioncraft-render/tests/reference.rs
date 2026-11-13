@@ -124,6 +124,11 @@ fn check(name: &str, pixels: &[u8]) {
         eprintln!("updated {}", reference.display());
         return;
     }
+    // The references are made on a hardware GPU. A software rasteriser (CI) differs in
+    // foliage and water by more than the tolerance, so there the pictures are only rendered.
+    if std::env::var_os("VISIONCRAFT_RENDER_ONLY").is_some() {
+        return;
+    }
     let Some((expected, w, h)) = read_png(&reference) else {
         panic!(
             "missing {}; run with VISIONCRAFT_UPDATE_REFERENCES=1",
