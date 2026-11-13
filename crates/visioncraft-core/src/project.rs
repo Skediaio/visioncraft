@@ -91,6 +91,96 @@ fn default_layers() -> Vec<Layer> {
     .into()
 }
 
+/// A plant species the user made, for example by editing a built-in one.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CustomSpecies {
+    /// `sp1`, `sp2`...: usable wherever a palette takes an asset id.
+    pub id: String,
+    pub name: String,
+    /// The built-in species id it was derived from.
+    #[serde(default)]
+    pub base: Option<String>,
+    /// The plant generator's parameters as JSON; the core does not read them.
+    pub params: Value,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extensions: Extensions,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct GroundPlane {
+    pub height: f32,
+    /// Linear RGB.
+    pub color: [f32; 3],
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SkyChoice {
+    Physical,
+    Hdri {
+        id: String,
+        rotation_deg: f32,
+        intensity: f32,
+    },
+}
+
+/// App-level view settings that travel with the project.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ViewState {
+    /// `None`: automatic exposure.
+    pub exposure_ev: Option<f32>,
+    pub sky: SkyChoice,
+    pub haze: f32,
+    pub wind_strength: f32,
+    pub wind_direction_deg: f32,
+    pub ground: Option<GroundPlane>,
+}
+
+impl Default for ViewState {
+    fn default() -> Self {
+        Self {
+            exposure_ev: None,
+            sky: SkyChoice::Physical,
+            haze: 2.5,
+            wind_strength: 0.3,
+            wind_direction_deg: 0.0,
+            ground: Some(GroundPlane {
+                height: 0.0,
+                color: [0.10, 0.17, 0.08],
+            }),
+        }
+    }
+}
+
+impl ViewState {
+    pub fn validate(&self) -> Result<(), String> {
+        let finite = |v: f32| v.is_finite();
+        let ok = self.exposure_ev.is_none_or(finite)
+            && self.haze.is_finite()
+            && self.haze >= 0.0
+            && self.wind_strength.is_finite()
+            && self.wind_strength >= 0.0
+            && finite(self.wind_direction_deg)
+            && self.ground.is_none_or(|g| {
+                finite(g.height) && g.color.iter().all(|c| c.is_finite() && *c >= 0.0)
+            })
+            && match &self.sky {
+                SkyChoice::Physical => true,
+                SkyChoice::Hdri {
+                    rotation_deg,
+                    intensity,
+                    ..
+                } => finite(*rotation_deg) && finite(*intensity) && *intensity >= 0.0,
+            };
+        if ok {
+            Ok(())
+        } else {
+            Err("a view setting is not a usable number".into())
+        }
+    }
+}
+
 /// How the scene is drawn, independent of its content.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RenderStyle {
@@ -167,6 +257,10 @@ pub struct Project {
     pub viewpoints: Vec<Viewpoint>,
     #[serde(default)]
     pub style: RenderStyle,
+    #[serde(default)]
+    pub species: Vec<CustomSpecies>,
+    #[serde(default)]
+    pub view: ViewState,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extensions: Extensions,
 }
@@ -186,6 +280,8 @@ impl Default for Project {
             lights: Vec::new(),
             viewpoints: Vec::new(),
             style: RenderStyle::default(),
+            species: Vec::new(),
+            view: ViewState::default(),
             extensions: Extensions::new(),
         }
     }

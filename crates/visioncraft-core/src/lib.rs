@@ -6,6 +6,7 @@
 
 pub mod catalog;
 mod commands;
+pub mod export;
 mod import;
 pub mod light;
 pub mod material;
@@ -20,8 +21,9 @@ pub mod sun;
 pub mod viewpoint;
 
 pub use catalog::{Asset, Catalog, CatalogError, attribution_markdown, validate_open_licences};
+pub use export::export_presets;
 pub use import::{import_3dcraft, import_obj};
-pub use light::{Light, LightKind, LightSpec, kelvin_to_linear_rgb};
+pub use light::{Light, LightKind, LightSpec, kelvin_to_linear_rgb, lights_for_placement};
 pub use material::{
     Assignment, Material, McMat, McMatError, SurfaceKind, Target, builtin_palette,
     dangling_assignments, read_mcmat, resolve_materials,
@@ -31,7 +33,8 @@ pub use planting::{
     Evaluation, Generator, Placement, Tuft, evaluate, evaluate_surface_fill, lawn_scatter,
 };
 pub use project::{
-    Layer, ModelKind, ModelRef, Project, ProjectError, RenderStyle, Site, SunTime, Transform,
+    CustomSpecies, GroundPlane, Layer, ModelKind, ModelRef, Project, ProjectError, RenderStyle,
+    Site, SkyChoice, SunTime, Transform, ViewState,
 };
 pub use raycast::{Hit, ground_height, raycast};
 pub use session::{Command, CommandError, Session};

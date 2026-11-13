@@ -26,6 +26,11 @@ pub(super) fn register(s: &mut Session) {
         "Move a model, shape, generator or light to a layer: {item, layer}",
         layer_assign,
     );
+    s.register(
+        "view.set",
+        "Set any of the view fields: {exposure_ev? (null = auto), sky? ({type: physical} or {type: hdri, id, rotation_deg, intensity}), haze?, wind_strength?, wind_direction_deg?, ground? (null = none, or {height, color})}",
+        view_set,
+    );
     s.register("style.set", "Set the render style: {clay}", style_set);
 }
 
@@ -109,5 +114,12 @@ fn style_set(project: &mut Project, params: &Value) -> Result<Value, CommandErro
         clay: bool,
     }
     project.style.clay = parse::<P>(params)?.clay;
+    Ok(Value::Null)
+}
+
+fn view_set(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
+    let view = super::merge_update(&project.view, params)?;
+    view.validate().map_err(|e| crate::session::bad(&e))?;
+    project.view = view;
     Ok(Value::Null)
 }

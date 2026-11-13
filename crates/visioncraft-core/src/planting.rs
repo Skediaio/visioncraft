@@ -18,8 +18,15 @@ pub struct Placement {
     pub position: [f32; 3],
     pub rotation_y_deg: f32,
     pub scale: f32,
+    /// Which variant of the species to draw: the app takes it modulo the number of variants it
+    /// has. Deterministic, and drawn so that positions, rotations and scales do not depend on it.
+    #[serde(default)]
+    pub variant: u32,
 }
 
+/// One species of a palette. `asset` is, by convention, one of: a catalogue asset id, `flora:<id>`
+/// for a built-in procedural species, or the id of a custom species of the project (`sp1`...).
+/// The core does not check which.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Weighted {
     pub asset: String,
@@ -193,6 +200,19 @@ impl Generator {
         each!(self, g => &mut g.layer)
     }
 
+    /// Whether the generator places `asset` (a catalogue, `flora:` or custom species id).
+    pub fn uses_asset(&self, asset: &str) -> bool {
+        let palette = |p: &[Weighted]| p.iter().any(|w| w.asset == asset);
+        match self {
+            Self::Single(g) => g.asset == asset,
+            Self::SplineMass(g) => palette(&g.asset_palette),
+            Self::AreaScatter(g) => palette(&g.asset_palette),
+            Self::MixedBrush(g) => palette(&g.asset_palette),
+            Self::SurfaceFill(g) => palette(&g.asset_palette),
+            Self::Cluster(g) => palette(&g.asset_palette),
+        }
+    }
+
     /// Rejects what cannot be evaluated: empty palettes, non-positive densities and so on. Asset
     /// ids are not checked here (the catalogue is not part of the project).
     pub fn validate(&self) -> Result<(), String> {
@@ -350,11 +370,15 @@ fn make(
     let asset = pick(palette, rng).to_string();
     let scale = lo + (hi - lo) * rng.f32();
     let rotation_y_deg = if spin { 360.0 * rng.f32() } else { 0.0 };
+    // A side stream: `rng` itself is not advanced, so a generator that goes on drawing from it
+    // (a cluster) gives the same points as before variants existed.
+    let variant = Rng::new(rng.0 ^ 0xA5A5_5A5A_C3C3_3C3C).next() as u32;
     Placement {
         asset,
         position,
         rotation_y_deg,
         scale,
+        variant,
     }
 }
 
@@ -597,6 +621,11 @@ pub fn evaluate(generator: &Generator, ground: &dyn Fn(f32, f32) -> Option<f32>)
                 position: g.position,
                 rotation_y_deg: g.rotation_y_deg,
                 scale: g.scale,
+                // A single has no stream: its variant comes from its id.
+                variant: g
+                    .id
+                    .bytes()
+                    .fold(7u32, |h, b| h.wrapping_mul(31).wrapping_add(u32::from(b))),
             }],
             false,
         ),
@@ -1149,6 +1178,18 @@ mod tests {
                 .iter()
                 .all(|t| t.position[2].abs() < 1e-5)
         );
+    }
+
+    #[test]
+    fn variants_are_spread_and_stable() {
+        let g = Generator::AreaScatter(area(l_shape(), 4.0));
+        let a = evaluate(&g, &flat).placements;
+        let b = evaluate(&g, &flat).placements;
+        assert!(a.iter().zip(&b).all(|(x, y)| x.variant == y.variant));
+        let distinct: std::collections::BTreeSet<_> = a.iter().map(|p| p.variant % 4).collect();
+        assert_eq!(distinct.len(), 4, "{distinct:?}");
+        assert!(a.iter().any(|p| p.variant > u32::MAX / 2));
+        assert!(g.uses_asset("fern") && !g.uses_asset("flora:oak"));
     }
 
     #[test]

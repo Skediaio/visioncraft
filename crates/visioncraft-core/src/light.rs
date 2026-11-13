@@ -1,5 +1,6 @@
 //! Lights and their colour.
 
+use crate::planting::Placement;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -25,6 +26,10 @@ pub struct Light {
     pub lumens: f32,
     pub range_m: f32,
     pub enabled: bool,
+    /// The id of the `Single` placement or generator whose fixture made this light, so removing
+    /// or moving the lamp can update it.
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 /// What a catalogue fixture emits: a [`Light`] without id, name, layer and position.
@@ -34,22 +39,34 @@ pub struct LightSpec {
     pub color_temperature_k: f32,
     pub lumens: f32,
     pub range_m: f32,
+    /// The emitter's position relative to the asset's pivot, at scale 1 and rotation 0.
+    #[serde(default)]
+    pub offset_m: [f32; 3],
 }
 
 impl LightSpec {
-    /// The light of a fixture placed at `position` and turned `rotation_y_deg` about +Y (counter-
-    /// clockwise from above, like a model's transform); a spot's direction turns with it.
+    /// The light of a fixture with its pivot at `position`, turned `rotation_y_deg` about +Y
+    /// (counter-clockwise from above, like a model's transform) and scaled by `scale`: the
+    /// emitter sits at `offset_m` scaled and turned the same way, and a spot's direction turns.
     pub fn light(
         &self,
         (id, name, layer): (String, String, String),
         position: [f32; 3],
         rotation_y_deg: f32,
+        scale: f32,
     ) -> Light {
+        let (s, c) = rotation_y_deg.to_radians().sin_cos();
+        let turn = |d: [f32; 3]| [c * d[0] + s * d[2], d[1], -s * d[0] + c * d[2]];
         let mut kind = self.kind;
-        if let LightKind::Spot { direction: d, .. } = &mut kind {
-            let (s, c) = rotation_y_deg.to_radians().sin_cos();
-            *d = [c * d[0] + s * d[2], d[1], -s * d[0] + c * d[2]];
+        if let LightKind::Spot { direction, .. } = &mut kind {
+            *direction = turn(*direction);
         }
+        let o = turn(self.offset_m);
+        let position = [
+            position[0] + o[0] * scale,
+            position[1] + o[1] * scale,
+            position[2] + o[2] * scale,
+        ];
         Light {
             id,
             name,
@@ -60,8 +77,27 @@ impl LightSpec {
             lumens: self.lumens,
             range_m: self.range_m,
             enabled: true,
+            source: None,
         }
     }
+}
+
+/// The light a placed fixture needs: `spec` at the placement's position, rotation and scale,
+/// remembering `source` (the id of the placement or generator that owns the lamp).
+pub fn lights_for_placement(
+    spec: &LightSpec,
+    placement: &Placement,
+    ids: (String, String, String),
+    source: &str,
+) -> Light {
+    let mut light = spec.light(
+        ids,
+        placement.position,
+        placement.rotation_y_deg,
+        placement.scale,
+    );
+    light.source = Some(source.to_string());
+    light
 }
 
 impl LightKind {
@@ -159,11 +195,13 @@ mod tests {
             color_temperature_k: 2700.0,
             lumens: 800.0,
             range_m: 8.0,
+            offset_m: [0.0, 2.0, 0.0],
         };
         let l = spec.light(
             ("li1".into(), "Lamp".into(), "lighting".into()),
             [1.0, 2.0, 3.0],
             90.0,
+            2.0,
         );
         let LightKind::Spot { direction: d, .. } = l.kind else {
             panic!()

@@ -1,5 +1,5 @@
 use super::{check_layer, fail, next_id};
-use crate::material::Target;
+use crate::material::{Assignment, Target};
 use crate::project::{LAYER_SHAPES, Project};
 use crate::session::{CommandError, Session, bad, parse};
 use crate::shape::{Area, Extrusion, Shape, shape_mesh};
@@ -9,12 +9,12 @@ use serde_json::{Value, json};
 pub(super) fn register(s: &mut Session) {
     s.register(
         "shape.add_area",
-        "Add a flat area: {name, outline: [[x,z]..], elevation? (0), layer?}; returns {id}",
+        "Add a flat area: {name, outline: [[x,z]..], elevation? (0), layer?, material? (id: also assigns it to the whole shape)}; returns {id}",
         add_area,
     );
     s.register(
         "shape.add_extrusion",
-        "Add an extruded outline: {name, outline, closed? (true), base? (0), height, thickness? (0.2, open only), layer?}; returns {id}",
+        "Add an extruded outline: {name, outline, closed? (true), base? (0), height, thickness? (0.2, open only), layer?, material?}; returns {id}",
         add_extrusion,
     );
     s.register(
@@ -52,15 +52,26 @@ pub(super) fn register(s: &mut Session) {
 
 fn add(
     project: &mut Project,
-    layer: Option<String>,
+    (layer, material): (Option<String>, Option<String>),
     make: impl FnOnce(String, String) -> Shape,
 ) -> Result<Value, CommandError> {
     let layer = layer.unwrap_or_else(|| LAYER_SHAPES.into());
     check_layer(project, &layer)?;
+    if let Some(m) = &material
+        && project.materials.iter().all(|x| &x.id != m)
+    {
+        return Err(fail(format!("no material `{m}`")));
+    }
     let id = next_id("S", |id| project.shapes.iter().any(|s| s.id() == id));
     let shape = make(id.clone(), layer);
     shape_mesh(&shape).map_err(|e| fail(e.to_string()))?;
     project.shapes.push(shape);
+    if let Some(material) = material {
+        project.assignments.push(Assignment {
+            target: Target::Owner { owner: id.clone() },
+            material,
+        });
+    }
     Ok(json!({ "id": id }))
 }
 
@@ -72,9 +83,10 @@ fn add_area(project: &mut Project, params: &Value) -> Result<Value, CommandError
         #[serde(default)]
         elevation: f32,
         layer: Option<String>,
+        material: Option<String>,
     }
     let p: P = parse(params)?;
-    add(project, p.layer, |id, layer| {
+    add(project, (p.layer, p.material), |id, layer| {
         Shape::Area(Area {
             id,
             name: p.name,
@@ -98,6 +110,7 @@ fn add_extrusion(project: &mut Project, params: &Value) -> Result<Value, Command
         #[serde(default = "thin")]
         thickness: f32,
         layer: Option<String>,
+        material: Option<String>,
     }
     fn yes() -> bool {
         true
@@ -106,7 +119,7 @@ fn add_extrusion(project: &mut Project, params: &Value) -> Result<Value, Command
         0.2
     }
     let p: P = parse(params)?;
-    add(project, p.layer, |id, layer| {
+    add(project, (p.layer, p.material), |id, layer| {
         Shape::Extrusion(Extrusion {
             id,
             name: p.name,

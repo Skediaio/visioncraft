@@ -140,6 +140,17 @@ impl Session {
         }
     }
 
+    /// Swaps in another project ("Open", "New") as one undoable step.
+    pub fn replace_project(&mut self, project: Project) {
+        self.undo
+            .push(std::mem::replace(&mut self.project, project));
+        if self.undo.len() > UNDO_LIMIT {
+            self.undo.remove(0);
+        }
+        self.redo.clear();
+        self.revision += 1;
+    }
+
     pub fn can_undo(&self) -> bool {
         !self.undo.is_empty()
     }

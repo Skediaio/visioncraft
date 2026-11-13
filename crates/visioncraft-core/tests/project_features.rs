@@ -47,6 +47,7 @@ fn version_one_file_without_new_fields_loads() {
     assert_eq!(p.models[0].layer, "model");
     assert_eq!(p.materials.len(), 12);
     assert!(p.shapes.is_empty() && p.generators.is_empty() && !p.style.clay);
+    assert!(p.species.is_empty() && p.view == Default::default());
 }
 
 #[test]
@@ -411,4 +412,141 @@ fn one_of_everything_round_trips_and_undoes() {
         s.run("light.remove", json!({"id": "nope"})),
         Err(CommandError::Failed(_))
     ));
+}
+
+#[test]
+fn shape_with_material_is_one_undo_step() {
+    let mut s = Session::new(Project::default());
+    let before = s.project().clone();
+    let a = id(s
+        .run(
+            "shape.add_area",
+            json!({"name": "Lawn", "outline": square(), "material": "lawn"}),
+        )
+        .unwrap());
+    assert_eq!(s.project().assignments.len(), 1);
+    assert_eq!(
+        s.project().assignments[0].target,
+        Target::Owner { owner: a }
+    );
+    assert!(s.undo());
+    assert_eq!(*s.project(), before);
+    let err = s.run(
+        "shape.add_extrusion",
+        json!({"name": "B", "outline": square(), "height": 1.0, "material": "nope"}),
+    );
+    assert!(err.is_err() && s.project().shapes.is_empty());
+}
+
+#[test]
+fn replace_project_is_undoable() {
+    let mut s = Session::new(Project::default());
+    let start = s.project().clone();
+    let mut other = Project::default();
+    other.style.clay = true;
+    let rev = s.revision();
+    s.replace_project(other.clone());
+    assert_eq!(*s.project(), other);
+    assert!(s.revision() > rev);
+    assert!(s.undo() && *s.project() == start);
+    assert!(s.redo() && *s.project() == other);
+}
+
+#[test]
+fn custom_species_commands_and_use_check() {
+    let mut s = Session::new(Project::default());
+    let sp = id(s
+        .run(
+            "species.add",
+            json!({"name": "Tall birch", "base": "birch", "params": {"height": 14.0}}),
+        )
+        .unwrap());
+    assert_eq!(sp, "sp1");
+    s.run(
+        "species.update",
+        json!({"id": sp, "params": {"height": 16.0}}),
+    )
+    .unwrap();
+    assert_eq!(s.project().species[0].name, "Tall birch");
+    assert_eq!(s.project().species[0].params["height"], 16.0);
+    s.run(
+        "planting.add_single",
+        json!({"name": "Birch", "asset": sp, "position": [0.0, 0.0, 0.0]}),
+    )
+    .unwrap();
+    assert!(s.run("species.remove", json!({"id": sp})).is_err());
+    s.run("planting.remove", json!({"id": "g1"})).unwrap();
+    s.run("planting.add_cluster", json!({"name": "C", "asset_palette": [{"asset": sp, "weight": 1.0}], "center": [0.0, 0.0], "radius_m": 1.0, "count": 3})).unwrap();
+    assert!(s.run("species.remove", json!({"id": sp})).is_err());
+    s.run("planting.remove", json!({"id": "g1"})).unwrap();
+    s.run("species.remove", json!({"id": sp})).unwrap();
+    let p = Project::from_json_bytes(&s.project().to_json_bytes()).unwrap();
+    assert_eq!(&p, s.project());
+}
+
+#[test]
+fn view_set_takes_any_subset() {
+    let mut s = Session::new(Project::default());
+    let v = &s.project().view;
+    assert_eq!((v.haze, v.wind_strength, v.exposure_ev), (2.5, 0.3, None));
+    assert_eq!(v.ground.unwrap().height, 0.0);
+    s.run(
+        "view.set",
+        json!({"haze": 4.0, "exposure_ev": -1.0, "ground": null}),
+    )
+    .unwrap();
+    s.run(
+        "view.set",
+        json!({"sky": {"type": "hdri", "id": "meadow", "rotation_deg": 30.0, "intensity": 1.5}}),
+    )
+    .unwrap();
+    let v = s.project().view.clone();
+    assert_eq!((v.haze, v.exposure_ev, v.ground), (4.0, Some(-1.0), None));
+    assert!(matches!(v.sky, visioncraft_core::SkyChoice::Hdri { .. }));
+    s.run(
+        "view.set",
+        json!({"exposure_ev": null, "ground": {"height": 0.2, "color": [0.1, 0.2, 0.1]}}),
+    )
+    .unwrap();
+    assert_eq!(s.project().view.exposure_ev, None);
+    assert!(s.run("view.set", json!({"haze": -1.0})).is_err());
+    assert!(s.run("view.set", json!({"hazee": 1.0})).is_err());
+    let p = Project::from_json_bytes(&s.project().to_json_bytes()).unwrap();
+    assert_eq!(&p, s.project());
+}
+
+#[test]
+fn lamp_light_follows_its_placement_and_export_presets_exist() {
+    use visioncraft_core::{LightKind, LightSpec, Placement, export_presets, lights_for_placement};
+    let spec = LightSpec {
+        kind: LightKind::Point,
+        color_temperature_k: 2700.0,
+        lumens: 300.0,
+        range_m: 5.0,
+        offset_m: [1.0, 2.0, 0.0],
+    };
+    let p = Placement {
+        asset: "lamp".into(),
+        position: [10.0, 0.0, 0.0],
+        rotation_y_deg: 90.0,
+        scale: 2.0,
+        variant: 0,
+    };
+    let l = lights_for_placement(
+        &spec,
+        &p,
+        ("li1".into(), "Lamp".into(), "lighting".into()),
+        "g1",
+    );
+    // Offset +X turned 90 degrees counter-clockwise from above points to -Z, doubled by the scale.
+    assert!(
+        (l.position[0] - 10.0).abs() < 1e-5
+            && (l.position[1] - 4.0).abs() < 1e-5
+            && (l.position[2] + 2.0).abs() < 1e-5,
+        "{:?}",
+        l.position
+    );
+    assert_eq!(l.source.as_deref(), Some("g1"));
+    assert_eq!(export_presets().len(), 6);
+    assert_eq!(export_presets()[3], ("4K", 3840, 2160));
 }

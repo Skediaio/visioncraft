@@ -8,12 +8,12 @@ use serde_json::{Value, json};
 pub(super) fn register(s: &mut Session) {
     s.register(
         "light.add",
-        "Add a light: {name, position, kind? (point, or spot with direction and cones), color_temperature_k? (2700), lumens? (800), range_m? (10), enabled?, layer?}; returns {id}",
+        "Add a light: {name, position, kind? (point, or spot with direction and cones), color_temperature_k? (2700), lumens? (800), range_m? (10), enabled?, layer?, source?}; returns {id}",
         light_add,
     );
     s.register(
         "light.update",
-        "Change fields of a light: {id, name?, kind?, position?, color_temperature_k?, lumens?, range_m?, enabled?, layer?}",
+        "Change fields of a light: {id, name?, kind?, position?, color_temperature_k?, lumens?, range_m?, enabled?, layer?, source?}",
         light_update,
     );
     s.register("light.remove", "Remove a light: {id}", light_remove);
@@ -35,6 +35,7 @@ fn light_add(project: &mut Project, params: &Value) -> Result<Value, CommandErro
         #[serde(default = "yes")]
         enabled: bool,
         layer: Option<String>,
+        source: Option<String>,
     }
     fn point() -> LightKind {
         LightKind::Point
@@ -65,6 +66,7 @@ fn light_add(project: &mut Project, params: &Value) -> Result<Value, CommandErro
         lumens: p.lumens,
         range_m: p.range_m,
         enabled: p.enabled,
+        source: p.source,
     };
     light.validate().map_err(|e| bad(&e))?;
     project.lights.push(light);

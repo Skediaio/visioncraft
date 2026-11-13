@@ -12,11 +12,13 @@ mod lights;
 mod materials;
 mod planting;
 mod shapes;
+mod species;
 mod viewpoints;
 
 pub(crate) fn register(s: &mut Session) {
     layers::register(s);
     shapes::register(s);
+    species::register(s);
     materials::register(s);
     planting::register(s);
     lights::register(s);
