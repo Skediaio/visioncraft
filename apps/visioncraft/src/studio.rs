@@ -1038,8 +1038,9 @@ pub struct Reach {
 
 /// From an orbit the shadows reach the far side of what the camera looks at (twice its distance
 /// to the pivot, at least the 80 m of eye level), in 20 m steps so zooming does not re-render
-/// them every frame. The air is clear for 2.5 times the camera's height over the ground: an
-/// overview from 50-100 m up stays crisp, eye level keeps its haze. Small plants' impostors draw
+/// them every frame. The air is clear for 5 times the camera's height over the ground: an
+/// overview from 50-100 m up sees the ground crisp for several hundred metres and the haze only
+/// towards the horizon, eye level keeps its haze. Small plants' impostors draw
 /// their full reach from 40 m up and a tenth of it at eye level, where the ground, trunks and
 /// hedges hide them (a 0.6 m perennial still reaches about 45 m at MEDIUM, four times its old cull).
 pub fn view_reach(camera: &crate::camera::Camera, ground_y: f32, view_distance: f32) -> Reach {
@@ -1051,7 +1052,7 @@ pub fn view_reach(camera: &crate::camera::Camera, ground_y: f32, view_distance: 
     let height = (camera.eye().y - ground_y).max(0.0);
     Reach {
         shadow_m: (shadow / 20.0).round() * 20.0,
-        clear_m: (2.5 * height).min(400.0) * view_distance,
+        clear_m: (5.0 * height).min(800.0) * view_distance,
         small_impostors: (height / 40.0).clamp(0.1, 1.0),
     }
 }
@@ -1074,7 +1075,7 @@ mod reach_tests {
         c.walk.eye.y = 1.7;
         let eye = view_reach(&c, 0.0, 1.0);
         assert_eq!(eye.shadow_m, 80.0);
-        assert!(eye.clear_m < 5.0, "{eye:?}");
+        assert!(eye.clear_m < 10.0, "{eye:?}");
         assert!(eye.small_impostors < far.small_impostors);
     }
 }
