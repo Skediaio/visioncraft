@@ -343,10 +343,16 @@ mod native {
     }
 
     /// Prepares frames until plants are generated and library files have arrived and been uploaded.
-    fn settle(s: &mut Studio) {
+    fn settle(s: &mut Studio, device: &wgpu::Device, queue: &wgpu::Queue) {
         let mut calm = 0;
-        for _ in 0..60000 {
+        for i in 0..60000 {
             s.prepare();
+            // Frames, so that the renderer's texture memory statistics are current.
+            if s.size[0] > 0 && i % 8 == 0 {
+                let mut encoder = device.create_command_encoder(&Default::default());
+                s.renderer.render(&mut encoder);
+                queue.submit([encoder.finish()]);
+            }
             if s.plants_pending() > 0 || !s.scene.library.idle() {
                 calm = 0;
                 std::thread::sleep(std::time::Duration::from_millis(1));
@@ -557,7 +563,7 @@ mod native {
                         }
                     }
                 }
-                Step::WaitAssets => settle(&mut s),
+                Step::WaitAssets => settle(&mut s, &device, &queue),
                 Step::TextureCap(mb) => s.scene.library.store.cap_bytes = mb << 20,
                 Step::SaveProject(path) => {
                     std::fs::write(&path, s.project().to_json_bytes())
@@ -674,7 +680,7 @@ mod native {
                     spacing,
                     fit,
                 } => {
-                    settle(&mut s);
+                    settle(&mut s, &device, &queue);
                     let ids: Vec<(String, f32)> = s
                         .scene
                         .library
@@ -701,7 +707,7 @@ mod native {
                 Step::Screenshot { name, w, h } => {
                     s.resize(w, h);
                     // plants are generated one step per frame and library files stream in
-                    settle(&mut s);
+                    settle(&mut s, &device, &queue);
                     s.prepare();
                     // The renderer converges over frames (sky environment, alternating shadow
                     // cascades): draw a few before the one that is read back.

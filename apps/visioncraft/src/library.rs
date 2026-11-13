@@ -506,7 +506,9 @@ impl Library {
                 .position(|l| d <= l.max_distance_m)
                 .unwrap_or(n - 1);
             for (i, l) in a.lods.iter().enumerate() {
-                if i == need || i == n - 1 {
+                // Over the memory cap only the coarsest levels are asked for; the finer ones
+                // that are resident then stop being used and are the first to go.
+                if i == n - 1 || (i == need && !self.store.over_cap) {
                     self.request(&l.file, priority(d, i, n - 1));
                 }
             }

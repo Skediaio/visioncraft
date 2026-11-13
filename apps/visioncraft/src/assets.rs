@@ -417,6 +417,8 @@ pub struct AssetStore {
     pub cap_bytes: u64,
     pub max_inflight: usize,
     pub stats: StoreStats,
+    /// The GPU holds more texture memory than `cap_bytes` (as of the last frame).
+    pub over_cap: bool,
 }
 
 /// Entries used within this many ticks (frames) are never evicted.
@@ -451,6 +453,7 @@ impl AssetStore {
             },
             max_inflight: if cfg!(target_arch = "wasm32") { 6 } else { 4 },
             stats: StoreStats::default(),
+            over_cap: false,
         }
     }
 
@@ -620,6 +623,7 @@ impl AssetStore {
         let texture_bytes = r.stats().texture_bytes;
         self.stats.peak_texture_bytes = self.stats.peak_texture_bytes.max(texture_bytes);
         let over = texture_bytes.saturating_sub(self.cap_bytes);
+        self.over_cap = over > 0;
         if over > 0 {
             for key in self
                 .lru
