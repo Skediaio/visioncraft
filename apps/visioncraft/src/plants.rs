@@ -80,6 +80,8 @@ fn impostor_distances(h: f32) -> [f32; 3] {
 /// One variant of a species in one season class.
 struct Variant {
     parts: Vec<Part>,
+    /// What each part is (bark, foliage...), for re-tinted copies.
+    kinds: Vec<flora::Material>,
     /// Trees: (mesh levels shortened for the impostor, the impostor) once baked.
     baked: Option<(Vec<Part>, ImpostorId)>,
     height: f32,
@@ -89,6 +91,28 @@ struct Tex {
     atlas: TextureId,
     bark: TextureId,
     bark_normal: TextureId,
+    /// Mean linear colour of the atlas' opaque texels: what a tint of 1 looks like.
+    leaf_mean: [f32; 3],
+}
+
+/// Mean linear RGB of the texels with alpha over one half (sRGB RGBA8 input).
+fn opaque_mean(rgba: &[u8]) -> [f32; 3] {
+    let lin = |c: u8| {
+        let c = f32::from(c) / 255.0;
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let (mut sum, mut n) = ([0.0f32; 3], 0u32);
+    for px in rgba.as_chunks::<4>().0.iter().filter(|p| p[3] > 128) {
+        for k in 0..3 {
+            sum[k] += lin(px[k]);
+        }
+        n += 1;
+    }
+    sum.map(|v| v / n.max(1) as f32)
 }
 
 struct Want {
@@ -106,6 +130,8 @@ pub struct Flora {
     queue: Vec<Want>,
     /// Trees whose impostor is still to be baked: (species, class, variant).
     bakes: Vec<(String, u32, u32)>,
+    /// Copies with their foliage re-tinted: (species, class, variant, colour bits).
+    tinted: HashMap<(String, u32, u32, [u32; 3]), Vec<Part>>,
     /// Counts finished generations, so generators know to rebuild.
     pub rev: u64,
 }
@@ -125,6 +151,39 @@ impl Flora {
     pub fn parts(&self, id: &str, class: u32, variant: u32) -> Option<&[Part]> {
         let v = self.variant(id, class, variant)?;
         Some(v.baked.as_ref().map_or(&v.parts, |b| &b.0))
+    }
+
+    /// `parts` with the foliage coloured so that it averages `rgb` (linear): lawn tufts that
+    /// match the lawn under them. Materials are made once per colour.
+    pub fn tinted(
+        &mut self,
+        r: &mut Renderer,
+        id: &str,
+        class: u32,
+        variant: u32,
+        rgb: [f32; 3],
+    ) -> Option<Vec<Part>> {
+        let key = (id.to_string(), class, variant, rgb.map(f32::to_bits));
+        if let Some(p) = self.tinted.get(&key) {
+            return Some(p.clone());
+        }
+        let tex = self.textures.get(id)?;
+        let v = self.variant(id, class, variant)?;
+        let tint = [0, 1, 2].map(|k| (rgb[k] / tex.leaf_mean[k].max(1e-3)).clamp(0.0, 4.0));
+        let mut foliage: Option<MaterialId> = None;
+        let mut out = Vec::new();
+        for (&(m, mat, d), &kind) in v.parts.iter().zip(&v.kinds) {
+            let mat = if kind == flora::Material::Foliage {
+                *foliage.get_or_insert_with(|| {
+                    scene::plant_material(r, kind, (tex.atlas, tex.bark, tex.bark_normal), tint)
+                })
+            } else {
+                mat
+            };
+            out.push((m, mat, d));
+        }
+        self.tinted.insert(key, out.clone());
+        Some(out)
     }
 
     /// The impostor that follows `parts`' last level, once baked.
@@ -209,6 +268,7 @@ impl Flora {
                     atlas: up(r, &t.atlas, true, false)?,
                     bark: up(r, &t.bark, true, true)?,
                     bark_normal: up(r, &t.bark_normal, false, true)?,
+                    leaf_mean: opaque_mean(&t.atlas.rgba),
                 })
             })();
             match tex {
@@ -226,6 +286,7 @@ impl Flora {
         let mut variants = Vec::new();
         for v in 0..VARIANTS {
             let mut parts = Vec::new();
+            let mut kinds = Vec::new();
             let mut mats: HashMap<usize, MaterialId> = HashMap::new();
             let mut height = 1.0;
             for (li, lod) in flora::Lod::ALL.into_iter().enumerate() {
@@ -253,6 +314,7 @@ impl Flora {
                         )
                     });
                     parts.push((m, mat, dist));
+                    kinds.push(kind);
                 }
             }
             if height >= TREE_M {
@@ -260,6 +322,7 @@ impl Flora {
             }
             variants.push(Variant {
                 parts,
+                kinds,
                 baked: None,
                 height,
             });

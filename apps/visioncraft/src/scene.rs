@@ -313,15 +313,18 @@ struct Owner {
 type Wanted = (String, Geom, Arc<ImportedModel>, Mat4, bool, bool, bool);
 
 /// The 3D grass of one owner's lawn faces.
-type LawnKey = (Geom, Mat4, Vec<(usize, [u32; 2], u64)>, u64, u8);
+type LawnKey = (Geom, Mat4, Vec<(usize, [u32; 5], u64)>, u64, u8);
 
 struct LawnGpu {
     key: LawnKey,
     items: Vec<ItemId>,
 }
 
-/// Tufts stop being drawn beyond this distance: far lawns are just the ground texture.
+/// Tufts stop being drawn beyond this distance: far lawns are just the ground texture. They thin
+/// out towards it: each of `LAWN_BANDS` shares of the tufts stops at its own distance, so the
+/// edge is a gradient instead of a line.
 const LAWN_FADE_M: f32 = 40.0;
+const LAWN_BANDS: usize = 4;
 /// At most this many tufts per square metre are drawn, and this many per lawn.
 const LAWN_MAX_DENSITY: f32 = 300.0;
 const LAWN_MAX_TUFTS: usize = 60_000;
@@ -649,21 +652,26 @@ impl Scene {
         let class = plants::class(&res.params, month);
         let mut owners: Vec<&String> = self.owners.keys().collect();
         owners.sort();
-        let mut todo: Vec<(String, Vec<(usize, visioncraft_core::material::Lawn3d)>)> = Vec::new();
+        type Faces = Vec<(usize, visioncraft_core::material::Lawn3d, [f32; 3])>;
+        let mut todo: Vec<(String, Faces)> = Vec::new();
         for id in owners {
             let o = &self.owners[id];
             if !o.key.visible || !o.is_shape {
                 continue;
             }
-            let faces: Vec<(usize, visioncraft_core::material::Lawn3d)> =
-                resolve_materials(project, id, &o.geom)
-                    .into_iter()
-                    .enumerate()
-                    .filter_map(|(f, m)| match &project.materials.get(m?)?.kind {
-                        SurfaceKind::Lawn3d(l) => Some((f, *l)),
+            let faces: Faces = resolve_materials(project, id, &o.geom)
+                .into_iter()
+                .enumerate()
+                .filter_map(|(f, m)| {
+                    let m = project.materials.get(m?)?;
+                    match &m.kind {
+                        SurfaceKind::Lawn3d(l) => {
+                            Some((f, *l, [m.base_color[0], m.base_color[1], m.base_color[2]]))
+                        }
                         _ => None,
-                    })
-                    .collect();
+                    }
+                })
+                .collect();
             if !faces.is_empty() {
                 todo.push((id.clone(), faces));
             }
@@ -676,10 +684,16 @@ impl Scene {
                 o.xf,
                 faces
                     .iter()
-                    .map(|(f, l)| {
+                    .map(|(f, l, c)| {
                         (
                             *f,
-                            [l.density_per_m2.to_bits(), l.blade_height_m.to_bits()],
+                            [
+                                l.density_per_m2.to_bits(),
+                                l.blade_height_m.to_bits(),
+                                c[0].to_bits(),
+                                c[1].to_bits(),
+                                c[2].to_bits(),
+                            ],
                             l.seed,
                         )
                     })
@@ -694,10 +708,13 @@ impl Scene {
                 self.flora.want(LAWN_SPECIES, class, month, &res.params);
                 continue;
             }
-            // One matrix list per variant, so the lawn does not repeat one tuft.
-            let mut by_variant: Vec<Vec<Mat4>> = vec![Vec::new(); plants::VARIANTS as usize];
+            // One matrix list per variant (the lawn does not repeat one tuft) and fade band.
+            let lists = plants::VARIANTS as usize * LAWN_BANDS;
+            let mut by_variant: Vec<Vec<Mat4>> = vec![Vec::new(); lists];
             let mut n = 0usize;
-            for (face, lawn) in &faces {
+            // shortcut: one colour per lawn (its first lawn face's), fine until lawns mix colours
+            let color = faces[0].2;
+            for (face, lawn, _) in &faces {
                 let lawn = visioncraft_core::material::Lawn3d {
                     density_per_m2: lawn.density_per_m2.min(LAWN_MAX_DENSITY),
                     ..*lawn
@@ -708,11 +725,14 @@ impl Scene {
                     }
                     let p = o.xf.transform_point3(Vec3::from(t.position));
                     let s = (t.height_m / 0.08).clamp(0.3, 2.5);
-                    by_variant[n % plants::VARIANTS as usize].push(
-                        Mat4::from_translation(p)
-                            * Mat4::from_rotation_y(t.rotation_y_deg.to_radians())
-                            * Mat4::from_scale(Vec3::splat(s)),
-                    );
+                    // a scrambled band so that thinning has no pattern
+                    let band = (n.wrapping_mul(2_654_435_761) >> 7) % LAWN_BANDS;
+                    by_variant[band * plants::VARIANTS as usize + n % plants::VARIANTS as usize]
+                        .push(
+                            Mat4::from_translation(p)
+                                * Mat4::from_rotation_y(t.rotation_y_deg.to_radians())
+                                * Mat4::from_scale(Vec3::splat(s)),
+                        );
                     n += 1;
                 }
             }
@@ -720,17 +740,19 @@ impl Scene {
                 old.items.into_iter().for_each(|i| r.remove_item(i));
             }
             let mut items = Vec::new();
-            for (v, matrices) in by_variant.iter().enumerate() {
-                let Some(parts) = self.flora.parts(LAWN_SPECIES, class, v as u32) else {
-                    continue;
-                };
+            for (i, matrices) in by_variant.iter().enumerate() {
+                let (band, v) = (i / plants::VARIANTS as usize, i as u32 % plants::VARIANTS);
                 if matrices.is_empty() {
                     continue;
                 }
+                let Some(parts) = self.flora.tinted(r, LAWN_SPECIES, class, v, color) else {
+                    continue;
+                };
                 // The coarsest level is the last one drawn, then nothing.
+                let end = LAWN_FADE_M * (band + 1) as f32 / LAWN_BANDS as f32;
                 let parts: Vec<_> = parts
                     .iter()
-                    .map(|&(m, mat, d)| (m, mat, d.min(LAWN_FADE_M)))
+                    .map(|&(m, mat, d)| (m, mat, d.min(end)))
                     .collect();
                 items.push(r.add_lod_item(&parts, matrices));
             }

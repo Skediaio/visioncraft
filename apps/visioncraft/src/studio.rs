@@ -146,12 +146,25 @@ pub fn demo_assets() -> Vec<Asset> {
     ]
 }
 
-/// Automatic exposure from the sun (the renderer's guide: noon 15, sun at 10 degrees 13-14, sunset
-/// 11-12, dusk 7-9, late dusk with garden lights 4-6, night with lamps 1-3); `lamps` lowers the
-/// exposure after sunset so that garden lights show. Linear between the table's rows.
+/// Automatic exposure from the sun: noon 15, sun at 10 degrees 13.5, sunset 10.5, then down with
+/// the twilight sky's light (about 2.5 EV per 3 degrees in the renderer's sky) so the garden
+/// stays readable as a photographer's "blue hour" picture would; `lamps` keeps it about one stop
+/// lower after sunset so that garden lights glow instead of washing out. Linear between rows.
 pub fn auto_ev(elevation_deg: f32, lamps: bool) -> f32 {
-    const DAY: [(f32, f32); 4] = [(-12.0, 8.0), (-3.0, 9.0), (0.0, 11.5), (10.0, 13.5)];
-    const LAMPS: [(f32, f32); 4] = [(-12.0, 4.0), (-6.0, 5.5), (-3.0, 8.0), (0.0, 11.5)];
+    const DAY: [(f32, f32); 5] = [
+        (-12.0, 1.5),
+        (-8.0, 2.8),
+        (-4.0, 6.0),
+        (0.0, 10.5),
+        (10.0, 13.5),
+    ];
+    const LAMPS: [(f32, f32); 5] = [
+        (-12.0, 1.0),
+        (-8.0, 2.0),
+        (-4.0, 5.0),
+        (0.0, 10.0),
+        (10.0, 13.5),
+    ];
     let table: &[(f32, f32)] = if lamps && elevation_deg < 0.0 {
         &LAMPS
     } else {
@@ -508,11 +521,21 @@ impl Studio {
         self.ev_used = (ev, elevation);
         self.renderer.set_exposure(ev);
         self.renderer.set_clay(self.project().style.clay);
+        // Below the horizon the haze only scatters the dim, pink twilight sky back at the camera
+        // and washes the garden out: thin it as the sun sinks, and no sun glow.
+        let night = (-elevation / 6.0).clamp(0.0, 1.0);
         self.renderer
             .set_atmosphere(&visioncraft_render::Atmosphere {
-                haze: v.haze,
+                haze: v.haze * (1.0 - 0.7 * night),
+                sun_glow: 0.5 * (1.0 - night),
                 ..Default::default()
             });
+        // Lamps after sunset bloom a little more, so they read as lights.
+        let q = self.current_quality();
+        if q.bloom {
+            self.renderer
+                .set_bloom(if lamps { 0.025 + 0.035 * night } else { 0.025 });
+        }
         self.renderer
             .set_ground(v.ground.map(|g| visioncraft_render::Ground {
                 height: g.height,
@@ -818,4 +841,23 @@ pub fn render_lights(p: &Project) -> Vec<visioncraft_render::Light> {
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::auto_ev;
+
+    #[test]
+    fn exposure_falls_with_the_sun_and_lamps_keep_it_lower_after_sunset() {
+        let mut last = f32::INFINITY;
+        for e in (-15..=60).rev() {
+            let ev = auto_ev(e as f32, false);
+            assert!(ev <= last + 1e-6, "{e}");
+            last = ev;
+        }
+        for e in [-10.0, -6.0, -2.0] {
+            assert!(auto_ev(e, true) < auto_ev(e, false));
+        }
+        assert_eq!(auto_ev(20.0, true), auto_ev(20.0, false));
+    }
 }
