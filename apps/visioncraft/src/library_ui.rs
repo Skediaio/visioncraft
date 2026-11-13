@@ -37,11 +37,14 @@ pub fn fixtures(ui: &mut egui::Ui, cx: &mut Cx) -> Option<String> {
     const OUTSIDE: [&str; 7] = [
         "street", "lamppost", "lantern", "exterior", "security", "wall", "garden",
     ];
-    let outside = |a: &visioncraft_core::Asset| {
-        OUTSIDE
+    // Words that make a lamp an indoor one even when it is called a lantern.
+    const INSIDE: [&str; 5] = ["chandelier", "candle", "desk", "ceiling", "diya"];
+    let has = |a: &visioncraft_core::Asset, words: &[&str]| {
+        words
             .iter()
             .any(|w| a.id.contains(w) || a.tags.iter().any(|t| t.contains(w)))
     };
+    let outside = |a: &visioncraft_core::Asset| has(a, &OUTSIDE) && !has(a, &INSIDE);
     let (garden, indoor): (Vec<&visioncraft_core::Asset>, Vec<_>) = catalog
         .assets
         .iter()
