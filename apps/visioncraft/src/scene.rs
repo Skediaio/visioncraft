@@ -10,14 +10,14 @@ use visioncraft_core::{
     resolve_materials, shape_mesh,
 };
 use visioncraft_flora as flora;
-use visioncraft_render::{ItemId, LineVertex, Renderer};
+use visioncraft_render::{ImpostorId, ItemId, LineVertex, Renderer};
 pub use visioncraft_render::{MaterialId, MeshId};
 
 use crate::library::{self, Library};
 use crate::material_library;
 use crate::placeholder::{self, MeshData};
 use crate::plant_scene::{self, DirtyLog, EVERYTHING, Inst, Rect};
-use crate::plants::{self, Flora};
+use crate::plants::{self, Flora, LAWN_SPECIES};
 
 /// A loaded or generated design, with a counter that changes when its triangles do.
 #[derive(Clone)]
@@ -337,12 +337,11 @@ const CULL_FADE_SHARE: f32 = 0.25;
 /// At most this many tufts per square metre are drawn, and this many per lawn.
 const LAWN_MAX_DENSITY: f32 = 300.0;
 const LAWN_MAX_TUFTS: usize = 60_000;
-const LAWN_SPECIES: &str = "flora:lawn-tuft";
 
 /// Catalogue objects smaller than this (largest side, metres) are culled far away, at
 /// `OBJECT_CULL_PER_M` metres per metre of size.
 const SMALL_OBJECT_M: f32 = 4.0;
-const OBJECT_CULL_PER_M: f32 = 120.0;
+const OBJECT_CULL_PER_M: f32 = 500.0;
 
 /// The largest LOD distance below `last` (0 when there is none).
 fn parts_before(parts: &[(MeshId, MaterialId, f32)], last: f32) -> f32 {
@@ -359,6 +358,9 @@ fn parts_before(parts: &[(MeshId, MaterialId, f32)], last: f32) -> f32 {
 struct Group {
     items: Vec<ItemId>,
     parts: Option<LodParts>,
+    /// The impostor the items were made with: one baked later (a shrub's keeps its mesh
+    /// levels) still means new items.
+    impostor: Option<ImpostorId>,
     matrices: Vec<Mat4>,
 }
 
@@ -959,7 +961,7 @@ impl Scene {
                 .and_then(|c| c.asset(asset))
                 .map_or(1.0, |a| a.size_m.into_iter().fold(0.0, f32::max));
             if size < SMALL_OBJECT_M {
-                let cull = (OBJECT_CULL_PER_M * size).clamp(40.0, 400.0);
+                let cull = (OBJECT_CULL_PER_M * size).clamp(60.0, 1500.0);
                 let last = parts.iter().map(|p| p.2).fold(0.0, f32::max);
                 let cull = cull.max(parts_before(&parts, last) + 1.0);
                 for p in parts.iter_mut().filter(|p| p.2 == last) {
@@ -989,17 +991,16 @@ impl Scene {
     ) -> Vec<ItemId> {
         if let Some(parts) = src {
             let item = r.add_lod_item(parts, matrices);
-            let impostor = (!self.library.knows(asset))
-                .then(|| plants::resolve(project, asset))
-                .flatten()
-                .and_then(|res| {
-                    let class = plants::class(&res.params, month);
-                    self.flora.impostor(asset, class, variant)
-                });
+            let impostor = self.impostor_for(project, asset, variant, month);
             let last = parts.iter().map(|p| p.2).fold(0.0, f32::max);
             match impostor {
                 // fails only for a removed impostor: the tree then stops at its far mesh
-                Some(imp) => drop(r.set_item_impostor(item, imp, plants::IMPOSTOR_MAX_M)),
+                Some((imp, max, small)) => {
+                    if r.set_item_impostor(item, imp, max).is_ok() {
+                        // At eye level a shrub far away is hidden anyway: its reach follows the camera.
+                        r.set_item_follows_reach(item, small);
+                    }
+                }
                 // Culled at a finite distance (shrubs, small objects): dither out before it.
                 None if last.is_finite() => r.set_item_cull_fade(item, last * CULL_FADE_SHARE),
                 None => {}
@@ -1025,6 +1026,22 @@ impl Scene {
             .collect()
     }
 
+    /// A plant's baked impostor and how far it draws (none for catalogue models).
+    fn impostor_for(
+        &self,
+        project: &Project,
+        asset: &str,
+        variant: u32,
+        month: u8,
+    ) -> Option<(ImpostorId, f32, bool)> {
+        if self.library.knows(asset) {
+            return None;
+        }
+        let res = plants::resolve(project, asset)?;
+        let class = plants::class(&res.params, month);
+        self.flora.impostor(asset, class, variant)
+    }
+
     /// Swaps stand-ins for the real thing once a plant generation or a catalogue model finished,
     /// and follows the catalogue's resident levels (a finer one arrived, one was evicted).
     fn upgrade(
@@ -1037,7 +1054,10 @@ impl Scene {
     ) {
         for ((asset, variant), grp) in groups.iter_mut() {
             let src = self.source(project, asset, *variant, month);
-            if src == grp.parts {
+            let imp = self
+                .impostor_for(project, asset, *variant, month)
+                .map(|i| i.0);
+            if src == grp.parts && imp == grp.impostor {
                 continue;
             }
             grp.items.drain(..).for_each(|i| r.remove_item(i));
@@ -1052,6 +1072,7 @@ impl Scene {
                 &grp.matrices,
             );
             grp.parts = src;
+            grp.impostor = imp;
         }
     }
 
@@ -1090,8 +1111,11 @@ impl Scene {
                 self.library.note(g.id(), &asset, &matrices);
             }
             let src = self.source(project, &asset, variant, month);
+            let imp = self
+                .impostor_for(project, &asset, variant, month)
+                .map(|i| i.0);
             let items = match old_groups.remove(&(asset.clone(), variant)) {
-                Some(prev) if prev.parts == src => {
+                Some(prev) if prev.parts == src && prev.impostor == imp => {
                     prev.items
                         .iter()
                         .for_each(|i| r.set_instances(*i, &matrices));
@@ -1118,6 +1142,7 @@ impl Scene {
                 Group {
                     items,
                     parts: src,
+                    impostor: imp,
                     matrices,
                 },
             );

@@ -56,6 +56,9 @@ pub const RELINK: &str = "Relink model";
 pub const MODEL_UPDATED: &str = "Model updated";
 pub const DROP_HINT: &str =
     "Open or drop a .3dcraft or .obj model, a .glb object, or draw with the Draw tool";
+pub const VIEW_DISTANCE: &str = "View distance";
+pub const VIEW_DISTANCE_TIP: &str =
+    "How far plants keep their detail, shadows reach and the air stays clear (1 is the default)";
 pub const WALK_HINT: &str = "Walking: WASD or arrows move, Shift runs, drag to look, Space to exit";
 
 pub const MODE_LABELS: [(&str, &str); 5] = [

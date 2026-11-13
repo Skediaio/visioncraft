@@ -54,12 +54,26 @@ pub fn class(p: &flora::PlantParams, month: u8) -> u32 {
 /// (mesh, material, LOD max distance)
 type Part = (MeshId, MaterialId, f32);
 
-/// Plants at least this tall (unscaled) are trees: they hand over to a baked impostor.
+/// Plants at least this tall (unscaled) are trees: they hand over to their baked impostor early.
 const TREE_M: f32 = 3.0;
+/// The lawn's tufts never get an impostor: there are tens of thousands of them and the lawn
+/// material carries their colour from afar.
+pub const LAWN_SPECIES: &str = "flora:lawn-tuft";
 /// Views around a tree an impostor is baked from.
 const IMPOSTOR_VIEWS: u32 = 8;
-/// Trees: impostors draw up to here (metres; beyond, a tree is a few pixels).
+/// Impostors draw up to here at most (metres; beyond, a tree is a few pixels).
 pub const IMPOSTOR_MAX_M: f32 = 2500.0;
+/// An impostor draws while its plant is taller than about 1.5 pixels: at a 50 degree field of view
+/// on a 1080 pixel tall view, `h` metres project to 1.5 pixels at about 770 h metres. Twice that,
+/// because the quality's level-of-detail scale (50 % at MEDIUM, 40 % at LOW) shortens it again.
+const IMPOSTOR_M_PER_M: f32 = 1540.0;
+
+/// How far the impostor of a plant `h` metres tall draws: by the size it has on screen, not a
+/// fixed distance (a 0.6 m perennial reaches about 920 m before the quality's scale, a tree the full
+/// `IMPOSTOR_MAX_M`).
+pub fn impostor_max(h: f32) -> f32 {
+    (IMPOSTOR_M_PER_M * h).clamp(60.0, IMPOSTOR_MAX_M)
+}
 
 /// The LOD distances (near, mid, far end) of a plant `h` metres tall, before any impostor:
 /// the far mesh of a tree draws to infinity until its impostor is baked, a shrub or ground
@@ -188,12 +202,19 @@ impl Flora {
         Some(out)
     }
 
-    /// The impostor that follows `parts`' last level, once baked.
-    pub fn impostor(&self, id: &str, class: u32, variant: u32) -> Option<ImpostorId> {
-        self.variant(id, class, variant)?
-            .baked
-            .as_ref()
-            .map(|b| b.1)
+    /// The impostor that follows `parts`' last level, once baked, and how far it draws.
+    /// Smaller plants share the impostor of their first variant (a few pixels tall, the
+    /// variants look alike; one atlas per species instead of three).
+    /// (impostor, how far it draws, whether the plant is smaller than a tree).
+    pub fn impostor(&self, id: &str, class: u32, variant: u32) -> Option<(ImpostorId, f32, bool)> {
+        let v = self.variant(id, class, variant)?;
+        let baked = v.baked.as_ref().or_else(|| {
+            (v.height < TREE_M)
+                .then(|| self.variant(id, class, 0))
+                .flatten()
+                .and_then(|first| first.baked.as_ref())
+        })?;
+        Some((baked.1, impostor_max(v.height), v.height < TREE_M))
     }
 
     /// Bakes one waiting impostor (from the far mesh level). True when one was made.
@@ -216,7 +237,13 @@ impl Flora {
             let Ok(imp) = r.bake_impostor(&src, None, IMPOSTOR_VIEWS) else {
                 continue; // stays a mesh to infinity
             };
-            let ends = impostor_distances(v.height);
+            // Trees hand over early; smaller plants keep their meshes as far as before and
+            // then become an impostor instead of disappearing.
+            let ends = if v.height >= TREE_M {
+                impostor_distances(v.height)
+            } else {
+                lod_distances(v.height)
+            };
             let mut levels: Vec<f32> = v.parts.iter().map(|p| p.2).collect();
             levels.sort_by(f32::total_cmp);
             levels.dedup();
@@ -372,7 +399,7 @@ impl Flora {
                     kinds.push(kind);
                 }
             }
-            if height >= TREE_M {
+            if id != LAWN_SPECIES && (height >= TREE_M || v == 0) {
                 self.bakes.push((id.clone(), class, v));
             }
             variants.push(Variant {

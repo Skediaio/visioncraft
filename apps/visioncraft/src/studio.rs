@@ -96,6 +96,8 @@ pub struct Studio {
     /// window must hand the new view to egui.
     pub targets_changed: bool,
     pub size: [u32; 2],
+    /// The sun shadows' reach last handed to the renderer (metres).
+    shadow_reach: f32,
     draft_serial: u64,
     version: u64,
     synced: Option<(u64, u64)>,
@@ -247,6 +249,7 @@ impl Studio {
             overlays_in_pictures: false,
             targets_changed: false,
             size: [0, 0],
+            shadow_reach: 0.0,
             draft_serial: 0,
             version: 0,
             synced: None,
@@ -624,12 +627,24 @@ impl Studio {
         // Below the horizon the haze only scatters the dim, pink twilight sky back at the camera
         // and washes the garden out: thin it as the sun sinks, and no sun glow.
         let night = ((1.0 - elevation) / 7.0).clamp(0.0, 1.0);
+        let reach = view_reach(
+            &self.camera,
+            v.ground.map_or(0.0, |g| g.height),
+            v.view_distance,
+        );
         self.renderer
             .set_atmosphere(&visioncraft_render::Atmosphere {
                 haze: v.haze * (1.0 - 0.7 * night),
                 sun_glow: 0.5 * (1.0 - night),
+                clear_m: reach.clear_m,
                 ..Default::default()
             });
+        self.renderer.set_view_distance(v.view_distance);
+        self.renderer.set_impostor_reach(reach.small_impostors);
+        if self.shadow_reach != reach.shadow_m {
+            self.shadow_reach = reach.shadow_m;
+            self.renderer.set_shadow_distance(reach.shadow_m);
+        }
         // Lamps after sunset bloom a little more, so they read as lights.
         let q = self.current_quality();
         if q.bloom {
@@ -1008,5 +1023,58 @@ mod tests {
             assert!(auto_ev(e, true) > auto_ev(e, false));
         }
         assert_eq!(auto_ev(20.0, true), auto_ev(20.0, false));
+    }
+}
+
+/// How far shadows reach and how far the air stays clear, for the camera and the project's view
+/// distance.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Reach {
+    pub shadow_m: f32,
+    pub clear_m: f32,
+    /// How far the impostors of shrubs and ground plants draw, as a share of their full reach.
+    pub small_impostors: f32,
+}
+
+/// From an orbit the shadows reach the far side of what the camera looks at (twice its distance
+/// to the pivot, at least the 80 m of eye level), in 20 m steps so zooming does not re-render
+/// them every frame. The air is clear for 2.5 times the camera's height over the ground: an
+/// overview from 50-100 m up stays crisp, eye level keeps its haze. Small plants' impostors draw
+/// their full reach from 40 m up and a tenth of it at eye level, where the ground, trunks and
+/// hedges hide them (a 0.6 m perennial still reaches about 45 m at MEDIUM, four times its old cull).
+pub fn view_reach(camera: &crate::camera::Camera, ground_y: f32, view_distance: f32) -> Reach {
+    let looked_at = match camera.view {
+        crate::camera::View::Orbit => 2.0 * camera.dist,
+        _ => 0.0,
+    };
+    let shadow = (looked_at.max(80.0) * view_distance).clamp(40.0, 1200.0);
+    let height = (camera.eye().y - ground_y).max(0.0);
+    Reach {
+        shadow_m: (shadow / 20.0).round() * 20.0,
+        clear_m: (2.5 * height).min(400.0) * view_distance,
+        small_impostors: (height / 40.0).clamp(0.1, 1.0),
+    }
+}
+
+#[cfg(test)]
+mod reach_tests {
+    use super::view_reach;
+    use crate::camera::{Camera, View};
+
+    #[test]
+    fn an_overview_reaches_further_and_stays_clear_eye_level_keeps_its_haze() {
+        let mut c = Camera::default();
+        c.view = View::Orbit;
+        c.dist = 120.0;
+        let far = view_reach(&c, 0.0, 1.0);
+        assert!(far.shadow_m >= 240.0, "{far:?}");
+        assert!(far.clear_m > 100.0, "{far:?}");
+        assert_eq!(view_reach(&c, 0.0, 2.0).shadow_m, 2.0 * far.shadow_m);
+        c.view = View::Walk;
+        c.walk.eye.y = 1.7;
+        let eye = view_reach(&c, 0.0, 1.0);
+        assert_eq!(eye.shadow_m, 80.0);
+        assert!(eye.clear_m < 5.0, "{eye:?}");
+        assert!(eye.small_impostors < far.small_impostors);
     }
 }

@@ -541,6 +541,20 @@ impl Hud {
                                 cx.s.quality_auto = false;
                             }
                         }
+                        ui.separator();
+                        // Stored with the project (a command); Auto still lowers detail by fps.
+                        let mut vd = cx.s.project().view.view_distance;
+                        let r = ui
+                            .add(
+                                egui::Slider::new(&mut vd, 0.25..=4.0)
+                                    .logarithmic(true)
+                                    .max_decimals(2)
+                                    .text(t::VIEW_DISTANCE),
+                            )
+                            .on_hover_text(t::VIEW_DISTANCE_TIP);
+                        if r.drag_stopped() || (r.changed() && !r.dragged()) {
+                            cx.run("view.set", serde_json::json!({"view_distance": vd}));
+                        }
                     });
                 if ui.selectable_label(self.export_open, t::EXPORT).clicked() {
                     self.export_open = !self.export_open;
