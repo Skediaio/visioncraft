@@ -190,7 +190,10 @@ impl MaterialsState {
             .or(self.picked.as_ref().map(|p| &p.0))
             .map(|p| (p.owner.clone(), p.face));
         if let (Some(h), Some(pos), None) = (&hover, cx.input.hover, &self.picked) {
-            cx.label(pos + Vec2::new(16.0, 18.0), &h.face_name);
+            cx.label(
+                pos + Vec2::new(16.0, 18.0),
+                &surface_name(cx.s.project(), h),
+            );
         }
         if cx.input.escape {
             self.picked = None;
@@ -230,6 +233,7 @@ impl MaterialsState {
             (click.x + 14.0).clamp(8.0, (rect.width() - 300.0).max(8.0)),
             (click.y + 14.0).clamp(96.0, (rect.height() - 420.0).max(96.0)),
         );
+        let title = surface_name(cx.s.project(), &pick);
         let ctx = cx.ctx.clone();
         egui::Area::new(egui::Id::new("matpanel"))
             .fixed_pos(pos)
@@ -237,7 +241,7 @@ impl MaterialsState {
             .show(&ctx, |ui| {
                 panel_frame().show(ui, |ui| {
                     ui.set_max_width((rect.width() - 24.0).min(290.0));
-                    ui.small(&pick.face_name);
+                    ui.small(title);
                     ui.horizontal(|ui| {
                         for (s, label) in [
                             (Scope::Face, t::THIS_FACE),
@@ -410,6 +414,24 @@ impl MaterialsState {
             cx.s.set_draft(Some(Draft::Material(m)));
         }
     }
+}
+
+/// What a person calls the surface: "Area 3 · top" rather than the face id "S3:top".
+fn surface_name(p: &visioncraft_core::Project, pick: &crate::scene::Pick) -> String {
+    let owner = p
+        .shapes
+        .iter()
+        .find(|s| s.id() == pick.owner)
+        .map(|s| s.name().to_string())
+        .or_else(|| {
+            p.models
+                .iter()
+                .find(|m| m.id == pick.owner)
+                .map(|m| m.name.clone())
+        })
+        .unwrap_or_else(|| pick.owner.clone());
+    let face = pick.face_name.rsplit(':').next().unwrap_or(&pick.face_name);
+    format!("{owner} · {face}")
 }
 
 #[cfg(test)]
