@@ -250,17 +250,24 @@ impl TerrainTool {
             .iter()
             .filter_map(|p| terrain.height_at(p[0], p[1]))
             .fold(f32::INFINITY, f32::min);
-        let level = if rim.is_finite() { rim - 0.15 } else { -0.15 };
+        let level = if rim.is_finite() {
+            rim - POND_MARGIN_M
+        } else {
+            -POND_MARGIN_M
+        };
         let depth = self.pond_depth;
+        // The water reaches as far out as the carved bank is below it: no dry strip of bank shows
+        // between the water's edge and the grass.
+        let water = offset_outline(&outline, wet_bank(depth, POND_BANK_M, POND_MARGIN_M));
         let r = cx.s.with_lamps(|s| {
             let before = s.project().terrain.clone();
             s.run(
                 "terrain.carve",
-                json!({"outline": outline, "depth_m": depth, "bank_m": 1.5}),
+                json!({"outline": outline, "depth_m": depth, "bank_m": POND_BANK_M}),
             )?;
             s.run(
                 "shape.add_area",
-                json!({"name": t::TR_POND_NAME, "outline": outline, "elevation": level, "drape": false, "material": "water"}),
+                json!({"name": t::TR_POND_NAME, "outline": water, "elevation": level, "drape": false, "material": "water"}),
             )?;
             follow_ground(s, before.as_deref())
         });
@@ -278,14 +285,6 @@ impl TerrainTool {
             }
             return;
         };
-        ui.horizontal_wrapped(|ui| {
-            for b in Brush::ALL {
-                if ui.selectable_label(self.brush == b, b.label()).clicked() {
-                    self.brush = b;
-                    self.pond.clear();
-                }
-            }
-        });
         ui.small(self.brush.hint());
         if self.brush == Brush::Pond {
             slider_field(ui, t::TR_DEPTH, &mut self.pond_depth, 0.2..=3.0);
@@ -317,6 +316,16 @@ impl TerrainTool {
             ));
             if ui.small_button(t::TR_REMOVE).clicked() {
                 cx.run("terrain.remove", json!({}));
+            }
+        });
+        // The brushes last, next to the tabs: they stay put whatever the brush shows above.
+        ui.separator();
+        ui.horizontal_wrapped(|ui| {
+            for b in Brush::ALL {
+                if ui.selectable_label(self.brush == b, b.label()).clicked() {
+                    self.brush = b;
+                    self.pond.clear();
+                }
             }
         });
     }
@@ -510,5 +519,100 @@ mod tests {
         assert!((pos(0)[1] - t.height_at(10.0, 10.0).unwrap()).abs() < 1e-4);
         assert!(pos(0)[1] > 0.1);
         assert_eq!(pos(1)[1], 3.0, "an object above the ground stays");
+    }
+}
+
+/// A pond's bank slopes up over this distance outside its outline.
+const POND_BANK_M: f32 = 1.5;
+/// Its water stands this far below the lowest point of the old ground on the outline.
+const POND_MARGIN_M: f32 = 0.15;
+
+/// How far outside the outline the carved bank is still below the water: the carve lowers the
+/// ground by `depth * (1 - smoothstep(d / bank))` at distance `d` outside (the core's
+/// `Terrain::carve`), the water is `margin` below the old ground.
+fn wet_bank(depth: f32, bank: f32, margin: f32) -> f32 {
+    if depth <= margin {
+        return 0.0;
+    }
+    let target = 1.0 - margin / depth;
+    let smooth = |x: f32| x * x * (3.0 - 2.0 * x);
+    let (mut lo, mut hi) = (0.0f32, 1.0f32);
+    for _ in 0..30 {
+        let mid = (lo + hi) / 2.0;
+        if smooth(mid) < target {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    lo * bank
+}
+
+/// `outline` moved `d` outward along its edges' normals (mitred corners, capped at 3 d).
+fn offset_outline(outline: &[[f32; 2]], d: f32) -> Vec<[f32; 2]> {
+    let n = outline.len();
+    if d <= 0.0 || n < 3 {
+        return outline.to_vec();
+    }
+    let area2: f32 = (0..n)
+        .map(|i| {
+            let (a, b) = (outline[i], outline[(i + 1) % n]);
+            a[0] * b[1] - b[0] * a[1]
+        })
+        .sum();
+    // Outward for a counter-clockwise ring (positive area in x, z) is to the right of an edge.
+    let side = if area2 > 0.0 { 1.0 } else { -1.0 };
+    let normal = |a: [f32; 2], b: [f32; 2]| {
+        let (dx, dz) = (b[0] - a[0], b[1] - a[1]);
+        let l = dx.hypot(dz).max(1e-6);
+        [side * dz / l, -side * dx / l]
+    };
+    (0..n)
+        .map(|i| {
+            let p = outline[i];
+            let n1 = normal(outline[(i + n - 1) % n], p);
+            let n2 = normal(p, outline[(i + 1) % n]);
+            let dot = (n1[0] * n2[0] + n1[1] * n2[1]).max(-0.9);
+            let k = (d / (1.0 + dot)).min(3.0 * d);
+            [p[0] + (n1[0] + n2[0]) * k, p[1] + (n1[1] + n2[1]) * k]
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod pond_tests {
+    use super::*;
+
+    #[test]
+    fn the_water_covers_the_bank_up_to_the_waterline() {
+        let d = wet_bank(0.8, POND_BANK_M, POND_MARGIN_M);
+        // At d the carved bank is exactly at the waterline.
+        let s = |x: f32| x * x * (3.0 - 2.0 * x);
+        let lowered = 0.8 * (1.0 - s(d / POND_BANK_M));
+        assert!((lowered - POND_MARGIN_M).abs() < 1e-3 && d > 0.5 && d < POND_BANK_M);
+        assert_eq!(wet_bank(0.1, POND_BANK_M, POND_MARGIN_M), 0.0);
+        // A 4 by 2 square, either winding, grows by d on every side.
+        for sq in [
+            vec![[0.0, 0.0], [4.0, 0.0], [4.0, 2.0], [0.0, 2.0]],
+            vec![[0.0, 0.0], [0.0, 2.0], [4.0, 2.0], [4.0, 0.0]],
+        ] {
+            let o = offset_outline(&sq, 1.0);
+            let (lo, hi) = o
+                .iter()
+                .fold(([f32::MAX; 2], [f32::MIN; 2]), |(lo, hi), p| {
+                    (
+                        [lo[0].min(p[0]), lo[1].min(p[1])],
+                        [hi[0].max(p[0]), hi[1].max(p[1])],
+                    )
+                });
+            assert!(
+                (lo[0] + 1.0).abs() < 1e-4 && (hi[0] - 5.0).abs() < 1e-4,
+                "{o:?}"
+            );
+            assert!(
+                (lo[1] + 1.0).abs() < 1e-4 && (hi[1] - 3.0).abs() < 1e-4,
+                "{o:?}"
+            );
+        }
     }
 }
