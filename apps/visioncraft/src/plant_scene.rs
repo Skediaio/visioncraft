@@ -173,20 +173,19 @@ pub fn instances(project: &Project, assets: &[Asset], placements: &[Placement]) 
         .collect()
 }
 
-/// Distance along the ray to a vertical cylinder (sides and caps), if it hits.
-pub fn ray_cylinder(o: Vec3, d: Vec3, c: &Inst) -> Option<f32> {
-    let (cx, cz) = (c.pos[0], c.pos[2]);
+/// Distance along the ray to a vertical cylinder at (x, z) from height `y0` to `y1`, if it hits.
+fn ray_vcyl(o: Vec3, d: Vec3, (cx, cz): (f32, f32), (y0, y1): (f32, f32), r: f32) -> Option<f32> {
     let a = d.x * d.x + d.z * d.z;
     let (ox, oz) = (o.x - cx, o.z - cz);
     // Interval inside the infinite cylinder.
     let (mut t0, mut t1) = if a < 1e-9 {
-        if ox * ox + oz * oz > c.radius * c.radius {
+        if ox * ox + oz * oz > r * r {
             return None;
         }
         (f32::NEG_INFINITY, f32::INFINITY)
     } else {
         let b = ox * d.x + oz * d.z;
-        let disc = b * b - a * (ox * ox + oz * oz - c.radius * c.radius);
+        let disc = b * b - a * (ox * ox + oz * oz - r * r);
         if disc < 0.0 {
             return None;
         }
@@ -195,15 +194,28 @@ pub fn ray_cylinder(o: Vec3, d: Vec3, c: &Inst) -> Option<f32> {
     };
     // Intersect with the slab between the caps.
     if d.y.abs() < 1e-9 {
-        if o.y < c.pos[1] || o.y > c.pos[1] + c.height {
+        if o.y < y0 || o.y > y1 {
             return None;
         }
     } else {
-        let (s0, s1) = ((c.pos[1] - o.y) / d.y, (c.pos[1] + c.height - o.y) / d.y);
+        let (s0, s1) = ((y0 - o.y) / d.y, (y1 - o.y) / d.y);
         t0 = t0.max(s0.min(s1));
         t1 = t1.min(s0.max(s1));
     }
     (t0 <= t1 && t1 > 0.0).then(|| t0.max(0.0))
+}
+
+/// Distance along the ray to a plant's bounding volume, if it hits: a crown cylinder over a
+/// thin trunk cylinder, so the air under a tall tree's crown does not count as the tree.
+pub fn ray_cylinder(o: Vec3, d: Vec3, c: &Inst) -> Option<f32> {
+    let at = (c.pos[0], c.pos[2]);
+    let (y, h) = (c.pos[1], c.height);
+    let crown = ray_vcyl(o, d, at, (y + 0.3 * h, y + h), c.radius);
+    let trunk = ray_vcyl(o, d, at, (y, y + 0.3 * h), (c.radius * 0.2).max(0.1));
+    match (crown, trunk) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    }
 }
 
 /// The nearest instance the ray hits: its index and distance.
@@ -303,6 +315,10 @@ mod tests {
         let o = Vec3::new(-10.0, 2.0, 0.0);
         assert!((ray_cylinder(o, Vec3::X, &tree).unwrap() - 9.0).abs() < 1e-4);
         assert!(ray_cylinder(Vec3::new(-10.0, 6.0, 0.0), Vec3::X, &tree).is_none());
+        // Under the crown only the thin trunk is there.
+        let low = Vec3::new(-10.0, 0.5, 0.0);
+        assert!((ray_cylinder(low, Vec3::X, &tree).unwrap() - 9.8).abs() < 1e-4);
+        assert!(ray_cylinder(Vec3::new(-10.0, 0.5, 0.5), Vec3::X, &tree).is_none());
         // Straight down onto the top cap.
         let t = ray_cylinder(Vec3::new(0.3, 10.0, 0.2), Vec3::NEG_Y, &tree).unwrap();
         assert!((t - 5.0).abs() < 1e-4);

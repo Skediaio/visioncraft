@@ -10,9 +10,9 @@
 //!   `center`, `owner` with `faces` or `top_faces: true`, `strokes: [{points, radius, erase}]`).
 //! * `stroke`: `points`, `radius`, `erase`, the settings above, `new: true` for a new brush;
 //!   consecutive strokes with the same settings extend one brush.
-//! * `sync`, `bench` (`frames`, `w`, `h`), `pick` (`x`, `y`), `duplicate` (`id`).
+//! * `save` (`path`), `sync`, `bench` (`frames`, `w`, `h`), `pick` (`x`, `y`), `duplicate` (`id`).
 
-use crate::planting_tools::{BrushTarget, Form, Geom, commit};
+use crate::planting_tools::{BrushTarget, Form, Geom};
 use serde_json::Value;
 use visioncraft_core::planting::{Spacing, Stroke, Weighted};
 use visioncraft_core::planting_presets;
@@ -182,7 +182,7 @@ pub use native::run;
 mod native {
     use super::*;
     use crate::plant_scene::now_ms;
-    use crate::planting_tools::commit_stroke;
+    use crate::planting_tools::{commit, commit_stroke};
     use crate::studio::Studio;
     use visioncraft_core::ImportedModel;
 
@@ -216,8 +216,8 @@ mod native {
     fn report(s: &Studio, what: &str, ms: f64) {
         let t = s.scene.timings;
         println!(
-            "plant {what}: {} placements, evaluate {:.1} ms, upload {:.1} ms, sync {ms:.1} ms",
-            t.placements, t.eval_ms, t.upload_ms
+            "plant {what}: {} placements, evaluate {:.1} ms, upload {:.1} ms, sync {ms:.1} ms, {} evaluations so far",
+            t.placements, t.eval_ms, t.upload_ms, t.rebuilds
         );
     }
 
@@ -300,10 +300,22 @@ mod native {
                 let (x, y) = (num(v, "x").unwrap_or(0.0), num(v, "y").unwrap_or(0.0));
                 let size = glam::Vec2::new(s.size[0] as f32, s.size[1] as f32);
                 let (o, d) = s.pointer_ray(glam::Vec2::new(x, y), size);
-                match s.scene.pick_plant(o, d) {
-                    Some((id, t)) => println!("plant pick {x},{y}: {id} at {t:.2} m"),
+                match s.scene.pick_plant_detail(o, d) {
+                    Some((id, c, t)) => println!(
+                        "plant pick {x},{y}: {id} at {t:.2} m (cylinder at {:?}, radius {:.1}, height {:.1})",
+                        c.pos, c.radius, c.height
+                    ),
                     None => println!("plant pick {x},{y}: nothing"),
                 }
+            }
+            "save" => {
+                // A project file for the browser checks: drop it on the page to open it.
+                let path = v
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .ok_or("`save` needs `path`")?;
+                std::fs::write(path, s.project().to_json_bytes()).map_err(|e| e.to_string())?;
+                println!("plant save {path}");
             }
             "bench" => {
                 let (w, h) = (

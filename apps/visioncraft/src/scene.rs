@@ -311,6 +311,8 @@ pub struct Timings {
     pub eval_ms: f64,
     pub upload_ms: f64,
     pub placements: usize,
+    /// How many generator evaluations have run in all.
+    pub rebuilds: u64,
 }
 
 /// The model transform: scale, then rotation about +Y, then translation.
@@ -768,6 +770,7 @@ impl Scene {
             eval_ms: t1 - t0,
             upload_ms: plant_scene::now_ms() - t1,
             placements: placements.len(),
+            rebuilds: self.timings.rebuilds + 1,
         };
         GenGpu {
             sig,
@@ -824,12 +827,19 @@ impl Scene {
 
     /// The generator whose plant the ray hits first (against bounding cylinders), and the distance.
     pub fn pick_plant(&self, origin: Vec3, dir: Vec3) -> Option<(String, f32)> {
+        self.pick_plant_detail(origin, dir)
+            .map(|(id, _, t)| (id, t))
+    }
+
+    /// Like `pick_plant`, with the plant's bounding cylinder.
+    pub fn pick_plant_detail(&self, origin: Vec3, dir: Vec3) -> Option<(String, Inst, f32)> {
         self.gens
             .iter()
             .filter_map(|(id, g)| {
-                plant_scene::pick_instance(&g.insts, origin, dir).map(|(_, t)| (id.clone(), t))
+                plant_scene::pick_instance(&g.insts, origin, dir)
+                    .map(|(i, t)| (id.clone(), g.insts[i], t))
             })
-            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .min_by(|a, b| a.2.total_cmp(&b.2))
     }
 
     /// Placeholder meshes of an asset, built once per asset.

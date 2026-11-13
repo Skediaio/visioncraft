@@ -16,7 +16,7 @@ use glam::{Vec2, Vec3};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use visioncraft_core::planting::{Spacing, Stroke, Weighted};
-use visioncraft_core::{Generator, PlantLayer, Session};
+use visioncraft_core::{Generator, PlantLayer, Session, planting_presets};
 use visioncraft_render::LineVertex;
 
 /// At most this many preview dots are drawn; more are thinned out evenly.
@@ -190,6 +190,14 @@ pub fn pick_weighted(palette: &[Weighted], r: f32) -> Option<&str> {
     palette.last().map(|w| w.asset.as_str())
 }
 
+/// The preset whose layers these are, if they are still untouched.
+fn preset_of(layers: &[PlantLayer]) -> Option<String> {
+    planting_presets()
+        .into_iter()
+        .find(|p| p.layers == layers)
+        .map(|p| p.name)
+}
+
 impl Form {
     pub fn from_generator(g: &Generator) -> Form {
         let mut f = Form {
@@ -228,6 +236,7 @@ impl Form {
                 f.palette = weighted(&a.asset_palette).unwrap_or(f.palette);
                 (f.layers, f.density, f.min_distance) =
                     (a.layers.clone(), a.density_per_m2, a.min_distance_m);
+                f.preset = preset_of(&f.layers);
                 (f.pos_jitter, f.spin, f.seed) = (a.position_jitter, a.random_rotation, a.seed);
                 (f.scale_min, f.scale_max) = (a.scale_min, a.scale_max);
             }
@@ -235,6 +244,7 @@ impl Form {
                 f.palette = weighted(&s.asset_palette).unwrap_or(f.palette);
                 (f.layers, f.density, f.min_distance) =
                     (s.layers.clone(), s.density_per_m2, s.min_distance_m);
+                f.preset = preset_of(&f.layers);
                 (f.pos_jitter, f.spin, f.seed) = (s.position_jitter, s.random_rotation, s.seed);
                 (f.scale_min, f.scale_max, f.max_slope) =
                     (s.scale_min, s.scale_max, s.max_slope_deg);
@@ -243,6 +253,7 @@ impl Form {
                 f.palette = weighted(&b.asset_palette).unwrap_or(f.palette);
                 (f.layers, f.density, f.min_distance) =
                     (b.layers.clone(), b.density_per_m2, b.min_distance_m);
+                f.preset = preset_of(&f.layers);
                 (f.scale_min, f.scale_max, f.seed) = (b.scale_min, b.scale_max, b.seed);
             }
         }
@@ -418,10 +429,11 @@ impl Form {
         }
     }
 
-    /// What decides whether a brush stroke extends the same generator: everything but the seed.
+    /// What decides whether a brush stroke extends the same generator: everything but the seed
+    /// and the fields a brush does not have (a cluster's radius, a single plant's rotation).
     pub fn signature(&self) -> String {
         let mut f = self.clone();
-        f.seed = 0;
+        (f.seed, f.radius, f.rotation) = (0, 0.0, 0.0);
         format!("{f:?}")
     }
 
@@ -624,6 +636,8 @@ pub struct PlantingTools {
     /// The selected planting's settings, edited live.
     pub edit: Option<Form>,
     edit_rev: u64,
+    pub panel_height: f32,
+    pub grow: u8,
     pub add_to: Option<AddTarget>,
     pub show_help: bool,
     pub vertex: Option<usize>,
@@ -648,6 +662,8 @@ impl Default for PlantingTools {
             selected: None,
             edit: None,
             edit_rev: u64::MAX,
+            panel_height: 0.0,
+            grow: 0,
             add_to: None,
             show_help: false,
             vertex: None,
@@ -1353,7 +1369,8 @@ impl PlantingTools {
         if input.clicked
             && let Some(s) = snap
         {
-            if closing {
+            if closing || (self.points.last() == Some(&s.pos) && self.points.len() >= need) {
+                // The first point closes an area; the last one clicked again (a double click) ends it.
                 self.finish_polyline(cx, area);
             } else if !input.double_clicked && self.points.last() != Some(&s.pos) {
                 self.points.push(s.pos);

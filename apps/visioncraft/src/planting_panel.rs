@@ -118,14 +118,21 @@ fn form_ui(
     let layered = kind.layered() && !form.layers.is_empty();
     if kind.layered() {
         ui.horizontal_wrapped(|ui| {
-            if ui.selectable_label(!layered, t::PT_SIMPLE).clicked() && layered {
+            if ui
+                .selectable_label(!layered, RichText::new(t::PT_SIMPLE).small())
+                .clicked()
+                && layered
+            {
                 form.layers.clear();
                 form.preset = None;
                 edit = Edit::Done;
             }
             for p in planting_presets() {
                 let on = layered && form.preset.as_deref() == Some(p.name.as_str());
-                if ui.selectable_label(on, &p.name).clicked() {
+                if ui
+                    .selectable_label(on, RichText::new(&p.name).small())
+                    .clicked()
+                {
                     form.layers = p.layers;
                     form.preset = Some(p.name);
                     edit = Edit::Done;
@@ -345,6 +352,8 @@ fn slider(
 impl PlantingTools {
     pub fn panel(&mut self, ui: &mut egui::Ui, cx: &mut Cx) {
         ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 3.0;
+            ui.spacing_mut().button_padding.x = 6.0;
             for tool in Tool::ALL {
                 if ui
                     .selectable_label(self.tool == tool, tool.label())
@@ -361,12 +370,26 @@ impl PlantingTools {
                 self.show_help = !self.show_help;
             }
         });
-        let max_h = (cx.input.rect.height() - 150.0).clamp(140.0, 640.0);
-        egui::ScrollArea::vertical()
+        // Room for the file bar above and the mode bar below.
+        let max_h = (cx.input.rect.height() - 200.0).clamp(140.0, 640.0);
+        let out = egui::ScrollArea::vertical()
             .max_height(max_h)
+            .min_scrolled_height(self.panel_height.min(max_h).max(64.0))
             .auto_shrink([true, true])
             .id_salt("planting-scroll")
             .show(ui, |ui| self.body(ui, cx));
+        // The panel hangs from the bottom edge and a scroll area is sized from the last frame, so
+        // it takes a few frames to grow to its content: paint on until it has.
+        let wanted = out.content_size.y.min(max_h);
+        let growing = (out.inner_rect.height() - wanted).abs() > 1.0
+            || (out.content_size.y - self.panel_height).abs() > 0.5;
+        self.panel_height = out.content_size.y;
+        if growing && self.grow < 40 {
+            self.grow += 1;
+            cx.ctx.request_repaint();
+        } else if !growing {
+            self.grow = 0;
+        }
         self.help(cx);
     }
 
