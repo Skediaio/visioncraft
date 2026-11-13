@@ -198,6 +198,7 @@ impl LightsTool {
 
     pub fn update(&mut self, cx: &mut Cx) {
         let mut top = Vec::new();
+        cx.s.light_markers = true;
         let ground = Self::ground(cx);
         // The handle of the selected spot.
         let spot = self.light(cx).and_then(|l| match l.kind {

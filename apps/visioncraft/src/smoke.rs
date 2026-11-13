@@ -89,8 +89,12 @@ pub enum Step {
         count: usize,
         cols: usize,
         spacing: f32,
+        /// Scale every asset to this longest side in metres (a legibility sheet), else real size.
+        fit: Option<f32>,
     },
     Stats,
+    /// Prints the bodies of an owner with their bounds.
+    Bodies(String),
     Pick {
         x: f32,
         y: f32,
@@ -254,11 +258,17 @@ pub fn parse_step(v: &Value) -> Result<Step, String> {
             owner: owner.to_string(),
             scope: scope.iter().map(|s| s.to_string()).collect(),
         }),
-        ["contact", "sheet", first, count, cols, spacing] => Ok(Step::ContactSheet {
+        ["bodies", owner] => Ok(Step::Bodies(owner.to_string())),
+        ["contact", "sheet", first, count, cols, spacing, rest @ ..] => Ok(Step::ContactSheet {
             first: first.parse().map_err(|_| "first")?,
             count: count.parse().map_err(|_| "count")?,
             cols: cols.parse().map_err(|_| "cols")?,
             spacing: spacing.parse().map_err(|_| "spacing")?,
+            fit: match rest {
+                [] => None,
+                ["fit", m] => Some(m.parse().map_err(|_| "fit is not a number")?),
+                _ => return Err("contact sheet takes an optional `fit metres`".into()),
+            },
         }),
         ["highlight", "none"] => Ok(Step::Highlight(None)),
         ["highlight", owner, face] => {
@@ -543,6 +553,10 @@ mod native {
                 }
                 Step::WaitAssets => settle(&mut s),
                 Step::Stats => {
+                    println!(
+                        "sun elevation {:.1} deg, exposure EV {:.1}",
+                        s.ev_used.1, s.ev_used.0
+                    );
                     let st = &s.scene.library.store.stats;
                     println!(
                         "assets: {} uploads, worst {:.1} ms, total {:.0} ms, {} evictions, peak texture bytes {} MB, {} models resident, worst pump {:.1} ms",
@@ -626,14 +640,30 @@ mod native {
                         )
                         .map_err(|e| at(e.to_string()))?;
                 }
+                Step::Bodies(owner) => {
+                    s.sync();
+                    let g = s
+                        .scene
+                        .geometry(&owner)
+                        .ok_or_else(|| at(format!("no owner `{owner}`")))?;
+                    for b in &g.bodies {
+                        println!(
+                            "body {}: {:?} .. {:?}",
+                            b.id,
+                            b.bounds[0].map(|v| (v * 100.0).round() / 100.0),
+                            b.bounds[1].map(|v| (v * 100.0).round() / 100.0)
+                        );
+                    }
+                }
                 Step::ContactSheet {
                     first,
                     count,
                     cols,
                     spacing,
+                    fit,
                 } => {
                     settle(&mut s);
-                    let ids: Vec<String> = s
+                    let ids: Vec<(String, f32)> = s
                         .scene
                         .library
                         .catalog
@@ -643,20 +673,32 @@ mod native {
                         .iter()
                         .skip(first)
                         .take(count)
-                        .map(|a| a.id.clone())
+                        .map(|a| {
+                            let longest = a.size_m.iter().copied().fold(0.01, f32::max);
+                            (a.id.clone(), fit.map_or(1.0, |m| m / longest))
+                        })
                         .collect();
-                    for (i, id) in ids.iter().enumerate() {
+                    for (i, (id, scale)) in ids.iter().enumerate() {
                         let (c, r) = ((i % cols) as f32, (i / cols) as f32);
-                        place(&mut s, id, c * spacing, r * spacing, Some(0.0), 0.0, 1.0)
+                        place(&mut s, id, c * spacing, r * spacing, Some(0.0), 0.0, *scale)
                             .map_err(at)?;
                     }
-                    println!("contact sheet: {}", ids.join(" "));
+                    let names: Vec<&str> = ids.iter().map(|(i, _)| i.as_str()).collect();
+                    println!("contact sheet: {}", names.join(" "));
                 }
                 Step::Screenshot { name, w, h } => {
                     s.resize(w, h);
                     // plants are generated one step per frame and library files stream in
                     settle(&mut s);
                     s.prepare();
+                    // The renderer converges over frames (sky environment, alternating shadow
+                    // cascades): draw a few before the one that is read back.
+                    for _ in 0..10 {
+                        let mut encoder = device.create_command_encoder(&Default::default());
+                        s.renderer.render(&mut encoder);
+                        queue.submit([encoder.finish()]);
+                        s.prepare();
+                    }
                     let rb = Readback::start(&mut s, &device, &queue);
                     device
                         .poll(wgpu::PollType::wait_indefinitely())

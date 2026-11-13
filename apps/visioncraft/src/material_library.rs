@@ -20,7 +20,7 @@ pub const KINDS: [&str; 13] = [
 /// Which library material each plain palette material shows while the library is there
 /// (lawn: a grass ground, paving: paving stones, plaster, timber and so on).
 const DEFAULTS: [(&str, &str, f32); 9] = [
-    ("lawn", "grass003", 0.6),
+    ("lawn", "grass001", 0.6),
     ("paving", "pavingstones005", 0.4),
     ("plaster", "plaster001", 0.25),
     ("timber", "planks021", 0.2),
@@ -269,7 +269,7 @@ mod tests {
         let mut lib = Library::new();
         let lawn = builtin_palette().into_iter().find(|m| m.id == "lawn").unwrap();
         assert!(overlay(&lib, &lawn).is_none(), "no library, no look");
-        lib.materials = vec![entry("grass003", Some([1.4, 1.4]))];
+        lib.materials = vec![entry("grass001", Some([1.4, 1.4]))];
         let o = overlay(&lib, &lawn).expect("a grass look");
         assert_eq!(o.scale_m, 1.4);
         assert!(o.spec.orm.is_some());

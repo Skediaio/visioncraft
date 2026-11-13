@@ -60,6 +60,10 @@ pub struct Studio {
     pub show_people: bool,
     pub placing_person: bool,
     pub lights_on: bool,
+    /// The exposure (EV) and sun elevation of the last frame, for the measurements.
+    pub ev_used: (f32, f32),
+    /// The lights' markers show while the Lights tool is open.
+    pub light_markers: bool,
     /// The sun has set while the lights are off and the user has not been told yet.
     pub suggest_lights: bool,
     suggested: bool,
@@ -189,6 +193,8 @@ impl Studio {
             show_people: true,
             placing_person: false,
             lights_on: false,
+            ev_used: (0.0, 0.0),
+            light_markers: false,
             suggest_lights: false,
             suggested: false,
             dropped_lights: 0,
@@ -400,6 +406,7 @@ impl Studio {
         let v = self.project().view.clone();
         let lamps = self.lights_on && self.project().lights.iter().any(|l| l.enabled);
         let ev = v.exposure_ev.unwrap_or_else(|| self.sky.auto_ev(elevation, lamps)) - self.exposure;
+        self.ev_used = (ev, elevation);
         self.renderer.set_exposure(ev);
         self.renderer.set_clay(self.project().style.clay);
         self.renderer
@@ -531,7 +538,12 @@ impl Studio {
             .as_ref()
             .and_then(|(o, f)| self.scene.highlight(o, *f));
         self.renderer.set_highlight(hl);
-        let (mut depth, top) = (light_markers(self.project()), Vec::new());
+        let markers = if std::mem::take(&mut self.light_markers) {
+            light_markers(self.project())
+        } else {
+            Vec::new()
+        };
+        let (mut depth, top) = (markers, Vec::new());
         depth.extend(self.missing_model_boxes());
         depth.extend(self.extra.0.iter().copied());
         let mut top = top;
