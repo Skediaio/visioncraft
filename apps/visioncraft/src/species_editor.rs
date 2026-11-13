@@ -70,7 +70,9 @@ impl SpeciesEditor {
 
     pub fn close(&mut self, s: &mut Studio) {
         self.editing = None;
-        s.species_preview = None;
+        if let Some((sp, _)) = s.species_preview.take() {
+            s.scene.flora.retire(&sp.id);
+        }
         s.force_sync();
     }
 
@@ -85,6 +87,10 @@ impl SpeciesEditor {
         }
         self.shown = e.serial;
         let id = format!("species-preview-{}", e.serial);
+        // The plant of the last change is generated anew under the new id: free the old one.
+        if let Some((old, _)) = &s.species_preview {
+            s.scene.flora.retire(&old.id);
+        }
         let p = s.camera.pivot;
         let y = s.scene.floor_below(p.x, p.y + 50.0, p.z).unwrap_or(0.0);
         s.species_preview = Some((

@@ -132,6 +132,8 @@ pub struct Flora {
     bakes: Vec<(String, u32, u32)>,
     /// Copies with their foliage re-tinted: (species, class, variant, colour bits).
     tinted: HashMap<(String, u32, u32, [u32; 3]), Vec<Part>>,
+    /// Species no longer drawn, freed after a few pumps (the scene drops its items first).
+    retired: Vec<(String, u8)>,
     /// Counts finished generations, so generators know to rebuild.
     pub rev: u64,
 }
@@ -251,9 +253,62 @@ impl Flora {
         self.queue.len() + self.bakes.len()
     }
 
+    /// Frees species `id` (a species editor preview that changed) once nothing draws it.
+    pub fn retire(&mut self, id: &str) {
+        self.queue.retain(|w| w.id != id);
+        self.bakes.retain(|b| b.0 != id);
+        self.retired.push((id.to_string(), 3));
+    }
+
+    fn free_retired(&mut self, r: &mut Renderer) {
+        for e in &mut self.retired {
+            e.1 = e.1.saturating_sub(1);
+        }
+        let due: Vec<String> = self
+            .retired
+            .iter()
+            .filter(|e| e.1 == 0)
+            .map(|e| e.0.clone())
+            .collect();
+        self.retired.retain(|e| e.1 > 0);
+        for id in due {
+            let keys: Vec<(String, u32)> =
+                self.classes.keys().filter(|k| k.0 == id).cloned().collect();
+            for k in keys {
+                for v in self.classes.remove(&k).unwrap_or_default() {
+                    let mut mats: Vec<MaterialId> = Vec::new();
+                    for (m, mat, _) in v.parts {
+                        r.remove_mesh(m);
+                        if !mats.contains(&mat) {
+                            mats.push(mat);
+                        }
+                    }
+                    mats.into_iter().for_each(|m| r.remove_material(m));
+                    if let Some((_, imp)) = v.baked {
+                        r.remove_impostor(imp);
+                    }
+                }
+            }
+            self.tinted.retain(|k, _| k.0 != id);
+            if let Some(t) = self.textures.remove(&id) {
+                for tex in [t.atlas, t.bark, t.bark_normal] {
+                    r.remove_texture(tex);
+                }
+            }
+        }
+    }
+
+    /// How many species (with their seasons) are generated and kept.
+    pub fn kept(&self) -> usize {
+        self.classes.len()
+    }
+
     /// One step: the textures of the first wanted species, or its meshes. True when something finished.
     #[allow(clippy::map_entry)] // the textures are generated between the check and the insert
     pub fn pump(&mut self, r: &mut Renderer) -> bool {
+        if !self.retired.is_empty() {
+            self.free_retired(r);
+        }
         let Some(w) = self.queue.first() else {
             return self.bake_one(r);
         };
