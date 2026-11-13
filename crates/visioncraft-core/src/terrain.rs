@@ -524,6 +524,30 @@ impl Terrain {
         }
     }
 
+    /// Height at world `(x, z)` on the triangles the terrain is drawn with (each cell split along
+    /// its (0,0)-(1,1) diagonal), not the bilinear [`Terrain::height_at`]; `None` outside.
+    pub fn surface_height(&self, x: f32, z: f32) -> Option<f32> {
+        let (u, v) = (
+            (x - self.origin[0]) / self.cell_m,
+            (z - self.origin[1]) / self.cell_m,
+        );
+        if !(u >= 0.0 && v >= 0.0 && u <= self.width as f32 && v <= self.depth as f32) {
+            return None;
+        }
+        let (ix, iz) = (
+            (u.floor() as i64).min(i64::from(self.width) - 1),
+            (v.floor() as i64).min(i64::from(self.depth) - 1),
+        );
+        let (fx, fz) = (u - ix as f32, v - iz as f32);
+        let h = |dx, dz| self.height_clamped(ix + dx, iz + dz);
+        // Above the diagonal (fz > fx): corners (0,0), (0,1), (1,1); below: (0,0), (1,1), (1,0).
+        Some(if fz >= fx {
+            h(0, 0) + (h(0, 1) - h(0, 0)) * fz + (h(1, 1) - h(0, 1)) * fx
+        } else {
+            h(0, 0) + (h(1, 0) - h(0, 0)) * fx + (h(1, 1) - h(1, 0)) * fz
+        })
+    }
+
     /// The two triangles of a cell, split along the diagonal from corner (0,0) to (1,1).
     fn cell_triangles(&self, ix: u32, iz: u32) -> [[[f32; 3]; 3]; 2] {
         let v = |dx, dz| {

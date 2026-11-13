@@ -835,3 +835,150 @@ mod stacking_tests {
         assert_eq!(footing(&rect(2.0, 0.0, 10.0, 5.0), &|_, _| None), 0.0);
     }
 }
+
+/// Like [`shape_mesh_on`], cut along the terrain's own triangles: every piece of a draped area lies
+/// in one terrain triangle and its corners on that triangle's plane, so the surface runs exactly
+/// `elevation` above the ground the terrain draws, over hill edges and crests too. Areas without
+/// `drape` and extrusions are as [`shape_mesh`] makes them.
+pub fn shape_mesh_on_terrain(
+    shape: &Shape,
+    terrain: &crate::Terrain,
+) -> Result<ImportedModel, ShapeError> {
+    let Shape::Area(a) = shape else {
+        return shape_mesh(shape);
+    };
+    if !a.drape {
+        return shape_mesh(shape);
+    }
+    let flat = shape_mesh(shape)?;
+    let cell = terrain.cell_m;
+    let [ox, oz] = terrain.origin;
+    // Grid coordinates: cell edges at whole u and v, the cells' (0,0)-(1,1) diagonals at whole u - v.
+    let to_uv = |p: P2| [(p[0] - ox) / cell, (p[1] - oz) / cell];
+    let mut b = Builder {
+        model: ImportedModel::default(),
+        triangles: vec![Vec::new()],
+    };
+    for t in &flat.triangles {
+        let tri: Vec<P2> = t
+            .iter()
+            .map(|&i| to_uv([flat.positions[i as usize][0], flat.positions[i as usize][2]]))
+            .collect();
+        let mut pieces = vec![tri];
+        for dir in [[1.0, 0.0], [0.0, 1.0], [1.0, -1.0]] {
+            pieces = pieces.into_iter().flat_map(|p| slice(p, dir)).collect();
+        }
+        for piece in pieces {
+            let corner = |q: P2| {
+                let (x, z) = (ox + q[0] * cell, oz + q[1] * cell);
+                [
+                    x,
+                    terrain.surface_height(x, z).unwrap_or(0.0) + a.elevation,
+                    z,
+                ]
+            };
+            let c: Vec<[f32; 3]> = piece.iter().map(|&q| corner(q)).collect();
+            for k in 1..c.len().saturating_sub(1) {
+                b.tri(0, [c[0], c[k], c[k + 1]], [0.0, 1.0, 0.0]);
+            }
+        }
+    }
+    Ok(b.finish(&a.id, &a.name, vec![format!("{}:top", a.id)]))
+}
+
+/// Cuts a convex polygon along the lines `dir . p = k` for every whole `k` across it.
+fn slice(poly: Vec<P2>, dir: P2) -> Vec<Vec<P2>> {
+    let d = |p: &P2| dir[0] * p[0] + dir[1] * p[1];
+    let (lo, hi) = poly
+        .iter()
+        .map(d)
+        .fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), v| {
+            (a.min(v), b.max(v))
+        });
+    let mut out = Vec::new();
+    let mut rest = poly;
+    let mut k = lo.floor() + 1.0;
+    while k < hi - 1e-5 {
+        if k > lo + 1e-5 {
+            let (below, above) = cut(&rest, dir, k);
+            if below.len() >= 3 {
+                out.push(below);
+            }
+            rest = above;
+        }
+        k += 1.0;
+    }
+    if rest.len() >= 3 {
+        out.push(rest);
+    }
+    out
+}
+
+/// The parts of a convex polygon below and above the line `dir . p = k`.
+fn cut(poly: &[P2], dir: P2, k: f32) -> (Vec<P2>, Vec<P2>) {
+    let d = |p: &P2| dir[0] * p[0] + dir[1] * p[1] - k;
+    let (mut below, mut above) = (Vec::new(), Vec::new());
+    for i in 0..poly.len() {
+        let (p, q) = (poly[i], poly[(i + 1) % poly.len()]);
+        let (dp, dq) = (d(&p), d(&q));
+        if dp <= 0.0 {
+            below.push(p);
+        }
+        if dp >= 0.0 {
+            above.push(p);
+        }
+        if (dp < 0.0 && dq > 0.0) || (dp > 0.0 && dq < 0.0) {
+            let t = dp / (dp - dq);
+            let x = [p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t];
+            below.push(x);
+            above.push(x);
+        }
+    }
+    (below, above)
+}
+
+#[cfg(test)]
+mod hill_tests {
+    use super::*;
+
+    /// A ridge 3 m high with steep flanks: a lawn over it must stay `elevation` above the
+    /// terrain's own surface everywhere, crest and foot included.
+    #[test]
+    fn a_draped_area_does_not_cut_through_a_hill_edge() {
+        let mut t = crate::Terrain::flat([0.0, 0.0], 20.0, 12.0, 0.5, "lawn").unwrap();
+        let w = t.width as usize + 1;
+        for (i, h) in t.heights.iter_mut().enumerate() {
+            let x = (i % w) as f32 * 0.5;
+            *h = (3.0 - 1.7 * (x - 10.2).abs()).max(0.0);
+        }
+        let a = Area {
+            id: "S1".into(),
+            name: "Lawn".into(),
+            layer: "shapes".into(),
+            outline: vec![[0.3, 0.2], [19.7, 0.9], [19.1, 11.6], [0.6, 11.3]],
+            elevation: AREA_LIFT_M,
+            drape: true,
+            extensions: Default::default(),
+        };
+        let m = shape_mesh_on_terrain(&Shape::Area(a), &t).unwrap();
+        assert!(m.triangles.len() > 500);
+        let mut worst = f32::INFINITY;
+        for tri in &m.triangles {
+            let [p, q, r] = tri.map(|i| m.positions[i as usize]);
+            for w in [
+                [0.5, 0.5, 0.0],
+                [0.0, 0.5, 0.5],
+                [0.5, 0.0, 0.5],
+                [1.0 / 3.0; 3],
+            ] {
+                let at = |k: usize| w[0] * p[k] + w[1] * q[k] + w[2] * r[k];
+                let ground = t.surface_height(at(0), at(2)).unwrap();
+                worst = worst.min(at(1) - ground);
+            }
+        }
+        assert!(
+            (worst - AREA_LIFT_M).abs() < 1e-3,
+            "the lawn runs {worst} m over the terrain's surface somewhere"
+        );
+    }
+}
