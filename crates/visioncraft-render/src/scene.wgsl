@@ -814,6 +814,7 @@ const GROUND_RINGS: u32 = 48u;
 const GROUND_SEGMENTS: u32 = 64u;
 const GROUND_GROWTH: f32 = 1.2716; // 0.5 m * 1.2716^47 = 40 km
 const GROUND_DEPTH: f32 = 0.999999;
+const EYE_SLOPE_NEAR: f32 = 1.7 / 40.0; // where the horizon fade begins
 
 @vertex
 fn vs_ground(@builtin(vertex_index) vi: u32) -> Varying {
@@ -838,10 +839,13 @@ fn vs_ground(@builtin(vertex_index) vi: u32) -> Varying {
     return out;
 }
 
-// Past ~40 m the ground fades into the colour the sky has
-// just above the horizon (by day, at dusk and at night alike), so there is
-// never a line between a dark field and the sky, haze or no haze. A plan or
-// elevation view has no horizon: the ground stays as it is.
+// Close to the horizon the ground fades into the colour the sky has just
+// above it (by day, at dusk and at night alike), so there is never a line
+// between a dark field and the sky, haze or no haze. The fade follows the
+// angle below the horizon, not the distance: from eye height it spans what
+// 40 m to 2 km used to, from an overview 100-250 m up the ground stays
+// ground for kilometres. A plan or elevation view has no horizon: the ground
+// stays as it is.
 @fragment
 fn fs_ground(in: Varying) -> @location(0) vec4<f32> {
     let c = shade(in, true, false).color;
@@ -857,9 +861,10 @@ fn fs_ground(in: Varying) -> @location(0) vec4<f32> {
     let ray = p.xyz / p.w - g.camera.xyz;
     let flat = vec3<f32>(ray.x, 0.0, ray.z);
     let horizon = fog_inscatter(flat / max(length(flat), 1e-6), 1.0);
-    // Over log distance from 40 m to 2 km: seen from eye height that spans a
-    // few degrees below the horizon, wide enough not to read as a line.
-    let fade = smoothstep(0.0, 1.0, log2(max(dist, 1.0) / 40.0) / log2(2000.0 / 40.0));
+    // Over the slope below the horizon that eye height (1.7 m) sees from
+    // 40 m to 2 km: a few degrees, wide enough not to read as a line.
+    let slope = max(-ray.y, 0.0) / max(length(flat), 1e-6);
+    let fade = smoothstep(0.0, 1.0, log2(EYE_SLOPE_NEAR / max(slope, 1e-7)) / log2(2000.0 / 40.0));
     // Fully faded, take the horizon as is: with MSAA a pixel on the far rim
     // shades at its centre, which may lie past the horizon, where the
     // interpolated position (and so the shading) runs off to huge values
