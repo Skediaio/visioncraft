@@ -29,6 +29,36 @@ pub struct Thumbs {
 }
 
 /// Draws a library image at `rect` (a grey tile while it loads); asks for it only if `visible`.
+/// The catalogue's light fixtures (assets that carry a light) as named tiles; returns the one
+/// clicked.
+pub fn fixtures(ui: &mut egui::Ui, cx: &mut Cx) -> Option<String> {
+    let catalog = cx.s.scene.library.catalog.clone()?;
+    let mut picked = None;
+    ui.horizontal_wrapped(|ui| {
+        for a in catalog.assets.iter().filter(|a| a.light.is_some()) {
+            let (rect, resp) = ui.allocate_exact_size(Vec2::new(54.0, 66.0), Sense::click());
+            let tile = egui::Rect::from_min_size(rect.min, Vec2::splat(54.0));
+            let vis = ui.is_rect_visible(rect);
+            thumb(ui, cx, &a.thumbnail, tile, vis, 0.0);
+            if vis {
+                let mut job = egui::text::LayoutJob::simple_singleline(
+                    a.name.clone(),
+                    egui::FontId::proportional(9.5),
+                    ui.visuals().text_color(),
+                );
+                job.wrap = egui::text::TextWrapping::truncate_at_width(56.0);
+                let galley = ui.painter().layout_job(job);
+                let at = egui::pos2(tile.center().x - galley.size().x / 2.0, tile.max.y + 1.0);
+                ui.painter().galley(at, galley, ui.visuals().text_color());
+            }
+            if resp.on_hover_text(&a.name).clicked() {
+                picked = Some(a.id.clone());
+            }
+        }
+    });
+    picked
+}
+
 pub fn thumb(
     ui: &egui::Ui,
     cx: &mut Cx,

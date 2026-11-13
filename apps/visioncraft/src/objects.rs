@@ -41,9 +41,20 @@ pub struct ObjectsState {
     pub species: crate::species_editor::SpeciesEditor,
 }
 
+/// A species' name for `month`: "in bloom" only in its bloom months, when the plant shows it
+/// (a name that promises blossom all year does not).
+pub(crate) fn species_label(s: &flora::Species, month: u8) -> String {
+    let name = s.common_name.trim_end_matches(" (in blossom)");
+    if s.bloom_months.contains(&month) {
+        format!("{name} · {}", t::IN_BLOOM_NOW)
+    } else {
+        name.to_string()
+    }
+}
+
 pub(crate) fn display_name(cx: &Cx, id: &str) -> String {
     if let Some(s) = id.strip_prefix("flora:").and_then(flora::Species::by_id) {
-        return s.common_name.to_string();
+        return species_label(s, cx.s.project().time.month as u8);
     }
     if let Some(c) = cx.s.project().species.iter().find(|c| c.id == id) {
         return c.name.clone();
@@ -137,7 +148,11 @@ impl ObjectsState {
                     }
                     let row = ui.horizontal(|ui| {
                         let r = ui
-                            .button(format!("{}  ·  {:.1} m", s.common_name, s.mature_height_m))
+                            .button(format!(
+                                "{}  ·  {:.1} m",
+                                species_label(s, month),
+                                s.mature_height_m
+                            ))
                             .on_hover_text(format!(
                                 "{}\n{:.1} × {:.1} m, {}{}",
                                 s.botanical_name,
@@ -178,6 +193,20 @@ impl ObjectsState {
     pub fn panel(&mut self, ui: &mut egui::Ui, cx: &mut Cx) {
         self.species.window(cx.ctx, cx);
         if self.tools.lights {
+            // Fixtures first (placed like any object, their light comes with them), bare lights
+            // second.
+            ui.label(egui::RichText::new(t::LIGHT_FIXTURES).strong());
+            if let Some(id) = crate::library_ui::fixtures(ui, cx) {
+                self.tools.set_tool(cx, crate::planting_tools::Tool::Single);
+                self.tools.form.palette = vec![visioncraft_core::planting::Weighted {
+                    asset: id,
+                    weight: 1.0,
+                }];
+                self.tools.form.spin = false;
+                return;
+            }
+            ui.separator();
+            ui.label(egui::RichText::new(t::BARE_LIGHTS).strong());
             self.library.lights.panel(ui, cx);
             ui.separator();
             self.tools.tool_row(ui, cx);
@@ -235,6 +264,22 @@ mod tests {
                 .iter()
                 .sum::<u32>(),
             100
+        );
+    }
+}
+
+#[cfg(test)]
+mod label_tests {
+    #[test]
+    fn in_bloom_only_in_bloom_months() {
+        let cherry = visioncraft_flora::Species::by_id("prunus-serrulata").expect("cherry");
+        let bloom = cherry.bloom_months[0];
+        let off = (1..=12).find(|m| !cherry.bloom_months.contains(m)).unwrap();
+        assert!(super::species_label(cherry, bloom).ends_with("in bloom"));
+        let plain = super::species_label(cherry, off);
+        assert!(
+            !plain.contains("blossom") && !plain.contains("bloom"),
+            "{plain}"
         );
     }
 }

@@ -70,6 +70,9 @@ pub struct Studio {
     pub show_people: bool,
     pub placing_person: bool,
     pub lights_on: bool,
+    /// How many lights the project had last frame (`None` before the first), so the first one
+    /// placed switches the lights on.
+    pub lights_seen: Option<usize>,
     /// The exposure (EV) and sun elevation of the last frame, for the measurements.
     pub ev_used: (f32, f32),
     /// The lights' markers show while the Lights tool is open.
@@ -234,6 +237,7 @@ impl Studio {
             show_people: true,
             placing_person: false,
             lights_on: false,
+            lights_seen: None,
             ev_used: (0.0, 0.0),
             light_markers: false,
             suggest_lights: false,

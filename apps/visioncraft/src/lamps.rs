@@ -103,6 +103,12 @@ pub fn reconcile(cx: &mut Cx) {
     for e in cx.s.reconcile_lamps() {
         cx.toasts.error(e);
     }
+    // The first light of a project switches the lights on: whoever places a lamp wants to see it.
+    let n = cx.s.project().lights.len();
+    if cx.s.lights_seen == Some(0) && n > 0 {
+        cx.s.lights_on = true;
+    }
+    cx.s.lights_seen = Some(n);
 }
 
 // ---- the Lights tool ----
