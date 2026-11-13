@@ -91,6 +91,10 @@ pub struct SplineMass {
     pub scale_max: f32,
     pub random_rotation: bool,
     pub seed: u64,
+    /// Straight segments between the points (a hedge along a plot's edges) instead of a smooth
+    /// curve through them.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub straight: bool,
 }
 
 /// Points inside a polygon on a jittered grid anchored at the world origin: a point depends only
@@ -613,8 +617,9 @@ fn catmull_rom(p: [[f32; 2]; 4], t: f32) -> [f32; 2] {
 
 /// The curve through `points` as a dense polyline (a closed curve ends where it began) with the
 /// distance along it at every vertex.
-fn spline_polyline(points: &[[f32; 2]], closed: bool) -> (Vec<[f32; 2]>, Vec<f32>) {
-    const STEPS: usize = 16;
+fn spline_polyline(points: &[[f32; 2]], closed: bool, straight: bool) -> (Vec<[f32; 2]>, Vec<f32>) {
+    // Straight: one step per segment, the points themselves.
+    let steps: usize = if straight { 1 } else { 16 };
     let n = points.len();
     let at = |i: isize| {
         if closed {
@@ -624,12 +629,12 @@ fn spline_polyline(points: &[[f32; 2]], closed: bool) -> (Vec<[f32; 2]>, Vec<f32
         }
     };
     let segments = if closed { n } else { n - 1 };
-    let mut line = Vec::with_capacity(segments * STEPS + 1);
+    let mut line = Vec::with_capacity(segments * steps + 1);
     for s in 0..segments as isize {
-        for k in 0..STEPS {
+        for k in 0..steps {
             line.push(catmull_rom(
                 [at(s - 1), at(s), at(s + 1), at(s + 2)],
-                k as f32 / STEPS as f32,
+                k as f32 / steps as f32,
             ));
         }
     }
@@ -655,7 +660,7 @@ fn along_line(line: &[[f32; 2]], along: &[f32], s: f32) -> ([f32; 2], [f32; 2]) 
 }
 
 fn evaluate_spline(g: &SplineMass, ground: &dyn Fn(f32, f32) -> Option<f32>) -> Evaluation {
-    let (line, along) = spline_polyline(&g.points, g.closed);
+    let (line, along) = spline_polyline(&g.points, g.closed, g.straight);
     let length = along[along.len() - 1];
     let (count, step) = match (g.spacing, g.closed) {
         (Spacing::Count(n), false) => (
@@ -1186,6 +1191,7 @@ mod tests {
             scale_max: 1.0,
             random_rotation: false,
             seed: 1,
+            straight: false,
         });
         let e = evaluate(&line, &flat);
         assert!(e.truncated && e.placements.len() == MAX_PLACEMENTS);
@@ -1206,7 +1212,30 @@ mod tests {
             scale_max: 1.5,
             random_rotation: false,
             seed: 3,
+            straight: false,
         }
+    }
+
+    #[test]
+    fn a_straight_line_keeps_to_its_corners() {
+        let mut g = spline(true, Spacing::Every(1.0));
+        g.spacing_jitter = 0.0;
+        g.straight = true;
+        // The 10 m square of `spline`: every item on its edges, 40 of them.
+        let e = evaluate(&Generator::SplineMass(g.clone()), &flat).placements;
+        assert_eq!(e.len(), 40);
+        assert!(e.iter().all(|p| {
+            let [x, _, z] = p.position;
+            let on = |v: f32| v.abs() < 1e-3 || (v - 10.0).abs() < 1e-3;
+            (on(x) || on(z)) && (-1e-3..=10.001).contains(&x) && (-1e-3..=10.001).contains(&z)
+        }));
+        // A curve through the same corners bulges outside the square.
+        g.straight = false;
+        let e = evaluate(&Generator::SplineMass(g), &flat).placements;
+        assert!(
+            e.iter()
+                .any(|p| p.position[0] < -0.1 || p.position[0] > 10.1)
+        );
     }
 
     #[test]

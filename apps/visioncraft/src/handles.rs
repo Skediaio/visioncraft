@@ -276,6 +276,7 @@ mod tests {
             scale_max: 1.0,
             random_rotation: false,
             seed: 1,
+            straight: false,
         });
         assert!(remove_point(&line, 0).is_none(), "a line keeps two points");
     }

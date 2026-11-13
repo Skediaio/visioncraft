@@ -130,6 +130,7 @@ pub(super) fn register(s: &mut Session) {
                 param("points", T::Outline, "Control points as [x, z] pairs in metres, at least 2.").required(),
                 param("spacing", T::Object, "{count: n} items (ends included on an open line) or {every: metres}.").required(),
                 param("closed", T::Boolean, "Join the last point back to the first.").default(json!(false)),
+                param("straight", T::Boolean, "Straight segments between the points instead of a smooth curve through them.").default(json!(false)),
                 param("spacing_jitter", T::Number, "0..1: how far an item slides along the line, as a fraction of the spacing.").default(json!(0)),
                 param("offset_m", T::Number, "Sideways shift, positive to the right of the direction of travel seen from above.").unit("m").default(json!(0)),
                 scale_min(),
@@ -414,6 +415,8 @@ fn add_spline(project: &mut Project, params: &Value) -> Result<Value, CommandErr
         random_rotation: bool,
         seed: Option<u64>,
         layer: Option<String>,
+        #[serde(default)]
+        straight: bool,
     }
     let p: P = parse(params)?;
     add(project, p.layer, |id, layer, seed| {
@@ -431,6 +434,7 @@ fn add_spline(project: &mut Project, params: &Value) -> Result<Value, CommandErr
             scale_max: p.scale_max,
             random_rotation: p.random_rotation,
             seed: p.seed.unwrap_or(seed),
+            straight: p.straight,
         })
     })
 }
@@ -654,7 +658,7 @@ fn brush_stroke(project: &mut Project, params: &Value) -> Result<Value, CommandE
 fn update(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
     let g = find(project, params)?;
     // Fields that are not written while empty can still be given.
-    let updated: Generator = merge_update(g, params, &["clip_outline"])?;
+    let updated: Generator = merge_update(g, params, &["clip_outline", "straight"])?;
     updated.validate().map_err(|e| bad(&e))?;
     let layer = updated.layer().to_string();
     *g = updated;
