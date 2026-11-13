@@ -170,3 +170,41 @@ fn check_fails_on_a_missing_file() {
     );
     std::fs::remove_dir_all(&out).unwrap();
 }
+
+#[test]
+fn dilation_fills_transparent_texels_with_the_colour_of_opaque_ones() {
+    let mut img = image::RgbaImage::from_pixel(8, 8, image::Rgba([0, 0, 0, 0]));
+    img.put_pixel(3, 3, image::Rgba([200, 100, 50, 255]));
+    let d = crate::scene::dilate(&img);
+    assert_eq!(d.get_pixel(5, 5).0, [200, 100, 50, 0]);
+    assert_eq!(d.get_pixel(3, 3).0, [200, 100, 50, 255]);
+}
+
+#[test]
+fn emitter_is_found_by_material_name_and_renamed() {
+    let mut m = cube_model();
+    let mut glass = m.meshes[0].clone();
+    glass.pos.iter_mut().for_each(|p| p[1] += 10.0);
+    glass.mat = 1;
+    m.meshes.push(glass);
+    m.mats[0].name = "lamp_x".into();
+    m.mats.push(crate::scene::Material {
+        name: "lamp_x_bulb".into(),
+        ..Default::default()
+    });
+    let e = crate::emit::find(&m, "lamp_x", false);
+    assert_eq!(e.mats, vec![1]);
+    assert!(e.offset[1] > 10.0);
+    crate::emit::apply(&mut m, &e.mats);
+    assert_eq!(m.mats[1].name, "lamp_x_bulb_emitter");
+    assert!(m.mats[1].emissive[0] > 0.0 && m.mats[0].emissive == [0.0; 3]);
+}
+
+#[test]
+fn a_simplification_that_loses_a_material_does_not_resemble_the_original() {
+    let m = cube_model();
+    let mut flat = m.clone();
+    flat.meshes[0].pos.iter_mut().for_each(|p| p[1] *= 0.5);
+    assert!(m.resembles(&m).is_ok());
+    assert!(flat.resembles(&m).is_err());
+}

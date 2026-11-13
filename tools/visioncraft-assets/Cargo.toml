@@ -16,7 +16,7 @@ clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ureq = "2"
-gltf = "1"
+gltf = { version = "1", features = ["KHR_materials_emissive_strength"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "hdr"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 md5 = "0.7"

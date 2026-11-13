@@ -100,6 +100,7 @@ pub fn write_glb(model: &Model, name: &str, max_px: u32) -> Result<Vec<u8>> {
     // (image pointer, role) -> texture index, so a shared image is embedded once.
     let mut tex_ids: HashMap<(usize, u8), usize> = HashMap::new();
     let mut materials = Vec::new();
+    let mut emissive_used = false;
     // Only materials a mesh uses are written.
     let mut used: Vec<usize> = model.meshes.iter().map(|m| m.mat).collect();
     used.sort_unstable();
@@ -112,7 +113,13 @@ pub fn write_glb(model: &Model, name: &str, max_px: u32) -> Result<Vec<u8>> {
             if let Some(&t) = tex_ids.get(&key) {
                 return Ok(Some(t));
             }
-            let small = fit(img, max_px);
+            // alpha-tested colour is PNG, which is big: half the size keeps the library small
+            let cap = if role == 0 && has_alpha(img) {
+                max_px / 2
+            } else {
+                max_px
+            };
+            let small = fit(img, cap);
             let (bytes, mime) = match role {
                 0 if has_alpha(&small) => (
                     png(&DynamicImage::ImageRgba8(small.to_rgba8()))?,
@@ -135,7 +142,13 @@ pub fn write_glb(model: &Model, name: &str, max_px: u32) -> Result<Vec<u8>> {
         if let Some(t) = orm {
             pbr["metallicRoughnessTexture"] = json!({"index": t});
         }
-        let mut mat = json!({"pbrMetallicRoughness": pbr, "doubleSided": m.double_sided});
+        let mut mat =
+            json!({"name": m.name, "pbrMetallicRoughness": pbr, "doubleSided": m.double_sided});
+        if m.emissive.iter().any(|&e| e > 0.0) {
+            mat["emissiveFactor"] = json!(m.emissive);
+            mat["extensions"] = json!({"KHR_materials_emissive_strength": {"emissiveStrength": m.emissive_strength}});
+            emissive_used = true;
+        }
         if let Some(t) = normal {
             mat["normalTexture"] = json!({"index": t});
         }
@@ -212,6 +225,9 @@ pub fn write_glb(model: &Model, name: &str, max_px: u32) -> Result<Vec<u8>> {
         "buffers": [{"byteLength": bin.data.len()}],
         "bufferViews": bin.views, "accessors": bin.accessors,
     });
+    if emissive_used {
+        doc["extensionsUsed"] = json!(["KHR_materials_emissive_strength"]);
+    }
     if !images.is_empty() {
         doc["images"] = images.into();
         doc["textures"] = textures.into();

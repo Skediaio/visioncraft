@@ -1214,6 +1214,18 @@
  },
  {
   "category": "grass",
+  "name": "Grass Bermuda 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/grass_bermuda_01",
+  "licence": "CC0-1.0",
+  "author": "Rico Cilliers",
+  "triangles": 223596,
+  "species": null,
+  "tags": [],
+  "why": "API categories: grass, nature, ground cover"
+ },
+ {
+  "category": "grass",
   "name": "Grass Medium 01",
   "source": "Poly Haven",
   "page_url": "https://polyhaven.com/a/grass_medium_01",
@@ -1275,6 +1287,21 @@
   "species": null,
   "tags": [],
   "why": "API categories: lighting"
+ },
+ {
+  "category": "other",
+  "name": "Hanging Picture Frame 02",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/hanging_picture_frame_02",
+  "licence": "CC0-1.0",
+  "author": "James Ray Cock",
+  "triangles": 3678,
+  "species": null,
+  "tags": [
+   "decor",
+   "frame"
+  ],
+  "why": "API categories: decorative, wall decoration"
  },
  {
   "category": "other",
@@ -2152,6 +2179,18 @@
  },
  {
   "category": "tree",
+  "name": "Searsia Burchellii",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/searsia_burchellii",
+  "licence": "CC0-1.0",
+  "author": "James Ray Cock, Jenelle van Heerden",
+  "triangles": 1427042,
+  "species": null,
+  "tags": [],
+  "why": "API categories: nature, trees"
+ },
+ {
+  "category": "tree",
   "name": "Searsia Lucida",
   "source": "Poly Haven",
   "page_url": "https://polyhaven.com/a/searsia_lucida",
@@ -2306,6 +2345,36 @@
   "triangles": 2372,
   "species": null,
   "tags": [],
+  "why": "API categories: decorative"
+ },
+ {
+  "category": "other",
+  "name": "Standing Picture Frame 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/standing_picture_frame_01",
+  "licence": "CC0-1.0",
+  "author": "James Ray Cock",
+  "triangles": 1634,
+  "species": null,
+  "tags": [
+   "decor",
+   "frame"
+  ],
+  "why": "API categories: decorative"
+ },
+ {
+  "category": "other",
+  "name": "Standing Picture Frame 02",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/standing_picture_frame_02",
+  "licence": "CC0-1.0",
+  "author": "James Ray Cock",
+  "triangles": 2986,
+  "species": null,
+  "tags": [
+   "decor",
+   "frame"
+  ],
   "why": "API categories: decorative"
  },
  {
@@ -2584,6 +2653,18 @@
   "species": null,
   "tags": [],
   "why": "API categories: containers, decorative"
+ },
+ {
+  "category": "shrub",
+  "name": "Wild Rooibos Bush",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/wild_rooibos_bush",
+  "licence": "CC0-1.0",
+  "author": "James Ray Cock, Jenelle van Heerden",
+  "triangles": 76521,
+  "species": null,
+  "tags": [],
+  "why": "API categories: nature, plants"
  },
  {
   "category": "other",

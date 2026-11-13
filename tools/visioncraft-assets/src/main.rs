@@ -2,6 +2,7 @@
 
 #![allow(clippy::needless_range_loop)] // vector maths reads better indexed
 
+mod emit;
 mod glb;
 mod ingest;
 mod library;
@@ -89,6 +90,14 @@ enum Cmd {
         #[arg(long)]
         to: PathBuf,
     },
+    /// Render every light fixture with a marker at its emitter offset, one PNG each.
+    Lightsheet {
+        #[arg(long, default_value = "assets")]
+        out: PathBuf,
+        /// Directory for the PNGs.
+        #[arg(long)]
+        to: PathBuf,
+    },
     /// Render the LODs of one asset side by side.
     Lodcmp {
         #[arg(long, default_value = "assets")]
@@ -141,6 +150,7 @@ fn main() -> Result<()> {
             list,
         } => net::add(&http, &source, &id, &category, &list),
         Cmd::Sheet { out, to } => library::sheet(&out, &to),
+        Cmd::Lightsheet { out, to } => library::lightsheet(&out, &to),
         Cmd::Lodcmp { out, id, to } => library::lodcmp(&out, &id, &to),
     }
 }

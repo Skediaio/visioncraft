@@ -322,6 +322,21 @@ fn fetch_one(c: &Candidate, cache: &Path, http: &Http) -> Result<usize> {
         for (rel, e) in g["include"].as_object().context("gltf has no include")? {
             get(e, Some(rel))?;
         }
+        // The cut-out of leaves and glass is a separate map the glTF does not list.
+        for (key, v) in files.as_object().context("files is not an object")? {
+            let k = key.to_lowercase();
+            if k.ends_with("alpha") || k.ends_with("opacity") {
+                let e = if v["1k"]["jpg"].is_object() {
+                    &v["1k"]["jpg"]
+                } else {
+                    &v["1k"]["png"]
+                };
+                if let Some(url) = e["url"].as_str() {
+                    let name = url.rsplit('/').next().unwrap_or_default();
+                    get(e, Some(&format!("textures/{name}")))?;
+                }
+            }
+        }
     }
     Ok(n)
 }

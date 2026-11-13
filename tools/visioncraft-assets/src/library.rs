@@ -228,6 +228,20 @@ pub fn sheet(out: &Path, to: &Path) -> Result<()> {
     save(&sheet, to)
 }
 
+/// One image per light fixture: lod0 with a marker where the catalogue puts the emitter.
+pub fn lightsheet(out: &Path, to: &Path) -> Result<()> {
+    let cat = Catalog::from_json_bytes(&fs::read(out.join("catalog.json"))?)?;
+    fs::create_dir_all(to)?;
+    for a in cat.assets.iter().filter(|a| a.light.is_some()) {
+        let spec = a.light.context("no light")?;
+        let m = read_glb(&fs::read(out.join(&a.lods[0].file))?)?;
+        println!("{}: offset {:?}", a.id, spec.offset_m);
+        let img = raster::render(&m, 384, Some(spec.offset_m));
+        img.save(to.join(format!("{}.png", a.id)))?;
+    }
+    Ok(())
+}
+
 /// lod0, lod1 and lod2 of one asset side by side, rendered from the GLBs on disk.
 pub fn lodcmp(out: &Path, id: &str, to: &Path) -> Result<()> {
     let cat = Catalog::from_json_bytes(&fs::read(out.join("catalog.json"))?)?;
@@ -240,7 +254,7 @@ pub fn lodcmp(out: &Path, id: &str, to: &Path) -> Result<()> {
     for (i, l) in a.lods.iter().enumerate() {
         let m = read_glb(&fs::read(out.join(&l.file))?)?;
         println!("{}: {} triangles", l.file, m.tris());
-        image::imageops::overlay(&mut img, &raster::render(&m, 512), i as i64 * 512, 0);
+        image::imageops::overlay(&mut img, &raster::render(&m, 512, None), i as i64 * 512, 0);
     }
     save(&img, to)
 }

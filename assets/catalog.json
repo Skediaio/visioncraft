@@ -783,7 +783,12 @@
         },
         "color_temperature_k": 2700.0,
         "lumens": 100.0,
-        "range_m": 3.0
+        "range_m": 3.0,
+        "offset_m": [
+          0.32160005,
+          0.7401594,
+          -0.0019396022
+        ]
       }
     },
     {
@@ -833,7 +838,12 @@
         },
         "color_temperature_k": 2700.0,
         "lumens": 100.0,
-        "range_m": 3.0
+        "range_m": 3.0,
+        "offset_m": [
+          0.00055148825,
+          0.06599617,
+          0.0019232524
+        ]
       }
     },
     {
@@ -1202,7 +1212,12 @@
         },
         "color_temperature_k": 2700.0,
         "lumens": 800.0,
-        "range_m": 10.0
+        "range_m": 10.0,
+        "offset_m": [
+          0.0052340077,
+          0.21594447,
+          0.00041019663
+        ]
       }
     },
     {
@@ -1849,7 +1864,12 @@
         },
         "color_temperature_k": 2700.0,
         "lumens": 800.0,
-        "range_m": 10.0
+        "range_m": 10.0,
+        "offset_m": [
+          0.0007818639,
+          0.35004312,
+          0.0014892966
+        ]
       }
     },
     {
@@ -1898,7 +1918,12 @@
         },
         "color_temperature_k": 2700.0,
         "lumens": 800.0,
-        "range_m": 10.0
+        "range_m": 10.0,
+        "offset_m": [
+          -0.00021369755,
+          0.2595686,
+          0.00017996132
+        ]
       }
     },
     {
@@ -1948,7 +1973,12 @@
         },
         "color_temperature_k": 2700.0,
         "lumens": 800.0,
-        "range_m": 10.0
+        "range_m": 10.0,
+        "offset_m": [
+          0.0,
+          0.28627628,
+          0.000105544925
+        ]
       }
     },
     {
@@ -2273,7 +2303,12 @@
         },
         "color_temperature_k": 2700.0,
         "lumens": 800.0,
-        "range_m": 10.0
+        "range_m": 10.0,
+        "offset_m": [
+          0.0002939865,
+          0.40982297,
+          0.00018320825
+        ]
       }
     },
     {
@@ -3527,7 +3562,12 @@
         },
         "color_temperature_k": 2700.0,
         "lumens": 400.0,
-        "range_m": 6.0
+        "range_m": 6.0,
+        "offset_m": [
+          0.012993807,
+          0.78379244,
+          -0.18695155
+        ]
       }
     },
     {
@@ -5035,18 +5075,18 @@
       "author": "Amal Kumar",
       "source_url": "https://polyhaven.com/a/football",
       "size_m": [
-        0.5088776,
+        0.22031747,
         0.2218847,
-        0.22215733
+        0.22058685
       ],
       "lods": [
         {
           "file": "models/football/lod0.glb",
-          "max_distance_m": 6.106531
+          "max_distance_m": 2.6626163
         },
         {
           "file": "models/football/lod1.glb",
-          "max_distance_m": 20.355103
+          "max_distance_m": 8.875388
         },
         {
           "file": "models/football/lod2.glb",
@@ -5449,6 +5489,185 @@
         }
       ],
       "thumbnail": "models/gothiccommode_01/thumb.png",
+      "plant": null,
+      "light": null
+    },
+    {
+      "id": "grass_bermuda_01",
+      "name": "Grass Bermuda 01",
+      "category": "grass",
+      "tags": [
+        "botany",
+        "field",
+        "foliage",
+        "grass",
+        "ground cover",
+        "natural",
+        "nature",
+        "outdoor",
+        "plant",
+        "shrub",
+        "small"
+      ],
+      "license": "CC0-1.0",
+      "origin": "BuiltIn",
+      "author": "Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/grass_bermuda_01",
+      "size_m": [
+        0.067738,
+        0.02474113,
+        0.084310144
+      ],
+      "lods": [
+        {
+          "file": "models/grass_bermuda_01/lod0.glb",
+          "max_distance_m": 1.0117217
+        },
+        {
+          "file": "models/grass_bermuda_01/lod0.glb",
+          "max_distance_m": 3.3724058
+        },
+        {
+          "file": "models/grass_bermuda_01/lod0.glb",
+          "max_distance_m": 3.4028235e+38
+        }
+      ],
+      "thumbnail": "models/grass_bermuda_01/thumb.png",
+      "plant": null,
+      "light": null
+    },
+    {
+      "id": "grass_bermuda_01_b",
+      "name": "Grass Bermuda 01 B",
+      "category": "grass",
+      "tags": [
+        "botany",
+        "field",
+        "foliage",
+        "grass",
+        "ground cover",
+        "natural",
+        "nature",
+        "outdoor",
+        "plant",
+        "shrub",
+        "small",
+        "variant"
+      ],
+      "license": "CC0-1.0",
+      "origin": "BuiltIn",
+      "author": "Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/grass_bermuda_01",
+      "size_m": [
+        0.04393804,
+        0.043633755,
+        0.069253266
+      ],
+      "lods": [
+        {
+          "file": "models/grass_bermuda_01_b/lod0.glb",
+          "max_distance_m": 0.8310392
+        },
+        {
+          "file": "models/grass_bermuda_01_b/lod0.glb",
+          "max_distance_m": 2.7701306
+        },
+        {
+          "file": "models/grass_bermuda_01_b/lod0.glb",
+          "max_distance_m": 3.4028235e+38
+        }
+      ],
+      "thumbnail": "models/grass_bermuda_01_b/thumb.png",
+      "plant": null,
+      "light": null
+    },
+    {
+      "id": "grass_bermuda_01_c",
+      "name": "Grass Bermuda 01 C",
+      "category": "grass",
+      "tags": [
+        "botany",
+        "field",
+        "foliage",
+        "grass",
+        "ground cover",
+        "natural",
+        "nature",
+        "outdoor",
+        "plant",
+        "shrub",
+        "small",
+        "variant"
+      ],
+      "license": "CC0-1.0",
+      "origin": "BuiltIn",
+      "author": "Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/grass_bermuda_01",
+      "size_m": [
+        0.03851223,
+        0.09775002,
+        0.028567333
+      ],
+      "lods": [
+        {
+          "file": "models/grass_bermuda_01_c/lod0.glb",
+          "max_distance_m": 1.1730003
+        },
+        {
+          "file": "models/grass_bermuda_01_c/lod0.glb",
+          "max_distance_m": 3.9100008
+        },
+        {
+          "file": "models/grass_bermuda_01_c/lod0.glb",
+          "max_distance_m": 3.4028235e+38
+        }
+      ],
+      "thumbnail": "models/grass_bermuda_01_c/thumb.png",
+      "plant": null,
+      "light": null
+    },
+    {
+      "id": "grass_bermuda_01_d",
+      "name": "Grass Bermuda 01 D",
+      "category": "grass",
+      "tags": [
+        "botany",
+        "field",
+        "foliage",
+        "grass",
+        "ground cover",
+        "natural",
+        "nature",
+        "outdoor",
+        "plant",
+        "shrub",
+        "small",
+        "variant"
+      ],
+      "license": "CC0-1.0",
+      "origin": "BuiltIn",
+      "author": "Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/grass_bermuda_01",
+      "size_m": [
+        0.06783503,
+        0.15088645,
+        0.045581207
+      ],
+      "lods": [
+        {
+          "file": "models/grass_bermuda_01_d/lod0.glb",
+          "max_distance_m": 1.8106374
+        },
+        {
+          "file": "models/grass_bermuda_01_d/lod0.glb",
+          "max_distance_m": 6.0354576
+        },
+        {
+          "file": "models/grass_bermuda_01_d/lod0.glb",
+          "max_distance_m": 3.4028235e+38
+        }
+      ],
+      "thumbnail": "models/grass_bermuda_01_d/thumb.png",
       "plant": null,
       "light": null
     },
@@ -5994,8 +6213,55 @@
         },
         "color_temperature_k": 2700.0,
         "lumens": 800.0,
-        "range_m": 10.0
+        "range_m": 10.0,
+        "offset_m": [
+          -6.7055225e-8,
+          0.15691328,
+          1.4901161e-7
+        ]
       }
+    },
+    {
+      "id": "hanging_picture_frame_02",
+      "name": "Hanging Picture Frame 02",
+      "category": "other",
+      "tags": [
+        "art",
+        "decor",
+        "decorative",
+        "frame",
+        "old",
+        "other",
+        "painting",
+        "wall decoration",
+        "wood"
+      ],
+      "license": "CC0-1.0",
+      "origin": "BuiltIn",
+      "author": "James Ray Cock",
+      "source_url": "https://polyhaven.com/a/hanging_picture_frame_02",
+      "size_m": [
+        0.7518134,
+        0.49999997,
+        0.033075146
+      ],
+      "lods": [
+        {
+          "file": "models/hanging_picture_frame_02/lod0.glb",
+          "max_distance_m": 9.021761
+        },
+        {
+          "file": "models/hanging_picture_frame_02/lod1.glb",
+          "max_distance_m": 30.072536
+        },
+        {
+          "file": "models/hanging_picture_frame_02/lod2.glb",
+          "max_distance_m": 3.4028235e+38
+        }
+      ],
+      "thumbnail": "models/hanging_picture_frame_02/thumb.png",
+      "plant": null,
+      "light": null
     },
     {
       "id": "hanging_picture_frame_03",
@@ -6225,7 +6491,12 @@
         },
         "color_temperature_k": 2700.0,
         "lumens": 400.0,
-        "range_m": 6.0
+        "range_m": 6.0,
+        "offset_m": [
+          2.0489097e-8,
+          0.2996084,
+          0.057497576
+        ]
       }
     },
     {
@@ -6273,7 +6544,12 @@
         },
         "color_temperature_k": 2700.0,
         "lumens": 500.0,
-        "range_m": 8.0
+        "range_m": 8.0,
+        "offset_m": [
+          -0.0000061690807,
+          0.21495324,
+          0.0059013925
+        ]
       }
     },
     {
@@ -6324,7 +6600,12 @@
         },
         "color_temperature_k": 2700.0,
         "lumens": 500.0,
-        "range_m": 8.0
+        "range_m": 8.0,
+        "offset_m": [
+          -0.0019401833,
+          0.126538,
+          0.058700144
+        ]
       }
     },
     {
@@ -6425,7 +6706,12 @@
         },
         "color_temperature_k": 2700.0,
         "lumens": 400.0,
-        "range_m": 6.0
+        "range_m": 6.0,
+        "offset_m": [
+          -0.00007530302,
+          0.14699712,
+          0.000050980598
+        ]
       }
     },
     {
@@ -6475,7 +6761,12 @@
         },
         "color_temperature_k": 2700.0,
         "lumens": 800.0,
-        "range_m": 10.0
+        "range_m": 10.0,
+        "offset_m": [
+          -0.0036947746,
+          0.34935474,
+          -0.0010146517
+        ]
       }
     },
     {
@@ -6837,7 +7128,12 @@
         },
         "color_temperature_k": 2700.0,
         "lumens": 800.0,
-        "range_m": 10.0
+        "range_m": 10.0,
+        "offset_m": [
+          9.685755e-8,
+          0.19864027,
+          4.656613e-8
+        ]
       }
     },
     {
@@ -10065,6 +10361,49 @@
       "light": null
     },
     {
+      "id": "searsia_burchellii",
+      "name": "Searsia Burchellii",
+      "category": "tree",
+      "tags": [
+        "bush",
+        "dry",
+        "karoo",
+        "large",
+        "nature",
+        "shrub",
+        "simplified",
+        "south africa",
+        "tree",
+        "trees"
+      ],
+      "license": "CC0-1.0",
+      "origin": "BuiltIn",
+      "author": "James Ray Cock, Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/searsia_burchellii",
+      "size_m": [
+        8.192494,
+        3.1587853,
+        4.950275
+      ],
+      "lods": [
+        {
+          "file": "models/searsia_burchellii/lod0.glb",
+          "max_distance_m": 98.30994
+        },
+        {
+          "file": "models/searsia_burchellii/lod1.glb",
+          "max_distance_m": 327.69977
+        },
+        {
+          "file": "models/searsia_burchellii/lod2.glb",
+          "max_distance_m": 3.4028235e+38
+        }
+      ],
+      "thumbnail": "models/searsia_burchellii/thumb.png",
+      "plant": null,
+      "light": null
+    },
+    {
       "id": "searsia_lucida",
       "name": "Searsia Lucida",
       "category": "tree",
@@ -10291,7 +10630,12 @@
         },
         "color_temperature_k": 2700.0,
         "lumens": 500.0,
-        "range_m": 8.0
+        "range_m": 8.0,
+        "offset_m": [
+          0.0011829743,
+          0.19773452,
+          0.044978805
+        ]
       }
     },
     {
@@ -11298,6 +11642,91 @@
       "light": null
     },
     {
+      "id": "standing_picture_frame_01",
+      "name": "Standing Picture Frame 01",
+      "category": "other",
+      "tags": [
+        "art",
+        "clean",
+        "decor",
+        "decorative",
+        "frame",
+        "minimalist",
+        "modern",
+        "other",
+        "photo",
+        "simple"
+      ],
+      "license": "CC0-1.0",
+      "origin": "BuiltIn",
+      "author": "James Ray Cock",
+      "source_url": "https://polyhaven.com/a/standing_picture_frame_01",
+      "size_m": [
+        0.10027687,
+        0.24965811,
+        0.20079985
+      ],
+      "lods": [
+        {
+          "file": "models/standing_picture_frame_01/lod0.glb",
+          "max_distance_m": 2.9958973
+        },
+        {
+          "file": "models/standing_picture_frame_01/lod1.glb",
+          "max_distance_m": 9.986324
+        },
+        {
+          "file": "models/standing_picture_frame_01/lod2.glb",
+          "max_distance_m": 3.4028235e+38
+        }
+      ],
+      "thumbnail": "models/standing_picture_frame_01/thumb.png",
+      "plant": null,
+      "light": null
+    },
+    {
+      "id": "standing_picture_frame_02",
+      "name": "Standing Picture Frame 02",
+      "category": "other",
+      "tags": [
+        "art",
+        "decor",
+        "decorative",
+        "frame",
+        "old",
+        "other",
+        "painting",
+        "photo",
+        "wood"
+      ],
+      "license": "CC0-1.0",
+      "origin": "BuiltIn",
+      "author": "James Ray Cock",
+      "source_url": "https://polyhaven.com/a/standing_picture_frame_02",
+      "size_m": [
+        0.10228872,
+        0.26639253,
+        0.21689215
+      ],
+      "lods": [
+        {
+          "file": "models/standing_picture_frame_02/lod0.glb",
+          "max_distance_m": 3.1967103
+        },
+        {
+          "file": "models/standing_picture_frame_02/lod1.glb",
+          "max_distance_m": 10.655701
+        },
+        {
+          "file": "models/standing_picture_frame_02/lod2.glb",
+          "max_distance_m": 3.4028235e+38
+        }
+      ],
+      "thumbnail": "models/standing_picture_frame_02/thumb.png",
+      "plant": null,
+      "light": null
+    },
+    {
       "id": "stone_01",
       "name": "Stone 01",
       "category": "other",
@@ -11445,7 +11874,12 @@
         },
         "color_temperature_k": 2700.0,
         "lumens": 3000.0,
-        "range_m": 15.0
+        "range_m": 15.0,
+        "offset_m": [
+          0.000028470531,
+          3.263132,
+          4.0978193e-7
+        ]
       }
     },
     {
@@ -11505,7 +11939,12 @@
         },
         "color_temperature_k": 2700.0,
         "lumens": 3000.0,
-        "range_m": 15.0
+        "range_m": 15.0,
+        "offset_m": [
+          -4.1909516e-7,
+          1.0688188,
+          0.20903495
+        ]
       }
     },
     {
@@ -11974,7 +12413,12 @@
         },
         "color_temperature_k": 2700.0,
         "lumens": 100.0,
-        "range_m": 3.0
+        "range_m": 3.0,
+        "offset_m": [
+          2.9802322e-8,
+          0.4974059,
+          2.561137e-8
+        ]
       }
     },
     {
@@ -12446,6 +12890,173 @@
       "light": null
     },
     {
+      "id": "wild_rooibos_bush",
+      "name": "Wild Rooibos Bush",
+      "category": "shrub",
+      "tags": [
+        "desert",
+        "dried",
+        "dry",
+        "karoo",
+        "nature",
+        "plants",
+        "shrub",
+        "south africa"
+      ],
+      "license": "CC0-1.0",
+      "origin": "BuiltIn",
+      "author": "James Ray Cock, Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/wild_rooibos_bush",
+      "size_m": [
+        0.69657433,
+        0.53949434,
+        0.8434299
+      ],
+      "lods": [
+        {
+          "file": "models/wild_rooibos_bush/lod0.glb",
+          "max_distance_m": 10.121159
+        },
+        {
+          "file": "models/wild_rooibos_bush/lod1.glb",
+          "max_distance_m": 33.737198
+        },
+        {
+          "file": "models/wild_rooibos_bush/lod2.glb",
+          "max_distance_m": 3.4028235e+38
+        }
+      ],
+      "thumbnail": "models/wild_rooibos_bush/thumb.png",
+      "plant": null,
+      "light": null
+    },
+    {
+      "id": "wild_rooibos_bush_b",
+      "name": "Wild Rooibos Bush B",
+      "category": "shrub",
+      "tags": [
+        "desert",
+        "dried",
+        "dry",
+        "karoo",
+        "nature",
+        "plants",
+        "shrub",
+        "south africa",
+        "variant"
+      ],
+      "license": "CC0-1.0",
+      "origin": "BuiltIn",
+      "author": "James Ray Cock, Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/wild_rooibos_bush",
+      "size_m": [
+        0.52431905,
+        0.5412663,
+        0.47469503
+      ],
+      "lods": [
+        {
+          "file": "models/wild_rooibos_bush_b/lod0.glb",
+          "max_distance_m": 6.495196
+        },
+        {
+          "file": "models/wild_rooibos_bush_b/lod1.glb",
+          "max_distance_m": 21.650654
+        },
+        {
+          "file": "models/wild_rooibos_bush_b/lod2.glb",
+          "max_distance_m": 3.4028235e+38
+        }
+      ],
+      "thumbnail": "models/wild_rooibos_bush_b/thumb.png",
+      "plant": null,
+      "light": null
+    },
+    {
+      "id": "wild_rooibos_bush_c",
+      "name": "Wild Rooibos Bush C",
+      "category": "shrub",
+      "tags": [
+        "desert",
+        "dried",
+        "dry",
+        "karoo",
+        "nature",
+        "plants",
+        "shrub",
+        "south africa",
+        "variant"
+      ],
+      "license": "CC0-1.0",
+      "origin": "BuiltIn",
+      "author": "James Ray Cock, Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/wild_rooibos_bush",
+      "size_m": [
+        0.4253667,
+        0.44835135,
+        0.47210896
+      ],
+      "lods": [
+        {
+          "file": "models/wild_rooibos_bush_c/lod0.glb",
+          "max_distance_m": 5.6653075
+        },
+        {
+          "file": "models/wild_rooibos_bush_c/lod1.glb",
+          "max_distance_m": 18.884357
+        },
+        {
+          "file": "models/wild_rooibos_bush_c/lod2.glb",
+          "max_distance_m": 3.4028235e+38
+        }
+      ],
+      "thumbnail": "models/wild_rooibos_bush_c/thumb.png",
+      "plant": null,
+      "light": null
+    },
+    {
+      "id": "wild_rooibos_bush_d",
+      "name": "Wild Rooibos Bush D",
+      "category": "shrub",
+      "tags": [
+        "desert",
+        "dried",
+        "dry",
+        "karoo",
+        "nature",
+        "plants",
+        "shrub",
+        "south africa",
+        "variant"
+      ],
+      "license": "CC0-1.0",
+      "origin": "BuiltIn",
+      "author": "James Ray Cock, Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/wild_rooibos_bush",
+      "size_m": [
+        0.327425,
+        0.41994303,
+        0.38355017
+      ],
+      "lods": [
+        {
+          "file": "models/wild_rooibos_bush_d/lod0.glb",
+          "max_distance_m": 5.039316
+        },
+        {
+          "file": "models/wild_rooibos_bush_d/lod1.glb",
+          "max_distance_m": 16.797722
+        },
+        {
+          "file": "models/wild_rooibos_bush_d/lod2.glb",
+          "max_distance_m": 3.4028235e+38
+        }
+      ],
+      "thumbnail": "models/wild_rooibos_bush_d/thumb.png",
+      "plant": null,
+      "light": null
+    },
+    {
       "id": "wine_barrel_01",
       "name": "Wine Barrel 01",
       "category": "other",
@@ -12852,7 +13463,12 @@
         },
         "color_temperature_k": 2700.0,
         "lumens": 100.0,
-        "range_m": 3.0
+        "range_m": 3.0,
+        "offset_m": [
+          0.000012507662,
+          0.18303753,
+          -0.000004004687
+        ]
       }
     },
     {
@@ -13176,7 +13792,12 @@
         },
         "color_temperature_k": 2700.0,
         "lumens": 400.0,
-        "range_m": 6.0
+        "range_m": 6.0,
+        "offset_m": [
+          0.0010526031,
+          0.18557681,
+          -0.0056071915
+        ]
       }
     },
     {

@@ -1,6 +1,7 @@
 //! `ingest`: cached sources -> library folders, each with an `entry.json` that `catalog` collects.
 
 use crate::{
+    emit,
     glb::{fit, jpeg, write_glb},
     net::{Candidate, ph_info},
     raster,
@@ -82,6 +83,7 @@ fn light_spec(id: &str) -> LightSpec {
         color_temperature_k: 2700.0,
         lumens,
         range_m,
+        offset_m: [0.0; 3],
     }
 }
 
@@ -168,6 +170,59 @@ pub fn ingest_model(c: &Candidate, cache: &Path, out: &Path) -> Result<Vec<Asset
     Ok(assets)
 }
 
+/// A lower LOD of `lod0`, at about `target` triangles, that still resembles it. When it does
+/// not, the target is raised step by step, and finally the previous LOD is reused.
+fn guarded_lod(
+    lod0: &Model,
+    prev: &Model,
+    target: usize,
+    notes: &mut Vec<String>,
+    k: usize,
+) -> Model {
+    let mut why = String::new();
+    for f in [1.0, 1.4, 2.0, 3.0] {
+        let t = (target as f64 * f) as usize;
+        if t * 10 >= prev.tris() * 9 {
+            break;
+        }
+        let m = lod0.simplified(t).ground();
+        match m.resembles(lod0) {
+            Ok(()) => {
+                if f > 1.0 {
+                    notes.push(format!("lod{k}: gentler target x{f} ({why})"));
+                }
+                return m;
+            }
+            Err(e) => why = e,
+        }
+    }
+    if prev.tris() < lod0.tris() || k == 1 {
+        notes.push(format!("lod{k}: reused the previous LOD ({why})"));
+    } else {
+        notes.push(format!("lod{k}: reused lod0 ({why})"));
+    }
+    prev.clone()
+}
+
+/// Growth form from the name, where it is obvious.
+fn growth_form(id: &str) -> Option<&'static str> {
+    [
+        ("fern", "fern"),
+        ("succulent", "succulent"),
+        ("iceplant", "succulent"),
+        ("sapling", "sapling"),
+        ("grass", "grass"),
+        ("flower", "flower"),
+        ("dandelion", "flower"),
+        ("celandine", "flower"),
+        ("shrub", "shrub"),
+        ("bush", "shrub"),
+    ]
+    .iter()
+    .find(|(w, _)| id.contains(w))
+    .map(|(_, t)| *t)
+}
+
 fn ingest_variant(
     c: &Candidate,
     out: &Path,
@@ -185,6 +240,10 @@ fn ingest_variant(
     if variant {
         tags.push("variant".into());
     }
+    let mut model = model;
+    if cat != Category::Lighting {
+        emit::apply(&mut model, &[]);
+    }
     let lod0 = if source_tris > budget(cat) {
         tags.push("simplified".into());
         // meshopt may land a little over its target; the budget is a hard limit.
@@ -192,6 +251,9 @@ fn ingest_variant(
         loop {
             let m = model.simplified(target).ground();
             if m.tris() <= budget(cat) {
+                if let Err(why) = m.resembles(&model) {
+                    println!("FALLBACK {id} lod0: simplified to the budget but {why}");
+                }
                 break m;
             }
             target = target * 9 / 10;
@@ -199,14 +261,29 @@ fn ingest_variant(
     } else {
         model
     };
+    let mut lod0 = lod0;
+    let (mut light, mut emitter_note) = (None, String::new());
+    if cat == Category::Lighting {
+        let wall = ["wall", "sconce", "security"]
+            .iter()
+            .any(|w| c.id().contains(w));
+        let e = emit::find(&lod0, &c.id(), wall);
+        emit::apply(&mut lod0, &e.mats);
+        let mut spec = light_spec(&id);
+        spec.offset_m = e.offset;
+        light = Some(spec);
+        emitter_note = format!("{} -> {:?}", e.how, e.offset);
+    }
     let t0 = lod0.tris();
     let reuse = t0 < REUSE_BELOW;
     let target = |f: f64| (((t0 as f64 * f).round() as usize).max(MIN_TRIS)).min(t0);
-    let models = [
-        lod0.clone(),
-        lod0.simplified(target(0.35)).ground(),
-        lod0.simplified(target(0.08)).ground(),
-    ];
+    let mut notes = Vec::new();
+    let lod1 = guarded_lod(&lod0, &lod0, target(0.35), &mut notes, 1);
+    let lod2 = guarded_lod(&lod0, &lod1, target(0.08), &mut notes, 2);
+    for n in &notes {
+        println!("FALLBACK {id} {n}");
+    }
+    let models = [lod0.clone(), lod1, lod2];
     let dir = out.join("models").join(&id);
     let mut lods = Vec::new();
     let size = lod0.size();
@@ -227,11 +304,14 @@ fn ingest_variant(
         });
     }
     let mut thumb = Vec::new();
-    raster::render(&lod0, 256).write_to(
+    raster::render(&lod0, 256, None).write_to(
         &mut std::io::Cursor::new(&mut thumb),
         image::ImageFormat::Png,
     )?;
     write(&dir.join("thumb.png"), &thumb)?;
+    if is_plant(cat) {
+        tags.extend(growth_form(&c.id()).map(str::to_string));
+    }
     tags.sort();
     tags.dedup();
     let asset = Asset {
@@ -251,7 +331,7 @@ fn ingest_variant(
             .as_deref()
             .and_then(|s| plant_info(s, size))
             .filter(|_| is_plant(cat)),
-        light: (cat == Category::Lighting).then(|| light_spec(&id)),
+        light,
     };
     write(&dir.join("entry.json"), &serde_json::to_vec_pretty(&asset)?)?;
     println!(
@@ -259,6 +339,9 @@ fn ingest_variant(
         models[1].tris(),
         models[2].tris()
     );
+    if !emitter_note.is_empty() {
+        println!("emitter {id}: {emitter_note}");
+    }
     Ok(asset)
 }
 

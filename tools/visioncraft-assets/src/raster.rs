@@ -7,7 +7,7 @@ use image::{DynamicImage, RgbaImage};
 const SS: u32 = 2;
 
 /// `size` x `size` RGBA render of the model from the front-right, 30 degrees above.
-pub fn render(model: &Model, size: u32) -> RgbaImage {
+pub fn render(model: &Model, size: u32, marker: Option<[f32; 3]>) -> RgbaImage {
     let s = size * SS;
     let (yaw, pitch) = (-45.0_f32.to_radians(), 30.0_f32.to_radians());
     let (sy, cy, sp, cp) = (yaw.sin(), yaw.cos(), pitch.sin(), pitch.cos());
@@ -172,6 +172,23 @@ pub fn render(model: &Model, size: u32) -> RgbaImage {
                 byte(c[2] / n),
                 byte(n / (SS * SS) as f32),
             ]);
+        }
+    }
+    if let Some(m) = marker {
+        // red cross with a white outline, to check where a light's emitter sits
+        let [px, py] = to_px(view(m));
+        let (cx, cy) = ((px / SS as f32) as i32, (py / SS as f32) as i32);
+        for (r, c) in [(3, [255, 255, 255, 255]), (2, [255, 0, 0, 255])] {
+            for d in -(r + 4)..=(r + 4) {
+                for (x, y) in [(cx + d, cy), (cx, cy + d)] {
+                    for w in -(r - 2)..=(r - 2) {
+                        let (x, y) = if y == cy { (x, y + w) } else { (x + w, y) };
+                        if x >= 0 && y >= 0 && (x as u32) < size && (y as u32) < size {
+                            out.put_pixel(x as u32, y as u32, image::Rgba(c));
+                        }
+                    }
+                }
+            }
         }
     }
     out

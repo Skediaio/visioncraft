@@ -32,6 +32,10 @@ pub struct Material {
     pub alpha: Alpha,
     pub cutoff: f32,
     pub double_sided: bool,
+    pub name: String,
+    pub emissive: [f32; 3],
+    /// `KHR_materials_emissive_strength`.
+    pub emissive_strength: f32,
 }
 
 impl Default for Material {
@@ -46,6 +50,9 @@ impl Default for Material {
             alpha: Alpha::Opaque,
             cutoff: 0.5,
             double_sided: true,
+            name: String::new(),
+            emissive: [0.0; 3],
+            emissive_strength: 1.0,
         }
     }
 }
@@ -92,6 +99,47 @@ impl Model {
                 p[k] += t[k];
             }
         }
+    }
+
+    /// Surface area per material.
+    pub fn area_by_material(&self) -> HashMap<usize, f64> {
+        let mut out = HashMap::new();
+        for m in &self.meshes {
+            let mut a = 0.0_f64;
+            for t in m.idx.as_chunks::<3>().0 {
+                let [p, q, r] = t.map(|i| m.pos[i as usize]);
+                let u: [f32; 3] = std::array::from_fn(|k| q[k] - p[k]);
+                let v: [f32; 3] = std::array::from_fn(|k| r[k] - p[k]);
+                let c = cross(u, v);
+                a += f64::from((c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt()) / 2.0;
+            }
+            *out.entry(m.mat).or_insert(0.0) += a;
+        }
+        out
+    }
+
+    /// Does `self`, a simplification of `reference`, still look like it? The box may move by at
+    /// most 3% of the largest dimension, and no material may lose more than half its area or
+    /// all its triangles.
+    pub fn resembles(&self, reference: &Model) -> Result<(), String> {
+        let ((lo, hi), (rlo, rhi)) = (self.bounds(), reference.bounds());
+        let largest = reference.size().into_iter().fold(0.0_f32, f32::max);
+        for k in 0..3 {
+            if (lo[k] - rlo[k]).abs() > 0.03 * largest || (hi[k] - rhi[k]).abs() > 0.03 * largest {
+                return Err(format!("bounding box moved on axis {k}"));
+            }
+        }
+        let (a, b) = (self.area_by_material(), reference.area_by_material());
+        for (mat, ref_area) in b {
+            let kept = a.get(&mat).copied().unwrap_or(0.0);
+            if kept < 0.5 * ref_area {
+                return Err(format!(
+                    "material {mat} kept {:.0}% of its area",
+                    100.0 * kept / ref_area.max(1e-12)
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Put the lowest point back on y = 0 (simplification can lift it by a few millimetres).
@@ -266,6 +314,63 @@ pub fn pack_orm(
     out
 }
 
+/// Spread the colour of opaque texels (alpha >= 128) into the transparent ones around them, so
+/// downscaling and mip maps of an alpha-tested texture do not bleed black into the edges.
+pub fn dilate(img: &image::RgbaImage) -> image::RgbaImage {
+    let (w, h) = img.dimensions();
+    let mut out = img.clone();
+    let mut filled: Vec<bool> = img.pixels().map(|p| p.0[3] >= 128).collect();
+    for _ in 0..32 {
+        let mut next = filled.clone();
+        let mut changed = false;
+        for y in 0..h {
+            for x in 0..w {
+                if filled[(y * w + x) as usize] {
+                    continue;
+                }
+                let (mut sum, mut n) = ([0u32; 3], 0u32);
+                for (nx, ny) in [
+                    (-1, -1),
+                    (0, -1),
+                    (1, -1),
+                    (-1, 0),
+                    (1, 0),
+                    (-1, 1),
+                    (0, 1),
+                    (1, 1),
+                ]
+                .map(|(dx, dy)| (x as i32 + dx, y as i32 + dy))
+                {
+                    if nx < 0 || ny < 0 || nx >= w as i32 || ny >= h as i32 {
+                        continue;
+                    }
+                    if filled[(ny as u32 * w + nx as u32) as usize] {
+                        let p = out.get_pixel(nx as u32, ny as u32).0;
+                        (0..3).for_each(|k| sum[k] += u32::from(p[k]));
+                        n += 1;
+                    }
+                }
+                let avg = |s: u32| s.checked_div(n).unwrap_or(0);
+                if n > 0 {
+                    let a = out.get_pixel(x, y).0[3];
+                    out.put_pixel(
+                        x,
+                        y,
+                        image::Rgba([avg(sum[0]) as u8, avg(sum[1]) as u8, avg(sum[2]) as u8, a]),
+                    );
+                    next[(y * w + x) as usize] = true;
+                    changed = true;
+                }
+            }
+        }
+        filled = next;
+        if !changed {
+            break;
+        }
+    }
+    out
+}
+
 fn channel(img: &DynamicImage, c: usize) -> GrayImage {
     let rgb = img.to_rgb8();
     GrayImage::from_fn(rgb.width(), rgb.height(), |x, y| {
@@ -299,12 +404,18 @@ fn norm(v: [f32; 3]) -> [f32; 3] {
 struct Reader<'a> {
     base: &'a Path,
     bufs: Vec<gltf::buffer::Data>,
-    images: HashMap<usize, Arc<DynamicImage>>,
+    /// Keyed by file name (glTF often lists one file as several images), else by index.
+    images: HashMap<String, Arc<DynamicImage>>,
+    bases: HashMap<String, (Arc<DynamicImage>, Option<f32>)>,
 }
 
 impl Reader<'_> {
     fn image(&mut self, img: gltf::Image) -> Result<Arc<DynamicImage>> {
-        if let Some(i) = self.images.get(&img.index()) {
+        let key = match img.source() {
+            gltf::image::Source::Uri { uri, .. } => uri.to_string(),
+            gltf::image::Source::View { .. } => format!("view{}", img.index()),
+        };
+        if let Some(i) = self.images.get(&key) {
             return Ok(i.clone());
         }
         let decoded = match img.source() {
@@ -318,16 +429,80 @@ impl Reader<'_> {
             }
         };
         let decoded = Arc::new(decoded);
-        self.images.insert(img.index(), decoded.clone());
+        self.images.insert(key, decoded.clone());
         Ok(decoded)
+    }
+
+    /// A base-colour texture. Poly Haven keeps the cut-out of leaves in a separate
+    /// `<name>_alpha_` or `<name>_opacity_` map that the glTF never references: without it the
+    /// cards render as black polygons. When one sits next to the texture it is merged into the
+    /// alpha channel; the second value is the share of half-transparent texels (glass).
+    fn base_image(&mut self, img: gltf::Image) -> Result<(Arc<DynamicImage>, Option<f32>)> {
+        let decoded = self.image(img.clone())?;
+        let gltf::image::Source::Uri { uri, .. } = img.source() else {
+            return Ok((decoded, None));
+        };
+        if let Some(b) = self.bases.get(uri) {
+            return Ok(b.clone());
+        }
+        let r = self.base_with_alpha(&decoded, uri)?;
+        self.bases.insert(uri.to_string(), r.clone());
+        Ok(r)
+    }
+
+    fn base_with_alpha(
+        &self,
+        decoded: &Arc<DynamicImage>,
+        uri: &str,
+    ) -> Result<(Arc<DynamicImage>, Option<f32>)> {
+        let decoded = decoded.clone();
+        let sibling = ["_alpha_", "_opacity_"]
+            .iter()
+            .map(|n| self.base.join(uri.replace("_diff_", n)))
+            .find(|p| uri.contains("_diff_") && p.is_file());
+        let Some(path) = sibling else {
+            return Ok((decoded, None));
+        };
+        let alpha = image::open(&path)
+            .with_context(|| format!("alpha map {}", path.display()))?
+            .to_luma8();
+        let alpha = if alpha.dimensions() == (decoded.width(), decoded.height()) {
+            alpha
+        } else {
+            image::imageops::resize(
+                &alpha,
+                decoded.width(),
+                decoded.height(),
+                FilterType::Triangle,
+            )
+        };
+        if alpha.pixels().all(|p| p.0[0] >= 250) {
+            return Ok((decoded, None));
+        }
+        let mid = alpha
+            .pixels()
+            .filter(|p| (24..232).contains(&p.0[0]))
+            .count() as f32
+            / alpha.pixels().len() as f32;
+        let mut rgba = decoded.to_rgba8();
+        for (p, a) in rgba.pixels_mut().zip(alpha.pixels()) {
+            p.0[3] = a.0[0];
+        }
+        if mid <= 0.15 {
+            rgba = dilate(&rgba);
+        }
+        Ok((Arc::new(DynamicImage::ImageRgba8(rgba)), Some(mid)))
     }
 
     fn material(&mut self, m: gltf::Material) -> Result<Material> {
         let pbr = m.pbr_metallic_roughness();
-        let base = pbr
-            .base_color_texture()
-            .map(|t| self.image(t.texture().source()))
-            .transpose()?;
+        let (base, merged_mid) = match pbr.base_color_texture() {
+            Some(t) => {
+                let (i, mid) = self.base_image(t.texture().source())?;
+                (Some(i), mid)
+            }
+            None => (None, None),
+        };
         let normal = m
             .normal_texture()
             .map(|t| self.image(t.texture().source()))
@@ -358,6 +533,17 @@ impl Reader<'_> {
             }
             (None, None) => None,
         };
+        let src_alpha = match m.alpha_mode() {
+            gltf::material::AlphaMode::Opaque => Alpha::Opaque,
+            gltf::material::AlphaMode::Mask => Alpha::Mask,
+            gltf::material::AlphaMode::Blend => Alpha::Blend,
+        };
+        // A merged cut-out map makes the material alpha-tested, unless it is mostly glass.
+        let alpha = match merged_mid {
+            Some(mid) if mid > 0.15 => Alpha::Blend,
+            Some(_) => Alpha::Mask,
+            None => src_alpha,
+        };
         Ok(Material {
             base,
             base_factor: pbr.base_color_factor(),
@@ -365,13 +551,12 @@ impl Reader<'_> {
             normal,
             metallic: pbr.metallic_factor(),
             roughness: pbr.roughness_factor(),
-            alpha: match m.alpha_mode() {
-                gltf::material::AlphaMode::Opaque => Alpha::Opaque,
-                gltf::material::AlphaMode::Mask => Alpha::Mask,
-                gltf::material::AlphaMode::Blend => Alpha::Blend,
-            },
+            alpha,
             cutoff: m.alpha_cutoff().unwrap_or(0.5),
             double_sided: m.double_sided(),
+            name: m.name().unwrap_or_default().to_string(),
+            emissive: m.emissive_factor(),
+            emissive_strength: m.emissive_strength().unwrap_or(1.0),
         })
     }
 
@@ -482,6 +667,7 @@ pub fn read_gltf(g: &gltf::Gltf, base: &Path, variant: usize) -> Result<Model> {
         base,
         bufs,
         images: HashMap::new(),
+        bases: HashMap::new(),
     };
     let mut mats = doc
         .materials()
@@ -499,7 +685,19 @@ pub fn read_gltf(g: &gltf::Gltf, base: &Path, variant: usize) -> Result<Model> {
     // Poly Haven plants come as a row of variants (`x_a`, `x_b`, ...): keep the chosen one.
     let roots: Vec<gltf::Node> = match variant_roots(&scene) {
         Some(mut v) => vec![v.swap_remove(variant.min(v.len() - 1))],
-        None => scene.nodes().collect(),
+        None => {
+            // `x_deflated` next to `x_inflated`: keep the whole object, not the flat one.
+            let all: Vec<gltf::Node> = scene.nodes().collect();
+            let keep: Vec<gltf::Node> = all
+                .iter()
+                .filter(|n| {
+                    !n.name()
+                        .is_some_and(|s| s.contains("deflated") && !s.contains("inflated"))
+                })
+                .cloned()
+                .collect();
+            if keep.is_empty() { all } else { keep }
+        }
     };
     for n in roots {
         r.walk(n, &identity, default_mat, &mut parts);

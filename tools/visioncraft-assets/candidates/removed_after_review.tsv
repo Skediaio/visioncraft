@@ -1,20 +1,7 @@
-# id<TAB>reason (removed after looking at the contact sheets)
+# id<TAB>reason (removed after looking at the contact sheets; see also excluded_models.tsv)
 coast_rocks_01	flat terrain-patch slab, not an object
 coast_rocks_03	flat terrain-patch slab, not an object
-flower_heliophila	photoscan reduced to near-invisible wisps at 20k triangles (mush)
-grass_bermuda_01	leaf cards render as black polygons (black colour data under the alpha cut-out)
-leipoldtia_schultzei	sparse scan, mush after simplification
-hanging_picture_frame_01	picture is a black rectangle
-hanging_picture_frame_02	picture is a black rectangle
 industrial_caged_sconce	file is a parts kit laid out flat, not one fixture
-periwinkle_plant	thin vine lying flat on the ground, reads as a decal
-searsia_burchellii	foliage renders as a black blob
-modular_street_seating	parts of the geometry render black, kit pieces
-standing_picture_frame_01	picture is a black rectangle
-standing_picture_frame_02	picture is a black rectangle
-wild_rooibos_bush	foliage renders black (black colour data under the alpha cut-out)
-shrub_01	sparse sprigs scattered in a row, mush
-shrub_04	sparse sprigs scattered in a row, mush
 wooden_barrels_01	exploded: loose staves scattered around two barrels
 pachira_aquatica_01_c	variant is a bare stem
 PavingStones100	stylised wave/stripe pattern, not a natural paving
@@ -22,3 +9,10 @@ PavingStones101	stylised wave/stripe pattern, not a natural paving
 PavingStones102	stylised wave/stripe pattern, not a natural paving
 PavingStones103	stylised wave/stripe pattern, not a natural paving
 PavingStones104	stylised wave/stripe pattern, not a natural paving
+modular_street_seating	parts of the geometry render black (kit pieces)
+periwinkle_plant	thin vine lying flat on the ground (checked again after the alpha fix)
+shrub_01	sparse sprigs scattered in a row (checked again after the alpha fix)
+shrub_04	sparse sprigs scattered in a row (checked again after the alpha fix)
+leipoldtia_schultzei	sparse scan, wisps only (checked again after the alpha fix)
+flower_heliophila	near-invisible wisps (checked again after the alpha fix)
+hanging_picture_frame_01	blank grey picture even with its opacity map
