@@ -1239,6 +1239,8 @@ impl eframe::App for App {
         }
         if cx.s.project().models.is_empty()
             && cx.s.project().shapes.is_empty()
+            && cx.s.project().generators.is_empty()
+            && cx.s.project().terrain.is_none()
             && self.hud.mode.is_none()
         {
             egui::Area::new(egui::Id::new("empty"))
