@@ -3367,6 +3367,7 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-sys",
  "wgpu",
+ "zip",
 ]
 
 [[package]]

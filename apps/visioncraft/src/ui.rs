@@ -254,7 +254,13 @@ pub fn floating(
         .show(ctx, |ui| {
             panel_frame().show(ui, |ui| {
                 ui.set_max_width(max_width);
-                add(ui);
+                // A panel taller than the window scrolls instead of running off it.
+                let room = (ctx.content_rect().height() - offset.y.abs() - 40.0).max(120.0);
+                egui::ScrollArea::vertical()
+                    .id_salt(("floating", id))
+                    .max_height(room)
+                    .auto_shrink([true, true])
+                    .show(ui, add);
             });
         });
 }
@@ -332,6 +338,8 @@ pub enum Action {
     SelectModel(String),
     New,
     Export(usize),
+    /// Every viewpoint at export preset `usize`.
+    ExportAll(usize),
 }
 
 pub struct Hud {
@@ -339,6 +347,8 @@ pub struct Hud {
     pub show_fps: bool,
     pub layers_open: bool,
     pub export_open: bool,
+    /// Export every viewpoint instead of the current view.
+    pub export_all: bool,
 }
 
 impl Default for Hud {
@@ -348,6 +358,7 @@ impl Default for Hud {
             show_fps: true,
             layers_open: false,
             export_open: false,
+            export_all: false,
         }
     }
 }
@@ -516,9 +527,22 @@ impl Hud {
             };
             floating(&ctx, "export", a, o, 260.0, |ui| {
                 ui.label(RichText::new(t::EXPORT).strong());
+                let views = cx.s.project().viewpoints.len();
+                ui.add_enabled_ui(views > 0, |ui| {
+                    ui.checkbox(
+                        &mut self.export_all,
+                        format!("{} ({views})", t::EXPORT_ALL_VIEWS),
+                    )
+                    .on_hover_text(t::EXPORT_ALL_TIP);
+                });
+                let all = self.export_all && views > 0;
                 for (i, (name, w, h)) in visioncraft_core::export_presets().iter().enumerate() {
                     if ui.button(format!("{name}  {w} × {h}")).clicked() {
-                        actions.push(Action::Export(i));
+                        actions.push(if all {
+                            Action::ExportAll(i)
+                        } else {
+                            Action::Export(i)
+                        });
                         self.export_open = false;
                     }
                 }

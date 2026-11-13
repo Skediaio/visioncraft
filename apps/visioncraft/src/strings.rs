@@ -9,7 +9,7 @@ pub const LIBRARY_LOADING: &str = "The asset library is loading, or was not foun
 pub const LIGHTS_BUTTON: &str = "Lights";
 pub const LIGHTS_SUGGEST: &str =
     "The sun is down. Switch the lights on with the Lights button, top right.";
-pub const LIGHTS_DROPPED: &str = "lights are too crowded to draw all of them";
+pub const LIGHTS_DROPPED: &str = "lights left out: too many to draw";
 pub const LIGHTS_HINT: &str = "Click to place a light, click a light to select it. A spot is aimed by dragging its white handle. Delete removes the selected light.";
 pub const LIGHT_POINT: &str = "Point";
 pub const LIGHT_SPOT: &str = "Spot";
@@ -24,7 +24,6 @@ pub const TAB_LIBRARY: &str = "Library";
 pub const SURFACE: &str = "Surface";
 pub const SURFACE_KINDS: [&str; 4] = ["Standard", "Glass", "Water", "Lawn"];
 pub const VARIATION: &str = "Variation";
-pub const MATERIAL_LIBRARY_HINT: &str = "Pick a material to put on the surface you clicked.";
 pub const KIND_ALL: &str = "All";
 pub const SKY: &str = "Sky";
 pub const SKY_PHYSICAL: &str = "Physical";
@@ -98,11 +97,7 @@ pub const MATERIALS_HINT: &str =
 pub const MATERIAL_ADDED: &str = "Material added";
 
 // Objects
-pub const TOOL_SINGLE: &str = "Single";
-pub const TOOL_SCATTER: &str = "Area scatter";
 pub const DENSITY: &str = "Density per m²";
-pub const SINGLE_HINT: &str = "Click the ground to place one.";
-pub const SCATTER_HINT: &str = "Click points around the area, then Enter or click the first point.";
 pub const PLANTINGS: &str = "Placed";
 pub const REMOVE: &str = "Remove";
 
@@ -133,7 +128,6 @@ pub const SAVE_VIEW: &str = "Save current view";
 pub const UPDATE_VIEW: &str = "Update from current view";
 pub const RENAME: &str = "Rename";
 pub const DELETE: &str = "Delete";
-pub const VIEWS_FULL: &str = "Eight viewpoints are saved. Delete one to add another.";
 
 pub const UNSAVED_PROJECT: &str = "Untitled";
 pub const RELINK_PROMPT: &str = "needs its file";
@@ -151,7 +145,6 @@ pub const WIND: &str = "Wind";
 pub const WIND_DIRECTION: &str = "Wind direction";
 pub const GROUND: &str = "Ground plane";
 pub const EXPORT: &str = "Export";
-pub const NEW: &str = "New";
 pub const AUTO: &str = "auto";
 pub const REPLACE_PROJECT: &str = "Replace the current project? Unsaved changes are lost.";
 pub const REPLACE_ANYWAY: &str = "Replace";
@@ -159,7 +152,6 @@ pub const CANCEL: &str = "Cancel";
 pub const SEARCH: &str = "Search";
 pub const EVERGREEN: &str = "Evergreen";
 pub const IN_BLOOM: &str = "In bloom now";
-pub const PALETTE: &str = "Palette";
 
 // ---- Planting tools (Objects mode) ----
 pub const PT_SELECT: &str = "Select";
@@ -170,7 +162,7 @@ pub const PT_AREA: &str = "Area";
 pub const PT_SURFACE: &str = "Surface";
 pub const PT_BRUSH: &str = "Brush";
 pub const PT_SIMPLE: &str = "Simple";
-pub const PT_ADD_PLANTS: &str = "+ Add plants";
+pub const PT_ADD_PLANTS: &str = "+ Add plants or objects";
 pub const PT_SCALE: &str = "Scale";
 pub const PT_ROTATION: &str = "Rotation";
 pub const PT_RANDOM_ROTATION: &str = "Random rotation";
@@ -268,7 +260,7 @@ pub const PT_KEYS_BRUSH: &[(&str, &str)] = &[
 ];
 
 /// "<n> lamps have no light: at most <cap> fixtures shine."
-pub const LAMPS_OVER_CAP: &str = "lamps have no light: at most this many fixtures shine:";
+pub const LAMPS_OVER_CAP: &str = "lamps stay dark: lights from lamps are capped at";
 
 pub const ALLOW_AGENTS: &str = "Allow AI agents";
 pub const ALLOW_AGENTS_TIP: &str = "Lets visioncraft-cli mcp --bridge (an AI agent on this computer) change this project while you watch; Ctrl+Z undoes its steps. Untick to disconnect.";
@@ -308,3 +300,6 @@ pub const SP_HINT: &str = "The plant at the centre of the view shows each change
 pub const SP_SAVE: &str = "Save";
 pub const SP_SAVE_NEW: &str = "Save as my species";
 pub const SP_SAVED: &str = "Saved: the species is in the plant list of every tool.";
+pub const EXPORT_ALL_VIEWS: &str = "All viewpoints";
+pub const EXPORT_ALL_TIP: &str = "One picture per saved viewpoint, each with its own time of day: into a folder you pick, or one zip download in the browser.";
+pub const EXPORTING_VIEWS: &str = "Rendering every viewpoint at";

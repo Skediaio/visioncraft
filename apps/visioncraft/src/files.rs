@@ -109,6 +109,79 @@ pub fn save_as(
     });
 }
 
+/// Saves several files at once: into a folder the person picks, or on the web (which has no
+/// folders) as one `zip_name` download.
+pub fn save_many(
+    inbox: &Inbox,
+    ctx: &egui::Context,
+    zip_name: String,
+    files: Vec<(String, Vec<u8>)>,
+) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        match zip_stored(&files) {
+            Ok(bytes) => save_as(inbox, ctx, zip_name, bytes, "zip"),
+            Err(e) => inbox.push(Msg::Failed(format!("could not pack the files: {e}")), ctx),
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = zip_name;
+        let (inbox, ctx) = (inbox.clone(), ctx.clone());
+        spawn(async move {
+            let Some(dir) = rfd::AsyncFileDialog::new().pick_folder().await else {
+                return;
+            };
+            let dir = dir.path().to_path_buf();
+            for (name, bytes) in &files {
+                if let Err(e) = std::fs::write(dir.join(name), bytes) {
+                    inbox.push(Msg::Failed(format!("could not save {name}: {e}")), &ctx);
+                    return;
+                }
+            }
+            inbox.push(
+                Msg::Saved(format!("{} files in {}", files.len(), dir.display())),
+                &ctx,
+            );
+        });
+    }
+}
+
+/// A zip of `files`, stored without compression (pictures are compressed already).
+pub fn zip_stored(files: &[(String, Vec<u8>)]) -> Result<Vec<u8>, String> {
+    use std::io::Write;
+    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let opts =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (name, bytes) in files {
+        z.start_file(name.as_str(), opts)
+            .map_err(|e| e.to_string())?;
+        z.write_all(bytes).map_err(|e| e.to_string())?;
+    }
+    Ok(z.finish().map_err(|e| e.to_string())?.into_inner())
+}
+
+/// A file name from a viewpoint or project name: letters, digits, `-` and `_` only.
+pub fn file_stem(name: &str, fallback: &str) -> String {
+    let s: String = name
+        .trim()
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let s = s.trim_matches('-').to_string();
+    if s.is_empty() {
+        fallback.to_string()
+    } else {
+        s
+    }
+}
+
 /// Watches linked model files and reports changes in the inbox. On the web it does nothing:
 /// a page cannot see files on disk, "Reload model" re-opens the picker instead.
 #[cfg(not(target_arch = "wasm32"))]
@@ -188,6 +261,25 @@ impl Watcher {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stored_zip_reads_back() {
+        let files = vec![
+            ("a.png".to_string(), vec![1u8, 2, 3]),
+            ("b.png".to_string(), vec![4u8; 1000]),
+        ];
+        let bytes = zip_stored(&files).unwrap();
+        let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        assert_eq!(z.len(), 2);
+        let mut out = Vec::new();
+        std::io::Read::read_to_end(&mut z.by_name("b.png").unwrap(), &mut out).unwrap();
+        assert_eq!(out, vec![4u8; 1000]);
+        assert_eq!(
+            file_stem(" Front door / garden ", "x"),
+            "Front-door---garden"
+        );
+        assert_eq!(file_stem("///", "view"), "view");
+    }
 
     #[test]
     fn a_changed_file_is_reported() {

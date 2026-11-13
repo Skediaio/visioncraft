@@ -63,6 +63,15 @@ struct Job {
     task: Option<import_task::ImportTask>,
 }
 
+/// Every viewpoint rendered in turn at one size, then saved together.
+struct ExportAll {
+    size: (u32, u32),
+    todo: Vec<visioncraft_core::Viewpoint>,
+    current: Option<(String, visioncraft_render::Still)>,
+    done: Vec<(String, Vec<u8>)>,
+    count: usize,
+}
+
 struct ExportJob {
     still: visioncraft_render::Still,
     idx: usize,
@@ -96,6 +105,7 @@ pub struct App {
     modelui: modelui::ModelUi,
     loading: Option<Job>,
     export: Option<ExportJob>,
+    export_all: Option<ExportAll>,
     pending_replace: Option<Replace>,
     /// Models whose file changed, with the time to re-import them (debounce).
     changed: HashMap<String, f64>,
@@ -160,6 +170,7 @@ impl App {
             modelui: Default::default(),
             loading: None,
             export: None,
+            export_all: None,
             pending_replace: None,
             changed: HashMap::new(),
             project_name: cc.storage.and_then(|s| s.get_string(KEY_NAME)),
@@ -309,6 +320,56 @@ impl App {
             }
             None => self.toasts.error(format!("Export failed: {error}")),
         }
+    }
+
+    /// One step of exporting every viewpoint; true while it runs.
+    fn poll_export_all(&mut self, ctx: &egui::Context) -> bool {
+        let Some(job) = &mut self.export_all else {
+            return false;
+        };
+        if let Some((name, still)) = &mut job.current {
+            match still.try_take() {
+                None => return true,
+                Some(Ok(rgba)) => {
+                    let (w, h) = still.size();
+                    match studio::png_bytes(&rgba, w, h) {
+                        Ok(png) => job.done.push((format!("{name}.png"), png)),
+                        Err(e) => self.toasts.error(e),
+                    }
+                }
+                Some(Err(e)) => self.toasts.error(format!("{name}: {e}")),
+            }
+            job.current = None;
+        }
+        let Some(v) = job.todo.pop() else {
+            let job = self.export_all.take().expect("checked");
+            self.studio.time_draft = None;
+            self.studio.force_sync();
+            let stem = files::file_stem(
+                self.project_name.as_deref().unwrap_or("visioncraft"),
+                "visioncraft",
+            );
+            files::save_many(&self.inbox, ctx, format!("{stem}-viewpoints.zip"), job.done);
+            return false;
+        };
+        let (w, h) = job.size;
+        // The viewpoint's own time of day, its camera, then a still of it.
+        self.studio.time_draft = v.time;
+        self.studio.prepare();
+        let mut cam = camera::Camera::default();
+        cam.fov_y = v.fov_y_deg.to_radians();
+        cam.look_from(glam::Vec3::from(v.position), glam::Vec3::from(v.target));
+        let (view, proj, eye) = cam.matrices(w as f32 / h as f32);
+        let n = job.count - job.todo.len();
+        let mut name = format!("{n:02}-{}", files::file_stem(&v.name, "view"));
+        while job.done.iter().any(|(f, _)| *f == format!("{name}.png")) {
+            name.push('x');
+        }
+        match self.studio.renderer.render_still(w, h, view, proj, eye) {
+            Ok(still) => job.current = Some((name, still)),
+            Err(e) => self.toasts.error(format!("{}: {e}", v.name)),
+        }
+        true
     }
 
     fn poll_export(&mut self, ctx: &egui::Context) -> bool {
@@ -574,6 +635,26 @@ impl App {
             Action::New if self.dirty() => self.pending_replace = Some(Replace::New),
             Action::New => self.new_project(),
             Action::Export(i) => self.start_export(i),
+            Action::ExportAll(i) => {
+                let (_, w, h) = visioncraft_core::export_presets()[i];
+                let todo: Vec<_> = self
+                    .studio
+                    .project()
+                    .viewpoints
+                    .iter()
+                    .rev()
+                    .cloned()
+                    .collect();
+                self.toasts
+                    .info(format!("{} {} × {}…", strings::EXPORTING_VIEWS, w, h));
+                self.export_all = Some(ExportAll {
+                    size: (w, h),
+                    count: todo.len(),
+                    todo,
+                    current: None,
+                    done: Vec::new(),
+                });
+            }
             Action::Undo => self.studio.undo(),
             Action::Redo => self.studio.redo(),
             Action::ToggleWalk => self.toggle_walk(),
@@ -1060,6 +1141,7 @@ impl eframe::App for App {
         #[cfg(not(target_arch = "wasm32"))]
         self.agents_pill(&ctx, now);
         busy |= self.poll_export(&ctx);
+        busy |= self.poll_export_all(&ctx);
         let mut confirm = None;
         if self.pending_replace.is_some() {
             ui::floating(
