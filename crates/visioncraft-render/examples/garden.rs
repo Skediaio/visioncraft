@@ -41,6 +41,32 @@ fn shots() -> Vec<Shot> {
                 (demo::garden_camera(aspect), demo::afternoon_sun(), 14.7)
             },
         },
+        // Round 9: like a user's walk under a villa canopy at noon, at a
+        // desktop browser's size: a matte concrete sphere, a canopy slab on
+        // columns overhead, the garden's trees and hedges beyond.
+        Shot {
+            name: "canopy",
+            size: (2560, 1300),
+            build: |r, aspect| {
+                demo::garden(r);
+                r.set_time(2.0);
+                let concrete = r.add_material(&visioncraft_render::Material {
+                    base_color: [0.55, 0.54, 0.52, 1.0],
+                    roughness: 0.85,
+                    ..Default::default()
+                });
+                let mut solids = demo::MeshData::default();
+                solids.add_sphere(Vec3::new(9.0, 0.6, 22.0), 0.6, 96, 48);
+                solids.add_box(Vec3::new(4.0, 3.0, 17.0), Vec3::new(16.0, 3.3, 27.0));
+                for x in [5.0, 9.0, 13.0] {
+                    solids.add_box(Vec3::new(x, 0.0, 17.2), Vec3::new(x + 0.3, 3.0, 17.5));
+                }
+                let solids = r.add_mesh(&solids.mesh()).expect("canopy");
+                r.add_item(solids, concrete, &[glam::Mat4::IDENTITY]);
+                let cam = demo::camera(Vec3::new(9.5, 1.6, 25.5), Vec3::new(3.0, 3.0, 4.0), aspect);
+                (cam, demo::afternoon_sun(), 14.7)
+            },
+        },
         Shot {
             name: "garden_golden",
             size: (1920, 1080),
@@ -667,6 +693,12 @@ fn live_frame(
     w: u32,
     h: u32,
 ) -> Vec<u8> {
+    // A few frames first: the environment and SH update over several.
+    for _ in 0..4 {
+        let mut encoder = device.create_command_encoder(&Default::default());
+        r.render(&mut encoder);
+        queue.submit([encoder.finish()]);
+    }
     let mut encoder = device.create_command_encoder(&Default::default());
     r.render(&mut encoder);
     let stride = (w * 4).next_multiple_of(256);

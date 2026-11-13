@@ -14,7 +14,7 @@
 //! 2. depth pre-pass, `Depth32Float` (4x MSAA when enabled); cutout
 //!    materials write their coverage through the sample mask
 //! 3. depth resolve: sample 0 -> linear view depth, `R32Float`
-//! 4. AO + contact shadows at half render size, `Rg8Unorm`, depth-aware blur (H, V)
+//! 4. AO + contact shadows at half (ULTRA: full) render size, `Rg8Unorm`, depth-aware blur (H, V)
 //! 5. planar reflection of the largest visible water plane (when enabled):
 //!    the scene mirrored, coarser LODs, no screen-space effects,
 //!    `Rgba16Float` + `Depth32Float` at render size / divisor
@@ -48,6 +48,7 @@ use glam::{Mat4, Vec2, Vec3, Vec4};
 mod atmosphere;
 pub mod demo;
 mod env;
+pub mod hardware;
 mod hdri;
 mod impostor;
 pub mod lights;
@@ -62,11 +63,12 @@ mod timing;
 pub mod tonemap;
 
 pub use atmosphere::{Atmosphere, fog_transmittance};
+pub use hardware::{GpuKind, HardwareProbe, Score, calibrate, starting_quality};
 pub use hdri::{HdriCalibration, HdriImage, OVERCAST_LUX, calibrate_hdri, estimate_sun};
 pub use impostor::{ImpostorId, atlas_layout, impostor_views};
 pub use lights::{Light, LightKind};
 pub use sky::Sun;
-pub use stats::{RenderStats, suggest_quality};
+pub use stats::{RenderStats, TARGET_MS, ULTRA_HEADROOM, suggest_quality};
 pub use still::Still;
 pub use terrain::{TerrainChunk, TerrainLayer};
 pub use texture::{ColorSpace, TextureDesc, TextureId, mip_count};
@@ -351,6 +353,12 @@ pub struct Quality {
     pub water_reflection: u32,
     /// 3x3 PCF taps for sun shadows (otherwise 2x2: softer edges cost ~2x).
     pub soft_shadows: bool,
+    /// Ambient occlusion and contact shadows at the full render size
+    /// (otherwise half size, upsampled depth-aware).
+    pub ao_full_resolution: bool,
+    /// Side of one view in impostor atlases baked from now on (texels,
+    /// 64..=1024); impostors baked earlier keep theirs.
+    pub impostor_resolution: u32,
 }
 
 // `render_scale` is clamped to 0.5..=1 everywhere it is used, never NaN, so
@@ -376,6 +384,8 @@ impl Quality {
         bloom: false,
         water_reflection: 0,
         soft_shadows: false,
+        ao_full_resolution: false,
+        impostor_resolution: 256,
     };
     pub const MEDIUM: Quality = Quality {
         shadow_resolution: 1024,
@@ -391,6 +401,8 @@ impl Quality {
         bloom: true,
         water_reflection: 4,
         soft_shadows: false,
+        ao_full_resolution: false,
+        impostor_resolution: 256,
     };
     pub const HIGH: Quality = Quality {
         shadow_resolution: 2048,
@@ -404,11 +416,35 @@ impl Quality {
         bloom: true,
         water_reflection: 2,
         soft_shadows: true,
+        ao_full_resolution: false,
+        impostor_resolution: 256,
     };
-    pub const PRESETS: [(&'static str, Quality); 3] = [
+    /// For GPUs with headroom (a desktop card at 100+ fps on HIGH): 4096
+    /// shadow maps, full-resolution AO with more taps and a full-resolution
+    /// water reflection, mesh plants twice as far before their impostors,
+    /// 512-texel impostor views. Native resolution with 4x MSAA as on HIGH
+    /// (WebGPU core has no 8x); cutout foliage, impostors and the LOD
+    /// dissolve resolve through alpha to coverage, not a stipple.
+    pub const ULTRA: Quality = Quality {
+        shadow_resolution: 4096,
+        cascades: 4,
+        ao_samples: 24,
+        contact_shadows: true,
+        msaa: true,
+        lod_distance_percent: 200,
+        render_scale: 1.0,
+        fxaa: false,
+        bloom: true,
+        water_reflection: 1,
+        soft_shadows: true,
+        ao_full_resolution: true,
+        impostor_resolution: 512,
+    };
+    pub const PRESETS: [(&'static str, Quality); 4] = [
         ("low", Quality::LOW),
         ("medium", Quality::MEDIUM),
         ("high", Quality::HIGH),
+        ("ultra", Quality::ULTRA),
     ];
 
     fn samples(&self) -> u32 {
@@ -1132,6 +1168,7 @@ impl Renderer {
     pub fn set_quality(&mut self, quality: Quality) {
         let quality = Quality {
             cascades: quality.cascades.clamp(1, shadow::MAX_CASCADES as u32),
+            impostor_resolution: quality.impostor_resolution.clamp(64, 1024),
             render_scale: if quality.render_scale.is_nan() {
                 1.0
             } else {
@@ -1152,6 +1189,17 @@ impl Renderer {
         }
         self.quality = quality;
         self.rebuild_targets();
+    }
+
+    /// What wgpu reports about this renderer's adapter and device
+    /// (`hardware` module docs: little in a browser).
+    pub fn probe(&self) -> HardwareProbe {
+        HardwareProbe::from_device(&self.device)
+    }
+
+    /// `hardware::calibrate` on this renderer's device.
+    pub async fn calibrate(&self, clock: Option<&dyn Fn() -> f64>) -> Result<Score, String> {
+        calibrate(&self.device, &self.queue, clock).await
     }
 
     /// Camera: world-to-view matrix, a projection with depth 0..1
@@ -1484,7 +1532,8 @@ impl Renderer {
     /// Bakes an impostor of a plant: its meshes and materials (one level of
     /// detail, usually the finest) in model space, seen from `views` (4..=16)
     /// azimuths around the vertical plus once from above, into a colour and
-    /// a normal atlas of 256^2 tiles. `bounds` defaults to the meshes'. One
+    /// a normal atlas of `Quality::impostor_resolution`^2 tiles (256 up to
+    /// HIGH, 512 on ULTRA). `bounds` defaults to the meshes'. One
     /// per species variant and season: the colours are baked in.
     pub fn bake_impostor(
         &mut self,
@@ -1519,6 +1568,7 @@ impl Renderer {
             &list,
             bounds,
             views.clamp(4, 16),
+            self.quality.impostor_resolution,
         );
         self.impostors.push(Some(gpu));
         Ok(ImpostorId(self.impostors.len() as u32 - 1))
@@ -3017,7 +3067,7 @@ impl Renderer {
         b.floats(&[
             if q.soft_shadows { 9.0 } else { 4.0 },
             bloom,
-            0.0,
+            if q.ao_full_resolution { 1.0 } else { 2.0 },
             ground_height,
         ]);
         b.floats(&[
@@ -3777,6 +3827,13 @@ fn impostor_pipeline(
     shadow: bool,
 ) -> wgpu::RenderPipeline {
     let [_, instances] = vertex_layouts(true);
+    // With MSAA the pre-pass writes alpha-to-coverage sample masks.
+    let fs = if fs == "fs_impostor_depth" && samples > 1 {
+        "fs_impostor_depth_ms"
+    } else {
+        fs
+    };
+    let samples_constant = [("SAMPLES", samples as f64)];
     let depth_only = fs != "fs_impostor" && fs != "fs_impostor_reflect";
     let (compare, write) = match fs {
         "fs_impostor" => (wgpu::CompareFunction::Equal, false),
@@ -3822,7 +3879,11 @@ fn impostor_pipeline(
             depth: Some(depth_state(write, compare, bias)),
             cull: None,
             samples,
-            constants: &[],
+            constants: if fs == "fs_impostor_depth_ms" {
+                &samples_constant
+            } else {
+                &[]
+            },
             front_cw: false,
         },
     )
@@ -4037,7 +4098,11 @@ impl SampledPipelines {
                         label: "depth fade",
                         module: module(modules, "scene"),
                         vs: "vs_depth_fade",
-                        fs: Some("fs_depth_fade"),
+                        fs: Some(if samples > 1 {
+                            "fs_depth_fade_ms"
+                        } else {
+                            "fs_depth_fade"
+                        }),
                         groups: &[Some(&l.globals), Some(&l.material), Some(&l.draw)],
                         buffers: &vertex_layouts(true),
                         target: None,
@@ -4048,7 +4113,7 @@ impl SampledPipelines {
                         )),
                         cull: cull(double_sided == 1),
                         samples,
-                        constants: &[],
+                        constants: if samples > 1 { &samples_constant } else { &[] },
                         front_cw: false,
                     },
                 )
@@ -4304,8 +4369,10 @@ impl Targets {
         let hdr_msaa = (samples > 1).then(|| view(texture("hdr msaa", HDR, samples, attach)));
         let hdr = view(texture("hdr", HDR, 1, sampled));
         let linear_depth = view(texture("linear depth", LINEAR_DEPTH, 1, sampled));
-        // Half resolution: AO and contact shadows are low-frequency.
-        let half = (width.div_ceil(2), height.div_ceil(2));
+        // Half resolution unless the quality asks for full: AO and contact
+        // shadows are low-frequency.
+        let ao_div = if quality.ao_full_resolution { 1 } else { 2 };
+        let half = (width.div_ceil(ao_div), height.div_ceil(ao_div));
         let occlusion =
             [0, 1].map(|_| view(texture_sized("occlusion", OCCLUSION, 1, sampled, half)));
         let unorm = format.remove_srgb_suffix();

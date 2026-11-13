@@ -212,6 +212,32 @@ fn fs_impostor_depth(in: ImpostorVarying) {
     }
 }
 
+// With MSAA the hand-over splits each pixel's samples instead of the
+// pixels: the mesh keeps round((1 - fade) * SAMPLES) of a run starting at a
+// per-pixel offset, the impostor the rest, each also cut to its own alpha
+// coverage (alpha to coverage, a second offset). Resolved, a dissolve and
+// an impostor's silhouette are a blend, not a screen-door stipple.
+// (mesh samples, impostor samples)
+fn fade_split(clip: vec2<f32>, fade: f32) -> vec2<u32> {
+    let start = u32(ign(clip) * f32(SAMPLES));
+    let n = u32(round((1.0 - fade) * f32(SAMPLES)));
+    return vec2<u32>(sample_run(n, start), sample_run(SAMPLES - n, start + n));
+}
+
+fn alpha_mask(clip: vec2<f32>, a: f32, cutoff: f32) -> u32 {
+    return sample_run(alpha_samples(a, cutoff), u32(ign(clip + vec2<f32>(17.0, 29.0)) * f32(SAMPLES)));
+}
+
+@fragment
+fn fs_impostor_depth_ms(in: ImpostorVarying) -> @builtin(sample_mask) u32 {
+    let a = impostor_alpha(in, false);
+    let m = fade_split(in.clip.xy, in.fade).y & alpha_mask(in.clip.xy, a, impostor.grid.w);
+    if m == 0u {
+        discard;
+    }
+    return m;
+}
+
 @fragment
 fn fs_impostor_shadow(in: ImpostorVarying) {
     if impostor_alpha(in, true) < impostor.grid.w {
@@ -273,6 +299,18 @@ fn fs_depth_fade(in: FadeOut) {
     if (material.alpha.x > 0.0 && a < material.alpha.x) || ign(in.clip.xy) < in.fade {
         discard;
     }
+}
+
+@fragment
+fn fs_depth_fade_ms(in: FadeOut) -> @builtin(sample_mask) u32 {
+    var m = fade_split(in.clip.xy, in.fade).x;
+    if material.alpha.x > 0.0 {
+        m &= alpha_mask(in.clip.xy, cutout_alpha(in.uv), material.alpha.x);
+    }
+    if m == 0u {
+        discard;
+    }
+    return m;
 }
 
 // ---- baking -------------------------------------------------------------

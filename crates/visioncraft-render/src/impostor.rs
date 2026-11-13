@@ -20,9 +20,14 @@ const NORMAL: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 /// Atlas layout for `views` ring views plus the top view: (columns, atlas
 /// side in texels). Tile `k` sits at column k % columns, row k / columns.
 pub fn atlas_layout(views: u32) -> (u32, u32) {
+    atlas_layout_with(views, TILE)
+}
+
+/// `atlas_layout` with `tile` texels per view (`Quality::impostor_resolution`).
+pub(crate) fn atlas_layout_with(views: u32, tile: u32) -> (u32, u32) {
     let tiles = views + 1;
     let cols = (tiles as f32).sqrt().ceil() as u32;
-    (cols, cols * TILE)
+    (cols, cols * tile)
 }
 
 /// The views the shader blends for a model-space direction towards the
@@ -220,8 +225,9 @@ impl Baker {
         parts: &[(&wgpu::Buffer, &wgpu::Buffer, u32, &wgpu::BindGroup)],
         bounds: (Vec3, Vec3),
         views: u32,
+        tile: u32,
     ) -> GpuImpostor {
-        let (cols, size) = atlas_layout(views);
+        let (cols, size) = atlas_layout_with(views, tile);
         let centre = (bounds.0 + bounds.1) * 0.5;
         let (half_w, half_h, _) = extents(bounds);
         let target = |label, format, mips| {
@@ -341,8 +347,8 @@ impl Baker {
             pass.set_pipeline(&self.bake);
             pass.set_vertex_buffer(1, identity.slice(..));
             for k in 0..count {
-                let (x, y) = ((k % cols) * TILE, (k / cols) * TILE);
-                pass.set_viewport(x as f32, y as f32, TILE as f32, TILE as f32, 0.0, 1.0);
+                let (x, y) = ((k % cols) * tile, (k / cols) * tile);
+                pass.set_viewport(x as f32, y as f32, tile as f32, tile as f32, 0.0, 1.0);
                 pass.set_bind_group(2, &matrix_bind, &[(k as u64 * SLOT) as u32]);
                 for (vertices, indices, index_count, material) in parts {
                     pass.set_bind_group(1, *material, &[]);

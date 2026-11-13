@@ -979,6 +979,125 @@ fn u_twilight_white_wall_is_not_green() {
     }
 }
 
+/// Smooth gradients stay smooth on every output format the app uses
+/// (`Rgba8Unorm` natively, `Bgra8Unorm` as a browser canvas prefers it,
+/// `Rgba8UnormSrgb`), with and without the upscale (MEDIUM renders at 0.75
+/// and upscales; HIGH and ULTRA are native with MSAA): a large matte sphere
+/// lit by the sun and the sky, and the sky above it, read along vertical
+/// lines. Posterisation shows as few distinct levels for the span a line
+/// covers, banding as isolated jumps between flat runs.
+#[test]
+fn gradients_do_not_band_on_any_output_format() {
+    let (device, queue) = gpu();
+    let (w, h) = (320, 240);
+    for format in [
+        wgpu::TextureFormat::Rgba8Unorm,
+        wgpu::TextureFormat::Bgra8Unorm,
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+    ] {
+        for (name, quality) in [
+            ("medium", Quality::MEDIUM),
+            ("high", Quality::HIGH),
+            ("ultra", Quality::ULTRA),
+        ] {
+            let mut r = Renderer::new(device, queue, format);
+            r.resize(w, h);
+            r.set_quality(quality);
+            let mut ball = MeshData::default();
+            ball.add_sphere(Vec3::ZERO, 1.0, 96, 48);
+            let ball = r.add_mesh(&ball.mesh()).expect("sphere");
+            let matte = r.add_material(&Material {
+                base_color: [0.55, 0.53, 0.5, 1.0],
+                roughness: 0.9,
+                ..Default::default()
+            });
+            r.add_item(ball, matte, &[Mat4::IDENTITY]);
+            let cam = demo::camera(
+                Vec3::new(0.0, 0.3, 3.2),
+                Vec3::new(0.0, 0.3, 0.0),
+                w as f32 / h as f32,
+            );
+            setup(&mut r, cam, Sun::from_angles(210.0, 40.0), 15.0);
+            settle(&mut r);
+            let mut px = capture(&mut r, w, h);
+            if format == wgpu::TextureFormat::Bgra8Unorm {
+                px.chunks_mut(4).for_each(|p| p.swap(0, 2));
+            }
+            write_png(
+                &PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+                    .join(format!("reference/gradients_{format:?}_{name}.png")),
+                &px,
+                w,
+                h,
+            );
+            let at = |x: u32, y: u32, c: usize| px[((y * w + x) * 4) as usize + c] as i32;
+            // Down the sphere's lit face, and down the sky beside it.
+            for x in [w / 2 + 20, w / 2 - 30, 16] {
+                // Split the column at silhouettes (the sphere against the
+                // sky and the ground): jumps in any channel no gradient
+                // makes; then skip their anti-aliased pixels.
+                let step = |y: u32, c: usize| (at(x, y, c) - at(x, y - 1, c)).abs();
+                // A jump: much larger than the slope around it (a steep but
+                // smooth falloff is no jump).
+                let jump = |y: u32, c: usize| {
+                    let mut around: Vec<i32> = (y.saturating_sub(4).max(1)..(y + 5).min(h))
+                        .filter(|&k| k != y)
+                        .map(|k| step(k, c))
+                        .collect();
+                    around.sort_unstable();
+                    step(y, c) > 6 && step(y, c) > around[around.len() / 2] + 4
+                };
+                let mut cuts = vec![0];
+                for y in 1..h {
+                    if (0..3).any(|c| jump(y, c)) {
+                        cuts.push(y);
+                    }
+                }
+                cuts.push(h);
+                // A posterised gradient would be all cuts.
+                assert!(
+                    cuts.len() <= 2 + 6,
+                    "{format:?} {name}: column {x}: {} jumps",
+                    cuts.len() - 2
+                );
+                for c in 0..3 {
+                    let line: Vec<i32> = (0..h).map(|y| at(x, y, c)).collect();
+                    for pair in cuts.windows(2) {
+                        let (a, b) = (pair[0] as usize + 3, pair[1] as usize);
+                        if b < a + 24 {
+                            continue;
+                        }
+                        let segment = &line[a..b - 3];
+                        let span = segment.iter().max().unwrap() - segment.iter().min().unwrap();
+                        let mut levels = segment.to_vec();
+                        levels.sort_unstable();
+                        levels.dedup();
+                        // A dithered gradient visits (nearly) every level it spans.
+                        assert!(
+                            levels.len() as i32 * 2 > span,
+                            "{format:?} {name}: column {x} channel {c}: {} levels over a span of {span}",
+                            levels.len()
+                        );
+                        // No jump stands out from the local slope.
+                        let steps: Vec<i32> =
+                            segment.windows(2).map(|p| (p[1] - p[0]).abs()).collect();
+                        for (i, &step) in steps.iter().enumerate() {
+                            let around = &steps[i.saturating_sub(4)..(i + 5).min(steps.len())];
+                            let mut sorted = around.to_vec();
+                            sorted.sort_unstable();
+                            let typical = sorted[sorted.len() / 2];
+                            assert!(
+                                step <= typical + 4,
+                                "{format:?} {name}: column {x} channel {c}: a step of {step} where the slope is {typical}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Edge cases the app hits: an empty scene, only overlay lines, 1x1 and
 /// zero-sized outputs, every preset.
 #[test]

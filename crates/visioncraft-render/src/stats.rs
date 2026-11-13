@@ -37,12 +37,23 @@ pub const TARGET_MS: f32 = 1000.0 / 30.0;
 /// Frames needed before a decision.
 pub const MIN_HISTORY: usize = 30;
 
+/// Median frame time (as a fraction of `TARGET_MS`) below which HIGH at
+/// full scale steps up to ULTRA: about 100 fps, so ULTRA, roughly 2-3x the
+/// cost of HIGH, still lands well inside the budget.
+pub const ULTRA_HEADROOM: f32 = 0.3;
+
 /// The quality ladder from cheapest to best: each preset at its own render
-/// scale and at up to two coarser steps of 0.1 (not below 0.5).
-fn ladder() -> Vec<Quality> {
+/// scale and at up to two coarser steps of 0.1 (not below 0.5); ULTRA only
+/// at its own (a coarser ULTRA is worse than HIGH at full scale).
+pub(crate) fn ladder() -> Vec<Quality> {
     let mut out = Vec::new();
     for (_, preset) in Quality::PRESETS {
-        for step in [2, 1, 0] {
+        let steps: &[i32] = if preset == Quality::ULTRA {
+            &[0]
+        } else {
+            &[2, 1, 0]
+        };
+        for &step in steps {
             let scale = preset.render_scale - 0.1 * step as f32;
             if scale >= 0.5 - 1e-4 {
                 out.push(Quality {
@@ -55,7 +66,7 @@ fn ladder() -> Vec<Quality> {
     out
 }
 
-fn same_except_scale(a: &Quality, b: &Quality) -> bool {
+pub(crate) fn same_except_scale(a: &Quality, b: &Quality) -> bool {
     *a == Quality {
         render_scale: a.render_scale,
         ..*b
@@ -66,7 +77,8 @@ fn same_except_scale(a: &Quality, b: &Quality) -> bool {
 /// first): one step down the ladder when the median of the last
 /// `MIN_HISTORY` frames is over 110 % of the 30 fps budget, one step up when
 /// it is under 65 % (a step costs roughly 20-40 %, so the next one fits and
-/// the choice does not oscillate), otherwise unchanged. Medians ignore
+/// the choice does not oscillate), otherwise unchanged. The step from HIGH
+/// up to ULTRA needs a median under `ULTRA_HEADROOM` of the budget. Medians ignore
 /// single hitches. A quality that is no preset only has its `render_scale`
 /// moved, by 0.1 within 0.5..=1.0. Pure: the caller decides when to ask
 /// (after a change, clear the history so the new setting is measured).
@@ -110,6 +122,12 @@ pub fn suggest_quality(frame_ms_history: &[f32], current: Quality) -> Quality {
         };
     };
     let j = (i as i32 + direction).clamp(0, ladder.len() as i32 - 1) as usize;
+    if ladder[j] == Quality::ULTRA
+        && ladder[i] != Quality::ULTRA
+        && median >= TARGET_MS * ULTRA_HEADROOM
+    {
+        return current;
+    }
     ladder[j]
 }
 
@@ -135,9 +153,20 @@ mod tests {
         assert!(q.render_scale >= 0.5 - 1e-4);
         // Fast frames climb back up to HIGH at full scale and stay there.
         for _ in 0..20 {
-            q = suggest_quality(&frames(10.0), q);
+            q = suggest_quality(&frames(15.0), q);
         }
         assert_eq!(q, Quality::HIGH);
+        // Far faster (over 100 fps) steps up to ULTRA, and ULTRA too slow
+        // steps back to HIGH at full scale.
+        assert_eq!(suggest_quality(&frames(6.0), Quality::HIGH), Quality::ULTRA);
+        assert_eq!(
+            suggest_quality(&frames(6.0), Quality::ULTRA),
+            Quality::ULTRA
+        );
+        assert_eq!(
+            suggest_quality(&frames(45.0), Quality::ULTRA),
+            Quality::HIGH
+        );
     }
 
     #[test]

@@ -20,12 +20,13 @@ fn vs_fullscreen(@builtin(vertex_index) i: u32) -> Out {
 
 @fragment
 fn fs_main(in: Out) -> @location(0) vec4<f32> {
-    // Half resolution: texel q stands for full-res pixel 2q.
+    // Half resolution (g.options.z = 2): texel q stands for full-res pixel 2q.
+    let div = i32(g.options.z);
     let p = vec2<i32>(in.clip.xy);
     let size = vec2<i32>(textureDimensions(source));
     let full = vec2<i32>(g.viewport.xy) - 1;
     let step = select(vec2<i32>(0, 1), vec2<i32>(1, 0), HORIZONTAL);
-    let center = textureLoad(depth_tex, min(p * 2, full), 0).r;
+    let center = textureLoad(depth_tex, min(p * div, full), 0).r;
     if center >= SKY_DEPTH * 0.5 {
         return vec4<f32>(1.0);
     }
@@ -34,7 +35,7 @@ fn fs_main(in: Out) -> @location(0) vec4<f32> {
     var weight = 0.0;
     for (var i = -4; i <= 4; i++) {
         let q = clamp(p + step * i, vec2<i32>(0), size - 1);
-        let d = textureLoad(depth_tex, min(q * 2, full), 0).r;
+        let d = textureLoad(depth_tex, min(q * div, full), 0).r;
         let w = exp(-f32(i * i) / 8.0) * max(0.0, 1.0 - abs(d - center) / tolerance);
         sum += textureLoad(source, q, 0).rg * w;
         weight += w;

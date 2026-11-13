@@ -1,6 +1,6 @@
 // Screen-space ambient occlusion and contact shadows, one pass, from the
-// linear depth, at half resolution: each output texel takes the full-res
-// pixel at its top-left (2x, 2y). Output: r = ambient occlusion, g = contact
+// linear depth, at half resolution (or full: g.options.z is the divisor):
+// each output texel takes the full-res pixel at its top-left (2x, 2y). Output: r = ambient occlusion, g = contact
 // shadow (1 = lit). scene.wgsl upsamples it depth-aware.
 
 @group(1) @binding(0) var depth_tex: texture_2d<f32>;
@@ -130,7 +130,7 @@ fn vs_fullscreen(@builtin(vertex_index) i: u32) -> Out {
 
 @fragment
 fn fs_main(in: Out) -> @location(0) vec4<f32> {
-    let p = vec2<i32>(in.clip.xy) * 2;
+    let p = vec2<i32>(in.clip.xy) * i32(g.options.z);
     let d = depth_at(p);
     if d >= SKY_DEPTH * 0.5 {
         return vec4<f32>(1.0);

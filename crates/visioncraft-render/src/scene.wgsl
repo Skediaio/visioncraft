@@ -77,7 +77,7 @@ struct Draw {
 
 @group(3) @binding(0) var shadow_map: texture_depth_2d_array;
 @group(3) @binding(1) var shadow_sampler: sampler_comparison;
-@group(3) @binding(2) var occlusion: texture_2d<f32>; // half res: r ambient occlusion, g contact shadow
+@group(3) @binding(2) var occlusion: texture_2d<f32>; // half (or full) res: r ambient occlusion, g contact shadow
 @group(3) @binding(3) var linear_depth: texture_2d<f32>;
 // The scene mirrored about the water plane (reflection pass), pre-exposed HDR.
 @group(3) @binding(4) var planar_reflection: texture_2d<f32>;
@@ -215,16 +215,33 @@ fn fs_depth_cutout_1x(in: DepthOut) {
 @fragment
 fn fs_depth_cutout(in: DepthOut) -> @builtin(sample_mask) u32 {
     let a = cutout_alpha(in.uv) * edge_fade(in.world, normalize(to_eye(in.world)));
-    let cutoff = material.alpha.x;
-    let sharp = (a - cutoff) / max(fwidth(a), 1e-4) + 0.5;
-    let n = u32(clamp(round(sharp * f32(SAMPLES)), 0.0, f32(SAMPLES)));
+    let n = alpha_samples(a, material.alpha.x);
     if n == 0u {
         discard;
     }
-    let bits = (1u << n) - 1u;
-    let r = u32(ign(in.clip.xy) * f32(SAMPLES)) % SAMPLES;
+    return sample_run(n, u32(ign(in.clip.xy) * f32(SAMPLES)));
+}
+
+// `n` of the pixel's SAMPLES samples: a run starting at sample `start`,
+// wrapping around.
+fn sample_run(n: u32, start: u32) -> u32 {
     let full = (1u << SAMPLES) - 1u;
+    if n == 0u {
+        return 0u;
+    }
+    if n >= SAMPLES {
+        return full;
+    }
+    let bits = (1u << n) - 1u;
+    let r = start % SAMPLES;
     return ((bits << r) | (bits >> (SAMPLES - r))) & full;
+}
+
+// Alpha to coverage: how many samples a cutout alpha `a` covers, the alpha
+// sharpened to a one-pixel ramp across the cutoff (Golus 2017).
+fn alpha_samples(a: f32, cutoff: f32) -> u32 {
+    let sharp = (a - cutoff) / max(fwidth(a), 1e-4) + 0.5;
+    return u32(clamp(round(sharp * f32(SAMPLES)), 0.0, f32(SAMPLES)));
 }
 
 // ---- shadow maps ---------------------------------------------------------
@@ -415,7 +432,8 @@ fn sun_shadow(world: vec3<f32>, n: vec3<f32>, nol: f32, depth: f32) -> f32 {
 fn upsample_occlusion(pixel: vec2<f32>, depth: f32) -> vec2<f32> {
     let size = vec2<i32>(textureDimensions(occlusion));
     let full = vec2<i32>(g.viewport.xy) - 1;
-    let u = (pixel - 0.5) * 0.5;
+    let div = i32(g.options.z);
+    let u = (pixel - 0.5) / f32(div);
     let base = vec2<i32>(floor(u));
     let f = fract(u);
     var sum = vec2<f32>(0.0);
@@ -423,7 +441,7 @@ fn upsample_occlusion(pixel: vec2<f32>, depth: f32) -> vec2<f32> {
     for (var i = 0; i < 4; i++) {
         let o = vec2<i32>(i & 1, i >> 1u);
         let q = clamp(base + o, vec2<i32>(0), size - 1);
-        let d = textureLoad(linear_depth, min(q * 2, full), 0).r;
+        let d = textureLoad(linear_depth, min(q * div, full), 0).r;
         let bilinear = select(1.0 - f.x, f.x, o.x == 1) * select(1.0 - f.y, f.y, o.y == 1);
         let w = (bilinear + 1e-3) / (1e-3 + abs(d - depth) / depth);
         sum += textureLoad(occlusion, q, 0).rg * w;
