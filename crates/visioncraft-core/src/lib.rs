@@ -37,8 +37,8 @@ pub use material::{
 pub use model::{Body, Face, ImportError, ImportedModel, ModelCodecError};
 pub use object::UserObject;
 pub use planting::{
-    Evaluation, Generator, Placement, PlantLayer, Tuft, evaluate, evaluate_surface_fill,
-    lawn_scatter,
+    Evaluation, Generator, Placement, PlantLayer, Tuft, blocked_by_buildings, evaluate,
+    evaluate_avoiding, evaluate_surface_fill, lawn_scatter,
 };
 pub use presets::{PlantingPreset, planting_presets};
 pub use project::{

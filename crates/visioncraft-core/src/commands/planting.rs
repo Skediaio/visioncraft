@@ -137,6 +137,7 @@ pub(super) fn register(s: &mut Session) {
                 scale_max(),
                 spin(false),
                 seed(),
+                param("avoid_buildings", T::Boolean, "Leave out plants that would stand on or in a building: on a roof, under a canopy lower than the plant, inside a block.").default(json!(true)),
                 layer(),
             ],
             "{id}",
@@ -161,6 +162,7 @@ pub(super) fn register(s: &mut Session) {
                 spin(true),
                 min_distance(),
                 seed(),
+                param("avoid_buildings", T::Boolean, "Leave out plants that would stand on or in a building: on a roof, under a canopy lower than the plant, inside a block.").default(json!(true)),
                 layer(),
             ],
             "{id}",
@@ -181,9 +183,11 @@ pub(super) fn register(s: &mut Session) {
                 layers(),
                 param("strokes", T::Array, "Initial strokes [{points: [[x, z]..], radius_m, erase}].").default(json!([])),
                 param("clip_outline", T::Outline, "Plants only grow inside this outline (an area's), when given.").default(json!([])),
+                param("clip_holes", T::Array, "Outlines plants never grow in (areas lying on the clip area).").default(json!([])),
                 scale_min(),
                 scale_max(),
                 seed(),
+                param("avoid_buildings", T::Boolean, "Leave out plants that would stand on or in a building: on a roof, under a canopy lower than the plant, inside a block.").default(json!(true)),
                 layer(),
             ],
             "{id}",
@@ -417,6 +421,8 @@ fn add_spline(project: &mut Project, params: &Value) -> Result<Value, CommandErr
         layer: Option<String>,
         #[serde(default)]
         straight: bool,
+        #[serde(default = "super::shapes::yes")]
+        avoid_buildings: bool,
     }
     let p: P = parse(params)?;
     add(project, p.layer, |id, layer, seed| {
@@ -435,6 +441,7 @@ fn add_spline(project: &mut Project, params: &Value) -> Result<Value, CommandErr
             random_rotation: p.random_rotation,
             seed: p.seed.unwrap_or(seed),
             straight: p.straight,
+            avoid_buildings: p.avoid_buildings,
         })
     })
 }
@@ -463,6 +470,8 @@ fn add_area(project: &mut Project, params: &Value) -> Result<Value, CommandError
         min_distance_m: f32,
         seed: Option<u64>,
         layer: Option<String>,
+        #[serde(default = "super::shapes::yes")]
+        avoid_buildings: bool,
     }
     let p: P = parse(params)?;
     add(project, p.layer, |id, layer, seed| {
@@ -480,6 +489,7 @@ fn add_area(project: &mut Project, params: &Value) -> Result<Value, CommandError
             min_distance_m: p.min_distance_m,
             seed: p.seed.unwrap_or(seed),
             layers: p.layers,
+            avoid_buildings: p.avoid_buildings,
         })
     })
 }
@@ -507,6 +517,10 @@ fn add_brush(project: &mut Project, params: &Value) -> Result<Value, CommandErro
         layer: Option<String>,
         #[serde(default)]
         clip_outline: Vec<[f32; 2]>,
+        #[serde(default)]
+        clip_holes: Vec<Vec<[f32; 2]>>,
+        #[serde(default = "super::shapes::yes")]
+        avoid_buildings: bool,
     }
     let p: P = parse(params)?;
     add(project, p.layer, |id, layer, seed| {
@@ -523,6 +537,8 @@ fn add_brush(project: &mut Project, params: &Value) -> Result<Value, CommandErro
             seed: p.seed.unwrap_or(seed),
             layers: p.layers,
             clip_outline: p.clip_outline,
+            clip_holes: p.clip_holes,
+            avoid_buildings: p.avoid_buildings,
         })
     })
 }
@@ -658,7 +674,11 @@ fn brush_stroke(project: &mut Project, params: &Value) -> Result<Value, CommandE
 fn update(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
     let g = find(project, params)?;
     // Fields that are not written while empty can still be given.
-    let updated: Generator = merge_update(g, params, &["clip_outline", "straight"])?;
+    let updated: Generator = merge_update(
+        g,
+        params,
+        &["clip_outline", "clip_holes", "straight", "avoid_buildings"],
+    )?;
     updated.validate().map_err(|e| bad(&e))?;
     let layer = updated.layer().to_string();
     *g = updated;

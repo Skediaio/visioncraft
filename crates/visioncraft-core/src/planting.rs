@@ -95,6 +95,11 @@ pub struct SplineMass {
     /// curve through them.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub straight: bool,
+    /// Plants that would stand on or in a building (a roof, a canopy lower than the plant, the
+    /// inside of a block) are left out ([`evaluate_avoiding`]). Off for plantings made before
+    /// the rule existed, so they do not change by themselves.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub avoid_buildings: bool,
 }
 
 /// Points inside a polygon on a jittered grid anchored at the world origin: a point depends only
@@ -118,6 +123,11 @@ pub struct AreaScatter {
     pub seed: u64,
     #[serde(default)]
     pub layers: Vec<PlantLayer>,
+    /// Plants that would stand on or in a building (a roof, a canopy lower than the plant, the
+    /// inside of a block) are left out ([`evaluate_avoiding`]). Off for plantings made before
+    /// the rule existed, so they do not change by themselves.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub avoid_buildings: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -151,6 +161,14 @@ pub struct MixedBrush {
     /// over its bed stays in the bed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clip_outline: Vec<[f32; 2]>,
+    /// And never inside these (a terrace lying on the clipped lawn).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub clip_holes: Vec<Vec<[f32; 2]>>,
+    /// Plants that would stand on or in a building (a roof, a canopy lower than the plant, the
+    /// inside of a block) are left out ([`evaluate_avoiding`]). Off for plantings made before
+    /// the rule existed, so they do not change by themselves.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub avoid_buildings: bool,
 }
 
 /// Fills named faces of a model or shape with plants; needs the owner's mesh, see
@@ -797,6 +815,53 @@ fn run_tiers<'a>(
 /// Turns a generator into placements. `ground(x, z)` is the terrain height; a point with no
 /// ground goes to y = 0. A [`SurfaceFill`] needs its owner's mesh and gives nothing here: use
 /// [`evaluate_surface_fill`].
+/// [`evaluate`] with the rule of `avoid_buildings`: placements for which `blocked` is true are
+/// left out (the app and the automation give [`blocked_by_buildings`] the plant's size and their
+/// models). Generators without the switch evaluate as before.
+pub fn evaluate_avoiding(
+    generator: &Generator,
+    ground: &dyn Fn(f32, f32) -> Option<f32>,
+    blocked: &dyn Fn(&Placement) -> bool,
+) -> Evaluation {
+    let mut e = evaluate(generator, ground);
+    let avoid = match generator {
+        Generator::SplineMass(g) => g.avoid_buildings,
+        Generator::AreaScatter(g) => g.avoid_buildings,
+        Generator::MixedBrush(g) => g.avoid_buildings,
+        _ => false,
+    };
+    if avoid {
+        e.placements.retain(|p| !blocked(p));
+    }
+    e
+}
+
+/// Whether a plant `height` tall with a crown `radius` at `place` would stand on or in a
+/// building: its ground point is more than 30 cm above `open_ground` (the terrain and areas
+/// there: it stands on a roof, a canopy or a slab), or anything is above it lower than its top,
+/// at its stem or round its crown (`up` gives the distance from a point straight up to the
+/// nearest building geometry). A canopy higher than the plant is fine.
+pub fn blocked_by_buildings(
+    place: [f32; 3],
+    height: f32,
+    radius: f32,
+    open_ground: f32,
+    up: &dyn Fn([f32; 3]) -> Option<f32>,
+) -> bool {
+    if place[1] > open_ground + 0.3 {
+        return true;
+    }
+    let clear = (height - 0.3).max(0.1);
+    let r = radius * 0.7;
+    let ring = (0..6).map(|k| {
+        let a = std::f32::consts::TAU * k as f32 / 6.0;
+        [place[0] + r * a.cos(), place[2] + r * a.sin()]
+    });
+    std::iter::once([place[0], place[2]])
+        .chain(ring.filter(|_| r > 0.05))
+        .any(|[x, z]| up([x, place[1] + 0.3, z]).is_some_and(|d| d < clear))
+}
+
 pub fn evaluate(generator: &Generator, ground: &dyn Fn(f32, f32) -> Option<f32>) -> Evaluation {
     let y_at = |p: [f32; 2]| [p[0], ground(p[0], p[1]).unwrap_or(0.0), p[1]];
     let done = |placements, truncated| Evaluation {
@@ -866,6 +931,10 @@ pub fn evaluate(generator: &Generator, ground: &dyn Fn(f32, f32) -> Option<f32>)
             let clipped = g.clip_outline.len() >= 3;
             let covered = |p| {
                 (!clipped || point_in_polygon(p, &g.clip_outline))
+                    && !g
+                        .clip_holes
+                        .iter()
+                        .any(|h| h.len() >= 3 && point_in_polygon(p, h))
                     && g.strokes
                         .iter()
                         .rev()
@@ -1095,6 +1164,7 @@ mod tests {
             min_distance_m: 0.0,
             seed: 7,
             layers: Vec::new(),
+            avoid_buildings: false,
         }
     }
 
@@ -1192,6 +1262,7 @@ mod tests {
             random_rotation: false,
             seed: 1,
             straight: false,
+            avoid_buildings: false,
         });
         let e = evaluate(&line, &flat);
         assert!(e.truncated && e.placements.len() == MAX_PLACEMENTS);
@@ -1213,7 +1284,45 @@ mod tests {
             random_rotation: false,
             seed: 3,
             straight: false,
+            avoid_buildings: false,
         }
+    }
+
+    #[test]
+    fn plants_stay_out_of_buildings_but_fit_under_a_high_canopy() {
+        // A canopy 3 m up over x in 0..10; a wall (anything overhead from the ground) at x 12..12.3.
+        let up = |p: [f32; 3]| {
+            if (0.0..10.0).contains(&p[0]) {
+                Some(3.0 - p[1])
+            } else if (12.0..12.3).contains(&p[0]) {
+                Some(0.0)
+            } else {
+                None
+            }
+        };
+        let low = |x: f32| blocked_by_buildings([x, 0.0, 0.0], 0.8, 0.3, 0.0, &up);
+        let tree = |x: f32| blocked_by_buildings([x, 0.0, 0.0], 8.0, 2.5, 0.0, &up);
+        assert!(!low(5.0), "a low plant fits under the canopy");
+        assert!(tree(5.0), "a tree does not");
+        assert!(!tree(20.0) && !low(-3.0));
+        assert!(tree(14.0), "its crown would grow through the wall");
+        assert!(!low(14.0));
+        // Standing on the canopy's top instead of the ground.
+        assert!(blocked_by_buildings(
+            [5.0, 3.0, 0.0],
+            0.8,
+            0.3,
+            0.0,
+            &|_| None
+        ));
+        // The rule only applies to generators that ask for it.
+        let mut g = spline(false, Spacing::Count(5));
+        g.points = vec![[0.0, 0.0], [20.0, 0.0]];
+        let all = evaluate_avoiding(&Generator::SplineMass(g.clone()), &flat, &|_| true);
+        assert_eq!(all.placements.len(), 5);
+        g.avoid_buildings = true;
+        let none = evaluate_avoiding(&Generator::SplineMass(g), &flat, &|_| true);
+        assert!(none.placements.is_empty());
     }
 
     #[test]
@@ -1293,13 +1402,19 @@ mod tests {
             seed: 9,
             layers: Vec::new(),
             clip_outline: Vec::new(),
+            clip_holes: Vec::new(),
+            avoid_buildings: false,
         };
         let all = evaluate(&Generator::MixedBrush(g.clone()), &flat).placements;
         assert!(all.len() > 100);
         // Clipped to a bed: only what lies inside it stays.
         let mut bed = g.clone();
         bed.clip_outline = vec![[2.0, -3.0], [5.0, -3.0], [5.0, 3.0], [2.0, 3.0]];
-        let inside = evaluate(&Generator::MixedBrush(bed), &flat).placements;
+        let inside = evaluate(&Generator::MixedBrush(bed.clone()), &flat).placements;
+        // A terrace on the bed: nothing on it.
+        bed.clip_holes = vec![vec![[2.0, -3.0], [3.5, -3.0], [3.5, 3.0], [2.0, 3.0]]];
+        let around = evaluate(&Generator::MixedBrush(bed), &flat).placements;
+        assert!(!around.is_empty() && around.iter().all(|p| p.position[0] > 3.5));
         assert!(!inside.is_empty() && inside.len() < all.len() / 2);
         assert!(inside.iter().all(|p| (2.0..=5.0).contains(&p.position[0])));
         assert!(all.iter().all(|p| distance_to_segment(
@@ -1514,6 +1629,8 @@ mod layer_tests {
             seed: 4,
             layers,
             clip_outline: Vec::new(),
+            clip_holes: Vec::new(),
+            avoid_buildings: false,
         })
     }
 
@@ -1605,6 +1722,7 @@ mod layer_tests {
             min_distance_m: 0.0,
             seed: 1,
             layers: forest(),
+            avoid_buildings: false,
         });
         let e = evaluate(&area, &flat);
         assert!(

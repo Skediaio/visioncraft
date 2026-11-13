@@ -467,7 +467,7 @@ fn rename(project: &mut Project, params: &Value) -> Result<Value, CommandError> 
     Ok(Value::Null)
 }
 
-fn yes() -> bool {
+pub(crate) fn yes() -> bool {
     true
 }
 
