@@ -128,6 +128,8 @@ pub struct App {
     fps: f64,
     last_title: String,
     settle: u8,
+    /// The last frame asked for the next one: the time between them is a frame, not idle.
+    repainting: bool,
     #[cfg(not(target_arch = "wasm32"))]
     agents: agents::Agents,
     #[cfg(not(target_arch = "wasm32"))]
@@ -194,6 +196,7 @@ impl App {
             fps: 0.0,
             last_title: String::new(),
             settle: 0,
+            repainting: false,
             #[cfg(not(target_arch = "wasm32"))]
             agents: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -1135,14 +1138,15 @@ impl eframe::App for App {
             egui::Color32::WHITE,
         );
 
-        // fps over the last second.
-        // Smoothed rate of consecutive frames; a pause between repaints (idle) does not count.
-        if raw_dt > 0.0 && raw_dt < 0.1 {
+        // Smoothed rate of consecutive frames; a pause between repaints (idle) does not count, but
+        // a slow frame after a repaint request does (else Auto never sees a scene it cannot draw).
+        let consecutive = raw_dt > 0.0 && (raw_dt < 0.1 || (self.repainting && raw_dt < 2.0));
+        if consecutive {
             self.studio.record_frame(raw_dt as f32 * 1000.0);
         } else {
             self.studio.frame_ms.clear();
         }
-        if raw_dt > 0.0 && raw_dt < 0.25 {
+        if consecutive {
             self.fps = if self.fps == 0.0 {
                 1.0 / raw_dt
             } else {
@@ -1375,10 +1379,10 @@ impl eframe::App for App {
             self.settle -= 1;
             busy = true;
         }
-        if busy
+        self.repainting = busy
             || self.studio.session.revision() != revision_at_start
-            || self.studio.draft.is_some()
-        {
+            || self.studio.draft.is_some();
+        if self.repainting {
             ctx.request_repaint();
         }
     }
