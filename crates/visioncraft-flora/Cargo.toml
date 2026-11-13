@@ -1,0 +1,16 @@
+[package]
+name = "visioncraft-flora"
+description = "Procedural, deterministic plant meshes and textures (trees, shrubs, hedges, grasses, perennials) for VisionCraft."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+# MIT/Apache-2.0: only for writing the contact-sheet previews in the example.
+png = "0.18"
