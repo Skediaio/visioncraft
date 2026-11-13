@@ -12,7 +12,7 @@ struct Globals {
     proj: mat4x4<f32>,
     inv_view_proj: mat4x4<f32>,
     cascades: array<mat4x4<f32>, 4>,
-    camera: vec4<f32>,          // xyz world position
+    camera: vec4<f32>,          // xyz world position, w haze-free distance (m)
     sun_dir: vec4<f32>,         // xyz towards the sun, w disc luminance (pre-exposed)
     sun_light: vec4<f32>,       // rgb sun illuminance (pre-exposed), w cos(disc radius)
     splits: vec4<f32>,          // far view depth of each cascade
@@ -134,11 +134,15 @@ fn luminance(c: vec3<f32>) -> f32 {
 // 2010): tau = a e^{-b (o_y - y0)} (1 - e^{-b t d_y}) / (b d_y). lib.rs has
 // the same function (`fog_transmittance`), unit-tested against numerical
 // integration. The sky passes a very large `t` (1e9 m).
-fn fog_transmittance(origin_y: f32, dir_y: f32, t: f32) -> f32 {
+fn fog_transmittance(origin_y_in: f32, dir_y: f32, t_in: f32) -> f32 {
     let a = g.fog.x;
     if a <= 0.0 {
         return 1.0;
     }
+    // The first camera.w metres of the ray are clear air.
+    let skip = min(t_in, g.camera.w);
+    let origin_y = origin_y_in + dir_y * skip;
+    let t = t_in - skip;
     let b = g.fog.y;
     let start = a * exp(-b * (origin_y - g.fog.z));
     let k = b * dir_y;

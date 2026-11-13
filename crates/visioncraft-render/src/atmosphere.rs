@@ -20,6 +20,10 @@ pub struct Atmosphere {
     /// How much sunlight the haze scatters towards the camera (0..1; the
     /// bright glow around a low sun).
     pub sun_glow: f32,
+    /// The first metres of every view ray are clear air (0 none): an
+    /// overview of a garden from 100-200 m stays crisp while the haze still
+    /// builds up towards the horizon.
+    pub clear_m: f32,
 }
 
 impl Default for Atmosphere {
@@ -28,6 +32,7 @@ impl Default for Atmosphere {
             haze: 2.5,
             haze_height_m: 150.0,
             sun_glow: 0.5,
+            clear_m: 0.0,
         }
     }
 }

@@ -503,6 +503,8 @@ struct Item {
     /// Metres before the last level's distance over which instances dither
     /// out (0: they are culled at once).
     cull_fade: f32,
+    /// The impostor's end follows `set_impostor_reach` (small plants).
+    follows_reach: bool,
 }
 
 /// Instances in one ground cell: culled as a unit, drawn as one range, one
@@ -771,6 +773,10 @@ pub struct Renderer {
     sky: sky::Sky,
     ev100: f32,
     shadow_distance: f32,
+    /// Multiplies every level-of-detail distance (with the quality's percentage).
+    view_distance: f32,
+    /// Multiplies how far impostors draw (their last distance only).
+    impostor_reach: f32,
     wind: Wind,
     time: f32,
     clay: bool,
@@ -1064,6 +1070,8 @@ impl Renderer {
             sky,
             ev100: 15.0,
             shadow_distance: 80.0,
+            view_distance: 1.0,
+            impostor_reach: 1.0,
             wind: Wind::default(),
             time: 0.0,
             clay: false,
@@ -1154,6 +1162,28 @@ impl Renderer {
         self.ev100 = ev100;
     }
 
+    /// How far plants and objects keep their detail and stay drawn, as a
+    /// multiple of their own distances (default 1; with the quality's LOD
+    /// percentage on top).
+    pub fn set_view_distance(&mut self, scale: f32) {
+        self.view_distance = scale.clamp(0.05, 20.0);
+    }
+
+    /// How far the impostors of items marked with `set_item_follows_reach`
+    /// draw, as a multiple of their own end distance (default 1). An
+    /// overview from above sees small plants hundreds of metres away; at
+    /// eye level the ground and everything on it hide them long before.
+    pub fn set_impostor_reach(&mut self, scale: f32) {
+        self.impostor_reach = scale.clamp(0.01, 10.0);
+    }
+
+    /// Makes the end of `item`'s impostor follow `set_impostor_reach`.
+    pub fn set_item_follows_reach(&mut self, item: ItemId, follows: bool) {
+        if let Some(Some(it)) = self.items.get_mut(item.0 as usize) {
+            it.follows_reach = follows;
+        }
+    }
+
     /// How far from the camera sun shadows reach (metres, default 80).
     pub fn set_shadow_distance(&mut self, metres: f32) {
         self.shadow_distance = metres.max(1.0);
@@ -1219,6 +1249,7 @@ impl Renderer {
             haze: atmosphere.haze.max(0.0),
             haze_height_m: atmosphere.haze_height_m.max(1.0),
             sun_glow: atmosphere.sun_glow.clamp(0.0, 1.0),
+            clear_m: atmosphere.clear_m.max(0.0),
         };
     }
 
@@ -1674,6 +1705,7 @@ impl Renderer {
             clusters: Vec::new(),
             impostor: None,
             cull_fade: 0.0,
+            follows_reach: false,
         }));
         self.set_instances(id, instances);
         id
@@ -1918,7 +1950,7 @@ impl Renderer {
         self.terrain
             .write(&self.queue, self.ground.map(|g| g.color));
         // The impostor hand-over band, in metres at this quality's LOD scale.
-        let scale = self.quality.lod_distance_percent.max(1) as f32 / 100.0;
+        let scale = self.lod_scale();
         for item in self.items.iter().flatten() {
             if item.impostor.is_none() && item.cull_fade > 0.0 {
                 let last = item.lods.len() - 1;
@@ -2667,6 +2699,10 @@ impl Renderer {
         }
     }
 
+    fn lod_scale(&self) -> f32 {
+        self.quality.lod_distance_percent.max(1) as f32 / 100.0 * self.view_distance
+    }
+
     /// Per cluster level of detail from the camera distance to its bounds,
     /// and the front-to-back sort keys.
     /// With an orthographic camera every cluster takes the level for the
@@ -2675,7 +2711,7 @@ impl Renderer {
     fn update_lods(&mut self) {
         let eye = self.eye;
         let sun = self.sun.direction;
-        let scale = self.quality.lod_distance_percent.max(1) as f32 / 100.0;
+        let scale = self.lod_scale();
         let ortho = shadow::is_orthographic(self.proj).then(|| {
             let forward = -self
                 .view
@@ -2685,7 +2721,17 @@ impl Renderer {
                 .normalize_or(Vec3::NEG_Z);
             (2.0 / self.proj.y_axis.y.abs().max(1e-9), forward)
         });
+        let reach = self.impostor_reach;
         for item in self.items.iter_mut().flatten() {
+            // The impostor's end, shortened or lengthened by the reach.
+            let mut lods = item.lods.clone();
+            if item.impostor.is_some()
+                && item.follows_reach
+                && let Some(last) = lods.last_mut()
+            {
+                let mesh_end = item.lods[item.lods.len() - 2];
+                *last = (*last * reach).max(mesh_end + 1.0);
+            }
             for c in &mut item.clusters {
                 let Some((lo, hi)) = c.bounds else {
                     continue;
@@ -2700,7 +2746,7 @@ impl Renderer {
                 };
                 let d = d / scale;
                 let current = (c.lod != LOD_UNSET).then_some(c.lod as usize);
-                c.lod = lod::select(d, &item.lods, current, lod::HYSTERESIS_M) as u8;
+                c.lod = lod::select(d, &lods, current, lod::HYSTERESIS_M) as u8;
                 c.fading = false;
                 if item.impostor.is_some() {
                     // Clusters whose instances straddle the hand-over band
@@ -2803,7 +2849,7 @@ impl Renderer {
         let sun_light = self.sun.color * self.sun.illuminance * exposure;
         let disc_solid_angle = std::f32::consts::PI * sky::SUN_DISC_RADIUS * sky::SUN_DISC_RADIUS;
         let disc = (self.sun.illuminance / disc_solid_angle * exposure).min(64.0);
-        b.floats(&[eye.x, eye.y, eye.z, 0.0]);
+        b.floats(&[eye.x, eye.y, eye.z, self.atmosphere.clear_m]);
         b.floats(&self.sun.direction.extend(disc).to_array());
         b.floats(&sun_light.extend(sky::SUN_DISC_RADIUS.cos()).to_array());
         b.floats(&cascades.splits);
