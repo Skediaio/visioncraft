@@ -404,7 +404,7 @@ fn zip_images(zip: &Path) -> Result<Vec<(String, DynamicImage)>> {
     let mut out = Vec::new();
     for i in 0..z.len() {
         let mut f = z.by_index(i)?;
-        let name = f.name().to_string();
+        let name = f.name()?.to_string();
         if name.ends_with(".jpg") {
             let mut b = Vec::new();
             f.read_to_end(&mut b)?;
