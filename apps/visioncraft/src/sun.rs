@@ -79,9 +79,26 @@ fn on_circle(c: Pos2, r: f32, az_deg: f64) -> Pos2 {
 }
 
 pub fn panel(ui: &mut egui::Ui, cx: &mut Cx) {
+    let max = (cx.ctx.content_rect().height() - 90.0).max(200.0);
+    egui::ScrollArea::vertical()
+        .max_height(max)
+        .id_salt("sunpanel")
+        .show(ui, |ui| {
+            panel_body(ui, cx);
+            crate::sky_panel::panel(ui, cx);
+        });
+}
+
+fn panel_body(ui: &mut egui::Ui, cx: &mut Cx) {
     let (site, mut time) = (cx.s.site(), cx.s.time());
     let committed = cx.s.project().time;
-    let pos = sun_position(&site, &time);
+    // With the sky's own sun the compass shows it and cannot be dragged.
+    let sky_sun = cx.s.sky.sun_angles();
+    let mut pos = sun_position(&site, &time);
+    if let Some((az, el)) = sky_sun {
+        pos.azimuth_deg = az;
+        pos.elevation_deg = el;
+    }
     ui.small(t::SUN_HINT);
     let mut time_edit = Edit::None;
     ui.horizontal(|ui| {
@@ -167,14 +184,14 @@ pub fn panel(ui: &mut egui::Ui, cx: &mut Cx) {
         painter.circle_stroke(marker, 8.0, Stroke::new(1.5, Color32::BLACK));
         if let Some(p) = r
             .interact_pointer_pos()
-            .filter(|_| r.dragged() || r.clicked())
+            .filter(|_| (r.dragged() || r.clicked()) && sky_sun.is_none())
         {
             let d = p - c;
             let az = f64::from(d.x.atan2(-d.y).to_degrees()).rem_euclid(360.0);
             time.hour = hour_for_azimuth(&site, &time, az);
             time_edit = Edit::Live;
         }
-        if r.drag_stopped() || r.clicked() {
+        if (r.drag_stopped() || r.clicked()) && sky_sun.is_none() {
             time_edit = Edit::Done;
         }
 

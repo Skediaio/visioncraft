@@ -60,7 +60,18 @@ pub struct Studio {
     pub show_people: bool,
     pub placing_person: bool,
     pub lights_on: bool,
+    /// The sun has set while the lights are off and the user has not been told yet.
+    pub suggest_lights: bool,
+    suggested: bool,
     pub dropped_lights: usize,
+    /// Undo and redo that treat a lamp and its light as one step.
+    pub pairing: crate::lamps::Pairing,
+    /// The image sky in use and the sun taken from it.
+    pub sky: crate::sky_panel::SkyState,
+    /// Library pictures shown in the panels.
+    pub thumbs: crate::library_ui::Thumbs,
+    /// A tool is dragging something in the viewport: the camera must not orbit.
+    pub drag_capture: bool,
     last_lights: Vec<visioncraft_render::Light>,
     /// Extra overlay lines from tools: (depth tested, on top).
     pub extra: (Vec<LineVertex>, Vec<LineVertex>),
@@ -124,13 +135,29 @@ pub fn demo_assets() -> Vec<Asset> {
     ]
 }
 
-/// Automatic exposure: constant by day, a little brighter as the sun sinks, much brighter at night.
-pub fn auto_ev(elevation_deg: f32) -> f32 {
-    match elevation_deg {
-        e if e >= 25.0 => 13.5,
-        e if e >= 0.0 => 10.3 + 3.2 * e / 25.0,
-        e => 8.0 + 3.5 * ((e + 8.0) / 8.0).clamp(0.0, 1.0),
+/// Automatic exposure from the sun (the renderer's guide: noon 15, sun at 10 degrees 13-14, sunset
+/// 11-12, dusk 7-9, late dusk with garden lights 4-6, night with lamps 1-3); `lamps` lowers the
+/// exposure after sunset so that garden lights show. Linear between the table's rows.
+pub fn auto_ev(elevation_deg: f32, lamps: bool) -> f32 {
+    const DAY: [(f32, f32); 4] = [(-12.0, 8.0), (-3.0, 9.0), (0.0, 11.5), (10.0, 13.5)];
+    const LAMPS: [(f32, f32); 4] = [(-12.0, 4.0), (-6.0, 5.5), (-3.0, 8.0), (0.0, 11.5)];
+    let table: &[(f32, f32)] = if lamps && elevation_deg < 0.0 { &LAMPS } else { &DAY };
+    let e = elevation_deg;
+    if e >= 45.0 {
+        return 15.0;
     }
+    if e >= 10.0 {
+        return 13.5 + 1.5 * (e - 10.0) / 35.0;
+    }
+    if e <= table[0].0 {
+        return table[0].1;
+    }
+    for w in table.windows(2) {
+        if e <= w[1].0 {
+            return w[0].1 + (w[1].1 - w[0].1) * (e - w[0].0) / (w[1].0 - w[0].0);
+        }
+    }
+    table[table.len() - 1].1
 }
 
 impl Studio {
@@ -161,8 +188,14 @@ impl Studio {
             people: Vec::new(),
             show_people: true,
             placing_person: false,
-            lights_on: true,
+            lights_on: false,
+            suggest_lights: false,
+            suggested: false,
             dropped_lights: 0,
+            pairing: Default::default(),
+            sky: Default::default(),
+            thumbs: Default::default(),
+            drag_capture: false,
             last_lights: Vec::new(),
             extra: (Vec::new(), Vec::new()),
             size: [0, 0],
@@ -175,6 +208,16 @@ impl Studio {
 
     pub fn project(&self) -> &Project {
         self.session.project()
+    }
+
+    pub fn undo(&mut self) {
+        self.set_draft(None);
+        self.pairing.undo(&mut self.session);
+    }
+
+    pub fn redo(&mut self) {
+        self.set_draft(None);
+        self.pairing.redo(&mut self.session);
     }
 
     pub fn set_draft(&mut self, d: Option<Draft>) {
@@ -324,6 +367,9 @@ impl Studio {
     }
 
     pub fn sun(&self) -> (Sun, f32) {
+        if let Some(s) = self.sky.sun_override() {
+            return s;
+        }
         let pos = sun_position(&self.site(), &self.time());
         (
             Sun::from_angles(pos.azimuth_deg as f32, pos.elevation_deg as f32),
@@ -347,7 +393,8 @@ impl Studio {
     /// Sky, haze, ground, wind, exposure and lights from the project's view state.
     fn apply_view(&mut self, elevation: f32) {
         let v = self.project().view.clone();
-        let ev = v.exposure_ev.unwrap_or_else(|| auto_ev(elevation)) - self.exposure;
+        let lamps = self.lights_on && self.project().lights.iter().any(|l| l.enabled);
+        let ev = v.exposure_ev.unwrap_or_else(|| self.sky.auto_ev(elevation, lamps)) - self.exposure;
         self.renderer.set_exposure(ev);
         self.renderer.set_clay(self.project().style.clay);
         self.renderer
@@ -454,15 +501,24 @@ impl Studio {
 
     /// Sets everything the renderer needs for the next frame.
     pub fn prepare(&mut self) {
-        if self.scene.pump(&mut self.renderer) {
+        self.scene.library.lamps_on = self.lights_on;
+        let eye = self.camera.eye();
+        if self.scene.pump(&mut self.renderer, eye) {
             self.draft_serial += 1;
         }
+        self.take_catalog();
         self.sync();
         let (view, proj, eye) = self.camera.matrices(self.aspect());
         self.renderer.set_camera(view, proj, eye);
         let (sun, elevation) = self.sun();
         self.renderer.set_sun(&sun);
         self.apply_view(elevation);
+        crate::sky_panel::apply(self);
+        if elevation < 0.0 && !self.lights_on && !self.suggested && !self.project().lights.is_empty()
+        {
+            self.suggested = true;
+            self.suggest_lights = true;
+        }
         let q = self.current_quality();
         self.renderer.set_quality(q);
         let hl = self
@@ -477,6 +533,21 @@ impl Studio {
         top.extend(self.extra.1.iter().copied());
         self.renderer.set_overlay_lines(&depth);
         self.renderer.set_overlay_lines_on_top(&top);
+    }
+
+    /// The catalogue's assets join the demo ones, so placeholders and names work for them.
+    fn take_catalog(&mut self) {
+        let lib = &mut self.scene.library;
+        if !std::mem::take(&mut lib.catalog_arrived) {
+            return;
+        }
+        if let Some(c) = lib.catalog.clone() {
+            for a in &c.assets {
+                if !self.assets.iter().any(|x| x.id == a.id) {
+                    self.assets.push(a.clone());
+                }
+            }
+        }
     }
 
     /// Models in the project whose geometry is not loaded.

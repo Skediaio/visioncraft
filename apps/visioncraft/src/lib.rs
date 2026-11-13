@@ -2,15 +2,22 @@
 //! the frame loop, input routing, files and persistence. The scene, the camera and the modes live
 //! in their own modules; `studio` is everything that does not need a window.
 
+pub mod assets;
 pub mod camera;
 pub mod draw;
 pub mod files;
+pub mod gltf_load;
+pub mod lamps;
+pub mod library;
+pub mod library_ui;
+pub mod material_library;
 pub mod materials;
 pub mod modelui;
 pub mod objects;
 pub mod placeholder;
 pub mod plants;
 pub mod scene;
+pub mod sky_panel;
 pub mod smoke;
 pub mod strings;
 pub mod studio;
@@ -468,14 +475,8 @@ impl App {
             Action::New if self.dirty() => self.pending_replace = Some(Replace::New),
             Action::New => self.new_project(),
             Action::Export(i) => self.start_export(i),
-            Action::Undo => {
-                self.studio.set_draft(None);
-                self.studio.session.undo();
-            }
-            Action::Redo => {
-                self.studio.set_draft(None);
-                self.studio.session.redo();
-            }
+            Action::Undo => self.studio.undo(),
+            Action::Redo => self.studio.redo(),
             Action::ToggleWalk => self.toggle_walk(),
             Action::Mode(m) => self.set_mode(ctx, m),
             Action::SelectModel(id) => self.modelui.selected = Some(id),
@@ -629,6 +630,7 @@ impl eframe::App for App {
         }
 
         // Camera.
+        let captured = std::mem::take(&mut self.studio.drag_capture); // a tool is dragging a handle
         let cam = &mut self.studio.camera;
         let walking = cam.view == camera::View::Walk;
         if cam.is_flying() && (response.dragged() || response.double_clicked()) {
@@ -647,6 +649,7 @@ impl eframe::App for App {
             cam.pan(d.x, d.y, rect.height());
         } else if response.dragged_by(PointerButton::Primary)
             && (walking || cam.view == camera::View::Orbit)
+            && !captured
         {
             cam.orbit(d.x, d.y);
         }
@@ -724,6 +727,7 @@ impl eframe::App for App {
             _ => {}
         }
         self.views.pump(&mut cx, &self.device, &self.queue);
+        lamps::reconcile(&mut cx);
         busy |= self.views.busy();
 
         // Render.
@@ -735,7 +739,9 @@ impl eframe::App for App {
             Quality::PRESETS[self.studio.quality].1 != self.studio.renderer.quality();
         let rebuilt = self.studio.resize(size[0], size[1]) || quality_changed;
         self.studio.clock = now;
-        busy |= self.studio.animating() || self.studio.plants_pending() > 0;
+        busy |= self.studio.animating()
+            || self.studio.plants_pending() > 0
+            || !self.studio.scene.library.idle();
         self.studio.prepare();
         let mut encoder = self.device.create_command_encoder(&Default::default());
         let view = self.studio.renderer.render(&mut encoder);
@@ -788,6 +794,12 @@ impl eframe::App for App {
             input: &input,
             ctx: &ctx,
         };
+        for m in std::mem::take(&mut cx.s.scene.library.messages) {
+            cx.toasts.warn(m);
+        }
+        if std::mem::take(&mut cx.s.suggest_lights) {
+            cx.toasts.info(strings::LIGHTS_SUGGEST);
+        }
         let mut actions = self.hud.show(&mut cx, self.fps, walking);
         self.modelui.show(&mut cx, &mut actions);
         let (w, _h) = (rect.width(), rect.height());

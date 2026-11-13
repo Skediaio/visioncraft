@@ -47,6 +47,8 @@ pub struct ObjectsState {
     in_bloom: bool,
     points: Vec<[f32; 2]>,
     placed: u64,
+    /// The Objects and Lights tabs beside the plants browser.
+    pub library: crate::library_ui::LibraryUi,
 }
 
 impl Default for ObjectsState {
@@ -61,6 +63,7 @@ impl Default for ObjectsState {
             in_bloom: false,
             points: Vec::new(),
             placed: 0,
+            library: Default::default(),
         }
     }
 }
@@ -104,6 +107,9 @@ impl ObjectsState {
     }
 
     pub fn update(&mut self, cx: &mut Cx) {
+        if self.library.tab == crate::library_ui::Tab::Lights {
+            return self.library.lights.update(cx);
+        }
         let mut top: Vec<LineVertex> = Vec::new();
         let ground = Self::ground(cx);
         let Some(first) = self.palette.first().map(|p| p.0.clone()) else {
@@ -263,7 +269,15 @@ impl ObjectsState {
     }
 
     pub fn panel(&mut self, ui: &mut egui::Ui, cx: &mut Cx) {
-        self.browser(ui, cx);
+        if self.library.tabs(ui) {
+            self.browser(ui, cx);
+        } else {
+            self.library
+                .panel(ui, cx, &mut self.palette, &mut self.tool);
+            if self.library.tab == crate::library_ui::Tab::Lights {
+                return;
+            }
+        }
         ui.separator();
         ui.label(egui::RichText::new(t::PALETTE).strong());
         let pct = percentages(&self.palette.iter().map(|p| p.1).collect::<Vec<_>>());

@@ -12,6 +12,7 @@ use visioncraft_flora as flora;
 use visioncraft_render::{ItemId, LineVertex, Renderer};
 pub use visioncraft_render::{MaterialId, MeshId};
 
+use crate::library::{self, Library};
 use crate::placeholder::{self, MeshData};
 use crate::plants::{self, Flora};
 
@@ -22,7 +23,7 @@ pub struct Loaded {
     pub version: u64,
 }
 
-pub type LookKey = [u32; 12];
+pub type LookKey = [u32; 13];
 
 /// What a surface looks like to the renderer.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -39,6 +40,8 @@ pub struct Look {
     pub variation: f32,
     /// Metres per texture repeat.
     pub scale_m: f32,
+    /// Index of the material's maps in the library (0: none).
+    pub tex: u32,
 }
 
 impl Look {
@@ -53,6 +56,7 @@ impl Look {
             surface: 0,
             variation: 0.0,
             scale_m: 1.0,
+            tex: 0,
         }
     }
 
@@ -71,6 +75,7 @@ impl Look {
             self.surface as f32,
             self.variation,
             self.scale_m,
+            f32::from_bits(self.tex),
         ]
         .map(f32::to_bits)
     }
@@ -79,11 +84,13 @@ impl Look {
 const CLAY: Look = Look::plain(0.85, 0.85, 0.85, 0.9);
 const UNASSIGNED: Look = Look::plain(0.6, 0.6, 0.6, 0.8);
 
-fn look_of(m: &Material) -> Look {
+fn look_of(m: &Material, lib: &mut Library) -> Look {
+    let spec = library::spec_of(&m.maps);
     let plain = Look {
         color: m.base_color,
         metallic: m.metallic,
         roughness: m.roughness,
+        tex: if spec.is_empty() { 0 } else { lib.intern(spec) as u32 },
         ..Look::plain(0.0, 0.0, 0.0, 0.0)
     };
     match &m.kind {
@@ -277,7 +284,7 @@ struct Owner {
 type Wanted = (String, Geom, Arc<ImportedModel>, Mat4, bool, bool, bool);
 
 struct GenGpu {
-    key: (Generator, u64, u64, u8),
+    key: (Generator, u64, u64, u8, u64),
     items: Vec<ItemId>,
 }
 
@@ -298,6 +305,8 @@ pub struct Scene {
     /// Bumps whenever any owner's geometry or placement changes: generators depend on the ground.
     ground_rev: u64,
     pub flora: Flora,
+    /// The asset library: models, textures and lamps streamed in.
+    pub library: Library,
     people: Option<ItemId>,
 }
 
@@ -326,10 +335,16 @@ fn world_bounds(model: &ImportedModel, xf: &Mat4) -> Option<(Vec3, Vec3)> {
 
 impl Scene {
     fn material(&mut self, r: &mut Renderer, look: &Look) -> MaterialId {
-        *self
-            .materials
-            .entry(look.key())
-            .or_insert_with(|| r.add_material(&gpu_material(look)))
+        if let Some(id) = self.materials.get(&look.key()) {
+            return *id;
+        }
+        let m = gpu_material(look);
+        let id = r.add_material(&m);
+        if look.tex != 0 {
+            self.library.register_textured(id, m, look.tex as usize);
+        }
+        self.materials.insert(look.key(), id);
+        id
     }
 
     fn drop_owner(r: &mut Renderer, o: Owner) {
@@ -340,6 +355,9 @@ impl Scene {
     }
 
     pub fn clear(&mut self, r: &mut Renderer) {
+        for id in self.gens.keys() {
+            self.library.forget_generator(id);
+        }
         for (_, o) in self.owners.drain() {
             Self::drop_owner(r, o);
         }
@@ -402,7 +420,7 @@ impl Scene {
 
         for (id, geom, model, xf, visible, is_shape, is_area) in wanted {
             live.push(id.clone());
-            let owner_looks = |project: &Project| -> Vec<Look> {
+            let mut owner_looks = |project: &Project| -> Vec<Look> {
                 let resolved = resolve_materials(project, &id, &model);
                 model
                     .faces
@@ -412,7 +430,7 @@ impl Scene {
                         if clay {
                             CLAY
                         } else if let Some(i) = m {
-                            look_of(&project.materials[i])
+                            look_of(&project.materials[i], &mut self.library)
                         } else if let Some(c) = model.bodies[f.body as usize].color {
                             Look {
                                 color: c,
@@ -564,13 +582,14 @@ impl Scene {
             .cloned()
             .collect();
         for id in gone {
+            self.library.forget_generator(&id);
             if let Some(g) = self.gens.remove(&id) {
                 g.items.into_iter().for_each(|i| r.remove_item(i));
             }
         }
         let month = project.time.month as u8;
         for g in &project.generators {
-            let key = (g.clone(), self.ground_rev, self.flora.rev, month);
+            let key = (g.clone(), self.ground_rev, self.flora.rev, month, self.library.rev);
             if self.gens.get(g.id()).is_some_and(|old| old.key == key) {
                 continue;
             }
@@ -578,8 +597,16 @@ impl Scene {
                 old.items.into_iter().for_each(|i| r.remove_item(i));
             }
             let mut items = Vec::new();
+            self.library.forget_generator(g.id());
             if project.layer_visible(g.layer()) {
                 for (asset, variant, matrices) in self.placements(g) {
+                    if self.library.knows(&asset) {
+                        self.library.note(g.id(), &asset, &matrices);
+                        if let Some(parts) = self.library.parts(&asset) {
+                            items.push(r.add_lod_item(&parts, &matrices));
+                            continue;
+                        }
+                    }
                     if let Some(res) = plants::resolve(project, &asset) {
                         let class = plants::class(&res.params, month);
                         if let Some(parts) = self.flora.parts(&asset, class, variant) {
@@ -604,8 +631,9 @@ impl Scene {
     }
 
     /// One step of lazy plant generation; true when a generation finished (the scene must sync again).
-    pub fn pump(&mut self, r: &mut Renderer) -> bool {
-        self.flora.pump(r)
+    pub fn pump(&mut self, r: &mut Renderer, eye: Vec3) -> bool {
+        let library = self.library.pump(r, eye);
+        self.flora.pump(r) | library
     }
 
     /// Instance matrices per (asset id, variant) for one generator.
@@ -792,20 +820,20 @@ mod tests {
 
     #[test]
     fn classify_picks_the_cheapest_update() {
-        let a = key(1, vec![[0; 12]], true);
+        let a = key(1, vec![[0; 13]], true);
         let (i, t) = (Mat4::IDENTITY, Mat4::from_translation(Vec3::X));
         assert_eq!(classify(&a, &a.clone(), &i, &i), Change::Keep);
         assert_eq!(classify(&a, &a.clone(), &i, &t), Change::Transform);
         assert_eq!(
-            classify(&a, &key(2, vec![[0; 12]], true), &i, &i),
+            classify(&a, &key(2, vec![[0; 13]], true), &i, &i),
             Change::Rebuild
         );
         assert_eq!(
-            classify(&a, &key(1, vec![[1; 12]], true), &i, &i),
+            classify(&a, &key(1, vec![[1; 13]], true), &i, &i),
             Change::Rebuild
         );
         assert_eq!(
-            classify(&a, &key(1, vec![[0; 12]], false), &i, &t),
+            classify(&a, &key(1, vec![[0; 13]], false), &i, &t),
             Change::Rebuild
         );
     }
