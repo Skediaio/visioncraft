@@ -125,4 +125,46 @@ mod tests {
         assert!(unpack(b"PK nonsense").is_err());
         assert!(unpack(&bytes[..bytes.len() / 2]).is_err());
     }
+
+    /// A file from a build with extensions this one does not know keeps their data byte for
+    /// byte through open, save as a bundle, open, save.
+    #[test]
+    fn unknown_extension_namespaces_survive_unchanged() {
+        let ext = serde_json::json!({
+            "com.other.tool": {"pipes": [{"from": [0.5, 1.25], "to": [3.0, -2.0], "dn": 110}], "rev": 7},
+            "zz.vendor": {"note": "kept as is", "nested": {"a": [1, 2.5, null, true]}}
+        });
+        let mut doc: serde_json::Value =
+            serde_json::from_slice(&Project::default().to_json_bytes()).unwrap();
+        doc["extensions"] = ext.clone();
+        doc["models"] = serde_json::json!([{"id": "m1", "name": "House", "kind": "obj",
+            "source": "house.obj", "extensions": {"com.other.tool": {"tag": "facade"}}}]);
+        doc["materials"][0]["extensions"] = serde_json::json!({"com.other.tool": {"rough": 0.125}});
+        let original = serde_json::to_vec(&doc).unwrap();
+        // what the other build wrote, opened here and saved as a bundle
+        let mut s = Session::new(Project::default());
+        s.replace_project(Project::from_json_bytes(&original).unwrap());
+        let first = s.project().to_json_bytes();
+        let model: Arc<[u8]> = Arc::from(vec![7u8; 4]);
+        let zip = pack(s.project(), &|_| None, &|_| Some(model.clone())).unwrap();
+        let back = unpack(&zip).unwrap().project;
+        let second = back.to_json_bytes();
+        let parsed = |b: &[u8]| serde_json::from_slice::<serde_json::Value>(b).unwrap();
+        let (a, b) = (parsed(&first), parsed(&second));
+        let bytes = |v: &serde_json::Value| serde_json::to_vec(v).unwrap();
+        assert_eq!(bytes(&a["extensions"]), bytes(&ext));
+        assert_eq!(bytes(&b["extensions"]), bytes(&ext));
+        assert_eq!(
+            bytes(&b["models"][0]["extensions"]),
+            bytes(&a["models"][0]["extensions"])
+        );
+        assert_eq!(
+            bytes(&b["materials"][0]["extensions"]),
+            br#"{"com.other.tool":{"rough":0.125}}"#.to_vec()
+        );
+        // apart from the model's source moved into the bundle, the two saves are the same file
+        let mut b2 = b.clone();
+        b2["models"][0]["source"] = a["models"][0]["source"].clone();
+        assert_eq!(bytes(&b2), bytes(&a));
+    }
 }
