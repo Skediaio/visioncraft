@@ -131,11 +131,23 @@ pub(super) fn register(s: &mut Session) {
                 param("height", T::Number, "Extrusion: height above `base`, above zero.").unit("m"),
                 param("thickness", T::Number, "Open extrusion: width.").unit("m"),
                 param("elevation", T::Number, "Area: height of the surface.").unit("m"),
+                param("drape", T::Boolean, "Area: lie on the ground (follow the terrain, `elevation` above it) or be flat."),
             ],
             "null",
             json!({"id": "S2", "height": 4.5}),
         ),
         set_height,
+    );
+    s.register_with_spec(
+        spec(
+            "shape.drape_areas",
+            "Lay Areas on the Ground",
+            "Areas at height 0 that are flat start to lie on the ground (follow the terrain); what terrain.create does, for projects whose areas predate their terrain.",
+            vec![],
+            "{draped: integer}",
+            json!({}),
+        ),
+        |p, _| Ok(json!({"draped": drape_areas(p)})),
     );
     s.register_with_spec(
         spec(
@@ -401,6 +413,7 @@ fn set_height(project: &mut Project, params: &Value) -> Result<Value, CommandErr
         height: Option<f32>,
         thickness: Option<f32>,
         elevation: Option<f32>,
+        drape: Option<bool>,
     }
     let p: P = parse(params)?;
     edit(project, &p.id, |s| {
@@ -410,9 +423,10 @@ fn set_height(project: &mut Project, params: &Value) -> Result<Value, CommandErr
                     return Err(bad("an area has only an elevation"));
                 }
                 a.elevation = p.elevation.unwrap_or(a.elevation);
+                a.drape = p.drape.unwrap_or(a.drape);
             }
             Shape::Extrusion(e) => {
-                if p.elevation.is_some() {
+                if p.elevation.is_some() || p.drape.is_some() {
                     return Err(bad("an extrusion has base, height and thickness"));
                 }
                 e.base = p.base.unwrap_or(e.base);
@@ -455,4 +469,19 @@ fn rename(project: &mut Project, params: &Value) -> Result<Value, CommandError> 
 
 fn yes() -> bool {
     true
+}
+
+/// Areas at height 0 that are flat start to lie on the ground; returns how many.
+pub(crate) fn drape_areas(project: &mut Project) -> usize {
+    let mut n = 0;
+    for s in &mut project.shapes {
+        if let Shape::Area(a) = s
+            && !a.drape
+            && a.elevation == 0.0
+        {
+            a.drape = true;
+            n += 1;
+        }
+    }
+    n
 }

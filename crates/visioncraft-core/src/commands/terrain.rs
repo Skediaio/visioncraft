@@ -210,14 +210,7 @@ fn create(project: &mut Project, params: &Value) -> Result<Value, CommandError> 
         Terrain::flat(p.origin, p.width_m, p.depth_m, p.cell_m, &p.base_material).map_err(terr)?,
     ));
     // Areas that lay on the old flat ground lie on the new one (see `shape`'s module docs).
-    for s in &mut project.shapes {
-        if let crate::Shape::Area(a) = s
-            && !a.drape
-            && a.elevation == 0.0
-        {
-            a.drape = true;
-        }
-    }
+    super::shapes::drape_areas(project);
     Ok(Value::Null)
 }
 
