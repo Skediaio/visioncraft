@@ -128,6 +128,8 @@ pub struct App {
     fps: f64,
     last_title: String,
     settle: u8,
+    /// A project restored at start is still settling (its undo history is cleared until then).
+    settling_restore: bool,
     /// The last frame asked for the next one: the time between them is a frame, not idle.
     repainting: bool,
     #[cfg(not(target_arch = "wasm32"))]
@@ -196,6 +198,7 @@ impl App {
             fps: 0.0,
             last_title: String::new(),
             settle: 0,
+            settling_restore: was_restored,
             repainting: false,
             #[cfg(not(target_arch = "wasm32"))]
             agents: Default::default(),
@@ -1092,6 +1095,17 @@ impl eframe::App for App {
         overlay.show(&mut cx);
         self.views.pump(&mut cx, &self.device, &self.queue);
         lamps::reconcile(&mut cx);
+        // What the app does by itself while a restored project settles (lamp lights, the
+        // catalogue arriving) is not the person's to undo.
+        // shortcut: an edit made in those first seconds loses its undo step, rarely anyone's
+        if self.settling_restore {
+            let settled = cx.s.plants_pending() == 0
+                && cx.s.scene.library.idle()
+                && self.loading.is_none()
+                && self.queued_jobs.is_empty();
+            cx.s.session.clear_history();
+            self.settling_restore = !settled;
+        }
         busy |= self.views.busy();
 
         // Render.

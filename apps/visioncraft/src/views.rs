@@ -20,6 +20,9 @@ pub struct ViewsState {
     rename: String,
     dragging: Option<usize>,
     rects: Vec<Rect>,
+    /// (models loaded, plants and library settled) when the thumbnails were last made: a model or
+    /// the plants that arrive later make them anew.
+    settled: Option<(usize, bool)>,
 }
 
 impl ViewsState {
@@ -43,6 +46,19 @@ impl ViewsState {
                 .map(|v| v.id.clone())
                 .collect();
         self.thumbs.retain(|k, _| have.contains(k));
+        let now = (
+            cx.s.loaded.len(),
+            cx.s.plants_pending() == 0 && cx.s.scene.library.idle(),
+        );
+        if now.1 && self.settled.is_some_and(|s| s != now) {
+            // The old pictures stay until the new ones are in.
+            for id in &have {
+                self.queue(id);
+            }
+        }
+        if now.1 || self.settled.is_none() {
+            self.settled = Some(now);
+        }
         for id in &have {
             if !self.thumbs.contains_key(id)
                 && !self.jobs.contains(id)

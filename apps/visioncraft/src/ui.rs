@@ -387,6 +387,8 @@ pub struct Hud {
     pub show_fps: bool,
     pub layers_open: bool,
     pub export_open: bool,
+    /// Where the Export button was last frame: its panel opens under it.
+    pub export_at: egui::Rect,
     /// Export every viewpoint instead of the current view.
     pub export_all: bool,
 }
@@ -399,6 +401,7 @@ impl Default for Hud {
             show_fps: true,
             layers_open: false,
             export_open: false,
+            export_at: egui::Rect::ZERO,
             export_all: false,
         }
     }
@@ -556,7 +559,9 @@ impl Hud {
                             cx.run("view.set", serde_json::json!({"view_distance": vd}));
                         }
                     });
-                if ui.selectable_label(self.export_open, t::EXPORT).clicked() {
+                let export = ui.selectable_label(self.export_open, t::EXPORT);
+                self.export_at = export.rect;
+                if export.clicked() {
                     self.export_open = !self.export_open;
                 }
                 if ui.selectable_label(walking, t::WALK).clicked() {
@@ -581,10 +586,15 @@ impl Hud {
         });
 
         if self.export_open {
+            // Hanging under its button, right edges aligned.
             let (a, o) = if narrow(&ctx) {
                 (Align2::LEFT_TOP, Vec2::new(10.0, 150.0))
             } else {
-                (Align2::RIGHT_TOP, Vec2::new(-10.0, 270.0))
+                let right = ctx.content_rect().right() - self.export_at.right();
+                (
+                    Align2::RIGHT_TOP,
+                    Vec2::new(-(right - 8.0).max(10.0), self.export_at.bottom() + 14.0),
+                )
             };
             floating(&ctx, "export", a, o, 260.0, |ui| {
                 ui.label(RichText::new(t::EXPORT).strong());

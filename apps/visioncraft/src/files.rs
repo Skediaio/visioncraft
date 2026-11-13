@@ -100,6 +100,16 @@ pub fn save_as(
     bytes: Vec<u8>,
     extension: &'static str,
 ) {
+    // On the web a download needs no dialog: straight to the browser's downloads (rfd would
+    // first show its own "click here to download" box).
+    #[cfg(target_arch = "wasm32")]
+    match download(&suggested, &bytes) {
+        Ok(()) => {
+            inbox.push(Msg::Saved(suggested), ctx);
+            return;
+        }
+        Err(e) => log::warn!("direct download failed, asking instead: {e}"),
+    }
     let (inbox, ctx) = (inbox.clone(), ctx.clone());
     spawn(async move {
         let Some(h) = rfd::AsyncFileDialog::new()
@@ -115,6 +125,30 @@ pub fn save_as(
             Err(e) => inbox.push(Msg::Failed(format!("could not save: {e}")), &ctx),
         }
     });
+}
+
+/// A download of `bytes` named `name`, as a link with `download` clicked by the page.
+#[cfg(target_arch = "wasm32")]
+fn download(name: &str, bytes: &[u8]) -> Result<(), String> {
+    use wasm_bindgen::JsCast;
+    let err = |e: wasm_bindgen::JsValue| format!("{e:?}");
+    let parts = js_sys::Array::of1(&js_sys::Uint8Array::from(bytes));
+    let blob = web_sys::Blob::new_with_u8_array_sequence(&parts).map_err(err)?;
+    let url = web_sys::Url::create_object_url_with_blob(&blob).map_err(err)?;
+    let document = web_sys::window()
+        .and_then(|w| w.document())
+        .ok_or("no document")?;
+    let a = document
+        .create_element("a")
+        .map_err(err)?
+        .dyn_into::<web_sys::HtmlAnchorElement>()
+        .map_err(|_| "not an anchor".to_string())?;
+    a.set_href(&url);
+    a.set_download(name);
+    a.click();
+    // shortcut: the blob URL is not revoked (revoking at once can cancel the download); a few
+    // per session, freed with the page
+    Ok(())
 }
 
 /// Saves several files at once: into a folder the person picks, or on the web (which has no
