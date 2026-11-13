@@ -300,6 +300,13 @@ impl Session {
         }
     }
 
+    /// Forgets undo and redo (the project stays): what the app did by itself while opening a
+    /// project is not something to undo.
+    pub fn clear_history(&mut self) {
+        self.undo.clear();
+        self.redo.clear();
+    }
+
     pub fn can_undo(&self) -> bool {
         !self.undo.is_empty()
     }
