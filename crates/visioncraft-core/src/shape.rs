@@ -883,6 +883,10 @@ pub fn shape_mesh_on_terrain(
             }
         }
     }
+    // Smooth like the terrain, not faceted per piece.
+    for (p, n) in b.model.positions.iter().zip(b.model.normals.iter_mut()) {
+        *n = terrain.normal_at(p[0], p[2]);
+    }
     Ok(b.finish(&a.id, &a.name, vec![format!("{}:top", a.id)]))
 }
 
