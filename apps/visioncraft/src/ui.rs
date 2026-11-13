@@ -262,9 +262,42 @@ pub fn floating_own_scroll(
         .show(ctx, |ui| {
             panel_frame().show(ui, |ui| {
                 ui.set_max_width(max_width);
-                add(ui);
+                if !folded(ui, id) {
+                    add(ui);
+                }
             });
         });
+}
+
+/// The mode panel folds to its title (`MODE_PANEL_TITLE` in the context's data, set by the
+/// window each frame), so it can be moved out of a drawing's way; true while folded.
+pub const MODE_PANEL: &str = "modepanel";
+pub const MODE_PANEL_TITLE: &str = "modepanel-title";
+
+fn folded(ui: &mut egui::Ui, id: &str) -> bool {
+    if id != MODE_PANEL {
+        return false;
+    }
+    let ctx = ui.ctx().clone();
+    let key = egui::Id::new("modepanel-folded");
+    let mut folded: bool = ctx.data(|d| d.get_temp(key)).unwrap_or(false);
+    let title: String = ctx
+        .data(|d| d.get_temp(egui::Id::new(MODE_PANEL_TITLE)))
+        .unwrap_or_default();
+    let label = format!("{} {title}", if folded { "▸" } else { "▾" });
+    if ui
+        .add(egui::Button::new(RichText::new(label).small().strong()).frame(false))
+        .on_hover_text(if folded {
+            t::PANEL_UNFOLD
+        } else {
+            t::PANEL_FOLD
+        })
+        .clicked()
+    {
+        folded = !folded;
+        ctx.data_mut(|d| d.insert_temp(key, folded));
+    }
+    folded
 }
 
 /// A floating panel anchored to a corner; it scrolls when taller than the window.
@@ -288,6 +321,9 @@ pub fn floating(
                 // the content's height of the last frame, and paint again until it fits.
                 let key = egui::Id::new(("floating-height", id));
                 let last: f32 = ctx.data(|d| d.get_temp(key)).unwrap_or(0.0);
+                if folded(ui, id) {
+                    return;
+                }
                 let out = egui::ScrollArea::vertical()
                     .id_salt(("floating", id))
                     .max_height(room)

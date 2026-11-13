@@ -130,6 +130,9 @@ pub struct App {
     settle: u8,
     /// A project restored at start is still settling (its undo history is cleared until then).
     settling_restore: bool,
+    /// The plan's centre and half height as last fitted, and the free rectangle's left edge
+    /// then; `None` outside the plan.
+    plan_fit: Option<(glam::Vec2, f32, f32)>,
     /// The last frame asked for the next one: the time between them is a frame, not idle.
     repainting: bool,
     #[cfg(not(target_arch = "wasm32"))]
@@ -199,6 +202,7 @@ impl App {
             last_title: String::new(),
             settle: 0,
             settling_restore: was_restored,
+            plan_fit: None,
             repainting: false,
             #[cfg(not(target_arch = "wasm32"))]
             agents: Default::default(),
@@ -233,6 +237,7 @@ impl App {
                 app.studio.bounds_hint = b;
             }
             app.load_sources(None);
+            app.drape_old_areas();
             app.studio.sync();
             app.studio.frame_all();
             app.stored_revision = Some(0);
@@ -447,6 +452,26 @@ impl App {
         false
     }
 
+    /// A project whose areas predate its terrain: they start to lie on the ground (one command,
+    /// so one undo step), and a line says so.
+    fn drape_old_areas(&mut self) {
+        let p = self.studio.project();
+        let flat = p.shapes.iter().any(
+            |s| matches!(s, visioncraft_core::Shape::Area(a) if !a.drape && a.elevation == 0.0),
+        );
+        if p.terrain.is_none() || !flat {
+            return;
+        }
+        match self.studio.run("shape.drape_areas", serde_json::json!({})) {
+            Ok(v) => self.toasts.info(format!(
+                "{} {}",
+                v["draped"].as_u64().unwrap_or(0),
+                strings::AREAS_DRAPED
+            )),
+            Err(e) => self.toasts.error(e.to_string()),
+        }
+    }
+
     fn open_project(&mut self, name: &str, bytes: &[u8], path: Option<&Path>) {
         let opened = if extension(name) == "zip" {
             bundle::unpack(bytes).map(|u| (u.project, u.files))
@@ -462,6 +487,7 @@ impl App {
                 self.project_name = Some(stem(name.trim_end_matches(".zip")));
                 self.load_sources(path.and_then(Path::parent));
                 self.take_bundled(files);
+                self.drape_old_areas();
                 self.studio.sync();
                 self.studio.frame_all();
                 self.saved_revision = self.studio.session.revision();
@@ -726,9 +752,22 @@ impl App {
         if cam.view == camera::View::Walk {
             cam.leave_walk();
         } else {
+            // A free spot near what the view looks at, on the side the camera is, facing it.
+            let target = cam.pivot;
             let eye = cam.eye();
-            let ground = self.studio.scene.floor_below(eye.x, 500.0, eye.z);
-            self.studio.camera.enter_walk(ground);
+            let s = &self.studio;
+            let at = walk_spot(target, eye, &|x, z| {
+                s.scene.free_to_stand(s.project(), x, z)
+            });
+            let ground = self.studio.scene.floor_below(at.x, 500.0, at.z);
+            let cam = &mut self.studio.camera;
+            cam.enter_walk(ground);
+            cam.walk.eye.x = at.x;
+            cam.walk.eye.z = at.z;
+            let to = target - cam.walk.eye;
+            if to.x.hypot(to.z) > 1e-3 {
+                cam.walk.yaw = to.x.atan2(-to.z);
+            }
         }
     }
 
@@ -1185,6 +1224,20 @@ impl eframe::App for App {
         self.modelui.show(&mut cx, &mut actions);
         let (w, _h) = (rect.width(), rect.height());
         let panel_width = (w - 20.0).min(380.0);
+        let title = match self.hud.mode {
+            Some(Mode::Extension(id)) => self
+                .hud
+                .extension_modes
+                .iter()
+                .find(|m| m.0 == id)
+                .map_or(String::new(), |m| m.1.to_string()),
+            Some(m) => ui::MODES
+                .iter()
+                .position(|x| *x == m)
+                .map_or(String::new(), |i| strings::MODE_LABELS[i].0.to_string()),
+            None => String::new(),
+        };
+        ctx.data_mut(|d| d.insert_temp(egui::Id::new(ui::MODE_PANEL_TITLE), title));
         match self.hud.mode {
             Some(Mode::Draw) => ui::floating(
                 &ctx,
@@ -1262,6 +1315,23 @@ impl eframe::App for App {
             }
             None => {}
         }
+        // The plan shows the drawing in the part of the window no panel covers.
+        let free = egui::Rect::from_min_max(
+            egui::pos2(
+                ctx.memory(|m| m.area_rect(egui::Id::new(ui::MODE_PANEL)))
+                    .map_or(rect.left(), |r| r.right())
+                    + 10.0,
+                rect.top() + 60.0,
+            ),
+            egui::pos2(rect.right() - 10.0, rect.bottom() - 60.0),
+        );
+        self.plan_fit = fit_plan(
+            &mut cx.s.camera,
+            cx.s.scene.bounds(),
+            rect,
+            free,
+            self.plan_fit,
+        );
         // Models that need their file.
         let missing: Vec<(String, String)> =
             cx.s.missing_models()
@@ -1399,5 +1469,123 @@ impl eframe::App for App {
         if self.repainting {
             ctx.request_repaint();
         }
+    }
+}
+
+/// Where to start walking: the free spot (by `free`) nearest to 8 m from `target` towards
+/// `eye`, looking further round on both sides and further out; the camera's own ground point if
+/// nothing nearer is free.
+fn walk_spot(target: glam::Vec3, eye: glam::Vec3, free: &dyn Fn(f32, f32) -> bool) -> glam::Vec3 {
+    let back = glam::Vec2::new(eye.x - target.x, eye.z - target.z);
+    let start = back.y.atan2(back.x);
+    for r in (0..12).map(|k| 8.0 + 3.0 * k as f32) {
+        for k in 0..12 {
+            // 0, +15, -15, +30, -30 ... degrees around the camera's side.
+            let turn =
+                ((k + 1) / 2) as f32 * 15f32.to_radians() * if k % 2 == 0 { 1.0 } else { -1.0 };
+            let a = start + turn;
+            let p = glam::Vec3::new(target.x + r * a.cos(), 0.0, target.z + r * a.sin());
+            if free(p.x, p.z) {
+                return p;
+            }
+        }
+    }
+    glam::Vec3::new(eye.x, 0.0, eye.z)
+}
+
+#[cfg(test)]
+mod walk_tests {
+    use super::walk_spot;
+    use glam::Vec3;
+
+    #[test]
+    fn walking_starts_at_a_free_spot_on_the_camera_side() {
+        let target = Vec3::ZERO;
+        let eye = Vec3::new(0.0, 20.0, 40.0);
+        let open = walk_spot(target, eye, &|_, _| true);
+        assert!((open.z - 8.0).abs() < 1e-3 && open.x.abs() < 1e-3, "{open}");
+        // A hedge across the camera side up to 12 m: the spot is behind it.
+        let hedge = |_: f32, z: f32| z > 12.0;
+        let p = walk_spot(target, eye, &hedge);
+        assert!(p.z > 12.0 && p.distance(target) < 20.0, "{p}");
+    }
+}
+
+/// Fits the plan to the drawing when it opens, and again when the panel beside it changes width,
+/// as long as the plan was not moved since: the drawing fills `free` (the window minus the
+/// panels), 2 m around it. Returns the new fit state.
+fn fit_plan(
+    cam: &mut camera::Camera,
+    bounds: Option<(glam::Vec3, glam::Vec3)>,
+    window: egui::Rect,
+    free: egui::Rect,
+    last: Option<(glam::Vec2, f32, f32)>,
+) -> Option<(glam::Vec2, f32, f32)> {
+    if cam.view != camera::View::Top {
+        return None;
+    }
+    let now = (cam.top_center, cam.top_half_height);
+    let refit = match last {
+        None => true,
+        Some((c, h, left)) => (c, h) == now && (left - free.left()).abs() > 20.0,
+    };
+    if !refit {
+        return last;
+    }
+    let Some((lo, hi)) = bounds.filter(|_| free.width() > 50.0 && free.height() > 50.0) else {
+        return Some((now.0, now.1, free.left()));
+    };
+    let m = 2.0;
+    let (w, d) = (hi.x - lo.x + 2.0 * m, hi.z - lo.z + 2.0 * m);
+    let half_screen = window.height() / 2.0;
+    // Metres per point is h / half_screen: the drawing's width and depth must fit the free part.
+    let h = (w * half_screen / free.width())
+        .max(d * half_screen / free.height())
+        .max(1.0);
+    let mid = glam::Vec2::new((lo.x + hi.x) / 2.0, (lo.z + hi.z) / 2.0);
+    let shift = glam::Vec2::new(
+        free.center().x - window.center().x,
+        free.center().y - window.center().y,
+    ) * (h / half_screen);
+    cam.top_half_height = h;
+    cam.top_center = mid - shift;
+    Some((cam.top_center, h, free.left()))
+}
+
+#[cfg(test)]
+mod plan_tests {
+    use super::*;
+
+    #[test]
+    fn the_plan_fits_the_drawing_into_the_free_part_of_the_window() {
+        let mut cam = camera::Camera::default();
+        cam.view = camera::View::Top;
+        let window = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0));
+        let free = egui::Rect::from_min_max(egui::pos2(420.0, 60.0), egui::pos2(1430.0, 840.0));
+        let bounds = Some((
+            glam::Vec3::new(-15.0, 0.0, -10.0),
+            glam::Vec3::new(15.0, 6.0, 10.0),
+        ));
+        let fit = fit_plan(&mut cam, bounds, window, free, None).unwrap();
+        // Where a world point lands on the screen in the plan (x right, z down).
+        let screen = |x: f32, z: f32| {
+            let k = 450.0 / cam.top_half_height;
+            egui::pos2(
+                720.0 + (x - cam.top_center.x) * k,
+                450.0 + (z - cam.top_center.y) * k,
+            )
+        };
+        for (x, z) in [(-15.0, -10.0), (15.0, 10.0), (-15.0, 10.0), (15.0, -10.0)] {
+            assert!(
+                free.contains(screen(x, z)),
+                "{x}, {z} at {:?}",
+                screen(x, z)
+            );
+        }
+        // Moved by hand: a panel change does not refit.
+        cam.top_center.x += 3.0;
+        let narrower = egui::Rect::from_min_max(egui::pos2(200.0, 60.0), free.max);
+        let kept = fit_plan(&mut cam, bounds, window, narrower, Some(fit));
+        assert_eq!(kept, Some(fit));
     }
 }

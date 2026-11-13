@@ -74,12 +74,24 @@ pub const TOOL_SELECT: &str = "Select";
 pub const TOOL_AREA: &str = "Area";
 pub const TOOL_BLOCK: &str = "Block";
 pub const TOOL_WALL: &str = "Wall";
-pub const LIGHT_FIXTURES: &str = "Lamps (click one, then click where it goes)";
+pub const LIGHT_FIXTURES: &str = "Garden lamps (click one, then click where it goes)";
 pub const BARE_LIGHTS: &str = "Bare lights";
 pub const IN_BLOOM_NOW: &str = "in bloom";
 pub const PLAN_VIEW: &str = "Plan";
 pub const PLAN_VIEW_TIP: &str =
     "Look straight down, as in Draw: what you place lands exactly under the pointer";
+pub const STOREYS: &str = "Storeys";
+pub const AREAS_DRAPED: &str =
+    "areas now follow the ground (they were drawn before the terrain); undo puts them back";
+pub const FOLLOW_GROUND: &str = "Follow the ground";
+pub const FOLLOW_GROUND_TIP: &str = "On: the area lies on the terrain, its elevation is above the ground. Off: flat at its elevation (a raised deck, water)";
+pub const KEEP_INSIDE: &str = "Keep inside area";
+pub const KEEP_INSIDE_TIP: &str = "Plants stay inside the area (border, lawn) the stroke starts on";
+pub const INDOOR_LIGHTS: &str = "Indoor lights";
+pub const PT_PRESET: &str = "Mix";
+pub const PT_MORE: &str = "Size, turning, layer";
+pub const PANEL_FOLD: &str = "Fold the panel to its title, to see and click what is behind it";
+pub const PANEL_UNFOLD: &str = "Unfold the panel";
 pub const KIND_LAWN: &str = "Lawn";
 pub const KIND_TERRACE: &str = "Terrace";
 pub const KIND_PATH: &str = "Path";

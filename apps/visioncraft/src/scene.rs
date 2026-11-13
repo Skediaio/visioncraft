@@ -7,7 +7,7 @@ use std::sync::Arc;
 use visioncraft_core::{
     Asset, Evaluation, Generator, ImportedModel, Material, ModelRef, Project, Shape, SurfaceKind,
     Terrain, area_lifts, areas_over, evaluate, evaluate_surface_fill, footing, ground_height,
-    inside_outline, lawn_scatter, raycast, resolve_materials, shape_mesh_on,
+    inside_outline, lawn_scatter, raycast, resolve_materials, shape_mesh, shape_mesh_on_terrain,
 };
 use visioncraft_flora as flora;
 use visioncraft_render::{ImpostorId, ItemId, LineVertex, Renderer};
@@ -621,7 +621,11 @@ impl Scene {
             // The mesh is only rebuilt when the shape (or the terrain it lies on) changed.
             let model = match self.owners.get(&id) {
                 Some(o) if o.key.geom == geom => o.geom.clone(),
-                _ => match shape_mesh_on(&placed, &ground) {
+                _ => match match terrain.as_deref() {
+                    // Cut along the terrain's own triangles: no hill edge pokes through.
+                    Some(t) => shape_mesh_on_terrain(&placed, t),
+                    None => shape_mesh(&placed),
+                } {
                     Ok(m) => Arc::new(m),
                     Err(e) => {
                         problems.push(format!("{}: {e}", s.name()));
@@ -1306,6 +1310,64 @@ impl Scene {
     }
 
     // ---- queries ----
+
+    /// Whether a person could stand at `(x, z)`: not inside a plant's crown or a hedge (its
+    /// spread, from the species' width or the object's size), not under or inside a block or
+    /// model (anything more than 30 cm above the ground there), not in water.
+    pub fn free_to_stand(&self, project: &Project, x: f32, z: f32) -> bool {
+        let ground = self.floor_below(x, 500.0, z).unwrap_or(0.0);
+        let terrain = self
+            .terrain
+            .as_ref()
+            .and_then(|t| t.height_at(x, z))
+            .unwrap_or(ground);
+        if self
+            .raycast(Vec3::new(x, terrain + 200.0, z), Vec3::NEG_Y, false)
+            .is_some_and(|p| p.point.y > terrain + 0.3)
+        {
+            return false;
+        }
+        let water = project.shapes.iter().any(|s| {
+            let Shape::Area(a) = s else { return false };
+            inside_outline([x, z], &a.outline)
+                && self.owners.get(&a.id).is_some_and(|o| {
+                    resolve_materials(project, &a.id, &o.geom)
+                        .into_iter()
+                        .any(|m| {
+                            m.and_then(|i| project.materials.get(i)).is_some_and(|m| {
+                                matches!(m.kind, SurfaceKind::AnimatedWater { .. })
+                            })
+                        })
+                })
+        });
+        if water {
+            return false;
+        }
+        let half_width = |asset: &str| -> f32 {
+            asset
+                .strip_prefix("flora:")
+                .and_then(flora::Species::by_id)
+                .map(|s| s.mature_width_m / 2.0)
+                .or_else(|| {
+                    self.library
+                        .catalog
+                        .as_ref()
+                        .and_then(|c| c.asset(asset))
+                        .map(|a| a.size_m[0].max(a.size_m[2]) / 2.0)
+                })
+                .unwrap_or(0.5)
+        };
+        !self.gens.values().any(|g| {
+            g.groups.iter().any(|((asset, _), grp)| {
+                let r = half_width(asset);
+                grp.matrices.iter().any(|m| {
+                    let scale = m.x_axis.truncate().length();
+                    let at = m.w_axis;
+                    (at.x - x).hypot(at.z - z) < r * scale + 0.3
+                })
+            })
+        })
+    }
 
     pub fn raycast(&self, origin: Vec3, dir: Vec3, shapes_only: bool) -> Option<Pick> {
         let mut best: Option<Pick> = None;
