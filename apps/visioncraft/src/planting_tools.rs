@@ -25,7 +25,7 @@ pub const BRUSH_MIN: f32 = 0.25;
 pub const BRUSH_MAX: f32 = 40.0;
 const HANDLE_PX: f32 = 12.0;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub enum Tool {
     #[default]
     Select,
@@ -637,8 +637,10 @@ pub struct PlantingTools {
     pub tool: Tool,
     /// The Lights tool of the tool row is open instead of a planting tool.
     pub lights: bool,
-    /// Settings for new plantings.
+    /// Settings for new plantings with the current tool.
     pub form: Form,
+    /// The other tools' settings: each tool keeps its own palette.
+    forms: HashMap<Tool, Form>,
     pub selected: Option<String>,
     /// The selected planting's settings, edited live.
     pub edit: Option<Form>,
@@ -667,6 +669,7 @@ impl Default for PlantingTools {
             tool: Tool::Select,
             lights: false,
             form: Form::default(),
+            forms: HashMap::new(),
             selected: None,
             edit: None,
             edit_rev: u64::MAX,
@@ -836,7 +839,7 @@ impl PlantingTools {
         if self.tool == tool {
             return;
         }
-        self.tool = tool;
+        self.switch_form(tool);
         self.points.clear();
         self.stroke.clear();
         self.drag = Drag::None;
@@ -861,10 +864,21 @@ impl PlantingTools {
         self.edit_rev = cx.s.session.revision();
     }
 
+    /// Makes `tool` current with its own settings, keeping the old tool's.
+    fn switch_form(&mut self, tool: Tool) {
+        if tool == self.tool {
+            return;
+        }
+        let next = self.forms.remove(&tool).unwrap_or_default();
+        let old = std::mem::replace(&mut self.form, next);
+        self.forms.insert(self.tool, old);
+        self.tool = tool;
+    }
+
     /// Selects `g` (or nothing) without a `Cx`, as automation does.
     pub fn select_stored(&mut self, g: Option<&Generator>, revision: u64) {
         self.lights = false;
-        self.tool = Tool::Select;
+        self.switch_form(Tool::Select);
         self.vertex = None;
         self.edit = g.map(Form::from_generator);
         self.selected = g.map(|g| g.id().to_string());
@@ -948,9 +962,8 @@ impl PlantingTools {
         let Some(g) = self.selected.as_deref().and_then(|id| stored(cx, id)) else {
             return;
         };
-        let (cmd, p) = handles::duplicate_params(&g, [2.0, 2.0], next_seed(self.counter + 11));
-        self.counter += 1;
-        if let Some(r) = cx.run(cmd, p) {
+        let p = json!({"id": g.id(), "offset": [2.0, 2.0], "new_seed": true});
+        if let Some(r) = cx.run("planting.duplicate", p) {
             let id = r["id"].as_str().map(str::to_string);
             self.select_generator(cx, id);
         }
@@ -1892,5 +1905,19 @@ mod tests {
         assert_eq!(f.name("Brush", "Oak"), "Brush (layered)");
         f.preset = Some("Mixed woodland".into());
         assert_eq!(f.name("Brush", "Oak"), "Mixed woodland brush");
+    }
+
+    #[test]
+    fn each_tool_keeps_its_own_palette() {
+        let mut t = PlantingTools::default();
+        t.switch_form(Tool::Line);
+        t.form.palette = vec![Weighted {
+            asset: "flora:carpinus-hedge".into(),
+            weight: 1.0,
+        }];
+        t.switch_form(Tool::Single);
+        assert_ne!(t.form.palette[0].asset, "flora:carpinus-hedge");
+        t.switch_form(Tool::Line);
+        assert_eq!(t.form.palette[0].asset, "flora:carpinus-hedge");
     }
 }

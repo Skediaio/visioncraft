@@ -285,14 +285,8 @@ mod native {
                     .get("id")
                     .and_then(Value::as_str)
                     .ok_or("`duplicate` needs `id`")?;
-                let g = s
-                    .project()
-                    .generators
-                    .iter()
-                    .find(|g| g.id() == id)
-                    .ok_or_else(|| format!("no generator `{id}`"))?;
-                let (cmd, p) = crate::handles::duplicate_params(g, [2.0, 2.0], 4242);
-                let r = s.session.run(cmd, p).map_err(|e| e.to_string())?;
+                let p = serde_json::json!({"id": id, "offset": [2.0, 2.0], "new_seed": true});
+                let r = s.run("planting.duplicate", p).map_err(|e| e.to_string())?;
                 println!("plant duplicate {id} -> {}", r["id"]);
             }
             "pick" => {

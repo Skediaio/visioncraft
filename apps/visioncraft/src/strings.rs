@@ -273,3 +273,6 @@ pub const LAMPS_OVER_CAP: &str = "lamps have no light: at most this many fixture
 pub const ALLOW_AGENTS: &str = "Allow AI agents";
 pub const ALLOW_AGENTS_TIP: &str = "Lets visioncraft-cli mcp --bridge (an AI agent on this computer) change this project while you watch; Ctrl+Z undoes its steps. Untick to disconnect.";
 pub const AGENT_LAST: &str = "agent:";
+pub const PT_UNDO_STROKE: &str = "Remove last stroke";
+pub const PT_UNDO_STROKE_TIP: &str =
+    "Takes back this brush's most recent stroke, even after other changes.";

@@ -87,6 +87,15 @@ impl Look {
 const CLAY: Look = Look::plain(0.85, 0.85, 0.85, 0.9);
 const UNASSIGNED: Look = Look::plain(0.6, 0.6, 0.6, 0.8);
 
+/// The variation a material shows: its own, else (an untouched palette material) its library
+/// look's.
+pub fn shown_variation(lib: &Library, m: &Material) -> f32 {
+    if m.variation > 0.0 || !library::spec_of(&m.maps).is_empty() {
+        return m.variation;
+    }
+    material_library::overlay(lib, m).map_or(0.0, |o| o.variation)
+}
+
 fn look_of(m: &Material, lib: &mut Library) -> Look {
     let own = library::spec_of(&m.maps);
     // An unchanged palette material shows its library look while the library is there.
@@ -96,12 +105,11 @@ fn look_of(m: &Material, lib: &mut Library) -> Look {
         None
     };
     let spec = ov.as_ref().map_or(own, |o| o.spec.clone());
-    let variation = lib
-        .variation
-        .get(&m.id)
-        .copied()
-        .or(ov.as_ref().map(|o| o.variation))
-        .unwrap_or(0.0);
+    let variation = if m.variation > 0.0 {
+        m.variation
+    } else {
+        ov.as_ref().map_or(0.0, |o| o.variation)
+    };
     let mut plain = Look {
         color: m.base_color,
         metallic: m.metallic,
@@ -399,6 +407,8 @@ pub struct Scene {
     gens: HashMap<String, GenGpu>,
     lawns: HashMap<String, LawnGpu>,
     materials: HashMap<LookKey, MaterialId>,
+    /// Looks made for placeholders and the figure: never pruned.
+    pinned: std::collections::HashSet<LookKey>,
     protos: HashMap<String, Vec<(MeshId, MaterialId)>>,
     /// Where the ground changed since which stamp: generators depend on it.
     dirty: DirtyLog,
@@ -445,6 +455,33 @@ impl Scene {
         }
         self.materials.insert(look.key(), id);
         id
+    }
+
+    /// Frees the materials of looks no owner shows any more (a colour dragged through many
+    /// values makes one per value), once there are more than a few spare.
+    fn prune_materials(&mut self, r: &mut Renderer) {
+        const SPARE: usize = 32;
+        let used: std::collections::HashSet<LookKey> = self
+            .owners
+            .values()
+            .flat_map(|o| o.key.looks.iter().copied())
+            .chain(self.pinned.iter().copied())
+            .collect();
+        if self.materials.len() <= used.len() + SPARE {
+            return;
+        }
+        let unused: Vec<LookKey> = self
+            .materials
+            .keys()
+            .filter(|k| !used.contains(*k))
+            .copied()
+            .collect();
+        for k in unused {
+            if let Some(id) = self.materials.remove(&k) {
+                self.library.forget_textured(id);
+                r.remove_material(id);
+            }
+        }
     }
 
     fn drop_owner(r: &mut Renderer, o: Owner) {
@@ -638,6 +675,7 @@ impl Scene {
 
         self.sync_generators(r, project, assets);
         self.sync_lawns(r, project);
+        self.prune_materials(r);
         problems
     }
 
@@ -1152,6 +1190,7 @@ impl Scene {
         let mut out = Vec::new();
         for (data, look) in placeholder::parts(asset) {
             if let Some(mesh) = upload(r, &data, false) {
+                self.pinned.insert(look.key());
                 out.push((mesh, self.material(r, &look)));
             }
         }
@@ -1167,7 +1206,9 @@ impl Scene {
             None => {
                 let data = placeholder::person();
                 if let Some(mesh) = upload(r, &data, false) {
-                    let mat = self.material(r, &Look::plain(0.05, 0.05, 0.06, 0.9));
+                    let look = Look::plain(0.05, 0.05, 0.06, 0.9);
+                    self.pinned.insert(look.key());
+                    let mat = self.material(r, &look);
                     self.people = Some(r.add_item(mesh, mat, at));
                 }
             }

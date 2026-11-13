@@ -147,62 +147,6 @@ pub fn edge_hit_screen(pts: &[Vec2], closed: bool, p: Vec2, radius: f32) -> Opti
         .map(|(i, t, _)| (i, t))
 }
 
-/// Moves all control geometry by `d` (x, z).
-pub fn translate(g: &mut Generator, d: [f32; 2]) {
-    let shift = |p: &mut [f32; 2]| {
-        p[0] += d[0];
-        p[1] += d[1];
-    };
-    match g {
-        Generator::Single(s) => {
-            s.position[0] += d[0];
-            s.position[2] += d[1];
-        }
-        Generator::SplineMass(s) => s.points.iter_mut().for_each(shift),
-        Generator::AreaScatter(a) => a.outline.iter_mut().for_each(shift),
-        Generator::Cluster(c) => shift(&mut c.center),
-        Generator::MixedBrush(b) => b
-            .strokes
-            .iter_mut()
-            .flat_map(|s| s.points.iter_mut())
-            .for_each(shift),
-        Generator::SurfaceFill(_) => {}
-    }
-}
-
-pub fn set_seed(g: &mut Generator, seed: u64) {
-    match g {
-        Generator::SplineMass(s) => s.seed = seed,
-        Generator::AreaScatter(a) => a.seed = seed,
-        Generator::MixedBrush(b) => b.seed = seed,
-        Generator::SurfaceFill(f) => f.seed = seed,
-        Generator::Cluster(c) => c.seed = seed,
-        Generator::Single(_) => {}
-    }
-}
-
-/// The command that adds a copy of `g`, moved by `offset` and with a new seed, and its parameters.
-pub fn duplicate_params(g: &Generator, offset: [f32; 2], seed: u64) -> (&'static str, Value) {
-    let mut c = g.clone();
-    translate(&mut c, offset);
-    set_seed(&mut c, seed);
-    let cmd = match g {
-        Generator::Single(_) => "planting.add_single",
-        Generator::SplineMass(_) => "planting.add_spline",
-        Generator::AreaScatter(_) => "planting.add_area",
-        Generator::MixedBrush(_) => "planting.add_brush",
-        Generator::SurfaceFill(_) => "planting.add_surface_fill",
-        Generator::Cluster(_) => "planting.add_cluster",
-    };
-    let mut v = serde_json::to_value(&c).expect("generators serialise");
-    if let Some(o) = v.as_object_mut() {
-        o.remove("id");
-        o.remove("type");
-        o.insert("name".into(), json!(format!("{} copy", g.name())));
-    }
-    (cmd, v)
-}
-
 /// The fields in which `new` differs from `old`, as `planting.update` parameters (`None` if equal).
 pub fn diff_params(old: &Generator, new: &Generator) -> Option<Value> {
     let (a, b) = (
@@ -388,13 +332,7 @@ mod tests {
     }
 
     #[test]
-    fn duplicates_offset_reseed_and_updates_send_only_changes() {
-        let (cmd, p) = duplicate_params(&area(), [2.0, 0.0], 99);
-        assert_eq!(cmd, "planting.add_area");
-        assert_eq!(p["seed"], 99);
-        assert_eq!(p["outline"][0], json!([2.0, 0.0]));
-        assert!(p.get("id").is_none() && p.get("type").is_none());
-        assert_eq!(p["name"], "Area copy");
+    fn updates_send_only_changes() {
         let moved = move_handle(&area(), Handle::Point(0), [1.0, 1.0], 0.0).unwrap();
         let d = diff_params(&area(), &moved).unwrap();
         assert_eq!(d["id"], "g1");

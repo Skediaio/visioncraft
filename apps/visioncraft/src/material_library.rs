@@ -95,20 +95,13 @@ pub fn ensure_material(s: &mut Studio, lib_id: &str) -> Result<String, String> {
                          "relief": 1.0, "gloss": 0.0, "weathering": 0.0},
                 // the maps scale the factors: 1 lets the pictures decide
                 "base_color": [1.0, 1.0, 1.0, 1.0], "metallic": 1.0, "roughness": 1.0,
-                "maps": {"base_color": base, "normal": entry.maps.normal,
-                         // one packed occlusion-roughness-metallic picture: the same path in
-                         // all three (the core has no field for it)
-                         "roughness": orm, "metallic": orm, "ambient_occlusion": orm,
+                "maps": {"base_color": base, "normal": entry.maps.normal, "orm": orm,
                          "height": entry.maps.height},
+                "variation": if entry.kind == "paving" { 0.4 } else { 0.25 },
             }),
         )
         .map_err(|e| e.to_string())?;
-    let id = r["id"].as_str().unwrap_or_default().to_string();
-    s.scene
-        .library
-        .variation
-        .insert(id.clone(), if entry.kind == "paving" { 0.4 } else { 0.25 });
-    Ok(id)
+    Ok(r["id"].as_str().unwrap_or_default().to_string())
 }
 
 /// The surface kinds of the selector, as `material.update` payloads (keeping a standard

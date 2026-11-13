@@ -224,8 +224,6 @@ pub struct Library {
     /// Where each generator's library assets stand, to see how near the camera they are.
     wants: HashMap<String, Vec<(String, Vec<Vec3>)>>,
     pub lamps_on: bool,
-    /// Large-scale variation per project material (not stored in the project yet).
-    pub variation: HashMap<String, f32>,
     lamps_applied: Option<bool>,
     /// Bumps whenever something a scene item is built from changed.
     pub rev: u64,
@@ -269,7 +267,6 @@ impl Library {
             garbage: Vec::new(),
             wants: HashMap::new(),
             lamps_on: false,
-            variation: HashMap::new(),
             lamps_applied: None,
             rev: 0,
             specs: vec![TexSpec::default()],
@@ -353,6 +350,11 @@ impl Library {
             spec,
         });
         self.dirty = true;
+    }
+
+    /// A project material was freed: its maps are no longer applied to it.
+    pub fn forget_textured(&mut self, material: MaterialId) {
+        self.textured.retain(|t| t.material != material);
     }
 
     /// Decoded pixels (a dropped `.mcmat` map) usable as `TexSrc::Mem(name)`.
@@ -739,12 +741,20 @@ pub fn spec_of(maps: &visioncraft_core::material::MaterialMaps) -> TexSpec {
             }
         })
     };
-    let packed = matches!((&maps.roughness, &maps.metallic, &maps.ambient_occlusion),
+    // Projects saved before `maps.orm` existed put the packed map in all three fields.
+    let legacy = matches!((&maps.roughness, &maps.metallic, &maps.ambient_occlusion),
         (Some(a), Some(b), Some(c)) if a == b && b == c);
+    let packed = maps.orm.is_some() || legacy;
     TexSpec {
         base: src(&maps.base_color),
         normal: src(&maps.normal),
-        orm: if packed { src(&maps.roughness) } else { None },
+        orm: if maps.orm.is_some() {
+            src(&maps.orm)
+        } else if legacy {
+            src(&maps.roughness)
+        } else {
+            None
+        },
         roughness: if packed { None } else { src(&maps.roughness) },
         metallic: if packed { None } else { src(&maps.metallic) },
         ao: if packed {

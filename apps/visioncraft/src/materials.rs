@@ -364,23 +364,21 @@ impl MaterialsState {
                 }
             }
         });
-        let mut variation =
-            cx.s.scene
-                .library
-                .variation
-                .get(&id)
-                .copied()
-                .unwrap_or(0.0);
-        if ui
-            .add(
-                egui::Slider::new(&mut variation, 0.0..=1.0)
-                    .text(t::VARIATION)
-                    .max_decimals(2),
-            )
-            .changed()
-        {
-            cx.s.scene.library.variation.insert(id.clone(), variation);
-            cx.s.force_sync();
+        // Large-scale variation: a draft while it moves, one `material.update` when let go.
+        let shown = crate::scene::shown_variation(&cx.s.scene.library, &m);
+        let mut variation = shown;
+        match slider_field(ui, t::VARIATION, &mut variation, 0.0..=1.0) {
+            Edit::Live => {
+                m.variation = variation;
+                cx.s.set_draft(Some(Draft::Material(m)));
+                return;
+            }
+            Edit::Done => {
+                cx.s.set_draft(None);
+                cx.run("material.update", json!({"id": id, "variation": variation}));
+                return;
+            }
+            Edit::None => {}
         }
         let SurfaceKind::StandardTriplanarPbr {
             map_scale_m,

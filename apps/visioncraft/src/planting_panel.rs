@@ -420,6 +420,7 @@ impl PlantingTools {
         };
         let kind = selected.as_ref().map_or(self.tool, tool_of);
         let (mut dup, mut del, mut paint) = (false, false, false);
+        let mut unstroke: Option<String> = None;
         if let Some(g) = &selected {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(g.name()).strong());
@@ -428,8 +429,17 @@ impl PlantingTools {
                     .on_hover_text("Ctrl+D")
                     .clicked();
                 del = ui.small_button(t::REMOVE).on_hover_text("Delete").clicked();
-                paint = matches!(g, visioncraft_core::Generator::MixedBrush(_))
-                    && ui.small_button(t::PT_PAINT_MORE).clicked();
+                if let visioncraft_core::Generator::MixedBrush(b) = g {
+                    paint = ui.small_button(t::PT_PAINT_MORE).clicked();
+                    if b.strokes.len() > 1
+                        && ui
+                            .small_button(t::PT_UNDO_STROKE)
+                            .on_hover_text(t::PT_UNDO_STROKE_TIP)
+                            .clicked()
+                    {
+                        unstroke = Some(b.id.clone());
+                    }
+                }
             });
         } else {
             ui.small(match self.tool {
@@ -458,6 +468,14 @@ impl PlantingTools {
                         ui.small(format!("{} {n}", t::PT_EXTENDING));
                         if ui.small_button(t::PT_NEW_BRUSH).clicked() {
                             self.brush_target = None;
+                        }
+                        if let Some((id, _)) = self.brush_target.clone()
+                            && ui
+                                .small_button(t::PT_UNDO_STROKE)
+                                .on_hover_text(t::PT_UNDO_STROKE_TIP)
+                                .clicked()
+                        {
+                            cx.run("planting.undo_stroke", serde_json::json!({ "id": id }));
                         }
                     }
                     None => {
@@ -503,6 +521,9 @@ impl PlantingTools {
         }
         if paint {
             self.paint_more(cx);
+        }
+        if let Some(id) = unstroke {
+            cx.run("planting.undo_stroke", serde_json::json!({ "id": id }));
         }
         self.list(ui, cx);
     }
