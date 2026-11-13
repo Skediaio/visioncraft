@@ -258,8 +258,12 @@ fn free(r: &mut Renderer, m: Model) {
 
 impl Library {
     pub fn new() -> Self {
+        let mut store = AssetStore::new();
+        for (path, bytes) in crate::fixtures::files() {
+            store.provide(&path, Arc::from(bytes));
+        }
         Self {
-            store: AssetStore::new(),
+            store,
             catalog: None,
             materials: Vec::new(),
             skies: Vec::new(),

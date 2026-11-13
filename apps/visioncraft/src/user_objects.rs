@@ -208,6 +208,12 @@ impl Library {
         let mut cat = self.catalog.as_deref().cloned().unwrap_or_default();
         cat.assets.retain(|a| a.origin != Origin::User);
         cat.assets.extend(self.user_assets.iter().cloned());
+        // The garden lights made here (`fixtures`), once.
+        for f in crate::fixtures::assets() {
+            if !cat.assets.iter().any(|a| a.id == f.id) {
+                cat.assets.push(f);
+            }
+        }
         self.catalog = Some(Arc::new(cat));
         self.catalog_arrived = true;
         self.rev += 1;

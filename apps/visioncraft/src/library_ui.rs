@@ -38,7 +38,17 @@ pub fn fixtures(ui: &mut egui::Ui, cx: &mut Cx) -> Option<String> {
         "street", "lamppost", "lantern", "exterior", "security", "wall", "garden",
     ];
     // Words that make a lamp an indoor one even when it is called a lantern.
-    const INSIDE: [&str; 5] = ["chandelier", "candle", "desk", "ceiling", "diya"];
+    // Wall and industrial lights go on a building, not along a garden path.
+    const INSIDE: [&str; 8] = [
+        "chandelier",
+        "candle",
+        "desk",
+        "ceiling",
+        "diya",
+        "wall",
+        "industrial",
+        "sconce",
+    ];
     let has = |a: &visioncraft_core::Asset, words: &[&str]| {
         words
             .iter()
@@ -50,6 +60,9 @@ pub fn fixtures(ui: &mut egui::Ui, cx: &mut Cx) -> Option<String> {
         .iter()
         .filter(|a| a.light.is_some())
         .partition(|a| outside(a));
+    // The bollard and path light made here first: they are what a garden path wants.
+    let mut garden = garden;
+    garden.sort_by_key(|a| !a.id.starts_with(crate::fixtures::PREFIX));
     let mut picked = fixture_tiles(ui, cx, &garden);
     egui::CollapsingHeader::new(t::INDOOR_LIGHTS)
         .default_open(false)

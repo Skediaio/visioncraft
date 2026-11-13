@@ -12,6 +12,7 @@ mod command_params;
 pub mod draw;
 pub mod extension;
 pub mod files;
+pub mod fixtures;
 pub mod gltf_load;
 pub mod handles;
 pub mod import_task;
