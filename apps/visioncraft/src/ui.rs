@@ -82,7 +82,7 @@ impl Cx<'_> {
 
     /// Runs a command; a failure becomes a toast.
     pub fn run(&mut self, name: &str, params: Value) -> Option<Value> {
-        match self.s.session.run(name, params) {
+        match self.s.run(name, params) {
             Ok(v) => Some(v),
             Err(e) => {
                 self.toasts.error(e.to_string());

@@ -7,6 +7,7 @@ pub mod camera;
 pub mod draw;
 pub mod files;
 pub mod gltf_load;
+pub mod handles;
 pub mod lamps;
 pub mod library;
 pub mod library_ui;
@@ -15,6 +16,10 @@ pub mod materials;
 pub mod modelui;
 pub mod objects;
 pub mod placeholder;
+pub mod plant_scene;
+pub mod planting_panel;
+pub mod planting_smoke;
+pub mod planting_tools;
 pub mod plants;
 pub mod scene;
 pub mod sky_panel;
@@ -630,13 +635,14 @@ impl eframe::App for App {
         }
 
         // Camera.
-        let captured = std::mem::take(&mut self.studio.drag_capture); // a tool is dragging a handle
+        // Tools claim the pointer each frame (handles, brush strokes): no orbit, no Shift-zoom.
+        let captured = std::mem::take(&mut self.studio.pointer_captured);
         let cam = &mut self.studio.camera;
         let walking = cam.view == camera::View::Walk;
         if cam.is_flying() && (response.dragged() || response.double_clicked()) {
             cam.cancel_fly();
         }
-        if response.hovered() {
+        if response.hovered() && !(shift && captured) {
             let scroll = ctx.input(|i| i.smooth_scroll_delta.y);
             if scroll != 0.0 {
                 cam.zoom(scroll);
@@ -654,6 +660,7 @@ impl eframe::App for App {
             cam.orbit(d.x, d.y);
         }
         if input.double_clicked
+            && !self.studio.double_click_captured
             && cam.view == camera::View::Orbit
             && let Some(p) = input.hover.and_then(|p| {
                 self.studio.pick(

@@ -4,7 +4,6 @@
 
 use crate::assets::{Key, Loaded, State};
 use crate::lamps::LightsTool;
-use crate::objects::Tool;
 use crate::strings as t;
 use crate::ui::{ACCENT, Cx};
 use eframe::egui::{self, Color32, Sense, Vec2};
@@ -16,7 +15,6 @@ pub enum Tab {
     #[default]
     Plants,
     Objects,
-    Lights,
 }
 
 enum Thumb {
@@ -109,14 +107,10 @@ fn details(a: &Asset) -> String {
 }
 
 impl LibraryUi {
-    /// The tab switch (Plants | Objects | Lights); true while the plants browser should show.
+    /// The tab switch (Plants | Objects); true while the plants browser should show.
     pub fn tabs(&mut self, ui: &mut egui::Ui) -> bool {
         ui.horizontal(|ui| {
-            for (tab, label) in [
-                (Tab::Plants, t::TAB_PLANTS),
-                (Tab::Objects, t::TAB_OBJECTS),
-                (Tab::Lights, t::TAB_LIGHTS),
-            ] {
+            for (tab, label) in [(Tab::Plants, t::TAB_PLANTS), (Tab::Objects, t::TAB_OBJECTS)] {
                 if ui.selectable_label(self.tab == tab, label).clicked() {
                     self.tab = tab;
                 }
@@ -125,20 +119,11 @@ impl LibraryUi {
         self.tab == Tab::Plants
     }
 
-    pub fn panel(
-        &mut self,
-        ui: &mut egui::Ui,
-        cx: &mut Cx,
-        palette: &mut Vec<(String, f32)>,
-        tool: &mut Tool,
-    ) {
-        if self.tab == Tab::Lights {
-            self.lights.panel(ui, cx);
-            return;
-        }
+    /// The catalogue grid; returns the asset clicked.
+    pub fn panel(&mut self, ui: &mut egui::Ui, cx: &mut Cx) -> Option<String> {
         let Some(catalog) = cx.s.scene.library.catalog.clone() else {
             ui.small(t::LIBRARY_LOADING);
-            return;
+            return None;
         };
         ui.horizontal(|ui| {
             ui.add(
@@ -180,7 +165,6 @@ impl LibraryUi {
                 }
             });
         }
-        let current = palette.first().map(|p| p.0.clone());
         egui::ScrollArea::vertical()
             .max_height(190.0)
             .id_salt("objects-library")
@@ -199,7 +183,7 @@ impl LibraryUi {
                             ui.allocate_painter(Vec2::splat(tile), Sense::click());
                         let visible = ui.is_rect_visible(resp.rect);
                         thumb(ui, cx, &a.thumbnail, resp.rect, visible, i as f32);
-                        if current.as_deref() == Some(a.id.as_str()) {
+                        if self.recent.first() == Some(&a.id) {
                             painter.rect_stroke(
                                 resp.rect,
                                 egui::CornerRadius::same(6),
@@ -213,12 +197,11 @@ impl LibraryUi {
                     }
                 });
             });
-        if let Some(id) = picked {
-            *palette = vec![(id.clone(), 1.0)];
-            *tool = Tool::Single;
-            self.recent.retain(|r| *r != id);
-            self.recent.insert(0, id);
+        if let Some(id) = &picked {
+            self.recent.retain(|r| r != id);
+            self.recent.insert(0, id.clone());
             self.recent.truncate(8);
         }
+        picked
     }
 }

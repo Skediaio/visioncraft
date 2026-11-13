@@ -160,3 +160,112 @@ pub const SEARCH: &str = "Search";
 pub const EVERGREEN: &str = "Evergreen";
 pub const IN_BLOOM: &str = "In bloom now";
 pub const PALETTE: &str = "Palette";
+
+// ---- Planting tools (Objects mode) ----
+pub const PT_SELECT: &str = "Select";
+pub const PT_SINGLE: &str = "Single";
+pub const PT_LINE: &str = "Line";
+pub const PT_CLUSTER: &str = "Cluster";
+pub const PT_AREA: &str = "Area";
+pub const PT_SURFACE: &str = "Surface";
+pub const PT_BRUSH: &str = "Brush";
+pub const PT_SIMPLE: &str = "Simple";
+pub const PT_ADD_PLANTS: &str = "+ Add plants";
+pub const PT_SCALE: &str = "Scale";
+pub const PT_ROTATION: &str = "Rotation";
+pub const PT_RANDOM_ROTATION: &str = "Random rotation";
+pub const PT_MIN_DISTANCE: &str = "Min distance";
+pub const PT_KEEP_CLEAR: &str = "Keep clear";
+pub const PT_COUNT: &str = "Count";
+pub const PT_SPACING: &str = "Every";
+pub const PT_JITTER: &str = "Jitter";
+pub const PT_OFFSET: &str = "Offset";
+pub const PT_CLOSED: &str = "Closed";
+pub const PT_RADIUS: &str = "Radius";
+pub const PT_MAX_SLOPE: &str = "Max slope";
+pub const PT_RESHUFFLE: &str = "Reshuffle";
+pub const PT_RESHUFFLE_HINT: &str = "A new random seed: the same plants, placed differently";
+pub const PT_LAYER: &str = "Layer:";
+pub const PT_ERASE: &str = "Erase";
+pub const PT_EXTENDING: &str = "Extending";
+pub const PT_NEW_BRUSH: &str = "New brush";
+pub const PT_NEW_BRUSH_NEXT: &str = "The next stroke starts a new brush";
+pub const PT_DUPLICATE: &str = "Duplicate";
+pub const PT_PAINT_MORE: &str = "Paint more";
+pub const PT_PLANT: &str = "plant";
+pub const PT_PLANTS: &str = "plants";
+pub const PT_CAPPED: &str =
+    "Capped: more plants would not be drawn. Lower the density or the area.";
+pub const PT_VISIBLE: &str = "Visible (its layer)";
+pub const PT_HELP_TIP: &str = "Shortcuts of this tool";
+pub const PT_SHORTCUTS: &str = "Shortcuts";
+pub const PT_NOTHING_TO_ERASE: &str = "Nothing to erase: paint with these settings first";
+pub const PT_KEEP_POINTS: &str =
+    "A line keeps two points, an area three. Esc, then Delete removes the whole planting";
+pub const PT_SELECT_HINT: &str =
+    "Click a plant to select its planting; drag its handles to reshape it.";
+pub const PT_SINGLE_HINT: &str =
+    "Click to place a plant, drag to turn it, Shift+wheel or + / - to scale.";
+pub const PT_LINE_HINT: &str = "Click points along the line, Enter or double-click finishes.";
+pub const PT_CLUSTER_HINT: &str = "Click the centre of the clump, drag out its radius.";
+pub const PT_AREA_HINT: &str = "Click the outline, Enter or the first point closes it.";
+pub const PT_SURFACE_HINT: &str = "Click a surface to fill it, Shift-click adds a surface.";
+pub const PT_BRUSH_HINT: &str =
+    "Press and drag to paint, Alt-drag to erase, [ and ] size the brush.";
+
+pub const PT_KEYS_COMMON: &[(&str, &str)] = &[
+    (
+        "1 - 7",
+        "Select, Single, Line, Cluster, Area, Surface, Brush",
+    ),
+    ("Esc", "Cancel what is pending, leave the tool, deselect"),
+    ("Ctrl+Z", "Undo"),
+    ("?", "This list"),
+];
+pub const PT_KEYS_SELECT: &[(&str, &str)] = &[
+    ("Click", "Select the planting of a plant"),
+    (
+        "Drag handle",
+        "Move a point, a centre, a radius, a rotation",
+    ),
+    ("Click edge", "Insert a point on a line or an area"),
+    ("Delete", "Remove the selected point, else the planting"),
+    ("Ctrl+D", "Duplicate with an offset and a new seed"),
+];
+pub const PT_KEYS_SINGLE: &[(&str, &str)] = &[
+    ("Click", "Place a plant"),
+    ("Drag", "Set its rotation"),
+    ("Shift+wheel, + / -", "Scale"),
+    ("Ctrl+drag", "Orbit the camera"),
+];
+pub const PT_KEYS_LINE: &[(&str, &str)] = &[
+    ("Click", "Add a point"),
+    ("Enter / double-click", "Finish the line"),
+    ("Backspace", "Remove the last point"),
+    ("Alt", "Snap off"),
+];
+pub const PT_KEYS_CLUSTER: &[(&str, &str)] = &[
+    ("Click", "Place a clump of the default radius"),
+    ("Drag", "Drag out the radius from the centre"),
+    ("Ctrl+drag", "Orbit the camera"),
+];
+pub const PT_KEYS_AREA: &[(&str, &str)] = &[
+    ("Click", "Add an outline point"),
+    ("Enter / first point", "Close and fill the outline"),
+    ("Backspace", "Remove the last point"),
+    ("Alt", "Snap off"),
+];
+pub const PT_KEYS_SURFACE: &[(&str, &str)] = &[
+    ("Hover", "Highlight the surface under the cursor"),
+    ("Click", "Fill it"),
+    ("Shift+click", "Add the surface to the last fill"),
+];
+pub const PT_KEYS_BRUSH: &[(&str, &str)] = &[
+    ("Drag", "Paint a stroke (one undo step)"),
+    ("Alt+drag", "Erase"),
+    ("[  ]", "Brush radius 0.25 - 40 m"),
+    ("Ctrl+drag", "Orbit the camera"),
+];
+
+/// "<n> lamps have no light: at most <cap> fixtures shine."
+pub const LAMPS_OVER_CAP: &str = "lamps have no light: at most this many fixtures shine:";

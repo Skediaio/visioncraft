@@ -5,8 +5,9 @@ use glam::{Mat4, Vec3};
 use std::collections::HashMap;
 use std::sync::Arc;
 use visioncraft_core::{
-    Asset, Generator, ImportedModel, Material, ModelRef, Project, Shape, SurfaceKind, evaluate,
-    evaluate_surface_fill, ground_height, lawn_scatter, raycast, resolve_materials, shape_mesh,
+    Asset, Evaluation, Generator, ImportedModel, Material, ModelRef, Project, Shape, SurfaceKind,
+    Terrain, evaluate, evaluate_surface_fill, ground_height, lawn_scatter, raycast,
+    resolve_materials, shape_mesh,
 };
 use visioncraft_flora as flora;
 use visioncraft_render::{ItemId, LineVertex, Renderer};
@@ -15,6 +16,7 @@ pub use visioncraft_render::{MaterialId, MeshId};
 use crate::library::{self, Library};
 use crate::material_library;
 use crate::placeholder::{self, MeshData};
+use crate::plant_scene::{self, DirtyLog, EVERYTHING, Inst, Rect};
 use crate::plants::{self, Flora};
 
 /// A loaded or generated design, with a counter that changes when its triangles do.
@@ -325,9 +327,45 @@ const LAWN_MAX_DENSITY: f32 = 300.0;
 const LAWN_MAX_TUFTS: usize = 60_000;
 const LAWN_SPECIES: &str = "flora:lawn-tuft";
 
-struct GenGpu {
-    key: (Generator, u64, u64, u8, u64),
+/// The instances of one (asset, variant) of a generator: its renderer items (a plant or a
+/// catalogue model is one LOD item, a stand-in several), the LOD parts they draw (`None`: a
+/// stand-in) and their matrices.
+struct Group {
     items: Vec<ItemId>,
+    parts: Option<LodParts>,
+    matrices: Vec<Mat4>,
+}
+
+type LodParts = Vec<(MeshId, MaterialId, f32)>;
+
+struct GenGpu {
+    /// What the evaluation depended on besides the ground: the generator, the month, visibility.
+    sig: (Generator, u8, bool),
+    /// The dirty-log stamp it was evaluated at, and where it puts plants.
+    stamp: u64,
+    bounds: Option<Rect>,
+    flora_rev: u64,
+    library_rev: u64,
+    groups: HashMap<(String, u32), Group>,
+    insts: Vec<Inst>,
+    truncated: bool,
+}
+
+/// Plants of one generator, as the panel shows them.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct GenStats {
+    pub count: usize,
+    pub truncated: bool,
+}
+
+/// Milliseconds the last generator evaluation and its upload to the renderer took.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Timings {
+    pub eval_ms: f64,
+    pub upload_ms: f64,
+    pub placements: usize,
+    /// How many generator evaluations have run in all.
+    pub rebuilds: u64,
 }
 
 /// The model transform: scale, then rotation about +Y, then translation.
@@ -345,8 +383,10 @@ pub struct Scene {
     lawns: HashMap<String, LawnGpu>,
     materials: HashMap<LookKey, MaterialId>,
     protos: HashMap<String, Vec<(MeshId, MaterialId)>>,
-    /// Bumps whenever any owner's geometry or placement changes: generators depend on the ground.
-    ground_rev: u64,
+    /// Where the ground changed since which stamp: generators depend on it.
+    dirty: DirtyLog,
+    terrain: Option<Arc<Terrain>>,
+    pub timings: Timings,
     pub flora: Flora,
     /// The asset library: models, textures and lamps streamed in.
     pub library: Library,
@@ -405,12 +445,29 @@ impl Scene {
             Self::drop_owner(r, o);
         }
         for (_, g) in self.gens.drain() {
-            g.items.into_iter().for_each(|i| r.remove_item(i));
+            Self::drop_groups(r, g.groups);
         }
         for (_, l) in self.lawns.drain() {
             l.items.into_iter().for_each(|i| r.remove_item(i));
         }
-        self.ground_rev += 1;
+        self.dirty.mark(EVERYTHING);
+    }
+
+    fn drop_groups(r: &mut Renderer, groups: HashMap<(String, u32), Group>) {
+        for g in groups.into_values() {
+            g.items.into_iter().for_each(|i| r.remove_item(i));
+        }
+    }
+
+    /// The x/z extent of an owner (any owner: a surface fill follows walls too).
+    fn ground_rect(o: &Owner) -> Option<Rect> {
+        world_bounds(&o.geom, &o.xf).map(|(lo, hi)| [[lo.x, lo.z], [hi.x, hi.z]])
+    }
+
+    fn ground_changed(&mut self, rects: [Option<Rect>; 2]) {
+        if let Some(r) = rects.into_iter().flatten().reduce(plant_scene::rect_union) {
+            self.dirty.mark(r);
+        }
     }
 
     /// Brings the renderer in line with `project`. Returns plain-words problems (a shape that
@@ -424,6 +481,17 @@ impl Scene {
     ) -> Vec<String> {
         let mut problems = Vec::new();
         let mut live: Vec<String> = Vec::new();
+        // A new terrain (every terrain edit makes one) moves the ground under its whole extent.
+        let same = match (&self.terrain, &project.terrain) {
+            (None, None) => true,
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        };
+        if !same {
+            let extents = [&self.terrain, &project.terrain].map(|t| t.as_ref().map(|t| t.extent()));
+            self.ground_changed(extents);
+            self.terrain.clone_from(&project.terrain);
+        }
         let clay = false; // the renderer's own clay mode handles it (`Renderer::set_clay`)
 
         // Owners: models, then shapes.
@@ -503,14 +571,18 @@ impl Scene {
                 Change::Keep => {}
                 Change::Transform => {
                     let o = self.owners.get_mut(&id).expect("classified from it");
+                    let before = Self::ground_rect(o);
                     o.xf = xf;
                     for p in &o.pieces {
                         r.set_instances(p.item, &[xf]);
                     }
-                    self.ground_rev += 1;
+                    let after = Self::ground_rect(o);
+                    self.ground_changed([before, after]);
                 }
                 Change::Rebuild => {
+                    let mut before = None;
                     if let Some(old) = self.owners.remove(&id) {
+                        before = Self::ground_rect(&old);
                         Self::drop_owner(r, old);
                     }
                     let (pieces, face_piece) = if visible {
@@ -518,19 +590,18 @@ impl Scene {
                     } else {
                         (Vec::new(), vec![None; model.faces.len()])
                     };
-                    self.owners.insert(
-                        id.clone(),
-                        Owner {
-                            key,
-                            xf,
-                            geom: model,
-                            pieces,
-                            face_piece,
-                            is_shape,
-                            is_area,
-                        },
-                    );
-                    self.ground_rev += 1;
+                    let owner = Owner {
+                        key,
+                        xf,
+                        geom: model,
+                        pieces,
+                        face_piece,
+                        is_shape,
+                        is_area,
+                    };
+                    let after = Self::ground_rect(&owner);
+                    self.owners.insert(id.clone(), owner);
+                    self.ground_changed([before, after]);
                 }
             }
         }
@@ -542,8 +613,9 @@ impl Scene {
             .collect();
         for id in gone {
             if let Some(o) = self.owners.remove(&id) {
+                let before = Self::ground_rect(&o);
                 Self::drop_owner(r, o);
-                self.ground_rev += 1;
+                self.ground_changed([before, None]);
             }
         }
 
@@ -714,9 +786,11 @@ impl Scene {
 
     // ---- planting ----
 
-    fn ground_fn(&self) -> impl Fn(f32, f32) -> Option<f32> + '_ {
+    /// The ground plants stand on: the terrain, areas and imported models, the highest wins.
+    pub fn ground_fn(&self) -> impl Fn(f32, f32) -> Option<f32> + '_ {
         // Planting stands on areas and imported models, not on the roof of a house block.
         move |x, z| {
+            let terrain = self.terrain.as_ref().and_then(|t| t.height_at(x, z));
             self.owners
                 .values()
                 .filter(|o| !o.is_shape || o.is_area)
@@ -727,7 +801,7 @@ impl Scene {
                     ground_height(&o.geom, local.x, local.z)
                         .map(|y| o.xf.transform_point3(Vec3::new(local.x, y, local.z)).y)
                 })
-                .fold(None, |a: Option<f32>, y| Some(a.map_or(y, |a| a.max(y))))
+                .fold(terrain, |a: Option<f32>, y| Some(a.map_or(y, |a| a.max(y))))
         }
     }
 
@@ -742,55 +816,191 @@ impl Scene {
         for id in gone {
             self.library.forget_generator(&id);
             if let Some(g) = self.gens.remove(&id) {
-                g.items.into_iter().for_each(|i| r.remove_item(i));
+                Self::drop_groups(r, g.groups);
             }
         }
         let month = project.time.month as u8;
         for g in &project.generators {
-            let key = (
-                g.clone(),
-                self.ground_rev,
-                self.flora.rev,
-                month,
-                self.library.rev,
-            );
-            if self.gens.get(g.id()).is_some_and(|old| old.key == key) {
+            let sig = (g.clone(), month, project.layer_visible(g.layer()));
+            let bounds = match g {
+                Generator::SurfaceFill(f) => self
+                    .owners
+                    .get(&f.owner)
+                    .and_then(|o| world_bounds(&o.geom, &o.xf))
+                    .map(|(lo, hi)| [[lo.x, lo.z], [hi.x, hi.z]]),
+                _ => plant_scene::generator_bounds(g),
+            };
+            let mut old = self.gens.remove(g.id());
+            if let Some(o) = &mut old
+                && o.sig == sig
+                && !self.dirty.touches(o.stamp, o.bounds)
+            {
+                if o.flora_rev != self.flora.rev || o.library_rev != self.library.rev {
+                    self.upgrade(r, project, assets, month, &mut o.groups);
+                    o.flora_rev = self.flora.rev;
+                    o.library_rev = self.library.rev;
+                }
+                if let Some(o) = old {
+                    self.gens.insert(g.id().to_string(), o);
+                }
                 continue;
             }
-            if let Some(old) = self.gens.remove(g.id()) {
-                old.items.into_iter().for_each(|i| r.remove_item(i));
+            let built = self.rebuild(r, project, assets, g, sig, bounds, old);
+            self.gens.insert(g.id().to_string(), built);
+        }
+    }
+
+    /// What a group draws as its real self: a catalogue asset's resident LOD parts (the
+    /// catalogue wins over a plant of the same id), else the generated plant. `None` while only a
+    /// stand-in can show.
+    fn source(&self, project: &Project, asset: &str, variant: u32, month: u8) -> Option<LodParts> {
+        if self.library.knows(asset) {
+            return self.library.parts(asset);
+        }
+        let res = plants::resolve(project, asset)?;
+        let class = plants::class(&res.params, month);
+        self.flora.parts(asset, class, variant).map(<[_]>::to_vec)
+    }
+
+    /// Renderer items for one group: one LOD item for the real thing, else stand-in items (and the
+    /// plant is asked for).
+    #[allow(clippy::too_many_arguments)]
+    fn make_items(
+        &mut self,
+        r: &mut Renderer,
+        project: &Project,
+        assets: &[Asset],
+        asset: &str,
+        month: u8,
+        src: Option<&LodParts>,
+        matrices: &[Mat4],
+    ) -> Vec<ItemId> {
+        if let Some(parts) = src {
+            return vec![r.add_lod_item(parts, matrices)];
+        }
+        let plant = (!self.library.knows(asset))
+            .then(|| plants::resolve(project, asset))
+            .flatten();
+        let protos = match plant {
+            Some(res) => {
+                let class = plants::class(&res.params, month);
+                self.flora.want(asset, class, month, &res.params);
+                let stand_in = placeholder::flora_asset(asset, &res);
+                self.proto(r, asset, Some(&stand_in))
             }
-            let mut items = Vec::new();
-            self.library.forget_generator(g.id());
-            if project.layer_visible(g.layer()) {
-                for (asset, variant, matrices) in self.placements(g) {
-                    if self.library.knows(&asset) {
-                        self.library.note(g.id(), &asset, &matrices);
-                        if let Some(parts) = self.library.parts(&asset) {
-                            items.push(r.add_lod_item(&parts, &matrices));
-                            continue;
-                        }
-                    }
-                    if let Some(res) = plants::resolve(project, &asset) {
-                        let class = plants::class(&res.params, month);
-                        if let Some(parts) = self.flora.parts(&asset, class, variant) {
-                            items.push(r.add_lod_item(parts, &matrices));
-                            continue;
-                        }
-                        self.flora.want(&asset, class, month, &res.params);
-                        let stand_in = placeholder::flora_asset(&asset, &res);
-                        for (mesh, mat) in self.proto(r, &asset, Some(&stand_in)) {
-                            items.push(r.add_item(mesh, mat, &matrices));
-                        }
-                        continue;
-                    }
-                    let asset_def = assets.iter().find(|a| a.id == asset);
-                    for (mesh, mat) in self.proto(r, &asset, asset_def) {
-                        items.push(r.add_item(mesh, mat, &matrices));
-                    }
+            // A catalogue model still loading, or a plain asset: its box from the project assets.
+            None => self.proto(r, asset, assets.iter().find(|a| a.id == asset)),
+        };
+        protos
+            .into_iter()
+            .map(|(mesh, mat)| r.add_item(mesh, mat, matrices))
+            .collect()
+    }
+
+    /// Swaps stand-ins for the real thing once a plant generation or a catalogue model finished,
+    /// and follows the catalogue's resident levels (a finer one arrived, one was evicted).
+    fn upgrade(
+        &mut self,
+        r: &mut Renderer,
+        project: &Project,
+        assets: &[Asset],
+        month: u8,
+        groups: &mut HashMap<(String, u32), Group>,
+    ) {
+        for ((asset, variant), grp) in groups.iter_mut() {
+            let src = self.source(project, asset, *variant, month);
+            if src == grp.parts {
+                continue;
+            }
+            grp.items.drain(..).for_each(|i| r.remove_item(i));
+            grp.items = self.make_items(
+                r,
+                project,
+                assets,
+                asset,
+                month,
+                src.as_ref(),
+                &grp.matrices,
+            );
+            grp.parts = src;
+        }
+    }
+
+    /// Evaluates one generator and brings its renderer items in line: instance lists per
+    /// (asset, variant) are updated in place, items are only created or removed for groups that
+    /// appear, vanish or change what they draw.
+    #[allow(clippy::too_many_arguments)]
+    fn rebuild(
+        &mut self,
+        r: &mut Renderer,
+        project: &Project,
+        assets: &[Asset],
+        g: &Generator,
+        sig: (Generator, u8, bool),
+        bounds: Option<Rect>,
+        old: Option<GenGpu>,
+    ) -> GenGpu {
+        let t0 = plant_scene::now_ms();
+        let (placements, truncated) = if sig.2 {
+            let e = self.evaluate_generator(g);
+            (e.placements, e.truncated)
+        } else {
+            (Vec::new(), false)
+        };
+        let t1 = plant_scene::now_ms();
+        let month = sig.1;
+        let stamp = self.dirty.stamp();
+        let mut old_groups = old.map(|o| o.groups).unwrap_or_default();
+        let mut groups: HashMap<(String, u32), Group> = HashMap::new();
+        self.library.forget_generator(g.id());
+        for (asset, variant, matrices) in
+            plant_scene::group_placements(&placements, plants::VARIANTS)
+        {
+            if self.library.knows(&asset) {
+                // the library streams the level the nearest instance needs
+                self.library.note(g.id(), &asset, &matrices);
+            }
+            let src = self.source(project, &asset, variant, month);
+            let items = match old_groups.remove(&(asset.clone(), variant)) {
+                Some(prev) if prev.parts == src => {
+                    prev.items
+                        .iter()
+                        .for_each(|i| r.set_instances(*i, &matrices));
+                    prev.items
                 }
-            }
-            self.gens.insert(g.id().to_string(), GenGpu { key, items });
+                prev => {
+                    if let Some(p) = prev {
+                        p.items.into_iter().for_each(|i| r.remove_item(i));
+                    }
+                    self.make_items(r, project, assets, &asset, month, src.as_ref(), &matrices)
+                }
+            };
+            groups.insert(
+                (asset, variant),
+                Group {
+                    items,
+                    parts: src,
+                    matrices,
+                },
+            );
+        }
+        Self::drop_groups(r, old_groups);
+        let insts = plant_scene::instances(project, assets, &placements);
+        self.timings = Timings {
+            eval_ms: t1 - t0,
+            upload_ms: plant_scene::now_ms() - t1,
+            placements: placements.len(),
+            rebuilds: self.timings.rebuilds + 1,
+        };
+        GenGpu {
+            sig,
+            stamp,
+            bounds,
+            flora_rev: self.flora.rev,
+            library_rev: self.library.rev,
+            groups,
+            insts,
+            truncated,
         }
     }
 
@@ -800,37 +1010,58 @@ impl Scene {
         self.flora.pump(r) | library
     }
 
-    /// Instance matrices per (asset id, variant) for one generator.
-    fn placements(&self, g: &Generator) -> Vec<(String, u32, Vec<Mat4>)> {
-        let placements = match g {
+    /// The placements of a generator against the current ground (a surface fill against its
+    /// owner's mesh), in world space. Also what the tools preview.
+    pub fn evaluate_generator(&self, g: &Generator) -> Evaluation {
+        match g {
             Generator::SurfaceFill(f) => match self.owners.get(&f.owner) {
-                Some(o) => evaluate_surface_fill(f, &o.geom)
-                    .placements
-                    .into_iter()
-                    .map(|mut p| {
-                        p.position = o.xf.transform_point3(Vec3::from(p.position)).to_array();
-                        p
-                    })
-                    .collect(),
-                None => Vec::new(),
+                Some(o) => {
+                    let e = evaluate_surface_fill(f, &o.geom);
+                    Evaluation {
+                        placements: e
+                            .placements
+                            .into_iter()
+                            .map(|mut p| {
+                                p.position =
+                                    o.xf.transform_point3(Vec3::from(p.position)).to_array();
+                                p
+                            })
+                            .collect(),
+                        truncated: e.truncated,
+                    }
+                }
+                None => Evaluation {
+                    placements: Vec::new(),
+                    truncated: false,
+                },
             },
-            _ => evaluate(g, &self.ground_fn()).placements,
-        };
-        let mut out: Vec<(String, u32, Vec<Mat4>)> = Vec::new();
-        for p in placements {
-            let m = Mat4::from_translation(Vec3::from(p.position))
-                * Mat4::from_rotation_y(p.rotation_y_deg.to_radians())
-                * Mat4::from_scale(Vec3::splat(p.scale));
-            let variant = p.variant % plants::VARIANTS;
-            match out
-                .iter_mut()
-                .find(|(a, v, _)| *a == p.asset && *v == variant)
-            {
-                Some((_, _, v)) => v.push(m),
-                None => out.push((p.asset, variant, vec![m])),
-            }
+            _ => evaluate(g, &self.ground_fn()),
         }
-        out
+    }
+
+    pub fn gen_stats(&self, id: &str) -> Option<GenStats> {
+        let g = self.gens.get(id)?;
+        Some(GenStats {
+            count: g.insts.len(),
+            truncated: g.truncated,
+        })
+    }
+
+    /// The generator whose plant the ray hits first (against bounding cylinders), and the distance.
+    pub fn pick_plant(&self, origin: Vec3, dir: Vec3) -> Option<(String, f32)> {
+        self.pick_plant_detail(origin, dir)
+            .map(|(id, _, t)| (id, t))
+    }
+
+    /// Like `pick_plant`, with the plant's bounding cylinder.
+    pub fn pick_plant_detail(&self, origin: Vec3, dir: Vec3) -> Option<(String, Inst, f32)> {
+        self.gens
+            .iter()
+            .filter_map(|(id, g)| {
+                plant_scene::pick_instance(&g.insts, origin, dir)
+                    .map(|(i, t)| (id.clone(), g.insts[i], t))
+            })
+            .min_by(|a, b| a.2.total_cmp(&b.2))
     }
 
     /// Placeholder meshes of an asset, built once per asset.

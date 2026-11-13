@@ -1,138 +1,106 @@
 //! Lamps: the lights of catalogue fixtures and the Lights tool for bare point and spot lights.
 //!
-//! A fixture placed with `planting.add_single` gets its `Light` (through the core's
-//! `lights_for_placement`, `source` = the placement's id) from [`reconcile`], which also moves the
-//! light with a moved, turned or scaled fixture and removes it with a removed one. The core has no
-//! way to group commands into one undo step, so a lamp and its light are two commands; [`Pairing`]
-//! makes Undo and Redo step over both.
+//! Every placement of a lamp asset, made by any planting tool, gets its `Light` (the core's
+//! `lights_for_placements`, `source` = the generator's id) from [`reconcile_commands`], which also
+//! moves the lights with moved, turned or scaled fixtures and removes them with removed ones.
+//! [`crate::studio::Studio::run`] runs it in the same `Session::transaction` as the command that
+//! changed the fixture, so a lamp and its light are one undo step.
 
 use crate::strings as t;
 use crate::ui::{Cx, Edit, slider_field};
 use eframe::egui;
 use glam::Vec3;
 use serde_json::{Value, json};
-use std::collections::HashMap;
 use visioncraft_core::project::LAYER_LIGHTING;
 use visioncraft_core::{
-    Generator, Light, LightKind, Placement, Project, Session, lights_for_placement,
+    Generator, Light, LightKind, LightSpec, Placement, Project, lights_for_placements,
 };
 
-/// Which undo steps are follow-ups of the step before them.
-#[derive(Default)]
-pub struct Pairing {
-    /// Revision after the last follow-up -> number of follow-ups it ended.
-    follow: HashMap<u64, u32>,
-    /// After a paired undo: the revision it reached and how many steps to redo.
-    redo: Option<(u64, u32)>,
-    reconciled: u64,
+/// At most this many lights come from fixtures: every light costs shading time and only a few
+/// cast shadows, so a brush of 500 lamps lights its first ones and says so.
+pub const MAX_FIXTURE_LIGHTS: usize = 64;
+
+/// What [`reconcile_commands`] wants run, and how many lamps got no light over the cap.
+#[derive(Debug, Default)]
+pub struct Reconcile {
+    pub commands: Vec<(&'static str, Value)>,
+    pub skipped: usize,
 }
 
-impl Pairing {
-    pub fn undo(&mut self, s: &mut Session) {
-        let n = self.follow.get(&s.revision()).copied().unwrap_or(0);
-        for _ in 0..=n {
-            s.undo();
-        }
-        if n > 0 {
-            self.redo = Some((s.revision(), n));
-        }
-    }
-
-    pub fn redo(&mut self, s: &mut Session) {
-        let n = match self.redo.take() {
-            Some((rev, n)) if rev == s.revision() => n,
-            _ => 0,
-        };
-        for _ in 0..=n {
-            s.redo();
-        }
-        if n > 0 {
-            self.follow.insert(s.revision(), n);
-        }
-    }
-}
-
-/// The commands that bring the lights in line with the fixtures (pure; tested).
+/// The commands that bring the lights in line with the fixtures (pure; tested). `lamps` are the
+/// catalogue assets that carry a light; `placements_of` evaluates a generator (only generators
+/// that use a lamp are evaluated).
 pub fn reconcile_commands(
     project: &Project,
-    spec_of: &dyn Fn(&str) -> Option<visioncraft_core::LightSpec>,
-) -> Vec<(&'static str, Value)> {
-    let mut out = Vec::new();
+    lamps: &[(String, LightSpec)],
+    placements_of: &dyn Fn(&Generator) -> Vec<Placement>,
+) -> Reconcile {
+    let mut out = Reconcile::default();
+    let mut budget = MAX_FIXTURE_LIGHTS;
     for g in &project.generators {
-        let Generator::Single(s) = g else { continue };
-        let Some(spec) = spec_of(&s.asset) else {
-            continue;
-        };
-        let placement = Placement {
-            asset: s.asset.clone(),
-            position: s.position,
-            rotation_y_deg: s.rotation_y_deg,
-            scale: s.scale,
-            variant: 0,
-        };
-        let want = lights_for_placement(
-            &spec,
-            &placement,
-            (String::new(), s.name.clone(), LAYER_LIGHTING.into()),
-            &s.id,
-        );
-        match project
+        let used: Vec<&(String, LightSpec)> =
+            lamps.iter().filter(|(id, _)| g.uses_asset(id)).collect();
+        let mut want: Vec<Light> = Vec::new();
+        if !used.is_empty() {
+            let placements = placements_of(g);
+            for (asset, spec) in used {
+                let mine: Vec<Placement> = placements
+                    .iter()
+                    .filter(|p| &p.asset == asset)
+                    .cloned()
+                    .collect();
+                let (lights, skipped) =
+                    lights_for_placements(spec, &mine, "", g.id(), LAYER_LIGHTING, budget);
+                budget -= lights.len();
+                out.skipped += skipped;
+                want.extend(lights);
+            }
+        }
+        let have: Vec<&Light> = project
             .lights
             .iter()
-            .find(|l| l.source.as_deref() == Some(s.id.as_str()))
-        {
-            None => out.push((
-                "light.add",
-                json!({"name": format!("{} light", s.name), "position": want.position, "kind": want.kind,
-                       "color_temperature_k": want.color_temperature_k, "lumens": want.lumens,
-                       "range_m": want.range_m, "source": s.id}),
-            )),
-            Some(l) if l.position != want.position || l.kind != want.kind => out.push((
-                "light.update",
-                json!({"id": l.id, "position": want.position, "kind": want.kind}),
-            )),
-            Some(_) => {}
+            .filter(|l| l.source.as_deref() == Some(g.id()))
+            .collect();
+        let n = want.len();
+        for (i, w) in want.into_iter().enumerate() {
+            match have.get(i) {
+                None => {
+                    let name = if n == 1 {
+                        format!("{} light", g.name())
+                    } else {
+                        format!("{} light {}", g.name(), i + 1)
+                    };
+                    out.commands.push((
+                        "light.add",
+                        json!({"name": name, "position": w.position, "kind": w.kind,
+                               "color_temperature_k": w.color_temperature_k, "lumens": w.lumens,
+                               "range_m": w.range_m, "source": g.id()}),
+                    ));
+                }
+                Some(l) if l.position != w.position || l.kind != w.kind => out.commands.push((
+                    "light.update",
+                    json!({"id": l.id, "position": w.position, "kind": w.kind}),
+                )),
+                Some(_) => {}
+            }
+        }
+        for l in have.iter().skip(n) {
+            out.commands.push(("light.remove", json!({"id": l.id})));
         }
     }
     for l in &project.lights {
         if let Some(src) = &l.source
             && !project.generators.iter().any(|g| g.id() == src)
         {
-            out.push(("light.remove", json!({"id": l.id})));
+            out.commands.push(("light.remove", json!({"id": l.id})));
         }
     }
     out
 }
 
-/// Runs once per project change: creates, moves and removes the lights of placed fixtures.
-/// Returns what went wrong, in words.
-pub fn reconcile_studio(s: &mut crate::studio::Studio) -> Vec<String> {
-    let rev = s.session.revision();
-    let mut errors = Vec::new();
-    if s.pairing.reconciled == rev {
-        return errors;
-    }
-    let Some(catalog) = s.scene.library.catalog.clone() else {
-        return errors; // fixtures are unknown until the catalogue is there; try again then
-    };
-    let spec = |id: &str| catalog.asset(id).and_then(|a| a.light);
-    let commands = reconcile_commands(s.project(), &spec);
-    let n = commands.len() as u32;
-    for (name, params) in commands {
-        if let Err(e) = s.session.run(name, params) {
-            errors.push(e.to_string());
-        }
-    }
-    if n > 0 {
-        let after = s.session.revision();
-        s.pairing.follow.insert(after, n);
-    }
-    s.pairing.reconciled = s.session.revision();
-    errors
-}
-
+/// Shows what the lamp reconcile found (see `Studio::reconcile_lamps`).
 pub fn reconcile(cx: &mut Cx) {
-    for e in reconcile_studio(cx.s) {
+    for e in cx.s.reconcile_lamps() {
         cx.toasts.error(e);
     }
 }
@@ -223,7 +191,7 @@ impl LightsTool {
         // The press, not the pointer now: a drag has moved away by the time it is recognised.
         let press_on_handle = near(cx.input.press_origin);
         if near_handle || self.aiming.is_some() {
-            cx.s.drag_capture = true;
+            cx.s.pointer_captured = true;
         }
         if let (Some((id, pos, _)), Some(g)) = (&spot, ground) {
             if (cx.input.drag_started && press_on_handle)
@@ -359,26 +327,29 @@ impl LightsTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use visioncraft_core::{LightSpec, Session};
+    use visioncraft_core::Session;
 
-    fn lamp_spec() -> LightSpec {
-        LightSpec {
-            kind: LightKind::Point,
-            color_temperature_k: 2700.0,
-            lumens: 300.0,
-            range_m: 5.0,
-            offset_m: [0.0, 1.0, 0.0],
-        }
+    fn lamps() -> Vec<(String, LightSpec)> {
+        vec![(
+            "lamp".into(),
+            LightSpec {
+                kind: LightKind::Point,
+                color_temperature_k: 2700.0,
+                lumens: 300.0,
+                range_m: 5.0,
+                offset_m: [0.0, 1.0, 0.0],
+            },
+        )]
     }
 
-    fn spec(id: &str) -> Option<LightSpec> {
-        (id == "lamp").then(lamp_spec)
+    fn flat(g: &Generator) -> Vec<Placement> {
+        visioncraft_core::evaluate(g, &|_, _| Some(0.0)).placements
     }
 
-    fn run_all(s: &mut Session) -> u32 {
-        let cmds = reconcile_commands(s.project(), &spec);
-        let n = cmds.len() as u32;
-        for (c, p) in cmds {
+    fn run_all(s: &mut Session) -> usize {
+        let r = reconcile_commands(s.project(), &lamps(), &flat);
+        let n = r.commands.len();
+        for (c, p) in r.commands {
             s.run(c, p).unwrap();
         }
         n
@@ -403,7 +374,6 @@ mod tests {
         assert_eq!(l.source.as_deref(), r["id"].as_str());
         assert_eq!(l.position, [1.0, 1.0, 2.0]);
         assert_eq!(run_all(&mut s), 0, "settled");
-        // moving the fixture moves the light
         s.run(
             "planting.update",
             json!({"id": r["id"], "position": [4.0, 0.0, 2.0]}),
@@ -411,46 +381,23 @@ mod tests {
         .unwrap();
         assert_eq!(run_all(&mut s), 1);
         assert_eq!(s.project().lights.last().unwrap().position, [4.0, 1.0, 2.0]);
-        // removing the fixture removes the light
         s.run("planting.remove", json!({"id": r["id"]})).unwrap();
         assert_eq!(run_all(&mut s), 1);
         assert!(s.project().lights.is_empty());
     }
 
     #[test]
-    fn undo_and_redo_step_over_a_lamp_and_its_light_together() {
+    fn lamps_on_a_line_get_lights_up_to_the_cap() {
         let mut s = Session::new(Project::default());
-        let mut p = Pairing::default();
         s.run(
-            "planting.add_single",
-            json!({"name": "Lamp", "asset": "lamp", "position": [0.0, 0.0, 0.0]}),
+            "planting.add_spline",
+            json!({"name": "Path lamps", "asset_palette": [{"asset": "lamp", "weight": 1.0}],
+                   "points": [[0.0, 0.0], [200.0, 0.0]], "spacing": {"every": 1.0}}),
         )
         .unwrap();
-        let n = run_all(&mut s);
-        p.follow.insert(s.revision(), n);
-        assert_eq!(
-            (s.project().generators.len(), s.project().lights.len()),
-            (1, 1)
-        );
-        p.undo(&mut s);
-        assert_eq!(
-            (s.project().generators.len(), s.project().lights.len()),
-            (0, 0)
-        );
-        p.redo(&mut s);
-        assert_eq!(
-            (s.project().generators.len(), s.project().lights.len()),
-            (1, 1)
-        );
-        p.undo(&mut s);
-        assert!(s.project().generators.is_empty() && s.project().lights.is_empty());
-        // an ordinary step is still a single step
-        s.run(
-            "light.add",
-            json!({"name": "x", "position": [0.0, 1.0, 0.0]}),
-        )
-        .unwrap();
-        p.undo(&mut s);
-        assert!(s.project().lights.is_empty());
+        let r = reconcile_commands(s.project(), &lamps(), &flat);
+        let adds = r.commands.iter().filter(|c| c.0 == "light.add").count();
+        assert_eq!(adds, MAX_FIXTURE_LIGHTS);
+        assert!(r.skipped > 100, "{}", r.skipped);
     }
 }

@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use visioncraft_core::{
-    Asset, ImportedModel, Material, ModelKind, Project, Session, Shape, Site, SunTime,
+    Asset, Generator, ImportedModel, Material, ModelKind, Project, Session, Shape, Site, SunTime,
     catalog::Category, import_3dcraft, import_obj, sun::sun_position,
 };
 use visioncraft_render::{LineVertex, Quality, Renderer, Sun};
@@ -27,6 +27,7 @@ pub struct Source {
 pub enum Draft {
     Material(Material),
     Shape(Shape),
+    Generator(Generator),
 }
 
 pub struct Studio {
@@ -53,6 +54,11 @@ pub struct Studio {
     pub time_draft: Option<SunTime>,
     pub site_draft: Option<Site>,
     pub highlight: Option<(String, usize)>,
+    /// A tool uses the primary drag (a handle, a stroke): the camera does not orbit. Tools set it
+    /// every frame; the window reads and clears it.
+    pub pointer_captured: bool,
+    /// A tool finishes on a double click: the camera does not re-aim.
+    pub double_click_captured: bool,
     /// Seconds since start, for the wind animation.
     pub clock: f64,
     /// A 1.8 m figure for scale (positions on the ground).
@@ -68,14 +74,15 @@ pub struct Studio {
     pub suggest_lights: bool,
     suggested: bool,
     pub dropped_lights: usize,
-    /// Undo and redo that treat a lamp and its light as one step.
-    pub pairing: crate::lamps::Pairing,
+    /// The revision (and whether the catalogue was there) the lamp lights were last made for.
+    lamps_reconciled: (u64, bool),
+    /// Lamps over `lamps::MAX_FIXTURE_LIGHTS` at the last reconcile, and problems to show.
+    pub lamps_skipped: usize,
+    pub lamp_problems: Vec<String>,
     /// The image sky in use and the sun taken from it.
     pub sky: crate::sky_panel::SkyState,
     /// Library pictures shown in the panels.
     pub thumbs: crate::library_ui::Thumbs,
-    /// A tool is dragging something in the viewport: the camera must not orbit.
-    pub drag_capture: bool,
     last_lights: Vec<visioncraft_render::Light>,
     /// Extra overlay lines from tools: (depth tested, on top).
     pub extra: (Vec<LineVertex>, Vec<LineVertex>),
@@ -192,6 +199,8 @@ impl Studio {
             time_draft: None,
             site_draft: None,
             highlight: None,
+            pointer_captured: false,
+            double_click_captured: false,
             clock: 0.0,
             people: Vec::new(),
             show_people: true,
@@ -202,10 +211,11 @@ impl Studio {
             suggest_lights: false,
             suggested: false,
             dropped_lights: 0,
-            pairing: Default::default(),
+            lamps_reconciled: (u64::MAX, false),
+            lamps_skipped: 0,
+            lamp_problems: Vec::new(),
             sky: Default::default(),
             thumbs: Default::default(),
-            drag_capture: false,
             last_lights: Vec::new(),
             extra: (Vec::new(), Vec::new()),
             size: [0, 0],
@@ -220,14 +230,91 @@ impl Studio {
         self.session.project()
     }
 
+    /// Undo and redo leave the lights as history has them: a lamp and its light are one step.
     pub fn undo(&mut self) {
         self.set_draft(None);
-        self.pairing.undo(&mut self.session);
+        self.session.undo();
+        self.lamps_reconciled = (self.session.revision(), self.lamps_known());
     }
 
     pub fn redo(&mut self) {
         self.set_draft(None);
-        self.pairing.redo(&mut self.session);
+        self.session.redo();
+        self.lamps_reconciled = (self.session.revision(), self.lamps_known());
+    }
+
+    fn lamps_known(&self) -> bool {
+        self.scene.library.catalog.is_some()
+    }
+
+    /// Runs a command, and in the same undo step the light changes of the lamps it placed,
+    /// moved or removed.
+    pub fn run(
+        &mut self,
+        name: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, visioncraft_core::CommandError> {
+        self.with_lamps(|s| s.run(name, params))
+    }
+
+    /// Runs `f` and the lamp reconcile (`lamps::reconcile_commands`) as one transaction.
+    pub fn with_lamps<T>(
+        &mut self,
+        f: impl FnOnce(&mut Session) -> Result<T, visioncraft_core::CommandError>,
+    ) -> Result<T, visioncraft_core::CommandError> {
+        let lamps: Vec<(String, visioncraft_core::LightSpec)> = self
+            .scene
+            .library
+            .catalog
+            .as_ref()
+            .map(|c| {
+                c.assets
+                    .iter()
+                    .filter_map(|a| a.light.map(|l| (a.id.clone(), l)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let scene = &self.scene;
+        let mut problems = Vec::new();
+        let mut skipped = None;
+        let out = self.session.transaction(|s| {
+            let v = f(s)?;
+            if !lamps.is_empty() || !s.project().lights.is_empty() {
+                let r = crate::lamps::reconcile_commands(s.project(), &lamps, &|g| {
+                    scene.evaluate_generator(g).placements
+                });
+                for (name, params) in r.commands {
+                    // a light that cannot be made must not undo the user's change
+                    if let Err(e) = s.run(name, params) {
+                        problems.push(e.to_string());
+                    }
+                }
+                skipped = Some(r.skipped);
+            }
+            Ok(v)
+        });
+        if let Some(n) = skipped {
+            if n > 0 && n != self.lamps_skipped {
+                problems.push(format!(
+                    "{n} {} {}",
+                    crate::strings::LAMPS_OVER_CAP,
+                    crate::lamps::MAX_FIXTURE_LIGHTS
+                ));
+            }
+            self.lamps_skipped = n;
+        }
+        self.lamp_problems.extend(problems);
+        self.lamps_reconciled = (self.session.revision(), !lamps.is_empty());
+        out
+    }
+
+    /// Makes the lights of lamps right after a change that did not go through `run` (a loaded
+    /// project, the catalogue arriving, a command from automation): as its own undo step.
+    pub fn reconcile_lamps(&mut self) -> Vec<String> {
+        if self.lamps_reconciled != (self.session.revision(), self.lamps_known()) {
+            let _ = self.with_lamps(|_| Ok(()));
+        }
+        std::mem::take(&mut self.lamp_problems)
     }
 
     /// Makes the next `sync` look at the scene again although the project did not change.
@@ -344,6 +431,11 @@ impl Studio {
             Some(Draft::Shape(s)) => {
                 if let Some(slot) = p.to_mut().shapes.iter_mut().find(|x| x.id() == s.id()) {
                     *slot = s.clone();
+                }
+            }
+            Some(Draft::Generator(g)) => {
+                if let Some(slot) = p.to_mut().generators.iter_mut().find(|x| x.id() == g.id()) {
+                    *slot = g.clone();
                 }
             }
             None => {}

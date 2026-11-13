@@ -438,13 +438,8 @@ impl Library {
     fn read_indexes(&mut self) {
         let catalog = Key::Bytes("catalog.json".into());
         if let Some(Loaded::Bytes(b)) = self.store.take(&catalog) {
-            match parse_catalog(&b) {
-                Ok((c, skipped)) => {
-                    if let Some((n, first)) = skipped {
-                        self.messages.push(format!(
-                            "{n} catalogue entries could not be read and are left out (first: {first})"
-                        ));
-                    }
+            match Catalog::from_json_bytes(&b) {
+                Ok(c) => {
                     self.catalog = Some(Arc::new(c));
                     self.catalog_arrived = true;
                     self.rev += 1;
@@ -731,38 +726,6 @@ impl Library {
     }
 }
 
-/// Reads the catalogue; an entry that does not parse is left out (and counted) instead of
-/// refusing the whole library. The strict core reader is tried first.
-fn parse_catalog(bytes: &[u8]) -> Result<(Catalog, Option<(usize, String)>), String> {
-    if let Ok(c) = Catalog::from_json_bytes(bytes) {
-        return Ok((c, None));
-    }
-    #[derive(Deserialize)]
-    struct Raw {
-        assets: Vec<serde_json::Value>,
-    }
-    let raw: Raw = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
-    let (mut assets, mut skipped, mut first) =
-        (Vec::<visioncraft_core::Asset>::new(), 0, String::new());
-    for v in raw.assets {
-        let id = v["id"].as_str().unwrap_or("?").to_string();
-        match serde_json::from_value::<visioncraft_core::Asset>(v) {
-            Ok(a) if !a.lods.is_empty() && !assets.iter().any(|x| x.id == a.id) => assets.push(a),
-            Ok(_) => {}
-            Err(e) => {
-                if skipped == 0 {
-                    first = format!("{id}: {e}");
-                }
-                skipped += 1;
-            }
-        }
-    }
-    Ok((
-        Catalog { assets },
-        (skipped > 0).then_some((skipped, first)),
-    ))
-}
-
 /// The texture spec of a project material's `maps`: library paths, or `mcmat:` names for maps
 /// the app holds in memory. The same path in `roughness`, `metallic` and `ambient_occlusion`
 /// means one packed occlusion-roughness-metallic map (the core has no field for it yet).
@@ -804,25 +767,15 @@ mod tests {
     }
 
     #[test]
-    fn a_bad_catalogue_entry_is_left_out_not_fatal() {
-        let entry = |id: &str, plant: &str| {
-            format!(
-                r#"{{"id":"{id}","name":"{id}","category":"other","tags":[],"license":"CC0-1.0","origin":"BuiltIn","author":"a","source_url":"u","size_m":[1,1,1],"lods":[{{"file":"m/{id}.glb","max_distance_m":10.0}}],"thumbnail":"t.png","plant":{plant},"light":null}}"#
-            )
-        };
-        let good = format!(r#"{{"assets":[{}]}}"#, entry("a", "null"));
-        let (c, skipped) = parse_catalog(good.as_bytes()).unwrap();
-        assert_eq!((c.assets.len(), skipped), (1, None));
-        let bad_plant = r#"{"mature_height_m":1.0,"mature_width_m":1.0,"evergreen":null,"bloom_months":[],"exposure":null}"#;
-        let mixed = format!(
-            r#"{{"assets":[{},{}]}}"#,
-            entry("a", "null"),
-            entry("b", bad_plant)
+    fn a_plant_entry_without_evergreen_or_exposure_reads() {
+        let entry = r#"{"assets":[{"id":"b","name":"b","category":"other","tags":[],"license":"CC0-1.0","origin":"BuiltIn","author":"a","source_url":"u","size_m":[1,1,1],"lods":[{"file":"m/b.glb","max_distance_m":10.0}],"thumbnail":"t.png","plant":{"mature_height_m":1.0,"mature_width_m":1.0,"evergreen":null,"bloom_months":[],"exposure":null},"light":null}]}"#;
+        assert_eq!(
+            Catalog::from_json_bytes(entry.as_bytes())
+                .unwrap()
+                .assets
+                .len(),
+            1
         );
-        let (c, skipped) = parse_catalog(mixed.as_bytes()).unwrap();
-        assert_eq!(c.assets.len(), 1);
-        assert_eq!(skipped.map(|s| s.0), Some(1));
-        assert!(parse_catalog(b"{").is_err());
     }
 
     #[test]

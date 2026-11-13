@@ -103,6 +103,8 @@ pub enum Step {
         x: f32,
         y: f32,
     },
+    /// `{"plant": {...}}`: see `planting_smoke`.
+    Plant(Value),
     Screenshot {
         name: String,
         w: u32,
@@ -123,6 +125,9 @@ fn nums<const N: usize>(t: &[&str]) -> Result<[f32; N], String> {
 
 pub fn parse_step(v: &Value) -> Result<Step, String> {
     if let Some(obj) = v.as_object() {
+        if let Some(p) = obj.get("plant") {
+            return Ok(Step::Plant(p.clone()));
+        }
         let name = obj
             .get("run")
             .and_then(Value::as_str)
@@ -388,7 +393,7 @@ mod native {
                 serde_json::json!({"name": name, "asset": asset, "position": [x, y, z], "rotation_y_deg": rot, "scale": scale}),
             )
             .map_err(|e| e.to_string())?;
-        for e in crate::lamps::reconcile_studio(s) {
+        for e in s.reconcile_lamps() {
             eprintln!("problem: {e}");
         }
         Ok(())
@@ -402,6 +407,7 @@ mod native {
         let (device, queue) = pollster::block_on(visioncraft_render::headless_device())?;
         let renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
         let mut s = Studio::new(renderer, Project::default());
+        let mut plant = crate::planting_smoke::PlantSmoke::default();
         for (i, step) in steps.into_iter().enumerate() {
             let at = |e: String| format!("step {}: {e}", i + 1);
             match step {
@@ -409,7 +415,7 @@ mod native {
                     s.session
                         .run(&name, params)
                         .map_err(|e| at(format!("{name}: {e}")))?;
-                    for e in crate::lamps::reconcile_studio(&mut s) {
+                    for e in s.reconcile_lamps() {
                         eprintln!("problem: {e}");
                     }
                 }
@@ -526,6 +532,10 @@ mod native {
                         ),
                         None => println!("pick {x},{y}: nothing"),
                     }
+                }
+                Step::Plant(v) => {
+                    crate::planting_smoke::run(&mut s, &mut plant, &device, &queue, &v)
+                        .map_err(at)?
                 }
                 Step::Faces(owner) => {
                     s.sync();
