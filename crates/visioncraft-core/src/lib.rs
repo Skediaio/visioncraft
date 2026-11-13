@@ -18,6 +18,7 @@ pub mod project;
 pub mod raycast;
 pub mod session;
 pub mod shape;
+pub mod spec;
 pub mod sun;
 pub mod terrain;
 pub mod viewpoint;
@@ -43,6 +44,7 @@ pub use project::{
 pub use raycast::{Hit, ground_height, raycast};
 pub use session::{Command, CommandError, Session};
 pub use shape::{Shape, ShapeError, shape_mesh, shape_mesh_on};
+pub use spec::{CommandSpec, ParamSpec, ParamType, example_project};
 pub use terrain::{
     BrushStroke, DirtyRect, Terrain, TerrainChunk, Tool, apply_stroke, ground_height_over,
     terrain_chunk_mesh, terrain_chunks,

@@ -11,6 +11,7 @@ mod layers;
 mod lights;
 mod materials;
 mod planting;
+mod queries;
 mod shapes;
 mod species;
 mod terrain;
@@ -20,6 +21,7 @@ pub(crate) fn register(s: &mut Session) {
     layers::register(s);
     shapes::register(s);
     species::register(s);
+    queries::register(s);
     terrain::register(s);
     materials::register(s);
     planting::register(s);
@@ -59,7 +61,14 @@ pub(super) fn merge_update<T: Serialize + DeserializeOwned>(
     };
     for (k, v) in changes.iter().filter(|(k, _)| *k != "id") {
         if k == "type" || !fields.contains_key(k) {
-            return Err(bad(&format!("cannot update `{k}`")));
+            let near = crate::spec::nearest(
+                k,
+                fields.keys().map(String::as_str).filter(|f| *f != "type"),
+            );
+            return Err(bad(&format!(
+                "cannot update `{k}`{}",
+                near.map_or(String::new(), |n| format!("; did you mean `{n}`?"))
+            )));
         }
         fields.insert(k.clone(), v.clone());
     }

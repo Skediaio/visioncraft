@@ -29,6 +29,7 @@ pub enum ModelKind {
 
 /// Placement of a model: scale, then rotation about +Y, then translation (metres).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Transform {
     pub translation: [f32; 3],
     /// Degrees, counter-clockwise seen from above (+Y).
@@ -215,6 +216,7 @@ impl Default for Site {
 
 /// A moment in local time at the site.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SunTime {
     pub year: i32,
     pub month: u32,

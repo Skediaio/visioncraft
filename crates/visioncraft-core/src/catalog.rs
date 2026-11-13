@@ -50,11 +50,15 @@ pub struct Lod {
 pub struct PlantInfo {
     pub mature_height_m: f32,
     pub mature_width_m: f32,
-    pub evergreen: bool,
+    /// `None`: not known.
+    #[serde(default)]
+    pub evergreen: Option<bool>,
     /// 1 = January.
     #[serde(default)]
     pub bloom_months: Vec<u8>,
-    pub exposure: Exposure,
+    /// `None`: not known; a search by exposure does not match it.
+    #[serde(default)]
+    pub exposure: Option<Exposure>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -172,7 +176,9 @@ impl Catalog {
                     || a.tags.iter().any(|t| t.to_lowercase().contains(&q))
             })
             .filter(|a| category.is_none_or(|c| a.category == c))
-            .filter(|a| exposure.is_none_or(|e| a.plant.as_ref().is_some_and(|p| p.exposure == e)))
+            .filter(|a| {
+                exposure.is_none_or(|e| a.plant.as_ref().is_some_and(|p| p.exposure == Some(e)))
+            })
             .filter(|a| {
                 max_height_m
                     .is_none_or(|h| a.plant.as_ref().is_some_and(|p| p.mature_height_m <= h))

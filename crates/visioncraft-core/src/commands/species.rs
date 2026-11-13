@@ -1,29 +1,68 @@
 use super::{fail, next_id};
 use crate::project::{CustomSpecies, Project};
 use crate::session::{CommandError, Session, bad, parse};
+use crate::spec::{ParamType as T, param, spec};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 pub(super) fn register(s: &mut Session) {
-    s.register(
-        "species.add",
-        "Add a custom plant species: {name, base? (built-in species id), params (plant generator JSON)}; returns {id}",
+    let params = || {
+        param(
+            "params",
+            T::Any,
+            "The plant generator's parameters as JSON; the core does not read them.",
+        )
+    };
+    s.register_with_spec(
+        spec(
+            "species.add",
+            "Add Custom Species",
+            "Adds a custom plant species, usable as an asset id in any palette.",
+            vec![
+                param("name", T::String, "Display name.").required(),
+                param(
+                    "base",
+                    T::String,
+                    "Built-in species id it was derived from.",
+                ),
+                params().required(),
+            ],
+            "{id} (sp1, sp2...)",
+            json!({"name": "Tall birch", "base": "betula-pendula", "params": {"height": 14.0}}),
+        ),
         add,
     );
-    s.register(
-        "species.update",
-        "Change a custom species: {id, name?, params?}",
+    s.register_with_spec(
+        spec(
+            "species.update",
+            "Update Custom Species",
+            "Changes the name or parameters of a custom species.",
+            vec![
+                param("id", T::String, "Species id.").required(),
+                param("name", T::String, "Display name."),
+                params(),
+            ],
+            "null",
+            json!({"id": "sp1", "name": "Taller birch"}),
+        ),
         update,
     );
-    s.register(
-        "species.remove",
-        "Remove a custom species no generator uses: {id}",
+    s.register_with_spec(
+        spec(
+            "species.remove",
+            "Remove Custom Species",
+            "Removes a custom species; refused while a generator uses it.",
+            vec![param("id", T::String, "Species id.").required()],
+            "null",
+            json!({"id": "sp1"}),
+        ),
         remove,
     );
 }
 
 fn add(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
     #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
     struct P {
         name: String,
         base: Option<String>,
@@ -55,7 +94,10 @@ fn find<'a>(
 
 fn update(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
     #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
     struct P {
+        #[serde(rename = "id")]
+        _id: String,
         name: Option<String>,
         params: Option<Value>,
     }

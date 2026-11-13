@@ -2,11 +2,13 @@
 //! scripting later.
 
 use crate::project::{ModelKind, ModelRef, Project, Transform};
+use crate::spec::{CommandSpec, ParamType, param, spec};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::Arc;
 
 const UNDO_LIMIT: usize = 100;
 
@@ -32,9 +34,7 @@ impl std::error::Error for CommandError {}
 pub type Handler = Box<dyn Fn(&mut Project, &Value) -> Result<Value, CommandError>>;
 
 pub struct Command {
-    pub name: String,
-    /// One line.
-    pub description: String,
+    pub spec: CommandSpec,
     pub handler: Handler,
 }
 
@@ -44,6 +44,23 @@ pub struct Session {
     undo: Vec<Project>,
     redo: Vec<Project>,
     revision: u64,
+    /// Inside a transaction: nothing is pushed on the undo stack until it ends.
+    in_transaction: bool,
+}
+
+/// Whether two projects are equal; the terrain is compared by pointer first, since a command that
+/// did not touch it leaves the very same `Arc`.
+fn same_project(a: &mut Project, b: &mut Project) -> bool {
+    let (ta, tb) = (a.terrain.take(), b.terrain.take());
+    let terrain = match (&ta, &tb) {
+        (Some(x), Some(y)) => Arc::ptr_eq(x, y) || x == y,
+        (None, None) => true,
+        _ => false,
+    };
+    let same = terrain && a == b;
+    a.terrain = ta;
+    b.terrain = tb;
+    same
 }
 
 impl Session {
@@ -55,44 +72,118 @@ impl Session {
             undo: Vec::new(),
             redo: Vec::new(),
             revision: 0,
+            in_transaction: false,
         };
-        s.register(
-            "model.add",
-            "Add a model: {name, kind: 3dcraft|obj, source, id?, transform?, layer?}; returns {id}",
+        s.register_with_spec(
+            spec(
+                "model.add",
+                "Add Model",
+                "Adds a model (a CAD file or OBJ the app loads from `source`) to the project.",
+                vec![
+                    param("name", ParamType::String, "Display name.").required(),
+                    param("kind", ParamType::String, "File format of the source.")
+                        .required()
+                        .allowed(&["3dcraft", "obj"]),
+                    param("source", ParamType::String, "A path relative to the project file, or a URL.").required(),
+                    param("id", ParamType::String, "Id to use; by default the next free `m1`, `m2`..."),
+                    param("transform", ParamType::Object, "Placement {translation: [x, y, z] m, rotation_y_deg, scale}; any part may be left out. Scale first, then rotation about +Y, then translation.")
+                        .default(json!({"translation": [0, 0, 0], "rotation_y_deg": 0, "scale": 1})),
+                    param("layer", ParamType::String, "Layer id.").default(json!("model")),
+                ],
+                "{id}",
+                json!({"name": "House", "kind": "obj", "source": "house.obj"}),
+            ),
             model_add,
         );
-        s.register("model.remove", "Remove a model: {id}", model_remove);
-        s.register(
-            "model.set_transform",
-            "Move, turn or scale a model: {id, translation?, rotation_y_deg?, scale?}",
+        s.register_with_spec(
+            spec(
+                "model.remove",
+                "Remove Model",
+                "Removes a model and the material assignments made to it.",
+                vec![param("id", ParamType::String, "Model id.").required()],
+                "null",
+                json!({"id": "m1"}),
+            ),
+            model_remove,
+        );
+        s.register_with_spec(
+            spec(
+                "model.set_transform",
+                "Move Model",
+                "Moves, turns or scales a model; only the parts given change.",
+                vec![
+                    param("id", ParamType::String, "Model id.").required(),
+                    param("translation", ParamType::Point3, "Position of the model's origin, [x, y, z] (+X east, +Y up, -Z north).").unit("m"),
+                    param("rotation_y_deg", ParamType::Number, "Turn about +Y, counter-clockwise seen from above (east turns towards north).").unit("deg"),
+                    param("scale", ParamType::Number, "Uniform scale, above zero.").default(json!(1)),
+                ],
+                "null",
+                json!({"id": "m1", "translation": [2, 0, -3], "rotation_y_deg": 90}),
+            ),
             model_set_transform,
         );
-        s.register(
-            "site.set",
-            "Set the site: {latitude?, longitude?, utc_offset_hours?}",
+        s.register_with_spec(
+            spec(
+                "site.set",
+                "Set Site",
+                "Sets where the project stands on Earth, which decides the sun.",
+                vec![
+                    param("latitude", ParamType::Number, "North positive, -90..90.").unit("deg"),
+                    param("longitude", ParamType::Number, "East positive, -180..180.").unit("deg"),
+                    param(
+                        "utc_offset_hours",
+                        ParamType::Number,
+                        "Hours east of UTC that the project's time is given in, -14..14.",
+                    )
+                    .unit("h"),
+                ],
+                "null",
+                json!({"latitude": 50.85, "longitude": 4.35, "utc_offset_hours": 1}),
+            ),
             site_set,
         );
-        s.register(
-            "time.set",
-            "Set the local date and time: {year?, month?, day?, hour?}",
+        s.register_with_spec(
+            spec(
+                "time.set",
+                "Set Time",
+                "Sets the local date and time at the site, for the sun and the seasons (the month drives plant foliage).",
+                vec![
+                    param("year", ParamType::Integer, "Gregorian year."),
+                    param("month", ParamType::Integer, "1..12."),
+                    param("day", ParamType::Integer, "Day of the month, valid for the month."),
+                    param("hour", ParamType::Number, "Local time of day, 0 <= hour < 24.").unit("h"),
+                ],
+                "null",
+                json!({"month": 6, "day": 21, "hour": 20.5}),
+            ),
             time_set,
         );
         crate::commands::register(&mut s);
         s
     }
 
-    /// Adds or replaces a command; extensions use this to add their own.
+    /// Adds or replaces a command that has no spec of its own: it gets a minimal open one (any
+    /// parameters pass, nothing is documented but the description).
     pub fn register(
         &mut self,
         name: &str,
         description: &str,
         handler: impl Fn(&mut Project, &Value) -> Result<Value, CommandError> + 'static,
     ) {
+        self.register_with_spec(CommandSpec::minimal(name, description), handler);
+    }
+
+    /// Adds or replaces a command with its full spec; parameters are checked against it before
+    /// the handler runs.
+    pub fn register_with_spec(
+        &mut self,
+        spec: CommandSpec,
+        handler: impl Fn(&mut Project, &Value) -> Result<Value, CommandError> + 'static,
+    ) {
         self.commands.insert(
-            name.to_string(),
+            spec.name.clone(),
             Command {
-                name: name.to_string(),
-                description: description.to_string(),
+                spec,
                 handler: Box::new(handler),
             },
         );
@@ -102,8 +193,17 @@ impl Session {
     pub fn commands(&self) -> Vec<(&str, &str)> {
         self.commands
             .values()
-            .map(|c| (c.name.as_str(), c.description.as_str()))
+            .map(|c| (c.spec.name.as_str(), c.spec.summary.as_str()))
             .collect()
+    }
+
+    /// The specs of all commands, sorted by name.
+    pub fn command_specs(&self) -> Vec<&CommandSpec> {
+        self.commands.values().map(|c| &c.spec).collect()
+    }
+
+    pub fn command_spec(&self, name: &str) -> Option<&CommandSpec> {
+        self.commands.get(name).map(|c| &c.spec)
     }
 
     pub fn project(&self) -> &Project {
@@ -115,22 +215,34 @@ impl Session {
         self.revision
     }
 
-    /// Runs a command. On success it is undoable; on failure the project and both stacks are as before.
+    /// Runs a command. Parameters are checked against its spec first. On success that changed the
+    /// project it is one undo step; a command that left the project as it was adds no step and
+    /// does not bump the revision. On failure the project and both stacks are as before. A query
+    /// (`undoable: false`) never touches the project or the history.
     pub fn run(&mut self, name: &str, params: Value) -> Result<Value, CommandError> {
         let command = self
             .commands
             .get(name)
             .ok_or_else(|| CommandError::Unknown(name.to_string()))?;
-        // shortcut: snapshot undo clones the whole project, switch to inverse commands if projects grow past a few MB
-        let before = self.project.clone();
+        command
+            .spec
+            .check(&params)
+            .map_err(CommandError::BadParams)?;
+        if !command.spec.undoable {
+            return (command.handler)(&mut self.project.clone(), &params);
+        }
+        // shortcut: snapshot undo clones the whole project (the terrain is shared), switch to inverse commands if projects grow past a few MB
+        let mut before = self.project.clone();
         match (command.handler)(&mut self.project, &params) {
             Ok(result) => {
-                self.undo.push(before);
-                if self.undo.len() > UNDO_LIMIT {
-                    self.undo.remove(0);
+                if same_project(&mut before, &mut self.project) {
+                    return Ok(result);
                 }
-                self.redo.clear();
-                self.revision += 1;
+                if !self.in_transaction {
+                    self.push_undo(before);
+                    self.redo.clear();
+                    self.revision += 1;
+                }
                 Ok(result)
             }
             Err(e) => {
@@ -140,15 +252,52 @@ impl Session {
         }
     }
 
-    /// Swaps in another project ("Open", "New") as one undoable step.
-    pub fn replace_project(&mut self, project: Project) {
-        self.undo
-            .push(std::mem::replace(&mut self.project, project));
+    fn push_undo(&mut self, before: Project) {
+        self.undo.push(before);
         if self.undo.len() > UNDO_LIMIT {
             self.undo.remove(0);
         }
-        self.redo.clear();
-        self.revision += 1;
+    }
+
+    /// Runs `f`, which may run any commands (including ones registered by extensions); all of
+    /// them together are one undo step, or none if they changed nothing. If `f` fails, the
+    /// project, both stacks and the revision are exactly as they were. A transaction inside a
+    /// transaction joins the outer one. `undo` and `redo` do nothing while one runs.
+    pub fn transaction<T>(
+        &mut self,
+        f: impl FnOnce(&mut Session) -> Result<T, CommandError>,
+    ) -> Result<T, CommandError> {
+        if self.in_transaction {
+            return f(self);
+        }
+        let mut before = self.project.clone();
+        self.in_transaction = true;
+        let outcome = f(self);
+        self.in_transaction = false;
+        match outcome {
+            Ok(value) => {
+                if !same_project(&mut before, &mut self.project) {
+                    self.push_undo(before);
+                    self.redo.clear();
+                    self.revision += 1;
+                }
+                Ok(value)
+            }
+            Err(e) => {
+                self.project = before;
+                Err(e)
+            }
+        }
+    }
+
+    /// Swaps in another project ("Open", "New") as one undoable step.
+    pub fn replace_project(&mut self, project: Project) {
+        let old = std::mem::replace(&mut self.project, project);
+        if !self.in_transaction {
+            self.push_undo(old);
+            self.redo.clear();
+            self.revision += 1;
+        }
     }
 
     pub fn can_undo(&self) -> bool {
@@ -159,8 +308,11 @@ impl Session {
         !self.redo.is_empty()
     }
 
-    /// Returns false when there is nothing to undo.
+    /// Returns false when there is nothing to undo (or a transaction is running).
     pub fn undo(&mut self) -> bool {
+        if self.in_transaction {
+            return false;
+        }
         let Some(previous) = self.undo.pop() else {
             return false;
         };
@@ -170,8 +322,11 @@ impl Session {
         true
     }
 
-    /// Returns false when there is nothing to redo.
+    /// Returns false when there is nothing to redo (or a transaction is running).
     pub fn redo(&mut self) -> bool {
+        if self.in_transaction {
+            return false;
+        }
         let Some(next) = self.redo.pop() else {
             return false;
         };
@@ -199,6 +354,7 @@ fn check_transform(t: &Transform) -> Result<(), CommandError> {
 
 fn model_add(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
     #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
     struct P {
         id: Option<String>,
         name: String,
@@ -239,6 +395,7 @@ fn model_add(project: &mut Project, params: &Value) -> Result<Value, CommandErro
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct IdOnly {
     id: String,
 }
@@ -261,6 +418,7 @@ fn model_remove(project: &mut Project, params: &Value) -> Result<Value, CommandE
 
 fn model_set_transform(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
     #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
     struct P {
         id: String,
         translation: Option<[f32; 3]>,
@@ -280,6 +438,7 @@ fn model_set_transform(project: &mut Project, params: &Value) -> Result<Value, C
 
 fn site_set(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
     #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
     struct P {
         latitude: Option<f64>,
         longitude: Option<f64>,
@@ -311,6 +470,7 @@ fn days_in_month(year: i32, month: u32) -> u32 {
 
 fn time_set(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
     #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
     struct P {
         year: Option<i32>,
         month: Option<u32>,

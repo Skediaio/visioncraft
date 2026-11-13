@@ -2,25 +2,102 @@ use super::{check_layer, fail, merge_update, next_id};
 use crate::light::{Light, LightKind};
 use crate::project::{LAYER_LIGHTING, Project};
 use crate::session::{CommandError, Session, bad, parse};
+use crate::spec::{ParamType as T, param, spec};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 pub(super) fn register(s: &mut Session) {
-    s.register(
-        "light.add",
-        "Add a light: {name, position, kind? (point, or spot with direction and cones), color_temperature_k? (2700), lumens? (800), range_m? (10), enabled?, layer?, source?}; returns {id}",
+    let layer = || param("layer", T::String, "Layer id.");
+    let kind = || {
+        param(
+            "kind",
+            T::Object,
+            "{type: \"point\"} or {type: \"spot\", direction: [x, y, z] (where it points), inner_cone_deg, outer_cone_deg} with 0 <= inner <= outer <= 90.",
+        )
+    };
+    let kelvin = || {
+        param(
+            "color_temperature_k",
+            T::Number,
+            "Colour temperature, 1000..40000 (2700 warm white, 6500 daylight).",
+        )
+        .unit("K")
+    };
+    let lumens = || param("lumens", T::Number, "Luminous flux, 0 or more.").unit("lm");
+    let range = || {
+        param(
+            "range_m",
+            T::Number,
+            "Distance at which the light is cut off, above zero.",
+        )
+        .unit("m")
+    };
+    let source = || {
+        param(
+            "source",
+            T::String,
+            "Id of the placement or generator whose lamp asset made this light, so moving or removing the lamp can update it.",
+        )
+    };
+    s.register_with_spec(
+        spec(
+            "light.add",
+            "Add Light",
+            "Adds a point or spot light.",
+            vec![
+                param("name", T::String, "Display name.").required(),
+                param("position", T::Point3, "[x, y, z] of the emitter.").unit("m").required(),
+                kind().default(json!({"type": "point"})),
+                kelvin().default(json!(2700)),
+                lumens().default(json!(800)),
+                range().default(json!(10)),
+                param("enabled", T::Boolean, "Whether it shines.").default(json!(true)),
+                layer().default(json!("lighting")),
+                source(),
+            ],
+            "{id} (li1, li2...)",
+            json!({"name": "Garden spot", "position": [3, 2.5, 1], "kind": {"type": "spot", "direction": [0, -1, 0], "inner_cone_deg": 20, "outer_cone_deg": 40}, "lumens": 1200}),
+        ),
         light_add,
     );
-    s.register(
-        "light.update",
-        "Change fields of a light: {id, name?, kind?, position?, color_temperature_k?, lumens?, range_m?, enabled?, layer?, source?}",
+    s.register_with_spec(
+        spec(
+            "light.update",
+            "Update Light",
+            "Changes fields of a light.",
+            vec![
+                param("id", T::String, "Light id.").required(),
+                param("name", T::String, "Display name."),
+                kind(),
+                param("position", T::Point3, "[x, y, z] of the emitter.").unit("m"),
+                kelvin(),
+                lumens(),
+                range(),
+                param("enabled", T::Boolean, "Whether it shines."),
+                layer(),
+                source(),
+            ],
+            "null",
+            json!({"id": "li1", "lumens": 1500, "enabled": false}),
+        ),
         light_update,
     );
-    s.register("light.remove", "Remove a light: {id}", light_remove);
+    s.register_with_spec(
+        spec(
+            "light.remove",
+            "Remove Light",
+            "Removes a light.",
+            vec![param("id", T::String, "Light id.").required()],
+            "null",
+            json!({"id": "li1"}),
+        ),
+        light_remove,
+    );
 }
 
 fn light_add(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
     #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
     struct P {
         name: String,
         position: [f32; 3],

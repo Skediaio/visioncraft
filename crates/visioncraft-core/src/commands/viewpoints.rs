@@ -1,29 +1,78 @@
 use super::{fail, merge_update, next_id};
 use crate::project::{Project, SunTime};
 use crate::session::{CommandError, Session, bad, parse};
+use crate::spec::{ParamType as T, param, spec};
 use crate::viewpoint::Viewpoint;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 pub(super) fn register(s: &mut Session) {
-    s.register(
-        "viewpoint.add",
-        "Save a camera: {name, position, target, fov_y_deg? (60), time?}; returns {id}",
+    let time = || {
+        param(
+            "time",
+            T::Object,
+            "The sun to show from here {year, month, day, hour}; any part may be left out (the project's default fills in); null for the project's own time.",
+        )
+    };
+    let fov = || param("fov_y_deg", T::Number, "Vertical field of view, 1..179.").unit("deg");
+    s.register_with_spec(
+        spec(
+            "viewpoint.add",
+            "Save Viewpoint",
+            "Saves a camera position and target, optionally with a time of day.",
+            vec![
+                param("name", T::String, "Display name.").required(),
+                param("position", T::Point3, "Camera position [x, y, z].").unit("m").required(),
+                param("target", T::Point3, "Point it looks at; must differ from the position.").unit("m").required(),
+                fov().default(json!(60)),
+                time(),
+            ],
+            "{id} (v1, v2...)",
+            json!({"name": "From the terrace", "position": [0, 1.6, 8], "target": [0, 1.6, 0], "time": {"hour": 19.5}}),
+        ),
         viewpoint_add,
     );
-    s.register(
-        "viewpoint.update",
-        "Change a viewpoint: {id, name?, position?, target?, fov_y_deg?, time? (null clears)}",
+    s.register_with_spec(
+        spec(
+            "viewpoint.update",
+            "Update Viewpoint",
+            "Changes fields of a viewpoint.",
+            vec![
+                param("id", T::String, "Viewpoint id.").required(),
+                param("name", T::String, "Display name."),
+                param("position", T::Point3, "Camera position.").unit("m"),
+                param("target", T::Point3, "Look-at point.").unit("m"),
+                fov(),
+                time(),
+            ],
+            "null",
+            json!({"id": "v1", "fov_y_deg": 75}),
+        ),
         viewpoint_update,
     );
-    s.register(
-        "viewpoint.remove",
-        "Remove a viewpoint: {id}",
+    s.register_with_spec(
+        spec(
+            "viewpoint.remove",
+            "Remove Viewpoint",
+            "Removes a viewpoint.",
+            vec![param("id", T::String, "Viewpoint id.").required()],
+            "null",
+            json!({"id": "v2"}),
+        ),
         viewpoint_remove,
     );
-    s.register(
-        "viewpoint.reorder",
-        "Move a viewpoint to a place in the list: {id, index}",
+    s.register_with_spec(
+        spec(
+            "viewpoint.reorder",
+            "Reorder Viewpoint",
+            "Moves a viewpoint to a place in the list.",
+            vec![
+                param("id", T::String, "Viewpoint id.").required(),
+                param("index", T::Integer, "New index, from 0, inside the list.").required(),
+            ],
+            "null",
+            json!({"id": "v2", "index": 0}),
+        ),
         viewpoint_reorder,
     );
 }
@@ -38,6 +87,7 @@ fn at(project: &Project, id: &str) -> Result<usize, CommandError> {
 
 fn viewpoint_add(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
     #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
     struct P {
         name: String,
         position: [f32; 3],
@@ -86,6 +136,7 @@ fn viewpoint_remove(project: &mut Project, params: &Value) -> Result<Value, Comm
 
 fn viewpoint_reorder(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
     #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
     struct P {
         id: String,
         index: usize,

@@ -3,51 +3,165 @@ use crate::material::{Assignment, Target};
 use crate::project::{LAYER_SHAPES, Project};
 use crate::session::{CommandError, Session, bad, parse};
 use crate::shape::{Area, Extrusion, Shape, shape_mesh};
+use crate::spec::{ParamType as T, param, spec};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 pub(super) fn register(s: &mut Session) {
-    s.register(
-        "shape.add_area",
-        "Add a flat area: {name, outline: [[x,z]..], elevation? (0), drape? (false), layer?, material? (id: also assigns it to the whole shape)}; returns {id}",
+    let layer = || param("layer", T::String, "Layer id.").default(json!("shapes"));
+    let material = || {
+        param(
+            "material",
+            T::String,
+            "Material id: also assigned to the whole new shape, in the same undo step.",
+        )
+    };
+    let outline = |doc: &str| param("outline", T::Outline, doc).required();
+    s.register_with_spec(
+        spec(
+            "shape.add_area",
+            "Add Area",
+            "Draws a flat polygon (lawn, terrace, path, pond, bed) at a height; fails if the outline is self-intersecting or has fewer than 3 points.",
+            vec![
+                param("name", T::String, "Display name.").required(),
+                outline("Polygon as [x, z] pairs in metres, either winding, not self-intersecting."),
+                param("elevation", T::Number, "Height of the surface (above the ground when `drape`).").unit("m").default(json!(0)),
+                param("drape", T::Boolean, "Lie on the terrain: the surface follows the ground, `elevation` is the height above it.").default(json!(false)),
+                layer(),
+                material(),
+            ],
+            "{id} (S1, S2...; face names are `<id>:top`)",
+            json!({"name": "Lawn", "outline": [[0, 0], [10, 0], [10, 8], [0, 8]], "elevation": 0.0, "material": "lawn"}),
+        ),
         add_area,
     );
-    s.register(
-        "shape.add_extrusion",
-        "Add an extruded outline: {name, outline, closed? (true), base? (0), height, thickness? (0.2, open only), layer?, material?}; returns {id}",
+    s.register_with_spec(
+        spec(
+            "shape.add_extrusion",
+            "Add Extrusion",
+            "Extrudes a closed polygon upwards (house volume, block), or an open polyline given a thickness (wall, fence, hedge block).",
+            vec![
+                param("name", T::String, "Display name.").required(),
+                outline("Polygon (closed) or polyline (open) as [x, z] pairs in metres; at least 3 points closed, 2 open; not self-intersecting."),
+                param("closed", T::Boolean, "True: the last point joins the first. False: a polyline widened by `thickness`.").default(json!(true)),
+                param("base", T::Number, "Height of the bottom.").unit("m").default(json!(0)),
+                param("height", T::Number, "Height of the solid above `base`, above zero.").unit("m").required(),
+                param("thickness", T::Number, "Width of an open extrusion; ignored when closed.").unit("m").default(json!(0.2)),
+                layer(),
+                material(),
+            ],
+            "{id}; faces `<id>:top`, `:bottom`, `:side(n)` (n = outline edge), and `:start`, `:end` when open",
+            json!({"name": "House", "outline": [[2, 2], [8, 2], [8, 6], [2, 6]], "height": 3.0, "base": 0.0}),
+        ),
         add_extrusion,
     );
-    s.register(
-        "shape.set_outline",
-        "Replace the outline: {id, outline} (side materials are not remapped)",
+    s.register_with_spec(
+        spec(
+            "shape.set_outline",
+            "Set Outline",
+            "Replaces the whole outline of a shape; side materials are not renumbered (use insert/remove vertex for that).",
+            vec![
+                param("id", T::String, "Shape id.").required(),
+                outline("New outline as [x, z] pairs in metres."),
+            ],
+            "null",
+            json!({"id": "S2", "outline": [[2, 2], [9, 2], [9, 6], [2, 6]]}),
+        ),
         set_outline,
     );
-    s.register(
-        "shape.move_vertex",
-        "Move one outline point: {id, index, position: [x,z]}",
+    s.register_with_spec(
+        spec(
+            "shape.move_vertex",
+            "Move Vertex",
+            "Moves one outline point; every face name stays.",
+            vec![
+                param("id", T::String, "Shape id.").required(),
+                param(
+                    "index",
+                    T::Integer,
+                    "Index of the point in the outline, from 0.",
+                )
+                .required(),
+                param("position", T::Point2, "New [x, z].")
+                    .unit("m")
+                    .required(),
+            ],
+            "null",
+            json!({"id": "S2", "index": 2, "position": [9, 7]}),
+        ),
         move_vertex,
     );
-    s.register(
-        "shape.insert_vertex",
-        "Split edge `edge` with a new point at `position` [x,z]; the new point gets index edge+1 and later sides renumber, materials follow: {id, edge, position}",
+    s.register_with_spec(
+        spec(
+            "shape.insert_vertex",
+            "Insert Vertex",
+            "Splits an edge with a new point; the new point gets index edge+1, later sides renumber and their materials follow, both halves of the split edge keep its material.",
+            vec![
+                param("id", T::String, "Shape id.").required(),
+                param("edge", T::Integer, "Index of the edge to split (edge n runs from point n to point n+1).").required(),
+                param("position", T::Point2, "The new point [x, z].").unit("m").required(),
+            ],
+            "null",
+            json!({"id": "S2", "edge": 0, "position": [5, 1.5]}),
+        ),
         insert_vertex,
     );
-    s.register(
-        "shape.remove_vertex",
-        "Remove one outline point; its two edges merge, materials follow: {id, index}",
+    s.register_with_spec(
+        spec(
+            "shape.remove_vertex",
+            "Remove Vertex",
+            "Removes an outline point; its two edges merge into the earlier one (which keeps its material); refused if the shape would become invalid.",
+            vec![
+                param("id", T::String, "Shape id.").required(),
+                param("index", T::Integer, "Index of the point, from 0.").required(),
+            ],
+            "null",
+            json!({"id": "S2", "index": 3}),
+        ),
         remove_vertex,
     );
-    s.register(
-        "shape.set_height",
-        "Change heights: {id, base?, height?, thickness? (extrusions), elevation? (areas)}",
+    s.register_with_spec(
+        spec(
+            "shape.set_height",
+            "Set Height",
+            "Changes the heights of a shape: elevation for an area; base, height and thickness for an extrusion.",
+            vec![
+                param("id", T::String, "Shape id.").required(),
+                param("base", T::Number, "Extrusion: height of the bottom.").unit("m"),
+                param("height", T::Number, "Extrusion: height above `base`, above zero.").unit("m"),
+                param("thickness", T::Number, "Open extrusion: width.").unit("m"),
+                param("elevation", T::Number, "Area: height of the surface.").unit("m"),
+            ],
+            "null",
+            json!({"id": "S2", "height": 4.5}),
+        ),
         set_height,
     );
-    s.register(
-        "shape.remove",
-        "Remove a shape and its material assignments: {id}",
+    s.register_with_spec(
+        spec(
+            "shape.remove",
+            "Remove Shape",
+            "Removes a shape and the material assignments made to it.",
+            vec![param("id", T::String, "Shape id.").required()],
+            "null",
+            json!({"id": "S3"}),
+        ),
         remove,
     );
-    s.register("shape.rename", "Rename a shape: {id, name}", rename);
+    s.register_with_spec(
+        spec(
+            "shape.rename",
+            "Rename Shape",
+            "Renames a shape.",
+            vec![
+                param("id", T::String, "Shape id.").required(),
+                param("name", T::String, "New display name.").required(),
+            ],
+            "null",
+            json!({"id": "S1", "name": "Front lawn"}),
+        ),
+        rename,
+    );
 }
 
 fn add(
@@ -77,6 +191,7 @@ fn add(
 
 fn add_area(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
     #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
     struct P {
         name: String,
         outline: Vec<[f32; 2]>,
@@ -102,6 +217,7 @@ fn add_area(project: &mut Project, params: &Value) -> Result<Value, CommandError
 
 fn add_extrusion(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
     #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
     struct P {
         name: String,
         outline: Vec<[f32; 2]>,
@@ -156,6 +272,7 @@ fn edit(
 
 fn set_outline(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
     #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
     struct P {
         id: String,
         outline: Vec<[f32; 2]>,
@@ -170,6 +287,7 @@ fn set_outline(project: &mut Project, params: &Value) -> Result<Value, CommandEr
 
 fn move_vertex(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
     #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
     struct P {
         id: String,
         index: usize,
@@ -215,6 +333,7 @@ fn remap_sides(project: &mut Project, id: &str, f: impl Fn(usize) -> Vec<usize>)
 
 fn insert_vertex(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
     #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
     struct P {
         id: String,
         edge: usize,
@@ -244,6 +363,7 @@ fn insert_vertex(project: &mut Project, params: &Value) -> Result<Value, Command
 
 fn remove_vertex(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
     #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
     struct P {
         id: String,
         index: usize,
@@ -272,6 +392,7 @@ fn remove_vertex(project: &mut Project, params: &Value) -> Result<Value, Command
 
 fn set_height(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
     #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
     struct P {
         id: String,
         base: Option<f32>,
@@ -315,6 +436,7 @@ fn remove(project: &mut Project, params: &Value) -> Result<Value, CommandError> 
 
 fn rename(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
     #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
     struct P {
         id: String,
         name: String,
