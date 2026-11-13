@@ -1,0 +1,6 @@
+*
+!.gitignore
+!catalog.json
+!materials.json
+!skies.json
+!ATTRIBUTION.md

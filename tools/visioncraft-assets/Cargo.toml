@@ -1,0 +1,23 @@
+[package]
+name = "visioncraft-assets"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Offline tool: fetch, normalise and catalogue the openly licensed asset library."
+
+[lints]
+workspace = true
+
+[dependencies]
+visioncraft-core = { path = "../../crates/visioncraft-core" }
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = "2"
+gltf = "1"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "hdr"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+md5 = "0.7"
+meshopt = "0.4"

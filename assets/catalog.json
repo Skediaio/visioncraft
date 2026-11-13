@@ -1,0 +1,1052 @@
+{
+  "assets": [
+    {
+      "id": "anthurium_botany_01",
+      "name": "Anthurium Botany 01",
+      "category": "perennial",
+      "tags": [
+        "bush",
+        "forest",
+        "green",
+        "jungle",
+        "leaf",
+        "leaves",
+        "nature",
+        "outdoor",
+        "perennial",
+        "plant",
+        "plants",
+        "shrub"
+      ],
+      "license": "CC0-1.0",
+      "origin": "BuiltIn",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/anthurium_botany_01",
+      "size_m": [
+        0.8962163,
+        0.49968433,
+        1.1418908
+      ],
+      "lods": [
+        {
+          "file": "models/anthurium_botany_01/lod0.glb",
+          "max_distance_m": 13.702689
+        },
+        {
+          "file": "models/anthurium_botany_01/lod1.glb",
+          "max_distance_m": 45.67563
+        },
+        {
+          "file": "models/anthurium_botany_01/lod2.glb",
+          "max_distance_m": 3.4028235e+38
+        }
+      ],
+      "thumbnail": "models/anthurium_botany_01/thumb.png",
+      "plant": {
+        "mature_height_m": 0.49968433,
+        "mature_width_m": 1.1418908,
+        "evergreen": true,
+        "bloom_months": [],
+        "exposure": "half_shade"
+      },
+      "light": null
+    },
+    {
+      "id": "fern_02",
+      "name": "Fern 02",
+      "category": "perennial",
+      "tags": [
+        "bush",
+        "fern",
+        "foliage",
+        "green",
+        "jungle",
+        "leaf",
+        "leaves",
+        "nature",
+        "perennial",
+        "plant",
+        "plants",
+        "shrub"
+      ],
+      "license": "CC0-1.0",
+      "origin": "BuiltIn",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/fern_02",
+      "size_m": [
+        0.5519406,
+        0.28680354,
+        0.6134211
+      ],
+      "lods": [
+        {
+          "file": "models/fern_02/lod0.glb",
+          "max_distance_m": 7.361053
+        },
+        {
+          "file": "models/fern_02/lod1.glb",
+          "max_distance_m": 24.536842
+        },
+        {
+          "file": "models/fern_02/lod2.glb",
+          "max_distance_m": 3.4028235e+38
+        }
+      ],
+      "thumbnail": "models/fern_02/thumb.png",
+      "plant": null,
+      "light": null
+    },
+    {
+      "id": "flower_empodium",
+      "name": "Flower Empodium",
+      "category": "perennial",
+      "tags": [
+        "field",
+        "floral",
+        "flowers",
+        "ground cover",
+        "karoo",
+        "nature",
+        "perennial",
+        "plants",
+        "south africa",
+        "wildflower",
+        "yellow"
+      ],
+      "license": "CC0-1.0",
+      "origin": "BuiltIn",
+      "author": "Jenelle van Heerden, Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/flower_empodium",
+      "size_m": [
+        0.21736363,
+        0.26707187,
+        0.25076568
+      ],
+      "lods": [
+        {
+          "file": "models/flower_empodium/lod0.glb",
+          "max_distance_m": 3.2048626
+        },
+        {
+          "file": "models/flower_empodium/lod1.glb",
+          "max_distance_m": 10.682875
+        },
+        {
+          "file": "models/flower_empodium/lod2.glb",
+          "max_distance_m": 3.4028235e+38
+        }
+      ],
+      "thumbnail": "models/flower_empodium/thumb.png",
+      "plant": {
+        "mature_height_m": 0.26707187,
+        "mature_width_m": 0.25076568,
+        "evergreen": false,
+        "bloom_months": [],
+        "exposure": "sun"
+      },
+      "light": null
+    },
+    {
+      "id": "folding_wooden_stool",
+      "name": "Folding Wooden Stool",
+      "category": "furniture",
+      "tags": [
+        "camping",
+        "compact",
+        "folding stool",
+        "furniture",
+        "garage",
+        "garden",
+        "outdoor",
+        "portable",
+        "seating",
+        "woodwork",
+        "workshop"
+      ],
+      "license": "CC0-1.0",
+      "origin": "BuiltIn",
+      "author": "Ulan Cabanilla",
+      "source_url": "https://polyhaven.com/a/folding_wooden_stool",
+      "size_m": [
+        0.5278338,
+        0.4419685,
+        0.5470838
+      ],
+      "lods": [
+        {
+          "file": "models/folding_wooden_stool/lod0.glb",
+          "max_distance_m": 6.5650053
+        },
+        {
+          "file": "models/folding_wooden_stool/lod1.glb",
+          "max_distance_m": 21.883352
+        },
+        {
+          "file": "models/folding_wooden_stool/lod2.glb",
+          "max_distance_m": 3.4028235e+38
+        }
+      ],
+      "thumbnail": "models/folding_wooden_stool/thumb.png",
+      "plant": null,
+      "light": null
+    },
+    {
+      "id": "gate_latch_01",
+      "name": "Gate Latch 01",
+      "category": "fence",
+      "tags": [
+        "bolt",
+        "buildings",
+        "door",
+        "fence",
+        "gate",
+        "industrial",
+        "latch",
+        "lock",
+        "metal",
+        "outdoor",
+        "shed",
+        "structures",
+        "wooden"
+      ],
+      "license": "CC0-1.0",
+      "origin": "BuiltIn",
+      "author": "Desktoy",
+      "source_url": "https://polyhaven.com/a/gate_latch_01",
+      "size_m": [
+        0.20509501,
+        0.085424446,
+        0.07474935
+      ],
+      "lods": [
+        {
+          "file": "models/gate_latch_01/lod0.glb",
+          "max_distance_m": 2.4611402
+        },
+        {
+          "file": "models/gate_latch_01/lod1.glb",
+          "max_distance_m": 8.2038
+        },
+        {
+          "file": "models/gate_latch_01/lod2.glb",
+          "max_distance_m": 3.4028235e+38
+        }
+      ],
+      "thumbnail": "models/gate_latch_01/thumb.png",
+      "plant": null,
+      "light": null
+    },
+    {
+      "id": "industrial_wall_lamp",
+      "name": "Industrial Wall Lamp",
+      "category": "lighting",
+      "tags": [
+        "bunker",
+        "factory",
+        "industrial",
+        "light",
+        "lighting",
+        "metal",
+        "mine",
+        "wall light",
+        "warehouse"
+      ],
+      "license": "CC0-1.0",
+      "origin": "BuiltIn",
+      "author": "Kuutti Siitonen",
+      "source_url": "https://polyhaven.com/a/industrial_wall_lamp",
+      "size_m": [
+        0.2734608,
+        0.4299066,
+        0.14037845
+      ],
+      "lods": [
+        {
+          "file": "models/industrial_wall_lamp/lod0.glb",
+          "max_distance_m": 5.1588793
+        },
+        {
+          "file": "models/industrial_wall_lamp/lod1.glb",
+          "max_distance_m": 17.196264
+        },
+        {
+          "file": "models/industrial_wall_lamp/lod2.glb",
+          "max_distance_m": 3.4028235e+38
+        }
+      ],
+      "thumbnail": "models/industrial_wall_lamp/thumb.png",
+      "plant": null,
+      "light": {
+        "kind": {
+          "type": "point"
+        },
+        "color_temperature_k": 2700.0,
+        "lumens": 500.0,
+        "range_m": 8.0
+      }
+    },
+    {
+      "id": "outdoor_table_chair_set_01",
+      "name": "Outdoor Table Chair Set 01",
+      "category": "furniture",
+      "tags": [
+        "coffee",
+        "deli",
+        "diner",
+        "foldable",
+        "folding",
+        "furniture",
+        "outdoor",
+        "seating",
+        "street",
+        "urban",
+        "wood"
+      ],
+      "license": "CC0-1.0",
+      "origin": "BuiltIn",
+      "author": "James Ray Cock",
+      "source_url": "https://polyhaven.com/a/outdoor_table_chair_set_01",
+      "size_m": [
+        0.7416651,
+        0.8585816,
+        1.7173197
+      ],
+      "lods": [
+        {
+          "file": "models/outdoor_table_chair_set_01/lod0.glb",
+          "max_distance_m": 20.607838
+        },
+        {
+          "file": "models/outdoor_table_chair_set_01/lod1.glb",
+          "max_distance_m": 68.69279
+        },
+        {
+          "file": "models/outdoor_table_chair_set_01/lod2.glb",
+          "max_distance_m": 3.4028235e+38
+        }
+      ],
+      "thumbnail": "models/outdoor_table_chair_set_01/thumb.png",
+      "plant": null,
+      "light": null
+    },
+    {
+      "id": "painted_wooden_bench",
+      "name": "Painted Wooden Bench",
+      "category": "furniture",
+      "tags": [
+        "aged",
+        "antique",
+        "farmhouse",
+        "furniture",
+        "old",
+        "rustic",
+        "seat",
+        "seating",
+        "small",
+        "vintage",
+        "wooden",
+        "worn"
+      ],
+      "license": "CC0-1.0",
+      "origin": "BuiltIn",
+      "author": "Kirill Sannikov",
+      "source_url": "https://polyhaven.com/a/painted_wooden_bench",
+      "size_m": [
+        1.1649436,
+        0.88929147,
+        0.4965431
+      ],
+      "lods": [
+        {
+          "file": "models/painted_wooden_bench/lod0.glb",
+          "max_distance_m": 13.979322
+        },
+        {
+          "file": "models/painted_wooden_bench/lod1.glb",
+          "max_distance_m": 46.597744
+        },
+        {
+          "file": "models/painted_wooden_bench/lod2.glb",
+          "max_distance_m": 3.4028235e+38
+        }
+      ],
+      "thumbnail": "models/painted_wooden_bench/thumb.png",
+      "plant": null,
+      "light": null
+    },
+    {
+      "id": "planter_box_01",
+      "name": "Planter Box 01",
+      "category": "pot",
+      "tags": [
+        "containers",
+        "decorative",
+        "farmhouse",
+        "garden",
+        "gardening",
+        "greenhouse",
+        "landscaping",
+        "old",
+        "outdoor",
+        "pot",
+        "potted plants",
+        "shed",
+        "wood",
+        "wooden"
+      ],
+      "license": "CC0-1.0",
+      "origin": "BuiltIn",
+      "author": "James Ray Cock",
+      "source_url": "https://polyhaven.com/a/planter_box_01",
+      "size_m": [
+        0.91261137,
+        0.42496824,
+        0.41366798
+      ],
+      "lods": [
+        {
+          "file": "models/planter_box_01/lod0.glb",
+          "max_distance_m": 10.951336
+        },
+        {
+          "file": "models/planter_box_01/lod1.glb",
+          "max_distance_m": 36.504456
+        },
+        {
+          "file": "models/planter_box_01/lod2.glb",
+          "max_distance_m": 3.4028235e+38
+        }
+      ],
+      "thumbnail": "models/planter_box_01/thumb.png",
+      "plant": null,
+      "light": null
+    },
+    {
+      "id": "planter_box_02",
+      "name": "Planter Box 02",
+      "category": "pot",
+      "tags": [
+        "containers",
+        "decorative",
+        "farm",
+        "gardening",
+        "greenhouse",
+        "landscaping",
+        "old",
+        "outdoor",
+        "pot",
+        "potted plants",
+        "shed",
+        "simplified",
+        "wood",
+        "wooden",
+        "worn"
+      ],
+      "license": "CC0-1.0",
+      "origin": "BuiltIn",
+      "author": "James Ray Cock",
+      "source_url": "https://polyhaven.com/a/planter_box_02",
+      "size_m": [
+        1.2515099,
+        0.45337266,
+        0.46718612
+      ],
+      "lods": [
+        {
+          "file": "models/planter_box_02/lod0.glb",
+          "max_distance_m": 15.018119
+        },
+        {
+          "file": "models/planter_box_02/lod1.glb",
+          "max_distance_m": 50.060394
+        },
+        {
+          "file": "models/planter_box_02/lod2.glb",
+          "max_distance_m": 3.4028235e+38
+        }
+      ],
+      "thumbnail": "models/planter_box_02/thumb.png",
+      "plant": null,
+      "light": null
+    },
+    {
+      "id": "planter_box_03",
+      "name": "Planter Box 03",
+      "category": "pot",
+      "tags": [
+        "containers",
+        "decorative",
+        "farm",
+        "garden",
+        "gardening",
+        "greenhouse",
+        "landscaping",
+        "old",
+        "planters",
+        "pot",
+        "potted plants",
+        "shed",
+        "simplified",
+        "wood",
+        "wooden"
+      ],
+      "license": "CC0-1.0",
+      "origin": "BuiltIn",
+      "author": "James Ray Cock",
+      "source_url": "https://polyhaven.com/a/planter_box_03",
+      "size_m": [
+        0.91423416,
+        0.85510325,
+        0.6555437
+      ],
+      "lods": [
+        {
+          "file": "models/planter_box_03/lod0.glb",
+          "max_distance_m": 10.97081
+        },
+        {
+          "file": "models/planter_box_03/lod1.glb",
+          "max_distance_m": 36.569366
+        },
+        {
+          "file": "models/planter_box_03/lod2.glb",
+          "max_distance_m": 3.4028235e+38
+        }
+      ],
+      "thumbnail": "models/planter_box_03/thumb.png",
+      "plant": null,
+      "light": null
+    },
+    {
+      "id": "planter_pot_clay",
+      "name": "Planter Pot Clay",
+      "category": "pot",
+      "tags": [
+        "containers",
+        "dirty",
+        "farmhouse",
+        "garden",
+        "gardening",
+        "greenhouse",
+        "mossy",
+        "outdoor",
+        "pot",
+        "shed",
+        "used",
+        "vases",
+        "worn"
+      ],
+      "license": "CC0-1.0",
+      "origin": "BuiltIn",
+      "author": "Amal Kumar",
+      "source_url": "https://polyhaven.com/a/planter_pot_clay",
+      "size_m": [
+        0.26599672,
+        0.22187035,
+        0.26346305
+      ],
+      "lods": [
+        {
+          "file": "models/planter_pot_clay/lod0.glb",
+          "max_distance_m": 3.1919608
+        },
+        {
+          "file": "models/planter_pot_clay/lod1.glb",
+          "max_distance_m": 10.639869
+        },
+        {
+          "file": "models/planter_pot_clay/lod2.glb",
+          "max_distance_m": 3.4028235e+38
+        }
+      ],
+      "thumbnail": "models/planter_pot_clay/thumb.png",
+      "plant": null,
+      "light": null
+    },
+    {
+      "id": "plastic_monobloc_chair_01",
+      "name": "Plastic Monobloc Chair 01",
+      "category": "furniture",
+      "tags": [
+        "cheap",
+        "dirty",
+        "furniture",
+        "monobloc",
+        "old",
+        "outdoor",
+        "plastic",
+        "seating",
+        "shed"
+      ],
+      "license": "CC0-1.0",
+      "origin": "BuiltIn",
+      "author": "Kuutti Siitonen",
+      "source_url": "https://polyhaven.com/a/plastic_monobloc_chair_01",
+      "size_m": [
+        0.64186114,
+        0.8798412,
+        0.6275919
+      ],
+      "lods": [
+        {
+          "file": "models/plastic_monobloc_chair_01/lod0.glb",
+          "max_distance_m": 10.558094
+        },
+        {
+          "file": "models/plastic_monobloc_chair_01/lod1.glb",
+          "max_distance_m": 35.19365
+        },
+        {
+          "file": "models/plastic_monobloc_chair_01/lod2.glb",
+          "max_distance_m": 3.4028235e+38
+        }
+      ],
+      "thumbnail": "models/plastic_monobloc_chair_01/thumb.png",
+      "plant": null,
+      "light": null
+    },
+    {
+      "id": "potted_plant_04",
+      "name": "Potted Plant 04",
+      "category": "pot",
+      "tags": [
+        "aloe",
+        "cactus",
+        "decor",
+        "decorative",
+        "nature",
+        "plant",
+        "plants",
+        "pot",
+        "potplant",
+        "potted plants",
+        "small",
+        "succulent"
+      ],
+      "license": "CC0-1.0",
+      "origin": "BuiltIn",
+      "author": "James Ray Cock",
+      "source_url": "https://polyhaven.com/a/potted_plant_04",
+      "size_m": [
+        0.16788632,
+        0.26745766,
+        0.18475142
+      ],
+      "lods": [
+        {
+          "file": "models/potted_plant_04/lod0.glb",
+          "max_distance_m": 3.209492
+        },
+        {
+          "file": "models/potted_plant_04/lod1.glb",
+          "max_distance_m": 10.698307
+        },
+        {
+          "file": "models/potted_plant_04/lod2.glb",
+          "max_distance_m": 3.4028235e+38
+        }
+      ],
+      "thumbnail": "models/potted_plant_04/thumb.png",
+      "plant": null,
+      "light": null
+    },
+    {
+      "id": "security_light",
+      "name": "Security Light",
+      "category": "lighting",
+      "tags": [
+        "alleyway",
+        "entrance",
+        "exterior",
+        "industrial",
+        "infrastructure",
+        "light",
+        "lighting",
+        "outdoor"
+      ],
+      "license": "CC0-1.0",
+      "origin": "BuiltIn",
+      "author": "Maximilian Schuster",
+      "source_url": "https://polyhaven.com/a/security_light",
+      "size_m": [
+        0.32314473,
+        0.53097665,
+        0.41722304
+      ],
+      "lods": [
+        {
+          "file": "models/security_light/lod0.glb",
+          "max_distance_m": 6.37172
+        },
+        {
+          "file": "models/security_light/lod1.glb",
+          "max_distance_m": 21.239067
+        },
+        {
+          "file": "models/security_light/lod2.glb",
+          "max_distance_m": 3.4028235e+38
+        }
+      ],
+      "thumbnail": "models/security_light/thumb.png",
+      "plant": null,
+      "light": {
+        "kind": {
+          "type": "point"
+        },
+        "color_temperature_k": 2700.0,
+        "lumens": 500.0,
+        "range_m": 8.0
+      }
+    },
+    {
+      "id": "shrub_03",
+      "name": "Shrub 03",
+      "category": "shrub",
+      "tags": [
+        "botany",
+        "bush",
+        "field",
+        "foliage",
+        "green",
+        "ground cover",
+        "leaf",
+        "meadow",
+        "nature",
+        "plant",
+        "plants",
+        "shrub"
+      ],
+      "license": "CC0-1.0",
+      "origin": "BuiltIn",
+      "author": "Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/shrub_03",
+      "size_m": [
+        0.20062384,
+        0.4027838,
+        0.15120304
+      ],
+      "lods": [
+        {
+          "file": "models/shrub_03/lod0.glb",
+          "max_distance_m": 4.8334055
+        },
+        {
+          "file": "models/shrub_03/lod1.glb",
+          "max_distance_m": 16.111353
+        },
+        {
+          "file": "models/shrub_03/lod2.glb",
+          "max_distance_m": 3.4028235e+38
+        }
+      ],
+      "thumbnail": "models/shrub_03/thumb.png",
+      "plant": null,
+      "light": null
+    },
+    {
+      "id": "shrub_sorrel_01",
+      "name": "Shrub Sorrel 01",
+      "category": "shrub",
+      "tags": [
+        "bush",
+        "flowers",
+        "forest",
+        "green",
+        "leaf",
+        "leaves",
+        "nature",
+        "plants",
+        "potplant",
+        "shrub",
+        "small",
+        "sorrel"
+      ],
+      "license": "CC0-1.0",
+      "origin": "BuiltIn",
+      "author": "Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/shrub_sorrel_01",
+      "size_m": [
+        0.03838055,
+        0.05634659,
+        0.055310637
+      ],
+      "lods": [
+        {
+          "file": "models/shrub_sorrel_01/lod0.glb",
+          "max_distance_m": 0.6761591
+        },
+        {
+          "file": "models/shrub_sorrel_01/lod0.glb",
+          "max_distance_m": 2.2538636
+        },
+        {
+          "file": "models/shrub_sorrel_01/lod0.glb",
+          "max_distance_m": 3.4028235e+38
+        }
+      ],
+      "thumbnail": "models/shrub_sorrel_01/thumb.png",
+      "plant": {
+        "mature_height_m": 0.05634659,
+        "mature_width_m": 0.055310637,
+        "evergreen": false,
+        "bloom_months": [],
+        "exposure": "sun"
+      },
+      "light": null
+    },
+    {
+      "id": "stone_fire_pit",
+      "name": "Stone Fire Pit",
+      "category": "furniture",
+      "tags": [
+        "backyard",
+        "bbq",
+        "buildings",
+        "entertainment",
+        "farm",
+        "farmhouse",
+        "fire",
+        "furniture",
+        "garden",
+        "landscaping",
+        "outdoor",
+        "patio",
+        "structures"
+      ],
+      "license": "CC0-1.0",
+      "origin": "BuiltIn",
+      "author": "Sebastian Platen",
+      "source_url": "https://polyhaven.com/a/stone_fire_pit",
+      "size_m": [
+        1.4484962,
+        0.38832608,
+        1.4332345
+      ],
+      "lods": [
+        {
+          "file": "models/stone_fire_pit/lod0.glb",
+          "max_distance_m": 17.381954
+        },
+        {
+          "file": "models/stone_fire_pit/lod1.glb",
+          "max_distance_m": 57.93985
+        },
+        {
+          "file": "models/stone_fire_pit/lod2.glb",
+          "max_distance_m": 3.4028235e+38
+        }
+      ],
+      "thumbnail": "models/stone_fire_pit/thumb.png",
+      "plant": null,
+      "light": null
+    },
+    {
+      "id": "street_lamp_02",
+      "name": "Street Lamp 02",
+      "category": "lighting",
+      "tags": [
+        "city",
+        "industrial",
+        "lamppost",
+        "light",
+        "lighting",
+        "night",
+        "outdoor",
+        "pole",
+        "road",
+        "sidewalk",
+        "simplified",
+        "street",
+        "urban"
+      ],
+      "license": "CC0-1.0",
+      "origin": "BuiltIn",
+      "author": "Josh Dean",
+      "source_url": "https://polyhaven.com/a/street_lamp_02",
+      "size_m": [
+        0.38646477,
+        1.6738245,
+        0.8067751
+      ],
+      "lods": [
+        {
+          "file": "models/street_lamp_02/lod0.glb",
+          "max_distance_m": 20.085896
+        },
+        {
+          "file": "models/street_lamp_02/lod1.glb",
+          "max_distance_m": 66.95298
+        },
+        {
+          "file": "models/street_lamp_02/lod2.glb",
+          "max_distance_m": 3.4028235e+38
+        }
+      ],
+      "thumbnail": "models/street_lamp_02/thumb.png",
+      "plant": null,
+      "light": {
+        "kind": {
+          "type": "spot",
+          "direction": [
+            0.0,
+            -1.0,
+            0.0
+          ],
+          "inner_cone_deg": 30.0,
+          "outer_cone_deg": 60.0
+        },
+        "color_temperature_k": 2700.0,
+        "lumens": 3000.0,
+        "range_m": 15.0
+      }
+    },
+    {
+      "id": "vintage_oil_lamp",
+      "name": "Vintage Oil Lamp",
+      "category": "lighting",
+      "tags": [
+        "antique",
+        "decorative",
+        "historic",
+        "lamp",
+        "light",
+        "lighting",
+        "manor",
+        "oil",
+        "victorian"
+      ],
+      "license": "CC0-1.0",
+      "origin": "BuiltIn",
+      "author": "Monsta3D",
+      "source_url": "https://polyhaven.com/a/vintage_oil_lamp",
+      "size_m": [
+        0.22,
+        0.8016372,
+        0.22
+      ],
+      "lods": [
+        {
+          "file": "models/vintage_oil_lamp/lod0.glb",
+          "max_distance_m": 9.619646
+        },
+        {
+          "file": "models/vintage_oil_lamp/lod1.glb",
+          "max_distance_m": 32.065487
+        },
+        {
+          "file": "models/vintage_oil_lamp/lod2.glb",
+          "max_distance_m": 3.4028235e+38
+        }
+      ],
+      "thumbnail": "models/vintage_oil_lamp/thumb.png",
+      "plant": null,
+      "light": {
+        "kind": {
+          "type": "point"
+        },
+        "color_temperature_k": 2700.0,
+        "lumens": 400.0,
+        "range_m": 6.0
+      }
+    },
+    {
+      "id": "wooden_lantern_01",
+      "name": "Wooden Lantern 01",
+      "category": "lighting",
+      "tags": [
+        "colonial",
+        "cove",
+        "farmhouse",
+        "lantern",
+        "light",
+        "lighting",
+        "maritime",
+        "old",
+        "prop",
+        "props",
+        "wood",
+        "wooden",
+        "worn"
+      ],
+      "license": "CC0-1.0",
+      "origin": "BuiltIn",
+      "author": "James Ray Cock",
+      "source_url": "https://polyhaven.com/a/wooden_lantern_01",
+      "size_m": [
+        0.22104809,
+        0.5301366,
+        0.23472442
+      ],
+      "lods": [
+        {
+          "file": "models/wooden_lantern_01/lod0.glb",
+          "max_distance_m": 6.361639
+        },
+        {
+          "file": "models/wooden_lantern_01/lod1.glb",
+          "max_distance_m": 21.205463
+        },
+        {
+          "file": "models/wooden_lantern_01/lod2.glb",
+          "max_distance_m": 3.4028235e+38
+        }
+      ],
+      "thumbnail": "models/wooden_lantern_01/thumb.png",
+      "plant": null,
+      "light": {
+        "kind": {
+          "type": "point"
+        },
+        "color_temperature_k": 2700.0,
+        "lumens": 400.0,
+        "range_m": 6.0
+      }
+    },
+    {
+      "id": "wooden_picnic_table",
+      "name": "Wooden Picnic Table",
+      "category": "furniture",
+      "tags": [
+        "bench",
+        "countryside",
+        "furniture",
+        "old",
+        "outdoor",
+        "outdoor seating",
+        "park",
+        "seating",
+        "simplified",
+        "table",
+        "vintage",
+        "weathered",
+        "worn"
+      ],
+      "license": "CC0-1.0",
+      "origin": "BuiltIn",
+      "author": "Ulan Cabanilla",
+      "source_url": "https://polyhaven.com/a/wooden_picnic_table",
+      "size_m": [
+        2.2409759,
+        0.74598694,
+        3.0223296
+      ],
+      "lods": [
+        {
+          "file": "models/wooden_picnic_table/lod0.glb",
+          "max_distance_m": 36.267956
+        },
+        {
+          "file": "models/wooden_picnic_table/lod1.glb",
+          "max_distance_m": 120.89318
+        },
+        {
+          "file": "models/wooden_picnic_table/lod2.glb",
+          "max_distance_m": 3.4028235e+38
+        }
+      ],
+      "thumbnail": "models/wooden_picnic_table/thumb.png",
+      "plant": null,
+      "light": null
+    }
+  ]
+}

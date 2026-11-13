@@ -1,0 +1,31 @@
+{
+  "skies": [
+    {
+      "id": "kloofendal_48d_partly_cloudy_puresky",
+      "name": "Kloofendal 48d Partly Cloudy (Pure Sky)",
+      "license": "CC0-1.0",
+      "author": "Greg Zaal, Jarod Guest",
+      "source_url": "https://polyhaven.com/a/kloofendal_48d_partly_cloudy_puresky",
+      "file": "skies/kloofendal_48d_partly_cloudy_puresky/sky_1k.hdr",
+      "thumbnail": "skies/kloofendal_48d_partly_cloudy_puresky/thumb.jpg"
+    },
+    {
+      "id": "qwantani_noon_puresky",
+      "name": "Qwantani Noon (Pure Sky)",
+      "license": "CC0-1.0",
+      "author": "Greg Zaal, Jarod Guest",
+      "source_url": "https://polyhaven.com/a/qwantani_noon_puresky",
+      "file": "skies/qwantani_noon_puresky/sky_1k.hdr",
+      "thumbnail": "skies/qwantani_noon_puresky/thumb.jpg"
+    },
+    {
+      "id": "rustig_koppie_puresky",
+      "name": "Rustig Koppie (Pure Sky)",
+      "license": "CC0-1.0",
+      "author": "Greg Zaal, Jarod Guest",
+      "source_url": "https://polyhaven.com/a/rustig_koppie_puresky",
+      "file": "skies/rustig_koppie_puresky/sky_1k.hdr",
+      "thumbnail": "skies/rustig_koppie_puresky/thumb.jpg"
+    }
+  ]
+}
