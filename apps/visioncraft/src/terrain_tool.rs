@@ -260,7 +260,7 @@ impl TerrainTool {
             )?;
             s.run(
                 "shape.add_area",
-                json!({"name": t::TR_POND_NAME, "outline": outline, "elevation": level, "material": "water"}),
+                json!({"name": t::TR_POND_NAME, "outline": outline, "elevation": level, "drape": false, "material": "water"}),
             )?;
             follow_ground(s, before.as_deref())
         });

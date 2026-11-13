@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use visioncraft_core::{
     Asset, Evaluation, Generator, ImportedModel, Material, ModelRef, Project, Shape, SurfaceKind,
-    Terrain, evaluate, evaluate_surface_fill, ground_height, lawn_scatter, raycast,
-    resolve_materials, shape_mesh,
+    Terrain, area_lifts, areas_over, evaluate, evaluate_surface_fill, footing, ground_height,
+    inside_outline, lawn_scatter, raycast, resolve_materials, shape_mesh_on,
 };
 use visioncraft_flora as flora;
 use visioncraft_render::{ImpostorId, ItemId, LineVertex, Renderer};
@@ -273,7 +273,9 @@ fn upload(r: &mut Renderer, d: &MeshData, face_ids: bool) -> Option<MeshId> {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Geom {
     Model(u64),
-    Shape(Box<Shape>),
+    /// The shape as meshed (an area's lift already in its elevation) and, for an area lying on
+    /// the terrain, which terrain it was draped over.
+    Shape(Box<Shape>, usize),
 }
 
 /// Everything that decides the triangles and materials of an owner's pieces.
@@ -321,7 +323,7 @@ struct Owner {
 type Wanted = (String, Geom, Arc<ImportedModel>, Mat4, bool, bool, bool);
 
 /// The 3D grass of one owner's lawn faces.
-type LawnKey = (Geom, Mat4, Vec<(usize, [u32; 5], u64)>, u64, u8);
+type LawnKey = (Geom, Mat4, Vec<(usize, [u32; 5], u64)>, u64, u8, Vec<u32>);
 
 struct LawnGpu {
     key: LawnKey,
@@ -590,14 +592,36 @@ impl Scene {
                 ));
             }
         }
+        // How shapes sit on the ground: `visioncraft_core::shape`'s module docs.
+        let lifts: HashMap<String, f32> = area_lifts(&project.shapes).into_iter().collect();
+        let terrain = project.terrain.clone();
+        let ground = |x: f32, z: f32| terrain.as_ref().and_then(|t| t.height_at(x, z));
+        // shortcut: the terrain's address tells versions apart; an edit makes a new Arc
+        let terrain_key = terrain.as_ref().map_or(0, |t| Arc::as_ptr(t) as usize);
         for s in &project.shapes {
             let id = s.id().to_string();
-            let geom = Geom::Shape(Box::new(s.clone()));
+            let mut placed = s.clone();
+            let mut xf = Mat4::IDENTITY;
+            let mut draped = false;
+            match &mut placed {
+                Shape::Area(a) => {
+                    a.elevation += lifts.get(&id).copied().unwrap_or(0.0);
+                    draped = a.drape && terrain.is_some();
+                }
+                Shape::Extrusion(e) if terrain.is_some() => {
+                    xf = Mat4::from_translation(Vec3::new(0.0, footing(&e.outline, &ground), 0.0));
+                }
+                Shape::Extrusion(_) => {}
+            }
+            let geom = Geom::Shape(
+                Box::new(placed.clone()),
+                if draped { terrain_key } else { 0 },
+            );
             let visible = project.layer_visible(s.layer());
-            // The mesh is only rebuilt when the shape changed.
+            // The mesh is only rebuilt when the shape (or the terrain it lies on) changed.
             let model = match self.owners.get(&id) {
                 Some(o) if o.key.geom == geom => o.geom.clone(),
-                _ => match shape_mesh(s) {
+                _ => match shape_mesh_on(&placed, &ground) {
                     Ok(m) => Arc::new(m),
                     Err(e) => {
                         problems.push(format!("{}: {e}", s.name()));
@@ -609,7 +633,7 @@ impl Scene {
                 },
             };
             let is_area = matches!(s, Shape::Area(_));
-            wanted.push((id, geom, model, Mat4::IDENTITY, visible, true, is_area));
+            wanted.push((id, geom, model, xf, visible, true, is_area));
         }
 
         for (id, geom, model, xf, visible, is_shape, is_area) in wanted {
@@ -743,6 +767,12 @@ impl Scene {
         for (id, faces) in todo {
             live.push(id.clone());
             let o = &self.owners[&id];
+            // No grass under a terrace, path or pond drawn on top of this lawn.
+            let over = areas_over(&project.shapes, &id);
+            let over_key: Vec<u32> = over
+                .iter()
+                .flat_map(|o| o.iter().flat_map(|p| [p[0].to_bits(), p[1].to_bits()]))
+                .collect();
             let key = (
                 o.key.geom.clone(),
                 o.xf,
@@ -764,6 +794,7 @@ impl Scene {
                     .collect::<Vec<_>>(),
                 self.flora.rev,
                 month,
+                over_key,
             );
             if self.lawns.get(&id).is_some_and(|g| g.key == key) {
                 continue;
@@ -787,6 +818,9 @@ impl Scene {
                         break;
                     }
                     let p = o.xf.transform_point3(Vec3::from(t.position));
+                    if over.iter().any(|a| inside_outline([p.x, p.z], a)) {
+                        continue;
+                    }
                     let s = (t.height_m / 0.08).clamp(0.3, 2.5);
                     by_variant[n % plants::VARIANTS as usize].push(
                         Mat4::from_translation(p)
