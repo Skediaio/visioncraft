@@ -266,7 +266,7 @@ impl TerrainTool {
             let before = s.project().terrain.clone();
             s.run(
                 "terrain.carve",
-                json!({"outline": outline, "depth_m": depth, "bank_m": POND_BANK_M}),
+                json!({"outline": outline, "depth_m": depth, "bank_m": POND_BANK_M, "bed_material": "soil"}),
             )?;
             s.run(
                 "shape.add_area",
@@ -329,20 +329,6 @@ impl TerrainTool {
                     self.brush = b;
                     self.pond.clear();
                 }
-            }
-            // A pond's outline drawn from above lands where it looks like it does.
-            let plan = cx.s.camera.view == crate::camera::View::Top;
-            if ui
-                .selectable_label(plan, t::PLAN_VIEW)
-                .on_hover_text(t::PLAN_VIEW_TIP)
-                .clicked()
-            {
-                cx.s.camera.view = if plan {
-                    crate::camera::View::Orbit
-                } else {
-                    cx.s.camera.leave_walk();
-                    crate::camera::View::Top
-                };
             }
         });
     }

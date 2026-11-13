@@ -86,16 +86,36 @@ pub fn panel(ui: &mut egui::Ui, cx: &mut Cx, terrain: &mut crate::terrain_tool::
         terrain.panel(ui, cx);
     } else {
         panel_body(ui, cx);
-        crate::sky_panel::panel(ui, cx);
+        egui::CollapsingHeader::new(egui::RichText::new(t::SKY).small())
+            .id_salt("sun-sky")
+            .default_open(false)
+            .show(ui, |ui| crate::sky_panel::panel(ui, cx));
     }
     ui.separator();
     ui.horizontal(|ui| {
         if ui.selectable_label(!terrain.open, t::TAB_SUN).clicked() && terrain.open {
+            // The plan is the mode's, not the tab's.
+            let view = cx.s.camera.view;
             terrain.leave(cx);
+            cx.s.camera.view = view;
             terrain.open = false;
         }
         if ui.selectable_label(terrain.open, t::TAB_TERRAIN).clicked() {
             terrain.open = true;
+        }
+        // The plan, as in Draw and Objects: a pond or a stroke lands where it is drawn.
+        let plan = cx.s.camera.view == crate::camera::View::Top;
+        if ui
+            .selectable_label(plan, t::PLAN_VIEW)
+            .on_hover_text(t::PLAN_VIEW_TIP)
+            .clicked()
+        {
+            cx.s.camera.view = if plan {
+                crate::camera::View::Orbit
+            } else {
+                cx.s.camera.leave_walk();
+                crate::camera::View::Top
+            };
         }
     });
 }
@@ -392,40 +412,46 @@ fn view_fields(ui: &mut egui::Ui, cx: &mut Cx) {
             cx.run("view.set", json!({"exposure_ev": ev}));
         }
     });
-    let mut field = |ui: &mut egui::Ui,
-                     label: &str,
-                     key: &str,
-                     mut value: f32,
-                     range: std::ops::RangeInclusive<f32>| {
-        if ui
-            .add(
-                egui::Slider::new(&mut value, range)
-                    .text(label)
-                    .max_decimals(1),
-            )
-            .drag_stopped()
-        {
-            cx.run("view.set", json!({ key: value }));
-        }
-    };
-    field(ui, t::HAZE, "haze", v.haze, 0.0..=20.0);
-    field(ui, t::WIND, "wind_strength", v.wind_strength, 0.0..=2.0);
-    field(
-        ui,
-        t::WIND_DIRECTION,
-        "wind_direction_deg",
-        v.wind_direction_deg,
-        0.0..=360.0,
-    );
-    let mut ground = v.ground.is_some();
-    if ui.checkbox(&mut ground, t::GROUND).changed() {
-        let g = if ground {
-            json!({"height": 0.0, "color": [0.10, 0.17, 0.08]})
-        } else {
-            serde_json::Value::Null
-        };
-        cx.run("view.set", json!({"ground": g}));
-    }
+    // Haze, wind and the ground plane: folded, they are rarely changed.
+    egui::CollapsingHeader::new(egui::RichText::new(t::AIR_AND_GROUND).small())
+        .id_salt("sun-air")
+        .default_open(false)
+        .show(ui, |ui| {
+            let mut ground = v.ground.is_some();
+            if ui.checkbox(&mut ground, t::GROUND).changed() {
+                let g = if ground {
+                    json!({"height": 0.0, "color": [0.10, 0.17, 0.08]})
+                } else {
+                    serde_json::Value::Null
+                };
+                cx.run("view.set", json!({"ground": g}));
+            }
+            let mut field = |ui: &mut egui::Ui,
+                             label: &str,
+                             key: &str,
+                             mut value: f32,
+                             range: std::ops::RangeInclusive<f32>| {
+                if ui
+                    .add(
+                        egui::Slider::new(&mut value, range)
+                            .text(label)
+                            .max_decimals(1),
+                    )
+                    .drag_stopped()
+                {
+                    cx.run("view.set", json!({ key: value }));
+                }
+            };
+            field(ui, t::HAZE, "haze", v.haze, 0.0..=20.0);
+            field(ui, t::WIND, "wind_strength", v.wind_strength, 0.0..=2.0);
+            field(
+                ui,
+                t::WIND_DIRECTION,
+                "wind_direction_deg",
+                v.wind_direction_deg,
+                0.0..=360.0,
+            );
+        });
 }
 
 #[cfg(test)]
