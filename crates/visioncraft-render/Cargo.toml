@@ -12,5 +12,7 @@ glam = "0.30"
 wgpu = "30.0.1"
 
 [dev-dependencies]
+# Validates the WGSL without a GPU; same naga that wgpu already uses.
+naga = { version = "30.0.1", features = ["wgsl-in"] }
 pollster = "1.0.1"
 png = "0.17"
