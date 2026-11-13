@@ -93,6 +93,12 @@ pub const PT_MORE: &str = "Size, turning, layer";
 pub const PANEL_FOLD: &str = "Fold the panel to its title, to see and click what is behind it";
 pub const PANEL_UNFOLD: &str = "Unfold the panel";
 pub const PT_STRAIGHT: &str = "Straight (corner to corner)";
+pub const WIDTH: &str = "Width";
+pub const DEPTH: &str = "Depth";
+pub const AIR_AND_GROUND: &str = "Haze, wind, ground plane";
+pub const AVOID_BUILDINGS: &str =
+    "Avoid buildings (no plants on roofs, in blocks or under a low canopy)";
+pub const IN_BUILDING: &str = "That would put it inside a building or under a roof lower than the plant: hold Shift to place it anyway";
 pub const KIND_LAWN: &str = "Lawn";
 pub const KIND_TERRACE: &str = "Terrace";
 pub const KIND_PATH: &str = "Path";

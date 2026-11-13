@@ -284,6 +284,10 @@ pub struct DrawState {
     dragging: Option<usize>,
     /// (shape id, text) of the name field while it has the keyboard.
     name_edit: Option<(String, String)>,
+    /// Digits typed while drawing (the next segment's length), and a rectangle's width typed
+    /// before Tab or x.
+    typed: String,
+    typed_width: Option<f32>,
     /// The camera before Draw switched to the plan.
     camera_before: Option<crate::camera::Camera>,
     /// The project had nothing in it when Draw opened.
@@ -402,9 +406,66 @@ impl DrawState {
         let snap = cursor.map(|c| snap_point(c, &self.points, &existing, radius, !cx.input.alt));
         if cx.input.escape && !self.points.is_empty() {
             self.points.clear();
+            self.typed.clear();
+            self.typed_width = None;
         }
-        if cx.input.backspace {
+        // Typed sizes: digits set the length of the segment being drawn (towards the pointer);
+        // with the first corner down, `20` Tab (or x) `30` Enter makes a 20 by 30 m rectangle.
+        let typing_field = cx.ctx.egui_wants_keyboard_input();
+        let (text, tab) = cx.ctx.input(|i| {
+            let mut text = String::new();
+            let mut tab = false;
+            for e in &i.events {
+                match e {
+                    egui::Event::Text(t) => text.push_str(t),
+                    egui::Event::Key {
+                        key: egui::Key::Tab,
+                        pressed: true,
+                        ..
+                    } => tab = true,
+                    _ => {}
+                }
+            }
+            (text, tab)
+        });
+        if !typing_field && !self.points.is_empty() {
+            for c in text.chars() {
+                match c {
+                    '0'..='9' | '.' => self.typed.push(c),
+                    ',' => self.typed.push('.'),
+                    'x' | 'X' | '*' if closed_shape && self.points.len() == 1 => {
+                        self.typed_width = self.typed.parse().ok();
+                        self.typed.clear();
+                    }
+                    _ => {}
+                }
+            }
+            if tab && closed_shape && self.points.len() == 1 {
+                self.typed_width = self.typed.parse().ok();
+                self.typed.clear();
+            }
+        }
+        if cx.input.backspace && self.typed.pop().is_none() {
             self.points.pop();
+        }
+        let typed_len: Option<f32> = self.typed.parse().ok().filter(|v: &f32| *v > 0.0);
+        if cx.input.enter
+            && let (Some(len), Some(&last), Some(s)) = (typed_len, self.points.last(), snap)
+        {
+            match self.typed_width {
+                Some(w) if closed_shape && self.points.len() == 1 => {
+                    let corners = rectangle(last, s.pos, w, len);
+                    self.points = corners.to_vec();
+                    self.typed.clear();
+                    self.typed_width = None;
+                    self.finish(cx);
+                    return;
+                }
+                _ => {
+                    self.points.push(typed_point(last, s.pos, len));
+                    self.typed.clear();
+                }
+            }
         }
         if cx.input.clicked
             && let Some(s) = snap
@@ -415,7 +476,7 @@ impl DrawState {
                 self.points.push(s.pos);
             }
         }
-        if cx.input.enter {
+        if cx.input.enter && typed_len.is_none() {
             let needed = if closed_shape { 3 } else { 2 };
             if self.points.len() >= needed {
                 self.finish(cx);
@@ -460,6 +521,15 @@ impl DrawState {
         }
         for w in pts.windows(2) {
             self.length_label(cx, w[0], w[1]);
+        }
+        if (!self.typed.is_empty() || self.typed_width.is_some())
+            && let Some(at) = cx.input.hover
+        {
+            let text = match self.typed_width {
+                Some(w) => format!("{w} × {} m", self.typed),
+                None => format!("{} m", self.typed),
+            };
+            cx.label(at + egui::vec2(24.0, -18.0), &text);
         }
     }
 
@@ -714,6 +784,22 @@ impl DrawState {
                 self.name_edit = Some((shape.id().to_string(), name));
             }
         });
+        // A rectangle (at any turn) shows its width and depth to type in.
+        if shape.is_closed()
+            && let Some((w0, d0)) = rect_size(shape.outline())
+        {
+            let (mut w, mut d) = (w0, d0);
+            let ew = drag_field(ui, t::WIDTH, &mut w, 0.01, 0.1..=1000.0, " m");
+            let ed = drag_field(ui, t::DEPTH, &mut d, 0.01, 0.1..=1000.0, " m");
+            if (ew == Edit::Done || ed == Edit::Done)
+                && let Some(outline) = resized_rect(shape.outline(), w, d)
+            {
+                cx.run(
+                    "shape.set_outline",
+                    json!({"id": shape.id(), "outline": outline}),
+                );
+            }
+        }
         let mut edited = shape.clone();
         let mut edit = Edit::None;
         let mut params = serde_json::Map::new();
@@ -809,8 +895,77 @@ impl DrawState {
     }
 }
 
+/// The point `len` metres from `last` towards `toward`, along an axis when the pointer is within
+/// 10 degrees of one (so typed sizes come out exact).
+pub fn typed_point(last: P2, toward: P2, len: f32) -> P2 {
+    let (dx, dz) = (toward[0] - last[0], toward[1] - last[1]);
+    let (mut ux, mut uz) = if dx.hypot(dz) < 1e-6 {
+        (1.0, 0.0)
+    } else {
+        (dx / dx.hypot(dz), dz / dx.hypot(dz))
+    };
+    let snap = 10f32.to_radians().sin();
+    if uz.abs() < snap {
+        (ux, uz) = (ux.signum(), 0.0);
+    } else if ux.abs() < snap {
+        (ux, uz) = (0.0, uz.signum());
+    }
+    [last[0] + ux * len, last[1] + uz * len]
+}
+
+/// A `width` (along x) by `depth` (along z) rectangle from corner `p0`, opening towards `toward`.
+pub fn rectangle(p0: P2, toward: P2, width: f32, depth: f32) -> [P2; 4] {
+    let sx = if toward[0] < p0[0] { -1.0 } else { 1.0 };
+    let sz = if toward[1] < p0[1] { -1.0 } else { 1.0 };
+    let (x1, z1) = (p0[0] + sx * width, p0[1] + sz * depth);
+    [p0, [x1, p0[1]], [x1, z1], [p0[0], z1]]
+}
+
+/// Width and depth of a four-corner shape with right angles (a rectangle at any turn), else
+/// `None`.
+pub fn rect_size(outline: &[P2]) -> Option<(f32, f32)> {
+    let [a, b, c, d] = <[P2; 4]>::try_from(outline).ok()?;
+    let e = |p: P2, q: P2| [q[0] - p[0], q[1] - p[1]];
+    let (u, v, w, x) = (e(a, b), e(b, c), e(c, d), e(d, a));
+    let dot = |p: [f32; 2], q: [f32; 2]| p[0] * q[0] + p[1] * q[1];
+    let len = |p: [f32; 2]| p[0].hypot(p[1]);
+    let square = |p, q| dot(p, q).abs() < 1e-3 * len(p) * len(q) + 1e-6;
+    (square(u, v) && square(v, w) && square(w, x)).then(|| (len(u), len(v)))
+}
+
+/// The same rectangle with sides `width` (first edge) and `depth` (second), first corner and
+/// directions kept.
+pub fn resized_rect(outline: &[P2], width: f32, depth: f32) -> Option<Vec<P2>> {
+    let (w0, d0) = rect_size(outline)?;
+    let [a, b, _, d] = <[P2; 4]>::try_from(outline).ok()?;
+    let u = [(b[0] - a[0]) / w0, (b[1] - a[1]) / w0];
+    let v = [(d[0] - a[0]) / d0, (d[1] - a[1]) / d0];
+    let p = |s: f32, t: f32| [a[0] + u[0] * s + v[0] * t, a[1] + u[1] * s + v[1] * t];
+    Some(vec![a, p(width, 0.0), p(width, depth), p(0.0, depth)])
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn typed_sizes_come_out_exact() {
+        let p0 = [-10.2, 4.3];
+        let r = super::rectangle(p0, [0.0, 20.0], 20.0, 30.0);
+        let (w, d) = super::rect_size(&r).unwrap();
+        assert!(
+            (w - 20.0).abs() < 1e-4 && (d - 30.0).abs() < 1e-4,
+            "{w} {d}"
+        );
+        // Towards a pointer a little off the x axis: still along it.
+        let q = super::typed_point(p0, [0.0, 5.0], 12.5);
+        assert!((q[0] - (p0[0] + 12.5)).abs() < 1e-4 && (q[1] - p0[1]).abs() < 1e-6);
+        // A turned rectangle keeps its turn when resized.
+        let turned = vec![[0.0, 0.0], [3.0, 4.0], [-1.0, 7.0], [-4.0, 3.0]];
+        let resized = super::resized_rect(&turned, 10.0, 2.0).unwrap();
+        let (w, d) = super::rect_size(&resized).unwrap();
+        assert!((w - 10.0).abs() < 1e-4 && (d - 2.0).abs() < 1e-4);
+        assert!(super::rect_size(&[[0.0, 0.0], [1.0, 0.0], [2.0, 1.0], [0.0, 1.0]]).is_none());
+    }
 
     #[test]
     fn names_count_per_kind() {
