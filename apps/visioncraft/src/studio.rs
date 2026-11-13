@@ -53,6 +53,8 @@ pub struct Studio {
     /// Exposure offset in stops on top of the automatic exposure: positive is brighter.
     pub exposure: f32,
     pub draft: Option<Draft>,
+    /// The species editor's plant: drawn, never part of the session's project.
+    pub species_preview: Option<(visioncraft_core::CustomSpecies, Generator)>,
     pub time_draft: Option<SunTime>,
     pub site_draft: Option<Site>,
     pub highlight: Option<(String, usize)>,
@@ -219,6 +221,7 @@ impl Studio {
             base_offset: 1.0,
             exposure: 0.0,
             draft: None,
+            species_preview: None,
             time_draft: None,
             site_draft: None,
             highlight: None,
@@ -544,6 +547,11 @@ impl Studio {
             }
             Some(Draft::Terrain(t)) => p.to_mut().terrain = Some(t.clone()),
             None => {}
+        }
+        if let Some((sp, g)) = &self.species_preview {
+            let p = p.to_mut();
+            p.species.push(sp.clone());
+            p.generators.push(g.clone());
         }
         p
     }

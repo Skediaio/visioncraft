@@ -37,6 +37,8 @@ pub struct ObjectsState {
     in_bloom: bool,
     /// The Plants | Objects tabs of the browser, and the Lights tool.
     pub library: crate::library_ui::LibraryUi,
+    /// Making a species of one's own from a plant of the browser.
+    pub species: crate::species_editor::SpeciesEditor,
 }
 
 pub(crate) fn display_name(cx: &Cx, id: &str) -> String {
@@ -54,6 +56,7 @@ pub(crate) fn display_name(cx: &Cx, id: &str) -> String {
 
 impl ObjectsState {
     pub fn leave(&mut self, cx: &mut Cx) {
+        self.species.close(cx.s);
         self.tools.leave(cx);
         cx.s.extra = Default::default();
     }
@@ -64,6 +67,7 @@ impl ObjectsState {
         } else {
             self.tools.update(cx);
         }
+        self.species.update(cx.s);
     }
 
     /// The plant browser: a searchable, filterable list of the built-in species and the project's own.
@@ -104,16 +108,21 @@ impl ObjectsState {
         let month = cx.s.project().time.month as u8;
         let needle = self.search.to_lowercase();
         let mut add: Option<String> = None;
+        let mut edit: Option<String> = None;
         egui::ScrollArea::vertical()
             .max_height(170.0)
             .id_salt("plants")
             .show(ui, |ui| {
                 for c in &cx.s.project().species {
                     if needle.is_empty() || c.name.to_lowercase().contains(&needle) {
-                        let r = ui.button(format!("{} (own)", c.name));
-                        if r.clicked() {
-                            add = Some(c.id.clone());
-                        }
+                        ui.horizontal(|ui| {
+                            if ui.button(format!("{} ({})", c.name, t::SP_OWN)).clicked() {
+                                add = Some(c.id.clone());
+                            }
+                            if ui.small_button(t::SP_EDIT).clicked() {
+                                edit = Some(c.id.clone());
+                            }
+                        });
                     }
                 }
                 for s in flora::species() {
@@ -126,34 +135,48 @@ impl ObjectsState {
                     {
                         continue;
                     }
-                    let r = ui
-                        .button(format!("{}  ·  {:.1} m", s.common_name, s.mature_height_m))
-                        .on_hover_text(format!(
-                            "{}\n{:.1} × {:.1} m, {}{}",
-                            s.botanical_name,
-                            s.mature_height_m,
-                            s.mature_width_m,
-                            if s.evergreen {
-                                "evergreen"
-                            } else {
-                                "deciduous"
-                            },
-                            if s.bloom_months.is_empty() {
-                                String::new()
-                            } else {
-                                format!(", blooms {:?}", s.bloom_months)
-                            },
-                        ));
-                    if r.clicked() {
+                    let row = ui.horizontal(|ui| {
+                        let r = ui
+                            .button(format!("{}  ·  {:.1} m", s.common_name, s.mature_height_m))
+                            .on_hover_text(format!(
+                                "{}\n{:.1} × {:.1} m, {}{}",
+                                s.botanical_name,
+                                s.mature_height_m,
+                                s.mature_width_m,
+                                if s.evergreen {
+                                    "evergreen"
+                                } else {
+                                    "deciduous"
+                                },
+                                if s.bloom_months.is_empty() {
+                                    String::new()
+                                } else {
+                                    format!(", blooms {:?}", s.bloom_months)
+                                },
+                            ));
+                        if ui
+                            .small_button(t::SP_EDIT)
+                            .on_hover_text(t::SP_EDIT_TIP)
+                            .clicked()
+                        {
+                            edit = Some(format!("flora:{}", s.id));
+                        }
+                        r
+                    });
+                    if row.inner.clicked() {
                         add = Some(format!("flora:{}", s.id));
                     }
                 }
             });
+        if let Some(id) = edit {
+            self.species.open(cx.s.project(), &id);
+        }
         add
     }
 
     /// The planting panel, and next to it the plants browser while a "+" is open.
     pub fn panel(&mut self, ui: &mut egui::Ui, cx: &mut Cx) {
+        self.species.window(cx.ctx, cx);
         if self.tools.lights {
             self.tools.tool_row(ui, cx);
             self.library.lights.panel(ui, cx);

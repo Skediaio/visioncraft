@@ -298,3 +298,13 @@ pub const TR_DEPTH: &str = "Depth";
 pub const TR_LAYERS: &str = "Paint with";
 pub const TR_ADD_LAYER: &str = "+ Material from the library";
 pub const TR_CELLS: &str = "cells";
+
+pub const SP_OWN: &str = "own";
+pub const SP_EDIT: &str = "Edit";
+pub const SP_EDIT_TIP: &str = "Make a species of your own from this one.";
+pub const SP_TITLE: &str = "Species";
+pub const SP_NAME: &str = "Name";
+pub const SP_HINT: &str = "The plant at the centre of the view shows each change once you let go.";
+pub const SP_SAVE: &str = "Save";
+pub const SP_SAVE_NEW: &str = "Save as my species";
+pub const SP_SAVED: &str = "Saved: the species is in the plant list of every tool.";

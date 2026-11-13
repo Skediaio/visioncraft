@@ -29,6 +29,7 @@ pub mod plants;
 pub mod scene;
 pub mod sky_panel;
 pub mod smoke;
+pub mod species_editor;
 pub mod strings;
 pub mod studio;
 pub mod sun;
