@@ -240,6 +240,8 @@ pub struct DrawState {
     pub selected: Option<String>,
     pub vertex: Option<usize>,
     dragging: Option<usize>,
+    /// (shape id, text) of the name field while it has the keyboard.
+    name_edit: Option<(String, String)>,
 }
 
 const ACCENT: [u8; 4] = [255, 200, 70, 255];
@@ -587,7 +589,12 @@ impl DrawState {
         cx.label(Pos2::new(p.x + w / 2.0, p.y - 14.0), &format!("{len} m"));
     }
 
+    /// The selected shape's fields above the tools: the panel grows upwards from the bottom, so
+    /// the tool row stays where it is when a shape is selected.
     pub fn panel(&mut self, ui: &mut egui::Ui, cx: &mut Cx) {
+        if self.shape_panel(ui, cx) {
+            ui.separator();
+        }
         ui.horizontal(|ui| {
             for (tool, label) in [
                 (Tool::Select, t::TOOL_SELECT),
@@ -606,14 +613,28 @@ impl DrawState {
             Tool::Wall => t::WALL_HINT,
             _ => t::DRAW_HINT,
         });
-        let Some(shape) = self.shape(cx) else { return };
-        ui.separator();
-        let mut name = shape.name().to_string();
+    }
+
+    /// The selected shape's name, sizes and measurements; false when nothing is selected.
+    fn shape_panel(&mut self, ui: &mut egui::Ui, cx: &mut Cx) -> bool {
+        let Some(shape) = self.shape(cx) else {
+            return false;
+        };
+        // The name being typed lives here until the field lets go (the shape keeps the old one).
+        let mut name = match &self.name_edit {
+            Some((id, n)) if id == shape.id() => n.clone(),
+            _ => shape.name().to_string(),
+        };
         ui.horizontal(|ui| {
             ui.label(t::NAME);
             let r = ui.add(egui::TextEdit::singleline(&mut name).desired_width(140.0));
-            if r.lost_focus() && name != shape.name() && !name.is_empty() {
-                cx.run("shape.rename", json!({"id": shape.id(), "name": name}));
+            if r.lost_focus() {
+                self.name_edit = None;
+                if name != shape.name() && !name.trim().is_empty() {
+                    cx.run("shape.rename", json!({"id": shape.id(), "name": name}));
+                }
+            } else if r.has_focus() {
+                self.name_edit = Some((shape.id().to_string(), name));
             }
         });
         let mut edited = shape.clone();
@@ -682,6 +703,7 @@ impl DrawState {
                 self.vertex = None;
             }
         });
+        true
     }
 }
 
