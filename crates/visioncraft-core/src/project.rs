@@ -1,5 +1,10 @@
 //! The document VisionCraft saves as `.visioncraft`: JSON.
 
+use crate::light::Light;
+use crate::material::{Assignment, Material, builtin_palette};
+use crate::planting::Generator;
+use crate::shape::Shape;
+use crate::viewpoint::Viewpoint;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -48,8 +53,50 @@ pub struct ModelRef {
     pub source: String,
     #[serde(default)]
     pub transform: Transform,
+    #[serde(default = "model_layer")]
+    pub layer: String,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extensions: Extensions,
+}
+
+pub const LAYER_MODEL: &str = "model";
+pub const LAYER_SHAPES: &str = "shapes";
+pub const LAYER_PLANTING: &str = "planting";
+pub const LAYER_LIGHTING: &str = "lighting";
+
+fn model_layer() -> String {
+    LAYER_MODEL.into()
+}
+
+/// A named group that can be hidden; models, shapes, generators and lights each sit on one.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Layer {
+    pub id: String,
+    pub name: String,
+    pub visible: bool,
+}
+
+fn default_layers() -> Vec<Layer> {
+    [
+        (LAYER_MODEL, "Model"),
+        (LAYER_SHAPES, "Shapes"),
+        (LAYER_PLANTING, "Planting"),
+        (LAYER_LIGHTING, "Lighting"),
+    ]
+    .map(|(id, name)| Layer {
+        id: id.into(),
+        name: name.into(),
+        visible: true,
+    })
+    .into()
+}
+
+/// How the scene is drawn, independent of its content.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenderStyle {
+    /// Every surface white: a presentation mode.
+    #[serde(default)]
+    pub clay: bool,
 }
 
 /// Where the project stands on Earth, for the sun.
@@ -104,6 +151,22 @@ pub struct Project {
     pub site: Site,
     #[serde(default)]
     pub time: SunTime,
+    #[serde(default = "default_layers")]
+    pub layers: Vec<Layer>,
+    #[serde(default)]
+    pub shapes: Vec<Shape>,
+    #[serde(default = "builtin_palette")]
+    pub materials: Vec<Material>,
+    #[serde(default)]
+    pub assignments: Vec<Assignment>,
+    #[serde(default)]
+    pub generators: Vec<Generator>,
+    #[serde(default)]
+    pub lights: Vec<Light>,
+    #[serde(default)]
+    pub viewpoints: Vec<Viewpoint>,
+    #[serde(default)]
+    pub style: RenderStyle,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extensions: Extensions,
 }
@@ -115,6 +178,14 @@ impl Default for Project {
             models: Vec::new(),
             site: Site::default(),
             time: SunTime::default(),
+            layers: default_layers(),
+            shapes: Vec::new(),
+            materials: builtin_palette(),
+            assignments: Vec::new(),
+            generators: Vec::new(),
+            lights: Vec::new(),
+            viewpoints: Vec::new(),
+            style: RenderStyle::default(),
             extensions: Extensions::new(),
         }
     }
@@ -145,6 +216,36 @@ impl fmt::Display for ProjectError {
 impl std::error::Error for ProjectError {}
 
 impl Project {
+    /// Whether things on this layer are drawn; an unknown layer counts as visible.
+    pub fn layer_visible(&self, layer: &str) -> bool {
+        self.layers.iter().all(|l| l.id != layer || l.visible)
+    }
+
+    /// The layer of any model, shape, generator or light, by its id.
+    pub(crate) fn layer_of_mut(&mut self, id: &str) -> Option<&mut String> {
+        if let Some(m) = self.models.iter_mut().find(|m| m.id == id) {
+            return Some(&mut m.layer);
+        }
+        if let Some(s) = self.shapes.iter_mut().find(|s| s.id() == id) {
+            return Some(s.layer_mut());
+        }
+        if let Some(g) = self.generators.iter_mut().find(|g| g.id() == id) {
+            return Some(g.layer_mut());
+        }
+        self.lights
+            .iter_mut()
+            .find(|l| l.id == id)
+            .map(|l| &mut l.layer)
+    }
+
+    /// Whether any model, shape, generator or light sits on the layer.
+    pub fn layer_in_use(&self, layer: &str) -> bool {
+        self.models.iter().any(|m| m.layer == layer)
+            || self.shapes.iter().any(|s| s.layer() == layer)
+            || self.generators.iter().any(|g| g.layer() == layer)
+            || self.lights.iter().any(|l| l.layer == layer)
+    }
+
     pub fn to_json_bytes(&self) -> Vec<u8> {
         serde_json::to_vec_pretty(self).expect("a project is always serialisable")
     }
@@ -184,6 +285,7 @@ mod tests {
                 rotation_y_deg: 90.0,
                 scale: 2.0,
             },
+            layer: LAYER_MODEL.into(),
             extensions: [("nl.example.model".to_string(), json!({"tag": [1, 2]}))].into(),
         });
         p

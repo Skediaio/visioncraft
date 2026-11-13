@@ -4,15 +4,36 @@
 //!
 //! World convention: metres, right-handed, **Y up**, +X east, -Z north (the glTF convention).
 
+pub mod catalog;
+mod commands;
 mod import;
+pub mod light;
+pub mod material;
+pub mod measure;
 mod model;
+pub mod planting;
 pub mod project;
 pub mod raycast;
 pub mod session;
+pub mod shape;
 pub mod sun;
+pub mod viewpoint;
 
+pub use catalog::{Asset, Catalog, CatalogError, attribution_markdown, validate_open_licences};
 pub use import::{import_3dcraft, import_obj};
+pub use light::{Light, LightKind, LightSpec, kelvin_to_linear_rgb};
+pub use material::{
+    Assignment, Material, McMat, McMatError, SurfaceKind, Target, builtin_palette,
+    dangling_assignments, read_mcmat, resolve_materials,
+};
 pub use model::{Body, Face, ImportError, ImportedModel};
-pub use project::{ModelKind, ModelRef, Project, ProjectError, Site, SunTime, Transform};
+pub use planting::{
+    Evaluation, Generator, Placement, Tuft, evaluate, evaluate_surface_fill, lawn_scatter,
+};
+pub use project::{
+    Layer, ModelKind, ModelRef, Project, ProjectError, RenderStyle, Site, SunTime, Transform,
+};
 pub use raycast::{Hit, ground_height, raycast};
 pub use session::{Command, CommandError, Session};
+pub use shape::{Shape, ShapeError, shape_mesh};
+pub use viewpoint::{Viewpoint, interpolate};

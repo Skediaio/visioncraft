@@ -58,7 +58,7 @@ impl Session {
         };
         s.register(
             "model.add",
-            "Add a model: {name, kind: 3dcraft|obj, source, id?, transform?}; returns {id}",
+            "Add a model: {name, kind: 3dcraft|obj, source, id?, transform?, layer?}; returns {id}",
             model_add,
         );
         s.register("model.remove", "Remove a model: {id}", model_remove);
@@ -77,6 +77,7 @@ impl Session {
             "Set the local date and time: {year?, month?, day?, hour?}",
             time_set,
         );
+        crate::commands::register(&mut s);
         s
     }
 
@@ -169,11 +170,11 @@ impl Session {
     }
 }
 
-fn parse<T: DeserializeOwned>(params: &Value) -> Result<T, CommandError> {
+pub(crate) fn parse<T: DeserializeOwned>(params: &Value) -> Result<T, CommandError> {
     serde_json::from_value(params.clone()).map_err(|e| CommandError::BadParams(e.to_string()))
 }
 
-fn bad(why: &str) -> CommandError {
+pub(crate) fn bad(why: &str) -> CommandError {
     CommandError::BadParams(why.to_string())
 }
 
@@ -194,8 +195,15 @@ fn model_add(project: &mut Project, params: &Value) -> Result<Value, CommandErro
         source: String,
         #[serde(default)]
         transform: Transform,
+        layer: Option<String>,
     }
     let p: P = parse(params)?;
+    let layer = p
+        .layer
+        .unwrap_or_else(|| crate::project::LAYER_MODEL.into());
+    if project.layers.iter().all(|l| l.id != layer) {
+        return Err(CommandError::Failed(format!("no layer `{layer}`")));
+    }
     check_transform(&p.transform)?;
     let id = match p.id {
         Some(id) => id,
@@ -213,6 +221,7 @@ fn model_add(project: &mut Project, params: &Value) -> Result<Value, CommandErro
         kind: p.kind,
         source: p.source,
         transform: p.transform,
+        layer,
         extensions: BTreeMap::new(),
     });
     Ok(json!({ "id": id }))
@@ -235,6 +244,7 @@ fn model_remove(project: &mut Project, params: &Value) -> Result<Value, CommandE
     let IdOnly { id } = parse(params)?;
     find(project, &id)?;
     project.models.retain(|m| m.id != id);
+    project.assignments.retain(|a| a.target.owner() != id);
     Ok(Value::Null)
 }
 
