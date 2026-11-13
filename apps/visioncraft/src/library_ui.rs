@@ -29,26 +29,39 @@ pub struct Thumbs {
 }
 
 /// Draws a library image at `rect` (a grey tile while it loads); asks for it only if `visible`.
-/// The catalogue's light fixtures (assets that carry a light) as named tiles; returns the one
-/// clicked.
+/// The catalogue's light fixtures (assets that carry a light) as named tiles: the lamps for a
+/// garden first, the indoor ones (chandeliers, desk lamps) folded under their own heading.
+/// Returns the one clicked.
 pub fn fixtures(ui: &mut egui::Ui, cx: &mut Cx) -> Option<String> {
     let catalog = cx.s.scene.library.catalog.clone()?;
-    let mut picked = None;
-    // Lamps for outside first (street lamps, lanterns, wall lights), the chandeliers after.
     const OUTSIDE: [&str; 7] = [
         "street", "lamppost", "lantern", "exterior", "security", "wall", "garden",
     ];
-    let outside = |a: &&visioncraft_core::Asset| {
+    let outside = |a: &visioncraft_core::Asset| {
         OUTSIDE
             .iter()
             .any(|w| a.id.contains(w) || a.tags.iter().any(|t| t.contains(w)))
     };
-    let mut lamps: Vec<&visioncraft_core::Asset> = catalog
+    let (garden, indoor): (Vec<&visioncraft_core::Asset>, Vec<_>) = catalog
         .assets
         .iter()
         .filter(|a| a.light.is_some())
-        .collect();
-    lamps.sort_by_key(|a| !outside(a));
+        .partition(|a| outside(a));
+    let mut picked = fixture_tiles(ui, cx, &garden);
+    egui::CollapsingHeader::new(t::INDOOR_LIGHTS)
+        .default_open(false)
+        .show(ui, |ui| {
+            picked = picked.take().or(fixture_tiles(ui, cx, &indoor));
+        });
+    picked
+}
+
+fn fixture_tiles(
+    ui: &mut egui::Ui,
+    cx: &mut Cx,
+    lamps: &[&visioncraft_core::Asset],
+) -> Option<String> {
+    let mut picked = None;
     ui.horizontal_wrapped(|ui| {
         for a in lamps {
             let (rect, resp) = ui.allocate_exact_size(Vec2::new(54.0, 66.0), Sense::click());
