@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use visioncraft_core::{
-    Asset, ImportedModel, Material, ModelKind, Project, Session, Shape, Site, SunTime,
+    Asset, Generator, ImportedModel, Material, ModelKind, Project, Session, Shape, Site, SunTime,
     catalog::Category, import_3dcraft, import_obj, sun::sun_position,
 };
 use visioncraft_render::{LineVertex, Quality, Renderer, Sun};
@@ -27,6 +27,7 @@ pub struct Source {
 pub enum Draft {
     Material(Material),
     Shape(Shape),
+    Generator(Generator),
 }
 
 pub struct Studio {
@@ -53,6 +54,10 @@ pub struct Studio {
     pub time_draft: Option<SunTime>,
     pub site_draft: Option<Site>,
     pub highlight: Option<(String, usize)>,
+    /// A tool uses the primary drag this frame: the camera does not orbit.
+    pub pointer_captured: bool,
+    /// A tool finishes on a double click: the camera does not re-aim.
+    pub double_click_captured: bool,
     /// Seconds since start, for the wind animation.
     pub clock: f64,
     /// A 1.8 m figure for scale (positions on the ground).
@@ -157,6 +162,8 @@ impl Studio {
             time_draft: None,
             site_draft: None,
             highlight: None,
+            pointer_captured: false,
+            double_click_captured: false,
             clock: 0.0,
             people: Vec::new(),
             show_people: true,
@@ -286,6 +293,11 @@ impl Studio {
             Some(Draft::Shape(s)) => {
                 if let Some(slot) = p.to_mut().shapes.iter_mut().find(|x| x.id() == s.id()) {
                     *slot = s.clone();
+                }
+            }
+            Some(Draft::Generator(g)) => {
+                if let Some(slot) = p.to_mut().generators.iter_mut().find(|x| x.id() == g.id()) {
+                    *slot = g.clone();
                 }
             }
             None => {}
