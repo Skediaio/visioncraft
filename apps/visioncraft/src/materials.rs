@@ -276,12 +276,28 @@ impl MaterialsState {
                                             .paint_at(ui, r.rect);
                                     }
                                     None => {
-                                        let c = Color32::from_rgb(
-                                            to_srgb8(m.base_color[0]),
-                                            to_srgb8(m.base_color[1]),
-                                            to_srgb8(m.base_color[2]),
-                                        );
-                                        painter.rect_filled(r.rect, rr, c);
+                                        // A library material shows its library picture.
+                                        let lib = m.maps.base_color.as_ref().and_then(|p| {
+                                            cx.s.scene
+                                                .library
+                                                .materials
+                                                .iter()
+                                                .find(|e| e.maps.basecolor.as_ref() == Some(p))
+                                                .map(|e| e.thumbnail.clone())
+                                        });
+                                        if let Some(path) = lib {
+                                            let vis = ui.is_rect_visible(r.rect);
+                                            crate::library_ui::thumb(
+                                                ui, cx, &path, r.rect, vis, 0.0,
+                                            );
+                                        } else {
+                                            let c = Color32::from_rgb(
+                                                to_srgb8(m.base_color[0]),
+                                                to_srgb8(m.base_color[1]),
+                                                to_srgb8(m.base_color[2]),
+                                            );
+                                            painter.rect_filled(r.rect, rr, c);
+                                        }
                                     }
                                 }
                                 let sel = self.selected.as_ref() == Some(&m.id);

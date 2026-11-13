@@ -180,6 +180,8 @@ fn line(a: Vec3, b: Vec3, color: [u8; 4], w: f32) -> [visioncraft_render::LineVe
 
 /// Distance from a spot to the point it aims at, shown as a handle.
 const HANDLE_M: f32 = 3.0;
+/// How close (points) the pointer must be to grab the handle.
+const HANDLE_PX: f32 = 18.0;
 
 impl LightsTool {
     fn light<'a>(&self, cx: &'a Cx) -> Option<&'a Light> {
@@ -211,15 +213,20 @@ impl LightsTool {
         let handle = spot
             .as_ref()
             .map(|(_, p, d)| self.aiming.unwrap_or(*p + *d * HANDLE_M));
-        let near_handle = handle
-            .and_then(|h| cx.project(h))
-            .zip(cx.input.hover)
-            .is_some_and(|(h, p)| h.distance(p) < 16.0);
+        let handle_at = handle.and_then(|h| cx.project(h));
+        let near = |p: Option<eframe::egui::Pos2>| {
+            handle_at
+                .zip(p)
+                .is_some_and(|(h, p)| h.distance(p) < HANDLE_PX)
+        };
+        let near_handle = near(cx.input.hover);
+        // The press, not the pointer now: a drag has moved away by the time it is recognised.
+        let press_on_handle = near(cx.input.press_origin);
         if near_handle || self.aiming.is_some() {
             cx.s.drag_capture = true;
         }
         if let (Some((id, pos, _)), Some(g)) = (&spot, ground) {
-            if (cx.input.drag_started && near_handle)
+            if (cx.input.drag_started && press_on_handle)
                 || (self.aiming.is_some() && cx.input.dragging)
             {
                 self.aiming = Some(g);

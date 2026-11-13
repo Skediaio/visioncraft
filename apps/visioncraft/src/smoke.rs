@@ -93,6 +93,10 @@ pub enum Step {
         fit: Option<f32>,
     },
     Stats,
+    /// Sets the GPU texture memory cap of the asset store, in megabytes.
+    TextureCap(u64),
+    /// Writes the project as JSON (to seed the browser's stored project).
+    SaveProject(String),
     /// Prints the bodies of an owner with their bounds.
     Bodies(String),
     Pick {
@@ -205,6 +209,8 @@ pub fn parse_step(v: &Value) -> Result<Step, String> {
         }),
         ["faces", owner] => Ok(Step::Faces(owner.to_string())),
         ["wait", "assets"] => Ok(Step::WaitAssets),
+        ["texture", "cap", mb] => Ok(Step::TextureCap(mb.parse().map_err(|_| "megabytes")?)),
+        ["save", "project", path] => Ok(Step::SaveProject(path.to_string())),
         ["stats"] => Ok(Step::Stats),
         ["place", asset, x, z, rest @ ..] => {
             let (mut rot, mut scale, mut y) = (0.0, 1.0, None);
@@ -552,6 +558,12 @@ mod native {
                     }
                 }
                 Step::WaitAssets => settle(&mut s),
+                Step::TextureCap(mb) => s.scene.library.store.cap_bytes = mb << 20,
+                Step::SaveProject(path) => {
+                    std::fs::write(&path, s.project().to_json_bytes())
+                        .map_err(|e| at(format!("{path}: {e}")))?;
+                    println!("wrote {path}");
+                }
                 Step::Stats => {
                     println!(
                         "sun elevation {:.1} deg, exposure EV {:.1}",
@@ -713,6 +725,9 @@ mod native {
             }
             for p in s.problems.drain(..) {
                 eprintln!("problem: {p}");
+            }
+            for m in s.scene.library.messages.drain(..) {
+                eprintln!("library: {m}");
             }
         }
         Ok(())
