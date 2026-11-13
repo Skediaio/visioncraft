@@ -1,6 +1,15 @@
 {
   "skies": [
     {
+      "id": "belfast_sunset_puresky",
+      "name": "Belfast Sunset (Pure Sky)",
+      "license": "CC0-1.0",
+      "author": "Dimitrios Savva, Greg Zaal, Jarod Guest",
+      "source_url": "https://polyhaven.com/a/belfast_sunset_puresky",
+      "file": "skies/belfast_sunset_puresky/sky_1k.hdr",
+      "thumbnail": "skies/belfast_sunset_puresky/thumb.jpg"
+    },
+    {
       "id": "kloofendal_48d_partly_cloudy_puresky",
       "name": "Kloofendal 48d Partly Cloudy (Pure Sky)",
       "license": "CC0-1.0",
@@ -8,6 +17,60 @@
       "source_url": "https://polyhaven.com/a/kloofendal_48d_partly_cloudy_puresky",
       "file": "skies/kloofendal_48d_partly_cloudy_puresky/sky_1k.hdr",
       "thumbnail": "skies/kloofendal_48d_partly_cloudy_puresky/thumb.jpg"
+    },
+    {
+      "id": "kloofendal_overcast_puresky",
+      "name": "Kloofendal Overcast (Pure Sky)",
+      "license": "CC0-1.0",
+      "author": "Greg Zaal",
+      "source_url": "https://polyhaven.com/a/kloofendal_overcast_puresky",
+      "file": "skies/kloofendal_overcast_puresky/sky_1k.hdr",
+      "thumbnail": "skies/kloofendal_overcast_puresky/thumb.jpg"
+    },
+    {
+      "id": "kloppenheim_02_puresky",
+      "name": "Kloppenheim 02 (Pure Sky)",
+      "license": "CC0-1.0",
+      "author": "Greg Zaal, Jarod Guest",
+      "source_url": "https://polyhaven.com/a/kloppenheim_02_puresky",
+      "file": "skies/kloppenheim_02_puresky/sky_1k.hdr",
+      "thumbnail": "skies/kloppenheim_02_puresky/thumb.jpg"
+    },
+    {
+      "id": "overcast_soil_puresky",
+      "name": "Overcast Soil (Pure Sky)",
+      "license": "CC0-1.0",
+      "author": "Jarod Guest, Sergej Majboroda",
+      "source_url": "https://polyhaven.com/a/overcast_soil_puresky",
+      "file": "skies/overcast_soil_puresky/sky_1k.hdr",
+      "thumbnail": "skies/overcast_soil_puresky/thumb.jpg"
+    },
+    {
+      "id": "qwantani_dusk_1_puresky",
+      "name": "Qwantani Dusk 1 (Pure Sky)",
+      "license": "CC0-1.0",
+      "author": "Greg Zaal, Jarod Guest",
+      "source_url": "https://polyhaven.com/a/qwantani_dusk_1_puresky",
+      "file": "skies/qwantani_dusk_1_puresky/sky_1k.hdr",
+      "thumbnail": "skies/qwantani_dusk_1_puresky/thumb.jpg"
+    },
+    {
+      "id": "qwantani_late_afternoon_puresky",
+      "name": "Qwantani Late Afternoon (Pure Sky)",
+      "license": "CC0-1.0",
+      "author": "Greg Zaal, Jarod Guest",
+      "source_url": "https://polyhaven.com/a/qwantani_late_afternoon_puresky",
+      "file": "skies/qwantani_late_afternoon_puresky/sky_1k.hdr",
+      "thumbnail": "skies/qwantani_late_afternoon_puresky/thumb.jpg"
+    },
+    {
+      "id": "qwantani_morning_puresky",
+      "name": "Qwantani Morning (Pure Sky)",
+      "license": "CC0-1.0",
+      "author": "Jarod Guest",
+      "source_url": "https://polyhaven.com/a/qwantani_morning_puresky",
+      "file": "skies/qwantani_morning_puresky/sky_1k.hdr",
+      "thumbnail": "skies/qwantani_morning_puresky/thumb.jpg"
     },
     {
       "id": "qwantani_noon_puresky",
@@ -19,6 +82,15 @@
       "thumbnail": "skies/qwantani_noon_puresky/thumb.jpg"
     },
     {
+      "id": "qwantani_sunset_puresky",
+      "name": "Qwantani Sunset (Pure Sky)",
+      "license": "CC0-1.0",
+      "author": "Greg Zaal, Jarod Guest",
+      "source_url": "https://polyhaven.com/a/qwantani_sunset_puresky",
+      "file": "skies/qwantani_sunset_puresky/sky_1k.hdr",
+      "thumbnail": "skies/qwantani_sunset_puresky/thumb.jpg"
+    },
+    {
       "id": "rustig_koppie_puresky",
       "name": "Rustig Koppie (Pure Sky)",
       "license": "CC0-1.0",
@@ -26,6 +98,15 @@
       "source_url": "https://polyhaven.com/a/rustig_koppie_puresky",
       "file": "skies/rustig_koppie_puresky/sky_1k.hdr",
       "thumbnail": "skies/rustig_koppie_puresky/thumb.jpg"
+    },
+    {
+      "id": "syferfontein_6d_clear_puresky",
+      "name": "Syferfontein 6d Clear (Pure Sky)",
+      "license": "CC0-1.0",
+      "author": "Greg Zaal, Jarod Guest",
+      "source_url": "https://polyhaven.com/a/syferfontein_6d_clear_puresky",
+      "file": "skies/syferfontein_6d_clear_puresky/sky_1k.hdr",
+      "thumbnail": "skies/syferfontein_6d_clear_puresky/thumb.jpg"
     }
   ]
 }

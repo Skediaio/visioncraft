@@ -30,6 +30,16 @@ pub struct Candidate {
     pub author: String,
     pub triangles: Option<u32>,
     pub species: Option<String>,
+    /// Materials: brick, plaster, concrete, wood, paving, gravel, roof, stone, tile, metal,
+    /// ground, fabric, other.
+    #[serde(default)]
+    pub kind: Option<String>,
+    /// Extra tags for models (e.g. `rock`).
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// Ids of variants to skip (`<id>_c`), judged bad after looking.
+    #[serde(default)]
+    pub exclude: Vec<String>,
 }
 
 impl Candidate {
@@ -74,11 +84,17 @@ impl Candidate {
 }
 
 /// The Poly Haven and ambientCG entries of a candidate file, optionally only some ids.
-pub fn load_candidates(path: &Path, only: &[String]) -> Result<Vec<Candidate>> {
-    let all: Vec<Candidate> =
-        serde_json::from_slice(&fs::read(path).with_context(|| path.display().to_string())?)?;
+pub fn load_candidates(paths: &[PathBuf], only: &[String]) -> Result<Vec<Candidate>> {
+    let mut all: Vec<Candidate> = Vec::new();
+    for path in paths {
+        let more: Vec<Candidate> =
+            serde_json::from_slice(&fs::read(path).with_context(|| path.display().to_string())?)?;
+        all.extend(more);
+    }
+    let mut seen = std::collections::HashSet::new();
     Ok(all
         .into_iter()
+        .filter(|c| seen.insert(c.page_url.clone()))
         .filter(|c| c.source().is_some())
         .filter(|c| only.is_empty() || only.iter().any(|o| o.eq_ignore_ascii_case(c.source_id())))
         .collect())
@@ -234,7 +250,8 @@ pub fn fetch(cands: &[Candidate], cache: &Path, http: &Http) -> Result<()> {
     for c in &done {
         all.retain(|v| v["page_url"] != c.page_url);
         all.push(json!({"category": c.category, "name": c.name, "source": c.source, "page_url": c.page_url,
-            "author": c.author, "triangles": c.triangles, "species": c.species}));
+            "author": c.author, "triangles": c.triangles, "species": c.species,
+            "kind": c.kind, "tags": c.tags, "exclude": c.exclude}));
     }
     fs::write(path, serde_json::to_vec_pretty(&all)?)?;
     if failed.is_empty() {

@@ -4,7 +4,7 @@ use crate::{
     glb::{fit, jpeg, write_glb},
     net::{Candidate, ph_info},
     raster,
-    scene::{pack_orm, read_gltf_file},
+    scene::{Model, pack_orm, read_gltf_variant, variant_count},
 };
 use anyhow::{Context, Result, bail};
 use image::{DynamicImage, GrayImage, imageops::FilterType};
@@ -55,7 +55,8 @@ fn category(s: &str) -> Result<Category> {
 
 /// Default emission of a fixture, chosen from its name. Warm white, 2700 K.
 fn light_spec(id: &str) -> LightSpec {
-    let (lumens, range_m, kind) = if id.contains("street") {
+    let has = |words: &[&str]| words.iter().any(|w| id.to_lowercase().contains(w));
+    let (lumens, range_m, kind) = if has(&["street"]) {
         (
             3000.0,
             15.0,
@@ -65,9 +66,13 @@ fn light_spec(id: &str) -> LightSpec {
                 outer_cone_deg: 60.0,
             },
         )
-    } else if id.contains("wall") || id.contains("security") {
+    } else if has(&["wall", "security", "sconce"]) {
         (500.0, 8.0, LightKind::Point)
-    } else if id.contains("bollard") {
+    } else if has(&["chandelier", "ceiling", "hanging", "caged", "fluorescent"]) {
+        (800.0, 10.0, LightKind::Point)
+    } else if has(&["candle", "diya", "oil_lamp"]) {
+        (100.0, 3.0, LightKind::Point)
+    } else if has(&["bollard"]) {
         (300.0, 5.0, LightKind::Point)
     } else {
         (400.0, 6.0, LightKind::Point)
@@ -102,8 +107,24 @@ fn write(path: &Path, bytes: &[u8]) -> Result<()> {
     fs::write(path, bytes).with_context(|| path.display().to_string())
 }
 
-pub fn ingest_model(c: &Candidate, cache: &Path, out: &Path) -> Result<Asset> {
-    let id = c.id();
+/// Biggest source geometry we accept: beyond this simplification is too slow and too lossy.
+const MAX_SOURCE_TRIS: usize = 2_000_000;
+const MAX_VARIANTS: usize = 4;
+const MAX_GLB_BYTES: usize = 7_500_000;
+
+/// A GLB under the file budget: textures are halved until it fits.
+fn glb_fitting(m: &Model, name: &str, mut px: u32) -> Result<Vec<u8>> {
+    loop {
+        let bytes = write_glb(m, name, px)?;
+        if bytes.len() <= MAX_GLB_BYTES || px <= 128 {
+            return Ok(bytes);
+        }
+        px /= 2;
+    }
+}
+
+/// The model of a candidate, plus up to three further variants as `<id>_b`, `_c`, `_d`.
+pub fn ingest_model(c: &Candidate, cache: &Path, out: &Path) -> Result<Vec<Asset>> {
     let src = c.dir(cache);
     let gltf = fs::read_dir(&src)?
         .filter_map(Result::ok)
@@ -111,24 +132,69 @@ pub fn ingest_model(c: &Candidate, cache: &Path, out: &Path) -> Result<Asset> {
         .find(|p| p.extension().is_some_and(|e| e == "gltf"))
         .context("no .gltf in cache (run fetch)")?;
     let info = ph_info(&src)?;
+    let mut assets = Vec::new();
+    let mut seen: Vec<usize> = Vec::new();
+    for v in 0..variant_count(&gltf)?.min(MAX_VARIANTS) {
+        let mut model = read_gltf_variant(&gltf, v)?;
+        if model.tris() > MAX_SOURCE_TRIS {
+            if v == 0 {
+                bail!(
+                    "source geometry has {} triangles (over {MAX_SOURCE_TRIS})",
+                    model.tris()
+                );
+            }
+            continue;
+        }
+        // Variants with the same triangle count are copies, not distinct plants.
+        if seen.contains(&model.tris()) {
+            continue;
+        }
+        seen.push(model.tris());
+        model.normalise();
+        let (id, name) = if v == 0 {
+            (c.id(), info.name.clone())
+        } else {
+            let l = (b'a' + v as u8) as char;
+            (
+                format!("{}_{l}", c.id()),
+                format!("{} {}", info.name, l.to_ascii_uppercase()),
+            )
+        };
+        if c.exclude.contains(&id) {
+            continue;
+        }
+        assets.push(ingest_variant(c, out, &info, id, name, model, v > 0)?);
+    }
+    Ok(assets)
+}
+
+fn ingest_variant(
+    c: &Candidate,
+    out: &Path,
+    info: &crate::net::ApiInfo,
+    id: String,
+    name: String,
+    model: Model,
+    variant: bool,
+) -> Result<Asset> {
     let cat = category(&c.category)?;
-    let mut model = read_gltf_file(&gltf)?;
-    model.normalise();
     let source_tris = model.tris();
     let mut tags = vec![c.category.clone()];
+    tags.extend(c.tags.iter().cloned());
     tags.extend(info.tags.iter().map(|t| t.to_lowercase()));
+    if variant {
+        tags.push("variant".into());
+    }
     let lod0 = if source_tris > budget(cat) {
         tags.push("simplified".into());
-        {
-            // meshopt may land a little over its target; the budget is a hard limit.
-            let mut target = budget(cat) * 95 / 100;
-            loop {
-                let m = model.simplified(target).ground();
-                if m.tris() <= budget(cat) {
-                    break m;
-                }
-                target = target * 9 / 10;
+        // meshopt may land a little over its target; the budget is a hard limit.
+        let mut target = budget(cat) * 95 / 100;
+        loop {
+            let m = model.simplified(target).ground();
+            if m.tris() <= budget(cat) {
+                break m;
             }
+            target = target * 9 / 10;
         }
     } else {
         model
@@ -152,7 +218,7 @@ pub fn ingest_model(c: &Candidate, cache: &Path, out: &Path) -> Result<Asset> {
             format!("lod{k}.glb")
         };
         if !reuse || k == 0 {
-            write(&dir.join(&file), &write_glb(m, &id, MAX_PX[k])?)?;
+            write(&dir.join(&file), &glb_fitting(m, &id, MAX_PX[k])?)?;
         }
         let max_distance_m = [largest * 12.0, largest * 40.0, f32::MAX][k];
         lods.push(Lod {
@@ -170,12 +236,12 @@ pub fn ingest_model(c: &Candidate, cache: &Path, out: &Path) -> Result<Asset> {
     tags.dedup();
     let asset = Asset {
         id: id.clone(),
-        name: info.name,
+        name,
         category: cat,
         tags,
         license: "CC0-1.0".into(),
         origin: Origin::BuiltIn,
-        author: info.author,
+        author: info.author.clone(),
         source_url: c.page_url.clone(),
         size_m: size,
         lods,
@@ -213,6 +279,10 @@ pub struct MaterialEntry {
     pub license: String,
     pub author: String,
     pub source_url: String,
+    /// brick, plaster, concrete, wood, paving, gravel, roof, stone, tile, metal, ground, fabric
+    /// or other: what the app filters materials by.
+    #[serde(default = "other")]
+    pub kind: String,
     /// Width, height in metres one repeat of the texture covers; null when the source does not say.
     pub size_m: Option<[f32; 2]>,
     pub maps: MaterialMaps,
@@ -244,6 +314,10 @@ fn zip_images(zip: &Path) -> Result<Vec<(String, DynamicImage)>> {
         }
     }
     Ok(out)
+}
+
+fn other() -> String {
+    "other".into()
 }
 
 pub fn ingest_material(c: &Candidate, cache: &Path, out: &Path) -> Result<MaterialEntry> {
@@ -310,6 +384,7 @@ pub fn ingest_material(c: &Candidate, cache: &Path, out: &Path) -> Result<Materi
         // The ambientCG API does not state authors; the candidate list does (site-wide credit).
         author: c.author.clone(),
         source_url: c.page_url.clone(),
+        kind: c.kind.clone().unwrap_or_else(other),
         size_m: (w > 0.0 && h > 0.0).then(|| [(w / 100.0) as f32, (h / 100.0) as f32]),
         maps: MaterialMaps {
             basecolor: rel("basecolor.jpg"),

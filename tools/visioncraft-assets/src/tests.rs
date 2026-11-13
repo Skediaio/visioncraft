@@ -1,7 +1,7 @@
 use crate::{
     glb::write_glb,
     library,
-    scene::{Mesh, Model, pack_orm, read_glb, read_gltf_file},
+    scene::{Mesh, Model, pack_orm, read_glb, read_gltf_variant},
 };
 use image::{GrayImage, Luma};
 use std::path::PathBuf;
@@ -16,7 +16,7 @@ fn sample() -> Model {
         env!("CARGO_MANIFEST_DIR"),
         "/tests/data/sample_model_outdoor_table_chair_set_01/1k/outdoor_table_chair_set_01_1k.gltf"
     );
-    read_gltf_file(&PathBuf::from(p)).unwrap()
+    read_gltf_variant(&PathBuf::from(p), 0).unwrap()
 }
 
 #[test]

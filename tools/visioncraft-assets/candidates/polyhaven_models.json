@@ -1,0 +1,2866 @@
+[
+ {
+  "category": "furniture",
+  "name": "Arm Chair 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/ArmChair_01",
+  "licence": "CC0-1.0",
+  "author": "Kirill Sannikov",
+  "triangles": 5626,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, seating"
+ },
+ {
+  "category": "furniture",
+  "name": "Barber Shop Chair 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/BarberShopChair_01",
+  "licence": "CC0-1.0",
+  "author": "Fernando Quinn",
+  "triangles": 4280,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, seating"
+ },
+ {
+  "category": "other",
+  "name": "Barrel_01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/Barrel_01",
+  "licence": "CC0-1.0",
+  "author": "Jorge Camacho",
+  "triangles": 2682,
+  "species": null,
+  "tags": [
+   "barrel"
+  ],
+  "why": "API categories: industrial, containers"
+ },
+ {
+  "category": "other",
+  "name": "Barrel 02",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/Barrel_02",
+  "licence": "CC0-1.0",
+  "author": "Jorge Camacho",
+  "triangles": 2688,
+  "species": null,
+  "tags": [
+   "barrel"
+  ],
+  "why": "API categories: industrial, containers"
+ },
+ {
+  "category": "lighting",
+  "name": "Chandelier 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/Chandelier_01",
+  "licence": "CC0-1.0",
+  "author": "Kirill Sannikov",
+  "triangles": 26860,
+  "species": null,
+  "tags": [],
+  "why": "API categories: lighting, decorative"
+ },
+ {
+  "category": "lighting",
+  "name": "Chandelier 02",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/Chandelier_02",
+  "licence": "CC0-1.0",
+  "author": "Kirill Sannikov",
+  "triangles": 21514,
+  "species": null,
+  "tags": [],
+  "why": "API categories: lighting"
+ },
+ {
+  "category": "lighting",
+  "name": "Chandelier 03",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/Chandelier_03",
+  "licence": "CC0-1.0",
+  "author": "Kirill Sannikov",
+  "triangles": 29301,
+  "species": null,
+  "tags": [],
+  "why": "API categories: lighting, decorative"
+ },
+ {
+  "category": "furniture",
+  "name": "Classic Console 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/ClassicConsole_01",
+  "licence": "CC0-1.0",
+  "author": "Kirill Sannikov",
+  "triangles": 7566,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, table"
+ },
+ {
+  "category": "furniture",
+  "name": "Classic Nightstand 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/ClassicNightstand_01",
+  "licence": "CC0-1.0",
+  "author": "Kirill Sannikov",
+  "triangles": 2002,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, table"
+ },
+ {
+  "category": "furniture",
+  "name": "Coffee Table 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/CoffeeTable_01",
+  "licence": "CC0-1.0",
+  "author": "Fernando Quinn",
+  "triangles": 10404,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, table"
+ },
+ {
+  "category": "furniture",
+  "name": "Gothic Cabinet 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/GothicCabinet_01",
+  "licence": "CC0-1.0",
+  "author": "Kirill Sannikov",
+  "triangles": 12170,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, shelves"
+ },
+ {
+  "category": "furniture",
+  "name": "Gothic Commode 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/GothicCommode_01",
+  "licence": "CC0-1.0",
+  "author": "Kirill Sannikov",
+  "triangles": 3897,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, shelves"
+ },
+ {
+  "category": "furniture",
+  "name": "Green Chair 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/GreenChair_01",
+  "licence": "CC0-1.0",
+  "author": "Kirill Sannikov",
+  "triangles": 4213,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, seating"
+ },
+ {
+  "category": "lighting",
+  "name": "Lantern 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/Lantern_01",
+  "licence": "CC0-1.0",
+  "author": "Rajil Jose Macatangay",
+  "triangles": 33902,
+  "species": null,
+  "tags": [],
+  "why": "API categories: props, lighting"
+ },
+ {
+  "category": "furniture",
+  "name": "Ottoman 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/Ottoman_01",
+  "licence": "CC0-1.0",
+  "author": "Caspian Fortune",
+  "triangles": 4240,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, seating"
+ },
+ {
+  "category": "furniture",
+  "name": "Rockingchair 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/Rockingchair_01",
+  "licence": "CC0-1.0",
+  "author": "Jorge Camacho",
+  "triangles": 11866,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, seating"
+ },
+ {
+  "category": "furniture",
+  "name": "School Chair 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/SchoolChair_01",
+  "licence": "CC0-1.0",
+  "author": "Ethan Place",
+  "triangles": 5072,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, seating"
+ },
+ {
+  "category": "furniture",
+  "name": "School Desk 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/SchoolDesk_01",
+  "licence": "CC0-1.0",
+  "author": "Ethan Place",
+  "triangles": 4162,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture"
+ },
+ {
+  "category": "furniture",
+  "name": "Shelf 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/Shelf_01",
+  "licence": "CC0-1.0",
+  "author": "Gabriel Radi\u0107",
+  "triangles": 182,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, shelves"
+ },
+ {
+  "category": "furniture",
+  "name": "Sofa 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/Sofa_01",
+  "licence": "CC0-1.0",
+  "author": "Kirill Sannikov",
+  "triangles": 4101,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, seating"
+ },
+ {
+  "category": "furniture",
+  "name": "Wooden Chair 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/WoodenChair_01",
+  "licence": "CC0-1.0",
+  "author": "Jake Mobley",
+  "triangles": 19992,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, seating"
+ },
+ {
+  "category": "furniture",
+  "name": "Wooden Table 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/WoodenTable_01",
+  "licence": "CC0-1.0",
+  "author": "Ethan Place",
+  "triangles": 952,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture"
+ },
+ {
+  "category": "furniture",
+  "name": "Wooden Table 02",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/WoodenTable_02",
+  "licence": "CC0-1.0",
+  "author": "Fran Calvente",
+  "triangles": 1514,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, table"
+ },
+ {
+  "category": "furniture",
+  "name": "Wooden Table 03",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/WoodenTable_03",
+  "licence": "CC0-1.0",
+  "author": "Gabriel Radi\u0107",
+  "triangles": 2298,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture"
+ },
+ {
+  "category": "play",
+  "name": "American Football",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/american_football",
+  "licence": "CC0-1.0",
+  "author": "Riley Queen",
+  "triangles": 4480,
+  "species": null,
+  "tags": [],
+  "why": "API categories: props"
+ },
+ {
+  "category": "perennial",
+  "name": "Anthurium Botany 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/anthurium_botany_01",
+  "licence": "CC0-1.0",
+  "author": "Rob Tuytel, Rico Cilliers",
+  "triangles": 4134,
+  "species": "Anthurium sp.",
+  "tags": [],
+  "why": "API categories: plants, nature"
+ },
+ {
+  "category": "pot",
+  "name": "Antique Ceramic Vase 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/antique_ceramic_vase_01",
+  "licence": "CC0-1.0",
+  "author": "James Ray Cock",
+  "triangles": 9408,
+  "species": null,
+  "tags": [],
+  "why": "API categories: decorative, containers, vases"
+ },
+ {
+  "category": "furniture",
+  "name": "Bar Chair Round 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/bar_chair_round_01",
+  "licence": "CC0-1.0",
+  "author": "Dairon Sanchez",
+  "triangles": 14373,
+  "species": null,
+  "tags": [],
+  "why": "API categories: seating, furniture"
+ },
+ {
+  "category": "other",
+  "name": "Barrel 03",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/barrel_03",
+  "licence": "CC0-1.0",
+  "author": "Serhii Khromov",
+  "triangles": 1473,
+  "species": null,
+  "tags": [
+   "barrel"
+  ],
+  "why": "API categories: industrial, containers"
+ },
+ {
+  "category": "furniture",
+  "name": "Barrel Stove",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/barrel_stove",
+  "licence": "CC0-1.0",
+  "author": "MP",
+  "triangles": 11404,
+  "species": null,
+  "tags": [
+   "fire",
+   "barbecue"
+  ],
+  "why": "API categories: industrial, containers"
+ },
+ {
+  "category": "play",
+  "name": "Baseball 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/baseball_01",
+  "licence": "CC0-1.0",
+  "author": "Rico Cilliers",
+  "triangles": 2712,
+  "species": null,
+  "tags": [],
+  "why": "API categories: props"
+ },
+ {
+  "category": "play",
+  "name": "Baseball Bat",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/baseball_bat",
+  "licence": "CC0-1.0",
+  "author": "Enrique Mart\u00edn",
+  "triangles": 2672,
+  "species": null,
+  "tags": [],
+  "why": "API categories: props"
+ },
+ {
+  "category": "other",
+  "name": "Boulder 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/boulder_01",
+  "licence": "CC0-1.0",
+  "author": "Rico Cilliers",
+  "triangles": 123976,
+  "species": null,
+  "tags": [
+   "rock"
+  ],
+  "why": "API categories: rocks, nature"
+ },
+ {
+  "category": "lighting",
+  "name": "Brass Candleholders",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/brass_candleholders",
+  "licence": "CC0-1.0",
+  "author": "Tina",
+  "triangles": 41936,
+  "species": null,
+  "tags": [],
+  "why": "API categories: decorative, lighting"
+ },
+ {
+  "category": "lighting",
+  "name": "Brass Diya Lantern",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/brass_diya_lantern",
+  "licence": "CC0-1.0",
+  "author": "Bhargav Kubal",
+  "triangles": 12742,
+  "species": null,
+  "tags": [],
+  "why": "API categories: decorative, lighting"
+ },
+ {
+  "category": "pot",
+  "name": "Brass Pot 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/brass_pot_01",
+  "licence": "CC0-1.0",
+  "author": "Rico Cilliers",
+  "triangles": 3760,
+  "species": null,
+  "tags": [],
+  "why": "API categories: props, containers, decorative"
+ },
+ {
+  "category": "pot",
+  "name": "Brass Vase 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/brass_vase_01",
+  "licence": "CC0-1.0",
+  "author": "Rico Cilliers",
+  "triangles": 21440,
+  "species": null,
+  "tags": [],
+  "why": "API categories: decorative, vases"
+ },
+ {
+  "category": "pot",
+  "name": "Brass Vase 02",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/brass_vase_02",
+  "licence": "CC0-1.0",
+  "author": "Rico Cilliers",
+  "triangles": 6890,
+  "species": null,
+  "tags": [],
+  "why": "API categories: decorative, vases"
+ },
+ {
+  "category": "pot",
+  "name": "Brass Vase 03",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/brass_vase_03",
+  "licence": "CC0-1.0",
+  "author": "Rico Cilliers",
+  "triangles": 2616,
+  "species": null,
+  "tags": [],
+  "why": "API categories: containers, props, decorative, vases"
+ },
+ {
+  "category": "other",
+  "name": "Bronze Ray Statue",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/bronze_ray_statue",
+  "licence": "CC0-1.0",
+  "author": "Tina",
+  "triangles": 1844,
+  "species": null,
+  "tags": [
+   "statue",
+   "ornament"
+  ],
+  "why": "API categories: decorative"
+ },
+ {
+  "category": "other",
+  "name": "Bronze Shark Statue",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/bronze_shark_statue",
+  "licence": "CC0-1.0",
+  "author": "Tina",
+  "triangles": 7334,
+  "species": null,
+  "tags": [
+   "statue",
+   "ornament"
+  ],
+  "why": "API categories: decorative"
+ },
+ {
+  "category": "other",
+  "name": "Bronze Whale Statue",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/bronze_whale_statue",
+  "licence": "CC0-1.0",
+  "author": "Tina",
+  "triangles": 3816,
+  "species": null,
+  "tags": [
+   "statue",
+   "ornament"
+  ],
+  "why": "API categories: decorative"
+ },
+ {
+  "category": "lighting",
+  "name": "Caged Hanging Light",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/caged_hanging_light",
+  "licence": "CC0-1.0",
+  "author": "Ulan Cabanilla",
+  "triangles": 22893,
+  "species": null,
+  "tags": [],
+  "why": "API categories: lighting, industrial"
+ },
+ {
+  "category": "perennial",
+  "name": "Calathea Orbifolia 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/calathea_orbifolia_01",
+  "licence": "CC0-1.0",
+  "author": "Rob Tuytel, Rico Cilliers",
+  "triangles": 16688,
+  "species": null,
+  "tags": [],
+  "why": "API categories: plants, nature, ground cover"
+ },
+ {
+  "category": "other",
+  "name": "Carved Wooden Elephant",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/carved_wooden_elephant",
+  "licence": "CC0-1.0",
+  "author": "Greg Zaal",
+  "triangles": 2752,
+  "species": null,
+  "tags": [
+   "statue",
+   "ornament"
+  ],
+  "why": "API categories: props, decorative"
+ },
+ {
+  "category": "flower",
+  "name": "Celandine 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/celandine_01",
+  "licence": "CC0-1.0",
+  "author": "Rob Tuytel, Rico Cilliers",
+  "triangles": 1746764,
+  "species": null,
+  "tags": [],
+  "why": "API categories: nature, plants, ground cover, flowers"
+ },
+ {
+  "category": "pot",
+  "name": "Ceramic Vase 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/ceramic_vase_01",
+  "licence": "CC0-1.0",
+  "author": "James Ray Cock",
+  "triangles": 2548,
+  "species": null,
+  "tags": [],
+  "why": "API categories: vases, containers, decorative"
+ },
+ {
+  "category": "pot",
+  "name": "Ceramic Vase 02",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/ceramic_vase_02",
+  "licence": "CC0-1.0",
+  "author": "James Ray Cock",
+  "triangles": 2756,
+  "species": null,
+  "tags": [],
+  "why": "API categories: decorative, containers, vases"
+ },
+ {
+  "category": "pot",
+  "name": "Ceramic Vase 03",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/ceramic_vase_03",
+  "licence": "CC0-1.0",
+  "author": "James Ray Cock",
+  "triangles": 2784,
+  "species": null,
+  "tags": [],
+  "why": "API categories: containers, decorative, vases"
+ },
+ {
+  "category": "pot",
+  "name": "Ceramic Vase 04",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/ceramic_vase_04",
+  "licence": "CC0-1.0",
+  "author": "James Ray Cock",
+  "triangles": 2224,
+  "species": null,
+  "tags": [],
+  "why": "API categories: containers, decorative, vases"
+ },
+ {
+  "category": "perennial",
+  "name": "Cheiridopsis Succulent",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/cheiridopsis_succulent",
+  "licence": "CC0-1.0",
+  "author": "James Ray Cock, Jenelle van Heerden",
+  "triangles": 198888,
+  "species": null,
+  "tags": [],
+  "why": "API categories: nature, plants, ground cover"
+ },
+ {
+  "category": "furniture",
+  "name": "Chinese Armchair",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/chinese_armchair",
+  "licence": "CC0-1.0",
+  "author": "Kirill Sannikov",
+  "triangles": 2675,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, seating"
+ },
+ {
+  "category": "furniture",
+  "name": "Chinese Cabinet",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/chinese_cabinet",
+  "licence": "CC0-1.0",
+  "author": "Kirill Sannikov",
+  "triangles": 15668,
+  "species": null,
+  "tags": [],
+  "why": "API categories: shelves, furniture"
+ },
+ {
+  "category": "lighting",
+  "name": "Chinese Chandelier",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/chinese_chandelier",
+  "licence": "CC0-1.0",
+  "author": "Kirill Sannikov",
+  "triangles": 7828,
+  "species": null,
+  "tags": [],
+  "why": "API categories: lighting, decorative"
+ },
+ {
+  "category": "furniture",
+  "name": "Chinese Commode",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/chinese_commode",
+  "licence": "CC0-1.0",
+  "author": "Kirill Sannikov",
+  "triangles": 6775,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, shelves"
+ },
+ {
+  "category": "furniture",
+  "name": "Chinese Console Table",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/chinese_console_table",
+  "licence": "CC0-1.0",
+  "author": "Kirill Sannikov",
+  "triangles": 13648,
+  "species": null,
+  "tags": [],
+  "why": "API categories: table, furniture"
+ },
+ {
+  "category": "furniture",
+  "name": "Chinese Screen Panels",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/chinese_screen_panels",
+  "licence": "CC0-1.0",
+  "author": "Kirill Sannikov",
+  "triangles": 784,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture"
+ },
+ {
+  "category": "furniture",
+  "name": "Chinese Sofa",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/chinese_sofa",
+  "licence": "CC0-1.0",
+  "author": "Kirill Sannikov",
+  "triangles": 704,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, seating"
+ },
+ {
+  "category": "furniture",
+  "name": "Chinese Stool",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/chinese_stool",
+  "licence": "CC0-1.0",
+  "author": "Kirill Sannikov",
+  "triangles": 1090,
+  "species": null,
+  "tags": [],
+  "why": "API categories: seating, furniture"
+ },
+ {
+  "category": "furniture",
+  "name": "Chinese Tea Table",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/chinese_tea_table",
+  "licence": "CC0-1.0",
+  "author": "Kirill Sannikov",
+  "triangles": 2508,
+  "species": null,
+  "tags": [],
+  "why": "API categories: table, furniture"
+ },
+ {
+  "category": "other",
+  "name": "Coast Rocks 05",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/coast_rocks_05",
+  "licence": "CC0-1.0",
+  "author": "Rob Tuytel",
+  "triangles": 1446981,
+  "species": null,
+  "tags": [
+   "rock"
+  ],
+  "why": "API categories: nature, rocks"
+ },
+ {
+  "category": "furniture",
+  "name": "Coffee Table Round 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/coffee_table_round_01",
+  "licence": "CC0-1.0",
+  "author": "Ulan Cabanilla",
+  "triangles": 4044,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, table"
+ },
+ {
+  "category": "other",
+  "name": "Concrete Cat Statue",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/concrete_cat_statue",
+  "licence": "CC0-1.0",
+  "author": "Rico Cilliers, Riley Queen",
+  "triangles": 11950,
+  "species": null,
+  "tags": [
+   "statue",
+   "ornament"
+  ],
+  "why": "API categories: decorative"
+ },
+ {
+  "category": "other",
+  "name": "Concrete Road Barrier",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/concrete_road_barrier",
+  "licence": "CC0-1.0",
+  "author": "Amal Kumar",
+  "triangles": 80776,
+  "species": null,
+  "tags": [
+   "street"
+  ],
+  "why": "API categories: industrial, structures"
+ },
+ {
+  "category": "other",
+  "name": "Concrete Road Barrier 02",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/concrete_road_barrier_02",
+  "licence": "CC0-1.0",
+  "author": "Amal Kumar",
+  "triangles": 42578,
+  "species": null,
+  "tags": [
+   "street"
+  ],
+  "why": "API categories: industrial, structures"
+ },
+ {
+  "category": "vehicle",
+  "name": "Covered Car",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/covered_car",
+  "licence": "CC0-1.0",
+  "author": "MP",
+  "triangles": 12592,
+  "species": null,
+  "tags": [],
+  "why": "API categories: props, industrial"
+ },
+ {
+  "category": "perennial",
+  "name": "Crystalline Iceplant",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/crystalline_iceplant",
+  "licence": "CC0-1.0",
+  "author": "James Ray Cock, Jenelle van Heerden",
+  "triangles": 23487,
+  "species": null,
+  "tags": [],
+  "why": "API categories: nature, plants, ground cover"
+ },
+ {
+  "category": "flower",
+  "name": "Dandelion 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/dandelion_01",
+  "licence": "CC0-1.0",
+  "author": "Rob Tuytel, Rico Cilliers",
+  "triangles": 64099,
+  "species": null,
+  "tags": [],
+  "why": "API categories: plants, flowers, nature, ground cover"
+ },
+ {
+  "category": "other",
+  "name": "Dead Quiver Trunk",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/dead_quiver_trunk",
+  "licence": "CC0-1.0",
+  "author": "James Ray Cock, Dario Barresi, Rico Cilliers",
+  "triangles": 33706,
+  "species": null,
+  "tags": [
+   "log",
+   "stump"
+  ],
+  "why": "API categories: nature, trees"
+ },
+ {
+  "category": "other",
+  "name": "Dead Tree Trunk",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/dead_tree_trunk",
+  "licence": "CC0-1.0",
+  "author": "Rob Tuytel",
+  "triangles": 101802,
+  "species": null,
+  "tags": [
+   "log",
+   "stump"
+  ],
+  "why": "API categories: nature, plants, ground cover"
+ },
+ {
+  "category": "other",
+  "name": "Dead Tree Trunk 02",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/dead_tree_trunk_02",
+  "licence": "CC0-1.0",
+  "author": "Jenelle van Heerden, Rico Cilliers",
+  "triangles": 155864,
+  "species": null,
+  "tags": [
+   "log",
+   "stump"
+  ],
+  "why": "API categories: nature, plants, trees"
+ },
+ {
+  "category": "lighting",
+  "name": "Desk Lamp Arm 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/desk_lamp_arm_01",
+  "licence": "CC0-1.0",
+  "author": "Yann Kervran, Kuutti Siitonen",
+  "triangles": 25710,
+  "species": null,
+  "tags": [],
+  "why": "API categories: lighting, rigged"
+ },
+ {
+  "category": "shrub",
+  "name": "Didelta Spinosa",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/didelta_spinosa",
+  "licence": "CC0-1.0",
+  "author": "Jenelle van Heerden",
+  "triangles": 694671,
+  "species": null,
+  "tags": [],
+  "why": "API categories: plants"
+ },
+ {
+  "category": "furniture",
+  "name": "Dining Chair 02",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/dining_chair_02",
+  "licence": "CC0-1.0",
+  "author": "James Ray Cock",
+  "triangles": 22013,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, seating"
+ },
+ {
+  "category": "furniture",
+  "name": "Dining Table",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/dining_table",
+  "licence": "CC0-1.0",
+  "author": "Aron \u0141yczek",
+  "triangles": 1048,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, table"
+ },
+ {
+  "category": "play",
+  "name": "Dirty Football",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/dirty_football",
+  "licence": "CC0-1.0",
+  "author": "Rohit Seervi",
+  "triangles": 37486,
+  "species": null,
+  "tags": [],
+  "why": "API categories: props"
+ },
+ {
+  "category": "furniture",
+  "name": "Drawer Cabinet",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/drawer_cabinet",
+  "licence": "CC0-1.0",
+  "author": "Ulan Cabanilla",
+  "triangles": 26406,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture"
+ },
+ {
+  "category": "other",
+  "name": "Dustpan",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/dustpan",
+  "licence": "CC0-1.0",
+  "author": "Balen",
+  "triangles": 4332,
+  "species": null,
+  "tags": [
+   "tool"
+  ],
+  "why": "API categories: props, tools"
+ },
+ {
+  "category": "other",
+  "name": "Fancy Picture Frame 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/fancy_picture_frame_01",
+  "licence": "CC0-1.0",
+  "author": "Rob Tuytel, Rico Cilliers",
+  "triangles": 938,
+  "species": null,
+  "tags": [
+   "decor",
+   "frame"
+  ],
+  "why": "API categories: decorative, wall decoration"
+ },
+ {
+  "category": "other",
+  "name": "Fancy Picture Frame 02",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/fancy_picture_frame_02",
+  "licence": "CC0-1.0",
+  "author": "Rob Tuytel, Rico Cilliers",
+  "triangles": 35102,
+  "species": null,
+  "tags": [
+   "decor",
+   "frame"
+  ],
+  "why": "API categories: decorative, wall decoration"
+ },
+ {
+  "category": "perennial",
+  "name": "Fern 02",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/fern_02",
+  "licence": "CC0-1.0",
+  "author": "Rob Tuytel, Rico Cilliers",
+  "triangles": 6232,
+  "species": null,
+  "tags": [],
+  "why": "API categories: plants, nature"
+ },
+ {
+  "category": "tree",
+  "name": "Fir Sapling",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/fir_sapling",
+  "licence": "CC0-1.0",
+  "author": "Rob Tuytel, Rico Cilliers",
+  "triangles": 433021,
+  "species": null,
+  "tags": [],
+  "why": "API categories: nature, plants, trees"
+ },
+ {
+  "category": "other",
+  "name": "Fire Hydrant",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/fire_hydrant",
+  "licence": "CC0-1.0",
+  "author": "Gon\u00e7alo Fel\u00edcio",
+  "triangles": 86316,
+  "species": null,
+  "tags": [
+   "street"
+  ],
+  "why": "API categories: industrial, structures"
+ },
+ {
+  "category": "flower",
+  "name": "Flower Empodium",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/flower_empodium",
+  "licence": "CC0-1.0",
+  "author": "Jenelle van Heerden, Rico Cilliers",
+  "triangles": 5820,
+  "species": "Empodium (South African geophyte)",
+  "tags": [],
+  "why": "API categories: nature, plants, flowers, ground cover"
+ },
+ {
+  "category": "flower",
+  "name": "Flower Gazania",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/flower_gazania",
+  "licence": "CC0-1.0",
+  "author": "James Ray Cock, Jenelle van Heerden",
+  "triangles": 25819,
+  "species": null,
+  "tags": [],
+  "why": "API categories: nature, plants, flowers, ground cover"
+ },
+ {
+  "category": "flower",
+  "name": "Flower Stinkkruid",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/flower_stinkkruid",
+  "licence": "CC0-1.0",
+  "author": "Jenelle van Heerden, Rico Cilliers",
+  "triangles": 103778,
+  "species": null,
+  "tags": [],
+  "why": "API categories: nature, plants, flowers"
+ },
+ {
+  "category": "flower",
+  "name": "Flower Ursinia",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/flower_ursinia",
+  "licence": "CC0-1.0",
+  "author": "Jenelle van Heerden, Rico Cilliers",
+  "triangles": 44360,
+  "species": null,
+  "tags": [],
+  "why": "API categories: nature, plants, flowers, ground cover"
+ },
+ {
+  "category": "furniture",
+  "name": "Folding Wooden Stool",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/folding_wooden_stool",
+  "licence": "CC0-1.0",
+  "author": "Ulan Cabanilla",
+  "triangles": 6324,
+  "species": null,
+  "tags": [],
+  "why": "API categories: seating, furniture"
+ },
+ {
+  "category": "play",
+  "name": "Football",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/football",
+  "licence": "CC0-1.0",
+  "author": "Amal Kumar",
+  "triangles": 4296,
+  "species": null,
+  "tags": [],
+  "why": "API categories: props"
+ },
+ {
+  "category": "furniture",
+  "name": "Gallinera Chair",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/gallinera_chair",
+  "licence": "CC0-1.0",
+  "author": "Ulan Cabanilla",
+  "triangles": 11560,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, seating"
+ },
+ {
+  "category": "furniture",
+  "name": "Gallinera Table",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/gallinera_table",
+  "licence": "CC0-1.0",
+  "author": "Ulan Cabanilla",
+  "triangles": 5528,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, table"
+ },
+ {
+  "category": "other",
+  "name": "Garden Gloves 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/garden_gloves_01",
+  "licence": "CC0-1.0",
+  "author": "Satyaki Mandal",
+  "triangles": 6822,
+  "species": null,
+  "tags": [
+   "tool"
+  ],
+  "why": "API categories: props"
+ },
+ {
+  "category": "other",
+  "name": "Garden Gnome",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/garden_gnome",
+  "licence": "CC0-1.0",
+  "author": "Bhargav Kubal",
+  "triangles": 28858,
+  "species": null,
+  "tags": [
+   "statue",
+   "ornament"
+  ],
+  "why": "API categories: decorative"
+ },
+ {
+  "category": "other",
+  "name": "Garden Hose Wall Mounted 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/garden_hose_wall_mounted_01",
+  "licence": "CC0-1.0",
+  "author": "Kuutti Siitonen",
+  "triangles": 11684,
+  "species": null,
+  "tags": [
+   "tool"
+  ],
+  "why": "API categories: wall decoration, plants"
+ },
+ {
+  "category": "furniture",
+  "name": "Gothic Coffee Table",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/gothic_coffee_table",
+  "licence": "CC0-1.0",
+  "author": "Ulan Cabanilla",
+  "triangles": 23836,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, table"
+ },
+ {
+  "category": "other",
+  "name": "Gothic Statue",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/gothic_statue",
+  "licence": "CC0-1.0",
+  "author": "Benny Weimer",
+  "triangles": 27739,
+  "species": null,
+  "tags": [
+   "statue",
+   "ornament"
+  ],
+  "why": "API categories: decorative"
+ },
+ {
+  "category": "grass",
+  "name": "Grass Medium 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/grass_medium_01",
+  "licence": "CC0-1.0",
+  "author": "Rob Tuytel, Rico Cilliers",
+  "triangles": 1606633,
+  "species": null,
+  "tags": [],
+  "why": "API categories: grass, nature, ground cover"
+ },
+ {
+  "category": "grass",
+  "name": "Grass Medium 02",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/grass_medium_02",
+  "licence": "CC0-1.0",
+  "author": "Rico Cilliers",
+  "triangles": 1043926,
+  "species": null,
+  "tags": [],
+  "why": "API categories: nature, ground cover, grass, plants"
+ },
+ {
+  "category": "other",
+  "name": "Hand Truck",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/hand_truck",
+  "licence": "CC0-1.0",
+  "author": "Mutanzom3D",
+  "triangles": 13220,
+  "species": null,
+  "tags": [
+   "tool"
+  ],
+  "why": "API categories: industrial, props"
+ },
+ {
+  "category": "other",
+  "name": "Handsaw Wood",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/handsaw_wood",
+  "licence": "CC0-1.0",
+  "author": "Konrad Sza\u0142ankiewicz",
+  "triangles": 2548,
+  "species": null,
+  "tags": [
+   "tool"
+  ],
+  "why": "API categories: props, tools, industrial"
+ },
+ {
+  "category": "lighting",
+  "name": "Hanging Industrial Lamp",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/hanging_industrial_lamp",
+  "licence": "CC0-1.0",
+  "author": "Kuutti Siitonen",
+  "triangles": 9530,
+  "species": null,
+  "tags": [],
+  "why": "API categories: lighting"
+ },
+ {
+  "category": "other",
+  "name": "Hanging Picture Frame 03",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/hanging_picture_frame_03",
+  "licence": "CC0-1.0",
+  "author": "James Ray Cock",
+  "triangles": 24348,
+  "species": null,
+  "tags": [
+   "decor",
+   "frame"
+  ],
+  "why": "API categories: wall decoration, decorative"
+ },
+ {
+  "category": "other",
+  "name": "Hatchet",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/hatchet",
+  "licence": "CC0-1.0",
+  "author": "James Ray Cock, Ulan Cabanilla",
+  "triangles": 5250,
+  "species": null,
+  "tags": [
+   "tool"
+  ],
+  "why": "API categories: tools"
+ },
+ {
+  "category": "other",
+  "name": "Horse Statue 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/horse_statue_01",
+  "licence": "CC0-1.0",
+  "author": "Rico Cilliers",
+  "triangles": 22388,
+  "species": null,
+  "tags": [
+   "statue",
+   "ornament"
+  ],
+  "why": "API categories: props, decorative"
+ },
+ {
+  "category": "furniture",
+  "name": "Industrial Coffee Table",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/industrial_coffee_table",
+  "licence": "CC0-1.0",
+  "author": "Ulan Cabanilla",
+  "triangles": 41300,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, table"
+ },
+ {
+  "category": "lighting",
+  "name": "Industrial Pipe Lamp",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/industrial_pipe_lamp",
+  "licence": "CC0-1.0",
+  "author": "Mateusz Sadek",
+  "triangles": 8626,
+  "species": null,
+  "tags": [],
+  "why": "API categories: industrial, lighting"
+ },
+ {
+  "category": "lighting",
+  "name": "Industrial Wall Lamp",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/industrial_wall_lamp",
+  "licence": "CC0-1.0",
+  "author": "Kuutti Siitonen",
+  "triangles": 4446,
+  "species": null,
+  "tags": [],
+  "why": "API categories: lighting"
+ },
+ {
+  "category": "lighting",
+  "name": "Industrial Wall Sconce",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/industrial_wall_sconce",
+  "licence": "CC0-1.0",
+  "author": "Ulan Cabanilla",
+  "triangles": 9826,
+  "species": null,
+  "tags": [],
+  "why": "API categories: lighting, decorative"
+ },
+ {
+  "category": "other",
+  "name": "Ladder Sectioned 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/ladder_sectioned_01",
+  "licence": "CC0-1.0",
+  "author": "MP",
+  "triangles": 29140,
+  "species": null,
+  "tags": [
+   "tool"
+  ],
+  "why": "API categories: industrial, tools"
+ },
+ {
+  "category": "lighting",
+  "name": "Lantern Chandelier 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/lantern_chandelier_01",
+  "licence": "CC0-1.0",
+  "author": "Kirill Sannikov",
+  "triangles": 5971,
+  "species": null,
+  "tags": [],
+  "why": "API categories: lighting"
+ },
+ {
+  "category": "other",
+  "name": "Marble Bust 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/marble_bust_01",
+  "licence": "CC0-1.0",
+  "author": "Rico Cilliers",
+  "triangles": 17456,
+  "species": null,
+  "tags": [
+   "statue",
+   "ornament"
+  ],
+  "why": "API categories: decorative"
+ },
+ {
+  "category": "pot",
+  "name": "Metal Jug",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/metal_jug",
+  "licence": "CC0-1.0",
+  "author": "Anzor Lezhava",
+  "triangles": 6040,
+  "species": null,
+  "tags": [],
+  "why": "API categories: containers, decorative, vases"
+ },
+ {
+  "category": "furniture",
+  "name": "Metal Stool 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/metal_stool_01",
+  "licence": "CC0-1.0",
+  "author": "Ulan Cabanilla",
+  "triangles": 8334,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, seating"
+ },
+ {
+  "category": "furniture",
+  "name": "Metal Stool 02",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/metal_stool_02",
+  "licence": "CC0-1.0",
+  "author": "Ulan Cabanilla",
+  "triangles": 6532,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, seating"
+ },
+ {
+  "category": "furniture",
+  "name": "Metal Stool 03",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/metal_stool_03",
+  "licence": "CC0-1.0",
+  "author": "Flo Tasser",
+  "triangles": 6576,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, seating"
+ },
+ {
+  "category": "other",
+  "name": "Metal Trash Can",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/metal_trash_can",
+  "licence": "CC0-1.0",
+  "author": "GurJas Studios",
+  "triangles": 13960,
+  "species": null,
+  "tags": [
+   "bin"
+  ],
+  "why": "API categories: industrial, containers"
+ },
+ {
+  "category": "furniture",
+  "name": "Mid Century Lounge Chair",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/mid_century_lounge_chair",
+  "licence": "CC0-1.0",
+  "author": "Kuutti Siitonen",
+  "triangles": 6148,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, seating"
+ },
+ {
+  "category": "lighting",
+  "name": "Modern Ceiling Lamp 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/modern_ceiling_lamp_01",
+  "licence": "CC0-1.0",
+  "author": "James Ray Cock",
+  "triangles": 5602,
+  "species": null,
+  "tags": [],
+  "why": "API categories: lighting"
+ },
+ {
+  "category": "furniture",
+  "name": "Modern Coffee Table 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/modern_coffee_table_01",
+  "licence": "CC0-1.0",
+  "author": "Amin",
+  "triangles": 4504,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, table"
+ },
+ {
+  "category": "furniture",
+  "name": "Modern Coffee Table 02",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/modern_coffee_table_02",
+  "licence": "CC0-1.0",
+  "author": "Amin",
+  "triangles": 13645,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, table"
+ },
+ {
+  "category": "furniture",
+  "name": "Modern Wooden Cabinet",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/modern_wooden_cabinet",
+  "licence": "CC0-1.0",
+  "author": "Patrik Pangerl",
+  "triangles": 24976,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, table"
+ },
+ {
+  "category": "other",
+  "name": "Namaqualand Boulder 02",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/namaqualand_boulder_02",
+  "licence": "CC0-1.0",
+  "author": "Greg Zaal, Rico Cilliers",
+  "triangles": 183681,
+  "species": null,
+  "tags": [
+   "rock"
+  ],
+  "why": "API categories: nature, rocks"
+ },
+ {
+  "category": "other",
+  "name": "Namaqualand Boulder 03",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/namaqualand_boulder_03",
+  "licence": "CC0-1.0",
+  "author": "Jenelle van Heerden, Dario Barresi",
+  "triangles": 121546,
+  "species": null,
+  "tags": [
+   "rock"
+  ],
+  "why": "API categories: nature, rocks"
+ },
+ {
+  "category": "other",
+  "name": "Namaqualand Boulder 04",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/namaqualand_boulder_04",
+  "licence": "CC0-1.0",
+  "author": "Jenelle van Heerden",
+  "triangles": 110746,
+  "species": null,
+  "tags": [
+   "rock"
+  ],
+  "why": "API categories: nature, rocks"
+ },
+ {
+  "category": "other",
+  "name": "Namaqualand Boulder 05",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/namaqualand_boulder_05",
+  "licence": "CC0-1.0",
+  "author": "Jenelle van Heerden, Dario Barresi",
+  "triangles": 117622,
+  "species": null,
+  "tags": [
+   "rock"
+  ],
+  "why": "API categories: nature, rocks"
+ },
+ {
+  "category": "other",
+  "name": "Namaqualand Boulder 06",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/namaqualand_boulder_06",
+  "licence": "CC0-1.0",
+  "author": "Greg Zaal, Jenelle van Heerden",
+  "triangles": 204584,
+  "species": null,
+  "tags": [
+   "rock"
+  ],
+  "why": "API categories: nature, rocks"
+ },
+ {
+  "category": "other",
+  "name": "Namaqualand Boulders 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/namaqualand_boulders_01",
+  "licence": "CC0-1.0",
+  "author": "Greg Zaal, Jenelle van Heerden",
+  "triangles": 76590,
+  "species": null,
+  "tags": [
+   "rock"
+  ],
+  "why": "API categories: nature, rocks"
+ },
+ {
+  "category": "other",
+  "name": "Namaqualand Rocks 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/namaqualand_rocks_01",
+  "licence": "CC0-1.0",
+  "author": "Greg Zaal, Jenelle van Heerden",
+  "triangles": 160716,
+  "species": null,
+  "tags": [
+   "rock"
+  ],
+  "why": "API categories: nature, rocks"
+ },
+ {
+  "category": "other",
+  "name": "Namaqualand Stones 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/namaqualand_stones_01",
+  "licence": "CC0-1.0",
+  "author": "Greg Zaal, Jenelle van Heerden",
+  "triangles": 106602,
+  "species": null,
+  "tags": [
+   "rock"
+  ],
+  "why": "API categories: nature, rocks"
+ },
+ {
+  "category": "perennial",
+  "name": "Nettle Plant",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/nettle_plant",
+  "licence": "CC0-1.0",
+  "author": "Rob Tuytel, Rico Cilliers",
+  "triangles": 46195,
+  "species": null,
+  "tags": [],
+  "why": "API categories: nature, plants, ground cover"
+ },
+ {
+  "category": "furniture",
+  "name": "Ornate Mirror 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/ornate_mirror_01",
+  "licence": "CC0-1.0",
+  "author": "James Ray Cock",
+  "triangles": 14246,
+  "species": null,
+  "tags": [],
+  "why": "API categories: decorative, wall decoration, furniture"
+ },
+ {
+  "category": "tree",
+  "name": "Othonna Cerarioides",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/othonna_cerarioides",
+  "licence": "CC0-1.0",
+  "author": "James Ray Cock, Jenelle van Heerden",
+  "triangles": 651641,
+  "species": null,
+  "tags": [],
+  "why": "API categories: nature, plants, trees"
+ },
+ {
+  "category": "furniture",
+  "name": "Outdoor Table Chair Set 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/outdoor_table_chair_set_01",
+  "licence": "CC0-1.0",
+  "author": "James Ray Cock",
+  "triangles": 9828,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, seating"
+ },
+ {
+  "category": "shrub",
+  "name": "Pachira Aquatica 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/pachira_aquatica_01",
+  "licence": "CC0-1.0",
+  "author": "Rob Tuytel, Rico Cilliers",
+  "triangles": 76914,
+  "species": null,
+  "tags": [],
+  "why": "API categories: plants, nature",
+  "exclude": [
+   "pachira_aquatica_01_c"
+  ]
+ },
+ {
+  "category": "furniture",
+  "name": "Painted Wooden Bench",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/painted_wooden_bench",
+  "licence": "CC0-1.0",
+  "author": "Kirill Sannikov",
+  "triangles": 630,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, seating"
+ },
+ {
+  "category": "furniture",
+  "name": "Painted Wooden Cabinet",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/painted_wooden_cabinet",
+  "licence": "CC0-1.0",
+  "author": "Kirill Sannikov",
+  "triangles": 2227,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, shelves"
+ },
+ {
+  "category": "furniture",
+  "name": "Painted Wooden Cabinet 02",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/painted_wooden_cabinet_02",
+  "licence": "CC0-1.0",
+  "author": "Kirill Sannikov",
+  "triangles": 966,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, shelves"
+ },
+ {
+  "category": "furniture",
+  "name": "Painted Wooden Chair 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/painted_wooden_chair_01",
+  "licence": "CC0-1.0",
+  "author": "Kuutti Siitonen",
+  "triangles": 724,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, seating"
+ },
+ {
+  "category": "furniture",
+  "name": "Painted Wooden Chair 02",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/painted_wooden_chair_02",
+  "licence": "CC0-1.0",
+  "author": "Kirill Sannikov",
+  "triangles": 1246,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, seating"
+ },
+ {
+  "category": "furniture",
+  "name": "Painted Wooden Nightstand",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/painted_wooden_nightstand",
+  "licence": "CC0-1.0",
+  "author": "Kirill Sannikov",
+  "triangles": 470,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, table"
+ },
+ {
+  "category": "furniture",
+  "name": "Painted Wooden Shelves",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/painted_wooden_shelves",
+  "licence": "CC0-1.0",
+  "author": "Kirill Sannikov",
+  "triangles": 524,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, shelves"
+ },
+ {
+  "category": "furniture",
+  "name": "Painted Wooden Sofa",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/painted_wooden_sofa",
+  "licence": "CC0-1.0",
+  "author": "Kirill Sannikov",
+  "triangles": 5826,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, seating"
+ },
+ {
+  "category": "furniture",
+  "name": "Painted Wooden Stool",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/painted_wooden_stool",
+  "licence": "CC0-1.0",
+  "author": "Kirill Sannikov",
+  "triangles": 676,
+  "species": null,
+  "tags": [],
+  "why": "API categories: seating, furniture"
+ },
+ {
+  "category": "furniture",
+  "name": "Painted Wooden Table",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/painted_wooden_table",
+  "licence": "CC0-1.0",
+  "author": "Kirill Sannikov",
+  "triangles": 600,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, table"
+ },
+ {
+  "category": "other",
+  "name": "Picke Dirty 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/picke_dirty_01",
+  "licence": "CC0-1.0",
+  "author": "Dennis Halbeck",
+  "triangles": 6196,
+  "species": null,
+  "tags": [
+   "tool"
+  ],
+  "why": "API categories: props, tools"
+ },
+ {
+  "category": "tree",
+  "name": "Pine Sapling Small",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/pine_sapling_small",
+  "licence": "CC0-1.0",
+  "author": "Rob Tuytel, Rico Cilliers",
+  "triangles": 398144,
+  "species": null,
+  "tags": [],
+  "why": "API categories: nature, plants, trees"
+ },
+ {
+  "category": "pot",
+  "name": "Planter Box 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/planter_box_01",
+  "licence": "CC0-1.0",
+  "author": "James Ray Cock",
+  "triangles": 8094,
+  "species": null,
+  "tags": [],
+  "why": "API categories: decorative, containers, potted plants"
+ },
+ {
+  "category": "pot",
+  "name": "Planter Box 02",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/planter_box_02",
+  "licence": "CC0-1.0",
+  "author": "James Ray Cock",
+  "triangles": 10944,
+  "species": null,
+  "tags": [],
+  "why": "API categories: containers, decorative, potted plants"
+ },
+ {
+  "category": "pot",
+  "name": "Planter Box 03",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/planter_box_03",
+  "licence": "CC0-1.0",
+  "author": "James Ray Cock",
+  "triangles": 13112,
+  "species": null,
+  "tags": [],
+  "why": "API categories: containers, decorative, potted plants"
+ },
+ {
+  "category": "pot",
+  "name": "Planter Pot Clay",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/planter_pot_clay",
+  "licence": "CC0-1.0",
+  "author": "Amal Kumar",
+  "triangles": 3080,
+  "species": null,
+  "tags": [],
+  "why": "API categories: containers, vases"
+ },
+ {
+  "category": "other",
+  "name": "Plastic Broom",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/plastic_broom",
+  "licence": "CC0-1.0",
+  "author": "L",
+  "triangles": 18736,
+  "species": null,
+  "tags": [
+   "tool"
+  ],
+  "why": "API categories: props, tools"
+ },
+ {
+  "category": "other",
+  "name": "Plastic Container",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/plastic_container",
+  "licence": "CC0-1.0",
+  "author": "PierreB3D",
+  "triangles": 4070,
+  "species": null,
+  "tags": [
+   "bucket"
+  ],
+  "why": "API categories: props, containers"
+ },
+ {
+  "category": "other",
+  "name": "Plastic Crate 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/plastic_crate_01",
+  "licence": "CC0-1.0",
+  "author": "PierreB3D",
+  "triangles": 18320,
+  "species": null,
+  "tags": [
+   "crate"
+  ],
+  "why": "API categories: props, containers"
+ },
+ {
+  "category": "other",
+  "name": "Plastic Crate 02",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/plastic_crate_02",
+  "licence": "CC0-1.0",
+  "author": "Fabi_G",
+  "triangles": 5840,
+  "species": null,
+  "tags": [
+   "crate"
+  ],
+  "why": "API categories: props, containers"
+ },
+ {
+  "category": "other",
+  "name": "Plastic Crate 03",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/plastic_crate_03",
+  "licence": "CC0-1.0",
+  "author": "Pacific Penguin",
+  "triangles": 21740,
+  "species": null,
+  "tags": [
+   "crate"
+  ],
+  "why": "API categories: containers, industrial"
+ },
+ {
+  "category": "furniture",
+  "name": "Plastic Monobloc Chair 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/plastic_monobloc_chair_01",
+  "licence": "CC0-1.0",
+  "author": "Kuutti Siitonen",
+  "triangles": 3356,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, seating"
+ },
+ {
+  "category": "pot",
+  "name": "Potted Plant 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/potted_plant_01",
+  "licence": "CC0-1.0",
+  "author": "Rico Cilliers",
+  "triangles": 96030,
+  "species": null,
+  "tags": [],
+  "why": "API categories: decorative, plants, potted plants, nature"
+ },
+ {
+  "category": "pot",
+  "name": "Potted Plant 02",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/potted_plant_02",
+  "licence": "CC0-1.0",
+  "author": "Rico Cilliers",
+  "triangles": 69806,
+  "species": null,
+  "tags": [],
+  "why": "API categories: decorative, plants, potted plants, nature"
+ },
+ {
+  "category": "pot",
+  "name": "Potted Plant 04",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/potted_plant_04",
+  "licence": "CC0-1.0",
+  "author": "James Ray Cock",
+  "triangles": 6097,
+  "species": null,
+  "tags": [],
+  "why": "API categories: decorative, plants, potted plants, succulent, nature"
+ },
+ {
+  "category": "tree",
+  "name": "Quiver Tree 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/quiver_tree_01",
+  "licence": "CC0-1.0",
+  "author": "James Ray Cock, Dario Barresi, Rico Cilliers",
+  "triangles": 269522,
+  "species": null,
+  "tags": [],
+  "why": "API categories: nature, plants, trees"
+ },
+ {
+  "category": "tree",
+  "name": "Quiver Tree 02",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/quiver_tree_02",
+  "licence": "CC0-1.0",
+  "author": "Dario Barresi, Rico Cilliers",
+  "triangles": 153887,
+  "species": null,
+  "tags": [],
+  "why": "API categories: nature, trees, plants"
+ },
+ {
+  "category": "other",
+  "name": "Rock 07",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/rock_07",
+  "licence": "CC0-1.0",
+  "author": "Jenelle van Heerden",
+  "triangles": 27830,
+  "species": null,
+  "tags": [
+   "rock"
+  ],
+  "why": "API categories: rocks, nature"
+ },
+ {
+  "category": "other",
+  "name": "Rock 09",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/rock_09",
+  "licence": "CC0-1.0",
+  "author": "Jenelle van Heerden",
+  "triangles": 23280,
+  "species": null,
+  "tags": [
+   "rock"
+  ],
+  "why": "API categories: nature, rocks"
+ },
+ {
+  "category": "other",
+  "name": "Rock Moss Set 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/rock_moss_set_01",
+  "licence": "CC0-1.0",
+  "author": "Kless Gyzen",
+  "triangles": 63127,
+  "species": null,
+  "tags": [
+   "rock"
+  ],
+  "why": "API categories: rocks, nature"
+ },
+ {
+  "category": "other",
+  "name": "Rock Moss Set 02",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/rock_moss_set_02",
+  "licence": "CC0-1.0",
+  "author": "Kless Gyzen",
+  "triangles": 57647,
+  "species": null,
+  "tags": [
+   "rock"
+  ],
+  "why": "API categories: rocks, nature"
+ },
+ {
+  "category": "furniture",
+  "name": "Round Wooden Table 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/round_wooden_table_01",
+  "licence": "CC0-1.0",
+  "author": "Ulan Cabanilla",
+  "triangles": 8640,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, table"
+ },
+ {
+  "category": "furniture",
+  "name": "Round Wooden Table 02",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/round_wooden_table_02",
+  "licence": "CC0-1.0",
+  "author": "Ulan Cabanilla",
+  "triangles": 4254,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, table"
+ },
+ {
+  "category": "other",
+  "name": "Rusted Spade 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/rusted_spade_01",
+  "licence": "CC0-1.0",
+  "author": "Blemonade",
+  "triangles": 11436,
+  "species": null,
+  "tags": [
+   "tool"
+  ],
+  "why": "API categories: tools, props"
+ },
+ {
+  "category": "other",
+  "name": "Sand Rocks Small 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/sand_rocks_small_01",
+  "licence": "CC0-1.0",
+  "author": "Rob Tuytel, Rico Cilliers",
+  "triangles": 1386500,
+  "species": null,
+  "tags": [
+   "rock"
+  ],
+  "why": "API categories: nature, rocks"
+ },
+ {
+  "category": "tree",
+  "name": "Searsia Lucida",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/searsia_lucida",
+  "licence": "CC0-1.0",
+  "author": "James Ray Cock, Jenelle van Heerden",
+  "triangles": 841648,
+  "species": null,
+  "tags": [],
+  "why": "API categories: nature, plants, trees"
+ },
+ {
+  "category": "lighting",
+  "name": "Security Light",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/security_light",
+  "licence": "CC0-1.0",
+  "author": "Maximilian Schuster",
+  "triangles": 4668,
+  "species": null,
+  "tags": [],
+  "why": "API categories: lighting, industrial"
+ },
+ {
+  "category": "pot",
+  "name": "Seedling Tray 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/seeding_tray_01",
+  "licence": "CC0-1.0",
+  "author": "Satyaki Mandal",
+  "triangles": 8334,
+  "species": null,
+  "tags": [],
+  "why": "API categories: containers"
+ },
+ {
+  "category": "shrub",
+  "name": "Shrub 02",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/shrub_02",
+  "licence": "CC0-1.0",
+  "author": "Rico Cilliers",
+  "triangles": 52317,
+  "species": null,
+  "tags": [],
+  "why": "API categories: nature, plants, ground cover"
+ },
+ {
+  "category": "shrub",
+  "name": "Shrub 03",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/shrub_03",
+  "licence": "CC0-1.0",
+  "author": "Rico Cilliers",
+  "triangles": 16955,
+  "species": null,
+  "tags": [],
+  "why": "API categories: nature, plants, ground cover"
+ },
+ {
+  "category": "shrub",
+  "name": "Shrub Sorrel 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/shrub_sorrel_01",
+  "licence": "CC0-1.0",
+  "author": "Rico Cilliers",
+  "triangles": 3319,
+  "species": "Rumex sp. (sorrel), per name",
+  "tags": [],
+  "why": "API categories: plants, flowers, nature"
+ },
+ {
+  "category": "furniture",
+  "name": "Side Table 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/side_table_01",
+  "licence": "CC0-1.0",
+  "author": "James Ray Cock",
+  "triangles": 2756,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, table"
+ },
+ {
+  "category": "furniture",
+  "name": "Side Table Tall 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/side_table_tall_01",
+  "licence": "CC0-1.0",
+  "author": "James Ray Cock",
+  "triangles": 6408,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, table"
+ },
+ {
+  "category": "other",
+  "name": "Sledgehammer 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/sledgehammer_01",
+  "licence": "CC0-1.0",
+  "author": "Dylan Guzman",
+  "triangles": 2596,
+  "species": null,
+  "tags": [
+   "tool"
+  ],
+  "why": "API categories: props, tools, industrial"
+ },
+ {
+  "category": "furniture",
+  "name": "Small Wooden Table 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/small_wooden_table_01",
+  "licence": "CC0-1.0",
+  "author": "Ulan Cabanilla",
+  "triangles": 3410,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, table"
+ },
+ {
+  "category": "furniture",
+  "name": "Sofa 02",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/sofa_02",
+  "licence": "CC0-1.0",
+  "author": "Kirill Sannikov",
+  "triangles": 2728,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, seating"
+ },
+ {
+  "category": "furniture",
+  "name": "Sofa 03",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/sofa_03",
+  "licence": "CC0-1.0",
+  "author": "Fran Calvente",
+  "triangles": 8004,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, seating"
+ },
+ {
+  "category": "furniture",
+  "name": "Standing Chalkboard 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/standing_chalkboard_01",
+  "licence": "CC0-1.0",
+  "author": "ParzivalCG",
+  "triangles": 2372,
+  "species": null,
+  "tags": [],
+  "why": "API categories: decorative"
+ },
+ {
+  "category": "other",
+  "name": "Stone 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/stone_01",
+  "licence": "CC0-1.0",
+  "author": "Dario Barresi, Rico Cilliers",
+  "triangles": 71916,
+  "species": null,
+  "tags": [
+   "rock"
+  ],
+  "why": "API categories: rocks, nature"
+ },
+ {
+  "category": "furniture",
+  "name": "Stone Fire Pit",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/stone_fire_pit",
+  "licence": "CC0-1.0",
+  "author": "Sebastian Platen",
+  "triangles": 3887,
+  "species": null,
+  "tags": [
+   "fire",
+   "barbecue"
+  ],
+  "why": "API categories: structures, buildings, furniture"
+ },
+ {
+  "category": "lighting",
+  "name": "Street Lamp 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/street_lamp_01",
+  "licence": "CC0-1.0",
+  "author": "Josh Dean",
+  "triangles": 30610,
+  "species": null,
+  "tags": [],
+  "why": "API categories: lighting, industrial"
+ },
+ {
+  "category": "lighting",
+  "name": "Street Lamp 02",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/street_lamp_02",
+  "licence": "CC0-1.0",
+  "author": "Josh Dean",
+  "triangles": 20338,
+  "species": null,
+  "tags": [],
+  "why": "API categories: lighting, industrial"
+ },
+ {
+  "category": "furniture",
+  "name": "Throw Pillows 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/throw_pillows_01",
+  "licence": "CC0-1.0",
+  "author": "Serhii Khromov",
+  "triangles": 6362,
+  "species": null,
+  "tags": [],
+  "why": "API categories: decorative"
+ },
+ {
+  "category": "other",
+  "name": "Treasure Chest",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/treasure_chest",
+  "licence": "CC0-1.0",
+  "author": "Rico Cilliers",
+  "triangles": 103330,
+  "species": null,
+  "tags": [
+   "crate"
+  ],
+  "why": "API categories: props, containers, decorative"
+ },
+ {
+  "category": "other",
+  "name": "Tree Stump 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/tree_stump_01",
+  "licence": "CC0-1.0",
+  "author": "Rob Tuytel",
+  "triangles": 41046,
+  "species": null,
+  "tags": [
+   "log",
+   "stump"
+  ],
+  "why": "API categories: nature, plants, ground cover, trees"
+ },
+ {
+  "category": "other",
+  "name": "Tree Stump 02",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/tree_stump_02",
+  "licence": "CC0-1.0",
+  "author": "Rob Tuytel",
+  "triangles": 62345,
+  "species": null,
+  "tags": [
+   "log",
+   "stump"
+  ],
+  "why": "API categories: nature, plants, ground cover, trees"
+ },
+ {
+  "category": "other",
+  "name": "Trowel 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/trowel_01",
+  "licence": "CC0-1.0",
+  "author": "Satyaki Mandal",
+  "triangles": 5242,
+  "species": null,
+  "tags": [
+   "tool"
+  ],
+  "why": "API categories: props, tools"
+ },
+ {
+  "category": "other",
+  "name": "Utility Box 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/utility_box_01",
+  "licence": "CC0-1.0",
+  "author": "James Ray Cock",
+  "triangles": 4404,
+  "species": null,
+  "tags": [
+   "street"
+  ],
+  "why": "API categories: industrial, structures"
+ },
+ {
+  "category": "other",
+  "name": "Utility Box 02",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/utility_box_02",
+  "licence": "CC0-1.0",
+  "author": "James Ray Cock",
+  "triangles": 6268,
+  "species": null,
+  "tags": [
+   "street"
+  ],
+  "why": "API categories: structures, industrial"
+ },
+ {
+  "category": "furniture",
+  "name": "Vintage Cabinet 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/vintage_cabinet_01",
+  "licence": "CC0-1.0",
+  "author": "Rico Cilliers",
+  "triangles": 61096,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, shelves"
+ },
+ {
+  "category": "furniture",
+  "name": "Vintage Day Bed",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/vintage_day_bed",
+  "licence": "CC0-1.0",
+  "author": "Aron \u0141yczek",
+  "triangles": 2715,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, bed, seating"
+ },
+ {
+  "category": "lighting",
+  "name": "Vintage Oil Lamp",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/vintage_oil_lamp",
+  "licence": "CC0-1.0",
+  "author": "Monsta3D",
+  "triangles": 7208,
+  "species": null,
+  "tags": [],
+  "why": "API categories: lighting, decorative"
+ },
+ {
+  "category": "other",
+  "name": "Vintage Suitcase",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/vintage_suitcase",
+  "licence": "CC0-1.0",
+  "author": "Maximilian Schuster",
+  "triangles": 16474,
+  "species": null,
+  "tags": [
+   "crate"
+  ],
+  "why": "API categories: decorative, props"
+ },
+ {
+  "category": "furniture",
+  "name": "Vintage Wooden Drawer 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/vintage_wooden_drawer_01",
+  "licence": "CC0-1.0",
+  "author": "James Ray Cock",
+  "triangles": 5184,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, shelves, table"
+ },
+ {
+  "category": "other",
+  "name": "Water Manhole Cover",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/water_manhole_cover",
+  "licence": "CC0-1.0",
+  "author": "Raunox",
+  "triangles": 6301,
+  "species": null,
+  "tags": [
+   "street"
+  ],
+  "why": "API categories: industrial, structures"
+ },
+ {
+  "category": "other",
+  "name": "Watering Can Metal 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/watering_can_metal_01",
+  "licence": "CC0-1.0",
+  "author": "Charles Nderitu",
+  "triangles": 11837,
+  "species": null,
+  "tags": [
+   "tool"
+  ],
+  "why": "API categories: containers, tools, props"
+ },
+ {
+  "category": "perennial",
+  "name": "Weed Plant 02",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/weed_plant_02",
+  "licence": "CC0-1.0",
+  "author": "Rob Tuytel, Rico Cilliers",
+  "triangles": 17062,
+  "species": null,
+  "tags": [],
+  "why": "API categories: nature, plants, ground cover"
+ },
+ {
+  "category": "pot",
+  "name": "Wicker Basket 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/wicker_basket_01",
+  "licence": "CC0-1.0",
+  "author": "Kuutti Siitonen",
+  "triangles": 22276,
+  "species": null,
+  "tags": [],
+  "why": "API categories: containers, decorative"
+ },
+ {
+  "category": "pot",
+  "name": "Wicker Basket 02",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/wicker_basket_02",
+  "licence": "CC0-1.0",
+  "author": "Kuutti Siitonen",
+  "triangles": 17850,
+  "species": null,
+  "tags": [],
+  "why": "API categories: containers, decorative"
+ },
+ {
+  "category": "other",
+  "name": "Wine Barrel 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/wine_barrel_01",
+  "licence": "CC0-1.0",
+  "author": "James Ray Cock",
+  "triangles": 10820,
+  "species": null,
+  "tags": [
+   "barrel"
+  ],
+  "why": "API categories: containers"
+ },
+ {
+  "category": "other",
+  "name": "Wooden Axe",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/wooden_axe",
+  "licence": "CC0-1.0",
+  "author": "Ulan Cabanilla",
+  "triangles": 3348,
+  "species": null,
+  "tags": [
+   "tool"
+  ],
+  "why": "API categories: props"
+ },
+ {
+  "category": "other",
+  "name": "Wooden Axe 02",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/wooden_axe_02",
+  "licence": "CC0-1.0",
+  "author": "Ulan Cabanilla",
+  "triangles": 2218,
+  "species": null,
+  "tags": [
+   "tool"
+  ],
+  "why": "API categories: props"
+ },
+ {
+  "category": "other",
+  "name": "Wooden Axe 03",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/wooden_axe_03",
+  "licence": "CC0-1.0",
+  "author": "Ulan Cabanilla",
+  "triangles": 3886,
+  "species": null,
+  "tags": [
+   "tool"
+  ],
+  "why": "API categories: props, tools"
+ },
+ {
+  "category": "furniture",
+  "name": "Wooden Bookshelf Worn",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/wooden_bookshelf_worn",
+  "licence": "CC0-1.0",
+  "author": "Ulan Cabanilla",
+  "triangles": 10106,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, shelves"
+ },
+ {
+  "category": "other",
+  "name": "Wooden Broom",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/wooden_broom",
+  "licence": "CC0-1.0",
+  "author": "Balen",
+  "triangles": 14258,
+  "species": null,
+  "tags": [
+   "tool"
+  ],
+  "why": "API categories: props, tools"
+ },
+ {
+  "category": "other",
+  "name": "Wooden Bucket 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/wooden_bucket_01",
+  "licence": "CC0-1.0",
+  "author": "James Ray Cock",
+  "triangles": 5116,
+  "species": null,
+  "tags": [
+   "bucket"
+  ],
+  "why": "API categories: props, containers"
+ },
+ {
+  "category": "other",
+  "name": "Wooden Bucket 02",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/wooden_bucket_02",
+  "licence": "CC0-1.0",
+  "author": "James Ray Cock",
+  "triangles": 7252,
+  "species": null,
+  "tags": [
+   "bucket"
+  ],
+  "why": "API categories: props, containers"
+ },
+ {
+  "category": "lighting",
+  "name": "Wooden Candlestick",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/wooden_candlestick",
+  "licence": "CC0-1.0",
+  "author": "Josh Dean",
+  "triangles": 3328,
+  "species": null,
+  "tags": [],
+  "why": "API categories: decorative, lighting"
+ },
+ {
+  "category": "other",
+  "name": "Wooden Crate 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/wooden_crate_01",
+  "licence": "CC0-1.0",
+  "author": "James Ray Cock",
+  "triangles": 6576,
+  "species": null,
+  "tags": [
+   "crate"
+  ],
+  "why": "API categories: containers"
+ },
+ {
+  "category": "other",
+  "name": "Wooden Crate 02",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/wooden_crate_02",
+  "licence": "CC0-1.0",
+  "author": "James Ray Cock, Jurita Burger",
+  "triangles": 5176,
+  "species": null,
+  "tags": [
+   "crate"
+  ],
+  "why": "API categories: containers, props"
+ },
+ {
+  "category": "furniture",
+  "name": "Wooden Display Shelves 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/wooden_display_shelves_01",
+  "licence": "CC0-1.0",
+  "author": "James Ray Cock",
+  "triangles": 3174,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, shelves"
+ },
+ {
+  "category": "other",
+  "name": "Wooden Hammer 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/wooden_hammer_01",
+  "licence": "CC0-1.0",
+  "author": "James Ray Cock",
+  "triangles": 3617,
+  "species": null,
+  "tags": [
+   "tool"
+  ],
+  "why": "API categories: industrial, tools, props"
+ },
+ {
+  "category": "other",
+  "name": "Wooden Ladder",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/wooden_ladder",
+  "licence": "CC0-1.0",
+  "author": "Miroslav Turura",
+  "triangles": 8492,
+  "species": null,
+  "tags": [
+   "tool"
+  ],
+  "why": "API categories: tools, industrial"
+ },
+ {
+  "category": "other",
+  "name": "Wooden Ladder 02",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/wooden_ladder_02",
+  "licence": "CC0-1.0",
+  "author": "JN_3DPRINTINGNERD",
+  "triangles": 6126,
+  "species": null,
+  "tags": [
+   "tool"
+  ],
+  "why": "API categories: tools"
+ },
+ {
+  "category": "lighting",
+  "name": "Wooden Lantern 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/wooden_lantern_01",
+  "licence": "CC0-1.0",
+  "author": "James Ray Cock",
+  "triangles": 8321,
+  "species": null,
+  "tags": [],
+  "why": "API categories: props, lighting"
+ },
+ {
+  "category": "other",
+  "name": "Wooden Military Crate",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/wooden_military_crate",
+  "licence": "CC0-1.0",
+  "author": "Prabhjinder Singh",
+  "triangles": 22986,
+  "species": null,
+  "tags": [
+   "crate"
+  ],
+  "why": "API categories: containers"
+ },
+ {
+  "category": "furniture",
+  "name": "Wooden Picnic Table",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/wooden_picnic_table",
+  "licence": "CC0-1.0",
+  "author": "Ulan Cabanilla",
+  "triangles": 10210,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, seating, table"
+ },
+ {
+  "category": "furniture",
+  "name": "Wooden Stool 01",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/wooden_stool_01",
+  "licence": "CC0-1.0",
+  "author": "Kuutti Siitonen",
+  "triangles": 10946,
+  "species": null,
+  "tags": [],
+  "why": "API categories: seating, furniture"
+ },
+ {
+  "category": "furniture",
+  "name": "Wooden Stool 02",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/wooden_stool_02",
+  "licence": "CC0-1.0",
+  "author": "Kuutti Siitonen",
+  "triangles": 11146,
+  "species": null,
+  "tags": [],
+  "why": "API categories: seating, furniture"
+ },
+ {
+  "category": "furniture",
+  "name": "Wooden Table 02",
+  "source": "Poly Haven",
+  "page_url": "https://polyhaven.com/a/wooden_table_02",
+  "licence": "CC0-1.0",
+  "author": "Serhii Khromov",
+  "triangles": 196,
+  "species": null,
+  "tags": [],
+  "why": "API categories: furniture, table"
+ }
+]

@@ -1,0 +1,282 @@
+# id<TAB>reason
+Camera_01	electronics/appliance/office clutter
+CashRegister_01	electronics/appliance/office clutter
+CheeseBox_01	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+CoffeeCart_01	electronics/appliance/office clutter
+Drill_01	electronics/appliance/office clutter
+GothicBed_01	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+Megaphone_01	electronics/appliance/office clutter
+Television_01	electronics/appliance/office clutter
+Ukulele_01	ships, creature, instrument or buildings: off-scope
+WetFloorSign_01	electronics/appliance/office clutter
+adjustable_wrench	industrial machinery / workshop tool not fitting house or garden
+alarm_clock_01	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+all_purpose_cleaner	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+ammo_box	industrial machinery / workshop tool not fitting house or garden
+antique_estoc	weapon
+antique_katana_01	weapon
+bananas	food/dishes close-up
+bark_debris_01	landscape scale terrain/cliff/moon/root or debris, not a placeable object
+bench_vice_01	industrial machinery / workshop tool not fitting house or garden
+binder_notebook	books clutter
+binoculars	industrial machinery / workshop tool not fitting house or garden
+bleach_bottle	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+bolt_action_rifle_7_62	weapon
+bolt_cutters_01	industrial machinery / workshop tool not fitting house or garden
+book_encyclopedia_set_01	books clutter
+boombox	electronics/appliance/office clutter
+brass_blowtorch	industrial machinery / workshop tool not fitting house or garden
+brass_goblets	food/dishes close-up
+brass_pan_01	food/dishes close-up
+brass_pot_02	food/dishes close-up
+brass_vase_04	food/dishes close-up
+bull_head	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+bunsen_burner	industrial machinery / workshop tool not fitting house or garden
+can_rusted	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+cannon_01	weapon
+cardboard_box_01	industrial machinery / workshop tool not fitting house or garden
+carrot_cake	food/dishes close-up
+carved_wooden_plate	food/dishes close-up
+cassette_player	electronics/appliance/office clutter
+ceiling_fan	electronics/appliance/office clutter
+cement_bag	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+ceramic_pot	food/dishes close-up
+chemistry_set	industrial machinery / workshop tool not fitting house or garden
+chess_set	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+cigarette_case	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+cigarette_pack	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+circuit_board	electronics/appliance/office clutter
+classic_laptop	electronics/appliance/office clutter
+cleaner_tin_01	industrial machinery / workshop tool not fitting house or garden
+clipboard	electronics/appliance/office clutter
+coast_land_rocks_02	landscape scale terrain/cliff/moon/root or debris, not a placeable object
+coast_land_rocks_03	landscape scale terrain/cliff/moon/root or debris, not a placeable object
+coast_land_rocks_04	landscape scale terrain/cliff/moon/root or debris, not a placeable object
+coast_line_01	landscape scale terrain/cliff/moon/root or debris, not a placeable object
+coast_line_02	landscape scale terrain/cliff/moon/root or debris, not a placeable object
+coast_rocks_02	landscape scale terrain/cliff/moon/root or debris, not a placeable object
+coastal_cliff_01	landscape scale terrain/cliff/moon/root or debris, not a placeable object
+coastal_cliff_02	landscape scale terrain/cliff/moon/root or debris, not a placeable object
+coastal_cliff_04	landscape scale terrain/cliff/moon/root or debris, not a placeable object
+combination_wrench	industrial machinery / workshop tool not fitting house or garden
+compost_bag_02	industrial machinery / workshop tool not fitting house or garden
+compost_bags	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+croissant	food/dishes close-up
+cross_pein_hammer	industrial machinery / workshop tool not fitting house or garden
+crowbar_01	industrial machinery / workshop tool not fitting house or garden
+dartboard	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+dead_quiver_branch_01	landscape scale terrain/cliff/moon/root or debris, not a placeable object
+dead_quiver_branch_02	landscape scale terrain/cliff/moon/root or debris, not a placeable object
+decorative_book_set_01	books clutter
+digital_wrist_watch	electronics/appliance/office clutter
+drain_cleaner	industrial machinery / workshop tool not fitting house or garden
+drill_press_01	electronics/appliance/office clutter
+dry_branches_medium_01	landscape scale terrain/cliff/moon/root or debris, not a placeable object
+dry_quiver_leaf	landscape scale terrain/cliff/moon/root or debris, not a placeable object
+dutch_ship_large_01	ships, creature, instrument or buildings: off-scope
+dutch_ship_large_02	ships, creature, instrument or buildings: off-scope
+dutch_ship_medium	ships, creature, instrument or buildings: off-scope
+electric_stove	electronics/appliance/office clutter
+exterior_aircon_unit	electronics/appliance/office clutter
+filmstrip_projector_8mm	electronics/appliance/office clutter
+fir_sapling_medium	landscape scale terrain/cliff/moon/root or debris, not a placeable object
+fir_tree_01	landscape scale terrain/cliff/moon/root or debris, not a placeable object
+fire_alarm	electronics/appliance/office clutter
+fish_knife	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+fishermans_hat	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+flathead_screwdriver	industrial machinery / workshop tool not fitting house or garden
+flood_lights	electronics/appliance/office clutter
+food_apple_01	food/dishes close-up
+food_avocado_01	food/dishes close-up
+food_ginger_01	food/dishes close-up
+food_kiwi_01	food/dishes close-up
+food_lime_01	food/dishes close-up
+food_lychee_01	food/dishes close-up
+food_pears_asian_01	food/dishes close-up
+food_pomegranate_01	food/dishes close-up
+gamepad	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+gaming_console	electronics/appliance/office clutter
+garden_sprinkler_01	electronics/appliance/office clutter
+gate_latch_01	industrial machinery / workshop tool not fitting house or garden
+hamburger_buns	food/dishes close-up
+hand_plane_no4	industrial machinery / workshop tool not fitting house or garden
+horse_head	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+industrial_microscope	electronics/appliance/office clutter
+industrial_pastic_container	electronics/appliance/office clutter
+industrial_storage_cart	industrial machinery / workshop tool not fitting house or garden
+island_tree_01	landscape scale terrain/cliff/moon/root or debris, not a placeable object
+island_tree_02	landscape scale terrain/cliff/moon/root or debris, not a placeable object
+island_tree_03	landscape scale terrain/cliff/moon/root or debris, not a placeable object
+jug_01	food/dishes close-up
+katana_stand_01	weapon
+kite_shield	weapon
+korean_fire_extinguisher_01	industrial machinery / workshop tool not fitting house or garden
+korean_public_payphone_01	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+lambis_shell	landscape scale terrain/cliff/moon/root or debris, not a placeable object
+large_castle_door	ships, creature, instrument or buildings: off-scope
+large_iron_gate	ships, creature, instrument or buildings: off-scope
+lateral_sea_marker	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+leather_cleaner_can	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+lemon	food/dishes close-up
+life_jacket	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+lifebuoy	industrial machinery / workshop tool not fitting house or garden
+lightbulb_01	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+lightbulb_led	electronics/appliance/office clutter
+lion_head	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+long_life_food	food/dishes close-up
+lubricant_spray	industrial machinery / workshop tool not fitting house or garden
+machete	weapon
+magnifying_glass_01	industrial machinery / workshop tool not fitting house or garden
+mantel_clock_01	electronics/appliance/office clutter
+measuring_tape_01	industrial machinery / workshop tool not fitting house or garden
+medical_box	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+medical_tape	industrial machinery / workshop tool not fitting house or garden
+metal_detector	electronics/appliance/office clutter
+metal_jerrycan	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+metal_jerrycan_green	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+metal_office_desk	electronics/appliance/office clutter
+metal_tool_chest	industrial machinery / workshop tool not fitting house or garden
+metal_toolbox	industrial machinery / workshop tool not fitting house or garden
+modern_arm_chair_01	electronics/appliance/office clutter
+modified_thermos	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+modular_airduct_circular_01	industrial machinery / workshop tool not fitting house or garden
+modular_airduct_rectangular_01	industrial machinery / workshop tool not fitting house or garden
+modular_chainlink_fence	industrial machinery / workshop tool not fitting house or garden
+modular_electric_cables	industrial machinery / workshop tool not fitting house or garden
+modular_electricity_poles	industrial machinery / workshop tool not fitting house or garden
+modular_factory_facade	ships, creature, instrument or buildings: off-scope
+modular_fire_escape	industrial machinery / workshop tool not fitting house or garden
+modular_fort_01	ships, creature, instrument or buildings: off-scope
+modular_industrial_pipes_01	industrial machinery / workshop tool not fitting house or garden
+modular_metal_gutter	industrial machinery / workshop tool not fitting house or garden
+modular_pipes	industrial machinery / workshop tool not fitting house or garden
+modular_pipes_plastic_01	industrial machinery / workshop tool not fitting house or garden
+modular_urban_apartments_facade	ships, creature, instrument or buildings: off-scope
+modular_wooden_pier	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+moon_rock_01	landscape scale terrain/cliff/moon/root or debris, not a placeable object
+moon_rock_02	landscape scale terrain/cliff/moon/root or debris, not a placeable object
+moon_rock_03	landscape scale terrain/cliff/moon/root or debris, not a placeable object
+moon_rock_04	landscape scale terrain/cliff/moon/root or debris, not a placeable object
+moon_rock_05	landscape scale terrain/cliff/moon/root or debris, not a placeable object
+moon_rock_06	landscape scale terrain/cliff/moon/root or debris, not a placeable object
+moon_rock_07	landscape scale terrain/cliff/moon/root or debris, not a placeable object
+moss_01	landscape scale terrain/cliff/moon/root or debris, not a placeable object
+mountainside	landscape scale terrain/cliff/moon/root or debris, not a placeable object
+mounted_fluorescent_lights	industrial machinery / workshop tool not fitting house or garden
+mousetrap	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+multi_cleaner_5_litre	industrial machinery / workshop tool not fitting house or garden
+multi_cleaner_bottle	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+namaqualand_cliff_01	landscape scale terrain/cliff/moon/root or debris, not a placeable object
+namaqualand_cliff_02	landscape scale terrain/cliff/moon/root or debris, not a placeable object
+ocean_buoy	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+office_notepads	electronics/appliance/office clutter
+oil_tin	industrial machinery / workshop tool not fitting house or garden
+old_bed_frame	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+old_drill_press	industrial machinery / workshop tool not fitting house or garden
+old_gas_mask	industrial machinery / workshop tool not fitting house or garden
+old_military_compressor	industrial machinery / workshop tool not fitting house or garden
+old_military_crate	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+old_tyre	industrial machinery / workshop tool not fitting house or garden
+ornate_medieval_dagger	weapon
+ornate_medieval_mace	weapon
+ornate_war_hammer	weapon
+overhead_crane	industrial machinery / workshop tool not fitting house or garden
+pastic_torch_6v	electronics/appliance/office clutter
+pine_roots	landscape scale terrain/cliff/moon/root or debris, not a placeable object
+pine_sapling_medium	landscape scale terrain/cliff/moon/root or debris, not a placeable object
+pine_tree_01	landscape scale terrain/cliff/moon/root or debris, not a placeable object
+pipe_wrench	industrial machinery / workshop tool not fitting house or garden
+plastic_bottle_gallon	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+plastic_jerrycan	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+plastic_thermos	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+pliers	industrial machinery / workshop tool not fitting house or garden
+plunger	industrial machinery / workshop tool not fitting house or garden
+pocket_watch	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+portable_cassette_player	electronics/appliance/office clutter
+portable_generator	electronics/appliance/office clutter
+portable_searchlight	electronics/appliance/office clutter
+portable_welding_cart	industrial machinery / workshop tool not fitting house or garden
+postcard_set_01	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+pot_enamel_01	food/dishes close-up
+power_box_01	electronics/appliance/office clutter
+projector_screen	electronics/appliance/office clutter
+propane_tank	industrial machinery / workshop tool not fitting house or garden
+propane_torch	industrial machinery / workshop tool not fitting house or garden
+propane_torch_02	industrial machinery / workshop tool not fitting house or garden
+pull_chain_light_socket	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+ratchet_wrench	industrial machinery / workshop tool not fitting house or garden
+retro_multimeter	electronics/appliance/office clutter
+rock_face_01	landscape scale terrain/cliff/moon/root or debris, not a placeable object
+rock_face_02	landscape scale terrain/cliff/moon/root or debris, not a placeable object
+rollershutter_door	industrial machinery / workshop tool not fitting house or garden
+rollershutter_window_01	industrial machinery / workshop tool not fitting house or garden
+rollershutter_window_02	industrial machinery / workshop tool not fitting house or garden
+rollershutter_window_03	industrial machinery / workshop tool not fitting house or garden
+root_cluster_01	landscape scale terrain/cliff/moon/root or debris, not a placeable object
+root_cluster_02	landscape scale terrain/cliff/moon/root or debris, not a placeable object
+round_spectacles	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+rubber_boots	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+rubber_duck_toy	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+russian_food_cans_01	food/dishes close-up
+rusted_hacksaw	industrial machinery / workshop tool not fitting house or garden
+rusted_wheel_rim_01	industrial machinery / workshop tool not fitting house or garden
+rusted_wheel_rim_02	industrial machinery / workshop tool not fitting house or garden
+scandinavian_masonry_heater	electronics/appliance/office clutter
+screwdriver	industrial machinery / workshop tool not fitting house or garden
+screwdrivers_02	industrial machinery / workshop tool not fitting house or garden
+seadogs_compass	industrial machinery / workshop tool not fitting house or garden
+security_camera_01	electronics/appliance/office clutter
+security_camera_02	electronics/appliance/office clutter
+service_pistol	weapon
+ship_pinnace	ships, creature, instrument or buildings: off-scope
+signal_flashlight	electronics/appliance/office clutter
+single_root	landscape scale terrain/cliff/moon/root or debris, not a placeable object
+small_lpg_tank	industrial machinery / workshop tool not fitting house or garden
+small_oil_can_01	industrial machinery / workshop tool not fitting house or garden
+small_plastic_torch	industrial machinery / workshop tool not fitting house or garden
+spinning_wheel_01	industrial machinery / workshop tool not fitting house or garden
+spray_paint_bottles	industrial machinery / workshop tool not fitting house or garden
+spray_paint_bottles_02	industrial machinery / workshop tool not fitting house or garden
+stationery_supplies	electronics/appliance/office clutter
+steel_frame_shelves_01	industrial machinery / workshop tool not fitting house or garden
+steel_frame_shelves_02	industrial machinery / workshop tool not fitting house or garden
+steel_frame_shelves_03	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+stick_grenade	weapon
+strawberry_chocolate_cake	food/dishes close-up
+street_rat	ships, creature, instrument or buildings: off-scope
+sungka_board	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+sungka_board_02	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+sweet_potato	food/dishes close-up
+tea_set_01	food/dishes close-up
+television_02	electronics/appliance/office clutter
+tire_pump	industrial machinery / workshop tool not fitting house or garden
+tongue_groove_pliers	industrial machinery / workshop tool not fitting house or garden
+tool_cart	industrial machinery / workshop tool not fitting house or garden
+trashbag	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+tree_small_02	landscape scale terrain/cliff/moon/root or debris, not a placeable object
+vintage_binocular	ships, creature, instrument or buildings: off-scope
+vintage_crutches_01	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+vintage_electric_kettle	electronics/appliance/office clutter
+vintage_flashlight	electronics/appliance/office clutter
+vintage_grandfather_clock_01	electronics/appliance/office clutter
+vintage_hand_drill	industrial machinery / workshop tool not fitting house or garden
+vintage_lighter	industrial machinery / workshop tool not fitting house or garden
+vintage_microscope	industrial machinery / workshop tool not fitting house or garden
+vintage_microwave	electronics/appliance/office clutter
+vintage_pocket_watch	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+vintage_radio_transceiver	electronics/appliance/office clutter
+vintage_spacecraft_instrument	electronics/appliance/office clutter
+vintage_stapler	electronics/appliance/office clutter
+vintage_telephone_wall_clock	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+vintage_video_camera	electronics/appliance/office clutter
+wall_clock	electronics/appliance/office clutter
+wheelchair_01	small prop clutter (bottles, watches, toys, cases) not useful for house/garden scenes
+wine_bottles_01	food/dishes close-up
+wooden_bowl_01	food/dishes close-up
+wooden_bowl_02	food/dishes close-up
+wooden_cutting_board	food/dishes close-up
+wooden_handle_saber	weapon
+wooden_spoon	food/dishes close-up
+worn_metal_rack	industrial machinery / workshop tool not fitting house or garden
+yellow_onion	food/dishes close-up
+jacaranda_tree	source geometry 3,863,832 triangles (API polycount said 312k): over the 2,000,000 limit

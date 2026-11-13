@@ -1,6 +1,337 @@
 {
   "materials": [
     {
+      "id": "asphalt020l",
+      "name": "Asphalt 020 L",
+      "tags": [
+        "20",
+        "asphalt",
+        "clean",
+        "dark",
+        "grey",
+        "smooth"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Asphalt020L",
+      "kind": "paving",
+      "size_m": [
+        4.6,
+        4.6
+      ],
+      "maps": {
+        "basecolor": "materials/asphalt020l/basecolor.jpg",
+        "normal": "materials/asphalt020l/normal.jpg",
+        "orm": "materials/asphalt020l/orm.jpg",
+        "height": "materials/asphalt020l/height.jpg"
+      },
+      "thumbnail": "materials/asphalt020l/thumb.jpg"
+    },
+    {
+      "id": "asphalt021",
+      "name": "Asphalt 021",
+      "tags": [
+        "21",
+        "asphalt",
+        "broken",
+        "cracks",
+        "dark",
+        "gray",
+        "grey"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Asphalt021",
+      "kind": "paving",
+      "size_m": [
+        1.85,
+        1.85
+      ],
+      "maps": {
+        "basecolor": "materials/asphalt021/basecolor.jpg",
+        "normal": "materials/asphalt021/normal.jpg",
+        "orm": "materials/asphalt021/orm.jpg",
+        "height": "materials/asphalt021/height.jpg"
+      },
+      "thumbnail": "materials/asphalt021/thumb.jpg"
+    },
+    {
+      "id": "asphalt022",
+      "name": "Asphalt 022",
+      "tags": [
+        "22",
+        "asphalt",
+        "broken",
+        "cracks",
+        "dark",
+        "gray",
+        "grey"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Asphalt022",
+      "kind": "paving",
+      "size_m": [
+        1.85,
+        1.85
+      ],
+      "maps": {
+        "basecolor": "materials/asphalt022/basecolor.jpg",
+        "normal": "materials/asphalt022/normal.jpg",
+        "orm": "materials/asphalt022/orm.jpg",
+        "height": "materials/asphalt022/height.jpg"
+      },
+      "thumbnail": "materials/asphalt022/thumb.jpg"
+    },
+    {
+      "id": "bark014",
+      "name": "Bark 014",
+      "tags": [
+        "14",
+        "bark",
+        "brown",
+        "fir",
+        "forest",
+        "tree",
+        "wood"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Bark014",
+      "kind": "ground",
+      "size_m": [
+        1.2,
+        1.2
+      ],
+      "maps": {
+        "basecolor": "materials/bark014/basecolor.jpg",
+        "normal": "materials/bark014/normal.jpg",
+        "orm": "materials/bark014/orm.jpg",
+        "height": "materials/bark014/height.jpg"
+      },
+      "thumbnail": "materials/bark014/thumb.jpg"
+    },
+    {
+      "id": "bark016",
+      "name": "Bark 016",
+      "tags": [
+        "016",
+        "16",
+        "bark",
+        "bark016",
+        "mossy"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Bark016",
+      "kind": "ground",
+      "size_m": [
+        0.8,
+        0.8
+      ],
+      "maps": {
+        "basecolor": "materials/bark016/basecolor.jpg",
+        "normal": "materials/bark016/normal.jpg",
+        "orm": "materials/bark016/orm.jpg",
+        "height": "materials/bark016/height.jpg"
+      },
+      "thumbnail": "materials/bark016/thumb.jpg"
+    },
+    {
+      "id": "bricks002",
+      "name": "Bricks 002",
+      "tags": [
+        "2",
+        "brick",
+        "bricks",
+        "modern",
+        "wall",
+        "yellow"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Bricks002",
+      "kind": "brick",
+      "size_m": [
+        0.95,
+        0.75
+      ],
+      "maps": {
+        "basecolor": "materials/bricks002/basecolor.jpg",
+        "normal": "materials/bricks002/normal.jpg",
+        "orm": "materials/bricks002/orm.jpg",
+        "height": "materials/bricks002/height.jpg"
+      },
+      "thumbnail": "materials/bricks002/thumb.jpg"
+    },
+    {
+      "id": "bricks003",
+      "name": "Bricks 003",
+      "tags": [
+        "3",
+        "bricks",
+        "dark",
+        "medieval",
+        "old",
+        "red",
+        "vintage",
+        "wall"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Bricks003",
+      "kind": "brick",
+      "size_m": [
+        1.25,
+        0.8
+      ],
+      "maps": {
+        "basecolor": "materials/bricks003/basecolor.jpg",
+        "normal": "materials/bricks003/normal.jpg",
+        "orm": "materials/bricks003/orm.jpg",
+        "height": "materials/bricks003/height.jpg"
+      },
+      "thumbnail": "materials/bricks003/thumb.jpg"
+    },
+    {
+      "id": "bricks008",
+      "name": "Bricks 008",
+      "tags": [
+        "8",
+        "bricks",
+        "church",
+        "clean",
+        "flat",
+        "medieval",
+        "old",
+        "sandstone",
+        "stone",
+        "wall"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Bricks008",
+      "kind": "brick",
+      "size_m": [
+        1.65,
+        1.65
+      ],
+      "maps": {
+        "basecolor": "materials/bricks008/basecolor.jpg",
+        "normal": "materials/bricks008/normal.jpg",
+        "orm": "materials/bricks008/orm.jpg",
+        "height": "materials/bricks008/height.jpg"
+      },
+      "thumbnail": "materials/bricks008/thumb.jpg"
+    },
+    {
+      "id": "bricks011",
+      "name": "Bricks 011",
+      "tags": [
+        "11",
+        "bricks",
+        "clean",
+        "modern",
+        "red",
+        "rough"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Bricks011",
+      "kind": "brick",
+      "size_m": [
+        1.55,
+        1.55
+      ],
+      "maps": {
+        "basecolor": "materials/bricks011/basecolor.jpg",
+        "normal": "materials/bricks011/normal.jpg",
+        "orm": "materials/bricks011/orm.jpg",
+        "height": "materials/bricks011/height.jpg"
+      },
+      "thumbnail": "materials/bricks011/thumb.jpg"
+    },
+    {
+      "id": "bricks016",
+      "name": "Bricks 016",
+      "tags": [
+        "16",
+        "bricks",
+        "clean",
+        "flat",
+        "modern",
+        "yellow"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Bricks016",
+      "kind": "brick",
+      "size_m": [
+        1.5,
+        1.5
+      ],
+      "maps": {
+        "basecolor": "materials/bricks016/basecolor.jpg",
+        "normal": "materials/bricks016/normal.jpg",
+        "orm": "materials/bricks016/orm.jpg",
+        "height": "materials/bricks016/height.jpg"
+      },
+      "thumbnail": "materials/bricks016/thumb.jpg"
+    },
+    {
+      "id": "bricks028",
+      "name": "Bricks 028",
+      "tags": [
+        "28",
+        "bricks",
+        "modern",
+        "orange",
+        "red",
+        "wall"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Bricks028",
+      "kind": "brick",
+      "size_m": [
+        1.75,
+        1.75
+      ],
+      "maps": {
+        "basecolor": "materials/bricks028/basecolor.jpg",
+        "normal": "materials/bricks028/normal.jpg",
+        "orm": "materials/bricks028/orm.jpg",
+        "height": "materials/bricks028/height.jpg"
+      },
+      "thumbnail": "materials/bricks028/thumb.jpg"
+    },
+    {
+      "id": "bricks038",
+      "name": "Bricks 038",
+      "tags": [
+        "38",
+        "bricks",
+        "old",
+        "wall",
+        "white"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Bricks038",
+      "kind": "brick",
+      "size_m": [
+        1.1,
+        1.1
+      ],
+      "maps": {
+        "basecolor": "materials/bricks038/basecolor.jpg",
+        "normal": "materials/bricks038/normal.jpg",
+        "orm": "materials/bricks038/orm.jpg",
+        "height": "materials/bricks038/height.jpg"
+      },
+      "thumbnail": "materials/bricks038/thumb.jpg"
+    },
+    {
       "id": "bricks104",
       "name": "Bricks 104",
       "tags": [
@@ -21,6 +352,7 @@
       "license": "CC0-1.0",
       "author": "ambientCG (Lennart Demes)",
       "source_url": "https://ambientcg.com/a/Bricks104",
+      "kind": "brick",
       "size_m": null,
       "maps": {
         "basecolor": "materials/bricks104/basecolor.jpg",
@@ -44,6 +376,7 @@
       "license": "CC0-1.0",
       "author": "ambientCG (Lennart Demes)",
       "source_url": "https://ambientcg.com/a/Concrete034",
+      "kind": "concrete",
       "size_m": [
         1.1,
         0.55
@@ -55,6 +388,406 @@
         "height": "materials/concrete034/height.jpg"
       },
       "thumbnail": "materials/concrete034/thumb.jpg"
+    },
+    {
+      "id": "concrete038",
+      "name": "Concrete 038",
+      "tags": [
+        "38",
+        "concrete",
+        "gray",
+        "green",
+        "mossy"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Concrete038",
+      "kind": "concrete",
+      "size_m": [
+        0.6,
+        0.6
+      ],
+      "maps": {
+        "basecolor": "materials/concrete038/basecolor.jpg",
+        "normal": "materials/concrete038/normal.jpg",
+        "orm": "materials/concrete038/orm.jpg",
+        "height": "materials/concrete038/height.jpg"
+      },
+      "thumbnail": "materials/concrete038/thumb.jpg"
+    },
+    {
+      "id": "concrete039",
+      "name": "Concrete 039",
+      "tags": [
+        "39",
+        "broken",
+        "brown",
+        "concrete",
+        "rough"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Concrete039",
+      "kind": "concrete",
+      "size_m": [
+        1.9,
+        1.9
+      ],
+      "maps": {
+        "basecolor": "materials/concrete039/basecolor.jpg",
+        "normal": "materials/concrete039/normal.jpg",
+        "orm": "materials/concrete039/orm.jpg",
+        "height": "materials/concrete039/height.jpg"
+      },
+      "thumbnail": "materials/concrete039/thumb.jpg"
+    },
+    {
+      "id": "concrete040",
+      "name": "Concrete 040",
+      "tags": [
+        "40",
+        "brown",
+        "concrete",
+        "rough"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Concrete040",
+      "kind": "concrete",
+      "size_m": [
+        1.4,
+        1.4
+      ],
+      "maps": {
+        "basecolor": "materials/concrete040/basecolor.jpg",
+        "normal": "materials/concrete040/normal.jpg",
+        "orm": "materials/concrete040/orm.jpg",
+        "height": "materials/concrete040/height.jpg"
+      },
+      "thumbnail": "materials/concrete040/thumb.jpg"
+    },
+    {
+      "id": "concrete045",
+      "name": "Concrete 045",
+      "tags": [
+        "45",
+        "concrete",
+        "industrial",
+        "modern",
+        "pattern"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Concrete045",
+      "kind": "concrete",
+      "size_m": [
+        2.0,
+        2.0
+      ],
+      "maps": {
+        "basecolor": "materials/concrete045/basecolor.jpg",
+        "normal": "materials/concrete045/normal.jpg",
+        "orm": "materials/concrete045/orm.jpg",
+        "height": "materials/concrete045/height.jpg"
+      },
+      "thumbnail": "materials/concrete045/thumb.jpg"
+    },
+    {
+      "id": "concrete046",
+      "name": "Concrete 046",
+      "tags": [
+        "46",
+        "concrete",
+        "gray",
+        "grey",
+        "plain",
+        "smooth",
+        "wall",
+        "white"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Concrete046",
+      "kind": "concrete",
+      "size_m": [
+        2.4,
+        2.4
+      ],
+      "maps": {
+        "basecolor": "materials/concrete046/basecolor.jpg",
+        "normal": "materials/concrete046/normal.jpg",
+        "orm": "materials/concrete046/orm.jpg",
+        "height": "materials/concrete046/height.jpg"
+      },
+      "thumbnail": "materials/concrete046/thumb.jpg"
+    },
+    {
+      "id": "corrugatedsteel001",
+      "name": "Corrugated Steel 001",
+      "tags": [
+        "1",
+        "blue",
+        "corrugated",
+        "cyan",
+        "painted",
+        "screws",
+        "steel"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/CorrugatedSteel001",
+      "kind": "metal",
+      "size_m": null,
+      "maps": {
+        "basecolor": "materials/corrugatedsteel001/basecolor.jpg",
+        "normal": "materials/corrugatedsteel001/normal.jpg",
+        "orm": "materials/corrugatedsteel001/orm.jpg",
+        "height": "materials/corrugatedsteel001/height.jpg"
+      },
+      "thumbnail": "materials/corrugatedsteel001/thumb.jpg"
+    },
+    {
+      "id": "corrugatedsteel002",
+      "name": "Corrugated Steel 002",
+      "tags": [
+        "2",
+        "corrugated",
+        "painted",
+        "red",
+        "screws",
+        "steel"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/CorrugatedSteel002",
+      "kind": "metal",
+      "size_m": null,
+      "maps": {
+        "basecolor": "materials/corrugatedsteel002/basecolor.jpg",
+        "normal": "materials/corrugatedsteel002/normal.jpg",
+        "orm": "materials/corrugatedsteel002/orm.jpg",
+        "height": "materials/corrugatedsteel002/height.jpg"
+      },
+      "thumbnail": "materials/corrugatedsteel002/thumb.jpg"
+    },
+    {
+      "id": "fabric046",
+      "name": "Fabric 046",
+      "tags": [
+        "46",
+        "blue",
+        "fabric",
+        "polyester",
+        "substance",
+        "vest"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Fabric046",
+      "kind": "fabric",
+      "size_m": [
+        0.4,
+        0.4
+      ],
+      "maps": {
+        "basecolor": "materials/fabric046/basecolor.jpg",
+        "normal": "materials/fabric046/normal.jpg",
+        "orm": "materials/fabric046/orm.jpg",
+        "height": "materials/fabric046/height.jpg"
+      },
+      "thumbnail": "materials/fabric046/thumb.jpg"
+    },
+    {
+      "id": "fabric047",
+      "name": "Fabric 047",
+      "tags": [
+        "47",
+        "fabric",
+        "green",
+        "polyester",
+        "substance",
+        "vest"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Fabric047",
+      "kind": "fabric",
+      "size_m": [
+        0.4,
+        0.4
+      ],
+      "maps": {
+        "basecolor": "materials/fabric047/basecolor.jpg",
+        "normal": "materials/fabric047/normal.jpg",
+        "orm": "materials/fabric047/orm.jpg",
+        "height": "materials/fabric047/height.jpg"
+      },
+      "thumbnail": "materials/fabric047/thumb.jpg"
+    },
+    {
+      "id": "fabric048",
+      "name": "Fabric 048",
+      "tags": [
+        "48",
+        "fabric",
+        "polyester",
+        "substance",
+        "vest",
+        "white"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Fabric048",
+      "kind": "fabric",
+      "size_m": [
+        0.4,
+        0.4
+      ],
+      "maps": {
+        "basecolor": "materials/fabric048/basecolor.jpg",
+        "normal": "materials/fabric048/normal.jpg",
+        "orm": "materials/fabric048/orm.jpg",
+        "height": "materials/fabric048/height.jpg"
+      },
+      "thumbnail": "materials/fabric048/thumb.jpg"
+    },
+    {
+      "id": "fabric049",
+      "name": "Fabric 049",
+      "tags": [
+        "49",
+        "black",
+        "fabric",
+        "polyester",
+        "substance",
+        "vest"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Fabric049",
+      "kind": "fabric",
+      "size_m": [
+        0.4,
+        0.4
+      ],
+      "maps": {
+        "basecolor": "materials/fabric049/basecolor.jpg",
+        "normal": "materials/fabric049/normal.jpg",
+        "orm": "materials/fabric049/orm.jpg",
+        "height": "materials/fabric049/height.jpg"
+      },
+      "thumbnail": "materials/fabric049/thumb.jpg"
+    },
+    {
+      "id": "fabric061",
+      "name": "Fabric 061",
+      "tags": [
+        "61",
+        "fabric",
+        "rough"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Fabric061",
+      "kind": "fabric",
+      "size_m": [
+        0.4,
+        0.4
+      ],
+      "maps": {
+        "basecolor": "materials/fabric061/basecolor.jpg",
+        "normal": "materials/fabric061/normal.jpg",
+        "orm": "materials/fabric061/orm.jpg",
+        "height": "materials/fabric061/height.jpg"
+      },
+      "thumbnail": "materials/fabric061/thumb.jpg"
+    },
+    {
+      "id": "grass001",
+      "name": "Grass 001",
+      "tags": [
+        "001",
+        "1",
+        "cover",
+        "dark",
+        "dense",
+        "fresh",
+        "garden",
+        "grass",
+        "grass001",
+        "green",
+        "ground",
+        "lawn",
+        "natural",
+        "park",
+        "short",
+        "soft"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Grass001",
+      "kind": "ground",
+      "size_m": [
+        1.4,
+        1.4
+      ],
+      "maps": {
+        "basecolor": "materials/grass001/basecolor.jpg",
+        "normal": "materials/grass001/normal.jpg",
+        "orm": "materials/grass001/orm.jpg",
+        "height": "materials/grass001/height.jpg"
+      },
+      "thumbnail": "materials/grass001/thumb.jpg"
+    },
+    {
+      "id": "grass002",
+      "name": "Grass 002",
+      "tags": [
+        "2",
+        "grass",
+        "green",
+        "ground"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Grass002",
+      "kind": "ground",
+      "size_m": [
+        1.4,
+        1.4
+      ],
+      "maps": {
+        "basecolor": "materials/grass002/basecolor.jpg",
+        "normal": "materials/grass002/normal.jpg",
+        "orm": "materials/grass002/orm.jpg",
+        "height": "materials/grass002/height.jpg"
+      },
+      "thumbnail": "materials/grass002/thumb.jpg"
+    },
+    {
+      "id": "grass003",
+      "name": "Grass 003",
+      "tags": [
+        "3",
+        "grass",
+        "green",
+        "ground"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Grass003",
+      "kind": "ground",
+      "size_m": [
+        1.4,
+        1.4
+      ],
+      "maps": {
+        "basecolor": "materials/grass003/basecolor.jpg",
+        "normal": "materials/grass003/normal.jpg",
+        "orm": "materials/grass003/orm.jpg",
+        "height": "materials/grass003/height.jpg"
+      },
+      "thumbnail": "materials/grass003/thumb.jpg"
     },
     {
       "id": "grass004",
@@ -79,6 +812,7 @@
       "license": "CC0-1.0",
       "author": "ambientCG (Lennart Demes)",
       "source_url": "https://ambientcg.com/a/Grass004",
+      "kind": "ground",
       "size_m": [
         1.4,
         1.4
@@ -90,6 +824,165 @@
         "height": "materials/grass004/height.jpg"
       },
       "thumbnail": "materials/grass004/thumb.jpg"
+    },
+    {
+      "id": "grass005",
+      "name": "Grass 005",
+      "tags": [
+        "5",
+        "clean",
+        "grass",
+        "green",
+        "lawn",
+        "short"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Grass005",
+      "kind": "ground",
+      "size_m": null,
+      "maps": {
+        "basecolor": "materials/grass005/basecolor.jpg",
+        "normal": "materials/grass005/normal.jpg",
+        "orm": "materials/grass005/orm.jpg",
+        "height": "materials/grass005/height.jpg"
+      },
+      "thumbnail": "materials/grass005/thumb.jpg"
+    },
+    {
+      "id": "gravel016",
+      "name": "Gravel 016",
+      "tags": [
+        "16",
+        "gravel",
+        "ground",
+        "pebbles",
+        "river",
+        "rocks"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Gravel016",
+      "kind": "gravel",
+      "size_m": [
+        1.0,
+        1.0
+      ],
+      "maps": {
+        "basecolor": "materials/gravel016/basecolor.jpg",
+        "normal": "materials/gravel016/normal.jpg",
+        "orm": "materials/gravel016/orm.jpg",
+        "height": "materials/gravel016/height.jpg"
+      },
+      "thumbnail": "materials/gravel016/thumb.jpg"
+    },
+    {
+      "id": "gravel017",
+      "name": "Gravel 017",
+      "tags": [
+        "17",
+        "gravel",
+        "ground",
+        "pebbles",
+        "river",
+        "rocks"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Gravel017",
+      "kind": "gravel",
+      "size_m": [
+        1.15,
+        1.15
+      ],
+      "maps": {
+        "basecolor": "materials/gravel017/basecolor.jpg",
+        "normal": "materials/gravel017/normal.jpg",
+        "orm": "materials/gravel017/orm.jpg",
+        "height": "materials/gravel017/height.jpg"
+      },
+      "thumbnail": "materials/gravel017/thumb.jpg"
+    },
+    {
+      "id": "gravel018",
+      "name": "Gravel 018",
+      "tags": [
+        "18",
+        "gravel",
+        "ground",
+        "pebbles",
+        "river",
+        "rocks"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Gravel018",
+      "kind": "gravel",
+      "size_m": [
+        1.65,
+        1.65
+      ],
+      "maps": {
+        "basecolor": "materials/gravel018/basecolor.jpg",
+        "normal": "materials/gravel018/normal.jpg",
+        "orm": "materials/gravel018/orm.jpg",
+        "height": "materials/gravel018/height.jpg"
+      },
+      "thumbnail": "materials/gravel018/thumb.jpg"
+    },
+    {
+      "id": "gravel019",
+      "name": "Gravel 019",
+      "tags": [
+        "19",
+        "gravel",
+        "ground",
+        "pebbles",
+        "river",
+        "rocks"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Gravel019",
+      "kind": "gravel",
+      "size_m": [
+        1.4,
+        1.4
+      ],
+      "maps": {
+        "basecolor": "materials/gravel019/basecolor.jpg",
+        "normal": "materials/gravel019/normal.jpg",
+        "orm": "materials/gravel019/orm.jpg",
+        "height": "materials/gravel019/height.jpg"
+      },
+      "thumbnail": "materials/gravel019/thumb.jpg"
+    },
+    {
+      "id": "gravel020",
+      "name": "Gravel 020",
+      "tags": [
+        "20",
+        "gravel",
+        "ground",
+        "pebbles",
+        "river",
+        "rocks"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Gravel020",
+      "kind": "gravel",
+      "size_m": [
+        0.8,
+        0.8
+      ],
+      "maps": {
+        "basecolor": "materials/gravel020/basecolor.jpg",
+        "normal": "materials/gravel020/normal.jpg",
+        "orm": "materials/gravel020/orm.jpg",
+        "height": "materials/gravel020/height.jpg"
+      },
+      "thumbnail": "materials/gravel020/thumb.jpg"
     },
     {
       "id": "gravel023",
@@ -108,6 +1001,7 @@
       "license": "CC0-1.0",
       "author": "ambientCG (Lennart Demes)",
       "source_url": "https://ambientcg.com/a/Gravel023",
+      "kind": "gravel",
       "size_m": [
         1.5,
         1.5
@@ -119,6 +1013,210 @@
         "height": "materials/gravel023/height.jpg"
       },
       "thumbnail": "materials/gravel023/thumb.jpg"
+    },
+    {
+      "id": "ground043",
+      "name": "Ground 043",
+      "tags": [
+        "43",
+        "dirt",
+        "ground",
+        "sand"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Ground043",
+      "kind": "ground",
+      "size_m": [
+        3.0,
+        3.0
+      ],
+      "maps": {
+        "basecolor": "materials/ground043/basecolor.jpg",
+        "normal": "materials/ground043/normal.jpg",
+        "orm": "materials/ground043/orm.jpg",
+        "height": "materials/ground043/height.jpg"
+      },
+      "thumbnail": "materials/ground043/thumb.jpg"
+    },
+    {
+      "id": "ground044",
+      "name": "Ground 044",
+      "tags": [
+        "44",
+        "dirt",
+        "ground",
+        "sand"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Ground044",
+      "kind": "ground",
+      "size_m": [
+        3.0,
+        3.0
+      ],
+      "maps": {
+        "basecolor": "materials/ground044/basecolor.jpg",
+        "normal": "materials/ground044/normal.jpg",
+        "orm": "materials/ground044/orm.jpg",
+        "height": "materials/ground044/height.jpg"
+      },
+      "thumbnail": "materials/ground044/thumb.jpg"
+    },
+    {
+      "id": "ground045",
+      "name": "Ground 045",
+      "tags": [
+        "45",
+        "dirt",
+        "ground",
+        "sand"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Ground045",
+      "kind": "ground",
+      "size_m": [
+        3.0,
+        3.0
+      ],
+      "maps": {
+        "basecolor": "materials/ground045/basecolor.jpg",
+        "normal": "materials/ground045/normal.jpg",
+        "orm": "materials/ground045/orm.jpg",
+        "height": "materials/ground045/height.jpg"
+      },
+      "thumbnail": "materials/ground045/thumb.jpg"
+    },
+    {
+      "id": "ground046",
+      "name": "Ground 046",
+      "tags": [
+        "46",
+        "dirt",
+        "ground",
+        "sand"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Ground046",
+      "kind": "ground",
+      "size_m": [
+        3.0,
+        3.0
+      ],
+      "maps": {
+        "basecolor": "materials/ground046/basecolor.jpg",
+        "normal": "materials/ground046/normal.jpg",
+        "orm": "materials/ground046/orm.jpg",
+        "height": "materials/ground046/height.jpg"
+      },
+      "thumbnail": "materials/ground046/thumb.jpg"
+    },
+    {
+      "id": "ground047",
+      "name": "Ground 047",
+      "tags": [
+        "47",
+        "dirt",
+        "ground",
+        "sand"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Ground047",
+      "kind": "ground",
+      "size_m": [
+        3.0,
+        3.0
+      ],
+      "maps": {
+        "basecolor": "materials/ground047/basecolor.jpg",
+        "normal": "materials/ground047/normal.jpg",
+        "orm": "materials/ground047/orm.jpg",
+        "height": "materials/ground047/height.jpg"
+      },
+      "thumbnail": "materials/ground047/thumb.jpg"
+    },
+    {
+      "id": "ground052",
+      "name": "Ground 052",
+      "tags": [
+        "52",
+        "beach",
+        "dirt",
+        "ground",
+        "sand",
+        "white"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Ground052",
+      "kind": "ground",
+      "size_m": [
+        2.0,
+        2.0
+      ],
+      "maps": {
+        "basecolor": "materials/ground052/basecolor.jpg",
+        "normal": "materials/ground052/normal.jpg",
+        "orm": "materials/ground052/orm.jpg",
+        "height": "materials/ground052/height.jpg"
+      },
+      "thumbnail": "materials/ground052/thumb.jpg"
+    },
+    {
+      "id": "ground054",
+      "name": "Ground 054",
+      "tags": [
+        "54",
+        "beach",
+        "dirt",
+        "ground",
+        "mud",
+        "sand"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Ground054",
+      "kind": "ground",
+      "size_m": [
+        3.5,
+        3.5
+      ],
+      "maps": {
+        "basecolor": "materials/ground054/basecolor.jpg",
+        "normal": "materials/ground054/normal.jpg",
+        "orm": "materials/ground054/orm.jpg",
+        "height": "materials/ground054/height.jpg"
+      },
+      "thumbnail": "materials/ground054/thumb.jpg"
+    },
+    {
+      "id": "ground055l",
+      "name": "Ground 055 L",
+      "tags": [
+        "55",
+        "beach",
+        "ground",
+        "sand"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Ground055L",
+      "kind": "ground",
+      "size_m": [
+        3.0,
+        3.0
+      ],
+      "maps": {
+        "basecolor": "materials/ground055l/basecolor.jpg",
+        "normal": "materials/ground055l/normal.jpg",
+        "orm": "materials/ground055l/orm.jpg",
+        "height": "materials/ground055l/height.jpg"
+      },
+      "thumbnail": "materials/ground055l/thumb.jpg"
     },
     {
       "id": "ground103",
@@ -139,6 +1237,7 @@
       "license": "CC0-1.0",
       "author": "ambientCG (Lennart Demes)",
       "source_url": "https://ambientcg.com/a/Ground103",
+      "kind": "ground",
       "size_m": null,
       "maps": {
         "basecolor": "materials/ground103/basecolor.jpg",
@@ -147,6 +1246,584 @@
         "height": "materials/ground103/height.jpg"
       },
       "thumbnail": "materials/ground103/thumb.jpg"
+    },
+    {
+      "id": "metal001",
+      "name": "Metal 001",
+      "tags": [
+        "1",
+        "bumpy",
+        "metal",
+        "scratches",
+        "silver",
+        "steel"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Metal001",
+      "kind": "metal",
+      "size_m": null,
+      "maps": {
+        "basecolor": "materials/metal001/basecolor.jpg",
+        "normal": "materials/metal001/normal.jpg",
+        "orm": "materials/metal001/orm.jpg",
+        "height": "materials/metal001/height.jpg"
+      },
+      "thumbnail": "materials/metal001/thumb.jpg"
+    },
+    {
+      "id": "moss001",
+      "name": "Moss 001",
+      "tags": [
+        "1",
+        "ground",
+        "moss",
+        "mossy"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Moss001",
+      "kind": "ground",
+      "size_m": [
+        0.45,
+        0.45
+      ],
+      "maps": {
+        "basecolor": "materials/moss001/basecolor.jpg",
+        "normal": "materials/moss001/normal.jpg",
+        "orm": "materials/moss001/orm.jpg",
+        "height": "materials/moss001/height.jpg"
+      },
+      "thumbnail": "materials/moss001/thumb.jpg"
+    },
+    {
+      "id": "paintedmetal001",
+      "name": "Painted Metal 001",
+      "tags": [
+        "1",
+        "metal",
+        "painted",
+        "scratched",
+        "scratches",
+        "yellow"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PaintedMetal001",
+      "kind": "metal",
+      "size_m": null,
+      "maps": {
+        "basecolor": "materials/paintedmetal001/basecolor.jpg",
+        "normal": "materials/paintedmetal001/normal.jpg",
+        "orm": "materials/paintedmetal001/orm.jpg",
+        "height": "materials/paintedmetal001/height.jpg"
+      },
+      "thumbnail": "materials/paintedmetal001/thumb.jpg"
+    },
+    {
+      "id": "paintedmetal002",
+      "name": "Painted Metal 002",
+      "tags": [
+        "2",
+        "blue",
+        "metal",
+        "painted",
+        "scratched",
+        "scratches"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PaintedMetal002",
+      "kind": "metal",
+      "size_m": null,
+      "maps": {
+        "basecolor": "materials/paintedmetal002/basecolor.jpg",
+        "normal": "materials/paintedmetal002/normal.jpg",
+        "orm": "materials/paintedmetal002/orm.jpg",
+        "height": "materials/paintedmetal002/height.jpg"
+      },
+      "thumbnail": "materials/paintedmetal002/thumb.jpg"
+    },
+    {
+      "id": "paintedmetal003",
+      "name": "Painted Metal 003",
+      "tags": [
+        "3",
+        "blue",
+        "metal",
+        "painted"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PaintedMetal003",
+      "kind": "metal",
+      "size_m": null,
+      "maps": {
+        "basecolor": "materials/paintedmetal003/basecolor.jpg",
+        "normal": "materials/paintedmetal003/normal.jpg",
+        "orm": "materials/paintedmetal003/orm.jpg",
+        "height": "materials/paintedmetal003/height.jpg"
+      },
+      "thumbnail": "materials/paintedmetal003/thumb.jpg"
+    },
+    {
+      "id": "paintedplaster001",
+      "name": "Painted Plaster 001",
+      "tags": [
+        "1",
+        "paint",
+        "painted",
+        "plaster",
+        "red",
+        "wall"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PaintedPlaster001",
+      "kind": "plaster",
+      "size_m": null,
+      "maps": {
+        "basecolor": "materials/paintedplaster001/basecolor.jpg",
+        "normal": "materials/paintedplaster001/normal.jpg",
+        "orm": "materials/paintedplaster001/orm.jpg",
+        "height": "materials/paintedplaster001/height.jpg"
+      },
+      "thumbnail": "materials/paintedplaster001/thumb.jpg"
+    },
+    {
+      "id": "paintedplaster002",
+      "name": "Painted Plaster 002",
+      "tags": [
+        "2",
+        "blue",
+        "paint",
+        "painted",
+        "plaster",
+        "scratched",
+        "scuffs",
+        "wall"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PaintedPlaster002",
+      "kind": "plaster",
+      "size_m": null,
+      "maps": {
+        "basecolor": "materials/paintedplaster002/basecolor.jpg",
+        "normal": "materials/paintedplaster002/normal.jpg",
+        "orm": "materials/paintedplaster002/orm.jpg",
+        "height": "materials/paintedplaster002/height.jpg"
+      },
+      "thumbnail": "materials/paintedplaster002/thumb.jpg"
+    },
+    {
+      "id": "paintedplaster003",
+      "name": "Painted Plaster 003",
+      "tags": [
+        "3",
+        "green",
+        "paint",
+        "painted",
+        "plaster",
+        "scratched",
+        "scratches",
+        "wall"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PaintedPlaster003",
+      "kind": "plaster",
+      "size_m": null,
+      "maps": {
+        "basecolor": "materials/paintedplaster003/basecolor.jpg",
+        "normal": "materials/paintedplaster003/normal.jpg",
+        "orm": "materials/paintedplaster003/orm.jpg",
+        "height": "materials/paintedplaster003/height.jpg"
+      },
+      "thumbnail": "materials/paintedplaster003/thumb.jpg"
+    },
+    {
+      "id": "paintedplaster004",
+      "name": "Painted Plaster 004",
+      "tags": [
+        "4",
+        "clean",
+        "paint",
+        "painted",
+        "plaster",
+        "yellow"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PaintedPlaster004",
+      "kind": "plaster",
+      "size_m": null,
+      "maps": {
+        "basecolor": "materials/paintedplaster004/basecolor.jpg",
+        "normal": "materials/paintedplaster004/normal.jpg",
+        "orm": "materials/paintedplaster004/orm.jpg",
+        "height": "materials/paintedplaster004/height.jpg"
+      },
+      "thumbnail": "materials/paintedplaster004/thumb.jpg"
+    },
+    {
+      "id": "paintedplaster005",
+      "name": "Painted Plaster 005",
+      "tags": [
+        "5",
+        "bumps",
+        "clean",
+        "cracks",
+        "orange",
+        "paint",
+        "painted",
+        "plaster",
+        "scratched",
+        "scuffs",
+        "yellow"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PaintedPlaster005",
+      "kind": "plaster",
+      "size_m": null,
+      "maps": {
+        "basecolor": "materials/paintedplaster005/basecolor.jpg",
+        "normal": "materials/paintedplaster005/normal.jpg",
+        "orm": "materials/paintedplaster005/orm.jpg",
+        "height": "materials/paintedplaster005/height.jpg"
+      },
+      "thumbnail": "materials/paintedplaster005/thumb.jpg"
+    },
+    {
+      "id": "paintedwood001",
+      "name": "Painted Wood 001",
+      "tags": [
+        "1",
+        "blue",
+        "old",
+        "painted",
+        "rough",
+        "wood"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PaintedWood001",
+      "kind": "wood",
+      "size_m": null,
+      "maps": {
+        "basecolor": "materials/paintedwood001/basecolor.jpg",
+        "normal": "materials/paintedwood001/normal.jpg",
+        "orm": "materials/paintedwood001/orm.jpg",
+        "height": "materials/paintedwood001/height.jpg"
+      },
+      "thumbnail": "materials/paintedwood001/thumb.jpg"
+    },
+    {
+      "id": "paintedwood003",
+      "name": "Painted Wood 003",
+      "tags": [
+        "3",
+        "old",
+        "painted",
+        "red",
+        "rough",
+        "wood"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PaintedWood003",
+      "kind": "wood",
+      "size_m": null,
+      "maps": {
+        "basecolor": "materials/paintedwood003/basecolor.jpg",
+        "normal": "materials/paintedwood003/normal.jpg",
+        "orm": "materials/paintedwood003/orm.jpg",
+        "height": "materials/paintedwood003/height.jpg"
+      },
+      "thumbnail": "materials/paintedwood003/thumb.jpg"
+    },
+    {
+      "id": "paintedwood005",
+      "name": "Painted Wood 005",
+      "tags": [
+        "5",
+        "old",
+        "painted",
+        "rough",
+        "wood"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PaintedWood005",
+      "kind": "wood",
+      "size_m": null,
+      "maps": {
+        "basecolor": "materials/paintedwood005/basecolor.jpg",
+        "normal": "materials/paintedwood005/normal.jpg",
+        "orm": "materials/paintedwood005/orm.jpg",
+        "height": "materials/paintedwood005/height.jpg"
+      },
+      "thumbnail": "materials/paintedwood005/thumb.jpg"
+    },
+    {
+      "id": "pavingstones005",
+      "name": "Paving Stones 005",
+      "tags": [
+        "5",
+        "cobblestone",
+        "pavement",
+        "paving",
+        "stones"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PavingStones005",
+      "kind": "paving",
+      "size_m": [
+        1.25,
+        1.25
+      ],
+      "maps": {
+        "basecolor": "materials/pavingstones005/basecolor.jpg",
+        "normal": "materials/pavingstones005/normal.jpg",
+        "orm": "materials/pavingstones005/orm.jpg",
+        "height": "materials/pavingstones005/height.jpg"
+      },
+      "thumbnail": "materials/pavingstones005/thumb.jpg"
+    },
+    {
+      "id": "pavingstones006",
+      "name": "Paving Stones 006",
+      "tags": [
+        "6",
+        "cobblestone",
+        "pavement",
+        "paving",
+        "stones"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PavingStones006",
+      "kind": "paving",
+      "size_m": null,
+      "maps": {
+        "basecolor": "materials/pavingstones006/basecolor.jpg",
+        "normal": "materials/pavingstones006/normal.jpg",
+        "orm": "materials/pavingstones006/orm.jpg",
+        "height": "materials/pavingstones006/height.jpg"
+      },
+      "thumbnail": "materials/pavingstones006/thumb.jpg"
+    },
+    {
+      "id": "pavingstones007",
+      "name": "Paving Stones 007",
+      "tags": [
+        "7",
+        "cobblestone",
+        "pavement",
+        "paving",
+        "stones"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PavingStones007",
+      "kind": "paving",
+      "size_m": null,
+      "maps": {
+        "basecolor": "materials/pavingstones007/basecolor.jpg",
+        "normal": "materials/pavingstones007/normal.jpg",
+        "orm": "materials/pavingstones007/orm.jpg",
+        "height": "materials/pavingstones007/height.jpg"
+      },
+      "thumbnail": "materials/pavingstones007/thumb.jpg"
+    },
+    {
+      "id": "pavingstones008",
+      "name": "Paving Stones 008",
+      "tags": [
+        "8",
+        "cobblestone",
+        "pavement",
+        "paving",
+        "stones"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PavingStones008",
+      "kind": "paving",
+      "size_m": null,
+      "maps": {
+        "basecolor": "materials/pavingstones008/basecolor.jpg",
+        "normal": "materials/pavingstones008/normal.jpg",
+        "orm": "materials/pavingstones008/orm.jpg",
+        "height": "materials/pavingstones008/height.jpg"
+      },
+      "thumbnail": "materials/pavingstones008/thumb.jpg"
+    },
+    {
+      "id": "pavingstones009",
+      "name": "Paving Stones 009",
+      "tags": [
+        "9",
+        "cobblestone",
+        "pavement",
+        "paving",
+        "stones"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PavingStones009",
+      "kind": "paving",
+      "size_m": null,
+      "maps": {
+        "basecolor": "materials/pavingstones009/basecolor.jpg",
+        "normal": "materials/pavingstones009/normal.jpg",
+        "orm": "materials/pavingstones009/orm.jpg",
+        "height": "materials/pavingstones009/height.jpg"
+      },
+      "thumbnail": "materials/pavingstones009/thumb.jpg"
+    },
+    {
+      "id": "pavingstones055",
+      "name": "Paving Stones 055",
+      "tags": [
+        "55",
+        "medieval",
+        "old",
+        "paved",
+        "pavement",
+        "paving",
+        "pebbles",
+        "road",
+        "rocks",
+        "roman",
+        "stones"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PavingStones055",
+      "kind": "paving",
+      "size_m": [
+        3.0,
+        3.0
+      ],
+      "maps": {
+        "basecolor": "materials/pavingstones055/basecolor.jpg",
+        "normal": "materials/pavingstones055/normal.jpg",
+        "orm": "materials/pavingstones055/orm.jpg",
+        "height": "materials/pavingstones055/height.jpg"
+      },
+      "thumbnail": "materials/pavingstones055/thumb.jpg"
+    },
+    {
+      "id": "pavingstones092",
+      "name": "Paving Stones 092",
+      "tags": [
+        "92",
+        "floor",
+        "pavement",
+        "paving",
+        "red",
+        "stone",
+        "stones"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PavingStones092",
+      "kind": "paving",
+      "size_m": [
+        1.55,
+        1.55
+      ],
+      "maps": {
+        "basecolor": "materials/pavingstones092/basecolor.jpg",
+        "normal": "materials/pavingstones092/normal.jpg",
+        "orm": "materials/pavingstones092/orm.jpg",
+        "height": "materials/pavingstones092/height.jpg"
+      },
+      "thumbnail": "materials/pavingstones092/thumb.jpg"
+    },
+    {
+      "id": "pavingstones105",
+      "name": "Paving Stones 105",
+      "tags": [
+        "105",
+        "grey",
+        "paving",
+        "stones",
+        "tiles",
+        "waves"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PavingStones105",
+      "kind": "paving",
+      "size_m": [
+        2.0,
+        2.0
+      ],
+      "maps": {
+        "basecolor": "materials/pavingstones105/basecolor.jpg",
+        "normal": "materials/pavingstones105/normal.jpg",
+        "orm": "materials/pavingstones105/orm.jpg",
+        "height": "materials/pavingstones105/height.jpg"
+      },
+      "thumbnail": "materials/pavingstones105/thumb.jpg"
+    },
+    {
+      "id": "pavingstones106",
+      "name": "Paving Stones 106",
+      "tags": [
+        "106",
+        "grey",
+        "paving",
+        "stones",
+        "tiles",
+        "waves"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PavingStones106",
+      "kind": "paving",
+      "size_m": [
+        2.0,
+        2.0
+      ],
+      "maps": {
+        "basecolor": "materials/pavingstones106/basecolor.jpg",
+        "normal": "materials/pavingstones106/normal.jpg",
+        "orm": "materials/pavingstones106/orm.jpg",
+        "height": "materials/pavingstones106/height.jpg"
+      },
+      "thumbnail": "materials/pavingstones106/thumb.jpg"
+    },
+    {
+      "id": "pavingstones119",
+      "name": "Paving Stones 119",
+      "tags": [
+        "119",
+        "cobble",
+        "cobblestone",
+        "gray",
+        "paving",
+        "stones"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PavingStones119",
+      "kind": "paving",
+      "size_m": [
+        1.15,
+        1.15
+      ],
+      "maps": {
+        "basecolor": "materials/pavingstones119/basecolor.jpg",
+        "normal": "materials/pavingstones119/normal.jpg",
+        "orm": "materials/pavingstones119/orm.jpg",
+        "height": "materials/pavingstones119/height.jpg"
+      },
+      "thumbnail": "materials/pavingstones119/thumb.jpg"
     },
     {
       "id": "pavingstones137",
@@ -163,6 +1840,7 @@
       "license": "CC0-1.0",
       "author": "ambientCG (Lennart Demes)",
       "source_url": "https://ambientcg.com/a/PavingStones137",
+      "kind": "paving",
       "size_m": [
         1.8,
         1.8
@@ -202,6 +1880,7 @@
       "license": "CC0-1.0",
       "author": "ambientCG (Lennart Demes)",
       "source_url": "https://ambientcg.com/a/PavingStones150",
+      "kind": "paving",
       "size_m": [
         0.9,
         0.9
@@ -215,6 +1894,151 @@
       "thumbnail": "materials/pavingstones150/thumb.jpg"
     },
     {
+      "id": "pavingstones151",
+      "name": "Paving Stones 151",
+      "tags": [
+        "151",
+        "arch",
+        "arches",
+        "beige",
+        "cobblestone",
+        "european",
+        "gray",
+        "grid",
+        "mosaic",
+        "old",
+        "paving",
+        "pavingstones151",
+        "pedestrian",
+        "rough",
+        "stone",
+        "stones",
+        "street",
+        "urban"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PavingStones151",
+      "kind": "paving",
+      "size_m": [
+        5.4,
+        5.4
+      ],
+      "maps": {
+        "basecolor": "materials/pavingstones151/basecolor.jpg",
+        "normal": "materials/pavingstones151/normal.jpg",
+        "orm": "materials/pavingstones151/orm.jpg",
+        "height": "materials/pavingstones151/height.jpg"
+      },
+      "thumbnail": "materials/pavingstones151/thumb.jpg"
+    },
+    {
+      "id": "planks007",
+      "name": "Planks 007",
+      "tags": [
+        "7",
+        "planks",
+        "smooth",
+        "wood"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Planks007",
+      "kind": "wood",
+      "size_m": [
+        1.5,
+        1.5
+      ],
+      "maps": {
+        "basecolor": "materials/planks007/basecolor.jpg",
+        "normal": "materials/planks007/normal.jpg",
+        "orm": "materials/planks007/orm.jpg",
+        "height": "materials/planks007/height.jpg"
+      },
+      "thumbnail": "materials/planks007/thumb.jpg"
+    },
+    {
+      "id": "planks021",
+      "name": "Planks 021",
+      "tags": [
+        "21",
+        "brown",
+        "floor",
+        "planks",
+        "raw",
+        "rough",
+        "wall",
+        "wood",
+        "yellow"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Planks021",
+      "kind": "wood",
+      "size_m": [
+        1.4,
+        1.4
+      ],
+      "maps": {
+        "basecolor": "materials/planks021/basecolor.jpg",
+        "normal": "materials/planks021/normal.jpg",
+        "orm": "materials/planks021/orm.jpg",
+        "height": "materials/planks021/height.jpg"
+      },
+      "thumbnail": "materials/planks021/thumb.jpg"
+    },
+    {
+      "id": "planks022",
+      "name": "Planks 022",
+      "tags": [
+        "22",
+        "dirt",
+        "dust",
+        "green",
+        "planks"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Planks022",
+      "kind": "wood",
+      "size_m": [
+        1.1,
+        1.1
+      ],
+      "maps": {
+        "basecolor": "materials/planks022/basecolor.jpg",
+        "normal": "materials/planks022/normal.jpg",
+        "orm": "materials/planks022/orm.jpg",
+        "height": "materials/planks022/height.jpg"
+      },
+      "thumbnail": "materials/planks022/thumb.jpg"
+    },
+    {
+      "id": "planks028",
+      "name": "Planks 028",
+      "tags": [
+        "28",
+        "painted",
+        "planks",
+        "red"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Planks028",
+      "kind": "wood",
+      "size_m": [
+        0.8,
+        0.8
+      ],
+      "maps": {
+        "basecolor": "materials/planks028/basecolor.jpg",
+        "normal": "materials/planks028/normal.jpg",
+        "orm": "materials/planks028/orm.jpg",
+        "height": "materials/planks028/height.jpg"
+      },
+      "thumbnail": "materials/planks028/thumb.jpg"
+    },
+    {
       "id": "planks029s",
       "name": "Planks 029 S",
       "tags": [
@@ -225,6 +2049,7 @@
       "license": "CC0-1.0",
       "author": "ambientCG (Lennart Demes)",
       "source_url": "https://ambientcg.com/a/Planks029S",
+      "kind": "wood",
       "size_m": [
         2.4,
         2.4
@@ -236,6 +2061,34 @@
         "height": "materials/planks029s/height.jpg"
       },
       "thumbnail": "materials/planks029s/thumb.jpg"
+    },
+    {
+      "id": "planks038",
+      "name": "Planks 038",
+      "tags": [
+        "38",
+        "brown",
+        "dirt",
+        "green",
+        "mold",
+        "moss",
+        "planks"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Planks038",
+      "kind": "wood",
+      "size_m": [
+        1.1,
+        0.55
+      ],
+      "maps": {
+        "basecolor": "materials/planks038/basecolor.jpg",
+        "normal": "materials/planks038/normal.jpg",
+        "orm": "materials/planks038/orm.jpg",
+        "height": "materials/planks038/height.jpg"
+      },
+      "thumbnail": "materials/planks038/thumb.jpg"
     },
     {
       "id": "plaster001",
@@ -258,6 +2111,7 @@
       "license": "CC0-1.0",
       "author": "ambientCG (Lennart Demes)",
       "source_url": "https://ambientcg.com/a/Plaster001",
+      "kind": "plaster",
       "size_m": null,
       "maps": {
         "basecolor": "materials/plaster001/basecolor.jpg",
@@ -266,6 +2120,329 @@
         "height": "materials/plaster001/height.jpg"
       },
       "thumbnail": "materials/plaster001/thumb.jpg"
+    },
+    {
+      "id": "rock004",
+      "name": "Rock 004",
+      "tags": [
+        "4",
+        "beige",
+        "flat",
+        "rock",
+        "smooth",
+        "stone"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Rock004",
+      "kind": "stone",
+      "size_m": null,
+      "maps": {
+        "basecolor": "materials/rock004/basecolor.jpg",
+        "normal": "materials/rock004/normal.jpg",
+        "orm": "materials/rock004/orm.jpg",
+        "height": "materials/rock004/height.jpg"
+      },
+      "thumbnail": "materials/rock004/thumb.jpg"
+    },
+    {
+      "id": "rock042l",
+      "name": "Rock 042 L",
+      "tags": [
+        "42",
+        "beige",
+        "rock",
+        "smooth"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Rock042L",
+      "kind": "stone",
+      "size_m": [
+        2.4,
+        2.4
+      ],
+      "maps": {
+        "basecolor": "materials/rock042l/basecolor.jpg",
+        "normal": "materials/rock042l/normal.jpg",
+        "orm": "materials/rock042l/orm.jpg",
+        "height": "materials/rock042l/height.jpg"
+      },
+      "thumbnail": "materials/rock042l/thumb.jpg"
+    },
+    {
+      "id": "rock043l",
+      "name": "Rock 043 L",
+      "tags": [
+        "43",
+        "grey",
+        "rock",
+        "rough"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Rock043L",
+      "kind": "stone",
+      "size_m": [
+        1.8,
+        1.8
+      ],
+      "maps": {
+        "basecolor": "materials/rock043l/basecolor.jpg",
+        "normal": "materials/rock043l/normal.jpg",
+        "orm": "materials/rock043l/orm.jpg",
+        "height": "materials/rock043l/height.jpg"
+      },
+      "thumbnail": "materials/rock043l/thumb.jpg"
+    },
+    {
+      "id": "rock044",
+      "name": "Rock 044",
+      "tags": [
+        "44",
+        "cliff",
+        "large",
+        "rock",
+        "rough"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Rock044",
+      "kind": "stone",
+      "size_m": [
+        1.15,
+        1.15
+      ],
+      "maps": {
+        "basecolor": "materials/rock044/basecolor.jpg",
+        "normal": "materials/rock044/normal.jpg",
+        "orm": "materials/rock044/orm.jpg",
+        "height": "materials/rock044/height.jpg"
+      },
+      "thumbnail": "materials/rock044/thumb.jpg"
+    },
+    {
+      "id": "rock045",
+      "name": "Rock 045",
+      "tags": [
+        "45",
+        "cliff",
+        "jagged",
+        "rock"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Rock045",
+      "kind": "stone",
+      "size_m": [
+        2.4,
+        2.4
+      ],
+      "maps": {
+        "basecolor": "materials/rock045/basecolor.jpg",
+        "normal": "materials/rock045/normal.jpg",
+        "orm": "materials/rock045/orm.jpg",
+        "height": "materials/rock045/height.jpg"
+      },
+      "thumbnail": "materials/rock045/thumb.jpg"
+    },
+    {
+      "id": "rock062",
+      "name": "Rock 062",
+      "tags": [
+        "062",
+        "62",
+        "cracked",
+        "eroded",
+        "grey",
+        "natural",
+        "outdoor",
+        "rock",
+        "rough",
+        "rugged",
+        "sand",
+        "stone",
+        "uneven"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Rock062",
+      "kind": "stone",
+      "size_m": null,
+      "maps": {
+        "basecolor": "materials/rock062/basecolor.jpg",
+        "normal": "materials/rock062/normal.jpg",
+        "orm": "materials/rock062/orm.jpg",
+        "height": "materials/rock062/height.jpg"
+      },
+      "thumbnail": "materials/rock062/thumb.jpg"
+    },
+    {
+      "id": "rock064",
+      "name": "Rock 064",
+      "tags": [
+        "064",
+        "64",
+        "forest",
+        "gray",
+        "green",
+        "irregular",
+        "moss",
+        "mossy",
+        "natural",
+        "old",
+        "rock",
+        "rock064",
+        "rough",
+        "stacked",
+        "stone"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Rock064",
+      "kind": "stone",
+      "size_m": null,
+      "maps": {
+        "basecolor": "materials/rock064/basecolor.jpg",
+        "normal": "materials/rock064/normal.jpg",
+        "orm": "materials/rock064/orm.jpg",
+        "height": "materials/rock064/height.jpg"
+      },
+      "thumbnail": "materials/rock064/thumb.jpg"
+    },
+    {
+      "id": "rocks006",
+      "name": "Rocks 006",
+      "tags": [
+        "6",
+        "edges",
+        "gravel",
+        "grey",
+        "light",
+        "pebbles",
+        "rocks",
+        "sharp",
+        "stone",
+        "stones"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Rocks006",
+      "kind": "stone",
+      "size_m": null,
+      "maps": {
+        "basecolor": "materials/rocks006/basecolor.jpg",
+        "normal": "materials/rocks006/normal.jpg",
+        "orm": "materials/rocks006/orm.jpg",
+        "height": "materials/rocks006/height.jpg"
+      },
+      "thumbnail": "materials/rocks006/thumb.jpg"
+    },
+    {
+      "id": "rocks022",
+      "name": "Rocks 022",
+      "tags": [
+        "22",
+        "gravel",
+        "pebble",
+        "pebbles",
+        "rocks",
+        "small",
+        "stone"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Rocks022",
+      "kind": "stone",
+      "size_m": [
+        0.5,
+        0.5
+      ],
+      "maps": {
+        "basecolor": "materials/rocks022/basecolor.jpg",
+        "normal": "materials/rocks022/normal.jpg",
+        "orm": "materials/rocks022/orm.jpg",
+        "height": "materials/rocks022/height.jpg"
+      },
+      "thumbnail": "materials/rocks022/thumb.jpg"
+    },
+    {
+      "id": "rocks025",
+      "name": "Rocks 025",
+      "tags": [
+        "25",
+        "floor",
+        "medieval",
+        "rocks",
+        "stone",
+        "wall"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Rocks025",
+      "kind": "stone",
+      "size_m": [
+        1.9,
+        1.9
+      ],
+      "maps": {
+        "basecolor": "materials/rocks025/basecolor.jpg",
+        "normal": "materials/rocks025/normal.jpg",
+        "orm": "materials/rocks025/orm.jpg",
+        "height": "materials/rocks025/height.jpg"
+      },
+      "thumbnail": "materials/rocks025/thumb.jpg"
+    },
+    {
+      "id": "roofingtiles001",
+      "name": "Roofing Tiles 001",
+      "tags": [
+        "1",
+        "city",
+        "house",
+        "old",
+        "roof",
+        "roofing",
+        "slate",
+        "stone",
+        "tiles"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/RoofingTiles001",
+      "kind": "roof",
+      "size_m": null,
+      "maps": {
+        "basecolor": "materials/roofingtiles001/basecolor.jpg",
+        "normal": "materials/roofingtiles001/normal.jpg",
+        "orm": "materials/roofingtiles001/orm.jpg",
+        "height": "materials/roofingtiles001/height.jpg"
+      },
+      "thumbnail": "materials/roofingtiles001/thumb.jpg"
+    },
+    {
+      "id": "roofingtiles002",
+      "name": "Roofing Tiles 002",
+      "tags": [
+        "2",
+        "clean",
+        "roofing",
+        "round",
+        "slate",
+        "tiles"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/RoofingTiles002",
+      "kind": "roof",
+      "size_m": null,
+      "maps": {
+        "basecolor": "materials/roofingtiles002/basecolor.jpg",
+        "normal": "materials/roofingtiles002/normal.jpg",
+        "orm": "materials/roofingtiles002/orm.jpg",
+        "height": "materials/roofingtiles002/height.jpg"
+      },
+      "thumbnail": "materials/roofingtiles002/thumb.jpg"
     },
     {
       "id": "roofingtiles003",
@@ -281,6 +2458,7 @@
       "license": "CC0-1.0",
       "author": "ambientCG (Lennart Demes)",
       "source_url": "https://ambientcg.com/a/RoofingTiles003",
+      "kind": "roof",
       "size_m": null,
       "maps": {
         "basecolor": "materials/roofingtiles003/basecolor.jpg",
@@ -289,6 +2467,165 @@
         "height": "materials/roofingtiles003/height.jpg"
       },
       "thumbnail": "materials/roofingtiles003/thumb.jpg"
+    },
+    {
+      "id": "roofingtiles004",
+      "name": "Roofing Tiles 004",
+      "tags": [
+        "4",
+        "clean",
+        "roofing",
+        "round",
+        "slate",
+        "tiles"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/RoofingTiles004",
+      "kind": "roof",
+      "size_m": null,
+      "maps": {
+        "basecolor": "materials/roofingtiles004/basecolor.jpg",
+        "normal": "materials/roofingtiles004/normal.jpg",
+        "orm": "materials/roofingtiles004/orm.jpg",
+        "height": "materials/roofingtiles004/height.jpg"
+      },
+      "thumbnail": "materials/roofingtiles004/thumb.jpg"
+    },
+    {
+      "id": "roofingtiles006",
+      "name": "Roofing Tiles 006",
+      "tags": [
+        "6",
+        "brown",
+        "clean",
+        "modern",
+        "roofing",
+        "tiles"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/RoofingTiles006",
+      "kind": "roof",
+      "size_m": [
+        3.2,
+        3.2
+      ],
+      "maps": {
+        "basecolor": "materials/roofingtiles006/basecolor.jpg",
+        "normal": "materials/roofingtiles006/normal.jpg",
+        "orm": "materials/roofingtiles006/orm.jpg",
+        "height": "materials/roofingtiles006/height.jpg"
+      },
+      "thumbnail": "materials/roofingtiles006/thumb.jpg"
+    },
+    {
+      "id": "roofingtiles007",
+      "name": "Roofing Tiles 007",
+      "tags": [
+        "7",
+        "brown",
+        "dirty",
+        "modern",
+        "roofing",
+        "tiles"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/RoofingTiles007",
+      "kind": "roof",
+      "size_m": [
+        3.2,
+        3.2
+      ],
+      "maps": {
+        "basecolor": "materials/roofingtiles007/basecolor.jpg",
+        "normal": "materials/roofingtiles007/normal.jpg",
+        "orm": "materials/roofingtiles007/orm.jpg",
+        "height": "materials/roofingtiles007/height.jpg"
+      },
+      "thumbnail": "materials/roofingtiles007/thumb.jpg"
+    },
+    {
+      "id": "roofingtiles008",
+      "name": "Roofing Tiles 008",
+      "tags": [
+        "8",
+        "brown",
+        "dirty",
+        "modern",
+        "moss",
+        "roofing",
+        "tiles"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/RoofingTiles008",
+      "kind": "roof",
+      "size_m": [
+        3.2,
+        3.2
+      ],
+      "maps": {
+        "basecolor": "materials/roofingtiles008/basecolor.jpg",
+        "normal": "materials/roofingtiles008/normal.jpg",
+        "orm": "materials/roofingtiles008/orm.jpg",
+        "height": "materials/roofingtiles008/height.jpg"
+      },
+      "thumbnail": "materials/roofingtiles008/thumb.jpg"
+    },
+    {
+      "id": "roofingtiles009",
+      "name": "Roofing Tiles 009",
+      "tags": [
+        "9",
+        "black",
+        "modern",
+        "roofing",
+        "tiles"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/RoofingTiles009",
+      "kind": "roof",
+      "size_m": [
+        3.2,
+        3.2
+      ],
+      "maps": {
+        "basecolor": "materials/roofingtiles009/basecolor.jpg",
+        "normal": "materials/roofingtiles009/normal.jpg",
+        "orm": "materials/roofingtiles009/orm.jpg",
+        "height": "materials/roofingtiles009/height.jpg"
+      },
+      "thumbnail": "materials/roofingtiles009/thumb.jpg"
+    },
+    {
+      "id": "roofingtiles010",
+      "name": "Roofing Tiles 010",
+      "tags": [
+        "10",
+        "grey",
+        "modern",
+        "roofing",
+        "tiles",
+        "white"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/RoofingTiles010",
+      "kind": "roof",
+      "size_m": [
+        3.2,
+        3.2
+      ],
+      "maps": {
+        "basecolor": "materials/roofingtiles010/basecolor.jpg",
+        "normal": "materials/roofingtiles010/normal.jpg",
+        "orm": "materials/roofingtiles010/orm.jpg",
+        "height": "materials/roofingtiles010/height.jpg"
+      },
+      "thumbnail": "materials/roofingtiles010/thumb.jpg"
     },
     {
       "id": "roofingtiles013a",
@@ -304,6 +2641,7 @@
       "license": "CC0-1.0",
       "author": "ambientCG (Lennart Demes)",
       "source_url": "https://ambientcg.com/a/RoofingTiles013A",
+      "kind": "roof",
       "size_m": [
         2.9,
         2.9
@@ -315,6 +2653,285 @@
         "height": "materials/roofingtiles013a/height.jpg"
       },
       "thumbnail": "materials/roofingtiles013a/thumb.jpg"
+    },
+    {
+      "id": "rust002",
+      "name": "Rust 002",
+      "tags": [
+        "2",
+        "brown",
+        "industrial",
+        "old",
+        "rust",
+        "rusted",
+        "rusty"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Rust002",
+      "kind": "metal",
+      "size_m": null,
+      "maps": {
+        "basecolor": "materials/rust002/basecolor.jpg",
+        "normal": "materials/rust002/normal.jpg",
+        "orm": "materials/rust002/orm.jpg",
+        "height": "materials/rust002/height.jpg"
+      },
+      "thumbnail": "materials/rust002/thumb.jpg"
+    },
+    {
+      "id": "rust003",
+      "name": "Rust 003",
+      "tags": [
+        "3",
+        "brown",
+        "industrial",
+        "old",
+        "rust",
+        "rusted",
+        "rusty"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Rust003",
+      "kind": "metal",
+      "size_m": null,
+      "maps": {
+        "basecolor": "materials/rust003/basecolor.jpg",
+        "normal": "materials/rust003/normal.jpg",
+        "orm": "materials/rust003/orm.jpg",
+        "height": "materials/rust003/height.jpg"
+      },
+      "thumbnail": "materials/rust003/thumb.jpg"
+    },
+    {
+      "id": "tiles038",
+      "name": "Tiles 038",
+      "tags": [
+        "38",
+        "bright",
+        "dirty",
+        "grey",
+        "light",
+        "pavement",
+        "paving",
+        "square",
+        "tiles"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Tiles038",
+      "kind": "tile",
+      "size_m": [
+        1.1,
+        0.55
+      ],
+      "maps": {
+        "basecolor": "materials/tiles038/basecolor.jpg",
+        "normal": "materials/tiles038/normal.jpg",
+        "orm": "materials/tiles038/orm.jpg",
+        "height": "materials/tiles038/height.jpg"
+      },
+      "thumbnail": "materials/tiles038/thumb.jpg"
+    },
+    {
+      "id": "tiles065",
+      "name": "Tiles 065",
+      "tags": [
+        "65",
+        "hexagon",
+        "mosaic",
+        "orange",
+        "tiled",
+        "tiles",
+        "yellow"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Tiles065",
+      "kind": "tile",
+      "size_m": [
+        0.45,
+        0.45
+      ],
+      "maps": {
+        "basecolor": "materials/tiles065/basecolor.jpg",
+        "normal": "materials/tiles065/normal.jpg",
+        "orm": "materials/tiles065/orm.jpg",
+        "height": "materials/tiles065/height.jpg"
+      },
+      "thumbnail": "materials/tiles065/thumb.jpg"
+    },
+    {
+      "id": "tiles066",
+      "name": "Tiles 066",
+      "tags": [
+        "66",
+        "brown",
+        "hexagon",
+        "mosaic",
+        "orange",
+        "tiled",
+        "tiles"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Tiles066",
+      "kind": "tile",
+      "size_m": [
+        0.45,
+        0.45
+      ],
+      "maps": {
+        "basecolor": "materials/tiles066/basecolor.jpg",
+        "normal": "materials/tiles066/normal.jpg",
+        "orm": "materials/tiles066/orm.jpg",
+        "height": "materials/tiles066/height.jpg"
+      },
+      "thumbnail": "materials/tiles066/thumb.jpg"
+    },
+    {
+      "id": "tiles069",
+      "name": "Tiles 069",
+      "tags": [
+        "69",
+        "blue",
+        "hexagon",
+        "mosaic",
+        "pool",
+        "tiled",
+        "tiles",
+        "white"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Tiles069",
+      "kind": "tile",
+      "size_m": [
+        0.6,
+        0.6
+      ],
+      "maps": {
+        "basecolor": "materials/tiles069/basecolor.jpg",
+        "normal": "materials/tiles069/normal.jpg",
+        "orm": "materials/tiles069/orm.jpg",
+        "height": "materials/tiles069/height.jpg"
+      },
+      "thumbnail": "materials/tiles069/thumb.jpg"
+    },
+    {
+      "id": "tiles070",
+      "name": "Tiles 070",
+      "tags": [
+        "70",
+        "black",
+        "blue",
+        "dark",
+        "hexagon",
+        "mosaic",
+        "pool",
+        "tiled",
+        "tiles",
+        "white"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Tiles070",
+      "kind": "tile",
+      "size_m": [
+        0.6,
+        0.6
+      ],
+      "maps": {
+        "basecolor": "materials/tiles070/basecolor.jpg",
+        "normal": "materials/tiles070/normal.jpg",
+        "orm": "materials/tiles070/orm.jpg",
+        "height": "materials/tiles070/height.jpg"
+      },
+      "thumbnail": "materials/tiles070/thumb.jpg"
+    },
+    {
+      "id": "tiles071",
+      "name": "Tiles 071",
+      "tags": [
+        "71",
+        "bathroom",
+        "hexagon",
+        "mosaic",
+        "tiled",
+        "tiles",
+        "white"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Tiles071",
+      "kind": "tile",
+      "size_m": [
+        0.45,
+        0.45
+      ],
+      "maps": {
+        "basecolor": "materials/tiles071/basecolor.jpg",
+        "normal": "materials/tiles071/normal.jpg",
+        "orm": "materials/tiles071/orm.jpg",
+        "height": "materials/tiles071/height.jpg"
+      },
+      "thumbnail": "materials/tiles071/thumb.jpg"
+    },
+    {
+      "id": "tiles072",
+      "name": "Tiles 072",
+      "tags": [
+        "72",
+        "black",
+        "hexagon",
+        "mosaic",
+        "tiled",
+        "tiles"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Tiles072",
+      "kind": "tile",
+      "size_m": [
+        0.45,
+        0.45
+      ],
+      "maps": {
+        "basecolor": "materials/tiles072/basecolor.jpg",
+        "normal": "materials/tiles072/normal.jpg",
+        "orm": "materials/tiles072/orm.jpg",
+        "height": "materials/tiles072/height.jpg"
+      },
+      "thumbnail": "materials/tiles072/thumb.jpg"
+    },
+    {
+      "id": "tiles073",
+      "name": "Tiles 073",
+      "tags": [
+        "73",
+        "bathroom",
+        "black",
+        "clean",
+        "shower",
+        "square",
+        "tiles"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Tiles073",
+      "kind": "tile",
+      "size_m": [
+        0.75,
+        0.75
+      ],
+      "maps": {
+        "basecolor": "materials/tiles073/basecolor.jpg",
+        "normal": "materials/tiles073/normal.jpg",
+        "orm": "materials/tiles073/orm.jpg",
+        "height": "materials/tiles073/height.jpg"
+      },
+      "thumbnail": "materials/tiles073/thumb.jpg"
     },
     {
       "id": "woodchips003",
@@ -329,6 +2946,7 @@
       "license": "CC0-1.0",
       "author": "ambientCG (Lennart Demes)",
       "source_url": "https://ambientcg.com/a/WoodChips003",
+      "kind": "ground",
       "size_m": [
         1.6,
         1.6
@@ -340,6 +2958,140 @@
         "height": "materials/woodchips003/height.jpg"
       },
       "thumbnail": "materials/woodchips003/thumb.jpg"
+    },
+    {
+      "id": "woodfloor032",
+      "name": "Wood Floor 032",
+      "tags": [
+        "32",
+        "brown",
+        "clean",
+        "floor",
+        "parquet",
+        "shiny",
+        "smooth",
+        "wood"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/WoodFloor032",
+      "kind": "wood",
+      "size_m": [
+        2.55,
+        2.55
+      ],
+      "maps": {
+        "basecolor": "materials/woodfloor032/basecolor.jpg",
+        "normal": "materials/woodfloor032/normal.jpg",
+        "orm": "materials/woodfloor032/orm.jpg",
+        "height": "materials/woodfloor032/height.jpg"
+      },
+      "thumbnail": "materials/woodfloor032/thumb.jpg"
+    },
+    {
+      "id": "woodfloor033",
+      "name": "Wood Floor 033",
+      "tags": [
+        "33",
+        "clean",
+        "floor",
+        "parquet",
+        "smooth",
+        "wood"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/WoodFloor033",
+      "kind": "wood",
+      "size_m": [
+        2.55,
+        2.55
+      ],
+      "maps": {
+        "basecolor": "materials/woodfloor033/basecolor.jpg",
+        "normal": "materials/woodfloor033/normal.jpg",
+        "orm": "materials/woodfloor033/orm.jpg",
+        "height": "materials/woodfloor033/height.jpg"
+      },
+      "thumbnail": "materials/woodfloor033/thumb.jpg"
+    },
+    {
+      "id": "woodfloor034",
+      "name": "Wood Floor 034",
+      "tags": [
+        "34",
+        "floor",
+        "herringbone",
+        "parquet",
+        "wood"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/WoodFloor034",
+      "kind": "wood",
+      "size_m": [
+        1.9,
+        1.9
+      ],
+      "maps": {
+        "basecolor": "materials/woodfloor034/basecolor.jpg",
+        "normal": "materials/woodfloor034/normal.jpg",
+        "orm": "materials/woodfloor034/orm.jpg",
+        "height": "materials/woodfloor034/height.jpg"
+      },
+      "thumbnail": "materials/woodfloor034/thumb.jpg"
+    },
+    {
+      "id": "woodfloor035",
+      "name": "Wood Floor 035",
+      "tags": [
+        "35",
+        "floor",
+        "herringbone",
+        "parquet",
+        "wood"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/WoodFloor035",
+      "kind": "wood",
+      "size_m": [
+        1.9,
+        1.9
+      ],
+      "maps": {
+        "basecolor": "materials/woodfloor035/basecolor.jpg",
+        "normal": "materials/woodfloor035/normal.jpg",
+        "orm": "materials/woodfloor035/orm.jpg",
+        "height": "materials/woodfloor035/height.jpg"
+      },
+      "thumbnail": "materials/woodfloor035/thumb.jpg"
+    },
+    {
+      "id": "woodsiding013",
+      "name": "Wood Siding 013",
+      "tags": [
+        "13",
+        "shingles",
+        "siding",
+        "weathered",
+        "wood"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/WoodSiding013",
+      "kind": "wood",
+      "size_m": [
+        1.4,
+        1.4
+      ],
+      "maps": {
+        "basecolor": "materials/woodsiding013/basecolor.jpg",
+        "normal": "materials/woodsiding013/normal.jpg",
+        "orm": "materials/woodsiding013/orm.jpg",
+        "height": "materials/woodsiding013/height.jpg"
+      },
+      "thumbnail": "materials/woodsiding013/thumb.jpg"
     }
   ]
 }

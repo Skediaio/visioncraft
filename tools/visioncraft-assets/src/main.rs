@@ -30,8 +30,9 @@ struct Cli {
 enum Cmd {
     /// Download the sources of the candidates into the cache (verified, resumable, polite).
     Fetch {
-        #[arg(long)]
-        list: PathBuf,
+        /// One or more candidate files.
+        #[arg(long, num_args = 1.., required = true)]
+        list: Vec<PathBuf>,
         /// Only these source ids.
         #[arg(long, num_args = 1..)]
         only: Vec<String>,
@@ -112,7 +113,7 @@ fn main() -> Result<()> {
             only,
             jobs,
         } => {
-            let cands = net::load_candidates(&cache.join("candidates.json"), &only)?;
+            let cands = net::load_candidates(&[cache.join("candidates.json")], &only)?;
             ingest::ingest_all(&cands, &cache, &out, jobs)
         }
         Cmd::Catalog { out } => library::catalog(&out),
