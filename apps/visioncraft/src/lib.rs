@@ -5,10 +5,15 @@
 pub mod camera;
 pub mod draw;
 pub mod files;
+pub mod handles;
 pub mod materials;
 pub mod modelui;
 pub mod objects;
 pub mod placeholder;
+pub mod plant_scene;
+pub mod planting_panel;
+pub mod planting_smoke;
+pub mod planting_tools;
 pub mod plants;
 pub mod scene;
 pub mod smoke;
@@ -634,7 +639,7 @@ impl eframe::App for App {
         if cam.is_flying() && (response.dragged() || response.double_clicked()) {
             cam.cancel_fly();
         }
-        if response.hovered() {
+        if response.hovered() && !(shift && self.studio.pointer_captured) {
             let scroll = ctx.input(|i| i.smooth_scroll_delta.y);
             if scroll != 0.0 {
                 cam.zoom(scroll);
@@ -647,10 +652,12 @@ impl eframe::App for App {
             cam.pan(d.x, d.y, rect.height());
         } else if response.dragged_by(PointerButton::Primary)
             && (walking || cam.view == camera::View::Orbit)
+            && !self.studio.pointer_captured
         {
             cam.orbit(d.x, d.y);
         }
         if input.double_clicked
+            && !self.studio.double_click_captured
             && cam.view == camera::View::Orbit
             && let Some(p) = input.hover.and_then(|p| {
                 self.studio.pick(

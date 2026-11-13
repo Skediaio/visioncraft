@@ -1,21 +1,11 @@
-//! Objects mode: single placement and area scatter against the demo catalogue. Brush, line,
-//! cluster and surface-fill tools get their own `Tool` variant and panel section next round.
+//! Objects mode: the planting tools (`planting_tools`, `planting_panel`) and the plants browser
+//! that their "+ Add plants" buttons open.
 
-use crate::draw::{closes, dot, outline_lines, snap_point};
+use crate::planting_tools::PlantingTools;
 use crate::strings as t;
 use crate::ui::Cx;
 use eframe::egui;
-use glam::Vec3;
-use serde_json::json;
 use visioncraft_flora as flora;
-use visioncraft_render::LineVertex;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum Tool {
-    #[default]
-    Single,
-    Scatter,
-}
 
 /// Weights as whole percentages that add up to 100 (largest remainder), for the palette readout.
 pub fn percentages(weights: &[f32]) -> Vec<u32> {
@@ -36,36 +26,17 @@ pub fn percentages(weights: &[f32]) -> Vec<u32> {
     out
 }
 
+#[derive(Default)]
 pub struct ObjectsState {
-    pub tool: Tool,
-    /// The chosen assets (catalogue id, `flora:<id>` or custom species id) and their weights.
-    pub palette: Vec<(String, f32)>,
-    pub density: f32,
+    /// The planting tools: palettes, presets, six tools, selecting and editing plantings.
+    pub tools: PlantingTools,
     search: String,
     category: Option<flora::Category>,
     evergreen: bool,
     in_bloom: bool,
-    points: Vec<[f32; 2]>,
-    placed: u64,
 }
 
-impl Default for ObjectsState {
-    fn default() -> Self {
-        Self {
-            tool: Tool::Single,
-            palette: vec![("flora:prunus-serrulata".into(), 1.0)],
-            density: 0.6,
-            search: String::new(),
-            category: None,
-            evergreen: false,
-            in_bloom: false,
-            points: Vec::new(),
-            placed: 0,
-        }
-    }
-}
-
-fn display_name(cx: &Cx, id: &str) -> String {
+pub(crate) fn display_name(cx: &Cx, id: &str) -> String {
     if let Some(s) = id.strip_prefix("flora:").and_then(flora::Species::by_id) {
         return s.common_name.to_string();
     }
@@ -80,100 +51,16 @@ fn display_name(cx: &Cx, id: &str) -> String {
 
 impl ObjectsState {
     pub fn leave(&mut self, cx: &mut Cx) {
-        self.points.clear();
+        self.tools.leave(cx);
         cx.s.extra = Default::default();
     }
 
-    /// The ground point under the pointer: the first surface hit, else the plane y = 0.
-    fn ground(cx: &Cx) -> Option<Vec3> {
-        let p = cx.input.hover?;
-        let (o, d) = cx.s.pointer_ray(glam::Vec2::new(p.x, p.y), cx.size());
-        match cx.s.scene.raycast(o, d, false) {
-            Some(h) => Some(h.point),
-            None => crate::camera::ray_plane(o, d, 0.0),
-        }
-    }
-
-    fn palette_json(&self) -> serde_json::Value {
-        json!(
-            self.palette
-                .iter()
-                .map(|(a, w)| json!({"asset": a, "weight": w}))
-                .collect::<Vec<_>>()
-        )
-    }
-
     pub fn update(&mut self, cx: &mut Cx) {
-        let mut top: Vec<LineVertex> = Vec::new();
-        let ground = Self::ground(cx);
-        let Some(first) = self.palette.first().map(|p| p.0.clone()) else {
-            return;
-        };
-        match self.tool {
-            Tool::Single => {
-                if let Some(g) = ground {
-                    top.extend(dot([g.x, g.z], g.y + 0.05, [255, 255, 255, 230], 10.0));
-                    if cx.input.clicked {
-                        self.placed += 1;
-                        let name = display_name(cx, &first);
-                        cx.run(
-                            "planting.add_single",
-                            json!({"name": name, "asset": first, "position": [g.x, g.y, g.z], "rotation_y_deg": (self.placed * 137 % 360) as f32}),
-                        );
-                    }
-                }
-            }
-            Tool::Scatter => {
-                if cx.input.escape {
-                    self.points.clear();
-                } else if cx.input.backspace {
-                    self.points.pop();
-                }
-                let radius = 0.4 * (cx.s.camera.eye().length().max(5.0) / 20.0);
-                let snap = ground
-                    .map(|g| snap_point([g.x, g.z], &self.points, &[], radius, !cx.input.alt));
-                if cx.input.clicked
-                    && let Some(s) = snap
-                {
-                    if closes(&self.points, s.pos, radius) {
-                        self.finish(cx);
-                    } else {
-                        self.points.push(s.pos);
-                    }
-                }
-                if cx.input.enter && self.points.len() >= 3 {
-                    self.finish(cx);
-                }
-                let mut pts = self.points.clone();
-                pts.extend(snap.map(|s| s.pos));
-                top.extend(outline_lines(&pts, false, 0.08, [120, 230, 140, 255], 3.0));
-                for p in &self.points {
-                    top.extend(dot(*p, 0.08, [120, 230, 140, 255], 9.0));
-                }
-            }
-        }
-        cx.s.extra = (Vec::new(), top);
-    }
-
-    fn finish(&mut self, cx: &mut Cx) {
-        let outline = std::mem::take(&mut self.points);
-        self.placed += 1;
-        let name = format!("{} scatter", display_name(cx, &self.palette[0].0));
-        cx.run(
-            "planting.add_area",
-            json!({
-                "name": name,
-                "asset_palette": self.palette_json(),
-                "outline": outline,
-                "density_per_m2": self.density,
-                "scale_min": 0.8, "scale_max": 1.2,
-                "seed": self.placed,
-            }),
-        );
+        self.tools.update(cx);
     }
 
     /// The plant browser: a searchable, filterable list of the built-in species and the project's own.
-    fn browser(&mut self, ui: &mut egui::Ui, cx: &mut Cx) {
+    fn browser(&mut self, ui: &mut egui::Ui, cx: &mut Cx) -> Option<String> {
         ui.horizontal(|ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut self.search)
@@ -255,85 +142,41 @@ impl ObjectsState {
                     }
                 }
             });
-        if let Some(id) = add
-            && !self.palette.iter().any(|p| p.0 == id)
-        {
-            self.palette.push((id, 1.0));
-        }
+        add
     }
 
+    /// The planting panel, and next to it the plants browser while a "+" is open.
     pub fn panel(&mut self, ui: &mut egui::Ui, cx: &mut Cx) {
-        self.browser(ui, cx);
-        ui.separator();
-        ui.label(egui::RichText::new(t::PALETTE).strong());
-        let pct = percentages(&self.palette.iter().map(|p| p.1).collect::<Vec<_>>());
-        let mut remove = None;
-        for (i, (id, w)) in self.palette.iter_mut().enumerate() {
-            ui.horizontal(|ui| {
-                ui.label(format!("{}%", pct[i]));
-                ui.add(egui::Slider::new(w, 0.0..=10.0).show_value(false));
-                ui.label(display_name(cx, id));
-                if ui.small_button("x").clicked() {
-                    remove = Some(i);
-                }
-            });
-        }
-        if let Some(i) = remove
-            && self.palette.len() > 1
-        {
-            self.palette.remove(i);
-        }
-        ui.horizontal(|ui| {
-            for (tool, label) in [
-                (Tool::Single, t::TOOL_SINGLE),
-                (Tool::Scatter, t::TOOL_SCATTER),
-            ] {
-                if ui.selectable_label(self.tool == tool, label).clicked() {
-                    self.tool = tool;
-                    self.points.clear();
-                }
-            }
-        });
-        ui.small(if self.tool == Tool::Single {
-            t::SINGLE_HINT
-        } else {
-            t::SCATTER_HINT
-        });
-        if self.tool == Tool::Scatter {
-            ui.horizontal(|ui| {
-                ui.label(t::DENSITY);
-                ui.add(
-                    egui::DragValue::new(&mut self.density)
-                        .range(0.02..=20.0)
-                        .speed(0.02),
-                );
-            });
-        }
-        let list: Vec<(String, String)> =
-            cx.s.project()
-                .generators
-                .iter()
-                .map(|g| (g.id().to_string(), g.name().to_string()))
-                .collect();
-        if !list.is_empty() {
-            ui.separator();
-            ui.label(egui::RichText::new(t::PLANTINGS).strong());
-            egui::ScrollArea::vertical()
-                .max_height(90.0)
-                .id_salt("placed")
-                .show(ui, |ui| {
-                    for (id, name) in list {
-                        ui.horizontal(|ui| {
-                            ui.label(name);
-                            if ui.small_button(t::REMOVE).clicked() {
-                                cx.run("planting.remove", json!({"id": id}));
-                            }
-                        });
-                    }
-                });
-        }
+        self.tools.panel(ui, cx);
         if cx.s.plants_pending() > 0 {
             ui.small(format!("generating plants… {}", cx.s.plants_pending()));
+        }
+        if self.tools.add_to.is_some() {
+            let narrow = crate::ui::narrow(cx.ctx);
+            let (anchor, offset) = if narrow {
+                (egui::Align2::LEFT_TOP, egui::Vec2::new(10.0, 150.0))
+            } else {
+                (
+                    egui::Align2::LEFT_BOTTOM,
+                    egui::Vec2::new(10.0 + 380.0 + 10.0, -58.0),
+                )
+            };
+            let (mut added, mut close) = (None, false);
+            crate::ui::floating(cx.ctx, "plantbrowser", anchor, offset, 330.0, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(t::PT_ADD_PLANTS).strong());
+                    if ui.small_button("×").clicked() {
+                        close = true;
+                    }
+                });
+                added = self.browser(ui, cx);
+            });
+            if let Some(id) = added {
+                self.tools.add_asset(cx, id);
+            }
+            if close {
+                self.tools.add_to = None;
+            }
         }
     }
 }

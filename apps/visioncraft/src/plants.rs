@@ -103,6 +103,7 @@ impl Flora {
     }
 
     /// One step: the textures of the first wanted species, or its meshes. True when something finished.
+    #[allow(clippy::map_entry)] // the texture upload may fail, and the queue entry goes then
     pub fn pump(&mut self, r: &mut Renderer) -> bool {
         let Some(w) = self.queue.first() else {
             return false;
