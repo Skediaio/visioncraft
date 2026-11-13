@@ -220,13 +220,31 @@ impl MatLibUi {
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing = Vec2::splat(5.0);
                     for (i, m) in items.iter().enumerate() {
+                        // The picture with its name under it.
                         let (resp, painter) =
-                            ui.allocate_painter(Vec2::splat(52.0), Sense::click());
+                            ui.allocate_painter(Vec2::new(52.0, 66.0), Sense::click());
+                        let tile = egui::Rect::from_min_size(resp.rect.min, Vec2::splat(52.0));
                         let visible = ui.is_rect_visible(resp.rect);
-                        thumb(ui, cx, &m.thumbnail, resp.rect, visible, i as f32);
+                        thumb(ui, cx, &m.thumbnail, tile, visible, i as f32);
+                        if visible {
+                            let font = egui::FontId::proportional(9.5);
+                            let color = ui.visuals().text_color();
+                            let mut job = egui::text::LayoutJob::simple_singleline(
+                                m.name.clone(),
+                                font,
+                                color,
+                            );
+                            job.wrap = egui::text::TextWrapping::truncate_at_width(54.0);
+                            let galley = painter.layout_job(job);
+                            let at = egui::pos2(
+                                tile.center().x - galley.size().x / 2.0,
+                                tile.max.y + 1.0,
+                            );
+                            painter.galley(at, galley, color);
+                        }
                         if used.contains(&m.maps.basecolor) {
                             painter.rect_stroke(
-                                resp.rect,
+                                tile,
                                 egui::CornerRadius::same(6),
                                 egui::Stroke::new(2.0, ACCENT),
                                 egui::StrokeKind::Inside,
