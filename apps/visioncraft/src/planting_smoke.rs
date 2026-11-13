@@ -325,8 +325,8 @@ mod native {
                     }
                 }
                 let mut each = Vec::new();
-                // Where a frame goes: app prepare, recording, submit, waiting for the GPU.
-                let mut phases = [0.0f64; 4];
+                // Where a frame goes: app prepare, recording, finishing, submit, waiting for the GPU.
+                let mut phases = [0.0f64; 5];
                 for _ in 0..frames + 3 {
                     let t0 = now_ms();
                     s.prepare();
@@ -334,16 +334,19 @@ mod native {
                     let mut enc = device.create_command_encoder(&Default::default());
                     s.renderer.render(&mut enc);
                     let t2 = now_ms();
-                    queue.submit([enc.finish()]);
+                    let commands = enc.finish();
                     let t3 = now_ms();
+                    queue.submit([commands]);
+                    let t4 = now_ms();
                     device
                         .poll(wgpu::PollType::wait_indefinitely())
                         .map_err(|e| e.to_string())?;
-                    let t4 = now_ms();
-                    for (p, d) in phases.iter_mut().zip([t1 - t0, t2 - t1, t3 - t2, t4 - t3]) {
+                    let t5 = now_ms();
+                    let steps = [t1 - t0, t2 - t1, t3 - t2, t4 - t3, t5 - t4];
+                    for (p, d) in phases.iter_mut().zip(steps) {
                         *p += d;
                     }
-                    let ms = t4 - t0;
+                    let ms = t5 - t0;
                     s.record_frame(ms as f32); // Auto adapts as in the window
                     each.push(ms);
                 }
@@ -383,11 +386,12 @@ mod native {
                 );
                 let n = (frames + 3) as f64;
                 println!(
-                    "plant bench phases: prepare {:.1} ms, record {:.1} ms, submit {:.1} ms, gpu wait {:.1} ms",
+                    "plant bench phases: prepare {:.1} ms, record {:.1} ms, finish {:.1} ms, submit {:.1} ms, gpu wait {:.1} ms",
                     phases[0] / n,
                     phases[1] / n,
                     phases[2] / n,
-                    phases[3] / n
+                    phases[3] / n,
+                    phases[4] / n
                 );
                 let st = s.renderer.stats();
                 let q = s.current_quality();
@@ -402,6 +406,7 @@ mod native {
                     q.shadow_resolution,
                     q.msaa
                 );
+                println!("plant bench pass draws: {:?}", st.pass_draws);
             }
             other => return Err(format!("unknown plant op `{other}`")),
         }
