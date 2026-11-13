@@ -1,0 +1,15 @@
+[package]
+name = "pipe-length"
+description = "Example VisionCraft extension: draw a pipe on the ground and read its length over the terrain."
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+visioncraft = { path = "../../apps/visioncraft" }
+visioncraft-core = { path = "../../crates/visioncraft-core" }
+serde_json = "1"

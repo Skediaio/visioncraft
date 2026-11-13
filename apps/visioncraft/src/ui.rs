@@ -18,6 +18,8 @@ pub enum Mode {
     Objects,
     Sun,
     Views,
+    /// An extension's mode, by its id.
+    Extension(&'static str),
 }
 
 pub const MODES: [Mode; 5] = [
@@ -380,6 +382,8 @@ pub enum Action {
 
 pub struct Hud {
     pub mode: Option<Mode>,
+    /// Extensions' modes after the built-in ones: (id, label).
+    pub extension_modes: Vec<(&'static str, &'static str)>,
     pub show_fps: bool,
     pub layers_open: bool,
     pub export_open: bool,
@@ -391,6 +395,7 @@ impl Default for Hud {
     fn default() -> Self {
         Self {
             mode: None,
+            extension_modes: Vec::new(),
             show_fps: true,
             layers_open: false,
             export_open: false,
@@ -437,13 +442,19 @@ impl Hud {
             w - 20.0,
             |ui| {
                 ui.horizontal(|ui| {
-                    for (mode, (full, short)) in crate::ui::MODES.iter().zip(t::MODE_LABELS) {
-                        let active = self.mode == Some(*mode);
+                    let built_in = crate::ui::MODES.iter().zip(t::MODE_LABELS);
+                    let extensions = self
+                        .extension_modes
+                        .iter()
+                        .map(|(id, label)| (Mode::Extension(id), (*label, *label)));
+                    let modes: Vec<_> = built_in.map(|(m, l)| (*m, l)).chain(extensions).collect();
+                    for (mode, (full, short)) in modes {
+                        let active = self.mode == Some(mode);
                         if pill(ui, if compact { short } else { full }, active)
                             .on_hover_text(full)
                             .clicked()
                         {
-                            actions.push(Action::Mode(if active { None } else { Some(*mode) }));
+                            actions.push(Action::Mode(if active { None } else { Some(mode) }));
                         }
                     }
                 });

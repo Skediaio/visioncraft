@@ -10,6 +10,7 @@ pub mod camera;
 #[cfg(test)]
 mod command_params;
 pub mod draw;
+pub mod extension;
 pub mod files;
 pub mod gltf_load;
 pub mod handles;
@@ -28,6 +29,7 @@ pub mod planting_smoke;
 pub mod planting_tools;
 pub mod plants;
 pub mod scene;
+pub mod shell;
 pub mod sky_panel;
 pub mod smoke;
 pub mod species_editor;
@@ -40,7 +42,11 @@ pub mod ui;
 pub mod user_objects;
 pub mod views;
 
-use eframe::egui::{self, Align2, Key, PointerButton, Vec2};
+pub use eframe::egui;
+pub use extension::{Extension, ExtensionCx, Overlay};
+pub use shell::Shell;
+
+use eframe::egui::{Align2, Key, PointerButton, Vec2};
 use files::{Inbox, Msg, Watcher};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -105,6 +111,7 @@ pub struct App {
     terrain: terrain_tool::TerrainTool,
     views: views::ViewsState,
     modelui: modelui::ModelUi,
+    extensions: Vec<Box<dyn Extension>>,
     loading: Option<Job>,
     /// Model imports waiting for `loading` (a bundle brings several).
     queued_jobs: Vec<Job>,
@@ -144,7 +151,7 @@ fn stem(name: &str) -> String {
 }
 
 impl App {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, extensions: Vec<Box<dyn Extension>>) -> Self {
         ui::apply_theme(&cc.egui_ctx);
         let state = cc
             .wgpu_render_state
@@ -172,6 +179,7 @@ impl App {
             terrain: Default::default(),
             views: Default::default(),
             modelui: Default::default(),
+            extensions,
             loading: None,
             queued_jobs: Vec::new(),
             export: None,
@@ -191,6 +199,12 @@ impl App {
             #[cfg(not(target_arch = "wasm32"))]
             focused: false,
         };
+        for e in &app.extensions {
+            e.register(&mut app.studio.session);
+            if let Some(label) = e.mode() {
+                app.hud.extension_modes.push((e.id(), label));
+            }
+        }
         // AI agents: the person's switch, or `--control [PORT]` for this run.
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -619,7 +633,8 @@ impl App {
             Some(Mode::Objects) => self.objects.leave(&mut cx),
             Some(Mode::Sun) => self.terrain.leave(&mut cx),
             Some(Mode::Views) => self.views.leave(),
-            _ => {}
+            Some(Mode::Extension(_)) => cx.s.double_click_captured = false,
+            None => {}
         }
         if mode == Some(Mode::Draw) {
             cx.s.camera.leave_walk();
@@ -1051,6 +1066,18 @@ impl eframe::App for App {
             Some(Mode::Sun) => self.terrain.update(&mut cx),
             _ => {}
         }
+        let mut overlay = extension::Overlay::default();
+        for e in &mut self.extensions {
+            if self.hud.mode == Some(Mode::Extension(e.id())) {
+                cx.s.double_click_captured = false;
+                e.update(&mut extension::ExtensionCx {
+                    cx: &mut cx,
+                    overlay: &mut overlay,
+                });
+            }
+            e.overlay(cx.s.project(), &mut overlay);
+        }
+        overlay.show(&mut cx);
         self.views.pump(&mut cx, &self.device, &self.queue);
         lamps::reconcile(&mut cx);
         busy |= self.views.busy();
@@ -1185,6 +1212,26 @@ impl eframe::App for App {
                         ui.small(strings::MATERIALS_HINT);
                     },
                 );
+            }
+            Some(Mode::Extension(id)) => {
+                if let Some(e) = self.extensions.iter_mut().find(|e| e.id() == id) {
+                    ui::floating(
+                        &ctx,
+                        "modepanel",
+                        Align2::LEFT_BOTTOM,
+                        Vec2::new(10.0, -58.0),
+                        panel_width,
+                        |ui| {
+                            e.panel(
+                                ui,
+                                &mut extension::ExtensionCx {
+                                    cx: &mut cx,
+                                    overlay: &mut Default::default(),
+                                },
+                            )
+                        },
+                    );
+                }
             }
             None => {}
         }

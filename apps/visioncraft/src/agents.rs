@@ -202,6 +202,7 @@ fn mode_id(m: Mode) -> &'static str {
         Mode::Objects => "objects",
         Mode::Sun => "sun",
         Mode::Views => "viewpoints",
+        Mode::Extension(id) => id,
     }
 }
 
