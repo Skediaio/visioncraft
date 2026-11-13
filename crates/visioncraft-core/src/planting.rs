@@ -678,13 +678,18 @@ fn evaluate_spline(g: &SplineMass, ground: &dyn Fn(f32, f32) -> Option<f32>) -> 
         let (p, d) = along_line(&line, &along, s);
         let (x, z) = (p[0] - d[1] * g.offset_m, p[1] + d[0] * g.offset_m);
         let y = ground(x, z).unwrap_or(0.0);
-        placements.push(make(
+        let mut placement = make(
             &g.asset_palette,
             (g.scale_min, g.scale_max),
             g.random_rotation,
             [x, y, z],
             &mut rng,
-        ));
+        );
+        if !g.random_rotation {
+            // Not turned at random: along the line (a hedge segment's x axis follows it).
+            placement.rotation_y_deg = (-d[1]).atan2(d[0]).to_degrees();
+        }
+        placements.push(placement);
     }
     Evaluation {
         placements,
@@ -1196,6 +1201,19 @@ mod tests {
             random_rotation: false,
             seed: 3,
         }
+    }
+
+    #[test]
+    fn unturned_line_items_face_along_the_line() {
+        let mut g = spline(false, Spacing::Every(1.0));
+        g.spacing_jitter = 0.0;
+        g.points = vec![[0.0, 0.0], [0.0, 10.0]];
+        let e = evaluate(&Generator::SplineMass(g.clone()), &flat).placements;
+        // Along +z: the item's x axis turned onto +z is -90 degrees about y.
+        assert!(e.iter().all(|p| (p.rotation_y_deg + 90.0).abs() < 1e-3));
+        g.random_rotation = true;
+        let e = evaluate(&Generator::SplineMass(g), &flat).placements;
+        assert!(e.iter().any(|p| (p.rotation_y_deg + 90.0).abs() > 1.0));
     }
 
     #[test]
