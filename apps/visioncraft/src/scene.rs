@@ -327,6 +327,20 @@ const LAWN_MAX_DENSITY: f32 = 300.0;
 const LAWN_MAX_TUFTS: usize = 60_000;
 const LAWN_SPECIES: &str = "flora:lawn-tuft";
 
+/// Catalogue objects smaller than this (largest side, metres) are culled far away, at
+/// `OBJECT_CULL_PER_M` metres per metre of size.
+const SMALL_OBJECT_M: f32 = 4.0;
+const OBJECT_CULL_PER_M: f32 = 120.0;
+
+/// The largest LOD distance below `last` (0 when there is none).
+fn parts_before(parts: &[(MeshId, MaterialId, f32)], last: f32) -> f32 {
+    parts
+        .iter()
+        .map(|p| p.2)
+        .filter(|d| *d < last)
+        .fold(0.0, f32::max)
+}
+
 /// The instances of one (asset, variant) of a generator: its renderer items (a plant or a
 /// catalogue model is one LOD item, a stand-in several), the LOD parts they draw (`None`: a
 /// stand-in) and their matrices.
@@ -855,15 +869,31 @@ impl Scene {
     /// stand-in can show.
     fn source(&self, project: &Project, asset: &str, variant: u32, month: u8) -> Option<LodParts> {
         if self.library.knows(asset) {
-            return self.library.parts(asset);
+            let mut parts = self.library.parts(asset)?;
+            // Small objects (a pot, a bench) stop drawing far away, at a size-proportional distance.
+            let size = self
+                .library
+                .catalog
+                .as_ref()
+                .and_then(|c| c.asset(asset))
+                .map_or(1.0, |a| a.size_m.into_iter().fold(0.0, f32::max));
+            if size < SMALL_OBJECT_M {
+                let cull = (OBJECT_CULL_PER_M * size).clamp(40.0, 400.0);
+                let last = parts.iter().map(|p| p.2).fold(0.0, f32::max);
+                let cull = cull.max(parts_before(&parts, last) + 1.0);
+                for p in parts.iter_mut().filter(|p| p.2 == last) {
+                    p.2 = p.2.min(cull);
+                }
+            }
+            return Some(parts);
         }
         let res = plants::resolve(project, asset)?;
         let class = plants::class(&res.params, month);
         self.flora.parts(asset, class, variant).map(<[_]>::to_vec)
     }
 
-    /// Renderer items for one group: one LOD item for the real thing, else stand-in items (and the
-    /// plant is asked for).
+    /// Renderer items for one group: one LOD item for the real thing (a tree's impostor after its
+    /// meshes), else stand-in items (and the plant is asked for).
     #[allow(clippy::too_many_arguments)]
     fn make_items(
         &mut self,
@@ -871,12 +901,25 @@ impl Scene {
         project: &Project,
         assets: &[Asset],
         asset: &str,
+        variant: u32,
         month: u8,
         src: Option<&LodParts>,
         matrices: &[Mat4],
     ) -> Vec<ItemId> {
         if let Some(parts) = src {
-            return vec![r.add_lod_item(parts, matrices)];
+            let item = r.add_lod_item(parts, matrices);
+            let impostor = (!self.library.knows(asset))
+                .then(|| plants::resolve(project, asset))
+                .flatten()
+                .and_then(|res| {
+                    let class = plants::class(&res.params, month);
+                    self.flora.impostor(asset, class, variant)
+                });
+            if let Some(imp) = impostor {
+                // fails only for a removed impostor: the tree then stops at its far mesh
+                let _ = r.set_item_impostor(item, imp, plants::IMPOSTOR_MAX_M);
+            }
+            return vec![item];
         }
         let plant = (!self.library.knows(asset))
             .then(|| plants::resolve(project, asset))
@@ -918,6 +961,7 @@ impl Scene {
                 project,
                 assets,
                 asset,
+                *variant,
                 month,
                 src.as_ref(),
                 &grp.matrices,
@@ -972,7 +1016,16 @@ impl Scene {
                     if let Some(p) = prev {
                         p.items.into_iter().for_each(|i| r.remove_item(i));
                     }
-                    self.make_items(r, project, assets, &asset, month, src.as_ref(), &matrices)
+                    self.make_items(
+                        r,
+                        project,
+                        assets,
+                        &asset,
+                        variant,
+                        month,
+                        src.as_ref(),
+                        &matrices,
+                    )
                 }
             };
             groups.insert(

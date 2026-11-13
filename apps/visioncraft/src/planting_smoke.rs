@@ -340,7 +340,9 @@ mod native {
                     device
                         .poll(wgpu::PollType::wait_indefinitely())
                         .map_err(|e| e.to_string())?;
-                    each.push(now_ms() - t0);
+                    let ms = now_ms() - t0;
+                    s.record_frame(ms as f32); // Auto adapts as in the window
+                    each.push(ms);
                 }
                 let each = &each[3..]; // the first frames build pipelines
                 let avg = each.iter().sum::<f64>() / each.len() as f64;
@@ -349,6 +351,19 @@ mod native {
                     "plant bench {w}x{h}: {} frames, average {avg:.1} ms ({:.1} fps), worst {max:.1} ms",
                     each.len(),
                     1000.0 / avg
+                );
+                let st = s.renderer.stats();
+                let q = s.current_quality();
+                println!(
+                    "plant bench stats: {} draw calls, {:.1} M triangles, {} instances, cpu {:.1} ms, render {:?}, lod {}% shadows {} msaa {}",
+                    st.draw_calls,
+                    st.triangles as f64 / 1e6,
+                    st.instances,
+                    st.cpu_encode_ms,
+                    st.render_size,
+                    q.lod_distance_percent,
+                    q.shadow_resolution,
+                    q.msaa
                 );
             }
             other => return Err(format!("unknown plant op `{other}`")),

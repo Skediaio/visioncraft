@@ -5,7 +5,7 @@ use crate::scene::{self, MaterialId, MeshId};
 use std::collections::HashMap;
 use visioncraft_core::Project;
 use visioncraft_flora as flora;
-use visioncraft_render::{Renderer, TextureId};
+use visioncraft_render::{ImpostorId, Renderer, TextureId};
 
 pub const VARIANTS: u32 = 3;
 
@@ -54,6 +54,37 @@ pub fn class(p: &flora::PlantParams, month: u8) -> u32 {
 /// (mesh, material, LOD max distance)
 type Part = (MeshId, MaterialId, f32);
 
+/// Plants at least this tall (unscaled) are trees: they hand over to a baked impostor.
+const TREE_M: f32 = 3.0;
+/// Views around a tree an impostor is baked from.
+const IMPOSTOR_VIEWS: u32 = 8;
+/// Trees: impostors draw up to here (metres; beyond, a tree is a few pixels).
+pub const IMPOSTOR_MAX_M: f32 = 2500.0;
+
+/// The LOD distances (near, mid, far end) of a plant `h` metres tall, before any impostor:
+/// the far mesh of a tree draws to infinity until its impostor is baked, a shrub or ground
+/// plant is culled at the end of its far level.
+fn lod_distances(h: f32) -> [f32; 3] {
+    if h >= TREE_M {
+        [8.0 + 3.0 * h, 22.0 + 6.0 * h, f32::INFINITY]
+    } else {
+        [3.0 + 2.0 * h, 8.0 + 4.0 * h, 15.0 + 12.0 * h]
+    }
+}
+
+/// A tree with its impostor: its three mesh levels' ends, the last where the impostor takes over.
+fn impostor_distances(h: f32) -> [f32; 3] {
+    [4.0 + 1.0 * h, 8.0 + 1.5 * h, 15.0 + 2.0 * h]
+}
+
+/// One variant of a species in one season class.
+struct Variant {
+    parts: Vec<Part>,
+    /// Trees: (mesh levels shortened for the impostor, the impostor) once baked.
+    baked: Option<(Vec<Part>, ImpostorId)>,
+    height: f32,
+}
+
 struct Tex {
     atlas: TextureId,
     bark: TextureId,
@@ -70,9 +101,11 @@ struct Want {
 #[derive(Default)]
 pub struct Flora {
     textures: HashMap<String, Tex>,
-    /// (species, class) to parts per variant: (mesh, material, LOD max distance).
-    classes: HashMap<(String, u32), Vec<Vec<Part>>>,
+    /// (species, class) to its variants.
+    classes: HashMap<(String, u32), Vec<Variant>>,
     queue: Vec<Want>,
+    /// Trees whose impostor is still to be baked: (species, class, variant).
+    bakes: Vec<(String, u32, u32)>,
     /// Counts finished generations, so generators know to rebuild.
     pub rev: u64,
 }
@@ -82,9 +115,65 @@ impl Flora {
         self.classes.contains_key(&(id.to_string(), class))
     }
 
+    fn variant(&self, id: &str, class: u32, variant: u32) -> Option<&Variant> {
+        self.classes
+            .get(&(id.to_string(), class))?
+            .get((variant % VARIANTS) as usize)
+    }
+
+    /// The LOD parts to draw: a tree's shortened mesh levels once its impostor is there.
     pub fn parts(&self, id: &str, class: u32, variant: u32) -> Option<&[Part]> {
-        let v = self.classes.get(&(id.to_string(), class))?;
-        v.get((variant % VARIANTS) as usize).map(Vec::as_slice)
+        let v = self.variant(id, class, variant)?;
+        Some(v.baked.as_ref().map_or(&v.parts, |b| &b.0))
+    }
+
+    /// The impostor that follows `parts`' last level, once baked.
+    pub fn impostor(&self, id: &str, class: u32, variant: u32) -> Option<ImpostorId> {
+        self.variant(id, class, variant)?
+            .baked
+            .as_ref()
+            .map(|b| b.1)
+    }
+
+    /// Bakes one waiting impostor (from the far mesh level). True when one was made.
+    fn bake_one(&mut self, r: &mut Renderer) -> bool {
+        while let Some((id, class, variant)) = self.bakes.pop() {
+            let Some(v) = self
+                .classes
+                .get_mut(&(id, class))
+                .and_then(|c| c.get_mut(variant as usize))
+            else {
+                continue;
+            };
+            let far = v.parts.iter().map(|p| p.2).fold(0.0, f32::max);
+            let src: Vec<(MeshId, MaterialId)> = v
+                .parts
+                .iter()
+                .filter(|p| p.2 == far)
+                .map(|p| (p.0, p.1))
+                .collect();
+            let Ok(imp) = r.bake_impostor(&src, None, IMPOSTOR_VIEWS) else {
+                continue; // stays a mesh to infinity
+            };
+            let ends = impostor_distances(v.height);
+            let mut levels: Vec<f32> = v.parts.iter().map(|p| p.2).collect();
+            levels.sort_by(f32::total_cmp);
+            levels.dedup();
+            let short = v
+                .parts
+                .iter()
+                .map(|&(m, mat, d)| {
+                    let rank = levels.iter().position(|l| *l == d).unwrap_or(0);
+                    // the last level is always the impostor's hand-over
+                    let rank = if d == far { 2 } else { rank.min(1) };
+                    (m, mat, ends[rank])
+                })
+                .collect();
+            v.baked = Some((short, imp));
+            self.rev += 1;
+            return true;
+        }
+        false
     }
 
     pub fn want(&mut self, id: &str, class: u32, month: u8, params: &flora::PlantParams) {
@@ -98,15 +187,16 @@ impl Flora {
         }
     }
 
+    /// Generations and impostor bakes still to do.
     pub fn pending(&self) -> usize {
-        self.queue.len()
+        self.queue.len() + self.bakes.len()
     }
 
     /// One step: the textures of the first wanted species, or its meshes. True when something finished.
     #[allow(clippy::map_entry)] // the textures are generated between the check and the insert
     pub fn pump(&mut self, r: &mut Renderer) -> bool {
         let Some(w) = self.queue.first() else {
-            return false;
+            return self.bake_one(r);
         };
         let (id, class, month) = (w.id.clone(), w.class, w.month);
         if !self.textures.contains_key(&id) {
@@ -148,7 +238,7 @@ impl Flora {
                 if li == 0 {
                     height = mesh.bounds().1[1].max(0.2);
                 }
-                let dist = [8.0 + 3.0 * height, 22.0 + 6.0 * height, f32::INFINITY][li];
+                let dist = lod_distances(height)[li];
                 for (kind, part) in mesh.split_parts() {
                     let Some(m) = scene::upload_plant_mesh(r, &part) else {
                         continue;
@@ -165,7 +255,14 @@ impl Flora {
                     parts.push((m, mat, dist));
                 }
             }
-            variants.push(parts);
+            if height >= TREE_M {
+                self.bakes.push((id.clone(), class, v));
+            }
+            variants.push(Variant {
+                parts,
+                baked: None,
+                height,
+            });
         }
         self.classes.insert((id, class), variants);
         self.rev += 1;

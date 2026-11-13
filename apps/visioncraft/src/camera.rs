@@ -5,8 +5,8 @@ use visioncraft_core::{Viewpoint, interpolate};
 
 pub const EYE_HEIGHT: f32 = 1.7;
 pub const WALK_SPEED: f32 = 1.4;
-/// The top view is a very narrow perspective from far above: the renderer's shadow maths needs a
-/// perspective projection, and at this angle it is parallel for all practical purposes.
+/// The top view is orthographic; its eye stands as far above the ground as a 6 degree view
+/// showing the same would (where the asset library measures distances from).
 const TOP_FOV: f32 = 0.105;
 pub const FLY_SECONDS: f64 = 1.2;
 
@@ -134,7 +134,10 @@ impl Camera {
         let eye = c + Vec3::Y * d;
         (
             Mat4::look_at_rh(eye, c, Vec3::NEG_Z),
-            Mat4::perspective_rh(TOP_FOV, aspect, d * 0.3, d * 3.0),
+            {
+                let h = self.top_half_height;
+                Mat4::orthographic_rh(-h * aspect, h * aspect, -h, h, d * 0.3, d * 3.0)
+            },
             eye,
         )
     }
@@ -381,6 +384,13 @@ mod tests {
         let north = (p * v).project_point3(Vec3::new(0.0, 0.0, -5.0));
         let east = (p * v).project_point3(Vec3::new(5.0, 0.0, 0.0));
         assert!(north.y > 0.0 && east.x > 0.0);
+        // Orthographic: a 10 m pole away from the centre shows as a point, and the view is
+        // exactly `top_half_height` tall.
+        let foot = (p * v).project_point3(Vec3::new(8.0, 0.0, 3.0));
+        let top = (p * v).project_point3(Vec3::new(8.0, 10.0, 3.0));
+        assert!((foot.truncate() - top.truncate()).length() < 1e-5);
+        let edge = (p * v).project_point3(Vec3::new(0.0, 0.0, -c.top_half_height));
+        assert!((edge.y - 1.0).abs() < 1e-5);
     }
 
     #[test]
