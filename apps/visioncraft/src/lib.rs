@@ -571,13 +571,14 @@ impl App {
     #[cfg(not(target_arch = "wasm32"))]
     fn agents_pill(&mut self, ctx: &egui::Context, now: f64) {
         let narrow = ui::narrow(ctx);
+        // Below the view bar (the bottom right is the plant browser's).
         let offset = if narrow {
-            Vec2::new(-10.0, -64.0)
+            Vec2::new(-10.0, 104.0)
         } else {
-            Vec2::new(-10.0, -10.0)
+            Vec2::new(-10.0, 64.0)
         };
         let mut on = self.agents.allowed();
-        ui::floating(ctx, "agents", Align2::RIGHT_BOTTOM, offset, 300.0, |ui| {
+        ui::floating(ctx, "agents", Align2::RIGHT_TOP, offset, 300.0, |ui| {
             ui.horizontal(|ui| {
                 let label = match self.agents.port() {
                     Some(p) if !narrow => format!("{} · {p}", strings::ALLOW_AGENTS),

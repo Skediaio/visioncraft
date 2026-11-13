@@ -45,7 +45,7 @@ impl SpeciesEditor {
             (
                 None,
                 Some(b.to_string()),
-                format!("{} ({})", s.common_name, t::SP_OWN),
+                format!("{} {}", t::SP_MY, s.common_name.to_lowercase()),
                 s.params.clone(),
             )
         } else {
@@ -118,7 +118,7 @@ impl SpeciesEditor {
             ctx,
             "species-editor",
             egui::Align2::RIGHT_TOP,
-            egui::Vec2::new(-10.0, 64.0),
+            egui::Vec2::new(-10.0, 104.0),
             340.0,
             |ui| {
                 ui.horizontal(|ui| {

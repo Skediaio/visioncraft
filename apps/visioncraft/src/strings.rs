@@ -305,3 +305,4 @@ pub const EXPORT_ALL_TIP: &str = "One picture per saved viewpoint, each with its
 pub const EXPORTING_VIEWS: &str = "Rendering every viewpoint at";
 pub const CLAY_NOTICE: &str = "Clay view: materials and plant colours are hidden.";
 pub const CLAY_OFF: &str = "Show materials";
+pub const SP_MY: &str = "My";

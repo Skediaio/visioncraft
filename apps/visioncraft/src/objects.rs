@@ -188,13 +188,12 @@ impl ObjectsState {
         }
         if self.tools.add_to.is_some() {
             let narrow = crate::ui::narrow(cx.ctx);
+            // Right of the planting panel, whose width follows its content: anchored at the
+            // other side of the window.
             let (anchor, offset) = if narrow {
                 (egui::Align2::LEFT_TOP, egui::Vec2::new(10.0, 150.0))
             } else {
-                (
-                    egui::Align2::LEFT_BOTTOM,
-                    egui::Vec2::new(10.0 + 430.0 + 10.0, -58.0),
-                )
+                (egui::Align2::RIGHT_BOTTOM, egui::Vec2::new(-10.0, -58.0))
             };
             let (mut added, mut close) = (None, false);
             crate::ui::floating(cx.ctx, "plantbrowser", anchor, offset, 330.0, |ui| {
