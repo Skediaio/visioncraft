@@ -349,8 +349,16 @@ export async function vc_decode(bytes) {
     }
 }
 
-async fn load(key: &Key, base: &io::Base) -> Result<Loaded, String> {
-    let bytes = io::read(base, key.path()).await?;
+/// Files that live in memory rather than under the library folder (objects a person imported,
+/// read from a bundle), by path.
+pub type MemoryFiles = Arc<Mutex<HashMap<String, Arc<[u8]>>>>;
+
+async fn load(key: &Key, base: &io::Base, memory: &MemoryFiles) -> Result<Loaded, String> {
+    let held = memory.lock().ok().and_then(|m| m.get(key.path()).cloned());
+    let bytes = match held {
+        Some(b) => b.to_vec(),
+        None => io::read(base, key.path()).await?,
+    };
     Ok(match key {
         Key::Bytes(_) => Loaded::Bytes(bytes),
         Key::Image { .. } | Key::Thumb(_) => Loaded::Image(io::decode(bytes).await?),
@@ -404,6 +412,8 @@ pub struct AssetStore {
     failed: HashSet<Key>,
     inbox: Inbox,
     pending_tex: Vec<(Key, f32, Rgba)>,
+    /// Imported files, read before the library folder.
+    pub memory: MemoryFiles,
     done: HashMap<Key, Loaded>,
     textures: HashMap<Key, TextureId>,
     lru: Lru,
@@ -438,6 +448,7 @@ impl AssetStore {
             inflight: HashSet::new(),
             failed: HashSet::new(),
             inbox: Inbox::default(),
+            memory: MemoryFiles::default(),
             pending_tex: Vec::new(),
             done: HashMap::new(),
             textures: HashMap::new(),
@@ -463,6 +474,20 @@ impl AssetStore {
 
     pub fn tick(&self) -> u64 {
         self.tick
+    }
+
+    /// Holds `bytes` as the file at `path` (an imported object): it loads from memory from now
+    /// on, and a failed earlier attempt (the file was missing) is forgotten.
+    pub fn provide(&mut self, path: &str, bytes: Arc<[u8]>) {
+        if let Ok(mut m) = self.memory.lock() {
+            m.insert(path.to_string(), bytes);
+        }
+        self.failed.retain(|k| k.path() != path);
+    }
+
+    /// The bytes of a file held in memory.
+    pub fn provided(&self, path: &str) -> Option<Arc<[u8]>> {
+        self.memory.lock().ok()?.get(path).cloned()
     }
 
     /// Asks for a file; nothing happens when it is loaded, loading or has failed.
@@ -600,9 +625,10 @@ impl AssetStore {
                 break;
             };
             self.inflight.insert(key.clone());
-            let (inbox, base) = (self.inbox.clone(), self.base.clone());
+            let (inbox, base, memory) =
+                (self.inbox.clone(), self.base.clone(), self.memory.clone());
             io::spawn(async move {
-                let result = load(&key, &base).await;
+                let result = load(&key, &base, &memory).await;
                 inbox.lock().expect("asset inbox").push((key, result));
             });
         }

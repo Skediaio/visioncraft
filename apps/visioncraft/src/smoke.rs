@@ -7,7 +7,7 @@
 //! `"set camera walk x z heading_deg pitch_deg"`, `"set camera top cx cz half_height"`,
 //! `"set camera frame"`, `"set quality low|medium|high|auto"`, `"set exposure stops"`,
 //! `"set clay on|off"`, `"highlight owner face-name"`, `"highlight none"`,
-//! `"screenshot name w h"`) or an object `{"run": "command.name", "params": {...}}`.
+//! `"screenshot name w h"`, `"object file.glb name"`) or an object `{"run": "command.name", "params": {...}}`.
 
 use serde_json::Value;
 
@@ -39,6 +39,11 @@ pub enum Cam {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Step {
+    /// Imports a `.glb` as a project object (`object path name`).
+    Object {
+        path: String,
+        name: String,
+    },
     Run {
         name: String,
         params: Value,
@@ -214,6 +219,10 @@ pub fn parse_step(v: &Value) -> Result<Step, String> {
         }),
         ["faces", owner] => Ok(Step::Faces(owner.to_string())),
         ["wait", "assets"] => Ok(Step::WaitAssets),
+        ["object", path, name] => Ok(Step::Object {
+            path: path.to_string(),
+            name: name.to_string(),
+        }),
         ["texture", "cap", mb] => Ok(Step::TextureCap(mb.parse().map_err(|_| "megabytes")?)),
         ["save", "project", path] => Ok(Step::SaveProject(path.to_string())),
         ["stats"] => Ok(Step::Stats),
@@ -575,6 +584,11 @@ mod native {
                     }
                 }
                 Step::WaitAssets => settle(&mut s, &device, &queue),
+                Step::Object { path, name } => {
+                    let bytes = std::fs::read(&path).map_err(|e| at(format!("{path}: {e}")))?;
+                    let id = s.import_object(&name, bytes).map_err(at)?;
+                    println!("object {path} -> {id}");
+                }
                 Step::TextureCap(mb) => s.scene.library.store.cap_bytes = mb << 20,
                 Step::SaveProject(path) => {
                     std::fs::write(&path, s.project().to_json_bytes())

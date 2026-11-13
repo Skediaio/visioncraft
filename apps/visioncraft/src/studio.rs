@@ -740,6 +740,9 @@ impl Studio {
         if self.scene.pump(&mut self.renderer, eye) {
             self.draft_serial += 1;
         }
+        self.scene
+            .library
+            .set_user_objects(&self.session.project().objects);
         self.take_catalog();
         self.sync();
         self.scene
@@ -785,6 +788,9 @@ impl Studio {
         if !std::mem::take(&mut lib.catalog_arrived) {
             return;
         }
+        // Imported objects come and go with the project: theirs are taken afresh.
+        self.assets
+            .retain(|a| a.origin != visioncraft_core::catalog::Origin::User);
         if let Some(c) = lib.catalog.clone() {
             for a in &c.assets {
                 if !self.assets.iter().any(|x| x.id == a.id) {
@@ -792,6 +798,35 @@ impl Studio {
                 }
             }
         }
+    }
+
+    /// Imports a `.glb` as a project object: checked, its bytes held by the asset store, and
+    /// recorded with `object.add`. Returns the object's asset id (`user:<id>`).
+    pub fn import_object(&mut self, name: &str, bytes: Vec<u8>) -> Result<String, String> {
+        let checked = crate::user_objects::check_glb(&bytes)?;
+        let file = crate::user_objects::file_for(name, &self.project().objects);
+        let store = &mut self.scene.library.store;
+        store.provide(&file, Arc::from(bytes));
+        if let Some(t) = checked.thumbnail {
+            store.provide(&crate::user_objects::thumbnail_path(&file), Arc::from(t));
+        }
+        let r = self
+            .run(
+                "object.add",
+                serde_json::json!({"name": name, "file": file, "size_m": checked.size_m}),
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(format!("user:{}", r["id"].as_str().unwrap_or_default()))
+    }
+
+    /// Imported objects whose file is not held (a project opened without its bundle).
+    pub fn missing_objects(&self) -> Vec<&visioncraft_core::UserObject> {
+        let store = &self.scene.library.store;
+        self.project()
+            .objects
+            .iter()
+            .filter(|o| store.provided(&o.file).is_none())
+            .collect()
     }
 
     /// Models in the project whose geometry is not loaded.

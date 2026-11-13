@@ -44,7 +44,15 @@ fn spawn(fut: impl Future<Output = ()> + 'static) {
     wasm_bindgen_futures::spawn_local(fut);
 }
 
-pub const OPEN_EXTENSIONS: [&str; 5] = ["3dcraft", "obj", "visioncraft", "mcmat", "json"];
+pub const OPEN_EXTENSIONS: [&str; 7] = [
+    "3dcraft",
+    "obj",
+    "visioncraft",
+    "zip",
+    "glb",
+    "mcmat",
+    "json",
+];
 
 /// Opens a file picker; the chosen file arrives in `inbox`.
 pub fn pick(

@@ -54,7 +54,8 @@ pub const MODELS: &str = "Models";
 pub const RELOAD_MODEL: &str = "Reload model";
 pub const RELINK: &str = "Relink model";
 pub const MODEL_UPDATED: &str = "Model updated";
-pub const DROP_HINT: &str = "Open or drop a .3dcraft or .obj model, or draw with the Draw tool";
+pub const DROP_HINT: &str =
+    "Open or drop a .3dcraft or .obj model, a .glb object, or draw with the Draw tool";
 pub const WALK_HINT: &str = "Walking: WASD or arrows move, Shift runs, drag to look, Space to exit";
 
 pub const MODE_LABELS: [(&str, &str); 5] = [
@@ -306,3 +307,7 @@ pub const EXPORTING_VIEWS: &str = "Rendering every viewpoint at";
 pub const CLAY_NOTICE: &str = "Clay view: materials and plant colours are hidden.";
 pub const CLAY_OFF: &str = "Show materials";
 pub const SP_MY: &str = "My";
+pub const OBJECT_IMPORTED: &str = "is in the plant browser under Objects: place it with any tool.";
+pub const OBJECTS_MISSING: &str =
+    "Imported objects without their file (open the .visioncraft.zip, or import the .glb again):";
+pub const OBJECT_UNREADABLE: &str = "the object file in the bundle cannot be read";

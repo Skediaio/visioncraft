@@ -5,6 +5,7 @@
 #[cfg(not(target_arch = "wasm32"))]
 pub mod agents;
 pub mod assets;
+pub mod bundle;
 pub mod camera;
 #[cfg(test)]
 mod command_params;
@@ -36,6 +37,7 @@ pub mod sun;
 pub mod terrain_gpu;
 pub mod terrain_tool;
 pub mod ui;
+pub mod user_objects;
 pub mod views;
 
 use eframe::egui::{self, Align2, Key, PointerButton, Vec2};
@@ -104,6 +106,8 @@ pub struct App {
     views: views::ViewsState,
     modelui: modelui::ModelUi,
     loading: Option<Job>,
+    /// Model imports waiting for `loading` (a bundle brings several).
+    queued_jobs: Vec<Job>,
     export: Option<ExportJob>,
     export_all: Option<ExportAll>,
     pending_replace: Option<Replace>,
@@ -169,6 +173,7 @@ impl App {
             views: Default::default(),
             modelui: Default::default(),
             loading: None,
+            queued_jobs: Vec::new(),
             export: None,
             export_all: None,
             pending_replace: None,
@@ -235,6 +240,15 @@ impl App {
                 }
             }
         }
+        // Imported objects next to a plain project file (natively; a page sees no folders).
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(dir) = project_dir {
+            for o in self.studio.project().objects.clone() {
+                if let Ok(bytes) = std::fs::read(dir.join(&o.file)) {
+                    self.take_bundled(vec![(o.file.clone(), Arc::from(bytes))]);
+                }
+            }
+        }
         let _ = project_dir;
     }
 
@@ -253,10 +267,10 @@ impl App {
         target: Option<String>,
     ) {
         match extension(&name).as_str() {
-            "visioncraft" | "json" if self.dirty() => {
+            "visioncraft" | "json" | "zip" if self.dirty() => {
                 self.pending_replace = Some(Replace::Open { name, bytes, path });
             }
-            "visioncraft" | "json" => self.open_project(&name, &bytes, path.as_deref()),
+            "visioncraft" | "json" | "zip" => self.open_project(&name, &bytes, path.as_deref()),
             "3dcraft" | "obj" => {
                 self.loading = Some(Job {
                     name,
@@ -266,6 +280,13 @@ impl App {
                     task: None,
                 })
             }
+            "glb" => match self.studio.import_object(&stem(&name), bytes) {
+                Ok(_) => {
+                    self.toasts
+                        .info(format!("{} {}", stem(&name), strings::OBJECT_IMPORTED));
+                }
+                Err(e) => self.toasts.error(format!("{name}: {e}")),
+            },
             "mcmat" => {
                 let mut cx = Cx {
                     s: &mut self.studio,
@@ -407,18 +428,76 @@ impl App {
     }
 
     fn open_project(&mut self, name: &str, bytes: &[u8], path: Option<&Path>) {
-        match Project::from_json_bytes(bytes) {
-            Ok(p) => {
+        let opened = if extension(name) == "zip" {
+            bundle::unpack(bytes).map(|u| (u.project, u.files))
+        } else {
+            Project::from_json_bytes(bytes)
+                .map(|p| (p, Vec::new()))
+                .map_err(|e| e.to_string())
+        };
+        match opened {
+            Ok((p, files)) => {
                 self.watcher.forget_all();
                 self.studio.replace_project(p);
-                self.project_name = Some(stem(name));
+                self.project_name = Some(stem(name.trim_end_matches(".zip")));
                 self.load_sources(path.and_then(Path::parent));
+                self.take_bundled(files);
                 self.studio.sync();
                 self.studio.frame_all();
                 self.saved_revision = self.studio.session.revision();
                 self.hud.mode = None;
+                let missing: Vec<String> = self
+                    .studio
+                    .missing_objects()
+                    .iter()
+                    .map(|o| format!("{} ({})", o.name, o.file))
+                    .collect();
+                if !missing.is_empty() {
+                    self.toasts.warn(format!(
+                        "{} {}",
+                        strings::OBJECTS_MISSING,
+                        missing.join(", ")
+                    ));
+                }
             }
-            Err(e) => self.toasts.error(e.to_string()),
+            Err(e) => self.toasts.error(format!("{name}: {e}")),
+        }
+    }
+
+    /// The files of an opened bundle: objects held by the asset store, model sources imported
+    /// (in turn, off the UI thread) into the models that name them.
+    fn take_bundled(&mut self, files: Vec<(String, Arc<[u8]>)>) {
+        for (file, bytes) in files {
+            if self.studio.project().objects.iter().any(|o| o.file == file) {
+                if let Ok(c) = user_objects::check_glb(&bytes) {
+                    let store = &mut self.studio.scene.library.store;
+                    if let Some(t) = c.thumbnail {
+                        store.provide(&user_objects::thumbnail_path(&file), Arc::from(t));
+                    }
+                    store.provide(&file, bytes);
+                } else {
+                    self.toasts
+                        .warn(format!("{file}: {}", strings::OBJECT_UNREADABLE));
+                }
+                continue;
+            }
+            let models: Vec<String> = self
+                .studio
+                .project()
+                .models
+                .iter()
+                .filter(|m| m.source == file)
+                .map(|m| m.id.clone())
+                .collect();
+            for id in models {
+                self.queued_jobs.push(Job {
+                    name: file.clone(),
+                    bytes: bytes.clone(),
+                    path: None,
+                    target: Some(id),
+                    task: None,
+                });
+            }
         }
     }
 
@@ -444,7 +523,9 @@ impl App {
         };
         let result = model.and_then(|model| match &target {
             Some(id) => self.studio.reimport_imported(id, model, src).map(|(w, d)| {
-                self.toasts.info(strings::MODEL_UPDATED);
+                if !name.starts_with("models/") {
+                    self.toasts.info(strings::MODEL_UPDATED);
+                }
                 if d > 0 {
                     self.toasts
                         .warn(format!("{d} material assignments no longer match a face"));
@@ -626,18 +707,37 @@ impl App {
             Action::Open => files::pick(&self.inbox, ctx, None, &files::OPEN_EXTENSIONS),
             Action::Save => {
                 self.saving_revision = self.studio.session.revision();
-                let name = format!(
-                    "{}.visioncraft",
-                    self.project_name
-                        .clone()
-                        .unwrap_or_else(|| strings::UNSAVED_PROJECT.to_lowercase())
-                );
-                files::save(
-                    &self.inbox,
-                    ctx,
-                    name,
-                    self.studio.project().to_json_bytes(),
-                );
+                let stem = self
+                    .project_name
+                    .clone()
+                    .unwrap_or_else(|| strings::UNSAVED_PROJECT.to_lowercase());
+                // Imported objects (and, on the web, model files) only travel inside a bundle.
+                let p = self.studio.project();
+                let bundled = !p.objects.is_empty()
+                    || (cfg!(target_arch = "wasm32") && !self.studio.sources.is_empty());
+                if bundled {
+                    let s = &self.studio;
+                    let store = &s.scene.library.store;
+                    match bundle::pack(p, &|f| store.provided(f), &|id| {
+                        s.sources.get(id).map(|src| src.bytes.clone())
+                    }) {
+                        Ok(bytes) => files::save_as(
+                            &self.inbox,
+                            ctx,
+                            format!("{stem}.visioncraft.zip"),
+                            bytes,
+                            "zip",
+                        ),
+                        Err(e) => self.toasts.error(e),
+                    }
+                } else {
+                    files::save(
+                        &self.inbox,
+                        ctx,
+                        format!("{stem}.visioncraft"),
+                        p.to_json_bytes(),
+                    );
+                }
             }
             Action::New if self.dirty() => self.pending_replace = Some(Replace::New),
             Action::New => self.new_project(),
@@ -750,6 +850,9 @@ impl eframe::App for App {
         let mut busy = false;
 
         // Work that arrived since last frame.
+        if self.loading.is_none() && !self.queued_jobs.is_empty() {
+            self.loading = Some(self.queued_jobs.remove(0));
+        }
         if let Some(job) = &mut self.loading {
             match &job.task {
                 None => {

@@ -216,6 +216,8 @@ pub struct Library {
     pub skies: Vec<LibSky>,
     /// Set when the catalogue has just arrived (the studio adds its assets for placeholders).
     pub catalog_arrived: bool,
+    /// The project's imported objects as catalogue assets (`user_objects`).
+    pub(crate) user_assets: Vec<visioncraft_core::catalog::Asset>,
     indexes_asked: bool,
     models: HashMap<String, Model>,
     awaiting: HashSet<String>,
@@ -260,6 +262,7 @@ impl Library {
             materials: Vec::new(),
             skies: Vec::new(),
             catalog_arrived: false,
+            user_assets: Vec::new(),
             indexes_asked: false,
             models: HashMap::new(),
             awaiting: HashSet::new(),
@@ -443,6 +446,7 @@ impl Library {
             match Catalog::from_json_bytes(&b) {
                 Ok(c) => {
                     self.catalog = Some(Arc::new(c));
+                    self.merge_user_assets();
                     self.catalog_arrived = true;
                     self.rev += 1;
                 }
