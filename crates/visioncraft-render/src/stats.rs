@@ -8,6 +8,9 @@ use crate::Quality;
 pub struct RenderStats {
     /// Draw calls in all passes (shadow, depth, reflection, forward, post).
     pub draw_calls: u32,
+    /// `draw_calls` per pass group: shadow (all cascades), depth,
+    /// reflection, forward (with sky and transparent), post.
+    pub pass_draws: Vec<(&'static str, u32)>,
     /// Triangles submitted in all passes.
     pub triangles: u64,
     /// Instances drawn in the camera's view (after culling and LOD).

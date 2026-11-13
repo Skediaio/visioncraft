@@ -16,7 +16,15 @@
 //! `--no-haze` `--no-ground` `--no-bloom` `--no-reflection` `--no-fxaa` to
 //! price each realism feature. `--forest`: 20 000 trees and 60 000
 //! understory plants over 4 ha, meshes near and impostors far.
+//! `--woodland`: 23 303 plants of 8 species (3 trees, 5 shrubs, each its
+//! own item with two mesh levels and an impostor) over 4 ha, about the
+//! app's mixed-woodland planting: many items, many draws.
 //! With a device that has timestamp queries, GPU ms per pass are printed.
+//! `--pipelined`: wait only for the previous frame's submission instead of
+//! this one's, so recording overlaps the GPU (one frame in flight), as an
+//! app's presentation loop does. Per frame the bench prints the CPU time of
+//! `render()` plus `encoder.finish()` (record) and of `queue.submit`
+//! (submit), and the draw calls per pass.
 
 use glam::Vec3;
 use visioncraft_render::demo::{self, BudgetOptions};
@@ -44,6 +52,7 @@ fn main() {
         .unwrap_or(150);
     let presets = value("--presets").unwrap_or_else(|| "low,medium,high,custom".into());
     let sun_every_frame = has("--sun-every-frame");
+    let pipelined = has("--pipelined");
     let (device, queue) = pollster::block_on(device_with_timestamps());
     let (w, h) = value("--size")
         .and_then(|v| {
@@ -86,8 +95,10 @@ fn main() {
         r.resize(w, h);
         r.set_quality(quality);
         let garden = has("--garden");
-        let forest = has("--forest");
-        let (tris, instanced) = if forest {
+        let forest = has("--forest") || has("--woodland");
+        let (tris, instanced) = if has("--woodland") {
+            (0, woodland(&mut r))
+        } else if forest {
             // 20 000 trees and 60 000 understory plants over 4 ha.
             let per = demo::forest(&mut r, 20_000, 60_000, 100.0);
             (0, per * 20_000)
@@ -132,6 +143,9 @@ fn main() {
         // nothing to cull) and an eye-level walk through it (the product).
         for path in ["orbit", "eye-level walk"] {
             let encode = std::cell::Cell::new(0.0);
+            let submit = std::cell::Cell::new(0.0);
+            let finish = std::cell::Cell::new(0.0);
+            let mut previous: Option<wgpu::SubmissionIndex> = None;
             let mut frame = |i: u32| {
                 let aspect = w as f32 / h as f32;
                 let (view, proj, eye) = if forest && path == "orbit" {
@@ -181,24 +195,43 @@ fn main() {
                 let cpu = std::time::Instant::now();
                 let mut encoder = device.create_command_encoder(&Default::default());
                 r.render(&mut encoder);
+                let finishing = std::time::Instant::now();
                 let commands = encoder.finish();
+                finish.set(finish.get() + finishing.elapsed().as_secs_f64() * 1000.0);
                 encode.set(encode.get() + cpu.elapsed().as_secs_f64() * 1000.0);
-                queue.submit([commands]);
-                device
-                    .poll(wgpu::PollType::wait_indefinitely())
-                    .expect("poll");
-                r.stats().gpu_passes
+                let cpu = std::time::Instant::now();
+                let index = queue.submit([commands]);
+                submit.set(submit.get() + cpu.elapsed().as_secs_f64() * 1000.0);
+                let wait = if pipelined {
+                    previous.replace(index)
+                } else {
+                    Some(index)
+                };
+                if let Some(index) = wait {
+                    device
+                        .poll(wgpu::PollType::Wait {
+                            submission_index: Some(index),
+                            timeout: None,
+                        })
+                        .expect("poll");
+                }
+                let stats = r.stats();
+                (stats.gpu_passes, stats.pass_draws)
             };
             for i in 0..20 {
                 frame(i);
             }
             encode.set(0.0);
+            submit.set(0.0);
+            finish.set(0.0);
+            let mut draws = Vec::new();
             let mut gpu: Vec<(&'static str, f32)> = Vec::new();
             let start = std::time::Instant::now();
             let mut worst = 0f64;
             for i in 0..frames {
                 let t = std::time::Instant::now();
-                let timings = frame(i);
+                let (timings, pass_draws) = frame(i);
+                draws = pass_draws;
                 worst = worst.max(t.elapsed().as_secs_f64() * 1000.0);
                 for (label, ms) in timings {
                     match gpu.iter_mut().find(|(l, _)| *l == label) {
@@ -209,14 +242,23 @@ fn main() {
             }
             let ms = start.elapsed().as_secs_f64() * 1000.0 / f64::from(frames);
             println!(
-                "{w}x{h} {tris} static + {instanced} instanced (LOD 0) tris, {name}, {path}: {ms:.2} ms/frame ({:.1} fps), worst {worst:.1} ms, CPU encode {:.2} ms{}",
+                "{w}x{h} {tris} static + {instanced} instanced (LOD 0) tris, {name}, {path}{}: {ms:.2} ms/frame ({:.1} fps), worst {worst:.1} ms, CPU record {:.2} ms (of which finish {:.2}), submit {:.2} ms{}",
+                if pipelined { " pipelined" } else { "" },
                 1000.0 / ms,
                 encode.get() / f64::from(frames),
+                finish.get() / f64::from(frames),
+                submit.get() / f64::from(frames),
                 if dropped > 0 {
                     format!(", {dropped} lights dropped")
                 } else {
                     String::new()
                 }
+            );
+            let parts: Vec<String> = draws.iter().map(|(l, n)| format!("{l} {n}")).collect();
+            println!(
+                "    draws (last frame): {} (sum {})",
+                parts.join(", "),
+                draws.iter().map(|d| d.1).sum::<u32>()
             );
             if !gpu.is_empty() {
                 let parts: Vec<String> = gpu
@@ -228,6 +270,42 @@ fn main() {
             }
         }
     }
+}
+
+/// 23 303 plants of 8 species over 200 x 200 m (see `--woodland`).
+fn woodland(r: &mut Renderer) -> usize {
+    use glam::{Mat4, Quat};
+    let per = demo::forest(r, 0, 0, 100.0);
+    let mut rng = demo::Rng::new(7);
+    for s in 0..8u32 {
+        let tree = s < 3;
+        let count = if tree { 1_100 } else { 4_000 } + if s == 0 { 3 } else { 0 };
+        let at: Vec<Mat4> = (0..count)
+            .map(|_| {
+                let (x, z) = (rng.unit() * 200.0 - 100.0, rng.unit() * 200.0 - 100.0);
+                Mat4::from_scale_rotation_translation(
+                    Vec3::splat(0.7 + rng.unit() * 0.8),
+                    Quat::from_rotation_y(rng.unit() * std::f32::consts::TAU),
+                    Vec3::new(x, 0.0, z),
+                )
+            })
+            .collect();
+        let shape = if tree {
+            demo::PlantShape::tree()
+        } else {
+            demo::PlantShape::shrub()
+        };
+        let lods = demo::plant_lods(&shape, 42 + s);
+        let tint = Vec3::new(0.12 + 0.02 * s as f32, 0.26, 0.06);
+        let mats = demo::plant_materials(r, tint, s);
+        let distances = if tree {
+            [6.0, 12.0, 300.0]
+        } else {
+            [3.0, 8.0, 80.0]
+        };
+        demo::add_plants_with_impostor(r, &lods, &mats, distances, &at);
+    }
+    per * 3_300
 }
 
 /// A headless device with timestamp queries when the adapter has them, so

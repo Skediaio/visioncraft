@@ -503,9 +503,6 @@ struct Item {
     /// Metres before the last level's distance over which instances dither
     /// out (0: they are culled at once).
     cull_fade: f32,
-    /// Cluster indices front to back, seen from the camera and from the sun
-    /// (so early depth testing rejects hidden foliage layers).
-    order: [Vec<u32>; 2],
 }
 
 /// Instances in one ground cell: culled as a unit, drawn as one range, one
@@ -516,6 +513,8 @@ struct Cluster {
     /// View level of detail (`lods.len()` = culled by distance; `LOD_UNSET`
     /// before the first frame).
     lod: u8,
+    /// Front-to-back sort keys seen from the camera and from the sun.
+    key: [f32; 2],
     /// Straddles the hand-over from the last mesh level (`lod`) to the
     /// impostor: both draw, dithered per instance by distance.
     fading: bool,
@@ -677,6 +676,9 @@ struct Counters {
     draws: Cell<u32>,
     triangles: Cell<u64>,
     instances: Cell<u32>,
+    /// Draws per pass group, closed by `split`.
+    passes: std::cell::RefCell<Vec<(&'static str, u32)>>,
+    mark: Cell<u32>,
 }
 
 impl Counters {
@@ -686,6 +688,16 @@ impl Counters {
             .set(self.triangles.get() + triangles * instances as u64);
         if view {
             self.instances.set(self.instances.get() + instances);
+        }
+    }
+
+    /// Attributes the draws since the last split to `label`.
+    fn split(&self, label: &'static str) {
+        let n = self.draws.get() - self.mark.replace(self.draws.get());
+        let mut passes = self.passes.borrow_mut();
+        match passes.iter_mut().find(|(l, _)| *l == label) {
+            Some(e) => e.1 += n,
+            None => passes.push((label, n)),
         }
     }
 }
@@ -1662,7 +1674,6 @@ impl Renderer {
             clusters: Vec::new(),
             impostor: None,
             cull_fade: 0.0,
-            order: [Vec::new(), Vec::new()],
         }));
         self.set_instances(id, instances);
         id
@@ -1733,6 +1744,7 @@ impl Renderer {
                     range: i as u32..i as u32 + 1,
                     bounds: None,
                     lod: LOD_UNSET,
+                    key: [0.0; 2],
                     fading: false,
                 }),
             }
@@ -1976,6 +1988,7 @@ impl Renderer {
                 Pass::Shadow { far, coarse: c > 0 },
             );
         }
+        self.counters.split("shadow");
         {
             let mut pass = depth_pass(
                 encoder,
@@ -1987,6 +2000,7 @@ impl Renderer {
             pass.set_bind_group(0, &self.globals_bind, &[]);
             self.draw_items(&mut pass, view_proj, true, Pass::Depth);
         }
+        self.counters.split("depth");
         {
             let mut pass = color_pass(
                 encoder,
@@ -2075,6 +2089,7 @@ impl Renderer {
             pass.set_pipeline(&self.pipelines.reflect_sky);
             pass.draw(0..3, 0..1);
         }
+        self.counters.split("reflection");
         {
             let (view, resolve) = match &t.hdr_msaa {
                 Some(msaa) => (msaa, Some(&t.hdr)),
@@ -2117,6 +2132,7 @@ impl Renderer {
             pass.draw(0..3, 0..1);
             self.draw_transparent(&mut pass, view_proj);
         }
+        self.counters.split("forward");
         let post = |encoder: &mut wgpu::CommandEncoder,
                     label: &'static str,
                     target: &wgpu::TextureView,
@@ -2200,6 +2216,7 @@ impl Renderer {
             pass.set_vertex_buffer(0, buffer.slice(..));
             pass.draw(0..6, 0..self.overlay_count);
         }
+        self.counters.split("post");
         if let Some(t) = &mut self.timer {
             t.end(encoder);
         }
@@ -2255,6 +2272,7 @@ impl Renderer {
         }
         self.last_stats = RenderStats {
             draw_calls: self.counters.draws.get(),
+            pass_draws: self.counters.passes.take(),
             triangles: self.counters.triangles.get(),
             instances: self.counters.instances.get(),
             visible_lights,
@@ -2337,8 +2355,10 @@ impl Renderer {
         })
     }
 
-    /// Runs of clusters, front to back, adjacent in the instance buffer,
-    /// that pass `keep` and are inside `cull`: one draw each.
+    /// Runs of consecutive clusters (adjacent in the instance buffer) that
+    /// pass `keep` and are inside `cull`, one draw each, ordered front to
+    /// back by their nearest cluster (so early depth testing rejects hidden
+    /// foliage layers while a run of cells stays one draw).
     fn runs(
         item: &Item,
         order: usize,
@@ -2346,23 +2366,29 @@ impl Renderer {
         near_far: bool,
         keep: impl Fn(&Cluster) -> bool,
     ) -> Vec<std::ops::Range<u32>> {
-        let mut out: Vec<std::ops::Range<u32>> = Vec::new();
-        for &i in &item.order[order] {
-            let c = &item.clusters[i as usize];
+        let mut out: Vec<(f32, std::ops::Range<u32>)> = Vec::new();
+        let mut open = false;
+        for c in &item.clusters {
             if !keep(c) || c.bounds.is_none_or(|b| outside(cull, b, near_far)) {
+                open = false;
                 continue;
             }
             match out.last_mut() {
-                Some(r) if r.end == c.range.start => r.end = c.range.end,
-                _ => out.push(c.range.clone()),
+                Some((k, r)) if open => {
+                    r.end = c.range.end;
+                    *k = k.min(c.key[order]);
+                }
+                _ => out.push((c.key[order], c.range.clone())),
             }
+            open = true;
         }
-        out
+        out.sort_by(|a, b| a.0.total_cmp(&b.0));
+        out.into_iter().map(|(_, r)| r).collect()
     }
 
     /// Draws every opaque and cutout part (and, into shadow maps, glass)
     /// whose bounds overlap `cull` (a view-projection), opaque parts first,
-    /// clusters front to back, then impostor quads. `near_far` also culls
+    /// clusters front to back, then all impostor quads. `near_far` also culls
     /// on depth.
     fn draw_items(&self, pass: &mut wgpu::RenderPass, cull: Mat4, near_far: bool, kind: Pass) {
         let mut current: Option<usize> = None;
@@ -2463,8 +2489,13 @@ impl Renderer {
                         }
                     }
                 }
-                if category == 1 {
-                    self.draw_impostor(pass, item, cull, near_far, kind, &mut current);
+            }
+            // All impostors after the cutout meshes: one pipeline switch.
+            if category == 1 {
+                for item in self.items.iter().flatten() {
+                    if item.bounds.is_some_and(|b| !outside(cull, b, near_far)) {
+                        self.draw_impostor(pass, item, cull, near_far, kind, &mut current);
+                    }
                 }
             }
         }
@@ -2636,9 +2667,8 @@ impl Renderer {
         }
     }
 
-    /// Per cluster level of detail from the camera distance to its bounds.
     /// Per cluster level of detail from the camera distance to its bounds,
-    /// and the front-to-back orders.
+    /// and the front-to-back sort keys.
     /// With an orthographic camera every cluster takes the level for the
     /// view's height in metres (what a perspective view showing that much
     /// would use) and the order follows depth along the view direction.
@@ -2656,10 +2686,8 @@ impl Renderer {
             (2.0 / self.proj.y_axis.y.abs().max(1e-9), forward)
         });
         for item in self.items.iter_mut().flatten() {
-            let mut keys = Vec::with_capacity(item.clusters.len());
             for c in &mut item.clusters {
                 let Some((lo, hi)) = c.bounds else {
-                    keys.push((f32::INFINITY, f32::INFINITY));
                     continue;
                 };
                 // Scaling the distance instead of the thresholds: same choice.
@@ -2706,16 +2734,7 @@ impl Renderer {
                     // level instead of culling by distance.
                     c.lod = c.lod.min(item.lods.len() as u8 - 1);
                 }
-                keys.push((order, -((lo + hi) * 0.5).dot(sun)));
-            }
-            for (k, order) in item.order.iter_mut().enumerate() {
-                order.clear();
-                order.extend(0..item.clusters.len() as u32);
-                let key = |i: &u32| {
-                    let (view, sun) = keys[*i as usize];
-                    if k == 0 { view } else { sun }
-                };
-                order.sort_by(|a, b| key(a).total_cmp(&key(b)));
+                c.key = [order, -((lo + hi) * 0.5).dot(sun)];
             }
         }
     }
