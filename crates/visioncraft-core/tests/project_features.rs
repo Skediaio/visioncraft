@@ -516,6 +516,27 @@ fn view_set_takes_any_subset() {
 }
 
 #[test]
+fn view_distance_is_a_view_setting_within_its_range_and_absent_from_old_files() {
+    let mut s = Session::new(Project::default());
+    assert_eq!(s.project().view.view_distance, 1.0);
+    let plain = String::from_utf8(s.project().to_json_bytes()).unwrap();
+    assert!(
+        !plain.contains("view_distance"),
+        "the default is not written"
+    );
+    s.run("view.set", json!({"view_distance": 2.5})).unwrap();
+    assert_eq!(s.project().view.view_distance, 2.5);
+    for bad in [0.2, 4.5, -1.0] {
+        assert!(s.run("view.set", json!({"view_distance": bad})).is_err());
+    }
+    assert_eq!(s.project().view.view_distance, 2.5);
+    let p = Project::from_json_bytes(&s.project().to_json_bytes()).unwrap();
+    assert_eq!(p.view.view_distance, 2.5);
+    s.undo();
+    assert_eq!(s.project().view.view_distance, 1.0);
+}
+
+#[test]
 fn lamp_light_follows_its_placement_and_export_presets_exist() {
     use visioncraft_core::{LightKind, LightSpec, Placement, export_presets, lights_for_placement};
     let spec = LightSpec {

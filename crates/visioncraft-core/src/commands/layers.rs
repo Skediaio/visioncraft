@@ -90,7 +90,7 @@ pub(super) fn register(s: &mut Session) {
         spec(
             "view.set",
             "Set View",
-            "Sets exposure, sky, haze, wind and the ground plane stored with the project; only the fields given change.",
+            "Sets exposure, sky, haze, wind, the ground plane and the view distance stored with the project; only the fields given change.",
             vec![
                 param("exposure_ev", T::Number, "Exposure offset in stops; null for automatic exposure."),
                 param("sky", T::Object, "{type: \"physical\"} or {type: \"hdri\", id: string, rotation_deg: number, intensity: number >= 0}.")
@@ -100,9 +100,12 @@ pub(super) fn register(s: &mut Session) {
                 param("wind_direction_deg", T::Number, "Direction the wind blows towards, clockwise from north seen from above.").unit("deg").default(json!(0)),
                 param("ground", T::Object, "Ground plane {height: m, color: [r, g, b] linear}; null for none.")
                     .default(json!({"height": 0, "color": [0.10, 0.17, 0.08]})),
+                param("view_distance", T::Number, "How far plants, shadows and a clear view reach, as a multiple of the default; 0.25 to 4.")
+                    .unit("x")
+                    .default(json!(1.0)),
             ],
             "null",
-            json!({"haze": 3.5, "wind_strength": 0.5, "ground": null}),
+            json!({"haze": 3.5, "wind_strength": 0.5, "ground": null, "view_distance": 2.0}),
         ),
         view_set,
     );
@@ -198,7 +201,8 @@ fn style_set(project: &mut Project, params: &Value) -> Result<Value, CommandErro
 }
 
 fn view_set(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
-    let view = super::merge_update(&project.view, params, &[])?;
+    // `view_distance` is not written while it is 1.
+    let view = super::merge_update(&project.view, params, &["view_distance"])?;
     view.validate().map_err(|e| crate::session::bad(&e))?;
     project.view = view;
     Ok(Value::Null)

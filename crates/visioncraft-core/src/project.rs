@@ -139,7 +139,18 @@ pub struct ViewState {
     pub wind_strength: f32,
     pub wind_direction_deg: f32,
     pub ground: Option<GroundPlane>,
+    /// How far plants, shadows and haze reach, as a multiple of the default (0.25..=4). Not
+    /// written when 1, so files from before it existed round-trip unchanged.
+    #[serde(skip_serializing_if = "is_one")]
+    pub view_distance: f32,
 }
+
+fn is_one(v: &f32) -> bool {
+    *v == 1.0
+}
+
+/// The range `view_distance` accepts.
+pub const VIEW_DISTANCE_RANGE: std::ops::RangeInclusive<f32> = 0.25..=4.0;
 
 impl Default for ViewState {
     fn default() -> Self {
@@ -153,6 +164,7 @@ impl Default for ViewState {
                 height: 0.0,
                 color: [0.10, 0.17, 0.08],
             }),
+            view_distance: 1.0,
         }
     }
 }
@@ -166,6 +178,7 @@ impl ViewState {
             && self.wind_strength.is_finite()
             && self.wind_strength >= 0.0
             && finite(self.wind_direction_deg)
+            && VIEW_DISTANCE_RANGE.contains(&self.view_distance)
             && self.ground.is_none_or(|g| {
                 finite(g.height) && g.color.iter().all(|c| c.is_finite() && *c >= 0.0)
             })
