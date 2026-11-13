@@ -1,0 +1,29 @@
+[package]
+name = "visioncraft"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+# One crate, one `main` for both targets (as the eframe template): native bin,
+# and the bin trunk builds for wasm32; `src/lib.rs` holds the app.
+[dependencies]
+visioncraft-render = { path = "../../crates/visioncraft-render" }
+glam = "0.30"
+egui = { version = "0.36", default-features = false, features = ["default_fonts"] }
+# `wgpu_no_default_features` instead of `wgpu`: the latter turns on wgpu's `webgl`
+# (a GLES backend in the wasm), and VisionCraft is WebGPU only.
+eframe = { version = "0.36", default-features = false, features = ["default_fonts", "wayland", "x11", "wgpu_no_default_features"] }
+egui-wgpu = { version = "0.36", default-features = false, features = ["fragile-send-sync-non-atomic-wasm"] }
+wgpu = "30.0.1"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+pollster = "1.0.1"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "=0.2.129"
+wasm-bindgen-futures = "0.4.79"
+web-sys = { version = "0.3.106", features = ["Document", "Window", "HtmlCanvasElement"] }
+log = "0.4"

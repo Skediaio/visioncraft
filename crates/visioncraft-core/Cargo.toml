@@ -1,0 +1,17 @@
+[package]
+name = "visioncraft-core"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# 3dcraft (MIT): reading .3dcraft, rebuilding its history into B-rep bodies, meshing them.
+craft3d-format = { git = "https://github.com/johancoppens/3dcraft", tag = "v0.1.1" }
+craft3d-regen = { git = "https://github.com/johancoppens/3dcraft", tag = "v0.1.1" }
+craft3d-tess = { git = "https://github.com/johancoppens/3dcraft", tag = "v0.1.1" }
+
+[dev-dependencies]
+craft3d-doc = { git = "https://github.com/johancoppens/3dcraft", tag = "v0.1.1" }
