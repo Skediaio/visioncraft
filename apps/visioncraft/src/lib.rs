@@ -1032,7 +1032,7 @@ impl eframe::App for App {
                     self.draw.panel(ui, &mut cx);
                 },
             ),
-            Some(Mode::Objects) => ui::floating(
+            Some(Mode::Objects) => ui::floating_own_scroll(
                 &ctx,
                 "modepanel",
                 Align2::LEFT_BOTTOM,

@@ -239,7 +239,28 @@ pub fn panel_frame() -> egui::Frame {
         })
 }
 
-/// A floating panel anchored to a corner.
+/// A floating panel for content that scrolls by itself (the planting panel sizes its own
+/// scroll area from the window height).
+pub fn floating_own_scroll(
+    ctx: &egui::Context,
+    id: &str,
+    anchor: Align2,
+    offset: Vec2,
+    max_width: f32,
+    add: impl FnOnce(&mut egui::Ui),
+) {
+    egui::Area::new(egui::Id::new(id))
+        .anchor(anchor, offset)
+        .order(egui::Order::Foreground)
+        .show(ctx, |ui| {
+            panel_frame().show(ui, |ui| {
+                ui.set_max_width(max_width);
+                add(ui);
+            });
+        });
+}
+
+/// A floating panel anchored to a corner; it scrolls when taller than the window.
 pub fn floating(
     ctx: &egui::Context,
     id: &str,
@@ -256,11 +277,21 @@ pub fn floating(
                 ui.set_max_width(max_width);
                 // A panel taller than the window scrolls instead of running off it.
                 let room = (ctx.content_rect().height() - offset.y.abs() - 40.0).max(120.0);
-                egui::ScrollArea::vertical()
+                // An area hanging from the bottom only has the room of its last size: ask for
+                // the content's height of the last frame, and paint again until it fits.
+                let key = egui::Id::new(("floating-height", id));
+                let last: f32 = ctx.data(|d| d.get_temp(key)).unwrap_or(0.0);
+                let out = egui::ScrollArea::vertical()
                     .id_salt(("floating", id))
                     .max_height(room)
+                    .min_scrolled_height(last.min(room))
                     .auto_shrink([true, true])
                     .show(ui, add);
+                ctx.data_mut(|d| d.insert_temp(key, out.content_size.y));
+                let want = out.content_size.y.min(room);
+                if (out.inner_rect.height() - want).abs() > 1.0 {
+                    ctx.request_repaint();
+                }
             });
         });
 }

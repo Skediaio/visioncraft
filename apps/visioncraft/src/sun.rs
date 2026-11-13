@@ -89,18 +89,13 @@ pub fn panel(ui: &mut egui::Ui, cx: &mut Cx, terrain: &mut crate::terrain_tool::
             terrain.open = true;
         }
     });
-    let max = (cx.ctx.content_rect().height() - 120.0).max(200.0);
-    egui::ScrollArea::vertical()
-        .max_height(max)
-        .id_salt("sunpanel")
-        .show(ui, |ui| {
-            if terrain.open {
-                terrain.panel(ui, cx);
-            } else {
-                panel_body(ui, cx);
-                crate::sky_panel::panel(ui, cx);
-            }
-        });
+    // The floating panel around it scrolls.
+    if terrain.open {
+        terrain.panel(ui, cx);
+    } else {
+        panel_body(ui, cx);
+        crate::sky_panel::panel(ui, cx);
+    }
 }
 
 fn panel_body(ui: &mut egui::Ui, cx: &mut Cx) {
