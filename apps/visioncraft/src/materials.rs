@@ -27,6 +27,8 @@ pub struct MaterialsState {
     thumbs: HashMap<String, egui::TextureHandle>,
     /// Map bytes of imported `.mcmat` materials, kept for when the renderer can show textures.
     pub maps: HashMap<String, Vec<McMatMap>>,
+    /// The Project | Library tabs of the swatch panel.
+    lib: crate::material_library::MatLibUi,
 }
 
 pub fn to_srgb8(c: f32) -> u8 {
@@ -119,9 +121,39 @@ impl MaterialsState {
             }
             None => ([0.5, 0.5, 0.5, 1.0], None),
         };
+        // Every map becomes a texture (the pictures decide, so the factors are neutral).
+        let stamp = cx.s.project().materials.len();
+        let mut maps = serde_json::Map::new();
+        for m in &mat.maps {
+            let key = match m.usage {
+                MapUsage::BaseColor => "base_color",
+                MapUsage::Normal => "normal",
+                MapUsage::Roughness => "roughness",
+                MapUsage::Metallic => "metallic",
+                MapUsage::AmbientOcclusion => "ambient_occlusion",
+                MapUsage::Height => "height",
+            };
+            if m.usage != MapUsage::Height
+                && let Some((w, h, px)) = decode_png(&m.png)
+            {
+                let name = format!("mcmat:{}#{stamp}/{key}", mat.name);
+                cx.s.scene
+                    .library
+                    .add_memory_image(name.clone(), crate::assets::Rgba { w, h, px });
+                maps.insert(key.into(), json!(name));
+            }
+        }
+        let has = |k: &str| maps.contains_key(k);
+        let color = if has("base_color") { [1.0; 4] } else { color };
+        let (rough, metal) = (
+            if has("roughness") { 1.0 } else { 0.8 },
+            if has("metallic") { 1.0 } else { 0.0 },
+        );
         let Some(r) = cx.run(
             "material.add",
-            json!({"name": mat.name, "base_color": color, "roughness": 0.8}),
+            json!({"name": mat.name, "base_color": color, "roughness": rough, "metallic": metal,
+                   "kind": {"type": "standard_triplanar_pbr", "map_scale_m": 1.0, "relief": 1.0, "gloss": 0.0, "weathering": 0.0},
+                   "maps": maps}),
         ) else {
             return;
         };
@@ -216,49 +248,83 @@ impl MaterialsState {
                         }
                     });
                     let materials = cx.s.project().materials.clone();
-                    ui.horizontal_wrapped(|ui| {
-                        ui.spacing_mut().item_spacing = Vec2::splat(5.0);
-                        for m in &materials {
-                            let (r, painter) =
-                                ui.allocate_painter(Vec2::splat(34.0), Sense::click());
-                            let rr = egui::CornerRadius::same(7);
-                            match self.thumbs.get(&m.id) {
-                                Some(tex) => {
-                                    egui::Image::new(tex).corner_radius(rr).paint_at(ui, r.rect);
-                                }
-                                None => {
-                                    let c = Color32::from_rgb(
-                                        to_srgb8(m.base_color[0]),
-                                        to_srgb8(m.base_color[1]),
-                                        to_srgb8(m.base_color[2]),
-                                    );
-                                    painter.rect_filled(r.rect, rr, c);
-                                }
-                            }
-                            let sel = self.selected.as_ref() == Some(&m.id);
-                            painter.rect_stroke(
-                                r.rect,
-                                rr,
-                                egui::Stroke::new(
-                                    if sel { 3.0 } else { 1.0 },
-                                    if sel {
-                                        ACCENT
-                                    } else {
-                                        Color32::from_white_alpha(70)
-                                    },
-                                ),
-                                egui::StrokeKind::Inside,
-                            );
-                            if r.on_hover_text(&m.name).clicked() {
-                                self.selected = Some(m.id.clone());
+                    let project_tab = self.lib.tabs(ui);
+                    if !project_tab && let Some(lib_id) = self.lib.grid(ui, cx) {
+                        match crate::material_library::ensure_material(cx.s, &lib_id) {
+                            Ok(id) => {
+                                self.selected = Some(id.clone());
                                 let target = self.target(&pick);
                                 cx.run(
                                     "material.assign",
-                                    json!({"target": target, "material": m.id}),
+                                    json!({"target": target, "material": id}),
                                 );
                             }
+                            Err(e) => cx.toasts.error(e),
                         }
-                    });
+                    }
+                    if project_tab {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing = Vec2::splat(5.0);
+                            for m in &materials {
+                                let (r, painter) =
+                                    ui.allocate_painter(Vec2::splat(34.0), Sense::click());
+                                let rr = egui::CornerRadius::same(7);
+                                match self.thumbs.get(&m.id) {
+                                    Some(tex) => {
+                                        egui::Image::new(tex)
+                                            .corner_radius(rr)
+                                            .paint_at(ui, r.rect);
+                                    }
+                                    None => {
+                                        // A library material shows its library picture.
+                                        let lib = m.maps.base_color.as_ref().and_then(|p| {
+                                            cx.s.scene
+                                                .library
+                                                .materials
+                                                .iter()
+                                                .find(|e| e.maps.basecolor.as_ref() == Some(p))
+                                                .map(|e| e.thumbnail.clone())
+                                        });
+                                        if let Some(path) = lib {
+                                            let vis = ui.is_rect_visible(r.rect);
+                                            crate::library_ui::thumb(
+                                                ui, cx, &path, r.rect, vis, 0.0,
+                                            );
+                                        } else {
+                                            let c = Color32::from_rgb(
+                                                to_srgb8(m.base_color[0]),
+                                                to_srgb8(m.base_color[1]),
+                                                to_srgb8(m.base_color[2]),
+                                            );
+                                            painter.rect_filled(r.rect, rr, c);
+                                        }
+                                    }
+                                }
+                                let sel = self.selected.as_ref() == Some(&m.id);
+                                painter.rect_stroke(
+                                    r.rect,
+                                    rr,
+                                    egui::Stroke::new(
+                                        if sel { 3.0 } else { 1.0 },
+                                        if sel {
+                                            ACCENT
+                                        } else {
+                                            Color32::from_white_alpha(70)
+                                        },
+                                    ),
+                                    egui::StrokeKind::Inside,
+                                );
+                                if r.on_hover_text(&m.name).clicked() {
+                                    self.selected = Some(m.id.clone());
+                                    let target = self.target(&pick);
+                                    cx.run(
+                                        "material.assign",
+                                        json!({"target": target, "material": m.id}),
+                                    );
+                                }
+                            }
+                        });
+                    }
                     if ui
                         .selectable_label(self.eyedropper, t::EYEDROPPER)
                         .clicked()
@@ -287,6 +353,35 @@ impl MaterialsState {
         let Some(mut m) = current else { return };
         ui.separator();
         ui.label(egui::RichText::new(&m.name).strong());
+        // Surface kind: standard, glass, water or lawn.
+        let current_kind = crate::material_library::kind_index(&m.kind);
+        ui.horizontal(|ui| {
+            ui.label(t::SURFACE);
+            for (i, name) in t::SURFACE_KINDS.iter().enumerate() {
+                if ui.selectable_label(current_kind == i, *name).clicked() && current_kind != i {
+                    let kind = crate::material_library::kind_payload(i, &m.kind);
+                    cx.run("material.update", json!({"id": id, "kind": kind}));
+                }
+            }
+        });
+        let mut variation =
+            cx.s.scene
+                .library
+                .variation
+                .get(&id)
+                .copied()
+                .unwrap_or(0.0);
+        if ui
+            .add(
+                egui::Slider::new(&mut variation, 0.0..=1.0)
+                    .text(t::VARIATION)
+                    .max_decimals(2),
+            )
+            .changed()
+        {
+            cx.s.scene.library.variation.insert(id.clone(), variation);
+            cx.s.force_sync();
+        }
         let SurfaceKind::StandardTriplanarPbr {
             map_scale_m,
             relief,

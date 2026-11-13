@@ -446,6 +446,15 @@ impl Hud {
                 if ui.selectable_label(self.layers_open, t::LAYERS).clicked() {
                     self.layers_open = !self.layers_open;
                 }
+                if ui
+                    .selectable_label(cx.s.lights_on, t::LIGHTS_BUTTON)
+                    .clicked()
+                {
+                    cx.s.lights_on = !cx.s.lights_on;
+                }
+                if cx.s.dropped_lights > 0 {
+                    ui.weak(format!("{} {}", cx.s.dropped_lights, t::LIGHTS_DROPPED));
+                }
                 let clay = cx.s.project().style.clay;
                 if ui.selectable_label(clay, t::CLAY).clicked() {
                     cx.run("style.set", serde_json::json!({"clay": !clay}));

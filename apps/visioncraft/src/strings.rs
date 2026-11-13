@@ -1,5 +1,41 @@
 //! Every piece of UI text, in one place so it can be translated later.
 
+// ---- asset library (objects, materials, skies, lamps) ----
+pub const TAB_PLANTS: &str = "Plants";
+pub const TAB_OBJECTS: &str = "Objects";
+pub const TAB_LIGHTS: &str = "Lights";
+pub const RECENT: &str = "Recent";
+pub const LIBRARY_LOADING: &str = "The asset library is loading, or was not found.";
+pub const LIGHTS_BUTTON: &str = "Lights";
+pub const LIGHTS_SUGGEST: &str =
+    "The sun is down. Switch the lights on with the Lights button, top right.";
+pub const LIGHTS_DROPPED: &str = "lights are too crowded to draw all of them";
+pub const LIGHTS_HINT: &str = "Click to place a light, click a light to select it. A spot is aimed by dragging its white handle. Delete removes the selected light.";
+pub const LIGHT_POINT: &str = "Point";
+pub const LIGHT_SPOT: &str = "Spot";
+pub const KELVIN: &str = "Colour temperature (K)";
+pub const LUMENS: &str = "Lumens";
+pub const RANGE: &str = "Range (m)";
+pub const LIGHT_HEIGHT: &str = "Height (m)";
+pub const CONE_INNER: &str = "Inner cone";
+pub const CONE_OUTER: &str = "Outer cone";
+pub const TAB_PROJECT: &str = "Project";
+pub const TAB_LIBRARY: &str = "Library";
+pub const SURFACE: &str = "Surface";
+pub const SURFACE_KINDS: [&str; 4] = ["Standard", "Glass", "Water", "Lawn"];
+pub const VARIATION: &str = "Variation";
+pub const MATERIAL_LIBRARY_HINT: &str = "Pick a material to put on the surface you clicked.";
+pub const KIND_ALL: &str = "All";
+pub const SKY: &str = "Sky";
+pub const SKY_PHYSICAL: &str = "Physical";
+pub const SKY_ROTATION: &str = "Rotation";
+pub const SKY_INTENSITY: &str = "Brightness";
+pub const SKY_USE_SUN: &str = "Use this sky's sun";
+pub const SKY_BACK_TO_DATE: &str = "Back to date and time";
+pub const SKY_SUN_FROM_IMAGE: &str = "The sun comes from the sky image.";
+pub const SKY_NO_SUN: &str = "This sky shows no sun (overcast): the sun stays as set.";
+pub const GROUND_COLOR: &str = "Ground colour";
+
 pub const APP_NAME: &str = "VisionCraft";
 
 pub const OPEN: &str = "Open";

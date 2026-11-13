@@ -6,12 +6,14 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use visioncraft_core::{
     Asset, Generator, ImportedModel, Material, ModelRef, Project, Shape, SurfaceKind, evaluate,
-    evaluate_surface_fill, ground_height, raycast, resolve_materials, shape_mesh,
+    evaluate_surface_fill, ground_height, lawn_scatter, raycast, resolve_materials, shape_mesh,
 };
 use visioncraft_flora as flora;
 use visioncraft_render::{ItemId, LineVertex, Renderer};
 pub use visioncraft_render::{MaterialId, MeshId};
 
+use crate::library::{self, Library};
+use crate::material_library;
 use crate::placeholder::{self, MeshData};
 use crate::plants::{self, Flora};
 
@@ -22,7 +24,7 @@ pub struct Loaded {
     pub version: u64,
 }
 
-pub type LookKey = [u32; 12];
+pub type LookKey = [u32; 13];
 
 /// What a surface looks like to the renderer.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -39,6 +41,8 @@ pub struct Look {
     pub variation: f32,
     /// Metres per texture repeat.
     pub scale_m: f32,
+    /// Index of the material's maps in the library (0: none).
+    pub tex: u32,
 }
 
 impl Look {
@@ -53,6 +57,7 @@ impl Look {
             surface: 0,
             variation: 0.0,
             scale_m: 1.0,
+            tex: 0,
         }
     }
 
@@ -71,6 +76,7 @@ impl Look {
             self.surface as f32,
             self.variation,
             self.scale_m,
+            f32::from_bits(self.tex),
         ]
         .map(f32::to_bits)
     }
@@ -79,13 +85,39 @@ impl Look {
 const CLAY: Look = Look::plain(0.85, 0.85, 0.85, 0.9);
 const UNASSIGNED: Look = Look::plain(0.6, 0.6, 0.6, 0.8);
 
-fn look_of(m: &Material) -> Look {
-    let plain = Look {
+fn look_of(m: &Material, lib: &mut Library) -> Look {
+    let own = library::spec_of(&m.maps);
+    // An unchanged palette material shows its library look while the library is there.
+    let ov = if own.is_empty() {
+        material_library::overlay(lib, m)
+    } else {
+        None
+    };
+    let spec = ov.as_ref().map_or(own, |o| o.spec.clone());
+    let variation = lib
+        .variation
+        .get(&m.id)
+        .copied()
+        .or(ov.as_ref().map(|o| o.variation))
+        .unwrap_or(0.0);
+    let mut plain = Look {
         color: m.base_color,
         metallic: m.metallic,
         roughness: m.roughness,
+        variation,
+        tex: if spec.is_empty() {
+            0
+        } else {
+            lib.intern(spec) as u32
+        },
         ..Look::plain(0.0, 0.0, 0.0, 0.0)
     };
+    if ov.is_some() {
+        // the pictures decide
+        plain.color = [1.0; 4];
+        plain.metallic = 1.0;
+        plain.roughness = 1.0;
+    }
     match &m.kind {
         SurfaceKind::ArchitecturalGlass { tint, roughness } => Look {
             color: [tint[0], tint[1], tint[2], 0.25],
@@ -105,15 +137,17 @@ fn look_of(m: &Material) -> Look {
             gloss,
             weathering,
         } => Look {
-            relief: *relief,
+            relief: if ov.is_some() { 1.0 } else { *relief },
             gloss: *gloss,
             weathering: *weathering,
-            scale_m: *map_scale_m,
+            scale_m: ov.as_ref().map_or(*map_scale_m, |o| o.scale_m),
             ..plain
         },
-        // shortcut: 3D grass is not scattered yet; the lawn is a green surface with large-scale variation
+        // The tufts are scattered separately (`Scene::sync_lawns`); the ground under them is this.
         SurfaceKind::Lawn3d(_) => Look {
-            variation: 0.6,
+            variation: plain.variation.max(0.6),
+            scale_m: ov.as_ref().map_or(1.0, |o| o.scale_m),
+            relief: if ov.is_some() { 1.0 } else { 0.0 },
             ..plain
         },
     }
@@ -276,8 +310,23 @@ struct Owner {
 
 type Wanted = (String, Geom, Arc<ImportedModel>, Mat4, bool, bool, bool);
 
+/// The 3D grass of one owner's lawn faces.
+type LawnKey = (Geom, Mat4, Vec<(usize, [u32; 2], u64)>, u64, u8);
+
+struct LawnGpu {
+    key: LawnKey,
+    items: Vec<ItemId>,
+}
+
+/// Tufts stop being drawn beyond this distance: far lawns are just the ground texture.
+const LAWN_FADE_M: f32 = 40.0;
+/// At most this many tufts per square metre are drawn, and this many per lawn.
+const LAWN_MAX_DENSITY: f32 = 300.0;
+const LAWN_MAX_TUFTS: usize = 60_000;
+const LAWN_SPECIES: &str = "flora:lawn-tuft";
+
 struct GenGpu {
-    key: (Generator, u64, u64, u8),
+    key: (Generator, u64, u64, u8, u64),
     items: Vec<ItemId>,
 }
 
@@ -293,11 +342,14 @@ pub fn model_matrix(m: &ModelRef) -> Mat4 {
 pub struct Scene {
     owners: HashMap<String, Owner>,
     gens: HashMap<String, GenGpu>,
+    lawns: HashMap<String, LawnGpu>,
     materials: HashMap<LookKey, MaterialId>,
     protos: HashMap<String, Vec<(MeshId, MaterialId)>>,
     /// Bumps whenever any owner's geometry or placement changes: generators depend on the ground.
     ground_rev: u64,
     pub flora: Flora,
+    /// The asset library: models, textures and lamps streamed in.
+    pub library: Library,
     people: Option<ItemId>,
 }
 
@@ -326,10 +378,16 @@ fn world_bounds(model: &ImportedModel, xf: &Mat4) -> Option<(Vec3, Vec3)> {
 
 impl Scene {
     fn material(&mut self, r: &mut Renderer, look: &Look) -> MaterialId {
-        *self
-            .materials
-            .entry(look.key())
-            .or_insert_with(|| r.add_material(&gpu_material(look)))
+        if let Some(id) = self.materials.get(&look.key()) {
+            return *id;
+        }
+        let m = gpu_material(look);
+        let id = r.add_material(&m);
+        if look.tex != 0 {
+            self.library.register_textured(id, m, look.tex as usize);
+        }
+        self.materials.insert(look.key(), id);
+        id
     }
 
     fn drop_owner(r: &mut Renderer, o: Owner) {
@@ -340,11 +398,17 @@ impl Scene {
     }
 
     pub fn clear(&mut self, r: &mut Renderer) {
+        for id in self.gens.keys() {
+            self.library.forget_generator(id);
+        }
         for (_, o) in self.owners.drain() {
             Self::drop_owner(r, o);
         }
         for (_, g) in self.gens.drain() {
             g.items.into_iter().for_each(|i| r.remove_item(i));
+        }
+        for (_, l) in self.lawns.drain() {
+            l.items.into_iter().for_each(|i| r.remove_item(i));
         }
         self.ground_rev += 1;
     }
@@ -402,7 +466,7 @@ impl Scene {
 
         for (id, geom, model, xf, visible, is_shape, is_area) in wanted {
             live.push(id.clone());
-            let owner_looks = |project: &Project| -> Vec<Look> {
+            let mut owner_looks = |project: &Project| -> Vec<Look> {
                 let resolved = resolve_materials(project, &id, &model);
                 model
                     .faces
@@ -412,7 +476,7 @@ impl Scene {
                         if clay {
                             CLAY
                         } else if let Some(i) = m {
-                            look_of(&project.materials[i])
+                            look_of(&project.materials[i], &mut self.library)
                         } else if let Some(c) = model.bodies[f.body as usize].color {
                             Look {
                                 color: c,
@@ -484,7 +548,119 @@ impl Scene {
         }
 
         self.sync_generators(r, project, assets);
+        self.sync_lawns(r, project);
         problems
+    }
+
+    /// 3D grass on every face whose material is a lawn: tufts of `flora:lawn-tuft` scattered with
+    /// the core's `lawn_scatter`, an LOD item that stops drawing at `LAWN_FADE_M`.
+    fn sync_lawns(&mut self, r: &mut Renderer, project: &Project) {
+        let month = project.time.month as u8;
+        let mut live: Vec<String> = Vec::new();
+        let Some(res) = plants::resolve(project, LAWN_SPECIES) else {
+            return;
+        };
+        let class = plants::class(&res.params, month);
+        let mut owners: Vec<&String> = self.owners.keys().collect();
+        owners.sort();
+        let mut todo: Vec<(String, Vec<(usize, visioncraft_core::material::Lawn3d)>)> = Vec::new();
+        for id in owners {
+            let o = &self.owners[id];
+            if !o.key.visible || !o.is_shape {
+                continue;
+            }
+            let faces: Vec<(usize, visioncraft_core::material::Lawn3d)> =
+                resolve_materials(project, id, &o.geom)
+                    .into_iter()
+                    .enumerate()
+                    .filter_map(|(f, m)| match &project.materials.get(m?)?.kind {
+                        SurfaceKind::Lawn3d(l) => Some((f, *l)),
+                        _ => None,
+                    })
+                    .collect();
+            if !faces.is_empty() {
+                todo.push((id.clone(), faces));
+            }
+        }
+        for (id, faces) in todo {
+            live.push(id.clone());
+            let o = &self.owners[&id];
+            let key = (
+                o.key.geom.clone(),
+                o.xf,
+                faces
+                    .iter()
+                    .map(|(f, l)| {
+                        (
+                            *f,
+                            [l.density_per_m2.to_bits(), l.blade_height_m.to_bits()],
+                            l.seed,
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+                self.flora.rev,
+                month,
+            );
+            if self.lawns.get(&id).is_some_and(|g| g.key == key) {
+                continue;
+            }
+            if self.flora.parts(LAWN_SPECIES, class, 0).is_none() {
+                self.flora.want(LAWN_SPECIES, class, month, &res.params);
+                continue;
+            }
+            // One matrix list per variant, so the lawn does not repeat one tuft.
+            let mut by_variant: Vec<Vec<Mat4>> = vec![Vec::new(); plants::VARIANTS as usize];
+            let mut n = 0usize;
+            for (face, lawn) in &faces {
+                let lawn = visioncraft_core::material::Lawn3d {
+                    density_per_m2: lawn.density_per_m2.min(LAWN_MAX_DENSITY),
+                    ..*lawn
+                };
+                for t in lawn_scatter(&o.geom, *face, &lawn) {
+                    if n >= LAWN_MAX_TUFTS {
+                        break;
+                    }
+                    let p = o.xf.transform_point3(Vec3::from(t.position));
+                    let s = (t.height_m / 0.08).clamp(0.3, 2.5);
+                    by_variant[n % plants::VARIANTS as usize].push(
+                        Mat4::from_translation(p)
+                            * Mat4::from_rotation_y(t.rotation_y_deg.to_radians())
+                            * Mat4::from_scale(Vec3::splat(s)),
+                    );
+                    n += 1;
+                }
+            }
+            if let Some(old) = self.lawns.remove(&id) {
+                old.items.into_iter().for_each(|i| r.remove_item(i));
+            }
+            let mut items = Vec::new();
+            for (v, matrices) in by_variant.iter().enumerate() {
+                let Some(parts) = self.flora.parts(LAWN_SPECIES, class, v as u32) else {
+                    continue;
+                };
+                if matrices.is_empty() {
+                    continue;
+                }
+                // The coarsest level is the last one drawn, then nothing.
+                let parts: Vec<_> = parts
+                    .iter()
+                    .map(|&(m, mat, d)| (m, mat, d.min(LAWN_FADE_M)))
+                    .collect();
+                items.push(r.add_lod_item(&parts, matrices));
+            }
+            self.lawns.insert(id, LawnGpu { key, items });
+        }
+        let gone: Vec<String> = self
+            .lawns
+            .keys()
+            .filter(|k| !live.contains(k))
+            .cloned()
+            .collect();
+        for id in gone {
+            if let Some(l) = self.lawns.remove(&id) {
+                l.items.into_iter().for_each(|i| r.remove_item(i));
+            }
+        }
     }
 
     fn build_pieces(
@@ -564,13 +740,20 @@ impl Scene {
             .cloned()
             .collect();
         for id in gone {
+            self.library.forget_generator(&id);
             if let Some(g) = self.gens.remove(&id) {
                 g.items.into_iter().for_each(|i| r.remove_item(i));
             }
         }
         let month = project.time.month as u8;
         for g in &project.generators {
-            let key = (g.clone(), self.ground_rev, self.flora.rev, month);
+            let key = (
+                g.clone(),
+                self.ground_rev,
+                self.flora.rev,
+                month,
+                self.library.rev,
+            );
             if self.gens.get(g.id()).is_some_and(|old| old.key == key) {
                 continue;
             }
@@ -578,8 +761,16 @@ impl Scene {
                 old.items.into_iter().for_each(|i| r.remove_item(i));
             }
             let mut items = Vec::new();
+            self.library.forget_generator(g.id());
             if project.layer_visible(g.layer()) {
                 for (asset, variant, matrices) in self.placements(g) {
+                    if self.library.knows(&asset) {
+                        self.library.note(g.id(), &asset, &matrices);
+                        if let Some(parts) = self.library.parts(&asset) {
+                            items.push(r.add_lod_item(&parts, &matrices));
+                            continue;
+                        }
+                    }
                     if let Some(res) = plants::resolve(project, &asset) {
                         let class = plants::class(&res.params, month);
                         if let Some(parts) = self.flora.parts(&asset, class, variant) {
@@ -604,8 +795,9 @@ impl Scene {
     }
 
     /// One step of lazy plant generation; true when a generation finished (the scene must sync again).
-    pub fn pump(&mut self, r: &mut Renderer) -> bool {
-        self.flora.pump(r)
+    pub fn pump(&mut self, r: &mut Renderer, eye: Vec3) -> bool {
+        let library = self.library.pump(r, eye);
+        self.flora.pump(r) | library
     }
 
     /// Instance matrices per (asset id, variant) for one generator.
@@ -792,20 +984,20 @@ mod tests {
 
     #[test]
     fn classify_picks_the_cheapest_update() {
-        let a = key(1, vec![[0; 12]], true);
+        let a = key(1, vec![[0; 13]], true);
         let (i, t) = (Mat4::IDENTITY, Mat4::from_translation(Vec3::X));
         assert_eq!(classify(&a, &a.clone(), &i, &i), Change::Keep);
         assert_eq!(classify(&a, &a.clone(), &i, &t), Change::Transform);
         assert_eq!(
-            classify(&a, &key(2, vec![[0; 12]], true), &i, &i),
+            classify(&a, &key(2, vec![[0; 13]], true), &i, &i),
             Change::Rebuild
         );
         assert_eq!(
-            classify(&a, &key(1, vec![[1; 12]], true), &i, &i),
+            classify(&a, &key(1, vec![[1; 13]], true), &i, &i),
             Change::Rebuild
         );
         assert_eq!(
-            classify(&a, &key(1, vec![[0; 12]], false), &i, &t),
+            classify(&a, &key(1, vec![[0; 13]], false), &i, &t),
             Change::Rebuild
         );
     }

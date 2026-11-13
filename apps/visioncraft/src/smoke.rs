@@ -60,6 +60,45 @@ pub enum Step {
     Clay(bool),
     Highlight(Option<(String, String)>),
     Faces(String),
+    WaitAssets,
+    Place {
+        asset: String,
+        x: f32,
+        z: f32,
+        y: Option<f32>,
+        rot: f32,
+        scale: f32,
+    },
+    Lights(bool),
+    /// `None` is the physical sky; else a library sky id, with rotation and brightness in stops.
+    Sky {
+        id: Option<String>,
+        rot: f32,
+        stops: f32,
+    },
+    SkySun(bool),
+    LibMaterial {
+        lib_id: String,
+        owner: String,
+        /// `owner`, `body <id>` or `face <name>`: the words after the owner.
+        scope: Vec<String>,
+    },
+    /// Places catalogue assets `first..first+count` in a grid of `cols` columns.
+    ContactSheet {
+        first: usize,
+        count: usize,
+        cols: usize,
+        spacing: f32,
+        /// Scale every asset to this longest side in metres (a legibility sheet), else real size.
+        fit: Option<f32>,
+    },
+    Stats,
+    /// Sets the GPU texture memory cap of the asset store, in megabytes.
+    TextureCap(u64),
+    /// Writes the project as JSON (to seed the browser's stored project).
+    SaveProject(String),
+    /// Prints the bodies of an owner with their bounds.
+    Bodies(String),
     Pick {
         x: f32,
         y: f32,
@@ -169,6 +208,74 @@ pub fn parse_step(v: &Value) -> Result<Step, String> {
             y: y.parse().map_err(|_| "y")?,
         }),
         ["faces", owner] => Ok(Step::Faces(owner.to_string())),
+        ["wait", "assets"] => Ok(Step::WaitAssets),
+        ["texture", "cap", mb] => Ok(Step::TextureCap(mb.parse().map_err(|_| "megabytes")?)),
+        ["save", "project", path] => Ok(Step::SaveProject(path.to_string())),
+        ["stats"] => Ok(Step::Stats),
+        ["place", asset, x, z, rest @ ..] => {
+            let (mut rot, mut scale, mut y) = (0.0, 1.0, None);
+            let mut i = 0;
+            while i < rest.len() {
+                let v = nums::<1>(rest.get(i + 1..i + 2).ok_or("an option needs a number")?)?[0];
+                match rest[i] {
+                    "rot" => rot = v,
+                    "scale" => scale = v,
+                    "y" => y = Some(v),
+                    other => return Err(format!("unknown place option `{other}`")),
+                }
+                i += 2;
+            }
+            Ok(Step::Place {
+                asset: asset.to_string(),
+                x: x.parse().map_err(|_| "x is not a number")?,
+                z: z.parse().map_err(|_| "z is not a number")?,
+                y,
+                rot,
+                scale,
+            })
+        }
+        ["set", "lights", on @ ("on" | "off")] => Ok(Step::Lights(*on == "on")),
+        ["set", "sky", "sun", on @ ("on" | "off")] => Ok(Step::SkySun(*on == "on")),
+        ["set", "sky", "physical"] => Ok(Step::Sky {
+            id: None,
+            rot: 0.0,
+            stops: 0.0,
+        }),
+        ["set", "sky", id, rest @ ..] => {
+            let (mut rot, mut stops) = (0.0, 0.0);
+            let mut i = 0;
+            while i < rest.len() {
+                let v = nums::<1>(rest.get(i + 1..i + 2).ok_or("an option needs a number")?)?[0];
+                match rest[i] {
+                    "rot" => rot = v,
+                    "stops" => stops = v,
+                    other => return Err(format!("unknown sky option `{other}`")),
+                }
+                i += 2;
+            }
+            Ok(Step::Sky {
+                id: Some(id.to_string()),
+                rot,
+                stops,
+            })
+        }
+        ["lib", "material", lib_id, owner, scope @ ..] => Ok(Step::LibMaterial {
+            lib_id: lib_id.to_string(),
+            owner: owner.to_string(),
+            scope: scope.iter().map(|s| s.to_string()).collect(),
+        }),
+        ["bodies", owner] => Ok(Step::Bodies(owner.to_string())),
+        ["contact", "sheet", first, count, cols, spacing, rest @ ..] => Ok(Step::ContactSheet {
+            first: first.parse().map_err(|_| "first")?,
+            count: count.parse().map_err(|_| "count")?,
+            cols: cols.parse().map_err(|_| "cols")?,
+            spacing: spacing.parse().map_err(|_| "spacing")?,
+            fit: match rest {
+                [] => None,
+                ["fit", m] => Some(m.parse().map_err(|_| "fit is not a number")?),
+                _ => return Err("contact sheet takes an optional `fit metres`".into()),
+            },
+        }),
         ["highlight", "none"] => Ok(Step::Highlight(None)),
         ["highlight", owner, face] => {
             Ok(Step::Highlight(Some((owner.to_string(), face.to_string()))))
@@ -235,6 +342,58 @@ mod native {
             .map_err(|e| e.to_string())
     }
 
+    /// Prepares frames until plants are generated and library files have arrived and been uploaded.
+    fn settle(s: &mut Studio, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let mut calm = 0;
+        for i in 0..60000 {
+            s.prepare();
+            // Frames, so that the renderer's texture memory statistics are current.
+            if s.size[0] > 0 && i % 8 == 0 {
+                let mut encoder = device.create_command_encoder(&Default::default());
+                s.renderer.render(&mut encoder);
+                queue.submit([encoder.finish()]);
+            }
+            if s.plants_pending() > 0 || !s.scene.library.idle() {
+                calm = 0;
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            } else {
+                calm += 1;
+                if calm >= 30 {
+                    return;
+                }
+            }
+        }
+        eprintln!("warning: assets still loading after the wait");
+    }
+
+    fn place(
+        s: &mut Studio,
+        asset: &str,
+        x: f32,
+        z: f32,
+        y: Option<f32>,
+        rot: f32,
+        scale: f32,
+    ) -> Result<(), String> {
+        s.sync();
+        let y = y.unwrap_or_else(|| s.scene.floor_below(x, 100.0, z).unwrap_or(0.0));
+        let name = s
+            .assets
+            .iter()
+            .find(|a| a.id == asset)
+            .map_or_else(|| asset.to_string(), |a| a.name.clone());
+        s.session
+            .run(
+                "planting.add_single",
+                serde_json::json!({"name": name, "asset": asset, "position": [x, y, z], "rotation_y_deg": rot, "scale": scale}),
+            )
+            .map_err(|e| e.to_string())?;
+        for e in crate::lamps::reconcile_studio(s) {
+            eprintln!("problem: {e}");
+        }
+        Ok(())
+    }
+
     pub fn run(script: &Path, out: &Path) -> Result<(), String> {
         let steps = parse_script(
             &std::fs::read_to_string(script).map_err(|e| format!("{}: {e}", script.display()))?,
@@ -250,6 +409,9 @@ mod native {
                     s.session
                         .run(&name, params)
                         .map_err(|e| at(format!("{name}: {e}")))?;
+                    for e in crate::lamps::reconcile_studio(&mut s) {
+                        eprintln!("problem: {e}");
+                    }
                 }
                 Step::LoadModel {
                     path,
@@ -401,16 +563,160 @@ mod native {
                         }
                     }
                 }
+                Step::WaitAssets => settle(&mut s, &device, &queue),
+                Step::TextureCap(mb) => s.scene.library.store.cap_bytes = mb << 20,
+                Step::SaveProject(path) => {
+                    std::fs::write(&path, s.project().to_json_bytes())
+                        .map_err(|e| at(format!("{path}: {e}")))?;
+                    println!("wrote {path}");
+                }
+                Step::Stats => {
+                    println!(
+                        "sun elevation {:.1} deg, exposure EV {:.1}",
+                        s.ev_used.1, s.ev_used.0
+                    );
+                    let st = &s.scene.library.store.stats;
+                    println!(
+                        "assets: {} uploads, worst {:.1} ms, total {:.0} ms, {} evictions, peak texture bytes {} MB, {} models resident, worst pump {:.1} ms",
+                        st.uploads,
+                        st.worst_upload_ms,
+                        st.total_upload_ms,
+                        st.evictions,
+                        st.peak_texture_bytes >> 20,
+                        s.scene.library.resident_models(),
+                        s.scene.library.worst_pump_ms
+                    );
+                }
+                Step::Place {
+                    asset,
+                    x,
+                    z,
+                    y,
+                    rot,
+                    scale,
+                } => {
+                    place(&mut s, &asset, x, z, y, rot, scale).map_err(at)?;
+                }
+                Step::Lights(on) => s.lights_on = on,
+                Step::SkySun(on) => s.sky.use_sun = on,
+                Step::Sky { id, rot, stops } => match id {
+                    None => {
+                        s.sky.use_sun = false;
+                        s.session
+                            .run("view.set", serde_json::json!({"sky": {"type": "physical"}}))
+                            .map_err(|e| at(e.to_string()))?;
+                    }
+                    Some(id) => {
+                        s.sky.pick = Some(id.clone());
+                        for _ in 0..20000 {
+                            s.prepare();
+                            if s.sky.calibrated(&id).is_some() {
+                                break;
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(1));
+                        }
+                        let c = s
+                            .sky
+                            .calibrated(&id)
+                            .ok_or_else(|| at(format!("sky `{id}` did not load")))?;
+                        s.sky.pick = None;
+                        s.session
+                            .run(
+                                "view.set",
+                                serde_json::json!({"sky": {"type": "hdri", "id": id, "rotation_deg": rot, "intensity": c * stops.exp2()}}),
+                            )
+                            .map_err(|e| at(e.to_string()))?;
+                        s.prepare();
+                    }
+                },
+                Step::LibMaterial {
+                    lib_id,
+                    owner,
+                    scope,
+                } => {
+                    let mat =
+                        crate::material_library::ensure_material(&mut s, &lib_id).map_err(at)?;
+                    let words: Vec<&str> = scope.iter().map(String::as_str).collect();
+                    let target = match words.as_slice() {
+                        [] | ["owner"] => serde_json::json!({"type": "owner", "owner": owner}),
+                        ["body", b] => {
+                            serde_json::json!({"type": "body", "owner": owner, "body": b})
+                        }
+                        ["face", f] => {
+                            serde_json::json!({"type": "face", "owner": owner, "face": f})
+                        }
+                        other => {
+                            return Err(at(format!(
+                                "scope {other:?} is owner, body <id> or face <name>"
+                            )));
+                        }
+                    };
+                    s.session
+                        .run(
+                            "material.assign",
+                            serde_json::json!({"target": target, "material": mat}),
+                        )
+                        .map_err(|e| at(e.to_string()))?;
+                }
+                Step::Bodies(owner) => {
+                    s.sync();
+                    let g = s
+                        .scene
+                        .geometry(&owner)
+                        .ok_or_else(|| at(format!("no owner `{owner}`")))?;
+                    for b in &g.bodies {
+                        println!(
+                            "body {}: {:?} .. {:?}",
+                            b.id,
+                            b.bounds[0].map(|v| (v * 100.0).round() / 100.0),
+                            b.bounds[1].map(|v| (v * 100.0).round() / 100.0)
+                        );
+                    }
+                }
+                Step::ContactSheet {
+                    first,
+                    count,
+                    cols,
+                    spacing,
+                    fit,
+                } => {
+                    settle(&mut s, &device, &queue);
+                    let ids: Vec<(String, f32)> = s
+                        .scene
+                        .library
+                        .catalog
+                        .as_ref()
+                        .ok_or_else(|| at("no asset library".into()))?
+                        .assets
+                        .iter()
+                        .skip(first)
+                        .take(count)
+                        .map(|a| {
+                            let longest = a.size_m.iter().copied().fold(0.01, f32::max);
+                            (a.id.clone(), fit.map_or(1.0, |m| m / longest))
+                        })
+                        .collect();
+                    for (i, (id, scale)) in ids.iter().enumerate() {
+                        let (c, r) = ((i % cols) as f32, (i / cols) as f32);
+                        place(&mut s, id, c * spacing, r * spacing, Some(0.0), 0.0, *scale)
+                            .map_err(at)?;
+                    }
+                    let names: Vec<&str> = ids.iter().map(|(i, _)| i.as_str()).collect();
+                    println!("contact sheet: {}", names.join(" "));
+                }
                 Step::Screenshot { name, w, h } => {
                     s.resize(w, h);
-                    // plants are generated one step per frame: let them finish
-                    for _ in 0..600 {
-                        s.prepare();
-                        if s.plants_pending() == 0 {
-                            break;
-                        }
-                    }
+                    // plants are generated one step per frame and library files stream in
+                    settle(&mut s, &device, &queue);
                     s.prepare();
+                    // The renderer converges over frames (sky environment, alternating shadow
+                    // cascades): draw a few before the one that is read back.
+                    for _ in 0..10 {
+                        let mut encoder = device.create_command_encoder(&Default::default());
+                        s.renderer.render(&mut encoder);
+                        queue.submit([encoder.finish()]);
+                        s.prepare();
+                    }
                     let rb = Readback::start(&mut s, &device, &queue);
                     device
                         .poll(wgpu::PollType::wait_indefinitely())
@@ -425,6 +731,9 @@ mod native {
             }
             for p in s.problems.drain(..) {
                 eprintln!("problem: {p}");
+            }
+            for m in s.scene.library.messages.drain(..) {
+                eprintln!("library: {m}");
             }
         }
         Ok(())

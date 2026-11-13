@@ -20,6 +20,10 @@ png = "0.17"
 # MIT: file dialogs; asynchronous, and the only option on wasm (upload, download).
 rfd = { version = "0.18", default-features = false, features = ["xdg-portal"] }
 glam = "0.30"
+# MIT/Apache-2.0: reads the library's GLB models (parser only: no image import, no file or URL loading).
+gltf = { version = "1", default-features = false, features = ["utils", "names", "KHR_materials_emissive_strength", "KHR_materials_transmission"] }
+# MIT/Apache-2.0: Radiance .hdr skies everywhere; JPEG and PNG textures natively (the browser decodes them on the web).
+image = { version = "0.25", default-features = false, features = ["hdr"] }
 egui = { version = "0.36", default-features = false, features = ["default_fonts"] }
 # `wgpu_no_default_features` instead of `wgpu`: the latter turns on wgpu's `webgl`
 # (a GLES backend in the wasm), and VisionCraft is WebGPU only.
@@ -29,6 +33,7 @@ wgpu = "30.0.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pollster = "1.0.1"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 # CC0-1.0: watches the linked model file.
 notify = "8"
 
