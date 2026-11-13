@@ -605,7 +605,8 @@ impl Hud {
                 self.layers(ui, cx, &mut actions)
             });
         }
-        if walking {
+        // Only over a bare view: a mode's panel would cover it.
+        if walking && self.mode.is_none() {
             egui::Area::new(egui::Id::new("walkhint"))
                 .anchor(Align2::CENTER_BOTTOM, Vec2::new(0.0, -64.0))
                 .order(egui::Order::Foreground)
