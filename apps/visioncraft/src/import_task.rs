@@ -5,7 +5,7 @@
 //! fails with a message: the page's own wasm leaves the importer (the geometry kernel) out.
 
 use std::sync::{Arc, Mutex};
-use visioncraft_core::{Body, Face, ImportedModel, ModelKind};
+use visioncraft_core::{ImportedModel, ModelKind};
 
 type Slot = Arc<Mutex<Option<Result<ImportedModel, String>>>>;
 
@@ -123,111 +123,20 @@ pub fn kind_of(name: &str) -> Option<ModelKind> {
 
 // ---- transfer ----
 
-fn put_u32(out: &mut Vec<u8>, v: u32) {
-    out.extend_from_slice(&v.to_le_bytes());
-}
-
-/// The model as bytes: counts, the vertex and triangle arrays little-endian, then the faces,
-/// bodies and warnings as JSON.
+/// The model as bytes for the trip back from the worker (the core's checked codec).
 pub fn encode(m: &ImportedModel) -> Vec<u8> {
-    let meta = serde_json::json!({
-        "faces": m.faces.iter().map(|f| (&f.name, f.body)).collect::<Vec<_>>(),
-        "bodies": m.bodies.iter().map(|b| (&b.id, &b.name, b.color, b.triangles.start, b.triangles.end, b.bounds)).collect::<Vec<_>>(),
-        "warnings": m.warnings,
-    })
-    .to_string();
-    let mut out = Vec::new();
-    for n in [
-        m.positions.len(),
-        m.normals.len(),
-        m.triangles.len(),
-        m.triangle_faces.len(),
-        meta.len(),
-    ] {
-        put_u32(&mut out, n as u32);
-    }
-    let floats = m.positions.iter().chain(&m.normals).flatten();
-    floats.for_each(|v| out.extend_from_slice(&v.to_le_bytes()));
-    let ints = m.triangles.iter().flatten().chain(&m.triangle_faces);
-    ints.for_each(|v| put_u32(&mut out, *v));
-    out.extend_from_slice(meta.as_bytes());
-    out
+    m.to_bytes()
 }
 
 pub fn decode(b: &[u8]) -> Result<ImportedModel, String> {
-    let bad = || "a damaged model came back from the import worker".to_string();
-    let mut at = 0usize;
-    let mut word = || -> Result<[u8; 4], String> {
-        let w = b.get(at..at + 4).ok_or_else(bad)?;
-        at += 4;
-        Ok([w[0], w[1], w[2], w[3]])
-    };
-    let mut counts = [0usize; 5];
-    for c in &mut counts {
-        *c = u32::from_le_bytes(word()?) as usize;
-    }
-    let [np, nn, nt, nf, nmeta] = counts;
-    let mut f3 = |n: usize| -> Result<Vec<[f32; 3]>, String> {
-        let mut v = Vec::with_capacity(n);
-        for _ in 0..n {
-            let mut p = [0.0f32; 3];
-            for c in &mut p {
-                *c = f32::from_le_bytes(word()?);
-            }
-            v.push(p);
-        }
-        Ok(v)
-    };
-    let positions = f3(np)?;
-    let normals = f3(nn)?;
-    let mut triangles = Vec::with_capacity(nt);
-    for _ in 0..nt {
-        let mut t = [0u32; 3];
-        for c in &mut t {
-            *c = u32::from_le_bytes(word()?);
-        }
-        triangles.push(t);
-    }
-    let triangle_faces = (0..nf)
-        .map(|_| word().map(u32::from_le_bytes))
-        .collect::<Result<Vec<_>, _>>()?;
-    let meta = b.get(at..at + nmeta).ok_or_else(bad)?;
-    #[derive(serde::Deserialize)]
-    struct Meta {
-        faces: Vec<(String, u32)>,
-        #[allow(clippy::type_complexity)]
-        bodies: Vec<(String, String, Option<[f32; 4]>, u32, u32, [[f32; 3]; 2])>,
-        warnings: Vec<String>,
-    }
-    let meta: Meta = serde_json::from_slice(meta).map_err(|e| e.to_string())?;
-    Ok(ImportedModel {
-        positions,
-        normals,
-        triangles,
-        triangle_faces,
-        faces: meta
-            .faces
-            .into_iter()
-            .map(|(name, body)| Face { name, body })
-            .collect(),
-        bodies: meta
-            .bodies
-            .into_iter()
-            .map(|(id, name, color, s, e, bounds)| Body {
-                id,
-                name,
-                color,
-                triangles: s..e,
-                bounds,
-            })
-            .collect(),
-        warnings: meta.warnings,
-    })
+    ImportedModel::from_bytes(b)
+        .map_err(|e| format!("a damaged model came back from the import worker: {e}"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use visioncraft_core::{Body, Face};
 
     #[test]
     fn a_model_survives_the_trip_through_bytes() {
