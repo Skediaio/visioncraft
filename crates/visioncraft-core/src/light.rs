@@ -171,6 +171,33 @@ pub fn kelvin_to_linear_rgb(kelvin: f32) -> [f32; 3] {
     })
 }
 
+/// Lights for many placed lamps of one asset: light `i` gets id `<base_id>-<i>` and name
+/// `<source> lamp <i>`, all remember `source` and sit on `layer`. At most `cap` lights are made;
+/// the second value counts the placements skipped beyond it.
+pub fn lights_for_placements(
+    spec: &LightSpec,
+    placements: &[Placement],
+    base_id: &str,
+    source: &str,
+    layer: &str,
+    cap: usize,
+) -> (Vec<Light>, usize) {
+    let lights = placements
+        .iter()
+        .take(cap)
+        .enumerate()
+        .map(|(i, p)| {
+            let ids = (
+                format!("{base_id}-{i}"),
+                format!("{source} lamp {i}"),
+                layer.to_string(),
+            );
+            lights_for_placement(spec, p, ids, source)
+        })
+        .collect();
+    (lights, placements.len().saturating_sub(cap))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

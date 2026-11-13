@@ -49,18 +49,20 @@ pub(super) fn check_layer(project: &Project, layer: &str) -> Result<(), CommandE
     }
 }
 
-/// A partial update: the top-level fields in `params` (without `id`) replace those of `item`.
+/// A partial update: the top-level fields in `params` (without `id`) replace those of `item`;
+/// `absent_ok` names fields that may be set although they are not serialised while empty.
 /// Unknown fields and `type` are refused, so a typo does not pass silently.
 pub(super) fn merge_update<T: Serialize + DeserializeOwned>(
     item: &T,
     params: &Value,
+    absent_ok: &[&str],
 ) -> Result<T, CommandError> {
     let mut value = serde_json::to_value(item).expect("project items serialise");
     let (Some(fields), Some(changes)) = (value.as_object_mut(), params.as_object()) else {
         return Err(bad("expected an object"));
     };
     for (k, v) in changes.iter().filter(|(k, _)| *k != "id") {
-        if k == "type" || !fields.contains_key(k) {
+        if k == "type" || (!fields.contains_key(k) && !absent_ok.contains(&k.as_str())) {
             let near = crate::spec::nearest(
                 k,
                 fields.keys().map(String::as_str).filter(|f| *f != "type"),

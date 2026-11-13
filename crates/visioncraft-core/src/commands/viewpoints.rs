@@ -119,7 +119,7 @@ fn viewpoint_update(project: &mut Project, params: &Value) -> Result<Value, Comm
         project,
         params["id"].as_str().ok_or_else(|| bad("missing id"))?,
     )?;
-    let v = merge_update(&project.viewpoints[i], params)?;
+    let v = merge_update(&project.viewpoints[i], params, &[])?;
     v.validate().map_err(|e| bad(&e))?;
     project.viewpoints[i] = v;
     Ok(Value::Null)

@@ -198,7 +198,7 @@ fn style_set(project: &mut Project, params: &Value) -> Result<Value, CommandErro
 }
 
 fn view_set(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
-    let view = super::merge_update(&project.view, params)?;
+    let view = super::merge_update(&project.view, params, &[])?;
     view.validate().map_err(|e| crate::session::bad(&e))?;
     project.view = view;
     Ok(Value::Null)

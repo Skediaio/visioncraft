@@ -5,6 +5,7 @@ use crate::session::{CommandError, Session, bad, parse};
 use crate::spec::{ParamType as T, param, spec};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 
 pub(super) fn register(s: &mut Session) {
     let name = || param("name", T::String, "Display name.");
@@ -22,11 +23,27 @@ pub(super) fn register(s: &mut Session) {
             "Linear RGBA, each 0..1 (alpha 1 if three numbers).",
         )
     };
-    let maps = || {
+    let maps = |doc: &str| {
         param(
             "maps",
             T::Object,
-            "Texture sources {base_color, normal (OpenGL), roughness, metallic, ambient_occlusion, height}: a path relative to the project, or a URL.",
+            &format!(
+                "Texture sources {{orm (packed occlusion-roughness-metallic, glTF channel order), base_color, normal (OpenGL), roughness, metallic, ambient_occlusion, height}}: a path relative to the project, or a URL.{doc}"
+            ),
+        )
+    };
+    let variation = || {
+        param(
+            "variation",
+            T::Number,
+            "0..1: large-scale colour variation across the surface, to break up repetition.",
+        )
+    };
+    let extensions = || {
+        param(
+            "extensions",
+            T::Object,
+            "Data of other tools by namespace, kept untouched: {\"com.example.tool\": {...}}. On update the whole object is replaced.",
         )
     };
     let target = || {
@@ -48,7 +65,9 @@ pub(super) fn register(s: &mut Session) {
                 color().default(json!([1, 1, 1, 1])),
                 param("metallic", T::Number, "0 (dielectric) to 1 (metal).").default(json!(0)),
                 param("roughness", T::Number, "0 (mirror) to 1 (matte).").default(json!(0.5)),
-                maps().default(json!({})),
+                maps("").default(json!({})),
+                variation().default(json!(0)),
+                extensions().default(json!({})),
             ],
             "{id} (mat1, mat2...)",
             json!({"name": "Red render", "base_color": [0.6, 0.1, 0.08, 1.0], "roughness": 0.8}),
@@ -67,10 +86,12 @@ pub(super) fn register(s: &mut Session) {
                 color(),
                 param("metallic", T::Number, "0 to 1."),
                 param("roughness", T::Number, "0 to 1."),
-                maps(),
+                maps(" Keys given replace those keys only; null clears one."),
+                variation(),
+                extensions(),
             ],
             "null",
-            json!({"id": "glass", "roughness": 0.2}),
+            json!({"id": "glass", "roughness": 0.2, "variation": 0.3, "maps": {"orm": "glass_orm.png"}, "extensions": {"com.example.tool": {"tag": 1}}}),
         ),
         update,
     );
@@ -127,6 +148,10 @@ fn add(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
         roughness: f32,
         #[serde(default)]
         maps: MaterialMaps,
+        #[serde(default)]
+        variation: f32,
+        #[serde(default)]
+        extensions: BTreeMap<String, Value>,
     }
     fn white() -> [f32; 4] {
         [1.0; 4]
@@ -144,7 +169,8 @@ fn add(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
         metallic: p.metallic,
         roughness: p.roughness,
         maps: p.maps,
-        extensions: Default::default(),
+        variation: p.variation,
+        extensions: p.extensions,
     };
     m.validate().map_err(|e| bad(&e))?;
     project.materials.push(m);
@@ -158,7 +184,32 @@ fn update(project: &mut Project, params: &Value) -> Result<Value, CommandError> 
         .iter()
         .position(|m| m.id == id)
         .ok_or_else(|| fail(format!("no material `{id}`")))?;
-    let m = merge_update(&project.materials[at], params)?;
+    // `maps` merges key by key (null clears one); `extensions` replaces the whole object.
+    let mut params = params.clone();
+    if let Some(Value::Object(given)) = params.get("maps").cloned() {
+        let mut maps = serde_json::to_value(&project.materials[at].maps).expect("maps serialise");
+        let known = [
+            "orm",
+            "base_color",
+            "normal",
+            "roughness",
+            "metallic",
+            "ambient_occlusion",
+            "height",
+        ];
+        for (k, v) in given {
+            if !known.contains(&k.as_str()) {
+                let near = crate::spec::nearest(&k, known.into_iter()).unwrap_or("");
+                return Err(bad(&format!("unknown map `{k}`; did you mean `{near}`?")));
+            }
+            match v {
+                Value::Null => maps.as_object_mut().expect("an object").remove(&k),
+                v => maps.as_object_mut().expect("an object").insert(k, v),
+            };
+        }
+        params["maps"] = maps;
+    }
+    let m = merge_update(&project.materials[at], &params, &["extensions"])?;
     m.validate().map_err(|e| bad(&e))?;
     project.materials[at] = m;
     Ok(Value::Null)

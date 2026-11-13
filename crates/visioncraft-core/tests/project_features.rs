@@ -531,6 +531,7 @@ fn lamp_light_follows_its_placement_and_export_presets_exist() {
         rotation_y_deg: 90.0,
         scale: 2.0,
         variant: 0,
+        layer: None,
     };
     let l = lights_for_placement(
         &spec,

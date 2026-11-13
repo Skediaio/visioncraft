@@ -3,6 +3,7 @@
 
 use crate::project::{ModelKind, ModelRef, Project, Transform};
 use crate::spec::{CommandSpec, ParamType, param, spec};
+use crate::terrain::DirtyRect;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -46,6 +47,7 @@ pub struct Session {
     revision: u64,
     /// Inside a transaction: nothing is pushed on the undo stack until it ends.
     in_transaction: bool,
+    terrain_dirty: Option<DirtyRect>,
 }
 
 /// Whether two projects are equal; the terrain is compared by pointer first, since a command that
@@ -73,6 +75,7 @@ impl Session {
             redo: Vec::new(),
             revision: 0,
             in_transaction: false,
+            terrain_dirty: None,
         };
         s.register_with_spec(
             spec(
@@ -210,6 +213,19 @@ impl Session {
         &self.project
     }
 
+    /// The vertices of the terrain the last change touched, for redrawing only those: set by a
+    /// command that edited the terrain (the exact bounding rectangle of what differs), cleared by
+    /// any other command, and the whole grid after `undo`, `redo` and `replace_project`. `None`
+    /// means the terrain is unchanged (or gone: see `project().terrain`). Inside a transaction it
+    /// accumulates; the value after the transaction covers all its commands.
+    pub fn last_terrain_dirty(&self) -> Option<DirtyRect> {
+        self.terrain_dirty
+    }
+
+    fn terrain_everything(&mut self) {
+        self.terrain_dirty = self.project.terrain.as_ref().map(|t| t.whole());
+    }
+
     /// Increases on every change of the project (run, undo, redo): compare it to know when to redraw.
     pub fn revision(&self) -> u64 {
         self.revision
@@ -235,6 +251,17 @@ impl Session {
         let mut before = self.project.clone();
         match (command.handler)(&mut self.project, &params) {
             Ok(result) => {
+                let dirty = match (&before.terrain, &self.project.terrain) {
+                    (Some(a), Some(b)) if Arc::ptr_eq(a, b) => None,
+                    (Some(a), Some(b)) => b.changed_since(a),
+                    (None, Some(b)) => Some(b.whole()),
+                    _ => None,
+                };
+                self.terrain_dirty = match (self.in_transaction, self.terrain_dirty, dirty) {
+                    (true, Some(old), Some(new)) => Some(old.union(new)),
+                    (true, old, None) => old,
+                    (_, _, new) => new,
+                };
                 if same_project(&mut before, &mut self.project) {
                     return Ok(result);
                 }
@@ -271,6 +298,7 @@ impl Session {
             return f(self);
         }
         let mut before = self.project.clone();
+        let dirty_before = self.terrain_dirty.take();
         self.in_transaction = true;
         let outcome = f(self);
         self.in_transaction = false;
@@ -285,6 +313,7 @@ impl Session {
             }
             Err(e) => {
                 self.project = before;
+                self.terrain_dirty = dirty_before;
                 Err(e)
             }
         }
@@ -297,6 +326,7 @@ impl Session {
             self.push_undo(old);
             self.redo.clear();
             self.revision += 1;
+            self.terrain_everything();
         }
     }
 
@@ -319,6 +349,7 @@ impl Session {
         self.redo
             .push(std::mem::replace(&mut self.project, previous));
         self.revision += 1;
+        self.terrain_everything();
         true
     }
 
@@ -332,6 +363,7 @@ impl Session {
         };
         self.undo.push(std::mem::replace(&mut self.project, next));
         self.revision += 1;
+        self.terrain_everything();
         true
     }
 }

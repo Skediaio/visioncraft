@@ -10,6 +10,10 @@ use std::fmt;
 /// Optional texture sources (a path relative to the project, or a URL) per usage.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct MaterialMaps {
+    /// A packed map: occlusion in red, roughness in green, metallic in blue (glTF channel order).
+    /// When set it stands in for the three separate maps below.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orm: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_color: Option<String>,
     /// OpenGL convention (+Y up).
@@ -79,6 +83,9 @@ pub struct Material {
     pub roughness: f32,
     #[serde(default)]
     pub maps: MaterialMaps,
+    /// 0..1: how much the colour varies across the surface at large scale (breaks up repetition).
+    #[serde(default)]
+    pub variation: f32,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extensions: Extensions,
 }
@@ -89,9 +96,10 @@ impl Material {
         let unit = |v: f32| (0.0..=1.0).contains(&v);
         if !(self.base_color.iter().all(|c| unit(*c))
             && unit(self.metallic)
-            && unit(self.roughness))
+            && unit(self.roughness)
+            && unit(self.variation))
         {
-            return Err("colour, metallic and roughness must lie in 0..1".into());
+            return Err("colour, metallic, roughness and variation must lie in 0..1".into());
         }
         let ok = match &self.kind {
             SurfaceKind::StandardTriplanarPbr {
@@ -231,6 +239,7 @@ fn plain(
         metallic,
         roughness,
         maps: MaterialMaps::default(),
+        variation: 0.0,
         extensions: Extensions::new(),
     }
 }

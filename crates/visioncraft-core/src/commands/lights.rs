@@ -157,7 +157,7 @@ fn light_update(project: &mut Project, params: &Value) -> Result<Value, CommandE
         .iter()
         .position(|l| l.id == id)
         .ok_or_else(|| fail(format!("no light `{id}`")))?;
-    let updated = merge_update(&project.lights[at], params)?;
+    let updated = merge_update(&project.lights[at], params, &[])?;
     updated.validate().map_err(|e| bad(&e))?;
     check_layer(project, &updated.layer)?;
     project.lights[at] = updated;

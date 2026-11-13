@@ -297,3 +297,223 @@ fn replace_project_still_works_inside_the_new_run() {
     assert_eq!(*s.project(), other);
     assert!(s.undo());
 }
+
+#[test]
+fn materials_take_orm_variation_and_extensions() {
+    let mut s = example_session("x");
+    let id = s
+        .run("material.add", json!({"name": "Brick", "maps": {"orm": "brick_orm.png", "normal": "brick_n.png"}, "variation": 0.4, "extensions": {"com.example.lib": {"id": 7}}}))
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let m = s
+        .project()
+        .materials
+        .iter()
+        .find(|m| m.id == id)
+        .unwrap()
+        .clone();
+    assert_eq!(m.maps.orm.as_deref(), Some("brick_orm.png"));
+    assert_eq!(
+        (m.variation, m.extensions["com.example.lib"]["id"].clone()),
+        (0.4, json!(7))
+    );
+    // `maps` merges key by key; null clears; extensions are replaced.
+    s.run("material.update", json!({"id": id, "maps": {"roughness": "r.png", "normal": null}, "variation": 0.1, "extensions": {"com.example.other": 1}})).unwrap();
+    let m = s
+        .project()
+        .materials
+        .iter()
+        .find(|m| m.id == id)
+        .unwrap()
+        .clone();
+    assert_eq!(
+        (
+            m.maps.orm.as_deref(),
+            m.maps.roughness.as_deref(),
+            m.maps.normal.clone()
+        ),
+        (Some("brick_orm.png"), Some("r.png"), None)
+    );
+    assert_eq!((m.variation, m.extensions.len()), (0.1, 1));
+    assert!(m.extensions.contains_key("com.example.other"));
+    let err = s
+        .run("material.update", json!({"id": id, "maps": {"orn": "x"}}))
+        .unwrap_err();
+    assert!(err.to_string().contains("did you mean `orm`"), "{err}");
+    assert!(
+        s.run("material.update", json!({"id": id, "variation": 2.0}))
+            .is_err()
+    );
+    let again = Project::from_json_bytes(&s.project().to_json_bytes()).unwrap();
+    assert_eq!(&again, s.project());
+}
+
+#[test]
+fn placements_know_their_layer() {
+    use visioncraft_core::{Generator, evaluate};
+    let mut s = example_session("x");
+    s.run(
+        "planting.apply_preset",
+        json!({"id": "g1", "preset": "broadleaf-woodland"}),
+    )
+    .unwrap();
+    s.run(
+        "planting.brush_stroke",
+        json!({"id": "g1", "points": [[0, 0], [30, 0]], "radius_m": 10}),
+    )
+    .unwrap();
+    let e = evaluate(&s.project().generators[0], &|_, _| None);
+    let layers: std::collections::BTreeSet<_> = e.placements.iter().map(|p| p.layer).collect();
+    assert_eq!(layers, [Some(0), Some(1), Some(2)].into());
+    let plain = evaluate(&s.project().generators[1], &|_, _| None);
+    assert!(plain.placements.iter().all(|p| p.layer.is_none()));
+    assert!(matches!(
+        &s.project().generators[0],
+        Generator::MixedBrush(_)
+    ));
+}
+
+#[test]
+fn duplicate_shifts_geometry_and_undo_stroke_pops() {
+    use visioncraft_core::Generator;
+    let mut s = example_session("x");
+    s.run("planting.add_area", json!({"name": "A", "asset_palette": [{"asset": "a", "weight": 1}], "outline": [[0, 0], [4, 0], [4, 4]], "density_per_m2": 1.0, "seed": 5})).unwrap();
+    s.run("planting.add_cluster", json!({"name": "C", "asset_palette": [{"asset": "a", "weight": 1}], "center": [1, 2], "radius_m": 1, "count": 3, "seed": 5})).unwrap();
+    s.run("planting.add_spline", json!({"name": "S", "asset_palette": [{"asset": "a", "weight": 1}], "points": [[0, 0], [2, 0]], "spacing": {"count": 3}, "seed": 5})).unwrap();
+    s.run("planting.add_surface_fill", json!({"name": "F", "asset_palette": [{"asset": "a", "weight": 1}], "owner": "S1", "faces": ["S1:top"], "density_per_m2": 1.0, "seed": 5})).unwrap();
+    let ids: Vec<String> = s
+        .project()
+        .generators
+        .iter()
+        .map(|g| g.id().to_string())
+        .collect();
+    assert_eq!(ids.len(), 6);
+    for id in &ids {
+        let r = s
+            .run(
+                "planting.duplicate",
+                json!({"id": id, "offset": [10, -2], "new_seed": true}),
+            )
+            .unwrap();
+        assert!(!ids.contains(&r["id"].as_str().unwrap().to_string()));
+    }
+    let gens = &s.project().generators;
+    assert_eq!(gens.len(), 12);
+    let (a, b) = (&gens[0], &gens[6]);
+    let (Generator::MixedBrush(a), Generator::MixedBrush(b)) = (a, b) else {
+        panic!()
+    };
+    assert_eq!(b.strokes[0].points[0], [10.0, -2.0]);
+    assert_eq!((b.name.as_str(), b.seed != a.seed), ("Woodland copy", true));
+    let Generator::Single(c) = &gens[7] else {
+        panic!()
+    };
+    assert_eq!(c.position, [14.0, 0.0, 1.0]);
+    let Generator::AreaScatter(c) = &gens[8] else {
+        panic!()
+    };
+    assert_eq!(c.outline[1], [14.0, -2.0]);
+    let Generator::Cluster(c) = &gens[9] else {
+        panic!()
+    };
+    assert_eq!(c.center, [11.0, 0.0]);
+    let Generator::SplineMass(c) = &gens[10] else {
+        panic!()
+    };
+    assert_eq!(c.points[1], [12.0, -2.0]);
+    let (Generator::SurfaceFill(f), Generator::SurfaceFill(g)) = (&gens[5], &gens[11]) else {
+        panic!()
+    };
+    assert_eq!((&f.faces, f.seed != g.seed), (&g.faces, true));
+    // Without new_seed the seed stays.
+    s.run("planting.duplicate", json!({"id": "g3"})).unwrap();
+    let (Generator::AreaScatter(x), Generator::AreaScatter(y)) = (
+        &s.project().generators[2],
+        s.project().generators.last().unwrap(),
+    ) else {
+        panic!()
+    };
+    assert_eq!((x.seed, y.seed, x.outline == y.outline), (5, 5, true));
+    // Strokes can be taken back one by one.
+    s.run("planting.undo_stroke", json!({"id": "g1"})).unwrap();
+    assert!(s.run("planting.undo_stroke", json!({"id": "g1"})).is_err());
+    assert!(s.run("planting.undo_stroke", json!({"id": "g2"})).is_err());
+}
+
+#[test]
+fn the_session_reports_what_the_last_terrain_command_touched() {
+    use visioncraft_core::DirtyRect;
+    let mut s = example_session("x");
+    assert_eq!(s.last_terrain_dirty(), None);
+    s.run("terrain.stroke", json!({"tool": "raise", "points": [[10.0, 10.0]], "radius_m": 2.0, "strength": 0.5, "falloff": 0.0})).unwrap();
+    let d = s.last_terrain_dirty().unwrap();
+    assert_eq!(
+        d,
+        DirtyRect {
+            x0: 16,
+            z0: 16,
+            x1: 24,
+            z1: 24
+        }
+    );
+    time(&mut s, 8.0).unwrap();
+    assert_eq!(s.last_terrain_dirty(), None);
+    s.run(
+        "terrain.stroke",
+        json!({"tool": "raise", "points": [[500.0, 5.0]], "radius_m": 2.0, "strength": 0.5}),
+    )
+    .unwrap();
+    assert_eq!(s.last_terrain_dirty(), None);
+    assert!(s.undo());
+    let whole = s.last_terrain_dirty().unwrap();
+    assert_eq!((whole.x0, whole.z0, whole.x1, whole.z1), (0, 0, 80, 60));
+    // A transaction reports the union of its commands.
+    s.transaction(|s| {
+        s.run("terrain.stroke", json!({"tool": "raise", "points": [[2.0, 2.0]], "radius_m": 1.0, "strength": 0.5, "falloff": 0.0}))?;
+        s.run("terrain.stroke", json!({"tool": "raise", "points": [[30.0, 20.0]], "radius_m": 1.0, "strength": 0.5, "falloff": 0.0}))?;
+        time(s, 9.0).map(|_| ())
+    })
+    .unwrap();
+    let u = s.last_terrain_dirty().unwrap();
+    assert!(u.x0 <= 4 && u.z0 <= 4 && u.x1 >= 60 && u.z1 >= 40, "{u:?}");
+    let _ = s.run("terrain.remove", json!({}));
+    assert_eq!(s.last_terrain_dirty(), None);
+}
+
+#[test]
+fn many_lamps_make_capped_lights() {
+    use visioncraft_core::{LightKind, LightSpec, Placement, lights_for_placements};
+    let spec = LightSpec {
+        kind: LightKind::Point,
+        color_temperature_k: 2700.0,
+        lumens: 300.0,
+        range_m: 5.0,
+        offset_m: [0.0, 1.0, 0.0],
+    };
+    let at = |x: f32| Placement {
+        asset: "lamp".into(),
+        position: [x, 0.0, 0.0],
+        rotation_y_deg: 0.0,
+        scale: 1.0,
+        variant: 0,
+        layer: None,
+    };
+    let placements: Vec<_> = (0..5).map(|i| at(i as f32)).collect();
+    let (lights, skipped) = lights_for_placements(&spec, &placements, "li-g4", "g4", "lighting", 3);
+    assert_eq!((lights.len(), skipped), (3, 2));
+    assert_eq!(lights[2].id, "li-g4-2");
+    assert_eq!(
+        (
+            lights[2].position,
+            lights[2].source.as_deref(),
+            lights[2].layer.as_str()
+        ),
+        ([2.0, 1.0, 0.0], Some("g4"), "lighting")
+    );
+    assert_eq!(
+        lights_for_placements(&spec, &placements, "x", "g4", "lighting", 10).1,
+        0
+    );
+}

@@ -302,6 +302,32 @@ pub(super) fn register(s: &mut Session) {
     );
     s.register_with_spec(
         spec(
+            "planting.duplicate",
+            "Duplicate Planting",
+            "Copies a generator of any kind under a new id (named \"<name> copy\"), shifting its geometry (points, outline, strokes, centre, position) by an offset. A surface fill keeps its faces; only its seed can change.",
+            vec![
+                param("id", T::String, "Generator id.").required(),
+                param("offset", T::Point2, "Shift [x, z] of the copy.").unit("m").default(json!([0, 0])),
+                param("new_seed", T::Boolean, "Give the copy its own number as seed, so its plants differ.").default(json!(false)),
+            ],
+            "{id}",
+            json!({"id": "g1", "offset": [12, 0], "new_seed": true}),
+        ),
+        duplicate,
+    );
+    s.register_with_spec(
+        spec(
+            "planting.undo_stroke",
+            "Remove Last Stroke",
+            "Removes the last stroke of a brush; refused when it has none.",
+            vec![param("id", T::String, "Brush generator id.").required()],
+            "null",
+            json!({"id": "g1"}),
+        ),
+        undo_stroke,
+    );
+    s.register_with_spec(
+        spec(
             "planting.remove",
             "Remove Planting",
             "Removes a generator.",
@@ -623,7 +649,7 @@ fn brush_stroke(project: &mut Project, params: &Value) -> Result<Value, CommandE
 
 fn update(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
     let g = find(project, params)?;
-    let updated: Generator = merge_update(g, params)?;
+    let updated: Generator = merge_update(g, params, &[])?;
     updated.validate().map_err(|e| bad(&e))?;
     let layer = updated.layer().to_string();
     *g = updated;
@@ -657,4 +683,91 @@ fn apply_preset(project: &mut Project, params: &Value) -> Result<Value, CommandE
     };
     *layers = preset.layers;
     Ok(Value::Null)
+}
+
+fn undo_stroke(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
+    let Generator::MixedBrush(b) = find(project, params)? else {
+        return Err(fail("only a brush has strokes"));
+    };
+    b.strokes
+        .pop()
+        .ok_or_else(|| fail("the brush has no strokes"))?;
+    Ok(Value::Null)
+}
+
+fn duplicate(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct P {
+        #[serde(rename = "id")]
+        _id: String,
+        #[serde(default)]
+        offset: [f32; 2],
+        #[serde(default)]
+        new_seed: bool,
+    }
+    let p: P = parse(params)?;
+    if !p.offset.iter().all(|c| c.is_finite()) {
+        return Err(bad("offset must be finite"));
+    }
+    let mut copy = find(project, params)?.clone();
+    let id = next_id("g", |id| project.generators.iter().any(|g| g.id() == id));
+    let seed = id[1..].parse().unwrap_or(0);
+    let shift = |pts: &mut Vec<[f32; 2]>| {
+        for q in pts {
+            *q = [q[0] + p.offset[0], q[1] + p.offset[1]];
+        }
+    };
+    match &mut copy {
+        Generator::Single(g) => {
+            g.id = id.clone();
+            g.name += " copy";
+            g.position = [
+                g.position[0] + p.offset[0],
+                g.position[1],
+                g.position[2] + p.offset[1],
+            ];
+        }
+        Generator::SplineMass(g) => {
+            g.id = id.clone();
+            g.name += " copy";
+            shift(&mut g.points);
+            if p.new_seed {
+                g.seed = seed;
+            }
+        }
+        Generator::AreaScatter(g) => {
+            g.id = id.clone();
+            g.name += " copy";
+            shift(&mut g.outline);
+            if p.new_seed {
+                g.seed = seed;
+            }
+        }
+        Generator::MixedBrush(g) => {
+            g.id = id.clone();
+            g.name += " copy";
+            g.strokes.iter_mut().for_each(|s| shift(&mut s.points));
+            if p.new_seed {
+                g.seed = seed;
+            }
+        }
+        Generator::SurfaceFill(g) => {
+            g.id = id.clone();
+            g.name += " copy";
+            if p.new_seed {
+                g.seed = seed;
+            }
+        }
+        Generator::Cluster(g) => {
+            g.id = id.clone();
+            g.name += " copy";
+            g.center = [g.center[0] + p.offset[0], g.center[1] + p.offset[1]];
+            if p.new_seed {
+                g.seed = seed;
+            }
+        }
+    }
+    project.generators.push(copy);
+    Ok(json!({ "id": id }))
 }

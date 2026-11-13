@@ -23,6 +23,9 @@ pub struct Placement {
     /// has. Deterministic, and drawn so that positions, rotations and scales do not depend on it.
     #[serde(default)]
     pub variant: u32,
+    /// Index of the [`PlantLayer`] that made it; `None` for a generator without layers.
+    #[serde(default)]
+    pub layer: Option<u32>,
 }
 
 /// One species of a palette. `asset` is, by convention, one of: a catalogue asset id, `flora:<id>`
@@ -434,6 +437,7 @@ fn make(
         rotation_y_deg,
         scale,
         variant,
+        layer: None,
     }
 }
 
@@ -718,6 +722,8 @@ struct Tier<'a> {
     spin: bool,
     keep_clear: f32,
     seed: u64,
+    /// Index of the `PlantLayer`, for plants it makes.
+    layer: Option<u32>,
 }
 
 /// The tiers of a generator: its layers if it has any (each on its own stream), else `own`.
@@ -736,6 +742,7 @@ fn tiers<'a>(own: Tier<'a>, layers: &'a [PlantLayer], seed: u64) -> Vec<Tier<'a>
             spin: l.random_rotation,
             keep_clear: l.keep_clear_m,
             seed: mix(seed ^ 0x504C_414E_545F_4C59, i as i64),
+            layer: Some(i as u32),
         })
         .collect()
 }
@@ -755,7 +762,10 @@ fn run_tiers<'a>(
                 keep.insert([p.position[0], 0.0, p.position[2]]);
             }
         }
-        let (more, cut) = one(t, &keep);
+        let (mut more, cut) = one(t, &keep);
+        for p in &mut more {
+            p.layer = t.layer;
+        }
         truncated |= cut;
         placements.extend(more);
         if placements.len() >= MAX_PLACEMENTS {
@@ -794,6 +804,7 @@ pub fn evaluate(generator: &Generator, ground: &dyn Fn(f32, f32) -> Option<f32>)
                     .id
                     .bytes()
                     .fold(7u32, |h, b| h.wrapping_mul(31).wrapping_add(u32::from(b))),
+                layer: None,
             }],
             false,
         ),
@@ -807,6 +818,7 @@ pub fn evaluate(generator: &Generator, ground: &dyn Fn(f32, f32) -> Option<f32>)
                 scale: (g.scale_min, g.scale_max),
                 spin: g.random_rotation,
                 keep_clear: 0.0,
+                layer: None,
                 seed: g.seed,
             };
             run_tiers(tiers(own, &g.layers, g.seed), |t, keep| {
@@ -851,6 +863,7 @@ pub fn evaluate(generator: &Generator, ground: &dyn Fn(f32, f32) -> Option<f32>)
                 scale: (g.scale_min, g.scale_max),
                 spin: true,
                 keep_clear: 0.0,
+                layer: None,
                 seed: g.seed,
             };
             run_tiers(tiers(own, &g.layers, g.seed), |t, keep| {
@@ -1004,6 +1017,7 @@ pub fn evaluate_surface_fill(fill: &SurfaceFill, model: &ImportedModel) -> Surfa
         scale: (fill.scale_min, fill.scale_max),
         spin: fill.random_rotation,
         keep_clear: 0.0,
+        layer: None,
         seed: fill.seed,
     };
     let e = run_tiers(tiers(own, &fill.layers, fill.seed), |t, keep| {

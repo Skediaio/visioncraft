@@ -302,6 +302,52 @@ impl Terrain {
         Ok(())
     }
 
+    /// All vertices, as a dirty rectangle.
+    pub fn whole(&self) -> DirtyRect {
+        DirtyRect {
+            x0: 0,
+            z0: 0,
+            x1: self.width,
+            z1: self.depth,
+        }
+    }
+
+    /// The vertices whose height or paint differ from `old`: their bounding rectangle, `None` if
+    /// there is no difference; everything when the grid or layers themselves changed.
+    pub fn changed_since(&self, old: &Terrain) -> Option<DirtyRect> {
+        if (self.origin, self.cell_m, self.width, self.depth)
+            != (old.origin, old.cell_m, old.width, old.depth)
+            || self.layers.len() != old.layers.len()
+        {
+            return Some(self.whole());
+        }
+        let n = self.layers.len();
+        let mut dirty = DirtyRect::EMPTY;
+        for iz in 0..=self.depth {
+            for ix in 0..=self.width {
+                let i = self.at(ix, iz);
+                if self.heights[i] != old.heights[i]
+                    || self.weights[i * n..(i + 1) * n] != old.weights[i * n..(i + 1) * n]
+                {
+                    dirty = dirty.union(DirtyRect {
+                        x0: ix,
+                        z0: iz,
+                        x1: ix,
+                        z1: iz,
+                    });
+                }
+            }
+        }
+        let layers_changed = self.layers != old.layers;
+        if dirty.is_empty() && !layers_changed {
+            None
+        } else if layers_changed {
+            Some(self.whole())
+        } else {
+            Some(dirty)
+        }
+    }
+
     pub fn vertex_count(&self) -> usize {
         (self.width as usize + 1) * (self.depth as usize + 1)
     }
@@ -645,24 +691,24 @@ impl DirtyRect {
         self.x0 > self.x1 || self.z0 > self.z1
     }
 
-    fn add(&mut self, other: Self) {
+    /// The smallest rectangle holding both (an empty one adds nothing).
+    pub fn union(self, other: Self) -> Self {
         if other.is_empty() {
-            return;
+            return self;
         }
-        *self = Self {
+        if self.is_empty() {
+            return other;
+        }
+        Self {
             x0: self.x0.min(other.x0),
             z0: self.z0.min(other.z0),
-            x1: if self.is_empty() {
-                other.x1
-            } else {
-                self.x1.max(other.x1)
-            },
-            z1: if self.is_empty() {
-                other.z1
-            } else {
-                self.z1.max(other.z1)
-            },
-        };
+            x1: self.x1.max(other.x1),
+            z1: self.z1.max(other.z1),
+        }
+    }
+
+    fn add(&mut self, other: Self) {
+        *self = self.union(other);
     }
 }
 

@@ -26,7 +26,9 @@ pub mod viewpoint;
 pub use catalog::{Asset, Catalog, CatalogError, attribution_markdown, validate_open_licences};
 pub use export::export_presets;
 pub use import::{import_3dcraft, import_obj};
-pub use light::{Light, LightKind, LightSpec, kelvin_to_linear_rgb, lights_for_placement};
+pub use light::{
+    Light, LightKind, LightSpec, kelvin_to_linear_rgb, lights_for_placement, lights_for_placements,
+};
 pub use material::{
     Assignment, Material, McMat, McMatError, SurfaceKind, Target, builtin_palette,
     dangling_assignments, read_mcmat, resolve_materials,
