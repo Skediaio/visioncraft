@@ -113,6 +113,10 @@ pub struct Form {
     pub rotation: f32,
     /// A cluster's radius, metres.
     pub radius: f32,
+    /// Brush: plants stay inside the area the stroke starts on.
+    pub keep_inside: bool,
+    /// Brush: the outline they stay inside (the area under the stroke's start), empty for none.
+    pub clip: Vec<[f32; 2]>,
 }
 
 impl Default for Form {
@@ -142,6 +146,8 @@ impl Default for Form {
             max_slope: 45.0,
             rotation: 0.0,
             radius: 2.0,
+            keep_inside: true,
+            clip: Vec::new(),
         }
     }
 }
@@ -293,6 +299,7 @@ impl Form {
                     (b.layers.clone(), b.density_per_m2, b.min_distance_m);
                 f.preset = preset_of(&f.layers);
                 (f.scale_min, f.scale_max, f.seed) = (b.scale_min, b.scale_max, b.seed);
+                f.clip.clone_from(&b.clip_outline);
             }
         }
         f
@@ -464,6 +471,7 @@ impl Form {
                     "strokes": strokes,
                     "scale_min": self.scale_min,
                     "scale_max": self.scale_max,
+                    "clip_outline": self.clip,
                 })),
             ),
         }
@@ -1628,6 +1636,27 @@ impl PlantingTools {
 
     // ---- Brush ----
 
+    /// With "Keep inside area": the outline of the topmost area under `p` (a border's bed, a
+    /// lawn), else nothing.
+    fn clip_under(&self, cx: &Cx, p: [f32; 2]) -> Vec<[f32; 2]> {
+        if !self.form.keep_inside {
+            return Vec::new();
+        }
+        cx.s.project()
+            .shapes
+            .iter()
+            .rev()
+            .find_map(|s| match s {
+                visioncraft_core::Shape::Area(a)
+                    if visioncraft_core::inside_outline(p, &a.outline) =>
+                {
+                    Some(a.outline.clone())
+                }
+                _ => None,
+            })
+            .unwrap_or_default()
+    }
+
     fn brush(&mut self, cx: &mut Cx, now: f64, top: &mut Vec<LineVertex>) {
         let input = cx.input;
         let ctrl = cx.ctx.input(|i| i.modifiers.command);
@@ -1672,6 +1701,9 @@ impl PlantingTools {
             finished = Some(vec![[g.x, g.z]]);
         }
         if let Some(points) = finished {
+            if !self.stroke_erase {
+                self.form.clip = self.clip_under(cx, points[0]);
+            }
             let stroke = Stroke {
                 points,
                 radius_m: r,
@@ -1705,6 +1737,7 @@ impl PlantingTools {
             self.refresh_preview(cx, String::new(), None, now);
         } else {
             let mut f = self.form.clone();
+            f.clip = self.clip_under(cx, self.stroke[0]);
             if let Some((id, _)) = &self.brush_target
                 && let Some(Generator::MixedBrush(b)) = stored(cx, id)
             {

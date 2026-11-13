@@ -117,27 +117,30 @@ fn form_ui(
     let mut edit = Edit::None;
     let layered = kind.layered() && !form.layers.is_empty();
     if kind.layered() {
-        ui.horizontal_wrapped(|ui| {
-            if ui
-                .selectable_label(!layered, RichText::new(t::PT_SIMPLE).small())
-                .clicked()
-                && layered
-            {
-                form.layers.clear();
-                form.preset = None;
-                edit = Edit::Done;
-            }
-            for p in planting_presets() {
-                let on = layered && form.preset.as_deref() == Some(p.name.as_str());
-                if ui
-                    .selectable_label(on, RichText::new(&p.name).small())
-                    .clicked()
-                {
-                    form.layers = p.layers;
-                    form.preset = Some(p.name);
-                    edit = Edit::Done;
-                }
-            }
+        // One line: a preset menu instead of eleven buttons wrapping over three.
+        let current = match (&form.preset, layered) {
+            (Some(p), true) => p.clone(),
+            _ => t::PT_SIMPLE.to_string(),
+        };
+        ui.horizontal(|ui| {
+            ui.label(t::PT_PRESET);
+            egui::ComboBox::from_id_salt(("planting-preset", kind.label()))
+                .selected_text(current)
+                .show_ui(ui, |ui| {
+                    if ui.selectable_label(!layered, t::PT_SIMPLE).clicked() && layered {
+                        form.layers.clear();
+                        form.preset = None;
+                        edit = Edit::Done;
+                    }
+                    for p in planting_presets() {
+                        let on = layered && form.preset.as_deref() == Some(p.name.as_str());
+                        if ui.selectable_label(on, &p.name).clicked() {
+                            form.layers = p.layers;
+                            form.preset = Some(p.name);
+                            edit = Edit::Done;
+                        }
+                    }
+                });
         });
     }
     if layered {
@@ -298,45 +301,53 @@ fn form_ui(
         }
         Tool::Select => {}
     }
-    if !layered && kind != Tool::Single {
-        ui.horizontal(|ui| {
-            edit = merge(
-                edit,
-                drag_field(ui, t::PT_SCALE, &mut form.scale_min, 0.01, 0.1..=10.0, ""),
-            );
-            edit = merge(
-                edit,
-                drag_field(ui, "–", &mut form.scale_max, 0.01, 0.1..=10.0, ""),
-            );
-        });
-        form.scale_max = form.scale_max.max(form.scale_min);
-        edit = merge(edit, checkbox(ui, &mut form.spin, t::PT_RANDOM_ROTATION));
-    }
-    ui.horizontal(|ui| {
-        if kind != Tool::Single
-            && ui
-                .button(t::PT_RESHUFFLE)
-                .on_hover_text(t::PT_RESHUFFLE_HINT)
-                .clicked()
-        {
-            form.seed = next_seed(form.seed);
-            edit = Edit::Done;
-        }
-        let name = project_layers
-            .iter()
-            .find(|l| l.0 == form.layer)
-            .map_or(form.layer.clone(), |l| l.1.clone());
-        egui::ComboBox::from_id_salt("planting-layer-choice")
-            .selected_text(format!("{} {name}", t::PT_LAYER))
-            .show_ui(ui, |ui| {
-                for (id, n) in project_layers {
-                    if ui.selectable_label(form.layer == *id, n).clicked() && form.layer != *id {
-                        form.layer.clone_from(id);
-                        edit = Edit::Done;
-                    }
+    // Size spread, turning, reshuffle and layer: folded, they are rarely changed.
+    egui::CollapsingHeader::new(RichText::new(t::PT_MORE).small())
+        .id_salt(("planting-more", kind.label()))
+        .default_open(false)
+        .show(ui, |ui| {
+            if !layered && kind != Tool::Single {
+                ui.horizontal(|ui| {
+                    edit = merge(
+                        edit,
+                        drag_field(ui, t::PT_SCALE, &mut form.scale_min, 0.01, 0.1..=10.0, ""),
+                    );
+                    edit = merge(
+                        edit,
+                        drag_field(ui, "–", &mut form.scale_max, 0.01, 0.1..=10.0, ""),
+                    );
+                });
+                form.scale_max = form.scale_max.max(form.scale_min);
+                edit = merge(edit, checkbox(ui, &mut form.spin, t::PT_RANDOM_ROTATION));
+            }
+            ui.horizontal(|ui| {
+                if kind != Tool::Single
+                    && ui
+                        .button(t::PT_RESHUFFLE)
+                        .on_hover_text(t::PT_RESHUFFLE_HINT)
+                        .clicked()
+                {
+                    form.seed = next_seed(form.seed);
+                    edit = Edit::Done;
                 }
+                let name = project_layers
+                    .iter()
+                    .find(|l| l.0 == form.layer)
+                    .map_or(form.layer.clone(), |l| l.1.clone());
+                egui::ComboBox::from_id_salt("planting-layer-choice")
+                    .selected_text(format!("{} {name}", t::PT_LAYER))
+                    .show_ui(ui, |ui| {
+                        for (id, n) in project_layers {
+                            if ui.selectable_label(form.layer == *id, n).clicked()
+                                && form.layer != *id
+                            {
+                                form.layer.clone_from(id);
+                                edit = Edit::Done;
+                            }
+                        }
+                    });
             });
-    });
+        });
     edit
 }
 
@@ -481,6 +492,8 @@ impl PlantingTools {
                         .suffix(" m"),
                 );
             });
+            ui.checkbox(&mut self.form.keep_inside, t::KEEP_INSIDE)
+                .on_hover_text(t::KEEP_INSIDE_TIP);
             ui.horizontal(|ui| {
                 ui.checkbox(&mut self.erase, t::PT_ERASE);
                 match self.target_name(cx) {
@@ -571,38 +584,50 @@ impl PlantingTools {
             return;
         }
         ui.separator();
-        ui.label(RichText::new(t::PLANTINGS).strong());
         let (mut pick, mut toggle) = (None, None);
-        egui::ScrollArea::vertical()
-            .max_height(110.0)
-            .id_salt("planting-list")
-            .show(ui, |ui| {
-                for (id, name, kind, count, layer, visible) in &rows {
-                    ui.horizontal(|ui| {
-                        let on = self.selected.as_deref() == Some(id.as_str());
-                        if ui
-                            .selectable_label(on, name)
-                            .on_hover_text(format!(
-                                "{kind}, {} {}",
-                                thousands(*count),
-                                t::PT_PLANTS
-                            ))
-                            .clicked()
-                        {
-                            pick = Some(id.clone());
-                        }
-                        ui.small(format!("{kind} · {}", thousands(*count)));
-                        let mut v = *visible;
-                        if ui
-                            .checkbox(&mut v, "")
-                            .on_hover_text(t::PT_VISIBLE)
-                            .changed()
-                        {
-                            toggle = Some((layer.clone(), v));
-                        }
-                    });
-                }
-            });
+        // Folded by default (and in the Select tool open): the list is what made the panel tall.
+        egui::CollapsingHeader::new(
+            RichText::new(format!("{} ({})", t::PLANTINGS, rows.len())).strong(),
+        )
+        .id_salt("planting-list-header")
+        .default_open(false)
+        .open(if self.tool == Tool::Select {
+            Some(true)
+        } else {
+            None
+        })
+        .show(ui, |ui| {
+            egui::ScrollArea::vertical()
+                .max_height(110.0)
+                .id_salt("planting-list")
+                .show(ui, |ui| {
+                    for (id, name, kind, count, layer, visible) in &rows {
+                        ui.horizontal(|ui| {
+                            let on = self.selected.as_deref() == Some(id.as_str());
+                            if ui
+                                .selectable_label(on, name)
+                                .on_hover_text(format!(
+                                    "{kind}, {} {}",
+                                    thousands(*count),
+                                    t::PT_PLANTS
+                                ))
+                                .clicked()
+                            {
+                                pick = Some(id.clone());
+                            }
+                            ui.small(format!("{kind} · {}", thousands(*count)));
+                            let mut v = *visible;
+                            if ui
+                                .checkbox(&mut v, "")
+                                .on_hover_text(t::PT_VISIBLE)
+                                .changed()
+                            {
+                                toggle = Some((layer.clone(), v));
+                            }
+                        });
+                    }
+                });
+        });
         if let Some((layer, v)) = toggle {
             cx.run(
                 "layer.set_visible",
