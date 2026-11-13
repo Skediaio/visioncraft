@@ -286,9 +286,9 @@ mod tests {
         let a = compute(v1, p, sun, 4, 2048, 80.0, None);
         let b = compute(v2, p, sun, 4, 2048, 80.0, None);
         assert_eq!(a.texel, b.texel);
-        for i in 0..4 {
+        for (m, n) in a.view_proj.iter().zip(&b.view_proj).take(4) {
             // Same scale terms: only the translation may differ.
-            assert!((a.view_proj[i].x_axis.x - b.view_proj[i].x_axis.x).abs() < 1e-6);
+            assert!((m.x_axis.x - n.x_axis.x).abs() < 1e-6);
         }
     }
 
@@ -375,14 +375,14 @@ mod tests {
         let hi = Vec3::new(30.0, 12.0, 30.0);
         let (view, proj) = camera(Vec3::new(0.0, 1.7, 10.0), Vec3::ZERO);
         let c = compute(view, proj, sun, 4, 2048, 80.0, Some((lo, hi)));
-        for i in 0..4 {
+        for (i, view_proj) in c.view_proj.iter().enumerate().take(4) {
             for corner in [
                 lo,
                 hi,
                 Vec3::new(lo.x, hi.y, hi.z),
                 Vec3::new(hi.x, lo.y, lo.z),
             ] {
-                let z = c.view_proj[i].transform_point3(corner).z;
+                let z = view_proj.transform_point3(corner).z;
                 assert!((0.0..=1.0).contains(&z), "cascade {i}: depth {z}");
             }
         }
