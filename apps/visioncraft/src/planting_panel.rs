@@ -364,7 +364,10 @@ impl PlantingTools {
                 }
             }
             if ui.selectable_label(self.lights, t::TAB_LIGHTS).clicked() && !self.lights {
+                // The plan stays: it is the mode's, not the tool's.
+                let view = cx.s.camera.view;
                 self.leave(cx);
+                cx.s.camera.view = view;
                 self.set_tool(cx, Tool::Select);
                 self.lights = true;
             }

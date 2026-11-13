@@ -34,8 +34,23 @@ pub struct Thumbs {
 pub fn fixtures(ui: &mut egui::Ui, cx: &mut Cx) -> Option<String> {
     let catalog = cx.s.scene.library.catalog.clone()?;
     let mut picked = None;
+    // Lamps for outside first (street lamps, lanterns, wall lights), the chandeliers after.
+    const OUTSIDE: [&str; 7] = [
+        "street", "lamppost", "lantern", "exterior", "security", "wall", "garden",
+    ];
+    let outside = |a: &&visioncraft_core::Asset| {
+        OUTSIDE
+            .iter()
+            .any(|w| a.id.contains(w) || a.tags.iter().any(|t| t.contains(w)))
+    };
+    let mut lamps: Vec<&visioncraft_core::Asset> = catalog
+        .assets
+        .iter()
+        .filter(|a| a.light.is_some())
+        .collect();
+    lamps.sort_by_key(|a| !outside(a));
     ui.horizontal_wrapped(|ui| {
-        for a in catalog.assets.iter().filter(|a| a.light.is_some()) {
+        for a in lamps {
             let (rect, resp) = ui.allocate_exact_size(Vec2::new(54.0, 66.0), Sense::click());
             let tile = egui::Rect::from_min_size(rect.min, Vec2::splat(54.0));
             let vis = ui.is_rect_visible(rect);
