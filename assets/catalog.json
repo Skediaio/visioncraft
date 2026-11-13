@@ -749,7 +749,6 @@
         "ornamental",
         "ornate",
         "pattern",
-        "simplified",
         "vintage"
       ],
       "license": "CC0-1.0",
@@ -757,18 +756,18 @@
       "author": "Tina",
       "source_url": "https://polyhaven.com/a/brass_candleholders",
       "size_m": [
-        1.0529399,
-        0.80946386,
-        0.36304182
+        0.09740627,
+        0.36554435,
+        0.09740628
       ],
       "lods": [
         {
           "file": "models/brass_candleholders/lod0.glb",
-          "max_distance_m": 12.635279
+          "max_distance_m": 4.3865323
         },
         {
           "file": "models/brass_candleholders/lod1.glb",
-          "max_distance_m": 42.117596
+          "max_distance_m": 14.621774
         },
         {
           "file": "models/brass_candleholders/lod2.glb",
@@ -785,9 +784,126 @@
         "lumens": 100.0,
         "range_m": 3.0,
         "offset_m": [
-          0.32160005,
-          0.7401594,
-          -0.0019396022
+          -0.000023081899,
+          0.35365814,
+          -0.00032593415
+        ]
+      }
+    },
+    {
+      "id": "brass_candleholders_b",
+      "name": "Brass Candleholders B",
+      "category": "lighting",
+      "tags": [
+        "antique",
+        "brass",
+        "candleholders",
+        "classic",
+        "decorative",
+        "elegant",
+        "fancy",
+        "lighting",
+        "ornamental",
+        "ornate",
+        "pattern",
+        "variant",
+        "vintage"
+      ],
+      "license": "CC0-1.0",
+      "origin": "BuiltIn",
+      "author": "Tina",
+      "source_url": "https://polyhaven.com/a/brass_candleholders",
+      "size_m": [
+        0.26114303,
+        0.40085718,
+        0.09740628
+      ],
+      "lods": [
+        {
+          "file": "models/brass_candleholders_b/lod0.glb",
+          "max_distance_m": 4.810286
+        },
+        {
+          "file": "models/brass_candleholders_b/lod1.glb",
+          "max_distance_m": 16.034286
+        },
+        {
+          "file": "models/brass_candleholders_b/lod2.glb",
+          "max_distance_m": 3.4028235e+38
+        }
+      ],
+      "thumbnail": "models/brass_candleholders_b/thumb.png",
+      "plant": null,
+      "light": {
+        "kind": {
+          "type": "point"
+        },
+        "color_temperature_k": 2700.0,
+        "lumens": 100.0,
+        "range_m": 3.0,
+        "offset_m": [
+          -0.000009963522,
+          0.38897097,
+          -0.0003259295
+        ]
+      }
+    },
+    {
+      "id": "brass_candleholders_c",
+      "name": "Brass Candleholders C",
+      "category": "lighting",
+      "tags": [
+        "antique",
+        "brass",
+        "candleholders",
+        "classic",
+        "decorative",
+        "elegant",
+        "fancy",
+        "lighting",
+        "ornamental",
+        "ornate",
+        "pattern",
+        "simplified",
+        "variant",
+        "vintage"
+      ],
+      "license": "CC0-1.0",
+      "origin": "BuiltIn",
+      "author": "Tina",
+      "source_url": "https://polyhaven.com/a/brass_candleholders",
+      "size_m": [
+        0.40827674,
+        0.80946386,
+        0.36468235
+      ],
+      "lods": [
+        {
+          "file": "models/brass_candleholders_c/lod0.glb",
+          "max_distance_m": 9.713566
+        },
+        {
+          "file": "models/brass_candleholders_c/lod1.glb",
+          "max_distance_m": 32.378555
+        },
+        {
+          "file": "models/brass_candleholders_c/lod2.glb",
+          "max_distance_m": 3.4028235e+38
+        }
+      ],
+      "thumbnail": "models/brass_candleholders_c/thumb.png",
+      "plant": null,
+      "light": {
+        "kind": {
+          "type": "point"
+        },
+        "color_temperature_k": 2700.0,
+        "lumens": 100.0,
+        "range_m": 3.0,
+        "offset_m": [
+          -0.08752549,
+          0.7411715,
+          0.1470663
         ]
       }
     },
@@ -840,7 +956,7 @@
         "lumens": 100.0,
         "range_m": 3.0,
         "offset_m": [
-          0.00055148825,
+          0.00056407787,
           0.06599617,
           0.0019232524
         ]
@@ -1214,9 +1330,9 @@
         "lumens": 800.0,
         "range_m": 10.0,
         "offset_m": [
-          0.0052340077,
-          0.21594447,
-          0.00041019663
+          0.0,
+          0.14656162,
+          0.0
         ]
       }
     },
@@ -1263,7 +1379,13 @@
         }
       ],
       "thumbnail": "models/calathea_orbifolia_01/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.42429426,
+        "mature_width_m": 0.60059994,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -1310,7 +1432,13 @@
         }
       ],
       "thumbnail": "models/calathea_orbifolia_01_b/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.30320275,
+        "mature_width_m": 0.44028184,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -1357,7 +1485,13 @@
         }
       ],
       "thumbnail": "models/calathea_orbifolia_01_c/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.28397724,
+        "mature_width_m": 0.38383967,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -1404,7 +1538,13 @@
         }
       ],
       "thumbnail": "models/calathea_orbifolia_01_d/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.1303588,
+        "mature_width_m": 0.22638533,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -1494,7 +1634,13 @@
         }
       ],
       "thumbnail": "models/celandine_01/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.18585163,
+        "mature_width_m": 0.2757268,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -1542,7 +1688,13 @@
         }
       ],
       "thumbnail": "models/celandine_01_b/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.14452833,
+        "mature_width_m": 0.30665803,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -1590,7 +1742,13 @@
         }
       ],
       "thumbnail": "models/celandine_01_c/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.17558737,
+        "mature_width_m": 0.25714716,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -1638,7 +1796,13 @@
         }
       ],
       "thumbnail": "models/celandine_01_d/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.1494979,
+        "mature_width_m": 0.22292745,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -2024,7 +2188,13 @@
         }
       ],
       "thumbnail": "models/cheiridopsis_succulent/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.18544334,
+        "mature_width_m": 0.2012223,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -2071,7 +2241,13 @@
         }
       ],
       "thumbnail": "models/cheiridopsis_succulent_b/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.16696191,
+        "mature_width_m": 0.2427558,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -2118,7 +2294,13 @@
         }
       ],
       "thumbnail": "models/cheiridopsis_succulent_c/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.19710264,
+        "mature_width_m": 0.26222914,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -2165,7 +2347,13 @@
         }
       ],
       "thumbnail": "models/cheiridopsis_succulent_d/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.25464857,
+        "mature_width_m": 0.3530147,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -3041,7 +3229,13 @@
         }
       ],
       "thumbnail": "models/crystalline_iceplant/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.08096193,
+        "mature_width_m": 0.31552085,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -3087,7 +3281,13 @@
         }
       ],
       "thumbnail": "models/crystalline_iceplant_b/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.06591283,
+        "mature_width_m": 0.30628246,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -3133,7 +3333,13 @@
         }
       ],
       "thumbnail": "models/crystalline_iceplant_c/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.06047201,
+        "mature_width_m": 0.26743418,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -3179,7 +3385,13 @@
         }
       ],
       "thumbnail": "models/crystalline_iceplant_d/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.03801746,
+        "mature_width_m": 0.18266198,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -3226,7 +3438,13 @@
         }
       ],
       "thumbnail": "models/dandelion_01/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.16423179,
+        "mature_width_m": 0.2576584,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -3274,7 +3492,13 @@
         }
       ],
       "thumbnail": "models/dandelion_01_b/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.11386952,
+        "mature_width_m": 0.2179616,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -3321,7 +3545,13 @@
         }
       ],
       "thumbnail": "models/dandelion_01_c/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.10094033,
+        "mature_width_m": 0.16987252,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -3368,7 +3598,13 @@
         }
       ],
       "thumbnail": "models/dandelion_01_d/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.055439502,
+        "mature_width_m": 0.14353672,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -3612,7 +3848,13 @@
         }
       ],
       "thumbnail": "models/didelta_spinosa/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 2.0700781,
+        "mature_width_m": 4.547824,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -3968,7 +4210,13 @@
         }
       ],
       "thumbnail": "models/fern_02/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.28680354,
+        "mature_width_m": 0.6134211,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -4014,7 +4262,13 @@
         }
       ],
       "thumbnail": "models/fern_02_b/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.4276947,
+        "mature_width_m": 0.9897474,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -4060,7 +4314,13 @@
         }
       ],
       "thumbnail": "models/fern_02_c/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.34902036,
+        "mature_width_m": 0.8743258,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -4106,7 +4366,13 @@
         }
       ],
       "thumbnail": "models/fern_02_d/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.21308756,
+        "mature_width_m": 0.5932783,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -4153,7 +4419,13 @@
         }
       ],
       "thumbnail": "models/fir_sapling/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 1.2999676,
+        "mature_width_m": 0.8510514,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -4201,7 +4473,13 @@
         }
       ],
       "thumbnail": "models/fir_sapling_b/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.94913054,
+        "mature_width_m": 0.81708145,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -4249,7 +4527,13 @@
         }
       ],
       "thumbnail": "models/fir_sapling_c/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.72991306,
+        "mature_width_m": 0.6340052,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -4496,7 +4780,13 @@
         }
       ],
       "thumbnail": "models/flower_gazania/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.04454917,
+        "mature_width_m": 0.13823056,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -4545,7 +4835,13 @@
         }
       ],
       "thumbnail": "models/flower_gazania_b/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.04800264,
+        "mature_width_m": 0.26836085,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -4594,7 +4890,13 @@
         }
       ],
       "thumbnail": "models/flower_gazania_c/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.068521544,
+        "mature_width_m": 0.2408579,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -4643,7 +4945,13 @@
         }
       ],
       "thumbnail": "models/flower_gazania_d/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.09977826,
+        "mature_width_m": 0.26637557,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -4689,7 +4997,13 @@
         }
       ],
       "thumbnail": "models/flower_stinkkruid/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.17596279,
+        "mature_width_m": 0.35000756,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -4736,7 +5050,13 @@
         }
       ],
       "thumbnail": "models/flower_stinkkruid_b/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.15268347,
+        "mature_width_m": 0.24865417,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -4782,7 +5102,13 @@
         }
       ],
       "thumbnail": "models/flower_stinkkruid_c/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.14740147,
+        "mature_width_m": 0.21378884,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -4828,7 +5154,13 @@
         }
       ],
       "thumbnail": "models/flower_stinkkruid_d/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.1251254,
+        "mature_width_m": 0.22124454,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -4872,7 +5204,13 @@
         }
       ],
       "thumbnail": "models/flower_ursinia/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.1641835,
+        "mature_width_m": 0.42538035,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -4917,7 +5255,13 @@
         }
       ],
       "thumbnail": "models/flower_ursinia_b/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.13126746,
+        "mature_width_m": 0.27724516,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -4962,7 +5306,13 @@
         }
       ],
       "thumbnail": "models/flower_ursinia_c/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.14958628,
+        "mature_width_m": 0.2609954,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -5007,7 +5357,13 @@
         }
       ],
       "thumbnail": "models/flower_ursinia_d/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.13307495,
+        "mature_width_m": 0.1862433,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -5533,7 +5889,13 @@
         }
       ],
       "thumbnail": "models/grass_bermuda_01/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.02474113,
+        "mature_width_m": 0.084310144,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -5578,7 +5940,13 @@
         }
       ],
       "thumbnail": "models/grass_bermuda_01_b/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.043633755,
+        "mature_width_m": 0.069253266,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -5623,7 +5991,13 @@
         }
       ],
       "thumbnail": "models/grass_bermuda_01_c/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.09775002,
+        "mature_width_m": 0.03851223,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -5668,7 +6042,13 @@
         }
       ],
       "thumbnail": "models/grass_bermuda_01_d/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.15088645,
+        "mature_width_m": 0.06783503,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -5712,7 +6092,13 @@
         }
       ],
       "thumbnail": "models/grass_medium_01/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.14042668,
+        "mature_width_m": 0.18484011,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -5757,7 +6143,13 @@
         }
       ],
       "thumbnail": "models/grass_medium_01_b/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.3225464,
+        "mature_width_m": 0.16095638,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -5802,7 +6194,13 @@
         }
       ],
       "thumbnail": "models/grass_medium_01_c/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.21774429,
+        "mature_width_m": 0.22137788,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -5847,7 +6245,13 @@
         }
       ],
       "thumbnail": "models/grass_medium_01_d/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.14668879,
+        "mature_width_m": 0.32655883,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -5892,7 +6296,13 @@
         }
       ],
       "thumbnail": "models/grass_medium_02/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.15693037,
+        "mature_width_m": 0.11976241,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -5938,7 +6348,13 @@
         }
       ],
       "thumbnail": "models/grass_medium_02_b/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.17956401,
+        "mature_width_m": 0.19926837,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -5984,7 +6400,13 @@
         }
       ],
       "thumbnail": "models/grass_medium_02_c/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.2316615,
+        "mature_width_m": 0.26167715,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -6030,7 +6452,13 @@
         }
       ],
       "thumbnail": "models/grass_medium_02_d/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.2603765,
+        "mature_width_m": 0.36192572,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -7988,7 +8416,13 @@
         }
       ],
       "thumbnail": "models/nettle_plant/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.13149078,
+        "mature_width_m": 0.0890633,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -8035,7 +8469,13 @@
         }
       ],
       "thumbnail": "models/nettle_plant_b/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.062566034,
+        "mature_width_m": 0.06419259,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -8082,7 +8522,13 @@
         }
       ],
       "thumbnail": "models/nettle_plant_c/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.21677493,
+        "mature_width_m": 0.10359125,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -8129,7 +8575,13 @@
         }
       ],
       "thumbnail": "models/nettle_plant_d/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.10457506,
+        "mature_width_m": 0.06616484,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -8222,7 +8674,13 @@
         }
       ],
       "thumbnail": "models/othonna_cerarioides/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 1.9695868,
+        "mature_width_m": 1.0992342,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -8269,7 +8727,13 @@
         }
       ],
       "thumbnail": "models/othonna_cerarioides_b/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 1.7657878,
+        "mature_width_m": 1.054822,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -8315,7 +8779,13 @@
         }
       ],
       "thumbnail": "models/othonna_cerarioides_c/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 1.4352808,
+        "mature_width_m": 0.94656235,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -8361,7 +8831,13 @@
         }
       ],
       "thumbnail": "models/othonna_cerarioides_d/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 1.1521142,
+        "mature_width_m": 0.65512073,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -8492,7 +8968,13 @@
         }
       ],
       "thumbnail": "models/pachira_aquatica_01/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.85091186,
+        "mature_width_m": 0.24101648,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -8537,7 +9019,13 @@
         }
       ],
       "thumbnail": "models/pachira_aquatica_01_b/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.74023813,
+        "mature_width_m": 0.74390805,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -8582,7 +9070,13 @@
         }
       ],
       "thumbnail": "models/pachira_aquatica_01_d/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.5179132,
+        "mature_width_m": 0.6073569,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -9108,7 +9602,13 @@
         }
       ],
       "thumbnail": "models/pine_sapling_small/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 1.2989513,
+        "mature_width_m": 0.7863764,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -9155,7 +9655,13 @@
         }
       ],
       "thumbnail": "models/pine_sapling_small_b/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 1.0456028,
+        "mature_width_m": 0.73034656,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -9202,7 +9708,13 @@
         }
       ],
       "thumbnail": "models/pine_sapling_small_c/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.96131235,
+        "mature_width_m": 0.57996553,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -9699,7 +10211,13 @@
         }
       ],
       "thumbnail": "models/potted_plant_01/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 1.3495889,
+        "mature_width_m": 0.63200164,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -9745,7 +10263,13 @@
         }
       ],
       "thumbnail": "models/potted_plant_02/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.8373236,
+        "mature_width_m": 0.6988727,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -9790,7 +10314,13 @@
         }
       ],
       "thumbnail": "models/potted_plant_04/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.26745766,
+        "mature_width_m": 0.18475142,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -9833,7 +10363,13 @@
         }
       ],
       "thumbnail": "models/quiver_tree_01/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 2.7152479,
+        "mature_width_m": 1.180605,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -9875,7 +10411,13 @@
         }
       ],
       "thumbnail": "models/quiver_tree_02/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 1.465853,
+        "mature_width_m": 0.88049006,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -10400,7 +10942,13 @@
         }
       ],
       "thumbnail": "models/searsia_burchellii/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 3.1587853,
+        "mature_width_m": 8.192494,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -10445,7 +10993,13 @@
         }
       ],
       "thumbnail": "models/searsia_lucida/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 2.3314607,
+        "mature_width_m": 1.939339,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -10491,7 +11045,13 @@
         }
       ],
       "thumbnail": "models/searsia_lucida_b/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 1.9776725,
+        "mature_width_m": 1.4981244,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -10537,7 +11097,13 @@
         }
       ],
       "thumbnail": "models/searsia_lucida_c/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 1.6791697,
+        "mature_width_m": 1.5089197,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -10583,7 +11149,13 @@
         }
       ],
       "thumbnail": "models/searsia_lucida_d/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 1.4232055,
+        "mature_width_m": 1.0953071,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -10767,7 +11339,13 @@
         }
       ],
       "thumbnail": "models/shrub_02/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 1.6889771,
+        "mature_width_m": 1.641007,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -10813,7 +11391,13 @@
         }
       ],
       "thumbnail": "models/shrub_02_b/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 1.5063126,
+        "mature_width_m": 1.2799168,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -10859,7 +11443,13 @@
         }
       ],
       "thumbnail": "models/shrub_02_c/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 1.3147666,
+        "mature_width_m": 2.2850623,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -10905,7 +11495,13 @@
         }
       ],
       "thumbnail": "models/shrub_02_d/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 1.2292378,
+        "mature_width_m": 1.098004,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -10950,7 +11546,13 @@
         }
       ],
       "thumbnail": "models/shrub_03/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.4027838,
+        "mature_width_m": 0.20062384,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -10996,7 +11598,13 @@
         }
       ],
       "thumbnail": "models/shrub_03_b/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.35250384,
+        "mature_width_m": 0.18430305,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -11042,7 +11650,13 @@
         }
       ],
       "thumbnail": "models/shrub_03_c/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.30439478,
+        "mature_width_m": 0.11315584,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -11088,7 +11702,13 @@
         }
       ],
       "thumbnail": "models/shrub_03_d/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.25555122,
+        "mature_width_m": 0.112772465,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -12417,7 +13037,7 @@
         "offset_m": [
           2.9802322e-8,
           0.4974059,
-          2.561137e-8
+          2.5844201e-8
         ]
       }
     },
@@ -12652,7 +13272,13 @@
         }
       ],
       "thumbnail": "models/weed_plant_02/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.07245764,
+        "mature_width_m": 0.29091942,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -12699,7 +13325,13 @@
         }
       ],
       "thumbnail": "models/weed_plant_02_b/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.067692846,
+        "mature_width_m": 0.1985361,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -12746,7 +13378,13 @@
         }
       ],
       "thumbnail": "models/weed_plant_02_c/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.0549238,
+        "mature_width_m": 0.14345148,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -12793,7 +13431,13 @@
         }
       ],
       "thumbnail": "models/weed_plant_02_d/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.038946133,
+        "mature_width_m": 0.15406537,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -12927,7 +13571,13 @@
         }
       ],
       "thumbnail": "models/wild_rooibos_bush/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.53949434,
+        "mature_width_m": 0.8434299,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -12969,7 +13619,13 @@
         }
       ],
       "thumbnail": "models/wild_rooibos_bush_b/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.5412663,
+        "mature_width_m": 0.52431905,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -13011,7 +13667,13 @@
         }
       ],
       "thumbnail": "models/wild_rooibos_bush_c/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.44835135,
+        "mature_width_m": 0.47210896,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {
@@ -13053,7 +13715,13 @@
         }
       ],
       "thumbnail": "models/wild_rooibos_bush_d/thumb.png",
-      "plant": null,
+      "plant": {
+        "mature_height_m": 0.41994303,
+        "mature_width_m": 0.38355017,
+        "evergreen": null,
+        "bloom_months": [],
+        "exposure": null
+      },
       "light": null
     },
     {

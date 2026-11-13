@@ -660,7 +660,7 @@ fn face_normals(m: &Mesh) -> Vec<[f32; 3]> {
 /// Read a glTF (node transforms applied to the vertices; primitives with one material merged;
 /// cameras, lights, animations, skins and everything unreferenced are ignored). Textures are
 /// resolved relative to `base`.
-pub fn read_gltf(g: &gltf::Gltf, base: &Path, variant: usize) -> Result<Model> {
+pub fn read_gltf(g: &gltf::Gltf, base: &Path, variant: usize, split_roots: bool) -> Result<Model> {
     let doc = &g.document;
     let bufs = gltf::import_buffers(doc, Some(base), g.blob.clone())?;
     let mut r = Reader {
@@ -683,7 +683,7 @@ pub fn read_gltf(g: &gltf::Gltf, base: &Path, variant: usize) -> Result<Model> {
         std::array::from_fn(|c| std::array::from_fn(|r| f32::from(u8::from(c == r))));
     let mut parts = Vec::new();
     // Poly Haven plants come as a row of variants (`x_a`, `x_b`, ...): keep the chosen one.
-    let roots: Vec<gltf::Node> = match variant_roots(&scene) {
+    let roots: Vec<gltf::Node> = match variant_roots(&scene, split_roots) {
         Some(mut v) => vec![v.swap_remove(variant.min(v.len() - 1))],
         None => {
             // `x_deflated` next to `x_inflated`: keep the whole object, not the flat one.
@@ -721,24 +721,34 @@ pub fn read_gltf(g: &gltf::Gltf, base: &Path, variant: usize) -> Result<Model> {
     Ok(Model { meshes, mats })
 }
 
-pub fn read_gltf_variant(path: &Path, variant: usize) -> Result<Model> {
+pub fn read_gltf_variant(path: &Path, variant: usize, split_roots: bool) -> Result<Model> {
     let g = gltf::Gltf::open(path).with_context(|| path.display().to_string())?;
-    read_gltf(&g, path.parent().unwrap_or(Path::new(".")), variant)
+    read_gltf(
+        &g,
+        path.parent().unwrap_or(Path::new(".")),
+        variant,
+        split_roots,
+    )
 }
 
 /// How many variants (rows of `x_a`, `x_b`, ...) the file holds; 1 for an ordinary model.
-pub fn variant_count(path: &Path) -> Result<usize> {
+pub fn variant_count(path: &Path, split_roots: bool) -> Result<usize> {
     let g = gltf::Gltf::open(path).with_context(|| path.display().to_string())?;
     let scene = g
         .document
         .default_scene()
         .or_else(|| g.document.scenes().next());
-    Ok(scene.map_or(1, |s| variant_roots(&s).map_or(1, |v| v.len())))
+    Ok(scene.map_or(1, |s| variant_roots(&s, split_roots).map_or(1, |v| v.len())))
 }
 
 /// The variants sorted by letter when the scene is a row of variants, else None.
-fn variant_roots<'a>(scene: &gltf::Scene<'a>) -> Option<Vec<gltf::Node<'a>>> {
+fn variant_roots<'a>(scene: &gltf::Scene<'a>, split_roots: bool) -> Option<Vec<gltf::Node<'a>>> {
     let mut roots: Vec<gltf::Node> = scene.nodes().collect();
+    if split_roots && roots.len() > 1 {
+        // a file of separate objects (candidate says so): each root is its own asset, by name
+        roots.sort_by_key(|n| n.name().unwrap_or_default().to_string());
+        return Some(roots);
+    }
     if roots.len() > 1
         && roots
             .iter()
@@ -752,5 +762,5 @@ fn variant_roots<'a>(scene: &gltf::Scene<'a>) -> Option<Vec<gltf::Node<'a>>> {
 }
 
 pub fn read_glb(bytes: &[u8]) -> Result<Model> {
-    read_gltf(&gltf::Gltf::from_slice(bytes)?, Path::new("."), 0)
+    read_gltf(&gltf::Gltf::from_slice(bytes)?, Path::new("."), 0, false)
 }

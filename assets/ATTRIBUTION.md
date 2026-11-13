@@ -19,6 +19,8 @@
 - Baseball Bat by Enrique Martín (https://polyhaven.com/a/baseball_bat)
 - Boulder 01 by Rico Cilliers (https://polyhaven.com/a/boulder_01)
 - Brass Candleholders by Tina (https://polyhaven.com/a/brass_candleholders)
+- Brass Candleholders B by Tina (https://polyhaven.com/a/brass_candleholders)
+- Brass Candleholders C by Tina (https://polyhaven.com/a/brass_candleholders)
 - Brass Diya Lantern by Bhargav Kubal (https://polyhaven.com/a/brass_diya_lantern)
 - Brass Pot 01 by Rico Cilliers (https://polyhaven.com/a/brass_pot_01)
 - Brass Vase 01 by Rico Cilliers (https://polyhaven.com/a/brass_vase_01)

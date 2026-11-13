@@ -98,10 +98,24 @@ fn plant_info(species: &str, size: [f32; 3]) -> Option<PlantInfo> {
     Some(PlantInfo {
         mature_height_m: size[1],
         mature_width_m: size[0].max(size[2]),
-        evergreen,
+        evergreen: Some(evergreen),
         bloom_months: Vec::new(),
-        exposure,
+        exposure: Some(exposure),
     })
+}
+
+/// Every plant gets its measured size (the model is a single specimen, so it stands for the
+/// mature size); evergreen and exposure only where the candidate states the species.
+fn plant_entry(species: Option<&str>, size: [f32; 3]) -> PlantInfo {
+    species
+        .and_then(|s| plant_info(s, size))
+        .unwrap_or(PlantInfo {
+            mature_height_m: size[1],
+            mature_width_m: size[0].max(size[2]),
+            evergreen: None,
+            bloom_months: Vec::new(),
+            exposure: None,
+        })
 }
 
 fn write(path: &Path, bytes: &[u8]) -> Result<()> {
@@ -136,8 +150,8 @@ pub fn ingest_model(c: &Candidate, cache: &Path, out: &Path) -> Result<Vec<Asset
     let info = ph_info(&src)?;
     let mut assets = Vec::new();
     let mut seen: Vec<usize> = Vec::new();
-    for v in 0..variant_count(&gltf)?.min(MAX_VARIANTS) {
-        let mut model = read_gltf_variant(&gltf, v)?;
+    for v in 0..variant_count(&gltf, c.split_roots)?.min(MAX_VARIANTS) {
+        let mut model = read_gltf_variant(&gltf, v, c.split_roots)?;
         if model.tris() > MAX_SOURCE_TRIS {
             if v == 0 {
                 bail!(
@@ -267,7 +281,11 @@ fn ingest_variant(
         let wall = ["wall", "sconce", "security"]
             .iter()
             .any(|w| c.id().contains(w));
-        let e = emit::find(&lod0, &c.id(), wall);
+        let e = if c.id().contains("caged") {
+            emit::split_body(&mut lod0).unwrap_or_else(|| emit::find(&lod0, &c.id(), wall))
+        } else {
+            emit::find(&lod0, &c.id(), wall)
+        };
         emit::apply(&mut lod0, &e.mats);
         let mut spec = light_spec(&id);
         spec.offset_m = e.offset;
@@ -326,11 +344,8 @@ fn ingest_variant(
         size_m: size,
         lods,
         thumbnail: format!("models/{id}/thumb.png"),
-        plant: c
-            .species
-            .as_deref()
-            .and_then(|s| plant_info(s, size))
-            .filter(|_| is_plant(cat)),
+        plant: (is_plant(cat) || c.id().starts_with("potted_plant"))
+            .then(|| plant_entry(c.species.as_deref(), size)),
         light,
     };
     write(&dir.join("entry.json"), &serde_json::to_vec_pretty(&asset)?)?;

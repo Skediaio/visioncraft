@@ -30,6 +30,9 @@ pub struct Candidate {
     pub author: String,
     pub triangles: Option<u32>,
     pub species: Option<String>,
+    /// The file holds separate objects as root nodes: each becomes an asset (`<id>`, `_b`, ...).
+    #[serde(default)]
+    pub split_roots: bool,
     /// Materials: brick, plaster, concrete, wood, paving, gravel, roof, stone, tile, metal,
     /// ground, fabric, other.
     #[serde(default)]
@@ -251,7 +254,7 @@ pub fn fetch(cands: &[Candidate], cache: &Path, http: &Http) -> Result<()> {
         all.retain(|v| v["page_url"] != c.page_url);
         all.push(json!({"category": c.category, "name": c.name, "source": c.source, "page_url": c.page_url,
             "author": c.author, "triangles": c.triangles, "species": c.species,
-            "kind": c.kind, "tags": c.tags, "exclude": c.exclude}));
+            "kind": c.kind, "tags": c.tags, "exclude": c.exclude, "split_roots": c.split_roots}));
     }
     fs::write(path, serde_json::to_vec_pretty(&all)?)?;
     if failed.is_empty() {

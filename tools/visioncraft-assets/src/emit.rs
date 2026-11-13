@@ -96,6 +96,13 @@ pub fn find(model: &Model, id: &str, wall: bool) -> Emitter {
             }
         }
         offset = std::array::from_fn(|k| (elo[k] + ehi[k]) / 2.0);
+        let flames = mats
+            .iter()
+            .all(|&i| has_token(&suffix(&model.mats[i].name, id), &["flame"]));
+        if flames && let Some(c) = tallest_piece_centre(model, &mats) {
+            offset = c;
+            how += "; the tallest flame (one light per fixture)";
+        }
     }
     if wall && let Some((axis, sign)) = back_plate(model) {
         let back = if sign > 0.0 { hi[axis] } else { lo[axis] };
@@ -165,4 +172,139 @@ pub fn apply(model: &mut Model, emitter: &[usize]) {
             m.emissive_strength = 1.0;
         }
     }
+}
+
+/// Triangle indices of each connected piece of a mesh (vertices that share a position count as
+/// connected, so UV seams do not split a piece).
+fn components(m: &crate::scene::Mesh) -> Vec<Vec<usize>> {
+    fn find(p: &mut [usize], mut x: usize) -> usize {
+        while p[x] != x {
+            p[x] = p[p[x]];
+            x = p[x];
+        }
+        x
+    }
+    let mut parent: Vec<usize> = (0..m.pos.len()).collect();
+    let mut by_pos = std::collections::HashMap::new();
+    for (i, p) in m.pos.iter().enumerate() {
+        let key = p.map(|v| (v * 1e5).round() as i64);
+        let j = *by_pos.entry(key).or_insert(i);
+        let (a, b) = (find(&mut parent, i), find(&mut parent, j));
+        parent[a] = b;
+    }
+    for t in m.idx.as_chunks::<3>().0 {
+        let (a, b) = (
+            find(&mut parent, t[0] as usize),
+            find(&mut parent, t[1] as usize),
+        );
+        parent[a] = b;
+        let (a, b) = (
+            find(&mut parent, t[1] as usize),
+            find(&mut parent, t[2] as usize),
+        );
+        parent[a] = b;
+    }
+    let mut pieces: std::collections::BTreeMap<usize, Vec<usize>> =
+        std::collections::BTreeMap::new();
+    for (ti, t) in m.idx.as_chunks::<3>().0.iter().enumerate() {
+        pieces
+            .entry(find(&mut parent, t[0] as usize))
+            .or_default()
+            .push(ti);
+    }
+    pieces.into_values().collect()
+}
+
+fn bbox_of(m: &crate::scene::Mesh, tris: &[usize]) -> ([f32; 3], [f32; 3]) {
+    let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+    for &ti in tris {
+        for k in 0..3 {
+            let p = m.pos[m.idx[ti * 3 + k] as usize];
+            for a in 0..3 {
+                lo[a] = lo[a].min(p[a]);
+                hi[a] = hi[a].max(p[a]);
+            }
+        }
+    }
+    (lo, hi)
+}
+
+/// For several flames the tallest one: the catalogue's `LightSpec` holds one light.
+fn tallest_piece_centre(model: &Model, mats: &[usize]) -> Option<[f32; 3]> {
+    let mut best: Option<(f32, [f32; 3])> = None;
+    for m in model.meshes.iter().filter(|m| mats.contains(&m.mat)) {
+        for piece in components(m) {
+            let (lo, hi) = bbox_of(m, &piece);
+            if best.is_none_or(|b| hi[1] > b.0) {
+                best = Some((hi[1], std::array::from_fn(|k| (lo[k] + hi[k]) / 2.0)));
+            }
+        }
+    }
+    best.map(|b| b.1)
+}
+
+/// A fixture whose only material covers chains, canopy and a long caged body: the body is the
+/// piece with the most triangles. The emitter is the centre of its bounding box, and its
+/// downward-facing triangles (the lens and the cage interior seen from below) become a separate
+/// `<name>_lens` material, which `apply` marks as the emitter.
+pub fn split_body(model: &mut Model) -> Option<Emitter> {
+    if model.meshes.len() != 1 {
+        return None;
+    }
+    let mesh = model.meshes[0].clone();
+    let body = components(&mesh).into_iter().max_by_key(Vec::len)?;
+    let (lo, hi) = bbox_of(&mesh, &body);
+    let offset = std::array::from_fn(|k| (lo[k] + hi[k]) / 2.0);
+    let down: Vec<usize> = body
+        .iter()
+        .copied()
+        .filter(|&ti| {
+            let [a, b, c] = [0, 1, 2].map(|k| mesh.pos[mesh.idx[ti * 3 + k] as usize]);
+            let (u, v): ([f32; 3], [f32; 3]) = (
+                std::array::from_fn(|k| b[k] - a[k]),
+                std::array::from_fn(|k| c[k] - a[k]),
+            );
+            let n = [
+                u[1] * v[2] - u[2] * v[1],
+                u[2] * v[0] - u[0] * v[2],
+                u[0] * v[1] - u[1] * v[0],
+            ];
+            let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+            len > 1e-12 && n[1] / len < -0.5
+        })
+        .collect();
+    if down.is_empty() {
+        return None;
+    }
+    let mut lens = crate::scene::Mesh {
+        mat: model.mats.len(),
+        ..Default::default()
+    };
+    let mut keep = Vec::new();
+    let mut map = std::collections::HashMap::new();
+    for (ti, t) in mesh.idx.as_chunks::<3>().0.iter().enumerate() {
+        if down.contains(&ti) {
+            for &i in t {
+                let id = *map.entry(i).or_insert_with(|| {
+                    lens.pos.push(mesh.pos[i as usize]);
+                    lens.nrm.push(mesh.nrm[i as usize]);
+                    lens.uv.push(mesh.uv[i as usize]);
+                    lens.pos.len() as u32 - 1
+                });
+                lens.idx.push(id);
+            }
+        } else {
+            keep.extend_from_slice(t);
+        }
+    }
+    let mut mat = model.mats[mesh.mat].clone();
+    mat.name = format!("{}_lens", mat.name);
+    model.mats.push(mat);
+    model.meshes[0].idx = keep;
+    model.meshes.push(lens);
+    Some(Emitter {
+        offset,
+        mats: vec![model.mats.len() - 1],
+        how: "centre of the caged body's bounding box; its downward-facing triangles are the emitter material".into(),
+    })
 }

@@ -416,7 +416,8 @@
   "triangles": 41936,
   "species": null,
   "tags": [],
-  "why": "API categories: decorative, lighting"
+  "why": "API categories: decorative, lighting; the file holds three separate candle holders as root nodes (split into _b, _c)",
+  "split_roots": true
  },
  {
   "category": "lighting",
