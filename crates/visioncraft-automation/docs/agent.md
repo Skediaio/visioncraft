@@ -206,3 +206,9 @@ From the command line, every viewpoint at the export presets:
 - **Pictures need a GPU.** Without one `view.render` is an error that says so; everything else
   works. The first picture takes a few seconds (the device, then the plants).
 - **Light markers** (small yellow crosses) are drawn in pictures where lamps are.
+- **Commands of an extension live in its window only.** A build made with
+  `visioncraft::Shell::new().with(...)` adds its extensions' commands to that window's session:
+  reach them with `visioncraft --control` (or `visioncraft-cli mcp --bridge`) against that build,
+  and open an extension's mode with `ui.set {"mode": "<extension id>"}`. `visioncraft-cli` on its
+  own and `visioncraft --agents-headless` build their session from the core commands and cannot
+  know a third-party build's commands, by design (nothing is loaded at run time).
