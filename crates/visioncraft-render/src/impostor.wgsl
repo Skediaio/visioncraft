@@ -57,19 +57,10 @@ fn impostor_views(d: vec3<f32>) -> vec4<f32> {
     return vec4<f32>(i0 % n, i1, f - i0, top);
 }
 
-// Fade from the last mesh level (0) to the impostor (1) by the instance's
-// distance, over the band the draw slot carries.
-fn lod_fade(origin: vec3<f32>) -> f32 {
-    let start = bitcast<f32>(draw.mesh.y);
-    let end = bitcast<f32>(draw.mesh.z);
-    if end <= start {
-        return 1.0;
-    }
-    var dist = length(origin - g.camera.xyz);
-    if is_ortho() {
-        dist = 2.0 / abs(g.proj[1][1]);
-    }
-    return clamp((dist - start) / (end - start), 0.0, 1.0);
+// How far a dissolve from the last mesh level (0) to the impostor or to
+// nothing (1) has run: per draw, from the draw slot (lib.rs `fade_slot`).
+fn lod_fade() -> f32 {
+    return bitcast<f32>(draw.mesh.z);
 }
 
 // The quad around an instance facing `towards` (world, unit, from the
@@ -123,7 +114,7 @@ fn vs_impostor(@builtin(vertex_index) vi: u32, v: ImpostorIn) -> ImpostorVarying
     let m = model(v.m0, v.m1, v.m2, v.m3);
     var out = impostor_vertex(vi, m, viewer_towards(m));
     out.clip = g.view_proj * vec4<f32>(out.world, 1.0);
-    out.fade = lod_fade(m[3].xyz);
+    out.fade = lod_fade();
     return out;
 }
 
@@ -273,7 +264,7 @@ struct FadeOut {
 fn vs_depth_fade(v: DepthIn) -> FadeOut {
     let m = model(v.m0, v.m1, v.m2, v.m3);
     let world = animated_world(v.position, v.wind, m, true);
-    return FadeOut(g.view_proj * vec4<f32>(world, 1.0), v.uv, lod_fade(m[3].xyz));
+    return FadeOut(g.view_proj * vec4<f32>(world, 1.0), v.uv, lod_fade());
 }
 
 @fragment

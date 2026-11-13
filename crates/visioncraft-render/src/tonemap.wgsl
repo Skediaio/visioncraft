@@ -56,8 +56,9 @@ override LUMA_IN_ALPHA: bool = false;
 fn fs_tonemap(in: Out) -> @location(0) vec4<f32> {
     var hdr = textureLoad(src, vec2<i32>(in.clip.xy), 0).rgb;
     if g.options.y > 0.0 {
-        // Five summed bloom levels: their mean keeps the energy.
-        let bloom = textureSampleLevel(src2, smp, in.clip.xy * g.viewport.zw, 0.0).rgb * 0.2;
+        // Four summed bloom levels (lib.rs BLOOM_LEVELS): their mean keeps
+        // the energy.
+        let bloom = textureSampleLevel(src2, smp, in.clip.xy * g.viewport.zw, 0.0).rgb * 0.25;
         hdr = mix(hdr, bloom, g.options.y);
     }
     let c = agx(hdr);

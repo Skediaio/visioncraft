@@ -114,6 +114,22 @@ fn fs_sh(in: EnvOut) -> @location(0) vec4<f32> {
     let d_theta = PI / f32(rows);
     let d_phi = 2.0 * PI / f32(cols);
     let lod = hdri_lod(4.0 * PI / f32(rows * cols));
+    // The analytic skies' ground takes the sky's light on it from the
+    // upper rows of this same sum (sky.wgsl ground_kcd).
+    let analytic = u32(g.sky.x + 0.5) != 2u;
+    var up = vec3<f32>(0.0);
+    if analytic {
+        for (var i = 0; i < rows / 2; i++) {
+            let theta = (f32(i) + 0.5) * d_theta;
+            let w = sin(theta) * d_theta * d_phi;
+            for (var j = 0; j < cols; j++) {
+                let phi = (f32(j) + 0.5) * d_phi;
+                let dir = vec3<f32>(sin(theta) * cos(phi), cos(theta), sin(theta) * sin(phi));
+                up += sky_kcd(dir, lod) * dir.y * w;
+            }
+        }
+    }
+    let ground = ground_kcd(up) + g.night.rgb;
     var sum = vec3<f32>(0.0);
     for (var i = 0; i < rows; i++) {
         let theta = (f32(i) + 0.5) * d_theta;
@@ -121,7 +137,11 @@ fn fs_sh(in: EnvOut) -> @location(0) vec4<f32> {
         for (var j = 0; j < cols; j++) {
             let phi = (f32(j) + 0.5) * d_phi;
             let dir = vec3<f32>(sin(theta) * cos(phi), cos(theta), sin(theta) * sin(phi));
-            sum += sky_kcd(dir, lod) * sh_basis(k, dir) * w;
+            var c = sky_kcd(dir, lod);
+            if analytic && dir.y < 0.0 {
+                c = ground;
+            }
+            sum += c * sh_basis(k, dir) * w;
         }
     }
     let band = select(select(PI / 4.0, 2.0 * PI / 3.0, k < 4u), PI, k == 0u);

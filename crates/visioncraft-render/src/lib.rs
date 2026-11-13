@@ -23,7 +23,7 @@
 //!    ground, the sky, then glass, water and alpha-blended materials sorted
 //!    back to front (not in the depth pre-pass, so not in AO and not
 //!    depth-writing); distance haze on everything
-//! 7. bloom: 5 half-size `Rgba16Float` levels down, then back up
+//! 7. bloom: 4 half-size `Rgba16Float` levels down, then back up
 //! 8. AgX tone map (bloom mixed in) to 8-bit sRGB-encoded values: straight
 //!    into the output, or into an LDR target at render size for
 //! 9. FXAA (when enabled) and
@@ -84,7 +84,9 @@ const CASCADE_SIZE: u64 = 80;
 const AO_RADIUS: f32 = 0.6; // metres
 const AO_INTENSITY: f32 = 1.5;
 /// Bloom levels (half size down to 1/32).
-const BLOOM_LEVELS: usize = 5;
+/// Four half-size levels (render size / 2 .. / 16): a fifth (/ 32) widened
+/// the halo by a margin no one saw and cost two of a frame's ~22 passes.
+const BLOOM_LEVELS: usize = 4;
 /// Solar illuminance at the top of the atmosphere (lux; Filament's
 /// documentation, "Physically based units"), in kcd/m2 per unit of the
 /// physical sky's LUTs.
@@ -512,17 +514,33 @@ struct Item {
 struct Cluster {
     range: std::ops::Range<u32>,
     bounds: Option<Bounds>,
-    /// View level of detail (`lods.len()` = culled by distance; `LOD_UNSET`
-    /// before the first frame).
+    /// View level of detail drawn (`lods.len()` = culled by distance;
+    /// `LOD_UNSET` before the first frame).
     lod: u8,
+    /// The level the distance asks for (with hysteresis); differs from
+    /// `lod` while a hand-over dissolves.
+    target: u8,
     /// Front-to-back sort keys seen from the camera and from the sun.
     key: [f32; 2],
-    /// Straddles the hand-over from the last mesh level (`lod`) to the
-    /// impostor: both draw, dithered per instance by distance.
+    /// Frames left of a dissolve between the last mesh level (`lod`) and
+    /// the impostor (or nothing, for a cull fade); 0 when settled.
+    fade: u8,
+    /// The dissolve goes towards the far side (impostor or culled).
+    to_far: bool,
+    /// Dissolving this frame: both sides draw, dithered by `fade_slot`.
     fading: bool,
+    /// First of this frame's fade slots (one per part, then the impostor).
+    fade_slot: u32,
 }
 
 const LOD_UNSET: u8 = u8::MAX;
+/// Frames a hand-over between the last mesh level and the impostor (or a
+/// cull fade) dissolves over: the dither shows only while it runs, never
+/// as a steady stipple on a parked camera.
+const FADE_FRAMES: u8 = 16;
+/// Draw slots for this frame's dissolving clusters; more dissolving at once
+/// switch without one.
+const FADE_SLOTS: usize = 1024;
 
 struct FarCache {
     eye: Vec3,
@@ -729,6 +747,9 @@ pub struct Renderer {
     draw_buffer: wgpu::Buffer,
     draw_bind: wgpu::BindGroup,
     draw_capacity: usize,
+    /// This frame's dissolving clusters' draw slots (`FADE_SLOTS`).
+    fade_buffer: wgpu::Buffer,
+    fade_bind: wgpu::BindGroup,
     next_slot: u32,
     free_slots: Vec<u32>,
     white: wgpu::TextureView,
@@ -743,7 +764,8 @@ pub struct Renderer {
     sky_source: SkySource,
     /// The sky-view LUT must follow the sun.
     sky_view_dirty: bool,
-    /// Radiance below the horizon (kcd/m2) for the environment.
+    /// Below the horizon for the environment: an HDRI's ground radiance
+    /// (kcd/m2), or the ground albedo the GPU lights (analytic skies).
     ground_kcd: Vec3,
     atmosphere: Atmosphere,
     ground: Option<Ground>,
@@ -855,6 +877,8 @@ impl Renderer {
         let draw_capacity = 64;
         let draw_buffer = uniform("draws", SLOT * draw_capacity as u64);
         let draw_bind = draw_bind_group(device, &layouts.draw, &draw_buffer);
+        let fade_buffer = uniform("fade draws", SLOT * FADE_SLOTS as u64);
+        let fade_bind = draw_bind_group(device, &layouts.draw, &fade_buffer);
 
         let white_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("white"),
@@ -1025,6 +1049,8 @@ impl Renderer {
             cascade_bind,
             draw_buffer,
             draw_bind,
+            fade_buffer,
+            fade_bind,
             draw_capacity,
             next_slot: 0,
             free_slots: Vec::new(),
@@ -1530,14 +1556,18 @@ impl Renderer {
         it.impostor = Some((impostor, slot));
         for c in &mut it.clusters {
             c.lod = LOD_UNSET;
+            c.target = LOD_UNSET;
+            c.fade = 0;
         }
         Ok(())
     }
 
-    /// Instances of `item` dither out over the last `band_m` metres before
-    /// its last level's (finite) distance instead of vanishing there (lawn
-    /// tufts, ground cover). 0 switches it off. Items with an impostor fade
-    /// mesh to impostor instead, and shadows never fade.
+    /// Instances of `item` that cross its last level's (finite) distance
+    /// dissolve over a few frames instead of vanishing at once (lawn tufts,
+    /// ground cover); a parked camera shows no dither. Any `band_m` above 0
+    /// switches it on (the value is no longer a distance band), 0 off.
+    /// Items with an impostor dissolve mesh to impostor instead, and
+    /// shadows never fade.
     pub fn set_item_cull_fade(&mut self, item: ItemId, band_m: f32) {
         if let Some(Some(it)) = self.items.get_mut(item.0 as usize) {
             it.cull_fade = band_m.max(0.0);
@@ -1776,8 +1806,12 @@ impl Renderer {
                     range: i as u32..i as u32 + 1,
                     bounds: None,
                     lod: LOD_UNSET,
+                    target: LOD_UNSET,
                     key: [0.0; 2],
+                    fade: 0,
+                    to_far: false,
                     fading: false,
+                    fade_slot: 0,
                 }),
             }
         }
@@ -1949,39 +1983,14 @@ impl Renderer {
         self.queue.write_buffer(&self.cascade_buffer, 0, &slots);
         self.terrain
             .write(&self.queue, self.ground.map(|g| g.color));
-        // The impostor hand-over band, in metres at this quality's LOD scale.
-        let scale = self.lod_scale();
+        // Settled impostors draw whole (fade 1); a buffer regrowth in
+        // `alloc_slot` writes plain mesh slots, so every frame.
         for item in self.items.iter().flatten() {
-            if item.impostor.is_none() && item.cull_fade > 0.0 {
-                let last = item.lods.len() - 1;
-                let end = item.lods[last];
-                if end.is_finite() {
-                    let band = ((end - item.cull_fade) * scale, end * scale);
-                    for p in item.parts.iter().filter(|p| p.lod as usize == last) {
-                        self.queue.write_buffer(
-                            &self.draw_buffer,
-                            p.slot as u64 * SLOT,
-                            &fade_slot(p.mesh, band),
-                        );
-                    }
-                }
-            }
-            let Some((_, slot)) = item.impostor else {
-                continue;
-            };
-            let last = item.lods.len() - 2;
-            let (a, b) = fade_band(item.lods[last]);
-            let band = (a * scale, b * scale);
-            self.queue.write_buffer(
-                &self.draw_buffer,
-                slot as u64 * SLOT,
-                &fade_slot(MeshId(u32::MAX - 2), band),
-            );
-            for p in item.parts.iter().filter(|p| p.lod as usize == last) {
+            if let Some((_, slot)) = item.impostor {
                 self.queue.write_buffer(
                     &self.draw_buffer,
-                    p.slot as u64 * SLOT,
-                    &fade_slot(p.mesh, band),
+                    slot as u64 * SLOT,
+                    &fade_slot(MeshId(u32::MAX - 2), 1.0),
                 );
             }
         }
@@ -2115,7 +2124,13 @@ impl Renderer {
             pass.set_bind_group(0, &self.reflect_globals_bind, &[]);
             pass.set_bind_group(3, &t.reflect_forward_bind, &[]);
             self.draw_items(&mut pass, view_proj * m, true, Pass::Reflection);
-            if self.ground.is_some() {
+            // The endless ground has no hole where the terrain is dug out:
+            // seen from water below its height (a pond in the lawn) it would
+            // cover the sky the water mirrors.
+            if self
+                .ground
+                .is_some_and(|g| water.is_some_and(|h| h >= g.height))
+            {
                 self.draw_ground(&mut pass, &self.pipelines.reflect_ground);
             }
             pass.set_pipeline(&self.pipelines.reflect_sky);
@@ -2436,7 +2451,7 @@ impl Renderer {
                     continue;
                 }
                 let levels = item.lods.len() as u8;
-                for part in &item.parts {
+                for (part_index, part) in item.parts.iter().enumerate() {
                     let Some(Some(mesh)) = self.meshes.get(part.mesh.0 as usize) else {
                         continue;
                     };
@@ -2459,8 +2474,9 @@ impl Renderer {
                         continue;
                     }
                     let weights = mesh.weights.as_ref().filter(|_| shaded);
-                    // The last mesh level of an item with an impostor hands
-                    // over in fading clusters, through its own pipelines.
+                    // The last mesh level of an item with an impostor (or a
+                    // cull fade) dissolves in fading clusters, through its
+                    // own pipelines, one draw and fade slot per cluster.
                     let can_fade = fades
                         && if item.impostor.is_some() {
                             part.lod + 2 == levels
@@ -2484,10 +2500,24 @@ impl Renderer {
                             Pass::Forward => (m.variant(), &self.sampled.forward[m.variant()]),
                             Pass::Reflection => (m.variant(), &self.pipelines.reflect[m.variant()]),
                         };
-                        let runs = Self::runs(item, order, cull, near_far, |c| {
+                        let keep = |c: &Cluster| {
                             Self::cluster_lod(item, c, kind) == Some(part.lod)
                                 && (!can_fade || c.fading == fading)
-                        });
+                        };
+                        let runs: Vec<(std::ops::Range<u32>, u32)> = if fading {
+                            item.clusters
+                                .iter()
+                                .filter(|c| {
+                                    keep(c) && c.bounds.is_some_and(|b| !outside(cull, b, near_far))
+                                })
+                                .map(|c| (c.range.clone(), c.fade_slot + part_index as u32))
+                                .collect()
+                        } else {
+                            Self::runs(item, order, cull, near_far, keep)
+                                .into_iter()
+                                .map(|r| (r, part.slot))
+                                .collect()
+                        };
                         if runs.is_empty() {
                             continue;
                         }
@@ -2501,17 +2531,18 @@ impl Renderer {
                         } else if shaded || category == 1 || fading {
                             pass.set_bind_group(1, &material.bind, &[]);
                         }
-                        if shaded || fading {
-                            pass.set_bind_group(
-                                2,
-                                &self.draw_bind,
-                                &[(part.slot as u64 * SLOT) as u32],
-                            );
-                        }
+                        let slots = if fading {
+                            &self.fade_bind
+                        } else {
+                            &self.draw_bind
+                        };
                         pass.set_vertex_buffer(0, mesh.vertices.slice(..));
                         pass.set_vertex_buffer(1, item.instances.slice(..));
                         pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-                        for r in runs {
+                        for (i, (r, slot)) in runs.into_iter().enumerate() {
+                            if (shaded || fading) && (fading || i == 0) {
+                                pass.set_bind_group(2, slots, &[(slot as u64 * SLOT) as u32]);
+                            }
                             self.counters.add(
                                 mesh.index_count as u64 / 3,
                                 r.len() as u32,
@@ -2552,13 +2583,21 @@ impl Renderer {
         };
         let level = item.lods.len() as u8 - 1;
         let order = matches!(kind, Pass::Shadow { .. }) as usize;
-        let runs = Self::runs(item, order, cull, near_far, |c| match kind {
-            Pass::Depth | Pass::Forward => {
-                c.lod < item.lods.len() as u8 && (c.lod == level || c.fading)
-            }
-            _ => Self::cluster_lod(item, c, kind) == Some(level),
+        let fades = matches!(kind, Pass::Depth | Pass::Forward);
+        let runs = Self::runs(item, order, cull, near_far, |c| {
+            Self::cluster_lod(item, c, kind) == Some(level) && !(fades && c.fading)
         });
-        if runs.is_empty() {
+        // Dissolving clusters draw their impostor with their own fade slot.
+        let fading: Vec<(std::ops::Range<u32>, u32)> = if fades {
+            item.clusters
+                .iter()
+                .filter(|c| c.fading && c.bounds.is_some_and(|b| !outside(cull, b, near_far)))
+                .map(|c| (c.range.clone(), c.fade_slot + item.parts.len() as u32))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        if runs.is_empty() && fading.is_empty() {
             return;
         }
         let (key, pipeline) = match kind {
@@ -2577,6 +2616,11 @@ impl Renderer {
         }
         pass.set_vertex_buffer(1, item.instances.slice(..));
         for r in runs {
+            self.counters.add(2, r.len() as u32, kind == Pass::Forward);
+            pass.draw(0..6, r);
+        }
+        for (r, slot) in fading {
+            pass.set_bind_group(2, &self.fade_bind, &[(slot as u64 * SLOT) as u32]);
             self.counters.add(2, r.len() as u32, kind == Pass::Forward);
             pass.draw(0..6, r);
         }
@@ -2722,6 +2766,8 @@ impl Renderer {
             (2.0 / self.proj.y_axis.y.abs().max(1e-9), forward)
         });
         let reach = self.impostor_reach;
+        let mut fade_bytes: Vec<u8> = Vec::new();
+        let mut fade_used = 0usize;
         for item in self.items.iter_mut().flatten() {
             // The impostor's end, shortened or lengthened by the reach.
             let mut lods = item.lods.clone();
@@ -2745,43 +2791,73 @@ impl Renderer {
                     }
                 };
                 let d = d / scale;
-                let current = (c.lod != LOD_UNSET).then_some(c.lod as usize);
-                c.lod = lod::select(d, &lods, current, lod::HYSTERESIS_M) as u8;
+                let current = (c.target != LOD_UNSET).then_some(c.target as usize);
+                let target = lod::select(d, &lods, current, lod::HYSTERESIS_M) as u8;
+                // The level next to the hand-over that dissolves: the last
+                // mesh level into the impostor, or the last level into
+                // nothing with a cull fade. None: levels switch at once.
+                let levels = item.lods.len() as u8;
+                let near = if ortho.is_some() {
+                    None
+                } else if item.impostor.is_some() {
+                    Some(levels - 2)
+                } else if item.cull_fade > 0.0 && item.lods[levels as usize - 1].is_finite() {
+                    Some(levels - 1)
+                } else {
+                    None
+                };
+                let far = |l: u8| near.is_some_and(|n| l > n);
+                // Beyond the impostor everything is culled at once.
+                let past = |l: u8| item.impostor.is_some() && l >= levels;
+                if let Some(n) = near
+                    && c.target != LOD_UNSET
+                    && far(c.target) != far(target)
+                    && !past(c.target)
+                    && !past(target)
+                {
+                    // Crossing the hand-over: dissolve, or turn a running
+                    // dissolve around where it is.
+                    c.fade = if c.fade > 0 {
+                        FADE_FRAMES - c.fade
+                    } else {
+                        FADE_FRAMES
+                    };
+                    c.to_far = far(target);
+                    c.lod = n;
+                } else if near.is_none() || past(target) {
+                    c.fade = 0;
+                }
+                c.target = target;
                 c.fading = false;
-                if item.impostor.is_some() {
-                    // Clusters whose instances straddle the hand-over band
-                    // draw both the last mesh level and the impostor.
-                    let mesh_last = item.lods.len() - 2;
-                    let (start, end) = fade_band(item.lods[mesh_last]);
-                    let far = match ortho {
-                        Some((height, _)) => height,
-                        None => (eye - lo).abs().max((eye - hi).abs()).length(),
-                    } / scale;
-                    if d < end && far > start {
-                        c.fading = true;
-                        c.lod = mesh_last as u8;
-                    } else if far <= start {
-                        c.lod = c.lod.min(mesh_last as u8);
+                if c.fade > 0 && fade_used + item.parts.len() < FADE_SLOTS {
+                    let done = (FADE_FRAMES - c.fade) as f32 + 1.0;
+                    let progress = done / (FADE_FRAMES as f32 + 1.0);
+                    let fade = if c.to_far { progress } else { 1.0 - progress };
+                    c.fade_slot = fade_used as u32;
+                    for p in &item.parts {
+                        fade_bytes.extend_from_slice(&fade_slot(p.mesh, fade));
+                        fade_bytes.resize(fade_bytes.len() + SLOT as usize - 16, 0);
                     }
-                } else if item.cull_fade > 0.0 && ortho.is_none() {
-                    // Instances near the cull distance dither out.
-                    let last = item.lods.len() - 1;
-                    let end = item.lods[last];
-                    if end.is_finite() {
-                        let far = (eye - lo).abs().max((eye - hi).abs()).length() / scale;
-                        if d < end && far > end - item.cull_fade {
-                            c.fading = true;
-                            c.lod = last as u8;
-                        }
-                    }
+                    fade_bytes.extend_from_slice(&fade_slot(MeshId(u32::MAX - 2), fade));
+                    fade_bytes.resize(fade_bytes.len() + SLOT as usize - 16, 0);
+                    fade_used += item.parts.len() + 1;
+                    c.fading = true;
+                    c.lod = near.unwrap_or(target);
+                    c.fade -= 1;
+                } else {
+                    c.fade = 0;
+                    c.lod = target;
                 }
                 if ortho.is_some() {
                     // A plan or elevation shows everything: the coarsest
                     // level instead of culling by distance.
-                    c.lod = c.lod.min(item.lods.len() as u8 - 1);
+                    c.lod = c.lod.min(levels - 1);
                 }
                 c.key = [order, -((lo + hi) * 0.5).dot(sun)];
             }
+        }
+        if !fade_bytes.is_empty() {
+            self.queue.write_buffer(&self.fade_buffer, 0, &fade_bytes);
         }
     }
 
@@ -2812,8 +2888,9 @@ impl Renderer {
                 let sun = self.sun.color * self.sun.illuminance * self.sun.direction.y.max(0.0);
                 albedo * (sun / std::f32::consts::PI + *mean * *intensity) / 1000.0
             }
-            // Preetham's estimate for both analytic skies (sky.rs).
-            _ => self.sky.ground_radiance(&self.sun) * (albedo / 0.2) / 1000.0,
+            // The analytic skies: the albedo; the GPU lights it with the sun
+            // and the drawn sky (sky.wgsl `ground_kcd`).
+            _ => albedo,
         };
         self.env.invalidate(all);
         self.sky_view_dirty = true;
@@ -3195,19 +3272,11 @@ fn texture_size(view: &wgpu::TextureView) -> (u32, u32) {
     (t.width(), t.height())
 }
 
-/// The hand-over band from the last mesh level (max distance `d0`) to the
-/// impostor: (start, end) in the same units.
-fn fade_band(d0: f32) -> (f32, f32) {
-    let band = (0.1 * d0).max(2.0);
-    (d0 - band, d0 + band)
-}
-
-/// A draw slot that also carries the impostor hand-over band (scene.wgsl
-/// `lod_fade`).
-fn fade_slot(mesh: MeshId, (start, end): (f32, f32)) -> [u8; 16] {
+/// A draw slot that also carries a dissolve's progress, 0 the last mesh
+/// level .. 1 the impostor or nothing (impostor.wgsl `lod_fade`).
+fn fade_slot(mesh: MeshId, fade: f32) -> [u8; 16] {
     let mut out = mesh_slot(mesh);
-    out[4..8].copy_from_slice(&start.to_le_bytes());
-    out[8..12].copy_from_slice(&end.to_le_bytes());
+    out[8..12].copy_from_slice(&fade.to_le_bytes());
     out
 }
 
@@ -4599,9 +4668,9 @@ mod tests {
     fn bloom_levels_halve_down_to_one_pixel() {
         assert_eq!(
             bloom_sizes((1536, 864)),
-            [(768, 432), (384, 216), (192, 108), (96, 54), (48, 27)]
+            [(768, 432), (384, 216), (192, 108), (96, 54)]
         );
-        assert_eq!(bloom_sizes((3, 1)), [(1, 1); 5]);
+        assert_eq!(bloom_sizes((3, 1)), [(1, 1); 4]);
         assert_eq!(bloom_sizes((1921, 1081))[0], (960, 540));
     }
 

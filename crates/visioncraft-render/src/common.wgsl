@@ -31,7 +31,7 @@ struct Globals {
     output: vec4<f32>,          // output width, height, render scale, 1 / render scale
     fog: vec4<f32>,             // x extinction at fog.z (1/m), y height falloff (1/m), z base height (m), w sun glow
     sky: vec4<f32>,             // x source (0 Preetham, 1 physical, 2 HDRI), y HDRI rotation (rad), z source -> kcd/m2, w HDRI mip count
-    ground: vec4<f32>,          // rgb radiance below the horizon (kcd/m2), w HDRI below the horizon (0/1)
+    ground: vec4<f32>,          // rgb: HDRI radiance below the horizon (kcd/m2), analytic skies the ground albedo (sky.wgsl ground_kcd); w HDRI below the horizon (0/1)
     options: vec4<f32>,         // x PCF taps (4 or 9), y bloom strength, z cascades refreshed this frame (bits), w unused
     reflection: vec4<f32>,      // x planar reflection available (0/1), y water height (m), z clip below (0/1), w clip height (m)
     sh: array<vec4<f32>, 9>,    // sky irradiance as L2 SH (kcd/m2 * sr), written on the GPU (env.wgsl)

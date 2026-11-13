@@ -141,14 +141,19 @@ impl Renderer {
         if let Some(t) = &self.timer {
             t.paused.set(true);
         }
-        let live_lods: Vec<Vec<u8>> = self
+        // A still starts settled: no level carried over, no dissolve.
+        let live_lods: Vec<Vec<(u8, u8, u8, bool)>> = self
             .items
             .iter_mut()
             .flatten()
             .map(|item| {
                 item.clusters
                     .iter_mut()
-                    .map(|c| std::mem::replace(&mut c.lod, LOD_UNSET))
+                    .map(|c| {
+                        let live = (c.lod, c.target, c.fade, c.to_far);
+                        (c.lod, c.target, c.fade) = (LOD_UNSET, LOD_UNSET, 0);
+                        live
+                    })
                     .collect()
             })
             .collect();
@@ -187,8 +192,8 @@ impl Renderer {
             t.paused.set(false);
         }
         for (item, lods) in self.items.iter_mut().flatten().zip(live_lods) {
-            for (c, lod) in item.clusters.iter_mut().zip(lods) {
-                c.lod = lod;
+            for (c, live) in item.clusters.iter_mut().zip(lods) {
+                (c.lod, c.target, c.fade, c.to_far) = live;
             }
         }
 

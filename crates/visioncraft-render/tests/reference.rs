@@ -917,6 +917,68 @@ fn u_open_shade_ratio() {
     check("u_open_shade", &px);
 }
 
+/// A white wall on a green lawn after sunset (physical sky): lit by the
+/// twilight sky and the little the lawn bounces, it reads neutral to cool,
+/// never green (the ground below the horizon used to take a daylight sky
+/// model extrapolated below the horizon, ten times the real twilight).
+#[test]
+fn u_twilight_white_wall_is_not_green() {
+    let mut r = renderer(W, H);
+    let lawn = [0.10, 0.17, 0.08];
+    let mut ground = MeshData::default();
+    ground.add_box(Vec3::new(-40.0, -0.1, -40.0), Vec3::new(40.0, 0.0, 40.0));
+    let ground = r.add_mesh(&ground.mesh()).expect("ground");
+    let grass = r.add_material(&Material {
+        base_color: [lawn[0], lawn[1], lawn[2], 1.0],
+        roughness: 0.95,
+        ..Default::default()
+    });
+    r.add_item(ground, grass, &[Mat4::IDENTITY]);
+    r.set_ground(Some(visioncraft_render::Ground {
+        color: lawn,
+        variation: 0.0,
+        ..Default::default()
+    }));
+    let mut block = MeshData::default();
+    block.add_box(Vec3::new(-6.0, 0.0, -4.0), Vec3::new(6.0, 6.0, 4.0));
+    let block = r.add_mesh(&block.mesh()).expect("block");
+    let white = r.add_material(&Material {
+        base_color: [0.8, 0.79, 0.76, 1.0],
+        roughness: 0.85,
+        ..Default::default()
+    });
+    r.add_item(block, white, &[Mat4::IDENTITY]);
+    let aspect = W as f32 / H as f32;
+    let cam = demo::camera(
+        Vec3::new(16.0, 12.0, 24.0),
+        Vec3::new(0.0, 2.5, 0.0),
+        aspect,
+    );
+    for (elevation, ev) in [(-2.5, 8.1), (-5.0, 5.6), (-7.0, 3.8)] {
+        setup(&mut r, cam, Sun::from_angles(318.0, elevation), ev);
+        settle(&mut r);
+        let px = capture(&mut r, W, H);
+        for p in [Vec3::new(0.0, 3.0, 4.0), Vec3::new(6.0, 3.0, 0.0)] {
+            let q = r.project(p).expect("wall in view");
+            let [red, green, blue] = mean(
+                &px,
+                q.x as u32 - 4,
+                q.y as u32 - 4,
+                q.x as u32 + 5,
+                q.y as u32 + 5,
+            );
+            eprintln!("sun {elevation} deg, wall at {p}: {red:.0} {green:.0} {blue:.0}");
+            assert!(
+                green <= red.max(blue) + 2.0,
+                "sun {elevation} deg: the wall is green ({red:.0} {green:.0} {blue:.0})"
+            );
+        }
+        if elevation == -5.0 {
+            check("u_twilight_wall", &px);
+        }
+    }
+}
+
 /// Edge cases the app hits: an empty scene, only overlay lines, 1x1 and
 /// zero-sized outputs, every preset.
 #[test]
@@ -1203,10 +1265,12 @@ fn ortho_plan_keeps_the_last_level() {
     assert!(r.stats().instances >= 900, "{:?}", r.stats());
 }
 
-/// A dithered cull fade draws the fading instances, without it they are gone.
+/// Instances crossing the cull distance dissolve over a few frames with a
+/// cull fade (still drawn the frame after the camera backs off, gone once
+/// the dissolve ran), and vanish at once without one.
 #[test]
-fn cull_fade_keeps_instances_near_the_limit() {
-    let count = |band: f32| {
+fn cull_fade_dissolves_over_a_few_frames() {
+    let counts = |band: f32| {
         let mut r = renderer(160, 90);
         let lods = demo::plant_lods(&PlantShape::shrub(), 9);
         let mats = demo::plant_materials(&mut r, Vec3::new(0.14, 0.26, 0.06), 3);
@@ -1215,17 +1279,29 @@ fn cull_fade_keeps_instances_near_the_limit() {
             .collect();
         let item = demo::add_plants(&mut r, &lods, &mats, [8.0, 20.0, 30.0], &tufts);
         r.set_item_cull_fade(item, band);
-        let cam = demo::camera(
-            Vec3::new(0.0, 1.7, 0.0),
-            Vec3::new(0.0, 0.0, -30.0),
-            16.0 / 9.0,
-        );
-        setup(&mut r, cam, demo::afternoon_sun(), 14.7);
+        let at = |z: f32| {
+            demo::camera(
+                Vec3::new(0.0, 1.7, z),
+                Vec3::new(0.0, 0.0, z - 30.0),
+                16.0 / 9.0,
+            )
+        };
+        setup(&mut r, at(0.0), demo::afternoon_sun(), 14.7);
+        settle(&mut r);
+        let (view, proj, eye) = at(12.0);
+        r.set_camera(view, proj, eye);
         capture_any(&mut r);
-        r.stats().instances
+        let first = r.stats().instances;
+        for _ in 0..20 {
+            capture_any(&mut r);
+        }
+        (first, r.stats().instances)
     };
-    let (cut, fade) = (count(0.0), count(10.0));
-    assert!(fade >= cut && cut > 0, "cut {cut}, fade {fade}");
+    let (cut, cut_later) = counts(0.0);
+    assert_eq!(cut, cut_later, "without a fade the cut is immediate");
+    let (fading, settled) = counts(10.0);
+    assert!(fading > settled, "dissolving {fading}, settled {settled}");
+    assert_eq!(settled, cut_later, "the dissolve ends where the cut is");
 }
 
 /// Clay is neutral everywhere, foliage and impostors included: no pixel

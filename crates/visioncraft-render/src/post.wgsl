@@ -204,5 +204,9 @@ fn fs_upscale(in: Out) -> @location(0) vec4<f32> {
     let lobe3 = max(-hit_min, hit_max);
     let lobe = max(-RCAS_LIMIT, min(max(lobe3.r, max(lobe3.g, lobe3.b)), 0.0)) * RCAS_SHARPNESS;
     let c = (lobe * (b + d + f + h) + e) / (4.0 * lobe + 1.0);
-    return vec4<f32>(clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
+    // The bilinear taps fall between the dithered 8-bit levels of the tone
+    // map: dither again by +-0.5 LSB before this output's quantisation, or
+    // a dim sky gradient bands (the tone map's dither alone averages out).
+    let n = (ign(in.clip.xy) - 0.5) / 255.0;
+    return vec4<f32>(clamp(c + n, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
 }

@@ -92,12 +92,30 @@ fn sky_kcd(dir: vec3<f32>, lod: f32) -> vec3<f32> {
         return hdri(dir, lod);
     }
     if dir.y < 0.0 {
-        return g.ground.rgb + g.night.rgb;
+        return ground_kcd(sky_up_sh()) + g.night.rgb;
     }
     if source == 1u {
         return sky_view(dir) * g.sky.z + g.night.rgb;
     }
     return preetham(dir) + g.night.rgb;
+}
+
+// The ground below the horizon under the analytic skies (kcd/m2): a
+// Lambertian plane of albedo g.ground.rgb lit by the sun and by `sky_up`,
+// the sky's irradiance on a horizontal surface (kcd/m2 * sr). Taking the
+// sky light from the sky that is drawn keeps the two in proportion at every
+// sun height: in twilight the ground is lit by the dim sky only, not by a
+// daylight model extrapolated below the horizon.
+fn ground_kcd(sky_up: vec3<f32>) -> vec3<f32> {
+    let sun = g.sun_light.rgb * max(g.sun_dir.y, 0.0) / g.night.w;
+    return g.ground.rgb * (sky_up + sun) / PI;
+}
+
+// The sky's irradiance on a horizontal surface from the SH (env.wgsl fs_sh
+// integrates it directly; the cube faces take it from here).
+fn sky_up_sh() -> vec3<f32> {
+    let e = g.sh[0].rgb * 0.282095 + g.sh[1].rgb * 0.488603 - g.sh[6].rgb * 0.315392 - g.sh[8].rgb * 0.546274;
+    return max(e, vec3<f32>(0.0));
 }
 
 // The background as seen (pre-exposed): the source above the horizon, and
