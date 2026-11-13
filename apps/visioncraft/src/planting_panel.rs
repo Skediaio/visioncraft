@@ -368,6 +368,20 @@ impl PlantingTools {
                 self.set_tool(cx, Tool::Select);
                 self.lights = true;
             }
+            // The plan Draw uses: placing from above lands where it looks like it does.
+            let plan = cx.s.camera.view == crate::camera::View::Top;
+            if ui
+                .selectable_label(plan, t::PLAN_VIEW)
+                .on_hover_text(t::PLAN_VIEW_TIP)
+                .clicked()
+            {
+                cx.s.camera.view = if plan {
+                    crate::camera::View::Orbit
+                } else {
+                    cx.s.camera.leave_walk();
+                    crate::camera::View::Top
+                };
+            }
             if !self.lights
                 && ui
                     .selectable_label(self.show_help, "?")
@@ -531,7 +545,8 @@ impl PlantingTools {
         self.list(ui, cx);
     }
 
-    /// All plantings: select the ones that are hard to click, hide a layer.
+    /// All plantings: select the ones that are hard to click, hide a layer. Single plants of one
+    /// kind share a row that counts them (clicking it selects the last one placed).
     fn list(&mut self, ui: &mut egui::Ui, cx: &mut Cx) {
         let rows: Vec<_> =
             cx.s.project()
@@ -548,6 +563,7 @@ impl PlantingTools {
                     )
                 })
                 .collect();
+        let rows = group_singles(rows);
         if rows.is_empty() {
             return;
         }
@@ -670,5 +686,55 @@ mod tests {
             assert!(k.iter().any(|(key, _)| *key == "?"));
         }
         assert!(shortcuts(Tool::Brush).iter().any(|(k, _)| k.contains('[')));
+    }
+}
+
+type Row = (String, String, &'static str, usize, String, bool);
+
+/// Rows of single plants with the same name merged: their counts add up, the last one's id stays.
+fn group_singles(rows: Vec<Row>) -> Vec<Row> {
+    let mut out: Vec<Row> = Vec::new();
+    for row in rows {
+        let single = row.2 == Tool::Single.label();
+        match out
+            .iter_mut()
+            .find(|o| single && o.2 == row.2 && o.1 == row.1 && o.4 == row.4)
+        {
+            Some(o) => {
+                o.3 += row.3;
+                o.0 = row.0;
+            }
+            None => out.push(row),
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod group_tests {
+    use super::*;
+
+    #[test]
+    fn single_plants_of_one_kind_share_a_row() {
+        let row = |id: &str, name: &str, kind: &'static str| {
+            (
+                id.to_string(),
+                name.to_string(),
+                kind,
+                1,
+                "planting".to_string(),
+                true,
+            )
+        };
+        let s = Tool::Single.label();
+        let rows = group_singles(vec![
+            row("g1", "Cherry", s),
+            row("g2", "Hedge", Tool::Line.label()),
+            row("g3", "Cherry", s),
+            row("g4", "Oak", s),
+            row("g5", "Cherry", s),
+        ]);
+        assert_eq!(rows.len(), 3);
+        assert_eq!((rows[0].0.as_str(), rows[0].3), ("g5", 3));
     }
 }
