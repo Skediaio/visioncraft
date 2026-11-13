@@ -376,7 +376,7 @@ impl Quality {
         soft_shadows: false,
     };
     pub const MEDIUM: Quality = Quality {
-        shadow_resolution: 1536,
+        shadow_resolution: 1024,
         cascades: 2,
         ao_samples: 8,
         // Contact shadows (~2 ms) are HIGH only since foliage is alpha-cut;
@@ -500,6 +500,9 @@ struct Item {
     clusters: Vec<Cluster>,
     /// The baked impostor drawn as the last level, and its draw slot.
     impostor: Option<(ImpostorId, u32)>,
+    /// Metres before the last level's distance over which instances dither
+    /// out (0: they are culled at once).
+    cull_fade: f32,
     /// Cluster indices front to back, seen from the camera and from the sun
     /// (so early depth testing rejects hidden foliage layers).
     order: [Vec<u32>; 2],
@@ -1160,7 +1163,12 @@ impl Renderer {
     /// Clay presentation: opaque and cutout materials draw matte white
     /// (cutout keeps its mask), glass and water as pale matte surfaces.
     pub fn set_clay(&mut self, clay: bool) {
-        self.clay = clay;
+        if clay != self.clay {
+            self.clay = clay;
+            // The light the ground bounces up (ambient SH, environment) is
+            // clay grey too, or leaves and anything facing down stay green.
+            self.update_ambient(true);
+        }
     }
 
     /// Point and spot lights (replaces the previous set). At most
@@ -1483,6 +1491,16 @@ impl Renderer {
         Ok(())
     }
 
+    /// Instances of `item` dither out over the last `band_m` metres before
+    /// its last level's (finite) distance instead of vanishing there (lawn
+    /// tufts, ground cover). 0 switches it off. Items with an impostor fade
+    /// mesh to impostor instead, and shadows never fade.
+    pub fn set_item_cull_fade(&mut self, item: ItemId, band_m: f32) {
+        if let Some(Some(it)) = self.items.get_mut(item.0 as usize) {
+            it.cull_fade = band_m.max(0.0);
+        }
+    }
+
     /// Frees an impostor; items using it draw nothing at that level.
     pub fn remove_impostor(&mut self, id: ImpostorId) {
         if let Some(slot) = self.impostors.get_mut(id.0 as usize) {
@@ -1643,6 +1661,7 @@ impl Renderer {
             bounds: None,
             clusters: Vec::new(),
             impostor: None,
+            cull_fade: 0.0,
             order: [Vec::new(), Vec::new()],
         }));
         self.set_instances(id, instances);
@@ -1889,6 +1908,20 @@ impl Renderer {
         // The impostor hand-over band, in metres at this quality's LOD scale.
         let scale = self.quality.lod_distance_percent.max(1) as f32 / 100.0;
         for item in self.items.iter().flatten() {
+            if item.impostor.is_none() && item.cull_fade > 0.0 {
+                let last = item.lods.len() - 1;
+                let end = item.lods[last];
+                if end.is_finite() {
+                    let band = ((end - item.cull_fade) * scale, end * scale);
+                    for p in item.parts.iter().filter(|p| p.lod as usize == last) {
+                        self.queue.write_buffer(
+                            &self.draw_buffer,
+                            p.slot as u64 * SLOT,
+                            &fade_slot(p.mesh, band),
+                        );
+                    }
+                }
+            }
             let Some((_, slot)) = item.impostor else {
                 continue;
             };
@@ -2206,6 +2239,20 @@ impl Renderer {
                 .sum::<u64>()
             + hdri;
         let gpu_passes = self.timer.as_ref().map_or(Vec::new(), |t| t.last.clone());
+        // Native tools: VISIONCRAFT_GPU_TIMINGS=1 prints the pass times once
+        // a second (at 60 frames), for profiling a host app's own scenes.
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.frame.is_multiple_of(60)
+            && !gpu_passes.is_empty()
+            && std::env::var_os("VISIONCRAFT_GPU_TIMINGS").is_some()
+        {
+            let parts: Vec<String> = gpu_passes
+                .iter()
+                .map(|(l, ms)| format!("{l} {ms:.2}"))
+                .collect();
+            let total: f32 = gpu_passes.iter().map(|p| p.1).sum();
+            eprintln!("gpu ms: {} (sum {total:.2})", parts.join(", "));
+        }
         self.last_stats = RenderStats {
             draw_calls: self.counters.draws.get(),
             triangles: self.counters.triangles.get(),
@@ -2356,7 +2403,12 @@ impl Renderer {
                     let weights = mesh.weights.as_ref().filter(|_| shaded);
                     // The last mesh level of an item with an impostor hands
                     // over in fading clusters, through its own pipelines.
-                    let can_fade = fades && item.impostor.is_some() && part.lod + 2 == levels;
+                    let can_fade = fades
+                        && if item.impostor.is_some() {
+                            part.lod + 2 == levels
+                        } else {
+                            item.cull_fade > 0.0 && part.lod + 1 == levels
+                        };
                     for fading in [false, true] {
                         if fading && !can_fade {
                             continue;
@@ -2637,6 +2689,22 @@ impl Renderer {
                     } else if far <= start {
                         c.lod = c.lod.min(mesh_last as u8);
                     }
+                } else if item.cull_fade > 0.0 && ortho.is_none() {
+                    // Instances near the cull distance dither out.
+                    let last = item.lods.len() - 1;
+                    let end = item.lods[last];
+                    if end.is_finite() {
+                        let far = (eye - lo).abs().max((eye - hi).abs()).length() / scale;
+                        if d < end && far > end - item.cull_fade {
+                            c.fading = true;
+                            c.lod = last as u8;
+                        }
+                    }
+                }
+                if ortho.is_some() {
+                    // A plan or elevation shows everything: the coarsest
+                    // level instead of culling by distance.
+                    c.lod = c.lod.min(item.lods.len() as u8 - 1);
                 }
                 keys.push((order, -((lo + hi) * 0.5).dot(sun)));
             }
@@ -2666,9 +2734,12 @@ impl Renderer {
     /// then the sky-view LUT, SH and environment cube (GPU; spread over a few
     /// frames unless `all`).
     fn update_ambient(&mut self, all: bool) {
-        let albedo = self
-            .ground
-            .map_or(Vec3::splat(0.2), |g| Vec3::from(g.color));
+        let albedo = if self.clay {
+            Vec3::splat(0.8) // clay surfaces' albedo (scene.wgsl `light`)
+        } else {
+            self.ground
+                .map_or(Vec3::splat(0.2), |g| Vec3::from(g.color))
+        };
         self.ground_kcd = match &self.sky_source {
             SkySource::Hdri {
                 mean, intensity, ..
@@ -2791,7 +2862,9 @@ impl Renderer {
             } => (2.0, *rotation, intensity / 1000.0, *mips as f32),
         };
         b.floats(&[source, rotation, scale, mips]);
-        let hdri_below = matches!(self.sky_source, SkySource::Hdri { .. }) && self.ground.is_none();
+        let hdri_below = matches!(self.sky_source, SkySource::Hdri { .. })
+            && self.ground.is_none()
+            && !self.clay;
         b.floats(
             &self
                 .ground_kcd
@@ -4287,8 +4360,14 @@ pub async fn headless_device() -> Result<(wgpu::Device, wgpu::Queue), String> {
         .await
         .map_err(|e| format!("no wgpu adapter: {e}"))?;
     eprintln!("adapter: {:?}", adapter.get_info());
+    // Timestamp queries when the adapter has them (headless only: tools and
+    // benches), so `stats()` reports GPU time per pass.
+    let required_features = adapter.features() & wgpu::Features::TIMESTAMP_QUERY;
     adapter
-        .request_device(&wgpu::DeviceDescriptor::default())
+        .request_device(&wgpu::DeviceDescriptor {
+            required_features,
+            ..Default::default()
+        })
         .await
         .map_err(|e| format!("no wgpu device: {e}"))
 }

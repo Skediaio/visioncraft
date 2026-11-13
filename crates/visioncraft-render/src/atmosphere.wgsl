@@ -30,7 +30,16 @@ const MIE_SCATTER: f32 = 0.003996;
 const MIE_EXTINCT: f32 = 0.00444;
 const MIE_H: f32 = 1.2;
 const MIE_G: f32 = 0.8;
-const OZONE: vec3<f32> = vec3<f32>(0.00065, 0.001881, 0.000085);
+// Ozone absorption per km at the layer's peak. Hillaire's three values are
+// the Chappuis band sampled at three wavelengths; spread over our broad
+// sRGB primaries the band (peaking at ~600 nm, between green and red)
+// covers red about as much as green, and three point samples put too
+// little of it on red: with the sun 2-8 degrees below the horizon the light
+// reaching the sky has crossed the ozone layer edge-on, and the sky turned
+// magenta. Red raised a little above green (picked by eye across -2..-8
+// degrees against blue-hour photographs): blue hour is blue, and sunsets
+// (where Rayleigh extinction dominates) stay warm.
+const OZONE: vec3<f32> = vec3<f32>(0.0024, 0.001881, 0.000085);
 const GROUND_ALBEDO: f32 = 0.3;
 
 struct Medium {

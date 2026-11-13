@@ -357,6 +357,170 @@ fn shots() -> Vec<Shot> {
             },
         },
         Shot {
+            name: "twilight_0",
+            size: (1280, 720),
+            build: |r, aspect| {
+                let lights = demo::garden(r);
+                r.set_lights(&lights);
+                r.set_time(2.0);
+                let sun = Sun::from_angles(300.0, -0.0);
+                (demo::garden_camera(aspect), sun, 10.5)
+            },
+        },
+        Shot {
+            name: "twilight_2",
+            size: (1280, 720),
+            build: |r, aspect| {
+                let lights = demo::garden(r);
+                r.set_lights(&lights);
+                r.set_time(2.0);
+                let sun = Sun::from_angles(300.0, -2.0);
+                (demo::garden_camera(aspect), sun, 9.0)
+            },
+        },
+        Shot {
+            name: "twilight_4",
+            size: (1280, 720),
+            build: |r, aspect| {
+                let lights = demo::garden(r);
+                r.set_lights(&lights);
+                r.set_time(2.0);
+                let sun = Sun::from_angles(300.0, -4.0);
+                (demo::garden_camera(aspect), sun, 7.5)
+            },
+        },
+        Shot {
+            name: "twilight_6",
+            size: (1280, 720),
+            build: |r, aspect| {
+                let lights = demo::garden(r);
+                r.set_lights(&lights);
+                r.set_time(2.0);
+                let sun = Sun::from_angles(300.0, -6.0);
+                (demo::garden_camera(aspect), sun, 6.0)
+            },
+        },
+        Shot {
+            name: "twilight_8",
+            size: (1280, 720),
+            build: |r, aspect| {
+                let lights = demo::garden(r);
+                r.set_lights(&lights);
+                r.set_time(2.0);
+                let sun = Sun::from_angles(300.0, -8.0);
+                (demo::garden_camera(aspect), sun, 4.5)
+            },
+        },
+        // A plan view over the forest, 220 m tall: further than the
+        // understory's cull distance (80 m), so before orthographic views
+        // drew the last level it vanished.
+        Shot {
+            name: "forest_plan",
+            size: (1280, 720),
+            build: |r, aspect| {
+                demo::forest(r, 1500, 4000, 60.0);
+                let h = 110.0;
+                let eye = Vec3::new(0.0, 150.0, 0.0);
+                let cam = (
+                    glam::Mat4::look_at_rh(eye, Vec3::ZERO, Vec3::NEG_Z),
+                    glam::Mat4::orthographic_rh(-h * aspect, h * aspect, -h, h, 0.1, 400.0),
+                    eye,
+                );
+                (cam, demo::afternoon_sun(), 14.7)
+            },
+        },
+        // Ground-cover tufts culled at 40 m: at once, or dithered out over
+        // the last 10 m (`set_item_cull_fade`).
+        Shot {
+            name: "tufts_cut",
+            size: (1280, 720),
+            build: |r, aspect| {
+                let mut floor = demo::MeshData::default();
+                floor.add_box(Vec3::new(-80.0, -0.1, -80.0), Vec3::new(80.0, 0.0, 80.0));
+                let floor = r.add_mesh(&floor.mesh()).expect("floor");
+                let grass = r.add_material(&visioncraft_render::Material {
+                    base_color: [0.05, 0.1, 0.03, 1.0],
+                    roughness: 0.95,
+                    ..Default::default()
+                });
+                r.add_item(floor, grass, &[glam::Mat4::IDENTITY]);
+                let lods = demo::plant_lods(&demo::PlantShape::shrub(), 9);
+                let mats = demo::plant_materials(r, Vec3::new(0.14, 0.26, 0.06), 3);
+                let mut rng = demo::Rng::new(3);
+                let tufts: Vec<glam::Mat4> = (0..6000)
+                    .map(|_| {
+                        let (x, z) = (rng.unit() * 120.0 - 60.0, rng.unit() * 120.0 - 60.0);
+                        glam::Mat4::from_scale_rotation_translation(
+                            Vec3::splat(0.35),
+                            glam::Quat::from_rotation_y(rng.unit() * std::f32::consts::TAU),
+                            Vec3::new(x, 0.0, z),
+                        )
+                    })
+                    .collect();
+                let item = demo::add_plants(r, &lods, &mats, [8.0, 20.0, 40.0], &tufts);
+                r.set_item_cull_fade(item, 0.0);
+                let cam = demo::camera(
+                    Vec3::new(0.0, 1.7, 20.0),
+                    Vec3::new(0.0, 0.0, -30.0),
+                    aspect,
+                );
+                (cam, demo::afternoon_sun(), 14.7)
+            },
+        },
+        // Ground-cover tufts culled at 40 m: at once, or dithered out over
+        // the last 10 m (`set_item_cull_fade`).
+        Shot {
+            name: "tufts_fade",
+            size: (1280, 720),
+            build: |r, aspect| {
+                let mut floor = demo::MeshData::default();
+                floor.add_box(Vec3::new(-80.0, -0.1, -80.0), Vec3::new(80.0, 0.0, 80.0));
+                let floor = r.add_mesh(&floor.mesh()).expect("floor");
+                let grass = r.add_material(&visioncraft_render::Material {
+                    base_color: [0.05, 0.1, 0.03, 1.0],
+                    roughness: 0.95,
+                    ..Default::default()
+                });
+                r.add_item(floor, grass, &[glam::Mat4::IDENTITY]);
+                let lods = demo::plant_lods(&demo::PlantShape::shrub(), 9);
+                let mats = demo::plant_materials(r, Vec3::new(0.14, 0.26, 0.06), 3);
+                let mut rng = demo::Rng::new(3);
+                let tufts: Vec<glam::Mat4> = (0..6000)
+                    .map(|_| {
+                        let (x, z) = (rng.unit() * 120.0 - 60.0, rng.unit() * 120.0 - 60.0);
+                        glam::Mat4::from_scale_rotation_translation(
+                            Vec3::splat(0.35),
+                            glam::Quat::from_rotation_y(rng.unit() * std::f32::consts::TAU),
+                            Vec3::new(x, 0.0, z),
+                        )
+                    })
+                    .collect();
+                let item = demo::add_plants(r, &lods, &mats, [8.0, 20.0, 40.0], &tufts);
+                r.set_item_cull_fade(item, 10.0);
+                let cam = demo::camera(
+                    Vec3::new(0.0, 1.7, 20.0),
+                    Vec3::new(0.0, 0.0, -30.0),
+                    aspect,
+                );
+                (cam, demo::afternoon_sun(), 14.7)
+            },
+        },
+        // Clay: every surface, foliage and impostors included, neutral.
+        Shot {
+            name: "forest_clay",
+            size: (1280, 720),
+            build: |r, aspect| {
+                demo::forest(r, 300, 600, 60.0);
+                r.set_clay(true);
+                let eye = Vec3::new(0.0, 2.0, 40.0);
+                (
+                    demo::camera(eye, Vec3::new(0.0, 2.5, 0.0), aspect),
+                    demo::afternoon_sun(),
+                    14.7,
+                )
+            },
+        },
+        Shot {
             name: "garden_clay",
             size: (1280, 720),
             build: |r, aspect| {

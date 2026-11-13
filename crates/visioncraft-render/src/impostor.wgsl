@@ -180,6 +180,34 @@ fn impostor_sample(in: ImpostorVarying) -> ImpostorSample {
     return ImpostorSample(a, n.xyz * 2.0 - 1.0);
 }
 
+// Alpha only (the depth-only passes): the same mix as `impostor_sample`, or
+// with `nearest` just the nearest view, one fetch (shadow maps: the sun's
+// view of a plant need not morph, and these passes pay for every layer of
+// a forest).
+fn impostor_alpha(in: ImpostorVarying, nearest: bool) -> f32 {
+    let uv0 = impostor_uv(in, in.views.x, false);
+    let size = vec2<f32>(textureDimensions(impostor_albedo));
+    let dx = dpdx(uv0 * size);
+    let dy = dpdy(uv0 * size);
+    let lod = max(0.0, 0.5 * log2(max(dot(dx, dx), dot(dy, dy))));
+    var a: f32;
+    if nearest {
+        var uv = select(uv0, impostor_uv(in, in.views.y, false), in.views.z > 0.5);
+        if in.views.w > 0.5 {
+            uv = impostor_uv(in, impostor.grid.x, true);
+        }
+        a = textureSampleLevel(impostor_albedo, impostor_smp, uv, lod).a;
+    } else {
+        let uv1 = impostor_uv(in, in.views.y, false);
+        a = mix(textureSampleLevel(impostor_albedo, impostor_smp, uv0, lod).a, textureSampleLevel(impostor_albedo, impostor_smp, uv1, lod).a, in.views.z);
+        if in.views.w > 0.0 {
+            let uvt = impostor_uv(in, impostor.grid.x, true);
+            a = mix(a, textureSampleLevel(impostor_albedo, impostor_smp, uvt, lod).a, in.views.w);
+        }
+    }
+    return a * (1.0 + lod * 0.5);
+}
+
 // The dithered hand-over: the impostor keeps the pixels the fading mesh
 // (fs_depth_fade) gives up.
 fn impostor_keep(in: ImpostorVarying, alpha: f32) -> bool {
@@ -188,14 +216,14 @@ fn impostor_keep(in: ImpostorVarying, alpha: f32) -> bool {
 
 @fragment
 fn fs_impostor_depth(in: ImpostorVarying) {
-    if !impostor_keep(in, impostor_sample(in).albedo.a) {
+    if !impostor_keep(in, impostor_alpha(in, false)) {
         discard;
     }
 }
 
 @fragment
 fn fs_impostor_shadow(in: ImpostorVarying) {
-    if impostor_sample(in).albedo.a < impostor.grid.w {
+    if impostor_alpha(in, true) < impostor.grid.w {
         discard;
     }
 }

@@ -1184,6 +1184,79 @@ fn z_forest() {
     assert!(r.stats().instances > 1000, "{:?}", r.stats());
 }
 
+/// An orthographic plan view draws every item at its last level instead of
+/// culling it by the view's height (here 220 m, past every cull distance).
+#[test]
+fn ortho_plan_keeps_the_last_level() {
+    let mut r = renderer(160, 90);
+    r.set_quality(Quality::MEDIUM);
+    demo::forest(&mut r, 300, 600, 60.0);
+    let h = 110.0;
+    let eye = Vec3::new(0.0, 150.0, 0.0);
+    let cam = (
+        Mat4::look_at_rh(eye, Vec3::ZERO, Vec3::NEG_Z),
+        Mat4::orthographic_rh(-h * 16.0 / 9.0, h * 16.0 / 9.0, -h, h, 0.1, 400.0),
+        eye,
+    );
+    setup(&mut r, cam, demo::afternoon_sun(), 14.7);
+    capture_any(&mut r);
+    assert!(r.stats().instances >= 900, "{:?}", r.stats());
+}
+
+/// A dithered cull fade draws the fading instances, without it they are gone.
+#[test]
+fn cull_fade_keeps_instances_near_the_limit() {
+    let count = |band: f32| {
+        let mut r = renderer(160, 90);
+        let lods = demo::plant_lods(&PlantShape::shrub(), 9);
+        let mats = demo::plant_materials(&mut r, Vec3::new(0.14, 0.26, 0.06), 3);
+        let tufts: Vec<Mat4> = (0..40)
+            .map(|i| Mat4::from_translation(Vec3::new(0.0, 0.0, -10.0 - i as f32)))
+            .collect();
+        let item = demo::add_plants(&mut r, &lods, &mats, [8.0, 20.0, 30.0], &tufts);
+        r.set_item_cull_fade(item, band);
+        let cam = demo::camera(
+            Vec3::new(0.0, 1.7, 0.0),
+            Vec3::new(0.0, 0.0, -30.0),
+            16.0 / 9.0,
+        );
+        setup(&mut r, cam, demo::afternoon_sun(), 14.7);
+        capture_any(&mut r);
+        r.stats().instances
+    };
+    let (cut, fade) = (count(0.0), count(10.0));
+    assert!(fade >= cut && cut > 0, "cut {cut}, fade {fade}");
+}
+
+/// Clay is neutral everywhere, foliage and impostors included: no pixel
+/// below the horizon keeps a green cast (the ground's bounce light used to
+/// carry the lawn colour into leaves facing down).
+#[test]
+fn z_forest_clay() {
+    let aspect = W as f32 / H as f32;
+    let mut r = renderer(W, H);
+    demo::forest(&mut r, 300, 600, 60.0);
+    r.set_clay(true);
+    let eye = Vec3::new(0.0, 2.0, 40.0);
+    setup(
+        &mut r,
+        demo::camera(eye, Vec3::new(0.0, 2.5, 0.0), aspect),
+        demo::afternoon_sun(),
+        14.7,
+    );
+    settle(&mut r);
+    let px = capture(&mut r, W, H);
+    let greenest = px
+        .chunks(4)
+        .map(|p| p[1] as f32 - 0.5 * (p[0] as f32 + p[2] as f32))
+        .fold(f32::MIN, f32::max);
+    assert!(
+        greenest < 8.0,
+        "a pixel is {greenest} levels greener than grey"
+    );
+    check("z_forest_clay", &px);
+}
+
 /// The renderer's own counters: draws and triangles of a frame, visible
 /// lights, memory, render size.
 #[test]

@@ -44,7 +44,19 @@ pub(crate) struct Timer {
 
 impl Timer {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Option<Timer> {
-        if !device.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
+        let on = device.features().contains(wgpu::Features::TIMESTAMP_QUERY);
+        #[cfg(not(target_arch = "wasm32"))]
+        if std::env::var_os("VISIONCRAFT_GPU_TIMINGS").is_some() {
+            eprintln!(
+                "gpu timings: {}",
+                if on {
+                    "on"
+                } else {
+                    "off: no TIMESTAMP_QUERY on this device"
+                }
+            );
+        }
+        if !on {
             return None;
         }
         let set = device.create_query_set(&wgpu::QuerySetDescriptor {

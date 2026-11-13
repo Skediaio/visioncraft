@@ -906,9 +906,9 @@ fn fog_premultiplied(c: vec4<f32>, world: vec3<f32>) -> vec4<f32> {
 // Thin architectural glass, drawn in two passes (lib.rs): first the
 // transmitted light, multiplying what is behind per channel (blend Zero,
 // Src): 50 % at normal incidence for the two faces' absorption and an
-// interior that reads as an interior in daylight, times the soda-lime
-// green-blue tint raised to the path length through the pane (Beer-Lambert:
-// 1 / cos theta, so edges and grazing views turn greener and darker); then
+// interior that reads as an interior in daylight, times a neutral grey
+// absorption raised to the path length through the pane (Beer-Lambert:
+// 1 / cos theta, so edges and grazing views turn darker); then
 // the reflected light added on top (blend One, One): two interfaces of a
 // thin slab (reflectance R' = 2R / (1 + R), from the geometric series of
 // inter-reflections) with a floor of 10 % so a window shows a little sky
@@ -944,7 +944,9 @@ fn glass_terms(in: Varying) -> GlassTerms {
     let lit = material.base_color.rgb * (sh_irradiance(n) / PI + g.sun_light.rgb * nol / PI);
     var out: GlassTerms;
     out.reflected = fr * environment(reflect(-v, n), roughness) + sun + lamps + (1.0 - fr) * opacity * lit;
-    let tint = pow(vec3<f32>(0.88, 0.96, 0.94), vec3<f32>(1.0 / max(nov, 0.15)));
+    // Neutral: a slight grey absorption that deepens with the path through
+    // the pane (1 / cos theta); a colour comes only from base_color.
+    let tint = pow(vec3<f32>(0.93), vec3<f32>(1.0 / max(nov, 0.15)));
     out.transmitted = tint * ((1.0 - fr) * (1.0 - opacity) * 0.5);
     return out;
 }
