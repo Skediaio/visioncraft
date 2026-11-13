@@ -72,7 +72,7 @@ pub struct TerrainTool {
     pub open: bool,
     pub brush: Brush,
     pub radius: f32,
-    /// 0..1; raise and lower move up to 5 cm per dab.
+    /// 0..1; raise and lower move up to 15 cm per dab.
     pub strength: f32,
     pub layer: usize,
     pub pond_depth: f32,
@@ -100,7 +100,7 @@ impl Default for TerrainTool {
 }
 
 /// Metres per dab at full strength for raise and lower.
-const MAX_STEP_M: f32 = 0.05;
+const MAX_STEP_M: f32 = 0.15;
 
 impl TerrainTool {
     /// The `terrain.stroke` parameters of `path` with the current settings.
