@@ -146,23 +146,26 @@ pub fn demo_assets() -> Vec<Asset> {
     ]
 }
 
-/// Automatic exposure from the sun: noon 15, sun at 10 degrees 13.5, sunset 10.5, then down with
+/// Automatic exposure (EV100, lower is brighter) from the sun: noon 15, sun at 10 degrees 13.5,
+/// sunset 10.8, then down with
 /// the twilight sky's light (about 2.5 EV per 3 degrees in the renderer's sky) so the garden
-/// stays readable as a photographer's "blue hour" picture would; `lamps` keeps it about one stop
-/// lower after sunset so that garden lights glow instead of washing out. Linear between rows.
+/// stays readable as a photographer's "blue hour" picture would; with `lamps` it stays a little
+/// darker (higher EV) after sunset so that the garden lights glow. Linear between rows.
 pub fn auto_ev(elevation_deg: f32, lamps: bool) -> f32 {
-    const DAY: [(f32, f32); 5] = [
-        (-12.0, 1.5),
-        (-8.0, 2.8),
-        (-4.0, 5.5),
-        (0.0, 9.5),
+    const DAY: [(f32, f32); 6] = [
+        (-18.0, -3.0),
+        (-12.0, -0.5),
+        (-8.0, 3.0),
+        (-4.0, 6.4),
+        (0.0, 10.8),
         (10.0, 13.5),
     ];
-    const LAMPS: [(f32, f32); 5] = [
-        (-12.0, 1.0),
-        (-8.0, 2.0),
-        (-4.0, 4.5),
-        (0.0, 9.0),
+    const LAMPS: [(f32, f32); 6] = [
+        (-18.0, -2.0),
+        (-12.0, 0.3),
+        (-8.0, 3.7),
+        (-4.0, 6.9),
+        (0.0, 10.8),
         (10.0, 13.5),
     ];
     let table: &[(f32, f32)] = if lamps && elevation_deg < 0.0 {
@@ -882,7 +885,7 @@ mod tests {
     use super::auto_ev;
 
     #[test]
-    fn exposure_falls_with_the_sun_and_lamps_keep_it_lower_after_sunset() {
+    fn exposure_falls_with_the_sun_and_lamps_keep_the_night_darker() {
         let mut last = f32::INFINITY;
         for e in (-15..=60).rev() {
             let ev = auto_ev(e as f32, false);
@@ -890,7 +893,7 @@ mod tests {
             last = ev;
         }
         for e in [-10.0, -6.0, -2.0] {
-            assert!(auto_ev(e, true) < auto_ev(e, false));
+            assert!(auto_ev(e, true) > auto_ev(e, false));
         }
         assert_eq!(auto_ev(20.0, true), auto_ev(20.0, false));
     }
