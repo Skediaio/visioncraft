@@ -1305,6 +1305,7 @@ mod tests {
             outline: vec![[0.0, 0.0], [6.0, 0.0], [6.0, 3.0], [0.0, 3.0]],
             elevation: 0.25,
             drape: false,
+            extensions: Default::default(),
         });
         let m = shape_mesh(&s).unwrap();
         (s, m)
@@ -1361,6 +1362,7 @@ mod tests {
             base: 0.0,
             height: 2.0,
             thickness: 0.2,
+            extensions: Default::default(),
         });
         let m = shape_mesh(&block).unwrap();
         let names: Vec<&str> = m.faces.iter().map(|f| f.name.as_str()).collect();
@@ -1566,6 +1568,7 @@ mod layer_tests {
             outline: vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]],
             elevation: 1.0,
             drape: false,
+            extensions: Default::default(),
         }))
         .unwrap();
         let fill = SurfaceFill {

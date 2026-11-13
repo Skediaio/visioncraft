@@ -1,8 +1,10 @@
 //! Shapes a private person draws instead of using CAD: flat areas and extruded outlines, meshed
 //! on demand with stable face names.
 
+use crate::project::Extensions;
 use crate::{Body, Face, ImportedModel};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fmt;
 
 /// A flat polygon (lawn, terrace, path, pond, plant bed) at `elevation` metres.
@@ -18,6 +20,9 @@ pub struct Area {
     /// Lie on the terrain: use [`shape_mesh_on`], with `elevation` as the height above the ground.
     #[serde(default)]
     pub drape: bool,
+    /// Data of other tools by namespace, kept untouched.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extensions: Extensions,
 }
 
 /// A closed polygon extruded up (house volume, block), or an open polyline given `thickness` and
@@ -33,6 +38,9 @@ pub struct Extrusion {
     pub height: f32,
     /// Width of an open extrusion; unused when `closed`.
     pub thickness: f32,
+    /// Data of other tools by namespace, kept untouched.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extensions: Extensions,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -479,6 +487,7 @@ mod tests {
             base: 1.0,
             height: 3.0,
             thickness: 0.2,
+            extensions: Default::default(),
         })
     }
 
@@ -492,6 +501,7 @@ mod tests {
             base: 0.0,
             height: 2.0,
             thickness: 0.4,
+            extensions: Default::default(),
         })
     }
 
@@ -587,6 +597,7 @@ mod tests {
             outline: square(3.0).into_iter().rev().collect(),
             elevation: 0.5,
             drape: false,
+            extensions: Default::default(),
         });
         let m = shape_mesh(&a).unwrap();
         assert_eq!(m.faces.len(), 1);
@@ -643,6 +654,7 @@ mod drape_tests {
             outline,
             elevation: 0.1,
             drape: true,
+            extensions: Default::default(),
         };
         let slope = |x: f32, _: f32| Some(0.5 * x);
         let m = shape_mesh_on(&Shape::Area(a.clone()), &slope).unwrap();

@@ -748,3 +748,57 @@ fn user_objects_add_rename_refuse_removal_and_round_trip() {
             .is_empty()
     );
 }
+
+#[test]
+fn extensions_of_objects_and_shapes_survive_load_and_save() {
+    let ext = json!({"vendor.paving": {"pattern": "herringbone", "tiles": [[0, 1], [2, 3]], "x": null}, "other.tool": {"deep": {"n": 1}}});
+    let square = json!([[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]]);
+    let doc = json!({
+        "format_version": 1,
+        "objects": [{"id": "uo1", "name": "Bench", "file": "objects/bench.glb", "size_m": [1.0, 1.0, 1.0], "extensions": ext}],
+        "shapes": [
+            {"type": "area", "id": "S1", "name": "Lawn", "layer": "shapes", "outline": square, "elevation": 0.0, "extensions": ext},
+            {"type": "extrusion", "id": "S2", "name": "House", "layer": "shapes", "outline": square, "closed": true, "base": 0.0, "height": 3.0, "thickness": 0.2, "extensions": ext},
+        ],
+    });
+    let p = Project::from_json_bytes(&serde_json::to_vec(&doc).unwrap()).unwrap();
+    let saved: Value = serde_json::from_slice(&p.to_json_bytes()).unwrap();
+    for at in [
+        &saved["objects"][0],
+        &saved["shapes"][0],
+        &saved["shapes"][1],
+    ] {
+        assert_eq!(
+            serde_json::to_string(&at["extensions"]).unwrap(),
+            serde_json::to_string(&ext).unwrap()
+        );
+    }
+    // Without extensions nothing is written, and an edit keeps them.
+    let mut s = Session::new(p);
+    s.run(
+        "shape.move_vertex",
+        json!({"id": "S2", "index": 2, "position": [5.0, 5.0]}),
+    )
+    .unwrap();
+    s.run(
+        "object.rename",
+        json!({"id": "uo1", "name": "Garden bench"}),
+    )
+    .unwrap();
+    let after: Value = serde_json::from_slice(&s.project().to_json_bytes()).unwrap();
+    assert_eq!(after["shapes"][1]["extensions"], ext);
+    assert_eq!(after["objects"][0]["extensions"], ext);
+    let plain = Session::new(Project::default());
+    let mut plain = plain;
+    plain
+        .run("shape.add_area", json!({"name": "x", "outline": square}))
+        .unwrap();
+    plain
+        .run(
+            "object.add",
+            json!({"name": "o", "file": "o.glb", "size_m": [1.0, 1.0, 1.0]}),
+        )
+        .unwrap();
+    let text = String::from_utf8(plain.project().to_json_bytes()).unwrap();
+    assert!(!text.contains("extensions"));
+}

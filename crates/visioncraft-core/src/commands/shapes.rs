@@ -211,6 +211,7 @@ fn add_area(project: &mut Project, params: &Value) -> Result<Value, CommandError
             outline: p.outline,
             elevation: p.elevation,
             drape: p.drape,
+            extensions: Default::default(),
         })
     })
 }
@@ -248,6 +249,7 @@ fn add_extrusion(project: &mut Project, params: &Value) -> Result<Value, Command
             base: p.base,
             height: p.height,
             thickness: p.thickness,
+            extensions: Default::default(),
         })
     })
 }

@@ -1,6 +1,8 @@
 //! Objects a person brings along: their own `.glb` files, placed like catalogue assets.
 
+use crate::project::Extensions;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// A user's own 3D model. Wherever a catalogue asset id is accepted (a single placement, a
 /// palette, a generator) `user:<id>` names it.
@@ -13,6 +15,9 @@ pub struct UserObject {
     pub file: String,
     /// Width, height, depth in metres.
     pub size_m: [f32; 3],
+    /// Data of other tools by namespace, kept untouched.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extensions: Extensions,
 }
 
 impl UserObject {

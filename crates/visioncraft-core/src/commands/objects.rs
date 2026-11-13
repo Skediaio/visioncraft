@@ -76,6 +76,7 @@ fn add(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
         name: p.name,
         file: p.file,
         size_m: p.size_m,
+        extensions: Default::default(),
     };
     object.validate().map_err(|e| bad(&e))?;
     project.objects.push(object);
