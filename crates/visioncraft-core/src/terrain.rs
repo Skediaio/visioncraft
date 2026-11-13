@@ -968,6 +968,34 @@ impl Terrain {
         self.edit_outline(outline, bank_m, |h, t| h - depth_m * t)
     }
 
+    /// Paints `layer` into the ground inside `outline` and over `margin` outside it, fading out
+    /// across the margin: the bed of a carved pond.
+    pub fn paint_outline(&mut self, outline: &[[f32; 2]], margin: f32, layer: usize) -> DirtyRect {
+        if layer >= self.layers.len() {
+            return DirtyRect::EMPTY;
+        }
+        let b = bounds(outline, margin.max(0.0));
+        let Some(r) = self.vertex_box(b[0], b[1]) else {
+            return DirtyRect::EMPTY;
+        };
+        for iz in r.z0..=r.z1 {
+            for ix in r.x0..=r.x1 {
+                let p = self.xz(ix, iz);
+                let (d, inside) = outline_distance(p, outline);
+                let t = if inside {
+                    1.0
+                } else if margin > 0.0 && d < margin {
+                    1.0 - smoothstep(d / margin)
+                } else {
+                    continue;
+                };
+                let v = self.at(ix, iz);
+                self.paint_vertex(v, layer, t);
+            }
+        }
+        r
+    }
+
     /// `f(old height, t)` with `t` 1 inside the outline and falling smoothly to 0 `margin` outside.
     fn edit_outline(
         &mut self,

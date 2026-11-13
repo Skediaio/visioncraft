@@ -840,9 +840,13 @@ mod stacking_tests {
 /// in one terrain triangle and its corners on that triangle's plane, so the surface runs exactly
 /// `elevation` above the ground the terrain draws, over hill edges and crests too. Areas without
 /// `drape` and extrusions are as [`shape_mesh`] makes them.
+///
+/// `holes` are outlines the area is cut out under (water on top of a lawn: the pond's bed is the
+/// terrain's, not grass), to the terrain's cell size.
 pub fn shape_mesh_on_terrain(
     shape: &Shape,
     terrain: &crate::Terrain,
+    holes: &[&[P2]],
 ) -> Result<ImportedModel, ShapeError> {
     let Shape::Area(a) = shape else {
         return shape_mesh(shape);
@@ -869,6 +873,14 @@ pub fn shape_mesh_on_terrain(
             pieces = pieces.into_iter().flat_map(|p| slice(p, dir)).collect();
         }
         for piece in pieces {
+            let n = piece.len() as f32;
+            let mid = piece
+                .iter()
+                .fold([0.0, 0.0], |m, q| [m[0] + q[0] / n, m[1] + q[1] / n]);
+            let mid = [ox + mid[0] * cell, oz + mid[1] * cell];
+            if holes.iter().any(|h| inside_outline(mid, h)) {
+                continue;
+            }
             let corner = |q: P2| {
                 let (x, z) = (ox + q[0] * cell, oz + q[1] * cell);
                 [
@@ -964,7 +976,7 @@ mod hill_tests {
             drape: true,
             extensions: Default::default(),
         };
-        let m = shape_mesh_on_terrain(&Shape::Area(a), &t).unwrap();
+        let m = shape_mesh_on_terrain(&Shape::Area(a.clone()), &t, &[]).unwrap();
         assert!(m.triangles.len() > 500);
         let mut worst = f32::INFINITY;
         for tri in &m.triangles {
@@ -984,5 +996,14 @@ mod hill_tests {
             (worst - AREA_LIFT_M).abs() < 1e-3,
             "the lawn runs {worst} m over the terrain's surface somewhere"
         );
+        // A pond on it: no lawn under the water.
+        let pond: Vec<P2> = vec![[3.0, 3.0], [7.0, 3.0], [7.0, 7.0], [3.0, 7.0]];
+        let cut = shape_mesh_on_terrain(&Shape::Area(a), &t, &[&pond]).unwrap();
+        assert!(cut.triangles.len() < m.triangles.len());
+        assert!(cut.triangles.iter().all(|tri| {
+            let [p, q, r] = tri.map(|i| cut.positions[i as usize]);
+            let c = [(p[0] + q[0] + r[0]) / 3.0, (p[2] + q[2] + r[2]) / 3.0];
+            !(3.2..6.8).contains(&c[0]) || !(3.2..6.8).contains(&c[1])
+        }));
     }
 }

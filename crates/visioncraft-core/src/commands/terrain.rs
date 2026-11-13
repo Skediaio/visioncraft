@@ -140,6 +140,7 @@ pub(super) fn register(s: &mut Session) {
                 outline(),
                 param("depth_m", T::Number, "How far to lower the ground.").unit("m").required(),
                 param("bank_m", T::Number, "Width of the sloped bank, 0 or more.").unit("m").required(),
+                param("bed_material", T::String, "Paints the basin and its bank with this material (a terrain layer is added for it if needed)."),
             ],
             "null",
             json!({"outline": [[5, 5], [10, 5], [10, 9], [5, 9]], "depth_m": 0.8, "bank_m": 1.5}),
@@ -325,8 +326,12 @@ fn carve(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
         outline: Vec<[f32; 2]>,
         depth_m: f32,
         bank_m: f32,
+        bed_material: Option<String>,
     }
     let p: P = parse(params)?;
+    if let Some(m) = &p.bed_material {
+        material_exists(project, m)?;
+    }
     if p.outline.len() < 3
         || !p.outline.iter().flatten().all(|c| c.is_finite())
         || !p.depth_m.is_finite()
@@ -336,7 +341,17 @@ fn carve(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
             "an outline of 3 points, a finite depth and a bank of 0 or more",
         ));
     }
-    edit(project)?.carve(&p.outline, p.depth_m, p.bank_m);
+    let t = edit(project)?;
+    t.carve(&p.outline, p.depth_m, p.bank_m);
+    if let Some(m) = &p.bed_material {
+        let layer = match t.layers.iter().position(|l| &l.material == m) {
+            Some(i) => i,
+            None => t
+                .add_layer(m)
+                .ok_or_else(|| fail("the terrain has no room for another material layer"))?,
+        };
+        t.paint_outline(&p.outline, p.bank_m, layer);
+    }
     Ok(Value::Null)
 }
 
