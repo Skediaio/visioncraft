@@ -4,7 +4,8 @@
 use crate::ImportedModel;
 use crate::material::Lawn3d;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
 
 /// Hard cap on the items one generator evaluates to, so a typo in a density cannot freeze a browser.
 pub const MAX_PLACEMENTS: usize = 200_000;
@@ -31,6 +32,22 @@ pub struct Placement {
 pub struct Weighted {
     pub asset: String,
     pub weight: f32,
+}
+
+/// One storey of a layered planting (canopy, shrubs, ground cover). When a generator has layers
+/// they replace its own palette, density and scale fields; each layer is evaluated on its own
+/// random stream, in order.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PlantLayer {
+    pub name: String,
+    pub asset_palette: Vec<Weighted>,
+    pub density_per_m2: f32,
+    pub min_distance_m: f32,
+    pub scale_min: f32,
+    pub scale_max: f32,
+    pub random_rotation: bool,
+    /// Drops points closer (horizontally) than this to any point of an EARLIER layer.
+    pub keep_clear_m: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -80,8 +97,10 @@ pub struct AreaScatter {
     pub id: String,
     pub name: String,
     pub layer: String,
+    #[serde(default)]
     pub asset_palette: Vec<Weighted>,
     pub outline: Vec<[f32; 2]>,
+    #[serde(default)]
     pub density_per_m2: f32,
     /// 0..1: how far a point may stray from its cell centre, as a fraction of the cell.
     pub position_jitter: f32,
@@ -90,6 +109,8 @@ pub struct AreaScatter {
     pub random_rotation: bool,
     pub min_distance_m: f32,
     pub seed: u64,
+    #[serde(default)]
+    pub layers: Vec<PlantLayer>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -106,12 +127,19 @@ pub struct MixedBrush {
     pub id: String,
     pub name: String,
     pub layer: String,
+    #[serde(default)]
     pub asset_palette: Vec<Weighted>,
     pub strokes: Vec<Stroke>,
+    #[serde(default)]
     pub density_per_m2: f32,
     pub scale_min: f32,
     pub scale_max: f32,
+    /// Without layers: no two plants closer than this.
+    #[serde(default)]
+    pub min_distance_m: f32,
     pub seed: u64,
+    #[serde(default)]
+    pub layers: Vec<PlantLayer>,
 }
 
 /// Fills named faces of a model or shape with plants; needs the owner's mesh, see
@@ -121,11 +149,13 @@ pub struct SurfaceFill {
     pub id: String,
     pub name: String,
     pub layer: String,
+    #[serde(default)]
     pub asset_palette: Vec<Weighted>,
     /// A model or shape id.
     pub owner: String,
     /// Persistent face names on that owner.
     pub faces: Vec<String>,
+    #[serde(default)]
     pub density_per_m2: f32,
     /// Accepted for the shared conventions; surface points are uniformly random, so it has no effect.
     pub position_jitter: f32,
@@ -137,6 +167,8 @@ pub struct SurfaceFill {
     #[serde(default = "default_slope")]
     pub max_slope_deg: f32,
     pub seed: u64,
+    #[serde(default)]
+    pub layers: Vec<PlantLayer>,
 }
 
 fn default_slope() -> f32 {
@@ -203,12 +235,15 @@ impl Generator {
     /// Whether the generator places `asset` (a catalogue, `flora:` or custom species id).
     pub fn uses_asset(&self, asset: &str) -> bool {
         let palette = |p: &[Weighted]| p.iter().any(|w| w.asset == asset);
+        let layered = |p: &[Weighted], l: &[PlantLayer]| {
+            palette(p) || l.iter().any(|l| palette(&l.asset_palette))
+        };
         match self {
             Self::Single(g) => g.asset == asset,
             Self::SplineMass(g) => palette(&g.asset_palette),
-            Self::AreaScatter(g) => palette(&g.asset_palette),
-            Self::MixedBrush(g) => palette(&g.asset_palette),
-            Self::SurfaceFill(g) => palette(&g.asset_palette),
+            Self::AreaScatter(g) => layered(&g.asset_palette, &g.layers),
+            Self::MixedBrush(g) => layered(&g.asset_palette, &g.layers),
+            Self::SurfaceFill(g) => layered(&g.asset_palette, &g.layers),
             Self::Cluster(g) => palette(&g.asset_palette),
         }
     }
@@ -239,6 +274,17 @@ impl Generator {
                 "too few points, or not finite",
             )
         };
+        let min_distance = |d: f32| ok(d.is_finite() && d >= 0.0, "min distance must be 0 or more");
+        // Layers replace the generator's own palette, density and scale.
+        let layers = |l: &[PlantLayer]| {
+            l.iter().try_for_each(|l| {
+                palette(&l.asset_palette)?;
+                density(l.density_per_m2)?;
+                scales(l.scale_min, l.scale_max)?;
+                min_distance(l.min_distance_m)?;
+                min_distance(l.keep_clear_m)
+            })
+        };
         match self {
             Self::Single(g) => ok(
                 finite(&g.position)
@@ -259,20 +305,25 @@ impl Generator {
                 }
             }
             Self::AreaScatter(g) => {
-                palette(&g.asset_palette)?;
                 flat(&g.outline, 3)?;
+                unit(g.position_jitter)?;
+                if !g.layers.is_empty() {
+                    return layers(&g.layers);
+                }
+                palette(&g.asset_palette)?;
                 scales(g.scale_min, g.scale_max)?;
                 density(g.density_per_m2)?;
-                unit(g.position_jitter)?;
-                ok(
-                    g.min_distance_m.is_finite() && g.min_distance_m >= 0.0,
-                    "min distance must be 0 or more",
-                )
+                min_distance(g.min_distance_m)
             }
             Self::MixedBrush(g) => {
-                palette(&g.asset_palette)?;
-                scales(g.scale_min, g.scale_max)?;
-                density(g.density_per_m2)?;
+                if g.layers.is_empty() {
+                    palette(&g.asset_palette)?;
+                    scales(g.scale_min, g.scale_max)?;
+                    density(g.density_per_m2)?;
+                    min_distance(g.min_distance_m)?;
+                } else {
+                    layers(&g.layers)?;
+                }
                 g.strokes.iter().try_for_each(|s| {
                     flat(&s.points, 1)?;
                     ok(
@@ -282,9 +333,13 @@ impl Generator {
                 })
             }
             Self::SurfaceFill(g) => {
-                palette(&g.asset_palette)?;
-                scales(g.scale_min, g.scale_max)?;
-                density(g.density_per_m2)?;
+                if g.layers.is_empty() {
+                    palette(&g.asset_palette)?;
+                    scales(g.scale_min, g.scale_max)?;
+                    density(g.density_per_m2)?;
+                } else {
+                    layers(&g.layers)?;
+                }
                 ok(
                     g.min_distance_m.is_finite()
                         && g.min_distance_m >= 0.0
@@ -311,11 +366,11 @@ impl Generator {
 pub(crate) struct Rng(u64);
 
 impl Rng {
-    fn new(seed: u64) -> Self {
+    pub(crate) fn new(seed: u64) -> Self {
         Self(seed)
     }
 
-    fn next(&mut self) -> u64 {
+    pub(crate) fn next(&mut self) -> u64 {
         self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.0;
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -324,13 +379,13 @@ impl Rng {
     }
 
     /// Uniform in `0..1`.
-    fn f32(&mut self) -> f32 {
+    pub(crate) fn f32(&mut self) -> f32 {
         (self.next() >> 40) as f32 / 16_777_216.0
     }
 }
 
 /// A seed for a sub-stream, e.g. one grid cell.
-fn mix(a: u64, b: i64) -> u64 {
+pub(crate) fn mix(a: u64, b: i64) -> u64 {
     Rng::new(a ^ (b as u64).wrapping_mul(0xD6E8_FEB8_6659_FD93)).next()
 }
 
@@ -382,46 +437,97 @@ fn make(
     }
 }
 
-/// Accepts points no closer than `min` to an earlier one. Iteration never depends on map order.
-struct Spaced {
-    min: f32,
-    cells: BTreeMap<(i32, i32, i32), Vec<[f32; 3]>>,
+/// Points in a uniform grid of `cell`-sized buckets, for "anything closer than `cell`?" queries
+/// without comparing all pairs. The map is only ever looked up, never iterated, so its order
+/// cannot matter.
+struct Grid3 {
+    cell: f32,
+    cells: HashMap<(i32, i32, i32), Vec<[f32; 3]>, CellBuild>,
+    /// Range of cell rows (y) that hold points: queries skip the empty rows above and below.
+    rows: (i32, i32),
 }
 
-impl Spaced {
-    fn new(min: f32) -> Self {
-        Self {
-            min,
-            cells: BTreeMap::new(),
+type CellBuild = BuildHasherDefault<CellHasher>;
+
+/// A cheap multiplicative hasher for the integer cell keys (the default SipHash is the hot spot
+/// of a dense scatter).
+#[derive(Default)]
+struct CellHasher(u64);
+
+impl Hasher for CellHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for b in bytes {
+            self.0 = (self.0.rotate_left(5) ^ u64::from(*b)).wrapping_mul(0x517C_C1B7_2722_0A95);
         }
     }
 
-    fn try_add(&mut self, p: [f32; 3]) -> bool {
-        if self.min <= 0.0 {
-            return true;
+    fn write_i32(&mut self, v: i32) {
+        self.0 = (self.0.rotate_left(5) ^ (v as u32 as u64)).wrapping_mul(0x517C_C1B7_2722_0A95);
+    }
+}
+
+impl Grid3 {
+    fn new(cell: f32) -> Self {
+        Self {
+            cell,
+            cells: HashMap::default(),
+            rows: (i32::MAX, i32::MIN),
         }
-        let c = p.map(|v| (v / self.min).floor() as i32);
-        for dx in -1..=1 {
-            for dy in -1..=1 {
+    }
+
+    fn key(&self, p: [f32; 3]) -> (i32, i32, i32) {
+        let c = p.map(|v| (v / self.cell).floor() as i32);
+        (c[0], c[1], c[2])
+    }
+
+    fn insert(&mut self, p: [f32; 3]) {
+        let k = self.key(p);
+        self.rows = (self.rows.0.min(k.1), self.rows.1.max(k.1));
+        self.cells.entry(k).or_default().push(p);
+    }
+
+    /// Whether a point lies closer than `cell` to `p`; always false for a zero cell.
+    fn near(&self, p: [f32; 3]) -> bool {
+        if self.cell <= 0.0 || self.cells.is_empty() {
+            return false;
+        }
+        let c = self.key(p);
+        let r2 = self.cell * self.cell;
+        for dy in (self.rows.0 - c.1).max(-1)..=(self.rows.1 - c.1).min(1) {
+            for dx in -1..=1 {
                 for dz in -1..=1 {
-                    let Some(near) = self.cells.get(&(c[0] + dx, c[1] + dy, c[2] + dz)) else {
+                    let Some(pts) = self.cells.get(&(c.0 + dx, c.1 + dy, c.2 + dz)) else {
                         continue;
                     };
-                    let far = |q: &[f32; 3]| {
-                        (0..3).map(|k| (q[k] - p[k]).powi(2)).sum::<f32>() >= self.min * self.min
-                    };
-                    if !near.iter().all(far) {
-                        return false;
+                    if pts
+                        .iter()
+                        .any(|q| (0..3).map(|k| (q[k] - p[k]).powi(2)).sum::<f32>() < r2)
+                    {
+                        return true;
                     }
                 }
             }
         }
-        self.cells.entry((c[0], c[1], c[2])).or_default().push(p);
+        false
+    }
+
+    /// Adds `p` unless a point is closer than the cell size.
+    fn try_add(&mut self, p: [f32; 3]) -> bool {
+        if self.near(p) {
+            return false;
+        }
+        if self.cell > 0.0 {
+            self.insert(p);
+        }
         true
     }
 }
 
-fn point_in_polygon(p: [f32; 2], poly: &[[f32; 2]]) -> bool {
+pub(crate) fn point_in_polygon(p: [f32; 2], poly: &[[f32; 2]]) -> bool {
     let mut inside = false;
     let mut j = poly.len() - 1;
     for i in 0..poly.len() {
@@ -466,7 +572,7 @@ fn grid_points(
         )
     };
     let ((i0, i1), (j0, j1)) = (range(0), range(1));
-    let mut spaced = Spaced::new(min_distance);
+    let mut spaced = Grid3::new(min_distance);
     let (mut out, mut visited) = (Vec::new(), 0usize);
     for i in i0..=i1 {
         for j in j0..=j1 {
@@ -602,6 +708,68 @@ fn stroke_hits(s: &Stroke, p: [f32; 2]) -> bool {
         .any(|w| distance_to_segment(p, w[0], w[1]) <= s.radius_m)
 }
 
+/// What one layer of a generator needs to be evaluated; a generator without layers is one tier
+/// made of its own fields.
+struct Tier<'a> {
+    palette: &'a [Weighted],
+    density: f32,
+    min_distance: f32,
+    scale: (f32, f32),
+    spin: bool,
+    keep_clear: f32,
+    seed: u64,
+}
+
+/// The tiers of a generator: its layers if it has any (each on its own stream), else `own`.
+fn tiers<'a>(own: Tier<'a>, layers: &'a [PlantLayer], seed: u64) -> Vec<Tier<'a>> {
+    if layers.is_empty() {
+        return vec![own];
+    }
+    layers
+        .iter()
+        .enumerate()
+        .map(|(i, l)| Tier {
+            palette: &l.asset_palette,
+            density: l.density_per_m2,
+            min_distance: l.min_distance_m,
+            scale: (l.scale_min, l.scale_max),
+            spin: l.random_rotation,
+            keep_clear: l.keep_clear_m,
+            seed: mix(seed ^ 0x504C_414E_545F_4C59, i as i64),
+        })
+        .collect()
+}
+
+/// Evaluates tiers in order. `one` gets the tier and a grid of the points of earlier tiers
+/// (cell size = the tier's `keep_clear`, empty when that is zero) and returns its placements.
+fn run_tiers<'a>(
+    tiers: Vec<Tier<'a>>,
+    mut one: impl FnMut(&Tier<'a>, &Grid3) -> (Vec<Placement>, bool),
+) -> Evaluation {
+    let mut placements: Vec<Placement> = Vec::new();
+    let mut truncated = false;
+    for t in &tiers {
+        let mut keep = Grid3::new(t.keep_clear);
+        if t.keep_clear > 0.0 {
+            for p in &placements {
+                keep.insert([p.position[0], 0.0, p.position[2]]);
+            }
+        }
+        let (more, cut) = one(t, &keep);
+        truncated |= cut;
+        placements.extend(more);
+        if placements.len() >= MAX_PLACEMENTS {
+            truncated |= placements.len() > MAX_PLACEMENTS;
+            placements.truncate(MAX_PLACEMENTS);
+            break;
+        }
+    }
+    Evaluation {
+        placements,
+        truncated,
+    }
+}
+
 /// Turns a generator into placements. `ground(x, z)` is the terrain height; a point with no
 /// ground goes to y = 0. A [`SurfaceFill`] needs its owner's mesh and gives nothing here: use
 /// [`evaluate_surface_fill`].
@@ -632,28 +800,30 @@ pub fn evaluate(generator: &Generator, ground: &dyn Fn(f32, f32) -> Option<f32>)
         Generator::SplineMass(g) => evaluate_spline(g, ground),
         Generator::AreaScatter(g) => {
             let b = bounds(g.outline.iter().copied());
-            let (pts, truncated) = grid_points(
-                b,
-                g.density_per_m2,
-                g.seed,
-                g.position_jitter,
-                g.min_distance_m,
-                |p| point_in_polygon(p, &g.outline),
-            );
-            let scale = (g.scale_min, g.scale_max);
-            let out = pts
-                .into_iter()
-                .map(|(p, mut rng)| {
-                    make(
-                        &g.asset_palette,
-                        scale,
-                        g.random_rotation,
-                        y_at(p),
-                        &mut rng,
-                    )
-                })
-                .collect();
-            done(out, truncated)
+            let own = Tier {
+                palette: &g.asset_palette,
+                density: g.density_per_m2,
+                min_distance: g.min_distance_m,
+                scale: (g.scale_min, g.scale_max),
+                spin: g.random_rotation,
+                keep_clear: 0.0,
+                seed: g.seed,
+            };
+            run_tiers(tiers(own, &g.layers, g.seed), |t, keep| {
+                let (pts, truncated) = grid_points(
+                    b,
+                    t.density,
+                    t.seed,
+                    g.position_jitter,
+                    t.min_distance,
+                    |p| point_in_polygon(p, &g.outline) && !keep.near([p[0], 0.0, p[1]]),
+                );
+                let out = pts
+                    .into_iter()
+                    .map(|(p, mut rng)| make(t.palette, t.scale, t.spin, y_at(p), &mut rng))
+                    .collect();
+                (out, truncated)
+            })
         }
         Generator::MixedBrush(g) => {
             let mut b = bounds(g.strokes.iter().filter(|s| !s.erase).flat_map(|s| {
@@ -674,13 +844,26 @@ pub fn evaluate(generator: &Generator, ground: &dyn Fn(f32, f32) -> Option<f32>)
                     .find(|s| stroke_hits(s, p))
                     .is_some_and(|s| !s.erase)
             };
-            let (pts, truncated) = grid_points(b, g.density_per_m2, g.seed, 1.0, 0.0, covered);
-            let scale = (g.scale_min, g.scale_max);
-            let out = pts
-                .into_iter()
-                .map(|(p, mut rng)| make(&g.asset_palette, scale, true, y_at(p), &mut rng))
-                .collect();
-            done(out, truncated)
+            let own = Tier {
+                palette: &g.asset_palette,
+                density: g.density_per_m2,
+                min_distance: g.min_distance_m,
+                scale: (g.scale_min, g.scale_max),
+                spin: true,
+                keep_clear: 0.0,
+                seed: g.seed,
+            };
+            run_tiers(tiers(own, &g.layers, g.seed), |t, keep| {
+                let (pts, truncated) =
+                    grid_points(b, t.density, t.seed, 1.0, t.min_distance, |p| {
+                        covered(p) && !keep.near([p[0], 0.0, p[1]])
+                    });
+                let out = pts
+                    .into_iter()
+                    .map(|(p, mut rng)| make(t.palette, t.scale, t.spin, y_at(p), &mut rng))
+                    .collect();
+                (out, truncated)
+            })
         }
         Generator::SurfaceFill(_) => done(Vec::new(), false),
         Generator::Cluster(g) => {
@@ -795,7 +978,8 @@ pub struct SurfaceFillResult {
 }
 
 /// Evaluates a [`SurfaceFill`] against its owner's mesh: points by triangle area on the named
-/// faces, on the surface, skipping triangles steeper than `max_slope_deg`.
+/// faces, on the surface, skipping triangles steeper than `max_slope_deg`. With layers, each is
+/// filled in turn and keeps clear (horizontally) of the earlier ones.
 pub fn evaluate_surface_fill(fill: &SurfaceFill, model: &ImportedModel) -> SurfaceFillResult {
     let mut result = SurfaceFillResult {
         placements: Vec::new(),
@@ -806,35 +990,41 @@ pub fn evaluate_surface_fill(fill: &SurfaceFill, model: &ImportedModel) -> Surfa
         return result;
     }
     let min_up = fill.max_slope_deg.to_radians().cos();
-    let mut spaced = Spaced::new(fill.min_distance_m);
+    let mut faces = Vec::new();
     for name in &fill.faces {
-        let Some(face) = model.faces.iter().position(|f| &f.name == name) else {
-            result.missing.push(name.clone());
-            continue;
-        };
-        for (p, mut rng) in triangle_points(
-            model,
-            face,
-            fill.density_per_m2,
-            mix(fill.seed, face as i64),
-            min_up,
-        ) {
-            if result.placements.len() >= MAX_PLACEMENTS {
-                result.truncated = true;
-                return result;
-            }
-            if spaced.try_add(p) {
-                let scale = (fill.scale_min, fill.scale_max);
-                result.placements.push(make(
-                    &fill.asset_palette,
-                    scale,
-                    fill.random_rotation,
-                    p,
-                    &mut rng,
-                ));
-            }
+        match model.faces.iter().position(|f| &f.name == name) {
+            Some(face) => faces.push(face),
+            None => result.missing.push(name.clone()),
         }
     }
+    let own = Tier {
+        palette: &fill.asset_palette,
+        density: fill.density_per_m2,
+        min_distance: fill.min_distance_m,
+        scale: (fill.scale_min, fill.scale_max),
+        spin: fill.random_rotation,
+        keep_clear: 0.0,
+        seed: fill.seed,
+    };
+    let e = run_tiers(tiers(own, &fill.layers, fill.seed), |t, keep| {
+        let mut spaced = Grid3::new(t.min_distance);
+        let mut out = Vec::new();
+        for &face in &faces {
+            for (p, mut rng) in
+                triangle_points(model, face, t.density, mix(t.seed, face as i64), min_up)
+            {
+                if out.len() >= MAX_PLACEMENTS {
+                    return (out, true);
+                }
+                if !keep.near([p[0], 0.0, p[2]]) && spaced.try_add(p) {
+                    out.push(make(t.palette, t.scale, t.spin, p, &mut rng));
+                }
+            }
+        }
+        (out, false)
+    });
+    result.placements = e.placements;
+    result.truncated = e.truncated;
     result
 }
 
@@ -874,6 +1064,7 @@ mod tests {
             random_rotation: true,
             min_distance_m: 0.0,
             seed: 7,
+            layers: Vec::new(),
         }
     }
 
@@ -1031,7 +1222,9 @@ mod tests {
             density_per_m2: 5.0,
             scale_min: 1.0,
             scale_max: 1.0,
+            min_distance_m: 0.0,
             seed: 9,
+            layers: Vec::new(),
         };
         let all = evaluate(&Generator::MixedBrush(g.clone()), &flat).placements;
         assert!(all.len() > 100);
@@ -1097,6 +1290,7 @@ mod tests {
             layer: "shapes".into(),
             outline: vec![[0.0, 0.0], [6.0, 0.0], [6.0, 3.0], [0.0, 3.0]],
             elevation: 0.25,
+            drape: false,
         });
         let m = shape_mesh(&s).unwrap();
         (s, m)
@@ -1118,6 +1312,7 @@ mod tests {
             min_distance_m: 0.0,
             max_slope_deg: 45.0,
             seed: 11,
+            layers: Vec::new(),
         }
     }
 
@@ -1202,5 +1397,182 @@ mod tests {
         let n = evaluate(&g, &flat).placements.len();
         eprintln!("evaluate: {n} placements in {:?}", t.elapsed());
         assert!(n > 9000);
+    }
+}
+
+#[cfg(test)]
+mod layer_tests {
+    use super::*;
+
+    fn layer(species: &str, density: f32, min: f32, keep: f32, seed_scale: f32) -> PlantLayer {
+        PlantLayer {
+            name: species.into(),
+            asset_palette: vec![Weighted {
+                asset: species.into(),
+                weight: 1.0,
+            }],
+            density_per_m2: density,
+            min_distance_m: min,
+            scale_min: seed_scale,
+            scale_max: seed_scale,
+            random_rotation: true,
+            keep_clear_m: keep,
+        }
+    }
+
+    fn hectare_brush(layers: Vec<PlantLayer>) -> Generator {
+        Generator::MixedBrush(MixedBrush {
+            id: "g1".into(),
+            name: "Forest".into(),
+            layer: "planting".into(),
+            asset_palette: Vec::new(),
+            strokes: vec![Stroke {
+                points: vec![[0.0, 50.0], [100.0, 50.0]],
+                radius_m: 50.0,
+                erase: false,
+            }],
+            density_per_m2: 0.0,
+            scale_min: 1.0,
+            scale_max: 1.0,
+            min_distance_m: 0.0,
+            seed: 4,
+            layers,
+        })
+    }
+
+    fn forest() -> Vec<PlantLayer> {
+        vec![
+            layer("tree", 0.02, 4.0, 0.0, 1.0),
+            layer("shrub", 0.15, 1.5, 2.0, 1.0),
+            layer("fern", 1.5, 0.3, 0.8, 1.0),
+        ]
+    }
+
+    #[test]
+    fn layers_are_independent_deterministic_and_keep_clear() {
+        let flat = |_: f32, _: f32| None;
+        let g = hectare_brush(forest());
+        let t = std::time::Instant::now();
+        let e = evaluate(&g, &flat);
+        eprintln!(
+            "three-layer brush over about 1.5 ha: {} placements in {:?}",
+            e.placements.len(),
+            t.elapsed()
+        );
+        assert_eq!(e, evaluate(&g, &flat));
+        let of = |a: &str| {
+            e.placements
+                .iter()
+                .filter(|p| p.asset == a)
+                .map(|p| p.position)
+                .collect::<Vec<_>>()
+        };
+        let (trees, shrubs, ferns) = (of("tree"), of("shrub"), of("fern"));
+        assert!(
+            !trees.is_empty() && shrubs.len() > trees.len() * 3 && ferns.len() > shrubs.len() * 3
+        );
+        let d = |a: [f32; 3], b: [f32; 3]| (a[0] - b[0]).hypot(a[2] - b[2]);
+        assert!(
+            shrubs
+                .iter()
+                .all(|s| trees.iter().all(|t| d(*s, *t) >= 2.0))
+        );
+        assert!(
+            ferns
+                .iter()
+                .all(|f| shrubs.iter().chain(&trees).all(|o| d(*f, *o) >= 0.8))
+        );
+        // Changing the shrub layer leaves the trees where they were; a layer's stream is its own.
+        let mut more = forest();
+        more[1].density_per_m2 = 0.3;
+        assert_eq!(of("tree"), {
+            let e2 = evaluate(&hectare_brush(more), &flat);
+            e2.placements
+                .iter()
+                .filter(|p| p.asset == "tree")
+                .map(|p| p.position)
+                .collect::<Vec<_>>()
+        });
+    }
+
+    #[test]
+    fn hectare_with_three_layers_is_fast() {
+        let g = hectare_brush(forest());
+        // Warm up, then time the evaluation proper.
+        let flat = |_: f32, _: f32| None;
+        let _ = evaluate(&g, &flat);
+        let t = std::time::Instant::now();
+        let e = evaluate(&g, &flat);
+        eprintln!(
+            "hectare brush, 3 layers: {} placements in {:?}",
+            e.placements.len(),
+            t.elapsed()
+        );
+        assert!(t.elapsed().as_millis() < 500);
+    }
+
+    #[test]
+    fn layered_area_and_fill_work_and_validate() {
+        let flat = |_: f32, _: f32| None;
+        let area = Generator::AreaScatter(AreaScatter {
+            id: "g2".into(),
+            name: "A".into(),
+            layer: "planting".into(),
+            asset_palette: Vec::new(),
+            outline: vec![[0.0, 0.0], [20.0, 0.0], [20.0, 20.0], [0.0, 20.0]],
+            density_per_m2: 0.0,
+            position_jitter: 1.0,
+            scale_min: 1.0,
+            scale_max: 1.0,
+            random_rotation: false,
+            min_distance_m: 0.0,
+            seed: 1,
+            layers: forest(),
+        });
+        let e = evaluate(&area, &flat);
+        assert!(
+            e.placements.len() > 400
+                && e.placements
+                    .iter()
+                    .all(|p| (0.0..=20.0).contains(&p.position[0]))
+        );
+        assert!(area.uses_asset("fern"));
+        let mut bad = forest();
+        bad[0].density_per_m2 = 0.0;
+        let Generator::AreaScatter(mut a) = area else {
+            unreachable!()
+        };
+        a.layers = bad;
+        assert!(Generator::AreaScatter(a).validate().is_err());
+        // Surface fill with layers on the top of a drawn area.
+        let shape = crate::shape::shape_mesh(&crate::shape::Shape::Area(crate::shape::Area {
+            id: "S1".into(),
+            name: "L".into(),
+            layer: "shapes".into(),
+            outline: vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]],
+            elevation: 1.0,
+            drape: false,
+        }))
+        .unwrap();
+        let fill = SurfaceFill {
+            id: "g3".into(),
+            name: "F".into(),
+            layer: "planting".into(),
+            asset_palette: Vec::new(),
+            owner: "S1".into(),
+            faces: vec!["S1:top".into()],
+            density_per_m2: 0.0,
+            position_jitter: 1.0,
+            scale_min: 1.0,
+            scale_max: 1.0,
+            random_rotation: false,
+            min_distance_m: 0.0,
+            max_slope_deg: 45.0,
+            seed: 2,
+            layers: forest(),
+        };
+        let r = evaluate_surface_fill(&fill, &shape);
+        assert!(r.placements.len() > 100 && r.placements.iter().all(|p| p.position[1] == 1.0));
+        assert_eq!(r, evaluate_surface_fill(&fill, &shape));
     }
 }

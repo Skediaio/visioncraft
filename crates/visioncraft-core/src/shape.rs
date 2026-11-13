@@ -15,6 +15,9 @@ pub struct Area {
     /// Points `(x, z)` in metres; either winding.
     pub outline: Vec<[f32; 2]>,
     pub elevation: f32,
+    /// Lie on the terrain: use [`shape_mesh_on`], with `elevation` as the height above the ground.
+    #[serde(default)]
+    pub drape: bool,
 }
 
 /// A closed polygon extruded up (house volume, block), or an open polyline given `thickness` and
@@ -380,6 +383,84 @@ pub fn shape_mesh(shape: &Shape) -> Result<ImportedModel, ShapeError> {
     }
 }
 
+/// Like [`shape_mesh`], but an [`Area`] with `drape` is subdivided into triangles of at most
+/// about 1 m (one uniform subdivision, so neighbouring triangles share their edge vertices; at
+/// most 64 steps per triangle edge) and every vertex lifted to `ground(x, z)` (0 where there is
+/// none) plus the elevation. Normals follow the ground. Face names are the same.
+pub fn shape_mesh_on(
+    shape: &Shape,
+    ground: &dyn Fn(f32, f32) -> Option<f32>,
+) -> Result<ImportedModel, ShapeError> {
+    let Shape::Area(a) = shape else {
+        return shape_mesh(shape);
+    };
+    if !a.drape {
+        return shape_mesh(shape);
+    }
+    let flat = shape_mesh(shape)?;
+    let h = |x: f32, z: f32| ground(x, z).unwrap_or(0.0) + a.elevation;
+    let normal_at = |x: f32, z: f32| {
+        let e = 0.5;
+        let n = [
+            -(h(x + e, z) - h(x - e, z)) / (2.0 * e),
+            1.0,
+            -(h(x, z + e) - h(x, z - e)) / (2.0 * e),
+        ];
+        let l = (n[0] * n[0] + 1.0 + n[2] * n[2]).sqrt();
+        n.map(|c| c / l)
+    };
+    let tris: Vec<[[f32; 2]; 3]> = flat
+        .triangles
+        .iter()
+        .map(|t| t.map(|i| [flat.positions[i as usize][0], flat.positions[i as usize][2]]))
+        .collect();
+    let longest = tris
+        .iter()
+        .flat_map(|t| {
+            (0..3).map(|k| (t[k][0] - t[(k + 1) % 3][0]).hypot(t[k][1] - t[(k + 1) % 3][1]))
+        })
+        .fold(0.0f32, f32::max);
+    let n = (longest.ceil() as usize).clamp(1, 64);
+    let mut b = Builder {
+        model: ImportedModel::default(),
+        triangles: vec![Vec::new()],
+    };
+    for t in &tris {
+        let point = |i: usize, j: usize| {
+            // Barycentric grid point (i, j) of the n-step subdivision.
+            let (u, v) = (i as f32 / n as f32, j as f32 / n as f32);
+            let p = [
+                t[0][0] + (t[1][0] - t[0][0]) * u + (t[2][0] - t[0][0]) * v,
+                t[0][1] + (t[1][1] - t[0][1]) * u + (t[2][1] - t[0][1]) * v,
+            ];
+            (p, h(p[0], p[1]))
+        };
+        let mut push = |corners: [(usize, usize); 3]| {
+            let pts = corners.map(|(i, j)| point(i, j));
+            // Counter-clockwise seen from above: the xz area must be negative (see `Builder::tri`).
+            let area = (pts[1].0[0] - pts[0].0[0]) * (pts[2].0[1] - pts[0].0[1])
+                - (pts[1].0[1] - pts[0].0[1]) * (pts[2].0[0] - pts[0].0[0]);
+            let order = if area < 0.0 { [0, 1, 2] } else { [0, 2, 1] };
+            let base = b.model.positions.len() as u32;
+            for k in order {
+                let (p, y) = pts[k];
+                b.model.positions.push([p[0], y, p[1]]);
+                b.model.normals.push(normal_at(p[0], p[1]));
+            }
+            b.triangles[0].push([base, base + 1, base + 2]);
+        };
+        for i in 0..n {
+            for j in 0..n - i {
+                push([(i, j), (i + 1, j), (i, j + 1)]);
+                if i + j + 1 < n {
+                    push([(i + 1, j), (i + 1, j + 1), (i, j + 1)]);
+                }
+            }
+        }
+    }
+    Ok(b.finish(&a.id, &a.name, vec![format!("{}:top", a.id)]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -505,6 +586,7 @@ mod tests {
             layer: "shapes".into(),
             outline: square(3.0).into_iter().rev().collect(),
             elevation: 0.5,
+            drape: false,
         });
         let m = shape_mesh(&a).unwrap();
         assert_eq!(m.faces.len(), 1);
@@ -544,5 +626,51 @@ mod tests {
         let crossing_wall = vec![[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [1.0, -1.0]];
         assert!(shape_mesh(&wall(crossing_wall)).is_err());
         assert!(shape_mesh(&wall(vec![[0.0, 0.0], [2.0, 0.0], [0.0, 0.01]])).is_err());
+    }
+}
+
+#[cfg(test)]
+mod drape_tests {
+    use super::*;
+
+    #[test]
+    fn draped_area_follows_the_ground_with_the_same_names() {
+        let outline = vec![[0.0, 0.0], [6.0, 0.0], [6.0, 4.0], [0.0, 4.0]];
+        let mut a = Area {
+            id: "S1".into(),
+            name: "Lawn".into(),
+            layer: "shapes".into(),
+            outline,
+            elevation: 0.1,
+            drape: true,
+        };
+        let slope = |x: f32, _: f32| Some(0.5 * x);
+        let m = shape_mesh_on(&Shape::Area(a.clone()), &slope).unwrap();
+        assert_eq!(m.faces.len(), 1);
+        assert_eq!(m.faces[0].name, "S1:top");
+        assert!(m.triangles.len() > 24);
+        assert!(
+            m.positions
+                .iter()
+                .all(|p| (p[1] - (0.5 * p[0] + 0.1)).abs() < 1e-5)
+        );
+        assert!(m.normals.iter().all(|n| n[1] > 0.8 && n[0] < 0.0));
+        // Counter-clockwise from above, and its area is the slope's: 24 m2 * sqrt(1.25).
+        let area: f32 = m
+            .triangles
+            .iter()
+            .map(|t| {
+                let [p, q, r] = t.map(|i| m.positions[i as usize]);
+                let n = cross3(sub3(q, p), sub3(r, p));
+                assert!(n[1] > 0.0);
+                (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt() / 2.0
+            })
+            .sum();
+        assert!((area - 24.0 * 1.25f32.sqrt()).abs() < 0.01, "{area}");
+        a.drape = false;
+        assert_eq!(
+            shape_mesh_on(&Shape::Area(a.clone()), &slope),
+            shape_mesh(&Shape::Area(a))
+        );
     }
 }

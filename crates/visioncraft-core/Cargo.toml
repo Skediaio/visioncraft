@@ -14,9 +14,11 @@ craft3d-doc = { git = "https://github.com/johancoppens/3dcraft", tag = "v0.1.1" 
 craft3d-regen = { git = "https://github.com/johancoppens/3dcraft", tag = "v0.1.1" }
 craft3d-tess = { git = "https://github.com/johancoppens/3dcraft", tag = "v0.1.1" }
 craft3d-topo = { git = "https://github.com/johancoppens/3dcraft", tag = "v0.1.1" }
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 # 3dcraft's ZIP reader (stored and deflated entries, pure Rust): for `.mcmat`.
 craft3d-zipstore = { git = "https://github.com/johancoppens/3dcraft", tag = "v0.1.1" }
 # ISC: ear clipping triangulation of the shape outlines.
 earcutr = "0.5"
+# MIT OR Zlib OR Apache-2.0, pure Rust: compresses the terrain arrays in the project JSON.
+miniz_oxide = "0.8"

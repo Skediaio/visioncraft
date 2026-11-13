@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 pub(super) fn register(s: &mut Session) {
     s.register(
         "shape.add_area",
-        "Add a flat area: {name, outline: [[x,z]..], elevation? (0), layer?, material? (id: also assigns it to the whole shape)}; returns {id}",
+        "Add a flat area: {name, outline: [[x,z]..], elevation? (0), drape? (false), layer?, material? (id: also assigns it to the whole shape)}; returns {id}",
         add_area,
     );
     s.register(
@@ -82,6 +82,8 @@ fn add_area(project: &mut Project, params: &Value) -> Result<Value, CommandError
         outline: Vec<[f32; 2]>,
         #[serde(default)]
         elevation: f32,
+        #[serde(default)]
+        drape: bool,
         layer: Option<String>,
         material: Option<String>,
     }
@@ -93,6 +95,7 @@ fn add_area(project: &mut Project, params: &Value) -> Result<Value, CommandError
             layer,
             outline: p.outline,
             elevation: p.elevation,
+            drape: p.drape,
         })
     })
 }

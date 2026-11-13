@@ -92,6 +92,13 @@ fn remove(project: &mut Project, params: &Value) -> Result<Value, CommandError> 
     if project.assignments.iter().any(|a| a.material == id) {
         return Err(fail(format!("material `{id}` is still assigned")));
     }
+    if project
+        .terrain
+        .as_ref()
+        .is_some_and(|t| t.layers.iter().any(|l| l.material == id))
+    {
+        return Err(fail(format!("material `{id}` is a terrain layer")));
+    }
     project.materials.retain(|m| m.id != id);
     Ok(Value::Null)
 }

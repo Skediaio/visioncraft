@@ -13,11 +13,13 @@ pub mod material;
 pub mod measure;
 mod model;
 pub mod planting;
+pub mod presets;
 pub mod project;
 pub mod raycast;
 pub mod session;
 pub mod shape;
 pub mod sun;
+pub mod terrain;
 pub mod viewpoint;
 
 pub use catalog::{Asset, Catalog, CatalogError, attribution_markdown, validate_open_licences};
@@ -30,13 +32,19 @@ pub use material::{
 };
 pub use model::{Body, Face, ImportError, ImportedModel};
 pub use planting::{
-    Evaluation, Generator, Placement, Tuft, evaluate, evaluate_surface_fill, lawn_scatter,
+    Evaluation, Generator, Placement, PlantLayer, Tuft, evaluate, evaluate_surface_fill,
+    lawn_scatter,
 };
+pub use presets::{PlantingPreset, planting_presets};
 pub use project::{
     CustomSpecies, GroundPlane, Layer, ModelKind, ModelRef, Project, ProjectError, RenderStyle,
     Site, SkyChoice, SunTime, Transform, ViewState,
 };
 pub use raycast::{Hit, ground_height, raycast};
 pub use session::{Command, CommandError, Session};
-pub use shape::{Shape, ShapeError, shape_mesh};
+pub use shape::{Shape, ShapeError, shape_mesh, shape_mesh_on};
+pub use terrain::{
+    BrushStroke, DirtyRect, Terrain, TerrainChunk, Tool, apply_stroke, ground_height_over,
+    terrain_chunk_mesh, terrain_chunks,
+};
 pub use viewpoint::{Viewpoint, interpolate};

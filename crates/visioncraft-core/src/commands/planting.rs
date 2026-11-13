@@ -1,8 +1,9 @@
 use super::{check_layer, fail, merge_update, next_id};
 use crate::planting::{
-    AreaScatter, Cluster, Generator, MixedBrush, Single, Spacing, SplineMass, Stroke, SurfaceFill,
-    Weighted,
+    AreaScatter, Cluster, Generator, MixedBrush, PlantLayer, Single, Spacing, SplineMass, Stroke,
+    SurfaceFill, Weighted,
 };
+use crate::presets::planting_presets;
 use crate::project::{LAYER_PLANTING, Project};
 use crate::session::{CommandError, Session, bad, parse};
 use serde::Deserialize;
@@ -21,12 +22,12 @@ pub(super) fn register(s: &mut Session) {
     );
     s.register(
         "planting.add_area",
-        "Scatter plants in a polygon: {name, asset_palette, outline: [[x,z]..], density_per_m2, position_jitter? (1), scale_min?, scale_max?, random_rotation? (true), min_distance_m? (0), seed?, layer?}; returns {id}",
+        "Scatter plants in a polygon: {name, asset_palette, outline: [[x,z]..], density_per_m2? (or layers), layers? [{name, asset_palette, density_per_m2, min_distance_m, scale_min, scale_max, random_rotation, keep_clear_m}], position_jitter? (1), scale_min?, scale_max?, random_rotation? (true), min_distance_m? (0), seed?, layer?}; returns {id}",
         add_area,
     );
     s.register(
         "planting.add_brush",
-        "Start a brush: {name, asset_palette, density_per_m2, strokes? ([{points, radius_m, erase}]), scale_min?, scale_max?, seed?, layer?}; returns {id}",
+        "Start a brush: {name, asset_palette?, density_per_m2?, layers?, min_distance_m?, strokes? ([{points, radius_m, erase}]), scale_min?, scale_max?, seed?, layer?}; returns {id}",
         add_brush,
     );
     s.register(
@@ -36,7 +37,7 @@ pub(super) fn register(s: &mut Session) {
     );
     s.register(
         "planting.add_surface_fill",
-        "Fill named faces of a model or shape: {name, asset_palette, owner, faces: [name..], density_per_m2, position_jitter? (1), scale_min?, scale_max?, random_rotation? (true), min_distance_m? (0), max_slope_deg? (45), seed?, layer?}; returns {id}",
+        "Fill named faces of a model or shape: {name, asset_palette, owner, faces: [name..], density_per_m2? (or layers), layers? [{name, asset_palette, density_per_m2, min_distance_m, scale_min, scale_max, random_rotation, keep_clear_m}], position_jitter? (1), scale_min?, scale_max?, random_rotation? (true), min_distance_m? (0), max_slope_deg? (45), seed?, layer?}; returns {id}",
         add_surface_fill,
     );
     s.register(
@@ -48,6 +49,11 @@ pub(super) fn register(s: &mut Session) {
         "planting.update",
         "Change fields of a generator (any of its fields except id and type): {id, ...}",
         update,
+    );
+    s.register(
+        "planting.apply_preset",
+        "Replace the layers of a brush, area scatter or surface fill with a preset's: {id, preset}",
+        apply_preset,
     );
     s.register("planting.remove", "Remove a generator: {id}", remove);
 }
@@ -149,9 +155,13 @@ fn add_area(project: &mut Project, params: &Value) -> Result<Value, CommandError
     #[derive(Deserialize)]
     struct P {
         name: String,
+        #[serde(default)]
         asset_palette: Vec<Weighted>,
         outline: Vec<[f32; 2]>,
+        #[serde(default)]
         density_per_m2: f32,
+        #[serde(default)]
+        layers: Vec<PlantLayer>,
         #[serde(default = "one")]
         position_jitter: f32,
         #[serde(default = "one")]
@@ -180,6 +190,7 @@ fn add_area(project: &mut Project, params: &Value) -> Result<Value, CommandError
             random_rotation: p.random_rotation,
             min_distance_m: p.min_distance_m,
             seed: p.seed.unwrap_or(seed),
+            layers: p.layers,
         })
     })
 }
@@ -188,8 +199,14 @@ fn add_brush(project: &mut Project, params: &Value) -> Result<Value, CommandErro
     #[derive(Deserialize)]
     struct P {
         name: String,
+        #[serde(default)]
         asset_palette: Vec<Weighted>,
+        #[serde(default)]
         density_per_m2: f32,
+        #[serde(default)]
+        min_distance_m: f32,
+        #[serde(default)]
+        layers: Vec<PlantLayer>,
         #[serde(default)]
         strokes: Vec<Stroke>,
         #[serde(default = "one")]
@@ -210,7 +227,9 @@ fn add_brush(project: &mut Project, params: &Value) -> Result<Value, CommandErro
             density_per_m2: p.density_per_m2,
             scale_min: p.scale_min,
             scale_max: p.scale_max,
+            min_distance_m: p.min_distance_m,
             seed: p.seed.unwrap_or(seed),
+            layers: p.layers,
         })
     })
 }
@@ -219,10 +238,14 @@ fn add_surface_fill(project: &mut Project, params: &Value) -> Result<Value, Comm
     #[derive(Deserialize)]
     struct P {
         name: String,
+        #[serde(default)]
         asset_palette: Vec<Weighted>,
         owner: String,
         faces: Vec<String>,
+        #[serde(default)]
         density_per_m2: f32,
+        #[serde(default)]
+        layers: Vec<PlantLayer>,
         #[serde(default = "one")]
         position_jitter: f32,
         #[serde(default = "one")]
@@ -263,6 +286,7 @@ fn add_surface_fill(project: &mut Project, params: &Value) -> Result<Value, Comm
             min_distance_m: p.min_distance_m,
             max_slope_deg: p.max_slope_deg,
             seed: p.seed.unwrap_or(seed),
+            layers: p.layers,
         })
     })
 }
@@ -346,5 +370,27 @@ fn update(project: &mut Project, params: &Value) -> Result<Value, CommandError> 
 fn remove(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
     let id = find(project, params)?.id().to_string();
     project.generators.retain(|g| g.id() != id);
+    Ok(Value::Null)
+}
+
+fn apply_preset(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
+    let name = params["preset"]
+        .as_str()
+        .ok_or_else(|| bad("missing preset"))?;
+    let preset = planting_presets()
+        .into_iter()
+        .find(|p| p.id == name)
+        .ok_or_else(|| fail(format!("no preset `{name}`")))?;
+    let layers = match find(project, params)? {
+        Generator::AreaScatter(g) => &mut g.layers,
+        Generator::MixedBrush(g) => &mut g.layers,
+        Generator::SurfaceFill(g) => &mut g.layers,
+        _ => {
+            return Err(fail(
+                "only a brush, area scatter or surface fill takes layers",
+            ));
+        }
+    };
+    *layers = preset.layers;
     Ok(Value::Null)
 }

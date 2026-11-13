@@ -4,11 +4,13 @@ use crate::light::Light;
 use crate::material::{Assignment, Material, builtin_palette};
 use crate::planting::Generator;
 use crate::shape::Shape;
+use crate::terrain::Terrain;
 use crate::viewpoint::Viewpoint;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::Arc;
 
 /// The newest `format_version` this build reads and writes.
 pub const FORMAT_VERSION: u32 = 1;
@@ -261,6 +263,9 @@ pub struct Project {
     pub species: Vec<CustomSpecies>,
     #[serde(default)]
     pub view: ViewState,
+    /// Behind an `Arc`: undo snapshots share it, and a command that edits it copies it once.
+    #[serde(default)]
+    pub terrain: Option<Arc<Terrain>>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extensions: Extensions,
 }
@@ -282,6 +287,7 @@ impl Default for Project {
             style: RenderStyle::default(),
             species: Vec::new(),
             view: ViewState::default(),
+            terrain: None,
             extensions: Extensions::new(),
         }
     }

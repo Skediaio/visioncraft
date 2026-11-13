@@ -47,7 +47,7 @@ fn version_one_file_without_new_fields_loads() {
     assert_eq!(p.models[0].layer, "model");
     assert_eq!(p.materials.len(), 12);
     assert!(p.shapes.is_empty() && p.generators.is_empty() && !p.style.clay);
-    assert!(p.species.is_empty() && p.view == Default::default());
+    assert!(p.species.is_empty() && p.view == Default::default() && p.terrain.is_none());
 }
 
 #[test]
@@ -549,4 +549,125 @@ fn lamp_light_follows_its_placement_and_export_presets_exist() {
     assert_eq!(l.source.as_deref(), Some("g1"));
     assert_eq!(export_presets().len(), 6);
     assert_eq!(export_presets()[3], ("4K", 3840, 2160));
+}
+
+#[test]
+fn terrain_commands_one_stroke_one_undo_and_cheap_snapshots() {
+    use std::sync::Arc;
+    let mut s = Session::new(Project::default());
+    assert!(s.project().terrain.is_none());
+    s.run(
+        "terrain.create",
+        json!({"origin": [0.0, 0.0], "width_m": 40.0, "depth_m": 40.0, "base_material": "lawn"}),
+    )
+    .unwrap();
+    assert!(
+        s.run(
+            "terrain.create",
+            json!({"origin": [0.0, 0.0], "width_m": 4.0, "depth_m": 4.0, "base_material": "lawn"})
+        )
+        .is_err()
+    );
+    let flat = s.project().clone();
+    s.run("terrain.stroke", json!({"tool": "raise", "points": [[10.0, 10.0], [30.0, 20.0]], "radius_m": 4.0, "strength": 0.1})).unwrap();
+    let t = s.project().terrain.clone().unwrap();
+    assert!(t.height_at(20.0, 15.0).unwrap() > 0.0);
+    // The snapshot taken before the stroke still shares nothing with the edited terrain, but two
+    // clones of the project share one allocation.
+    let copy = s.project().clone();
+    assert!(Arc::ptr_eq(
+        copy.terrain.as_ref().unwrap(),
+        s.project().terrain.as_ref().unwrap()
+    ));
+    assert!(!Arc::ptr_eq(
+        flat.terrain.as_ref().unwrap(),
+        s.project().terrain.as_ref().unwrap()
+    ));
+    assert!(s.undo());
+    assert_eq!(*s.project(), flat);
+    assert!(s.redo());
+    assert_eq!(s.project().terrain.as_deref(), Some(&*t));
+    assert!(
+        s.run(
+            "terrain.stroke",
+            json!({"tool": "paint", "points": [[1.0, 1.0]], "radius_m": 2.0, "strength": 1.0})
+        )
+        .is_err()
+    );
+    s.run("terrain.add_layer", json!({"material": "gravel"}))
+        .unwrap();
+    s.run("terrain.stroke", json!({"tool": "paint", "points": [[5.0, 5.0]], "radius_m": 3.0, "strength": 1.0, "falloff": 0.0, "layer": 1})).unwrap();
+    assert!(s.run("material.remove", json!({"id": "gravel"})).is_err());
+    s.run(
+        "terrain.set_layer_material",
+        json!({"index": 1, "material": "soil"}),
+    )
+    .unwrap();
+    let a = id(s.run("shape.add_area", json!({"name": "Terrace", "outline": [[20.0, 20.0], [30.0, 20.0], [30.0, 30.0], [20.0, 30.0]], "elevation": 0.4})).unwrap());
+    s.run("terrain.level_under", json!({"shape": a, "margin_m": 2.0}))
+        .unwrap();
+    assert_eq!(
+        s.project().terrain.as_ref().unwrap().height_at(25.0, 25.0),
+        Some(0.4)
+    );
+    s.run("terrain.carve", json!({"outline": [[5.0, 25.0], [12.0, 25.0], [12.0, 32.0], [5.0, 32.0]], "depth_m": 0.8, "bank_m": 1.5})).unwrap();
+    s.run(
+        "terrain.resize",
+        json!({"origin": [-5.0, -5.0], "width_m": 60.0, "depth_m": 60.0}),
+    )
+    .unwrap();
+    s.run("terrain.remove_layer", json!({"index": 1})).unwrap();
+    let n = s.project().terrain.as_ref().unwrap().vertex_count();
+    s.run("terrain.import_heights", json!({"origin": [0.0, 0.0], "width": 2, "depth": 2, "cell_m": 1.0, "heights": vec![1.0; 9]})).unwrap();
+    assert!(n > 9 && s.project().terrain.as_ref().unwrap().heights == vec![1.0; 9]);
+    assert!(
+        s.run(
+            "terrain.import_heights",
+            json!({"origin": [0.0, 0.0], "width": 2, "depth": 2, "cell_m": 1.0, "heights": [1.0]})
+        )
+        .is_err()
+    );
+    let p = Project::from_json_bytes(&s.project().to_json_bytes()).unwrap();
+    assert_eq!(&p, s.project());
+    s.run("terrain.remove", json!({})).unwrap();
+    assert!(s.project().terrain.is_none());
+    while s.undo() {}
+    assert!(s.project().terrain.is_none());
+}
+
+#[test]
+fn layered_planting_commands_and_presets() {
+    let mut s = Session::new(Project::default());
+    let g = id(s.run("planting.add_brush", json!({"name": "Forest", "strokes": [{"points": [[0.0, 0.0], [30.0, 0.0]], "radius_m": 8.0, "erase": false}]})).unwrap_or_else(|_| json!({"id": "none"})));
+    assert_eq!(g, "none"); // no palette and no layers: refused
+    let g = id(s.run("planting.add_brush", json!({"name": "Forest", "strokes": [{"points": [[0.0, 0.0], [30.0, 0.0]], "radius_m": 8.0, "erase": false}], "layers": []}))
+        .unwrap_or_else(|_| json!({"id": "none"})));
+    assert_eq!(g, "none");
+    let g = id(s.run("planting.add_brush", json!({"name": "Forest", "asset_palette": [{"asset": "flora:quercus-robur", "weight": 1.0}], "density_per_m2": 0.01, "strokes": [{"points": [[0.0, 0.0], [30.0, 0.0]], "radius_m": 8.0, "erase": false}]})).unwrap());
+    s.run(
+        "planting.apply_preset",
+        json!({"id": g, "preset": "broadleaf-woodland"}),
+    )
+    .unwrap();
+    assert!(
+        s.run("planting.apply_preset", json!({"id": g, "preset": "nope"}))
+            .is_err()
+    );
+    let Some(visioncraft_core::Generator::MixedBrush(b)) = s.project().generators.first() else {
+        panic!()
+    };
+    assert_eq!(b.layers.len(), 3);
+    let e = visioncraft_core::evaluate(&s.project().generators[0], &|_, _| None);
+    assert!(e.placements.len() > 100, "{}", e.placements.len());
+    assert!(e.placements.iter().all(|p| p.asset.starts_with("flora:")));
+    let a = id(s.run("planting.add_area", json!({"name": "Beds", "outline": square(), "layers": [
+        {"name": "a", "asset_palette": [{"asset": "x", "weight": 1.0}], "density_per_m2": 1.0, "min_distance_m": 0.0, "scale_min": 1.0, "scale_max": 1.0, "random_rotation": false, "keep_clear_m": 0.0}]})).unwrap());
+    s.run("planting.update", json!({"id": a, "layers": []}))
+        .unwrap_err();
+    let p = Project::from_json_bytes(&s.project().to_json_bytes()).unwrap();
+    assert_eq!(&p, s.project());
+    assert!(
+        s.run("species.add", json!({"name": "x", "params": {}}))
+            .is_ok()
+    );
 }
