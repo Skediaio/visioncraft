@@ -993,6 +993,10 @@ fn u_twilight_white_wall_is_not_green() {
 /// covers, banding as isolated jumps between flat runs.
 #[test]
 fn gradients_do_not_band_on_any_output_format() {
+    // Judges single 8-bit steps, which a software rasteriser places differently.
+    if std::env::var_os("VISIONCRAFT_RENDER_ONLY").is_some() {
+        return;
+    }
     let (device, queue) = gpu();
     let (w, h) = (320, 240);
     for format in [
