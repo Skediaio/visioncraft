@@ -1018,6 +1018,8 @@ impl eframe::App for App {
                 self.toggle_walk();
             } else if !cmd && key(Key::F) {
                 self.studio.frame_all();
+                // In the plan, F fits the whole scene into the part no panel covers.
+                self.plan_fit = None;
             }
         }
 

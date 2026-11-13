@@ -227,7 +227,10 @@ impl Camera {
     pub fn frame(&mut self, min: Vec3, max: Vec3) {
         let centre = (min + max) / 2.0;
         let radius = ((max - min).length() / 2.0).max(0.02);
-        self.view = View::Orbit;
+        // A plan stays a plan (Draw, Objects or Landscape in plan): it is framed from above.
+        if self.view != View::Top {
+            self.view = View::Orbit;
+        }
         self.pivot = centre;
         self.dist = radius / (self.fov_y / 2.0).tan() * 0.7;
         self.top_center = Vec2::new(centre.x, centre.z);
