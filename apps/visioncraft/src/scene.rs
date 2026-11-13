@@ -543,7 +543,12 @@ impl Scene {
         let old = self.terrain.clone();
         self.pinned.insert(CLAY.key());
         let any = self.material(r, &CLAY); // terrain items ignore their material
-        if let Some(d) = self.terrain_gpu.sync(r, project.terrain.as_ref(), any) {
+        if let Some(d) = self.terrain_gpu.sync(
+            r,
+            project.terrain.as_ref(),
+            project.view.ground.map(|g| g.height),
+            any,
+        ) {
             match (&old, &project.terrain) {
                 (Some(a), Some(b))
                     if a.origin == b.origin

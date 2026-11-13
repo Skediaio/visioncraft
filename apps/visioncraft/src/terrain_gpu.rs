@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use visioncraft_core::Project;
 use visioncraft_core::terrain::{
-    CHUNK_CELLS, DirtyRect, Terrain, terrain_chunk_mesh, terrain_chunks,
+    CHUNK_CELLS, DirtyRect, Terrain, terrain_chunk_mesh_on, terrain_chunks,
 };
 use visioncraft_render::{ItemId, Renderer, TerrainChunk, TerrainLayer};
 
@@ -23,6 +23,8 @@ struct Chunk {
 #[derive(Default)]
 pub struct TerrainGpu {
     shown: Option<Arc<Terrain>>,
+    /// The ground plane height the chunks were made for (borders at it get no skirt).
+    ground: Option<u32>,
     chunks: HashMap<(u32, u32), Chunk>,
     layers: Vec<TerrainLayer>,
 }
@@ -52,8 +54,13 @@ impl TerrainGpu {
         &mut self,
         r: &mut Renderer,
         terrain: Option<&Arc<Terrain>>,
+        ground: Option<f32>,
         material: MaterialId,
     ) -> Option<DirtyRect> {
+        if self.ground != ground.map(f32::to_bits) {
+            self.clear(r);
+            self.ground = ground.map(f32::to_bits);
+        }
         let Some(t) = terrain else {
             let had = self.shown.as_ref().map(|t| t.whole());
             self.clear(r);
@@ -83,16 +90,24 @@ impl TerrainGpu {
         };
         for z in span(d.z0, d.z1, cz) {
             for x in span(d.x0, d.x1, cx) {
-                self.remake(r, t, x, z, material);
+                self.remake(r, t, x, z, ground, material);
             }
         }
         Some(d)
     }
 
-    fn remake(&mut self, r: &mut Renderer, t: &Terrain, x: u32, z: u32, material: MaterialId) {
+    fn remake(
+        &mut self,
+        r: &mut Renderer,
+        t: &Terrain,
+        x: u32,
+        z: u32,
+        ground: Option<f32>,
+        material: MaterialId,
+    ) {
         let mut meshes = Vec::new();
         for (step, _) in LEVELS {
-            let m = terrain_chunk_mesh(t, x, z, step);
+            let m = terrain_chunk_mesh_on(t, x, z, step, ground);
             let chunk = TerrainChunk {
                 positions: &m.positions,
                 normals: &m.normals,
