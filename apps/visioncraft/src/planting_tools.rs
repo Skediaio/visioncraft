@@ -936,8 +936,12 @@ impl PlantingTools {
             .and_then(|id| stored(cx, id))
             .map_or(self.tool, |g| tool_of(&g))
             == Tool::Single;
+        let editing = self.editing();
         let form = self.active_form();
-        if single && matches!(target, AddTarget::Palette) {
+        // The starting palette is only a placeholder: the first pick replaces it (a hedge drawn
+        // after picking hornbeam is not half cherry trees).
+        let placeholder = !editing && form.palette == Form::default().palette;
+        if (single || placeholder) && matches!(target, AddTarget::Palette) {
             form.palette.clear();
         }
         let palette = match target {
