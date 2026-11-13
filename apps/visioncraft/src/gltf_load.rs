@@ -74,10 +74,10 @@ pub struct Glb {
 
 fn smooth_normals(positions: &[[f32; 3]], indices: &[u32]) -> Vec<[f32; 3]> {
     let mut n = vec![Vec3::ZERO; positions.len()];
-    for t in indices.chunks_exact(3) {
+    for t in indices.as_chunks::<3>().0 {
         let p = |i: u32| Vec3::from(positions[i as usize]);
         let f = (p(t[1]) - p(t[0])).cross(p(t[2]) - p(t[0]));
-        for &i in t {
+        for &i in t.iter() {
             n[i as usize] += f;
         }
     }
@@ -197,7 +197,7 @@ pub fn parse(bytes: &[u8]) -> Result<Glb, String> {
             );
             dst.uvs.extend(uvs);
             if flip {
-                for t in indices.chunks_exact_mut(3) {
+                for t in indices.as_chunks_mut::<3>().0 {
                     t.swap(1, 2);
                 }
             }
@@ -243,7 +243,7 @@ mod tests {
             "extensionsUsed": ["KHR_materials_emissive_strength"]
         });
         let mut j = serde_json::to_vec(&json).unwrap();
-        while j.len() % 4 != 0 {
+        while !j.len().is_multiple_of(4) {
             j.push(b' ');
         }
         let total = 12 + 8 + j.len() + 8 + bin.len();

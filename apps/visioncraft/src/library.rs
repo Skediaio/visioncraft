@@ -657,7 +657,7 @@ impl Library {
         self.messages.append(&mut self.store.messages);
         let ms = now_ms() - t0;
         self.worst_pump_ms = self.worst_pump_ms.max(ms);
-        if cfg!(target_arch = "wasm32") && tick % 30 == 0 {
+        if cfg!(target_arch = "wasm32") && tick.is_multiple_of(30) {
             self.publish_stats(r);
         }
         self.rev != rev_before
@@ -703,6 +703,35 @@ impl Library {
     }
 }
 
+/// The texture spec of a project material's `maps`: library paths, or `mcmat:` names for maps
+/// the app holds in memory. The same path in `roughness`, `metallic` and `ambient_occlusion`
+/// means one packed occlusion-roughness-metallic map (the core has no field for it yet).
+pub fn spec_of(maps: &visioncraft_core::material::MaterialMaps) -> TexSpec {
+    let src = |o: &Option<String>| {
+        o.as_ref().map(|s| {
+            if s.starts_with("mcmat:") {
+                TexSrc::Mem(s.clone())
+            } else {
+                TexSrc::Lib(s.clone())
+            }
+        })
+    };
+    let packed = matches!((&maps.roughness, &maps.metallic, &maps.ambient_occlusion),
+        (Some(a), Some(b), Some(c)) if a == b && b == c);
+    TexSpec {
+        base: src(&maps.base_color),
+        normal: src(&maps.normal),
+        orm: if packed { src(&maps.roughness) } else { None },
+        roughness: if packed { None } else { src(&maps.roughness) },
+        metallic: if packed { None } else { src(&maps.metallic) },
+        ao: if packed {
+            None
+        } else {
+            src(&maps.ambient_occlusion)
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -740,34 +769,5 @@ mod tests {
         )
         .unwrap();
         assert_eq!(s.skies[0].file, "f.hdr");
-    }
-}
-
-/// The texture spec of a project material's `maps`: library paths, or `mcmat:` names for maps
-/// the app holds in memory. The same path in `roughness`, `metallic` and `ambient_occlusion`
-/// means one packed occlusion-roughness-metallic map (the core has no field for it yet).
-pub fn spec_of(maps: &visioncraft_core::material::MaterialMaps) -> TexSpec {
-    let src = |o: &Option<String>| {
-        o.as_ref().map(|s| {
-            if s.starts_with("mcmat:") {
-                TexSrc::Mem(s.clone())
-            } else {
-                TexSrc::Lib(s.clone())
-            }
-        })
-    };
-    let packed = matches!((&maps.roughness, &maps.metallic, &maps.ambient_occlusion),
-        (Some(a), Some(b), Some(c)) if a == b && b == c);
-    TexSpec {
-        base: src(&maps.base_color),
-        normal: src(&maps.normal),
-        orm: if packed { src(&maps.roughness) } else { None },
-        roughness: if packed { None } else { src(&maps.roughness) },
-        metallic: if packed { None } else { src(&maps.metallic) },
-        ao: if packed {
-            None
-        } else {
-            src(&maps.ambient_occlusion)
-        },
     }
 }

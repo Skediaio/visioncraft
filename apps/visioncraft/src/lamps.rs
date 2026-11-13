@@ -219,9 +219,9 @@ impl LightsTool {
             cx.s.drag_capture = true;
         }
         if let (Some((id, pos, _)), Some(g)) = (&spot, ground) {
-            if cx.input.drag_started && near_handle {
-                self.aiming = Some(g);
-            } else if self.aiming.is_some() && cx.input.dragging {
+            if (cx.input.drag_started && near_handle)
+                || (self.aiming.is_some() && cx.input.dragging)
+            {
                 self.aiming = Some(g);
             }
             if self.aiming.is_some() && cx.input.drag_stopped {
@@ -244,14 +244,15 @@ impl LightsTool {
                 14.0,
             ));
         }
-        if self.aiming.is_none() && !near_handle {
-            if let Some(g) = ground {
-                let at = g + Vec3::Y * self.height;
-                top.extend(line(g, at, [255, 255, 255, 120], 1.5));
-                top.extend(line(at, at, [255, 214, 120, 255], 9.0));
-                if cx.input.clicked {
-                    self.click(cx, at);
-                }
+        if self.aiming.is_none()
+            && !near_handle
+            && let Some(g) = ground
+        {
+            let at = g + Vec3::Y * self.height;
+            top.extend(line(g, at, [255, 255, 255, 120], 1.5));
+            top.extend(line(at, at, [255, 214, 120, 255], 9.0));
+            if cx.input.clicked {
+                self.click(cx, at);
             }
         }
         if cx.input.delete

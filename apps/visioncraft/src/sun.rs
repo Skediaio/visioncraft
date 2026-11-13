@@ -369,17 +369,16 @@ fn view_fields(ui: &mut egui::Ui, cx: &mut Cx) {
                 json!({"exposure_ev": if auto { None } else { Some(13.0) }}),
             );
         }
-        if let Some(mut ev) = v.exposure_ev {
-            if ui
+        if let Some(mut ev) = v.exposure_ev
+            && ui
                 .add(
-                    egui::Slider::new(&mut ev, 6.0..=18.0)
+                    egui::Slider::new(&mut ev, 1.0..=18.0)
                         .text(t::EXPOSURE)
                         .max_decimals(1),
                 )
                 .drag_stopped()
-            {
-                cx.run("view.set", json!({"exposure_ev": ev}));
-            }
+        {
+            cx.run("view.set", json!({"exposure_ev": ev}));
         }
     });
     let mut field = |ui: &mut egui::Ui,

@@ -311,8 +311,10 @@ struct Owner {
 type Wanted = (String, Geom, Arc<ImportedModel>, Mat4, bool, bool, bool);
 
 /// The 3D grass of one owner's lawn faces.
+type LawnKey = (Geom, Mat4, Vec<(usize, [u32; 2], u64)>, u64, u8);
+
 struct LawnGpu {
-    key: (Geom, Mat4, Vec<(usize, [u32; 2], u64)>, u64, u8),
+    key: LawnKey,
     items: Vec<ItemId>,
 }
 
