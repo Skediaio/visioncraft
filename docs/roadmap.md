@@ -24,6 +24,21 @@ nothing here is a promise of a date.
 - **Tree form:** a better branch solver in the plant generator, compared against reference scans
   of real plants.
 
+- **North and site:** turn the whole drawing against north after the fact, and set the site by
+  address or coordinates, so the sun is right without knowing compass directions.
+- **Sun hours:** hours of sun per day for any spot or area, as a number and as a map over the
+  garden, by season and with grown plants; plants filtered by the light a spot gets.
+- **Shade from the surroundings:** neighbouring buildings and terrain as simple volumes that cast
+  shadow but are not part of the design.
+- **A plan as underlay:** a scaled image or PDF page of a floor plan or site plan under the
+  drawing, to trace over.
+- **Photos on walls:** a facade photo as the texture of a wall, straightened and scaled.
+- **Map data as a start:** import of outlines (parcel, buildings), a height raster as terrain and
+  an aerial image as ground texture from common geodata formats and services, with coordinates
+  converted to the drawing's metres and north.
+- **Quantities:** areas, lengths, volumes and counts per object and per material as a query, so
+  tools built on top can list what a design contains.
+
 ## Later
 
 - User species made of several models as growth stages.
