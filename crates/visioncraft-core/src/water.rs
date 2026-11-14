@@ -44,6 +44,11 @@ pub struct Sea {
     /// Limits the water to this polygon (`[x, z]`, 3..=64 points); empty: to the horizon.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub outline: Vec<[f32; 2]>,
+    /// A coastline to the horizon (`[x, z]`, 2..=16 points, the sea to its right as with
+    /// `terrain.shore`; the first and last stretches run on to the horizon): the endless ground
+    /// stays land on its left and drops under the water on its right. Empty: no coast.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub coast: Vec<[f32; 2]>,
 }
 
 /// How deep a person walks into the water (about knee-deep) before walking stops.
@@ -52,6 +57,32 @@ pub const WADE_DEPTH_M: f32 = 0.6;
 /// The most points an outline may have (the renderer tests them per pixel).
 pub const MAX_OUTLINE: usize = 64;
 
+/// The most points a coastline may have (the renderer tests them per vertex and pixel).
+pub const MAX_COAST: usize = 16;
+
+/// Signed distance (m) from `p` (`[x, z]`) to a coastline, positive on the sea side (its right);
+/// the first and last stretches run on without end. At least 2 points.
+pub fn coast_distance(coast: &[[f32; 2]], p: [f32; 2]) -> f32 {
+    let mut best = (f32::INFINITY, 1.0f32);
+    let last = coast.len().saturating_sub(2);
+    for (i, w) in coast.windows(2).enumerate() {
+        let (a, b) = (w[0], w[1]);
+        let d = [b[0] - a[0], b[1] - a[1]];
+        let q = [p[0] - a[0], p[1] - a[1]];
+        let len2 = (d[0] * d[0] + d[1] * d[1]).max(1e-9);
+        let lo = if i == 0 { f32::NEG_INFINITY } else { 0.0 };
+        let hi = if i == last { f32::INFINITY } else { 1.0 };
+        let t = ((q[0] * d[0] + q[1] * d[1]) / len2).clamp(lo, hi);
+        let dist = (q[0] - t * d[0]).hypot(q[1] - t * d[1]);
+        // At a corner both stretches agree on the side (the corner's region lies outside or
+        // inside both), so the first nearest one decides.
+        if dist < best.0 {
+            best = (dist, (d[0] * q[1] - d[1] * q[0]).signum());
+        }
+    }
+    best.0 * best.1
+}
+
 impl Default for Sea {
     fn default() -> Self {
         Sea {
@@ -59,13 +90,15 @@ impl Default for Sea {
             kind: WaterKind::Sea,
             sea_state: 2.0,
             direction_deg: None,
-            // A temperate coastal sea: dark blue-green.
-            color: [0.01, 0.05, 0.07],
-            clarity: 0.6,
+            // Open coastal water in clear weather: a deep blue (the Pacific off California); it
+            // turns turquoise by itself where a shallow sandy bed shows through.
+            color: [0.004, 0.026, 0.075],
+            clarity: 0.75,
             flow_deg: 0.0,
             flow_speed: 0.0,
             foam: 0.5,
             outline: Vec::new(),
+            coast: Vec::new(),
         }
     }
 }
@@ -98,6 +131,15 @@ impl Sea {
         {
             return Err(format!(
                 "an `outline` has 3 to {MAX_OUTLINE} finite points, or none for water to the horizon"
+            ));
+        }
+        if !self.coast.is_empty()
+            && (self.coast.len() < 2
+                || self.coast.len() > MAX_COAST
+                || !self.coast.iter().flatten().all(|c| c.is_finite()))
+        {
+            return Err(format!(
+                "a `coast` has 2 to {MAX_COAST} finite points, or none"
             ));
         }
         Ok(())
@@ -135,9 +177,11 @@ impl Sea {
         self.kind == WaterKind::Lake && self.sea_state <= 1.0
     }
 
-    /// Whether the water covers the point (x, z) at all (inside the outline, if there is one).
+    /// Whether the water covers the point (x, z) at all (inside the outline and on the sea side
+    /// of the coast, where there are such).
     pub fn covers(&self, x: f32, z: f32) -> bool {
-        self.outline.is_empty() || crate::shape::inside_outline([x, z], &self.outline)
+        (self.outline.is_empty() || crate::shape::inside_outline([x, z], &self.outline))
+            && (self.coast.len() < 2 || coast_distance(&self.coast, [x, z]) >= 0.0)
     }
 
     /// Whether a person may stand at (x, z) on ground `y` high: dry, or water up to
@@ -235,5 +279,34 @@ mod tests {
         assert_eq!(lake.depth_over(15.0, 5.0, 0.2), None, "outside the lake");
         assert_eq!(lake.depth_over(5.0, 5.0, 1.5), None, "dry ground");
         assert!(lake.wadeable(5.0, 5.0, 0.5) && !lake.wadeable(5.0, 5.0, 0.2));
+    }
+
+    #[test]
+    fn a_coast_keeps_the_sea_on_its_right_to_the_horizon() {
+        // West to east along z = 0, a headland bulging south (+z) at x = 100: sea to the south.
+        let coast = vec![
+            [-100.0, 0.0],
+            [80.0, 0.0],
+            [100.0, 40.0],
+            [120.0, 0.0],
+            [300.0, 0.0],
+        ];
+        let d = |x, z| coast_distance(&coast, [x, z]);
+        assert!((d(0.0, 10.0) - 10.0).abs() < 1e-4 && (d(0.0, -10.0) + 10.0).abs() < 1e-4);
+        // Past both ends the line runs on.
+        assert!(d(-5000.0, 3.0) > 0.0 && d(9000.0, -3.0) < 0.0);
+        // The headland: land behind its tip, sea in front.
+        assert!(d(100.0, 30.0) < 0.0 && d(100.0, 50.0) > 0.0);
+        let sea = Sea {
+            coast: coast.clone(),
+            ..Sea::default()
+        };
+        assert!(sea.validate().is_ok());
+        assert!(sea.covers(0.0, 5.0) && !sea.covers(0.0, -5.0));
+        let one = Sea {
+            coast: vec![[0.0, 0.0]],
+            ..Sea::default()
+        };
+        assert!(one.validate().is_err());
     }
 }

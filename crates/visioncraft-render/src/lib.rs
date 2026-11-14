@@ -108,7 +108,7 @@ const CLUSTER_CELL: f32 = 8.0;
 /// `set_time` wraps here (seconds) to keep f32 precision in the shaders.
 const TIME_WRAP: f64 = 4096.0;
 /// Byte offset of the SH in the globals (written by the GPU, see env.rs).
-const SH_OFFSET: u64 = 9 * 64 + 31 * 16;
+const SH_OFFSET: u64 = 9 * 64 + 40 * 16;
 
 const COMMON: &str = include_str!("common.wgsl");
 const SKY: &str = include_str!("sky.wgsl");
@@ -3603,12 +3603,12 @@ impl Renderer {
         } else {
             a.haze
         };
-        b.floats(&[
-            haze / 1000.0,
-            1.0 / a.haze_height_m,
-            ground_height,
-            a.sun_glow,
-        ]);
+        // The haze thins upwards from the lowest open ground: with a coast, the sea.
+        let haze_base = self
+            .sea()
+            .filter(|s| s.coast.len() >= 2)
+            .map_or(ground_height, |s| ground_height.min(s.level));
+        b.floats(&[haze / 1000.0, 1.0 / a.haze_height_m, haze_base, a.sun_glow]);
         let (source, rotation, scale, mips) = match &self.sky_source {
             SkySource::Preetham => (0.0, 0.0, 1.0, 1.0),
             SkySource::Physical => (1.0, 0.0, SUN_TOP_KLX, 1.0),
@@ -3671,6 +3671,18 @@ impl Renderer {
             0.0,
         ]);
         b.floats(&self.sky_volume_box);
+        // The sea's coastline: the endless ground stays land on its left (sea.rs).
+        let coast = self.sea().map_or(&[][..], |s| &s.coast[..]);
+        let n = if coast.len() >= 2 {
+            coast.len().min(sea::COAST)
+        } else {
+            0
+        };
+        let level = self.sea().map_or(0.0, |s| s.level);
+        b.floats(&[n as f32, level, level - 20.0, 0.0]);
+        for i in 0..sea::COAST {
+            b.floats(&coast.get(i).filter(|_| i < n).copied().unwrap_or([0.0; 2]));
+        }
         debug_assert_eq!(b.0.len() as u64, SH_OFFSET);
         self.queue.write_buffer(buffer, 0, &b.0);
     }
@@ -3909,7 +3921,7 @@ fn snow_cover_matrix(eye: Vec3, lo: Vec3, hi: Vec3, resolution: u32) -> Mat4 {
 const SNOW_COVER_M: f32 = 160.0;
 
 fn globals_size() -> u64 {
-    // 8 matrices, 28 vec4s, the 9 SH vec4s last; see common.wgsl.
+    // 9 matrices, 40 vec4s, the 9 SH vec4s last; see common.wgsl.
     SH_OFFSET + 9 * 16
 }
 
@@ -5564,9 +5576,22 @@ mod tests {
 
     #[test]
     fn globals_match_the_shader_layout() {
-        // common.wgsl: 8 mat4, 28 vec4, the snow cover's mat4 and the snow vec4, then the 9 SH vec4.
-        assert_eq!(SH_OFFSET, 9 * 64 + 31 * 16);
+        // Read the layout from the WGSL itself, so a field added on one side only fails here.
+        let module = naga::front::wgsl::parse_str(COMMON).unwrap();
+        let (span, members) = module
+            .types
+            .iter()
+            .find_map(|(_, t)| match &t.inner {
+                naga::TypeInner::Struct { members, span } if t.name.as_deref() == Some("Globals") => {
+                    Some((*span, members.clone()))
+                }
+                _ => None,
+            })
+            .expect("Globals in common.wgsl");
+        let sh = members.iter().find(|m| m.name.as_deref() == Some("sh"));
+        assert_eq!(u64::from(sh.unwrap().offset), SH_OFFSET);
         assert_eq!(SH_OFFSET % 16, 0, "SH copy needs 16-byte texel alignment");
+        assert_eq!(globals_size(), u64::from(span));
         assert_eq!(globals_size(), SH_OFFSET + 144);
     }
 

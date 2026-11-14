@@ -12,7 +12,7 @@ The plan, room schedule and dimensions are in [brief.md](brief.md).
 | `bodies.json` | Generated: body name -> 3DCraft feature id, the ids VisionCraft assigns materials to. |
 | `../../../crates/visioncraft-core/src/examples/beach-house.3dcraft` | Generated from the script by `craft3d-cli`. Do not edit by hand. |
 | `../../../crates/visioncraft-core/src/examples/beach-house-furnished.json` | Generated: the furnished house in VisionCraft (the model, materials per body, furniture, lights), shared by the `beach-house` and `coast` examples. |
-| `../../../crates/visioncraft-core/src/examples/beach-house.json` | Generated: the rest of the `beach-house` example (sand, site, time, viewpoints). The `coast` example's own part, `coast.json`, is written by hand. |
+| `../../../crates/visioncraft-core/src/examples/beach-house.json` | Generated: the rest of the `beach-house` example (sand, site, time, viewpoints). The `coast` example's own part, `coast.json`, comes from [../coast/generate.py](../coast/generate.py). |
 
 ## Regenerate
 
@@ -29,7 +29,7 @@ its `feature` should match `bodies.json`. A quick look in 3DCraft itself:
 
 Then `cargo test -p visioncraft-core examples` checks the counts. If a change adds or removes
 bodies, furniture or lights, update the numbers in `the_beach_house_builds_furnished_and_lit` and
-`the_coast_has_a_house_above_the_beach_and_the_sea_beyond`.
+`the_coast_is_a_mainland_beach_with_the_house_low_by_the_water`.
 
 ## How it is built
 

@@ -34,12 +34,20 @@ pub struct Sea {
     pub freezes: bool,
     /// The water only inside this polygon (`[x, z]`, up to 64 points); empty: everywhere.
     pub outline: Vec<[f32; 2]>,
+    /// A coastline to the horizon (`[x, z]`, up to 16 points, the sea to its right): the endless
+    /// ground stays land on its left and drops under the water on its right.
+    pub coast: Vec<[f32; 2]>,
 }
 
 /// Waves on MEDIUM and above; LOW has the first (longest) half.
 pub const WAVES: usize = 16;
 const OUTLINE: usize = 64;
-const UNIFORM_SIZE: u64 = 4 * 16 + (WAVES as u64) * 32 + (OUTLINE as u64 / 2) * 16;
+/// The bed slope the surf's crest spacing assumes (1:25, a typical sandy nearshore).
+// shortcut: one slope for every beach; upgrade by measuring it from the terrain under the water.
+const SURF_SLOPE: f32 = 0.04;
+/// Coastline points in the globals.
+pub(crate) const COAST: usize = 16;
+const UNIFORM_SIZE: u64 = 5 * 16 + (WAVES as u64) * 32 + (OUTLINE as u64 / 2) * 16;
 const RINGS: u32 = 96;
 const SEGMENTS: u32 = 128;
 
@@ -55,7 +63,7 @@ pub struct Wave {
     pub q: f32,
 }
 
-/// The wave set for a sea: wavelengths from 1.8 lambda_p down to lambda_p / 30 in a geometric
+/// The wave set for a sea: wavelengths (two near the peak, see below) from 1.8 lambda_p down to lambda_p / 30 in a geometric
 /// series, amplitudes from the Pierson-Moskowitz spectrum S(w) ~ w^-5 exp(-1.25 (w_p / w)^4)
 /// sampled per log-spaced band (A^2 ~ S(w) dw, dw ~ w, and w ~ lambda^-1/2 in deep water give
 /// A ~ lambda exp(-0.625 (lambda / lambda_p)^2)), scaled so that H_s = 4 sqrt(sum A^2 / 2)
@@ -69,7 +77,13 @@ pub fn waves(sea: &Sea) -> Vec<Wave> {
     let river = sea.flow[0].hypot(sea.flow[1]) > 0.05;
     let mut out: Vec<Wave> = (0..WAVES)
         .map(|i| {
-            let lambda = 1.8 * lp * ratio.powi(i as i32);
+            // The second and third waves sit near the peak, 15 % apart, so that they beat into
+            // groups of about seven waves instead of running as even stripes.
+            let lambda = match i {
+                1 => 1.15 * lp,
+                2 => lp,
+                _ => 1.8 * lp * ratio.powi(i as i32),
+            };
             let k = std::f32::consts::TAU / lambda;
             // Deterministic spread: a golden-ratio sequence in -1..1.
             let u = (i as f32 * 0.618_034 + 0.31).fract() * 2.0 - 1.0;
@@ -187,18 +201,6 @@ impl SeaPipelines {
                 },
             )
         };
-        let multiply = wgpu::BlendState {
-            color: wgpu::BlendComponent {
-                src_factor: wgpu::BlendFactor::Zero,
-                dst_factor: wgpu::BlendFactor::Src,
-                operation: wgpu::BlendOperation::Add,
-            },
-            alpha: wgpu::BlendComponent {
-                src_factor: wgpu::BlendFactor::Zero,
-                dst_factor: wgpu::BlendFactor::One,
-                operation: wgpu::BlendOperation::Add,
-            },
-        };
         Self {
             surface: make(
                 "sea",
@@ -211,7 +213,7 @@ impl SeaPipelines {
                 "sea wet band",
                 "vs_sea_wet",
                 "fs_sea_wet",
-                multiply,
+                wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
                 wgpu::CompareFunction::Always,
             ),
         }
@@ -278,6 +280,10 @@ impl Renderer {
             s.wave_height_m,
             1.0,
         ]);
+        // The surf: the peak frequency (deep-water dispersion), a nominal nearshore slope and the
+        // swell's direction.
+        let omega_p = (9.81 * std::f32::consts::TAU / s.peak_wavelength_m.max(0.1)).sqrt();
+        b.floats(&[omega_p, SURF_SLOPE, s.direction[0], s.direction[1]]);
         for i in 0..WAVES {
             let w = self.sea.waves.get(i).copied().unwrap_or(Wave {
                 direction: [1.0, 0.0],
@@ -330,6 +336,7 @@ mod tests {
             foam: 0.5,
             freezes: false,
             outline: Vec::new(),
+            coast: Vec::new(),
         }
     }
 
@@ -356,7 +363,7 @@ mod tests {
 
     #[test]
     fn the_uniform_has_the_shaders_layout() {
-        // SeaParams: four vec4, 16 waves of two vec4, 32 vec4 of outline points.
-        assert_eq!(UNIFORM_SIZE, 64 + 16 * 32 + 32 * 16);
+        // SeaParams: five vec4, 16 waves of two vec4, 32 vec4 of outline points.
+        assert_eq!(UNIFORM_SIZE, 80 + 16 * 32 + 32 * 16);
     }
 }
