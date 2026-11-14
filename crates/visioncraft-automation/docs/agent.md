@@ -301,7 +301,10 @@ the terrain, path lights, a walnut on a hidden layer and three viewpoints. `{"na
 "beach-house"}` is a furnished single-storey house imported from 3DCraft
 (`example:beach-house.3dcraft`, one body per element group, from
 `examples/models/beach-house/`), with library materials, catalogue furniture, downlights in
-every room and ten viewpoints inside and out.
+every room and ten viewpoints inside and out. For a furnished plan from above, take its roof
+off: `{"id": "model.set_hidden_bodies", "params": {"id": "m1", "bodies": ["roof",
+"roof-membrane", "fascia", "ceiling", "ceiling-living"]}}` (body names or feature ids; saved with
+the project; an empty list shows them again).
 
 ### 16. How the garden grows
 
