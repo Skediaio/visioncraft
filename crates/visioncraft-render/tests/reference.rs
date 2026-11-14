@@ -770,7 +770,9 @@ fn r_macro_variation() {
             check("r_macro_variation", &px);
         }
     }
-    assert!(spreads[1] > spreads[0] + 4.0, "block spread {spreads:?}");
+    // The variation is subtle on purpose (scene.wgsl `macro_variation`, two thirds of its first
+    // strength): a spread of about 4 levels of 255 at full variation, against 0.5 without.
+    assert!(spreads[1] > spreads[0] + 2.5, "block spread {spreads:?}");
 }
 
 /// An orthographic plan view of the garden: shadows work (the house's
