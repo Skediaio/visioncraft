@@ -45,8 +45,13 @@ pub struct Studio {
     pub quality: usize,
     /// Follow `suggest_quality` instead of the preset in `quality`.
     pub quality_auto: bool,
-    auto_quality: Quality,
+    pub auto_quality: Quality,
     pub frame_ms: Vec<f32>,
+    /// What the hardware probe found and chose (`hardware::Measured::line`), for the Quality menu.
+    pub hardware_line: Option<String>,
+    /// The Quality menu's Re-measure: calibrate again on the next frame.
+    pub remeasure: bool,
+    pub measuring: bool,
     /// UTC offset follows the EU summer-time rule for the chosen date.
     pub auto_dst: bool,
     pub base_offset: f64,
@@ -222,6 +227,9 @@ impl Studio {
             quality_auto: true,
             auto_quality: Quality::MEDIUM,
             frame_ms: Vec::new(),
+            hardware_line: None,
+            remeasure: false,
+            measuring: false,
             auto_dst: true,
             base_offset: 1.0,
             exposure: 0.0,

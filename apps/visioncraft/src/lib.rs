@@ -15,6 +15,7 @@ pub mod files;
 pub mod fixtures;
 pub mod gltf_load;
 pub mod handles;
+pub mod hardware;
 pub mod import_task;
 pub mod lamps;
 pub mod library;
@@ -102,6 +103,7 @@ pub struct App {
     egui_renderer: Arc<egui::mutex::RwLock<egui_wgpu::Renderer>>,
     texture: Option<egui::TextureId>,
     studio: Studio,
+    hardware: hardware::Hardware,
     hud: Hud,
     toasts: Toasts,
     inbox: Inbox,
@@ -176,6 +178,7 @@ impl App {
             queue: state.queue.clone(),
             egui_renderer: state.renderer.clone(),
             texture: None,
+            hardware: hardware::Hardware::new(renderer.probe()),
             studio: Studio::new(renderer, restored.unwrap_or_default()),
             hud: Hud::default(),
             toasts: Toasts::default(),
@@ -908,7 +911,7 @@ impl eframe::App for App {
         self.stored_revision = Some(rev);
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         let rect = ctx.content_rect();
         let ppp = ctx.pixels_per_point();
@@ -1160,6 +1163,21 @@ impl eframe::App for App {
         let rebuilt = self.studio.resize(size[0], size[1])
             || quality_changed
             || std::mem::take(&mut self.studio.targets_changed);
+        // The starting tier from this device's hardware (kept per adapter and size class).
+        if let Some(m) = self.hardware.pump(
+            &self.device,
+            &self.queue,
+            frame.storage_mut(),
+            (size[0], size[1]),
+            &mut self.studio.remeasure,
+        ) {
+            self.studio.auto_quality = m.quality();
+            self.studio.frame_ms.clear();
+            hardware::note(&format!("starting quality: {}", m.line()));
+            self.studio.hardware_line = Some(m.line());
+        }
+        self.studio.measuring = self.hardware.busy();
+        busy |= self.studio.measuring;
         self.studio.clock = now;
         busy |= self.studio.animating()
             || self.studio.plants_pending() > 0

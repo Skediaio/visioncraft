@@ -563,6 +563,7 @@ impl Hud {
                     Quality::PRESETS[cx.s.quality].0
                 };
                 egui::ComboBox::from_id_salt("quality")
+                    .height(400.0)
                     .selected_text(if compact {
                         name.to_string()
                     } else {
@@ -594,6 +595,21 @@ impl Hud {
                             .on_hover_text(t::VIEW_DISTANCE_TIP);
                         if r.drag_stopped() || (r.changed() && !r.dragged()) {
                             cx.run("view.set", serde_json::json!({"view_distance": vd}));
+                        }
+                        ui.separator();
+                        // What the hardware probe found: where Auto started.
+                        if cx.s.measuring {
+                            ui.weak(t::MEASURING);
+                        } else if let Some(line) = &cx.s.hardware_line {
+                            ui.weak(line);
+                        }
+                        if ui
+                            .add_enabled(!cx.s.measuring, egui::Button::new(t::REMEASURE))
+                            .on_hover_text(t::REMEASURE_TIP)
+                            .clicked()
+                        {
+                            cx.s.remeasure = true;
+                            cx.s.quality_auto = true;
                         }
                     });
                 let export = ui.selectable_label(self.export_open, t::EXPORT);
