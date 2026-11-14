@@ -114,6 +114,10 @@ impl Loading {
 pub struct Match {
     pub leaf: Option<(String, String)>,
     pub bark: Option<(String, String)>,
+    /// The index lists the species itself. A form it does not list (a clipped hedge) takes its
+    /// genus' leaf shapes in its own drawn colour: a hornbeam sheet photographed pale lime made
+    /// the hornbeam hedge yellowish, where a clipped hedge's sun leaves are dark.
+    pub listed: bool,
 }
 
 #[derive(Default)]
@@ -244,6 +248,7 @@ impl ScanLib {
         let none = Match {
             leaf: None,
             bark: None,
+            listed: false,
         };
         if params.drawn {
             return none;
@@ -252,6 +257,10 @@ impl ScanLib {
         let id = id.strip_prefix("flora:").unwrap_or(id);
         // A species the index does not list (a hedge form) takes its genus' sets.
         let genus = id.split('-').next().unwrap_or(id);
+        let listed = self
+            .index
+            .as_ref()
+            .is_some_and(|i| i.species.contains_key(id));
         let Some(s) = self.index.as_ref().and_then(|i| {
             i.species.get(id).or_else(|| {
                 let mut same: Vec<_> = i
@@ -277,6 +286,7 @@ impl ScanLib {
             // A look-alike bark would lose what the drawn one keeps (a birch's white and
             // black, a cherry's red-brown bands): only the genus' own.
             bark: s.bark.clone().filter(|b| b.1 == "genus"),
+            listed,
         }
     }
 
@@ -290,7 +300,7 @@ impl ScanLib {
             match self.leaves.get(leaf) {
                 Some(Some(s)) => {
                     out.leaf = Some(s.clone());
-                    out.leaf_hue = how == "genus";
+                    out.leaf_hue = how == "genus" && m.listed;
                     key.push_str(leaf);
                 }
                 Some(None) => {}

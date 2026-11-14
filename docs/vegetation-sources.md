@@ -36,10 +36,14 @@ and pass the second.
 Indexes are tracked in git (`assets/catalog.json`, `materials.json`, `skies.json`, `tiers.json`,
 `flora.json`); the files themselves are not. `tools/visioncraft-assets` fetches and ingests them.
 
-Scanned leaf coverage of the 118 species: 0 exact species, 17 same genus (3 by the source's own
-tags, 14 identified by eye and not botanically verified), 84 by leaf shape class (a look-alike,
-not the plant), 17 none (conifers, palms, ginkgo, peony, lupin, sedum, creeper, water lily,
-tomato). Those 17 keep drawn leaves.
+Scanned leaf coverage of the 118 species: 0 exact species, 16 same genus (3 by the source's own
+tags, 13 identified by eye and not botanically verified), 84 by leaf shape class (a look-alike,
+not the plant), 18 none (conifers, palms, ginkgo, peony, lupin, sedum, creeper, water lily,
+tomato, and cranesbill: its sheet's rounded, shallowly lobed leaves made 'Rozanne' a ball of
+discs). Those 18 keep drawn leaves. Hedge forms (a clipped hornbeam) take their genus' leaf
+shapes in their own drawn colour. LeafSet014 (hornbeam): three of its six cut-outs had the tip
+taken for the petiole and were turned round by hand in `flora.json`; the asset tool's petiole
+finder still mistakes a long drip tip for a petiole and would find them again on a fresh ingest.
 
 ## Sources that may be shipped
 

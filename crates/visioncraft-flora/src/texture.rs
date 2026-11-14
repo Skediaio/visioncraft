@@ -427,11 +427,17 @@ fn stamp_leaf(cv: &mut Canvas, scan: &LeafScan, base: (f32, f32), ang: f32, len:
     let (ax, ay) = (c.axis[0], c.axis[1]);
     let (pax, pay) = (-ay, ax);
     // Canvas pixels per sheet width. A drawn leaf's length is its blade; a scanned one's runs
-    // from the petiole's base, about a fifth longer.
-    let k = len * 1.2 / c.length.max(1e-4);
+    // from the petiole's base, about a fifth longer. A palmate leaf's petiole meets it in the
+    // middle (a cranesbill's): its pivot-to-tip is half the leaf, so the leaf's whole extent
+    // along its axis is what matches the drawn length; it stamped twice too large before.
+    let [rx, ry, rw, rh] = c.rect;
+    let along = [(rx, ry), (rx + rw, ry), (rx, ry + rh), (rx + rw, ry + rh)]
+        .map(|(x, y)| (x - c.pivot[0]) * c.axis[0] + (y - c.pivot[1]) * c.axis[1]);
+    let extent = along.iter().fold(f32::MIN, |a, &b| a.max(b))
+        - along.iter().fold(f32::MAX, |a, &b| a.min(b));
+    let k = len * 1.2 / c.length.max(0.85 * extent).max(1e-4);
     // The cut-out's corners on the canvas bound the stamp.
     let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
-    let [rx, ry, rw, rh] = c.rect;
     for (sx, sy) in [(rx, ry), (rx + rw, ry), (rx, ry + rh), (rx + rw, ry + rh)] {
         let (ox, oy) = (sx - c.pivot[0], sy - c.pivot[1]);
         let (al, be) = ((ox * ax + oy * ay) * k, (ox * pax + oy * pay) * k);
