@@ -253,6 +253,8 @@ impl ScanLib {
         if params.drawn {
             return none;
         }
+        // Fallen leaves are dead leaves, whatever the month: the species' autumn sheet.
+        let litter = id.starts_with(crate::plants::CLUTTER_PREFIX);
         let id = self.aliases.get(id).map_or(id, String::as_str);
         let id = id.strip_prefix("flora:").unwrap_or(id);
         // A species the index does not list (a hedge form) takes its genus' sets.
@@ -274,7 +276,7 @@ impl ScanLib {
         }) else {
             return none;
         };
-        let autumn = (9..=11).contains(&month) && params.deciduous;
+        let autumn = litter || ((9..=11).contains(&month) && params.deciduous);
         Match {
             leaf: autumn
                 .then(|| {
