@@ -1505,3 +1505,46 @@ fn beauty_house_evening() {
         eprintln!("wrote {}", path.display());
     }
 }
+
+/// A renderer keeps nothing of one picture's sky in the next: a dusk frame after a noon one
+/// (another sun, exposure, haze and sun glow) matches a dusk frame from a fresh renderer.
+#[test]
+fn p_dusk_after_noon_matches_a_fresh_dusk() {
+    let aspect = W as f32 / H as f32;
+    let frame = |r: &mut Renderer, sun: Sun, ev: f32, haze: f32, glow: f32, cover: f32| {
+        setup(r, demo::house_camera(aspect), sun, ev);
+        r.set_atmosphere(&Atmosphere {
+            haze,
+            sun_glow: glow,
+            ..Default::default()
+        });
+        r.set_clouds(&visioncraft_render::Clouds {
+            cover,
+            overcast: false,
+        });
+        r.finish_environment();
+        capture(r, W, H)
+    };
+    let fresh = || {
+        let mut r = renderer(W, H);
+        demo::house(&mut r);
+        r.set_sky(&Sky::Physical).unwrap();
+        r
+    };
+    let dusk = Sun::from_angles(300.0, -1.0);
+    let mut diffs = Vec::new();
+    for (haze, glow, cover) in [(0.8, 0.36, 0.3), (0.8, 0.36, 0.0), (1.0, 0.5, 0.0), (1.0, 0.5, 0.3)] {
+        let want = frame(&mut fresh(), dusk, 8.0, 0.8, 0.36, cover);
+        let mut used = fresh();
+        frame(&mut used, demo::afternoon_sun(), 15.0, haze, glow, cover);
+        let got = frame(&mut used, dusk, 8.0, 0.8, 0.36, cover);
+        let diff = want
+            .iter()
+            .zip(&got)
+            .map(|(a, b)| f64::from(a.abs_diff(*b)))
+            .sum::<f64>()
+            / want.len() as f64;
+        diffs.push(((haze, glow, cover), diff));
+    }
+    assert!(diffs.iter().all(|d| d.1 < 1.0), "{diffs:?}");
+}
