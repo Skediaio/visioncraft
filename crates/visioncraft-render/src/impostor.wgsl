@@ -185,10 +185,16 @@ fn impostor_sample(in: ImpostorVarying) -> ImpostorSample {
         a = mix(a, textureSampleLevel(impostor_albedo, impostor_smp, uvt, lod), in.views.w);
         n = mix(n, textureSampleLevel(impostor_normal, impostor_smp, uvt, lod), in.views.w);
     }
+    // Past the dilated border the atlas is empty (all zero), and the mips average that in: a
+    // small plant's mip came out darker and its normals bent towards (-1, -1, -1), a grey pebble.
+    // The normal's alpha is the share of baked or dilated texels, so dividing by it gives back
+    // the mean of the plant's own texels.
+    let filled = max(n.a, 1e-3);
+    a = vec4<f32>(a.rgb / filled, a.a);
     // Averaged mips of a sparse crown lose coverage faster than a leaf
     // texture: twice the cutout rescale keeps the silhouette.
     a.a *= 1.0 + lod * 0.5;
-    return ImpostorSample(a, n.xyz * 2.0 - 1.0);
+    return ImpostorSample(a, n.xyz / filled * 2.0 - 1.0);
 }
 
 // Alpha only (the depth-only passes): the same mix as `impostor_sample`, or
@@ -268,13 +274,16 @@ fn fs_impostor_shadow(in: ImpostorVarying) {
 fn impostor_shade(in: ImpostorVarying, screen_effects: bool) -> vec3<f32> {
     let t = impostor_sample(in);
     let n_world = normalize(mat3x3<f32>(in.n0, in.n1, in.n2) * t.normal);
+    // The baked normal's length: the leaves' sky (`fs_bake`), and in the mips also how much the
+    // normals of a texel's leaves diverge, which a clump of leaves shades itself by.
+    let sky = clamp(length(t.normal), 0.0, 1.0);
     var s: Surface;
     s.base = vec4<f32>(t.albedo.rgb, 1.0);
     s.n = n_world;
     s.geometric = n_world;
     s.roughness = 0.7;
     s.metallic = 0.0;
-    s.ao = 1.0;
+    s.ao = sky;
     s.emissive = vec3<f32>(0.0);
     let v = Varying(in.clip, in.world, n_world, 0xfffffffdu, vec2<f32>(0.0));
     return light(v, s, true, 0.0, screen_effects).color;
@@ -370,10 +379,12 @@ fn fs_bake(in: BakeOut, @builtin(front_facing) front: bool) -> BakeTargets {
     if material.flags.y != 0u && material.alpha.w == 0.0 && !front {
         n = -n;
     }
-    // The impostor has no light of its own inside the crown: the leaves' sky goes into the albedo.
+    // The leaves' sky (their place in the crown) goes into the normal's length, so the impostor
+    // shades with it as occlusion as the leaves do (`shade`). In the albedo it dimmed the sun on
+    // the impostor fully where the leaves lose only 0.6 of it: darker than the plant.
     var sky = 1.0;
     if material.alpha.w > 0.0 {
         sky = crown_sky(in.face);
     }
-    return BakeTargets(vec4<f32>(base.rgb * sky, 1.0), vec4<f32>(n * 0.5 + 0.5, 1.0));
+    return BakeTargets(vec4<f32>(base.rgb, 1.0), vec4<f32>(n * sky * 0.5 + 0.5, 1.0));
 }
