@@ -3,7 +3,7 @@
 
 use crate::strings as t;
 use crate::ui::{Cx, Edit};
-use eframe::egui::{self, Color32, Pos2, Sense, Stroke, Vec2};
+use eframe::egui::{self, Color32, Pos2, RichText, Sense, Stroke, Vec2};
 use serde_json::json;
 use visioncraft_core::sun::{sun_position, sunrise_sunset};
 use visioncraft_core::{Site, SunTime};
@@ -120,6 +120,53 @@ pub fn panel(ui: &mut egui::Ui, cx: &mut Cx, terrain: &mut crate::terrain_tool::
     });
 }
 
+/// Spring, Summer, Autumn, Winter and a snowy winter (`view.set {season, snow}`), and the snow.
+fn season_row(ui: &mut egui::Ui, cx: &mut Cx) {
+    use visioncraft_core::Season;
+    let p = cx.s.project();
+    let (now, snow) = (Season::of(cx.s.time().month, p.site.latitude), p.view.snow);
+    let mut run = None;
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new(t::SEASON).strong());
+        for (s, label) in Season::ALL.into_iter().zip(t::SEASONS) {
+            let on = now == s && (s != Season::Winter || snow == 0.0);
+            if ui.selectable_label(on, label).clicked() {
+                // Snow belongs to winter: another season clears it.
+                run = Some(if snow > 0.0 && s != Season::Winter {
+                    json!({"season": s.name(), "snow": 0})
+                } else {
+                    json!({"season": s.name()})
+                });
+            }
+        }
+        let snowy = now == Season::Winter && snow > 0.0;
+        if ui
+            .selectable_label(snowy, t::SNOWY)
+            .on_hover_text(t::SNOWY_TIP)
+            .clicked()
+            && !snowy
+        {
+            run = Some(json!({"season": "winter", "snow": SNOWY,
+                "clouds": {"kind": "overcast", "cover": 0.8}}));
+        }
+    });
+    if now == Season::Winter || snow > 0.0 {
+        let mut v = snow;
+        let r = ui
+            .add(egui::Slider::new(&mut v, 0.0..=1.0).text(t::SNOW))
+            .on_hover_text(t::SNOW_TIP);
+        if r.drag_stopped() || (r.changed() && !r.dragged()) {
+            run = Some(json!({"snow": (v * 100.0).round() / 100.0}));
+        }
+    }
+    if let Some(params) = run {
+        cx.run("view.set", params);
+    }
+}
+
+/// Snow of the Snowy winter.
+const SNOWY: f32 = 0.7;
+
 fn panel_body(ui: &mut egui::Ui, cx: &mut Cx) {
     let (site, mut time) = (cx.s.site(), cx.s.time());
     let committed = cx.s.project().time;
@@ -129,6 +176,17 @@ fn panel_body(ui: &mut egui::Ui, cx: &mut Cx) {
     if let Some((az, el)) = sky_sun {
         pos.azimuth_deg = az;
         pos.elevation_deg = el;
+    }
+    season_row(ui, cx);
+    // The exact date (for sun studies) is folded away: the season is what most people choose.
+    let exact_id = ui.id().with("exact-date");
+    let mut exact = ui.data(|d| d.get_temp::<bool>(exact_id).unwrap_or(false));
+    if ui
+        .checkbox(&mut exact, t::EXACT_DATE)
+        .on_hover_text(t::EXACT_DATE_TIP)
+        .changed()
+    {
+        ui.data_mut(|d| d.insert_temp(exact_id, exact));
     }
     ui.small(t::SUN_HINT);
     let mut time_edit = Edit::None;
@@ -226,6 +284,9 @@ fn panel_body(ui: &mut egui::Ui, cx: &mut Cx) {
             time_edit = Edit::Done;
         }
 
+        if !exact {
+            return;
+        }
         // Month dial.
         let (r, painter) = ui.allocate_painter(Vec2::splat(112.0), Sense::click_and_drag());
         let (c, radius) = (r.rect.center(), 44.0);
@@ -280,12 +341,14 @@ fn panel_body(ui: &mut egui::Ui, cx: &mut Cx) {
         }
     };
     ui.horizontal(|ui| {
-        ui.label(t::DATE);
-        field_edit(ui.add(egui::DragValue::new(&mut time.year).range(1900..=2100)));
-        field_edit(ui.add(egui::DragValue::new(&mut time.month).range(1..=12)));
-        let dim = days_in_month(time.year, time.month);
-        time.day = time.day.min(dim);
-        field_edit(ui.add(egui::DragValue::new(&mut time.day).range(1..=dim)));
+        if exact {
+            ui.label(t::DATE);
+            field_edit(ui.add(egui::DragValue::new(&mut time.year).range(1900..=2100)));
+            field_edit(ui.add(egui::DragValue::new(&mut time.month).range(1..=12)));
+            let dim = days_in_month(time.year, time.month);
+            time.day = time.day.min(dim);
+            field_edit(ui.add(egui::DragValue::new(&mut time.day).range(1..=dim)));
+        }
         ui.label(t::TIME);
         field_edit(
             ui.add(
