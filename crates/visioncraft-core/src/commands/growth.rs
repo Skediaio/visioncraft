@@ -31,7 +31,7 @@ pub(super) fn register(s: &mut Session) {
         spec(
             "planting.growth_conflicts",
             "Growth Conflicts",
-            "Where single trees and shrubs will grow into a building or into each other: the first year (up to `years`) the crown reaches a block's wall, or two crowns meet.",
+            "Where trees (and single shrubs) will grow into a building or into each other: the first year (up to `years`) a crown reaches a block's wall or two crowns meet. Trees of lines and scatters count too, at most 400 plants.",
             vec![param("years", T::Number, "How far to look ahead (0..60).").default(json!(30))],
             "{conflicts: [{planting, name, with, kind (wall|crown), year}]}",
             json!({"years": 20}),
@@ -40,6 +40,9 @@ pub(super) fn register(s: &mut Session) {
         growth_conflicts,
     );
 }
+
+/// The most plants `planting.growth_conflicts` compares.
+const MAX_PLANTS: usize = 400;
 
 /// The age (years) a planting's plants of `asset` have when planted.
 pub fn planted_age(g: &Generator, asset: &str) -> f32 {
@@ -120,31 +123,53 @@ fn growth_conflicts(project: &mut Project, params: &Value) -> Result<Value, Comm
     if !(0.0..=YEARS_MAX).contains(&p.years) {
         return Err(bad("years: 0..60"));
     }
-    // Single plantings of woody plants: (id, name, x, z, growth, planted age).
-    let plants: Vec<_> = project
-        .generators
-        .iter()
-        .filter_map(|g| match g {
-            Generator::Single(s) => {
-                let gr = growth_of(&s.asset, None);
+    // Trees and shrubs of every planting (single ones and those of lines and scatters, by
+    // where they are placed): (planting id, name, x, z, growth, planted age, scale). Scattered
+    // plantings count their trees only, and at most `MAX_PLANTS` plants are compared.
+    let mut plants = Vec::new();
+    for g in &project.generators {
+        if matches!(g, Generator::SurfaceFill(_)) {
+            continue; // placed on a model's faces: the app knows those, the core does not
+        }
+        let single = matches!(g, Generator::Single(_));
+        let ground = |x: f32, z: f32| {
+            project
+                .terrain
+                .as_deref()
+                .and_then(|t| t.height_at(x, z))
+                .or(Some(0.0))
+        };
+        for (k, pl) in crate::planting::evaluate(g, &ground)
+            .placements
+            .iter()
+            .enumerate()
+        {
+            let gr = growth_of(&pl.asset, None);
+            let woody = if single {
                 matches!(
                     gr.grower,
                     Grower::Tree | Grower::Conifer | Grower::Palm | Grower::Shrub
                 )
-                .then(|| {
-                    (
-                        s.id.clone(),
-                        s.name.clone(),
-                        [s.position[0], s.position[2]],
-                        gr,
-                        planted_age(g, &s.asset),
-                        s.scale,
-                    )
-                })
+            } else {
+                matches!(gr.grower, Grower::Tree | Grower::Conifer | Grower::Palm)
+            };
+            if woody && plants.len() < MAX_PLANTS {
+                let name = if single {
+                    g.name().to_string()
+                } else {
+                    format!("{} (#{})", g.name(), k + 1)
+                };
+                plants.push((
+                    g.id().to_string(),
+                    name,
+                    [pl.position[0], pl.position[2]],
+                    gr,
+                    planted_age(g, &pl.asset),
+                    pl.scale,
+                ));
             }
-            _ => None,
-        })
-        .collect();
+        }
+    }
     let blocks: Vec<(&str, &str, &[[f32; 2]])> = project
         .shapes
         .iter()
