@@ -547,7 +547,24 @@ fn finish(
                 }
             }
         }
+        // Bays: a crown's outline is broken by gaps where a limb's branch system ends and the
+        // next begins, deeper in tortuous species. Shoots in them get little light.
+        let mut brng = Rng::new(seed, 15);
+        let bays: [(V3, f32); 3] = std::array::from_fn(|_| {
+            (
+                crate::mesh::rand_dir(&mut brng) * brng.range(5.0, 8.0),
+                brng.f() * TAU,
+            )
+        });
+        let rough = (b.levels[0].curve_var_deg / 40.0).clamp(0.15, 0.5);
+        let (c, inv) = ((lo + hi) * 0.5, 1.0 / ((hi - lo).len() * 0.5).max(0.1));
         for (_, _, s) in &mut shoots {
+            let u = (s.p - c) * inv;
+            let bay: f32 = bays.iter().map(|(k, ph)| sin(u.dot(*k) + ph)).sum::<f32>() / 3.0;
+            if bay < rough - 0.95 {
+                s.light = 0.0;
+                continue;
+            }
             let i = g.index(g.key(s.p));
             // About exp(-2.4 s), in plain arithmetic so it is the same on every platform.
             let k = 1.0 + 1.2 * shade[i];
@@ -687,21 +704,6 @@ fn finish(
         })
         .collect();
     sk.shoot_r = r_shoot;
-    if std::env::var("VC_TREE_DEBUG").is_ok() {
-        let q = |f: f32| {
-            shoots
-                .get(((shoots.len() as f32 * f) as usize).min(shoots.len().saturating_sub(1)))
-                .map_or(0.0, |s| s.light)
-        };
-        eprintln!(
-            "sc nodes {n} twigs {} shoots {} lit {lit} light q10 {:.2} q50 {:.2} q90 {:.2} dk {dk:.2} r0 {r0:.3} k {k:.4}",
-            twigs.len(),
-            shoots.len(),
-            q(0.1),
-            q(0.5),
-            q(0.9)
-        );
-    }
     sk.shoots = shoots;
     sk
 }

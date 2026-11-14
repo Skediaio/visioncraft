@@ -945,7 +945,7 @@ fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, screen_effe
     let seen = sky_seen(vis, n);
     let bounce = room_bounce(in.world, n);
     var sky_irr = sh_irradiance(n);
-    if foliage {
+    if foliage && !clay {
         // A leaf is thin: of the sky light on its far side about as much comes through as its
         // near side reflects (diffuse transmission of thin leaves, as in Habel, Kusternig &
         // Wimmer, "Physically Based Real-Time Translucency for Leaves", EGSR 2007). Without it

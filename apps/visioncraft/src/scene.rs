@@ -260,7 +260,7 @@ const CROWN_TAG: u32 = 0xC000_0000;
 /// Per leaf vertex, how much sky it sees through the crown, as a tagged face id: leaves deep
 /// under the crown's top and inside it see little (an ellipsoid round the leaves' bounds; light
 /// falls through a crown in a few layers of leaves). The tops keep most of it, the bottom inside down
-/// to about a third, so a crown seen from above is not one pale, evenly lit surface; the sun
+/// to about two fifths, so a crown seen from above is not one pale, evenly lit surface; the sun
 /// on a leaf is dimmed by it too (scene.wgsl `light`).
 /// Branches (`wood`) outside the crown's ellipsoid see the whole sky.
 pub fn crown_occlusion(positions: &[[f32; 3]], (lo, hi): (Vec3, Vec3), wood: bool) -> Vec<u32> {
@@ -277,7 +277,9 @@ pub fn crown_occlusion(positions: &[[f32; 3]], (lo, hi): (Vec3, Vec3), wood: boo
             }
             let s = below.min(0.75) / 0.75;
             // Even the top leaves have neighbours that hide part of the sky.
-            let sky = (0.85 - 0.45 * s * s * (3.0 - 2.0 * s) - 0.2 * inside).max(0.3);
+            // Light also reaches the lower crown through the thin leaves above it: a floor of
+            // about two fifths, so a crown's underside is shaded green, not black.
+            let sky = (0.88 - 0.36 * s * s * (3.0 - 2.0 * s) - 0.15 * inside).max(0.42);
             CROWN_TAG | (sky * 65535.0) as u32
         })
         .collect()

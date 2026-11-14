@@ -334,6 +334,28 @@ fn decimate(nodes: &[Node], stride: usize) -> Vec<Node> {
     out
 }
 
+/// A branch as meshed at `lod`: its nodes and sides. A grown tree's chains (`all_levels`) have
+/// a node every growth step: they keep about one per half metre (one and a half far off) and
+/// take their sides from their radius, so a bare crown's budget reaches its finer branches.
+fn shaped(br: &Branch, lvl: usize, lod: usize, all_levels: bool) -> (Vec<Node>, u32) {
+    if !all_levels {
+        return (decimate(&br.nodes, STRIDE[lod]), SIDES[lod][lvl.min(3)]);
+    }
+    let seg = (br.nodes[1].p - br.nodes[0].p).len().max(1e-3);
+    let stride = ((([0.5, 0.9, 1.5][lod] / seg) as usize).max(STRIDE[lod])).max(1);
+    let r = br.nodes[0].r;
+    let sides = if r > 0.15 {
+        [10, 8, 6][lod]
+    } else if r > 0.05 {
+        [7, 5, 4][lod]
+    } else if r > 0.015 {
+        [4, 4, 3][lod]
+    } else {
+        3
+    };
+    (decimate(&br.nodes, stride), sides)
+}
+
 /// Which branches to mesh at `lod` and what that costs.
 fn wood_plan(
     sk: &Skeleton,
@@ -376,8 +398,8 @@ fn wood_plan(
         if lod == 2 && lvl > 1 && !all_levels {
             continue;
         }
-        let n = decimate(&br.nodes, STRIDE[lod]).len();
-        let cost = Builder::tube_cost(n, SIDES[lod][lvl.min(3)]);
+        let (nodes, sides) = shaped(br, lvl, lod, all_levels);
+        let cost = Builder::tube_cost(nodes.len(), sides);
         if used + cost <= wood_budget {
             used += cost;
             chosen.push(i);
@@ -517,11 +539,11 @@ pub(crate) fn cards(
     for &i in &chosen {
         let lvl = sk.levels[i] as usize;
         let br = &sk.branches[i];
-        let nodes = decimate(&br.nodes, STRIDE[li]);
+        let (nodes, sides) = shaped(br, lvl, li, grown(p));
         if grown(p) && br.nodes[0].r < crate::gen_tree::FINE_M {
-            out.twig_tube(&nodes, SIDES[li][lvl.min(3)], br.phase);
+            out.twig_tube(&nodes, sides, br.phase);
         } else {
-            out.tube(&nodes, SIDES[li][lvl.min(3)], br.phase);
+            out.tube(&nodes, sides, br.phase);
         }
     }
 
