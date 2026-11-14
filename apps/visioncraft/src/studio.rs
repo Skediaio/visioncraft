@@ -1056,7 +1056,8 @@ impl Studio {
 
     pub fn animating(&self) -> bool {
         let p = self.project();
-        p.view.wind_strength > 0.0 && !p.generators.is_empty()
+        // The sea's waves run all the time.
+        (p.view.wind_strength > 0.0 && !p.generators.is_empty()) || p.sea.is_some()
     }
 
     /// Lowest point of a model in its own space, and its local bounds.
@@ -1801,5 +1802,6 @@ pub fn render_sea(
         foam: s.foam,
         freezes: s.freezes(),
         outline: s.outline.clone(),
+        coast: s.coast.clone(),
     }
 }

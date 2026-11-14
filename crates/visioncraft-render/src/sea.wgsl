@@ -28,6 +28,7 @@ struct SeaParams {
     color: vec4<f32>,   // rgb deep colour (linear), w wet band height above the level (m)
     flow: vec4<f32>,    // xy surface flow (m/s), z freezes (0/1), w outline points
     extra: vec4<f32>,   // x endless ground above the water (0/1), y ripple strength, z significant wave height (m), w on (0/1)
+    surf: vec4<f32>,    // x peak angular frequency (rad/s), y nearshore bed slope, zw unit direction the swell travels (world x, z)
     waves: array<SeaWave, 16>,
     outline: array<vec4<f32>, 32>, // two [x, z] points per entry
 }
@@ -61,6 +62,42 @@ fn sea_covers(p: vec2<f32>) -> bool {
         j = i;
     }
     return inside;
+}
+
+fn coast_point(i: u32) -> vec2<f32> {
+    let e = g.coast[i / 2u];
+    return select(e.xy, e.zw, (i & 1u) == 1u);
+}
+
+// Signed distance (m) from `p` to the coastline in the globals, positive on the sea side (its
+// right), the first and last stretches running on without end; as the core's `coast_distance`.
+fn coast_distance(p: vec2<f32>) -> f32 {
+    let n = u32(g.coast_info.x);
+    var best = 1e30;
+    var side = 1.0;
+    for (var i = 0u; i + 1u < n; i++) {
+        let a = coast_point(i);
+        let d = coast_point(i + 1u) - a;
+        let q = p - a;
+        let lo = select(0.0, -1e30, i == 0u);
+        let hi = select(1.0, 1e30, i + 2u == n);
+        let t = clamp(dot(q, d) / max(dot(d, d), 1e-9), lo, hi);
+        let dist = length(q - t * d);
+        if dist < best {
+            best = dist;
+            side = select(-1.0, 1.0, d.x * q.y - d.y * q.x >= 0.0);
+        }
+    }
+    return best * side;
+}
+
+// The endless ground's height at `p`: its own on the land side of a coast, under the water on
+// the sea side.
+fn ground_height_at(p: vec2<f32>) -> f32 {
+    if g.coast_info.x > 1.5 && g.options.w > g.coast_info.y && coast_distance(p) > 0.0 {
+        return g.coast_info.z;
+    }
+    return g.options.w;
 }
 
 // The wave's phase at the undisplaced point `p`; a river carries the pattern along.
@@ -158,6 +195,73 @@ fn sea_surface(p: vec2<f32>, footprint: f32) -> SeaSurface {
     return out;
 }
 
+// Surf over a shallow bed, from linear wave theory in its shallow-water limit (Dean &
+// Dalrymple, "Water Wave Mechanics for Engineers and Scientists", 1991, chs. 3-4): the swell's
+// celerity falls to sqrt(g d), so its wavelength shrinks with the depth d; conservation of the
+// energy flux raises its height by the shoaling coefficient K_s = sqrt(c_g0 / c_g), with
+// c_g0 = g / (2 omega) and c_g = sqrt(g d) (Green's law, H ~ d^-1/4); it breaks once the height
+// passes 0.78 of the depth (McCowan 1894, as in the USACE Coastal Engineering Manual
+// EM 1110-2-1100, part II-4) and runs on as a bore that keeps that ratio. The phase is the
+// integral of the local wavenumber towards the shore over a bed of slope m:
+// theta = omega t + 2 omega sqrt(d) / (m sqrt(g)), so crests bunch up as they slow.
+struct Surf {
+    slope: vec2<f32>, // d eta / d(x, z) of the surf
+    foam: f32,
+    weight: f32,      // 0 offshore, 1 in shallow water
+}
+
+// Shift of the crest lines along the shore (rad), so they are not ruler-straight.
+fn surf_along(p: vec2<f32>) -> f32 {
+    let a = dot(p, vec2<f32>(-sea.surf.w, sea.surf.z));
+    return value_noise(vec3<f32>(a * 0.015, 0.0, 0.37)) * 7.0 + value_noise(vec3<f32>(a * 0.06, 1.3, 0.0)) * 2.0;
+}
+
+// The wave groups: every seventh wave or so is the highest (the envelope travels with the
+// crests in shallow water, where the group and phase speeds meet).
+fn surf_group(theta: f32) -> f32 {
+    return 0.65 + 0.35 * sin(theta / 7.0 + 1.3);
+}
+
+// Vertical run-up of the swash above the mean level (m): Stockdon et al., "Empirical
+// parameterization of setup, swash, and runup", Coastal Engineering 53 (2006), eq. 18 for
+// dissipative beaches, R2 = 0.043 sqrt(H0 L0).
+fn surf_runup() -> f32 {
+    let omega = max(sea.surf.x, 0.05);
+    let l0 = 2.0 * PI * GRAVITY / (omega * omega);
+    return 0.043 * sqrt(max(sea.extra.z, 0.0) * l0) + 0.02;
+}
+
+fn sea_surf(p: vec2<f32>, d: f32) -> Surf {
+    var out: Surf;
+    let omega = max(sea.surf.x, 0.05);
+    let h0 = sea.extra.z;
+    let l0 = 2.0 * PI * GRAVITY / (omega * omega);
+    // The shallow-water limit holds below about L0 / 20.
+    out.weight = (1.0 - smoothstep(l0 / 20.0, l0 / 8.0, d)) * smoothstep(0.02, 0.6, h0);
+    if out.weight <= 0.0 || d <= 0.0 {
+        return out;
+    }
+    let dd = max(d, 0.02);
+    let theta = omega * g.time.x + 2.0 * omega * sqrt(dd) / (sea.surf.y * sqrt(GRAVITY)) + surf_along(p);
+    let ks = max(sqrt(GRAVITY / (2.0 * omega) / sqrt(GRAVITY * dd)), 1.0);
+    let ratio = h0 * ks / (0.78 * dd);
+    let height = min(h0 * ks, 0.78 * dd) * surf_group(theta);
+    let breaking = smoothstep(0.8, 1.1, ratio);
+    let s = fract(theta / (2.0 * PI));
+    // Unbroken: a peaked crest; broken: a bore, steep onshore face (s 0.9..1), long back.
+    let c = 0.5 + 0.5 * cos(2.0 * PI * s);
+    let df_swell = -2.0 * c * PI * sin(2.0 * PI * s);
+    let df_bore = select(-1.0 / 0.9, 1.0 / 0.1, s > 0.9);
+    let df = mix(df_swell, df_bore, breaking);
+    // d eta / d theta, times d theta / d(onshore distance) = -k = -omega / sqrt(g d).
+    let k = omega / sqrt(GRAVITY * dd);
+    out.slope = -(height * df / (2.0 * PI)) * k * sea.surf.zw * out.weight;
+    // Whitewater on the face and a fading tail behind the bore, a thin residue over the zone.
+    let tail = max(exp(-10.0 * s), select(0.0, 0.9, s > 0.94));
+    out.foam = breaking * out.weight * (0.8 * tail + 0.04);
+    return out;
+}
+
 @fragment
 fn fs_sea(in: Varying) -> @location(0) vec4<f32> {
     // Derivatives first, in uniform control flow.
@@ -168,9 +272,21 @@ fn fs_sea(in: Varying) -> @location(0) vec4<f32> {
     }
     let pixel = vec2<i32>(in.clip.xy);
     let below = textureLoad(linear_depth, pixel, 0).r;
-    // The endless ground above the water hides it wherever no terrain lies under it.
+    // The endless ground above the water hides it wherever no terrain lies under it; with a
+    // coast only on the land side, or where the view ray meets the land before the water.
     if sea.extra.x > 0.5 && below > SKY_DEPTH * 0.5 {
-        discard;
+        var land = true;
+        if g.coast_info.x > 1.5 {
+            land = coast_distance(in.uv) < 0.0;
+            let h = g.options.w;
+            if !land && g.camera.y > h && in.world.y < h {
+                let hit = mix(g.camera.xyz, in.world, (g.camera.y - h) / (g.camera.y - in.world.y));
+                land = coast_distance(hit.xz) < 0.0;
+            }
+        }
+        if land {
+            discard;
+        }
     }
     let up = vec3<f32>(0.0, 1.0, 0.0);
     if g.time.w > 0.5 {
@@ -182,18 +298,31 @@ fn fs_sea(in: Varying) -> @location(0) vec4<f32> {
     let dist = length(eye_vec);
     let v = eye_vec / dist;
     let depth = -(g.view * vec4<f32>(in.world, 1.0)).z;
+    // Water depth under this point, straight down (perspective: along the ray to the bed).
+    let path = max(below - depth, 0.0) * dist / max(depth, 1e-3);
+    let bed = in.world - v * path;
+    let water_depth = select(1e4, max(sea.surface.x - bed.y, 0.0), below < SKY_DEPTH * 0.5);
+    // Over a shallow bed the swell shoals and breaks: its slope replaces most of the deep
+    // waves' (their crests do not follow the bed).
+    let surf = sea_surf(in.uv, water_depth);
     var n = s.n;
+    n = normalize(vec3<f32>(n.x * (1.0 - 0.6 * surf.weight) - surf.slope.x, n.y, n.z * (1.0 - 0.6 * surf.weight) - surf.slope.y));
     if dot(n, v) < 0.02 {
         // A back-facing slope seen at a grazing angle: bend it just towards the eye.
         n = normalize(n + v * (0.02 - dot(n, v)));
     }
-    let nov = max(dot(n, v), 1e-4);
     // Roughness: glassy water plus the unresolved waves (GGX alpha^2 ~ 2 sigma^2).
     let alpha = clamp(sqrt(0.0004 + 2.0 * s.variance), 0.02, 0.6);
     let rough = sqrt(alpha);
+    // The facets of the unresolved waves that face the eye are the ones seen, and they mirror
+    // sky about twice their tilt higher than the mean surface's grazing reflection, at a lower
+    // Fresnel (Bruneton, Neyret & Holzschuch 2010, sec. 4): the far sea stays blue instead of
+    // taking the pale horizon.
+    let sigma = min(sqrt(s.variance), 0.3);
+    let nov = max(max(dot(n, v), 1e-4), sigma);
     let f = f_schlick(nov, vec3<f32>(0.02)).r;
     let r = reflect(-v, n);
-    var sky = environment(vec3<f32>(r.x, max(r.y, 0.0), r.z), rough);
+    var sky = environment(normalize(vec3<f32>(r.x, max(r.y, 0.0) + 2.0 * sigma, r.z)), rough);
     var reflected = sky;
     if g.reflection.x > 0.5 && abs(sea.surface.x - g.reflection.y) < 0.05 {
         // The planar reflection at the mean level, shifted by the slope (less with distance);
@@ -202,12 +331,8 @@ fn fs_sea(in: Varying) -> @location(0) vec4<f32> {
         let size = vec2<f32>(textureDimensions(planar_reflection));
         let uv = in.clip.xy * g.viewport.zw + tilt * vec2<f32>(1.0, -1.0) * 1.2 / max(depth, 1.0);
         let planar = textureSampleLevel(planar_reflection, env_sampler, clamp(uv, 0.5 / size, 1.0 - 0.5 / size), 0.0).rgb;
-        reflected = mix(planar, sky, smoothstep(0.15, 0.45, rough));
+        reflected = mix(planar, sky, max(smoothstep(0.15, 0.45, rough), smoothstep(0.05, 0.2, sigma)));
     }
-    // Water depth under this point, straight down (perspective: along the ray to the bed).
-    let path = max(below - depth, 0.0) * dist / max(depth, 1e-3);
-    let bed = in.world - v * path;
-    let water_depth = select(1e4, max(sea.surface.x - bed.y, 0.0), below < SKY_DEPTH * 0.5);
     let l = g.sun_dir.xyz;
     let nol = max(dot(n, l), 0.0);
     var sun_on = 0.0;
@@ -220,7 +345,12 @@ fn fs_sea(in: Varying) -> @location(0) vec4<f32> {
     // Light scattered back out of the water body: the deep colour lit by the sky and the sun,
     // a little brighter where a crest faces the sun (thinner water, Fresnel aside).
     let crest = 1.0 + 0.6 * max(dot(n.xz, l.xz), 0.0) * smoothstep(0.0, 0.3, sea.extra.z);
-    let deep = sea.color.rgb * crest * (sh_irradiance(up) + g.sun_light.rgb * max(l.y, 0.0) * sun_on) / PI;
+    // Over a shallow sandy bed the light the bed sends back up loses its red first (pure water
+    // absorbs about 0.35 /m at 650 nm against 0.06 at 550 and 0.01 at 450 nm: Pope & Fry,
+    // Applied Optics 36(33), 1997): the water turns turquoise there and deepens to its colour.
+    let shallow = exp(-water_depth * vec3<f32>(0.7, 0.12, 0.03)) * (1.0 - smoothstep(0.0, 8.0, water_depth));
+    let tint = sea.color.rgb + vec3<f32>(0.0, 0.12, 0.1) * shallow * (1.0 - sea.surface.w);
+    let deep = tint * crest * (sh_irradiance(up) + g.sun_light.rgb * max(l.y, 0.0) * sun_on) / PI;
     var color = f * reflected + glint + (1.0 - f) * (1.0 - transmit) * deep;
     var alpha_out = f + (1.0 - f) * (1.0 - transmit);
     // Foam: crests that fold (more and lower thresholds at higher sea states), and a band over
@@ -229,12 +359,10 @@ fn fs_sea(in: Varying) -> @location(0) vec4<f32> {
     let noise = value_noise(vec3<f32>(in.uv.x * 0.9, t * 0.15, in.uv.y * 0.9)) * 0.6
         + value_noise(vec3<f32>(in.uv.x * 3.7, t * 0.4, in.uv.y * 3.7)) * 0.4;
     // Whitecaps start around sea state 3 (half-metre waves) and are everywhere by state 5.
-    let state = smoothstep(0.6, 3.0, sea.extra.z);
-    let crest_foam = smoothstep(0.55, 0.15, s.jacobian) * state * smoothstep(0.35, 0.7, noise + 0.15 * state);
-    let run = 0.25 + 0.5 * sea.extra.z;
-    let surge = 0.5 + 0.5 * sin(t * 0.9 + dot(in.uv, vec2<f32>(0.21, 0.17)));
-    let shore_foam = (1.0 - smoothstep(0.0, run * (0.5 + 0.5 * surge), water_depth))
-        * smoothstep(0.3, 0.75, noise + 0.25) * smoothstep(0.0, 0.03, water_depth);
+    let state = smoothstep(0.4, 2.5, sea.extra.z);
+    let crest_foam = smoothstep(0.6, 0.2, s.jacobian) * state * smoothstep(0.35, 0.7, noise + 0.15 * state);
+    // The breakers' whitewater, torn up by the noise into streaks and patches.
+    let shore_foam = surf.foam * smoothstep(0.3, 0.7, noise + 0.25 * surf.foam);
     let foam = clamp((crest_foam + shore_foam) * sea.surface.z * 2.0, 0.0, 1.0);
     if foam > 0.0 {
         let white = vec3<f32>(0.8) * (sh_irradiance(n) + g.sun_light.rgb * nol * sun_on) / PI;
@@ -265,9 +393,9 @@ fn fs_sea(in: Varying) -> @location(0) vec4<f32> {
     return fog_premultiplied(vec4<f32>(color, alpha_out), in.world);
 }
 
-// Wet ground just above the waterline: a full-screen pass multiplying the
-// opaque scene (and the bed below, which the water then covers) darker within
-// the swash band, as wet sand and stone absorb more (a water film lowers the
+// Wet ground just above the waterline and the swash running up it: a full-screen
+// pass darkening the opaque scene (and the bed below, which the water then covers)
+// within the swash band, as wet sand and stone absorb more (a water film lowers the
 // albedo: Lekner & Dorf, "Why some things are darker when wet", Applied
 // Optics 27(7), 1988). Only ground the water actually reaches: a point in the
 // band must have the sea bed (ground below the level) within a few metres
@@ -326,15 +454,42 @@ fn sea_wet_near(world: vec3<f32>, pixel: vec2<f32>) -> f32 {
 fn fs_sea_wet(in: Varying) -> @location(0) vec4<f32> {
     let below = textureLoad(linear_depth, vec2<i32>(in.clip.xy), 0).r;
     if below > SKY_DEPTH * 0.5 || is_ortho() || g.time.w > 0.5 {
-        return vec4<f32>(1.0);
+        return vec4<f32>(0.0);
     }
     let world = sea_wet_world(in.clip.xy).xyz;
-    let top = sea.surface.x + sea.color.w;
+    let runup = surf_runup();
+    let top = sea.surface.x + max(sea.color.w, 1.3 * runup);
     var wet = (1.0 - smoothstep(top - 0.5 * sea.color.w, top, world.y))
         * (1.0 - smoothstep(300.0, 500.0, below)) * (1.0 - g.snow.x);
     if wet <= 0.0 || !sea_covers(world.xz) {
-        return vec4<f32>(1.0);
+        return vec4<f32>(0.0);
     }
     wet *= sea_wet_near(world, in.clip.xy);
-    return vec4<f32>(vec3<f32>(mix(1.0, 0.5, wet)), 1.0);
+    // Darker wet ground (premultiplied: black at this coverage halves it).
+    let dark = 0.5 * wet;
+    // The swash: each bore that reaches the waterline (phase 0 there, as `sea_surf`) rushes up
+    // the beach to the run-up in about a third of the period and drains back in the rest, as a
+    // thin sheet with a foam front on the way up and lacy foam on the way down.
+    let z = world.y - sea.surface.x;
+    let theta = sea.surf.x * g.time.x + surf_along(world.xz);
+    let s = fract(theta / (2.0 * PI));
+    let reach = runup * surf_group(theta) * select(pow(1.0 - (s - 0.3) / 0.7, 1.5), sin(s / 0.3 * 0.5 * PI), s < 0.3);
+    var sheet = (1.0 - smoothstep(reach - 0.02, reach, z)) * step(0.0, z) * wet * smoothstep(0.02, 0.6, sea.extra.z);
+    let noise = value_noise(vec3<f32>(world.x * 2.3, g.time.x * 0.3, world.z * 2.3));
+    let front = (1.0 - smoothstep(0.0, 0.04, abs(reach - 0.015 - z))) * select(0.35, 1.0, s < 0.3);
+    let lace = select(0.0, 0.35 * smoothstep(0.55, 0.8, noise), s > 0.3);
+    let foam = saturate((front + lace) * sheet) * sea.surface.z * 2.0;
+    if sheet <= 0.0 {
+        return vec4<f32>(0.0, 0.0, 0.0, dark);
+    }
+    let up = vec3<f32>(0.0, 1.0, 0.0);
+    let v = normalize(to_eye(world));
+    let lit = (sh_irradiance(up) + g.sun_light.rgb * max(g.sun_dir.y, 0.0)) / PI;
+    let fr = f_schlick(max(v.y, 1e-3), vec3<f32>(0.02)).r;
+    // A sheet a few centimetres deep: the sand shows through it, darkened, with the sky
+    // mirrored on top.
+    let water = environment(reflect(-v, up), 0.2) * fr / max(0.15 + 0.6 * fr, 1e-3);
+    let cover = mix(0.15 + 0.6 * fr, 0.95, foam) * sheet;
+    let rgb = mix(water, vec3<f32>(0.8) * lit, foam) * cover;
+    return vec4<f32>(rgb, 1.0 - (1.0 - dark) * (1.0 - cover));
 }
