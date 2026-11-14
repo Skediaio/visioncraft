@@ -533,11 +533,18 @@ fn uv_normal(tn: vec3<f32>, n: vec3<f32>, world: vec3<f32>, uv: vec2<f32>) -> ve
 // "Blending in Detail", 2012): the geometric normal is expressed in each
 // projection's tangent frame, blended with that projection's map normal,
 // taken back to world space and the three are mixed by the triplanar weights.
+// A tangent-space normal from its X and Y alone (Z rebuilt): the same for RGBA8 maps and
+// two-channel BC5 ones, which keep no Z.
+fn decode_normal(t: vec4<f32>) -> vec3<f32> {
+    let xy = t.xy * 2.0 - 1.0;
+    return vec3<f32>(xy, sqrt(max(1.0 - dot(xy, xy), 0.0)));
+}
+
 fn triplanar_normal(l: Lookup, n: vec3<f32>, relief: f32) -> vec3<f32> {
     var sum = vec3<f32>(0.0);
     for (var i = 0; i < 3; i++) {
         if l.weight[i] > 0.0 {
-            var tn = textureSampleGrad(normal_tex, normal_smp, l.uv[i], l.dx[i], l.dy[i]).xyz * 2.0 - 1.0;
+            var tn = decode_normal(textureSampleGrad(normal_tex, normal_smp, l.uv[i], l.dx[i], l.dy[i]));
             tn = vec3<f32>(tn.xy * relief, tn.z);
             let t = l.t[i];
             let b = l.b[i];
@@ -633,7 +640,7 @@ fn surface(in: Varying, front: bool) -> Surface {
         if triplanar_on {
             s.n = triplanar_normal(l, n, relief);
         } else {
-            var tn = textureSampleGrad(normal_tex, normal_smp, l.uv[0], l.dx[0], l.dy[0]).xyz * 2.0 - 1.0;
+            var tn = decode_normal(textureSampleGrad(normal_tex, normal_smp, l.uv[0], l.dx[0], l.dy[0]));
             tn = vec3<f32>(tn.xy * relief, tn.z);
             s.n = uv_normal(tn, n, in.world, in.uv);
         }

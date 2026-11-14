@@ -46,6 +46,7 @@ use std::num::NonZeroU64;
 use glam::{Mat4, Vec2, Vec3, Vec4};
 
 mod atmosphere;
+pub mod bc;
 pub mod demo;
 mod env;
 pub mod hardware;
@@ -1631,6 +1632,84 @@ impl Renderer {
         }
     }
 
+    /// Whether the device takes BC-compressed textures (`bc::compress`, `add_compressed`).
+    pub fn supports_bc(&self) -> bool {
+        self.device
+            .features()
+            .contains(wgpu::Features::TEXTURE_COMPRESSION_BC)
+    }
+
+    /// Uploads a block-compressed image with its mip chain (`bc::compress`). Fails when the
+    /// device has no BC formats: the caller keeps RGBA8.
+    pub fn add_compressed(
+        &mut self,
+        c: &bc::Compressed,
+        repeat: bool,
+    ) -> Result<TextureId, String> {
+        if !self.supports_bc() {
+            return Err("no BC texture formats on this device".into());
+        }
+        let max = self.device.limits().max_texture_dimension_2d;
+        if c.width == 0 || c.height == 0 || c.width > max || c.height > max {
+            return Err(format!(
+                "texture size {}x{} outside 1..={max}",
+                c.width, c.height
+            ));
+        }
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("compressed material texture"),
+            size: wgpu::Extent3d {
+                width: c.width,
+                height: c.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: c.levels.len() as u32,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: c.format(),
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let block = bc::Compressed::block_bytes(c.kind) as u32;
+        for (i, data) in c.levels.iter().enumerate() {
+            let (w, h) = ((c.width >> i).max(1), (c.height >> i).max(1));
+            let (bw, bh) = (w.div_ceil(4), h.div_ceil(4));
+            self.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture,
+                    mip_level: i as u32,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                data,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bw * block),
+                    rows_per_image: Some(bh),
+                },
+                wgpu::Extent3d {
+                    width: bw * 4,
+                    height: bh * 4,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        self.textures.push(Some(texture::GpuTexture {
+            view: texture.create_view(&Default::default()),
+            repeat,
+            bytes: c.bytes(),
+        }));
+        Ok(TextureId(self.textures.len() as u32 - 1))
+    }
+
+    /// GPU memory of a texture with its mips (0 for a freed or unknown one).
+    pub fn texture_bytes(&self, id: TextureId) -> u64 {
+        self.textures
+            .get(id.0 as usize)
+            .and_then(Option::as_ref)
+            .map_or(0, |t| t.bytes)
+    }
+
     /// Frees a mesh. Items still referring to it draw nothing.
     pub fn remove_mesh(&mut self, id: MeshId) {
         if let Some(slot) = self.meshes.get_mut(id.0 as usize) {
@@ -2352,6 +2431,27 @@ impl Renderer {
                 .map(|i| i.bytes)
                 .sum::<u64>()
             + hdri;
+        let shadow =
+            u64::from(self.quality.shadow_resolution).pow(2) * 4 * u64::from(self.quality.cascades);
+        let texture_breakdown = vec![
+            (
+                "textures",
+                self.textures.iter().flatten().map(|t| t.bytes).sum::<u64>(),
+            ),
+            ("shadow maps", shadow),
+            ("render targets", self.targets.bytes.saturating_sub(shadow)),
+            ("environment", self.env.bytes),
+            ("terrain", self.terrain.bytes),
+            (
+                "impostors",
+                self.impostors
+                    .iter()
+                    .flatten()
+                    .map(|i| i.bytes)
+                    .sum::<u64>(),
+            ),
+            ("sky image", hdri),
+        ];
         let gpu_passes = self.timer.as_ref().map_or(Vec::new(), |t| t.last.clone());
         // Native tools: VISIONCRAFT_GPU_TIMINGS=1 prints the pass times once
         // a second (at 60 frames), for profiling a host app's own scenes.
@@ -2374,6 +2474,7 @@ impl Renderer {
             instances: self.counters.instances.get(),
             visible_lights,
             texture_bytes,
+            texture_breakdown,
             cpu_encode_ms,
             gpu_ms: (!gpu_passes.is_empty()).then(|| gpu_passes.iter().map(|p| p.1).sum()),
             gpu_passes,
@@ -4563,7 +4664,8 @@ pub async fn headless_device() -> Result<(wgpu::Device, wgpu::Queue), String> {
     eprintln!("adapter: {:?}", adapter.get_info());
     // Timestamp queries when the adapter has them (headless only: tools and
     // benches), so `stats()` reports GPU time per pass.
-    let required_features = adapter.features() & wgpu::Features::TIMESTAMP_QUERY;
+    let required_features = adapter.features()
+        & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TEXTURE_COMPRESSION_BC);
     adapter
         .request_device(&wgpu::DeviceDescriptor {
             required_features,

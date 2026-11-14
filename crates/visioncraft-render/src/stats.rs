@@ -19,6 +19,9 @@ pub struct RenderStats {
     pub visible_lights: u32,
     /// Estimate of the GPU memory held by textures and render targets.
     pub texture_bytes: u64,
+    /// `texture_bytes` by kind: renderer textures (materials, plant atlases), shadow maps,
+    /// other render targets, environment, terrain, impostor atlases, the sky image.
+    pub texture_breakdown: Vec<(&'static str, u64)>,
     /// CPU time spent recording the frame (0 on the web, where there is no
     /// clock without a UI dependency).
     pub cpu_encode_ms: f32,
