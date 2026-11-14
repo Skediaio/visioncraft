@@ -14,8 +14,10 @@
 //! * P. Prusinkiewicz & A. Lindenmayer, "The Algorithmic Beauty of Plants", 1990: phyllotaxis
 //!   (golden angle, whorled and decussate arrangements), rosettes, branching angles.
 //! * A. Runions, B. Lane & P. Prusinkiewicz, "Modeling Trees with a Space Colonization
-//!   Algorithm", 2007: the idea that a crown envelope bounds the branch system; used here as the
-//!   crown-envelope calibration rather than as the full colonisation algorithm.
+//!   Algorithm", 2007: the full algorithm grows broadleaf trees inside their crown envelope
+//!   (`gen_tree`, with W. Palubicki et al., "Self-organizing Tree Models for Image Synthesis",
+//!   SIGGRAPH 2009, for light, and the pipe model of Shinozaki et al. 1964 for radii); other
+//!   branching forms use the envelope only to calibrate their recursive skeleton.
 //! * Standard botanical leaf morphology (ovate, lanceolate, cordate, lobed, palmate, pinnate).
 
 // Geometry and raster helpers take many plain scalars (positions, angles, lengths, colours);

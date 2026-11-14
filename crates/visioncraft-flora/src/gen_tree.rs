@@ -447,8 +447,8 @@ fn finish(
             add_shoot((i as u32, NONE), sc.p[i], d, wgt, ph, &mut trng);
         }
         let mut az = trng.f() * TAU;
-        // Twigs about every 0.8 shoot lengths along the branch, more at its end.
-        let along = ((step / (ls * 0.8)).ceil() as usize).max(1);
+        // Twigs about every 0.6 shoot lengths along the branch, more at its end.
+        let along = ((step / (ls * 0.6)).ceil() as usize).max(1);
         let ntw = if kids[i].is_empty() { along + 1 } else { along };
         for _ in 0..ntw {
             az += div_twig;
@@ -691,7 +691,7 @@ fn finish(
     // The card levels hang their sprays on the lit shoots (shed ones carry none).
     let lit = shoots
         .iter()
-        .filter(|s| s.light > 0.15)
+        .filter(|s| s.light > LIT)
         .count()
         .max(shoots.len().min(64));
     sk.leaves = shoots[..lit]
@@ -707,6 +707,9 @@ fn finish(
     sk.shoots = shoots;
     sk
 }
+
+/// Shoots with less light than this are shed (they carry no leaves).
+const LIT: f32 = 0.1;
 
 /// Branches thinner than this at their base are fine twigs ([`Builder::twig_tube`]).
 pub(crate) const FINE_M: f32 = 0.012;
@@ -794,7 +797,7 @@ pub(crate) fn leaf_level(
     let flowers = p.flowers.as_ref().filter(|_| st.flowers);
     // Leaves on lit shoots; the season keeps a fraction of them (a hash per shoot, so the
     // same leaves stay from month to month).
-    let lit = sk.shoots.iter().filter(|s| s.light > 0.15).count();
+    let lit = sk.shoots.iter().filter(|s| s.light > LIT).count();
     let max_cards = left / 2;
     let mut cards = 0;
     let mut bare: Vec<usize> = Vec::new();
