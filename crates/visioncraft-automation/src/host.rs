@@ -212,9 +212,16 @@ impl HostState {
         if source.contains("://") {
             return Err(format!("`{source}`: models from a URL are not loaded here"));
         }
-        let path = self.access.resolve(source, false, self.base().as_deref())?;
-        let bytes =
-            std::fs::read(&path).map_err(|e| format!("cannot read `{}`: {e}", path.display()))?;
+        // An example's model travels inside the program.
+        let (path, bytes) = match visioncraft_core::example_file(source) {
+            Some(b) => (std::path::PathBuf::from(source), b.to_vec()),
+            None => {
+                let path = self.access.resolve(source, false, self.base().as_deref())?;
+                let bytes = std::fs::read(&path)
+                    .map_err(|e| format!("cannot read `{}`: {e}", path.display()))?;
+                (path, bytes)
+            }
+        };
         let model = match kind {
             ModelKind::Craft3d => visioncraft_core::import_3dcraft(&bytes),
             ModelKind::Obj => visioncraft_core::import_obj(&bytes),

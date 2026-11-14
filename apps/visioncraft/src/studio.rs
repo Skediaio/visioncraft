@@ -761,6 +761,25 @@ impl Studio {
         if self.synced == Some(key) {
             return;
         }
+        // An example's model travels inside the program (`example:<file>`): load it here, on the
+        // web too, whoever added it.
+        let examples: Vec<(String, &'static [u8])> = self
+            .session
+            .project()
+            .models
+            .iter()
+            .filter(|m| !self.loaded.contains_key(&m.id))
+            .filter_map(|m| Some((m.id.clone(), visioncraft_core::example_file(&m.source)?)))
+            .collect();
+        for (id, bytes) in examples {
+            let _ = self.reimport(
+                &id,
+                Source {
+                    bytes: Arc::from(bytes),
+                    path: None,
+                },
+            );
+        }
         self.synced = Some(key);
         let project = self.project_view().into_owned();
         let problems = self

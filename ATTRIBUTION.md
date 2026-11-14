@@ -20,6 +20,7 @@ written here unless the licence column says otherwise.
 | `crates/visioncraft-automation/src/bridge.rs` | Ported from `crates/automation/src/bridge.rs` | MIT |
 | `crates/visioncraft-automation/src/lib.rs`, `control.rs` | Modelled on `craft3d-automation` v0.1.1 and its `docs/control-protocol.md` | MIT |
 | `apps/visioncraft-cli/src/main.rs` | Shaped after `craft3d-cli` | MIT |
+| `crates/visioncraft-core/src/examples/villa.3dcraft` | The showcase villa, `docs/showcase/villa.3dcraft`, Johan Coppens; the estate example's house, unchanged | MIT |
 
 ## From other open-source code
 

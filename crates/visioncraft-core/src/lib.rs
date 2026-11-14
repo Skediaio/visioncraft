@@ -30,7 +30,7 @@ pub mod tiers;
 pub mod viewpoint;
 
 pub use catalog::{Asset, Catalog, CatalogError, attribution_markdown, validate_open_licences};
-pub use commands::examples::{EXAMPLES, example};
+pub use commands::examples::{EXAMPLES, example, example_file};
 pub use export::export_presets;
 pub use import::{import_3dcraft, import_obj};
 pub use light::{

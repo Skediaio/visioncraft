@@ -11,25 +11,14 @@ mod parity_tests {
     use visioncraft_automation::{Access, Headless};
     use visioncraft_core::Session;
 
-    #[test]
-    fn the_window_and_agents_count_the_same_placements() {
-        // The garden plus trees scattered over the house and terrace: the building rule at work.
-        let mut s = Session::new(Default::default());
-        s.run(
-            "project.load_example",
-            serde_json::json!({"name": "garden"}),
-        )
-        .unwrap();
-        s.run(
-            "planting.add_area",
-            serde_json::json!({"name": "Over the house", "asset_palette": [{"asset": "flora:betula-pendula", "weight": 1}], "outline": [[2, 0], [18, 0], [18, 14], [2, 14]], "density_per_m2": 0.1}),
-        )
-        .unwrap();
-        let p = s.project().clone();
+    /// (agents' counts, the window's counts) per planting of `p`; `None` without a GPU.
+    #[allow(clippy::type_complexity)]
+    fn counts(p: &visioncraft_core::Project) -> Option<(Vec<(String, u64)>, Vec<(String, u64)>)> {
         // Agents.
         let mut h = Headless::new(Access::default());
         h.session = Session::new(p.clone());
         h.state.catalog.assets = crate::fixtures::assets();
+        h.state.sync_models(p);
         let line = r#"{"id": 1, "method": "engine.execute", "params": {"command": "document.inspect", "params": {"faces": false}}}"#;
         let reply: Value =
             serde_json::from_str(&visioncraft_automation::rpc::handle_line(&mut h, line).unwrap())
@@ -48,7 +37,7 @@ mod parity_tests {
         // The window.
         let Ok((device, queue)) = pollster::block_on(visioncraft_render::headless_device()) else {
             eprintln!("no GPU adapter: the window side is skipped");
-            return;
+            return None;
         };
         let renderer =
             visioncraft_render::Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
@@ -65,6 +54,47 @@ mod parity_tests {
             })
             .collect();
         eprintln!("placements: {window:?}");
+        Some((agents, window))
+    }
+
+    /// The estate: a 3DCraft model the building rule must see, two large lawns, a woodland
+    /// brushed from a preset, a planting on a hidden layer (still counted).
+    #[test]
+    fn the_estate_counts_the_same_for_the_window_and_agents() {
+        let p = visioncraft_core::example("estate").unwrap();
+        let Some((agents, window)) = counts(&p) else {
+            return;
+        };
+        assert_eq!(window, agents);
+        let count = |n: &str| window.iter().find(|w| w.0 == n).unwrap().1;
+        assert!(count("Woodland") > 40, "{window:?}");
+        assert!(count("Border planting") > 200, "{window:?}");
+        assert_eq!(count("Path lights"), 7);
+        assert_eq!(
+            count("Old walnut"),
+            1,
+            "a hidden layer's plants are counted"
+        );
+    }
+
+    #[test]
+    fn the_window_and_agents_count_the_same_placements() {
+        // The garden plus trees scattered over the house and terrace: the building rule at work.
+        let mut s = Session::new(Default::default());
+        s.run(
+            "project.load_example",
+            serde_json::json!({"name": "garden"}),
+        )
+        .unwrap();
+        s.run(
+            "planting.add_area",
+            serde_json::json!({"name": "Over the house", "asset_palette": [{"asset": "flora:betula-pendula", "weight": 1}], "outline": [[2, 0], [18, 0], [18, 14], [2, 14]], "density_per_m2": 0.1}),
+        )
+        .unwrap();
+        let p = s.project().clone();
+        let Some((agents, window)) = counts(&p) else {
+            return;
+        };
         assert_eq!(window, agents);
         // The regression numbers: the hedge goes round the plot but not through the house.
         let count = |n: &str| window.iter().find(|w| w.0 == n).unwrap().1;

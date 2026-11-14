@@ -284,7 +284,10 @@ catalogue asset as `user:<id>`. `object.remove` is refused while a planting uses
 ```
 
 It replaces the project (undoable) with a 20 by 30 m plot built from commands: house, terrace,
-lawn, border, path, pond, hedge, trees, lights and six viewpoints.
+lawn, border, path, pond, hedge, trees, lights and six viewpoints. `{"name": "estate"}` is the large one:
+a 100 by 60 m plot round an imported 3DCraft villa (its model travels inside the program as
+`example:villa.3dcraft`), two lawns over 1,000 m2, a brushed woodland, a border, a pond carved in
+the terrain, path lights, a walnut on a hidden layer and three viewpoints.
 
 ### 16. How the garden grows
 

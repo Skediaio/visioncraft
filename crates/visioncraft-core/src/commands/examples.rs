@@ -9,15 +9,33 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 /// (name, commands) of every example.
-pub const EXAMPLES: [(&str, &str); 1] = [("garden", include_str!("../examples/garden.json"))];
+pub const EXAMPLES: [(&str, &str); 2] = [
+    ("garden", include_str!("../examples/garden.json")),
+    ("estate", include_str!("../examples/estate.json")),
+];
+
+/// The files examples refer to, by their source (`example:<file>`): the estate's villa, a
+/// sample of 3DCraft (MIT, Johan Coppens; see ATTRIBUTION.md).
+const EXAMPLE_FILES: [(&str, &[u8]); 1] = [(
+    "example:villa.3dcraft",
+    include_bytes!("../examples/villa.3dcraft"),
+)];
+
+/// The bytes of a model an example refers to (`source` of the form `example:<file>`).
+pub fn example_file(source: &str) -> Option<&'static [u8]> {
+    EXAMPLE_FILES
+        .iter()
+        .find(|(s, _)| *s == source)
+        .map(|(_, b)| *b)
+}
 
 pub(super) fn register(s: &mut Session) {
     s.register_with_spec(
         spec(
             "project.load_example",
             "Open Example",
-            "Replaces the project with an example built from commands: `garden`, a 20 by 30 m plot with a house block, terrace, lawn, border, path, carved pond, hornbeam hedge, three trees, path lights, a bollard and six viewpoints.",
-            vec![param("name", T::String, "The example: garden.").required()],
+            "Replaces the project with an example built from commands: `garden`, a 20 by 30 m plot with a house block, terrace, lawn, border, path, carved pond, hornbeam hedge, three trees, path lights, a bollard and six viewpoints; `estate`, a 100 by 60 m plot round an imported 3DCraft villa with two large lawns, a brushed woodland, a border, a pond in the terrain, path lights, a planting on a hidden layer and three viewpoints.",
+            vec![param("name", T::String, "The example: garden or estate.").required()],
             "{name, steps}",
             json!({"name": "garden"}),
         ),
@@ -30,7 +48,7 @@ pub fn example(name: &str) -> Result<Project, String> {
     let (_, commands) = EXAMPLES
         .iter()
         .find(|e| e.0 == name)
-        .ok_or_else(|| format!("no example `{name}`; there is: garden"))?;
+        .ok_or_else(|| format!("no example `{name}`; there are: garden, estate"))?;
     let steps: Vec<(String, Value)> =
         serde_json::from_str(commands).map_err(|e| format!("example {name}: {e}"))?;
     let mut s = Session::new(Project::default());
@@ -69,6 +87,31 @@ mod tests {
         assert_eq!(p.viewpoints.len(), 6);
         assert!(p.terrain.is_some());
         assert!(super::example("park").is_err());
+    }
+
+    #[test]
+    fn the_estate_builds_large_and_messy() {
+        let p = super::example("estate").unwrap();
+        assert_eq!(p.models.len(), 1);
+        assert!(super::example_file(&p.models[0].source).is_some_and(|b| b.len() > 10_000));
+        let lawns: Vec<f32> = p
+            .shapes
+            .iter()
+            .filter_map(|s| match s {
+                crate::Shape::Area(a) if a.name.contains("lawn") => {
+                    Some(crate::shape::shoelace_f32(&a.outline).abs() as f32)
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(
+            lawns.len() == 2 && lawns.iter().all(|a| *a > 1000.0),
+            "{lawns:?}"
+        );
+        assert!(p.layers.iter().any(|l| !l.visible));
+        assert_eq!(p.viewpoints.len(), 3);
+        assert!(p.viewpoints.iter().all(|v| v.time.is_none()));
+        assert!(p.terrain.is_some() && p.generators.len() >= 7);
     }
 
     #[test]
