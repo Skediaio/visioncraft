@@ -521,7 +521,10 @@ fn photo_parameters_are_checked_before_rendering() {
     );
     // Valid: on to the renderer, which this host has not.
     assert!(
-        error(&mut h, json!({"quality": "photo", "samples": 16, "aperture_m": 0.02}))
-            .contains("no renderer")
+        error(
+            &mut h,
+            json!({"quality": "photo", "samples": 16, "aperture_m": 0.02})
+        )
+        .contains("no renderer")
     );
 }
