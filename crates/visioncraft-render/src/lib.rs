@@ -71,6 +71,8 @@ pub use impostor::{ImpostorId, atlas_layout, impostor_views};
 pub use lights::{Light, LightKind};
 pub use sky::Sun;
 pub use stats::{RenderStats, TARGET_MS, ULTRA_HEADROOM, suggest_quality};
+#[cfg(not(target_arch = "wasm32"))]
+pub use still::Photo;
 pub use still::Still;
 pub use terrain::{TerrainChunk, TerrainLayer};
 pub use texture::{ColorSpace, TextureDesc, TextureId, mip_count};
@@ -829,6 +831,10 @@ pub struct Renderer {
     indoors: bool,
     /// The procedural cloud layer of the analytic skies (`set_clouds`).
     clouds: Clouds,
+    /// A photo's sample (`still::Photo`): the shadow's light direction moved within the sun's
+    /// disc, and the noise seed of ambient occlusion; zero for live frames.
+    shadow_jitter: Vec3,
+    photo_seed: f32,
     light_buffer: wgpu::Buffer,
     grid_buffer: wgpu::Buffer,
     grid: lights::Grid,
@@ -1143,6 +1149,8 @@ impl Renderer {
             grade: (1.0, 1.0),
             indoors: false,
             clouds: Clouds::default(),
+            shadow_jitter: Vec3::ZERO,
+            photo_seed: 0.0,
             light_buffer,
             grid_buffer,
             grid,
@@ -2331,7 +2339,7 @@ impl Renderer {
         let mut cascades = shadow::compute(
             self.view,
             self.proj,
-            self.sun.direction,
+            (self.sun.direction + self.shadow_jitter).normalize(),
             self.quality.cascades as usize,
             self.quality.shadow_resolution,
             self.shadow_distance,
@@ -3501,7 +3509,7 @@ impl Renderer {
             self.grade.0,
             self.grade.1,
             if self.indoors { 1.0 } else { 0.0 },
-            0.0,
+            self.photo_seed,
         ]);
         // Clouds drift with the wind, about 3 m/s in a moderate breeze, by the unwrapped clock
         // (the shader clock wraps every 68 minutes): continuous for weeks of running.

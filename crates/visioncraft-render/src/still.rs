@@ -132,6 +132,49 @@ impl Renderer {
             )
         });
 
+        let (_, _, encoder) = self.render_offscreen(
+            targets,
+            sampled,
+            quality,
+            (width, height),
+            (view, proj, eye),
+            &buffer,
+            stride,
+        );
+        self.queue.submit([encoder.finish()]);
+        let mapped = Arc::new(Mutex::new(None));
+        let slot = mapped.clone();
+        buffer.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+            if let Ok(mut s) = slot.lock() {
+                *s = Some(r.map_err(|e| e.to_string()));
+            }
+        });
+        let errors: Vec<ErrorFuture> = vec![Box::pin(validation.pop()), Box::pin(oom.pop())];
+        Ok(Still {
+            device: self.device.clone(),
+            buffer,
+            size: (width, height),
+            stride,
+            mapped,
+            errors,
+        })
+    }
+
+    /// Renders one frame into `targets` (and the multisampled pipelines `sampled` when the
+    /// quality's samples differ from the live ones) from `view`/`proj`/`eye`, copies the output
+    /// into `buffer`, and puts the live state back. Returns the targets for another frame and
+    /// the encoder to submit.
+    #[allow(clippy::too_many_arguments)]
+    fn render_offscreen(
+        &mut self,
+        targets: Targets,
+        sampled: Option<SampledPipelines>,
+        quality: Quality,
+        (width, height): (u32, u32),
+        (view, proj, eye): (Mat4, Mat4, Vec3),
+        buffer: &wgpu::Buffer,
+        stride: u32,
+    ) -> (Targets, Option<SampledPipelines>, wgpu::CommandEncoder) {
         // Swap the live state out, render, swap it back.
         let live_targets = std::mem::replace(&mut self.targets, targets);
         let live_sampled = sampled.map(|s| std::mem::replace(&mut self.sampled, s));
@@ -167,7 +210,7 @@ impl Renderer {
         encoder.copy_texture_to_buffer(
             self.targets.output.as_image_copy(),
             wgpu::TexelCopyBufferInfo {
-                buffer: &buffer,
+                buffer,
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(stride),
@@ -181,10 +224,8 @@ impl Renderer {
             },
         );
 
-        self.targets = live_targets;
-        if let Some(s) = live_sampled {
-            self.sampled = s;
-        }
+        let used_targets = std::mem::replace(&mut self.targets, live_targets);
+        let used_sampled = live_sampled.map(|s| std::mem::replace(&mut self.sampled, s));
         (self.size, self.quality, self.view, self.proj, self.eye) = live;
         self.far_cache = live_cache;
         self.cascade_rendered = live_cascades;
@@ -197,22 +238,245 @@ impl Renderer {
             }
         }
 
-        self.queue.submit([encoder.finish()]);
-        let mapped = Arc::new(Mutex::new(None));
-        let slot = mapped.clone();
-        buffer.slice(..).map_async(wgpu::MapMode::Read, move |r| {
-            if let Ok(mut s) = slot.lock() {
-                *s = Some(r.map_err(|e| e.to_string()));
-            }
+        (used_targets, used_sampled, encoder)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// A photo: many frames of the same view averaged, each with a sub-pixel shift (antialiasing),
+/// the sun's light direction moved within its disc (shadows with true penumbrae that widen with
+/// the distance to what casts them) and ambient occlusion sampled in other directions; and,
+/// with a lens aperture, the eye moved over it (depth of field). Native only: each sample waits
+/// for its pixels.
+pub struct Photo {
+    targets: Option<Targets>,
+    sampled: Option<SampledPipelines>,
+    quality: Quality,
+    size: (u32, u32),
+    buffer: wgpu::Buffer,
+    stride: u32,
+    /// Linear RGB sums.
+    sum: Vec<f32>,
+    /// Samples summed.
+    pub done: u32,
+}
+
+/// The `i`-th point of the base-`b` Halton sequence, in [0, 1).
+#[cfg(not(target_arch = "wasm32"))]
+fn halton(mut i: u32, b: u32) -> f32 {
+    let (mut f, mut r) = (1.0f32, 0.0f32);
+    while i > 0 {
+        f /= b as f32;
+        r += f * (i % b) as f32;
+        i /= b;
+    }
+    r
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn to_linear(c: u8) -> f32 {
+    let c = f32::from(c) / 255.0;
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn to_srgb(c: f32) -> u8 {
+    let c = c.clamp(0.0, 1.0);
+    let s = if c <= 0.0031308 {
+        c * 12.92
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    };
+    (s * 255.0 + 0.5) as u8
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Renderer {
+    /// Starts a photo at `width` x `height` with `quality` (its targets are kept for every
+    /// sample). Plants keep their finest levels (and leaf-cut shadows) twice as far as `quality`
+    /// says: a still has no frame rate to keep.
+    pub fn photo_begin(
+        &mut self,
+        width: u32,
+        height: u32,
+        mut quality: Quality,
+    ) -> Result<Photo, String> {
+        quality.lod_distance_percent *= 2;
+        if width == 0 || height == 0 || width > MAX_STILL.0 || height > MAX_STILL.1 {
+            return Err(format!(
+                "photo size {width}x{height} outside 1x1..={}x{}",
+                MAX_STILL.0, MAX_STILL.1
+            ));
+        }
+        let targets = Targets::new(
+            &self.device,
+            &self.layouts,
+            self.output_format,
+            quality,
+            (width, height),
+            &self.shadow_sampler,
+            &self.post_sampler,
+            &self.white,
+        );
+        let sampled = (quality.msaa != self.quality.msaa).then(|| {
+            SampledPipelines::new(
+                &self.device,
+                &self.layouts,
+                &self.modules,
+                quality.samples(),
+            )
         });
-        let errors: Vec<ErrorFuture> = vec![Box::pin(validation.pop()), Box::pin(oom.pop())];
-        Ok(Still {
-            device: self.device.clone(),
-            buffer,
+        let stride = (width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("photo readback"),
+            size: stride as u64 * height as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        Ok(Photo {
+            targets: Some(targets),
+            sampled,
+            quality,
             size: (width, height),
+            buffer,
             stride,
-            mapped,
-            errors,
+            sum: vec![0.0; (width * height * 3) as usize],
+            done: 0,
         })
+    }
+
+    /// Renders sample `k` of the photo from `view`/`proj`/`eye` and adds it. `aperture_m`
+    /// (0: none) is the lens' radius, focused at `focus_m` along the view.
+    #[allow(clippy::too_many_arguments)]
+    pub fn photo_sample(
+        &mut self,
+        photo: &mut Photo,
+        view: Mat4,
+        proj: Mat4,
+        eye: Vec3,
+        k: u32,
+        aperture_m: f32,
+        focus_m: f32,
+    ) -> Result<(), String> {
+        let (w, h) = photo.size;
+        // Sub-pixel shift: Halton (2, 3), centred.
+        let (jx, jy) = (halton(k + 1, 2) - 0.5, halton(k + 1, 3) - 0.5);
+        let proj =
+            Mat4::from_translation(Vec3::new(2.0 * jx / w as f32, 2.0 * jy / h as f32, 0.0)) * proj;
+        // The sun's light from a point of its disc (0.27 degrees in radius), uniformly.
+        let (u, v) = (halton(k + 1, 5), halton(k + 1, 7));
+        let (r, a) = (u.sqrt() * 0.27f32.to_radians(), v * std::f32::consts::TAU);
+        let d = self.sun.direction;
+        let side = d.cross(Vec3::Y).try_normalize().unwrap_or(Vec3::X);
+        let up = side.cross(d);
+        self.shadow_jitter = (side * a.cos() + up * a.sin()) * r;
+        // Ambient occlusion turned per sample.
+        self.photo_seed = k as f32;
+        // The eye over the lens, looking at the same focus point.
+        let view = if aperture_m > 0.0 {
+            let (lu, lv) = (halton(k + 1, 11), halton(k + 1, 13));
+            let (lr, la) = (lu.sqrt() * aperture_m, lv * std::f32::consts::TAU);
+            let inv = view.inverse();
+            let (right, upv, fwd) = (
+                inv.x_axis.truncate(),
+                inv.y_axis.truncate(),
+                -inv.z_axis.truncate(),
+            );
+            let focus = eye + fwd * focus_m;
+            let e = eye + right * (lr * la.cos()) + upv * (lr * la.sin());
+            Mat4::look_at_rh(e, focus, upv)
+        } else {
+            view
+        };
+        // `render_offscreen` starts without cached shadows, so each sample casts its own.
+        let targets = photo.targets.take().ok_or("photo targets missing")?;
+        let sampled = photo.sampled.take();
+        let (targets, sampled, encoder) = self.render_offscreen(
+            targets,
+            sampled,
+            photo.quality,
+            photo.size,
+            (view, proj, eye),
+            &photo.buffer,
+            photo.stride,
+        );
+        photo.targets = Some(targets);
+        photo.sampled = sampled;
+        self.shadow_jitter = Vec3::ZERO;
+        self.photo_seed = 0.0;
+        self.queue.submit([encoder.finish()]);
+        let (tx, rx) = std::sync::mpsc::channel();
+        photo
+            .buffer
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |r| {
+                let _ = tx.send(r);
+            });
+        self.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|e| format!("poll: {e}"))?;
+        rx.recv()
+            .map_err(|e| e.to_string())?
+            .map_err(|e| format!("photo readback failed: {e}"))?;
+        {
+            let view = photo
+                .buffer
+                .slice(..)
+                .get_mapped_range()
+                .map_err(|e| format!("photo readback failed: {e}"))?;
+            let lut: [f32; 256] = std::array::from_fn(|c| to_linear(c as u8));
+            for (y, row) in view
+                .chunks(photo.stride as usize)
+                .take(h as usize)
+                .enumerate()
+            {
+                let sum = &mut photo.sum[y * w as usize * 3..(y + 1) * w as usize * 3];
+                for (s, px) in sum
+                    .as_chunks_mut::<3>()
+                    .0
+                    .iter_mut()
+                    .zip(row.as_chunks::<4>().0)
+                {
+                    for c in 0..3 {
+                        s[c] += lut[px[c] as usize];
+                    }
+                }
+            }
+        }
+        photo.buffer.unmap();
+        photo.done += 1;
+        Ok(())
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Photo {
+    pub fn size(&self) -> (u32, u32) {
+        self.size
+    }
+
+    /// The average so far as RGBA8 (sRGB-encoded, top to bottom).
+    pub fn pixels(&self) -> Vec<u8> {
+        let n = self.done.max(1) as f32;
+        self.sum
+            .chunks(3)
+            .flat_map(|c| [to_srgb(c[0] / n), to_srgb(c[1] / n), to_srgb(c[2] / n), 255])
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn halton_fills_the_unit_interval_evenly() {
+        let xs: Vec<f32> = (1..=8).map(|i| super::halton(i, 2)).collect();
+        assert_eq!(xs[..4], [0.5, 0.25, 0.75, 0.125]);
+        for c in [0u8, 1, 50, 128, 200, 255] {
+            assert_eq!(super::to_srgb(super::to_linear(c)), c);
+        }
     }
 }

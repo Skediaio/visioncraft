@@ -137,6 +137,7 @@ fn fs_main(in: Out) -> @location(0) vec4<f32> {
     }
     let c = view_position(vec2<f32>(p) + 0.5, d);
     let n = view_normal(p, c);
-    let noise = ign(in.clip.xy);
+    // A photo's samples turn the directions on (`grade.w`): accumulated, many directions.
+    let noise = fract(ign(in.clip.xy) + g.grade.w * 0.618034);
     return vec4<f32>(ambient_occlusion(p, c, n, noise), contact_shadow(c, n, noise), 1.0, 1.0);
 }
