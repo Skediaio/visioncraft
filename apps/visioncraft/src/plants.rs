@@ -102,6 +102,8 @@ struct Variant {
 }
 
 struct Tex {
+    /// Leaf atlas texels per drawing unit (`Flora::leaf_scale` when made).
+    scale: usize,
     atlas: TextureId,
     /// The leaf normal map of a fine atlas (`leaf_scale` above 1).
     atlas_normal: Option<TextureId>,
@@ -109,6 +111,48 @@ struct Tex {
     bark_normal: TextureId,
     /// Mean linear colour of the atlas' opaque texels: what a tint of 1 looks like.
     leaf_mean: [f32; 3],
+}
+
+/// A species' textures at `scale` texels per drawing unit, uploaded (block-compressed where the
+/// device can).
+fn make_tex(r: &mut Renderer, params: &flora::PlantParams, scale: usize) -> Option<Tex> {
+    let t = flora::textures_at(params, scale);
+    // Block-compressed where the device can (a quarter to an eighth of the memory; the
+    // leaf atlas keeps its cutout coverage in every mip), else RGBA8.
+    let up = |r: &mut Renderer, i: &flora::Image, srgb: bool, repeat: bool| {
+        use visioncraft_render::bc::{BcKind, compress};
+        let kind = match (srgb, repeat) {
+            (true, false) => BcKind::Rgba, // the leaf atlas
+            (true, true) => BcKind::Rgb,   // bark
+            (false, _) => BcKind::Normal,
+        };
+        let space = if srgb {
+            visioncraft_render::ColorSpace::Srgb
+        } else {
+            visioncraft_render::ColorSpace::Linear
+        };
+        if r.supports_bc()
+            && !cfg!(target_arch = "wasm32")
+            && let Some(c) = compress(&i.rgba, i.width, i.height, kind, space)
+            && let Ok(id) = r.add_compressed(std::sync::Arc::new(c), repeat)
+        {
+            return Some(id);
+        }
+        scene::upload_texture(r, i.width, i.height, &i.rgba, srgb, repeat)
+    };
+    (|| {
+        Some(Tex {
+            scale,
+            atlas: up(r, &t.atlas, true, false)?,
+            atlas_normal: match &t.atlas_normal {
+                Some(n) => Some(up(r, n, false, false)?),
+                None => None,
+            },
+            bark: up(r, &t.bark, true, true)?,
+            bark_normal: up(r, &t.bark_normal, false, true)?,
+            leaf_mean: opaque_mean(&t.atlas.rgba),
+        })
+    })()
 }
 
 /// Mean linear RGB of the texels with alpha over one half (sRGB RGBA8 input).
@@ -157,6 +201,10 @@ pub struct Flora {
     /// shortcut: species already generated keep their atlas when the quality changes; regenerate
     /// on a change if Auto's steps make the difference visible
     pub leaf_scale: usize,
+    /// The parameters each species' textures were made from, to make them again.
+    tex_params: HashMap<String, flora::PlantParams>,
+    /// Every plant material made, with what it was made from, to point it at new textures.
+    plant_mats: Vec<(String, MaterialId, flora::Material, [f32; 3])>,
 }
 
 impl Flora {
@@ -209,6 +257,10 @@ impl Flora {
                 mat
             };
             out.push((m, mat, d));
+        }
+        if let Some(m) = foliage {
+            self.plant_mats
+                .push((id.to_string(), m, flora::Material::Foliage, tint));
         }
         self.tinted.insert(key, out.clone());
         Some(out)
@@ -344,6 +396,8 @@ impl Flora {
                 }
             }
             self.tinted.retain(|k, _| k.0 != id);
+            self.plant_mats.retain(|e| e.0 != id);
+            self.tex_params.remove(&id);
             if let Some(t) = self.textures.remove(&id) {
                 for tex in [t.atlas, t.bark, t.bark_normal]
                     .into_iter()
@@ -372,6 +426,49 @@ impl Flora {
             .sum()
     }
 
+    /// Makes one species' textures again at the current `leaf_scale` when they were made at
+    /// another (the quality changed): its materials point at the new ones, the old are freed
+    /// and the impostors baked again. True when one was done.
+    fn regenerate_one(&mut self, r: &mut Renderer) -> bool {
+        let scale = self.leaf_scale.max(1);
+        let Some(id) = self
+            .textures
+            .iter()
+            .find(|(_, t)| t.scale != scale)
+            .map(|(id, _)| id.clone())
+        else {
+            return false;
+        };
+        let Some(new) = self.tex_params.get(&id).and_then(|p| make_tex(r, p, scale)) else {
+            // Cannot make them (no parameters, or the GPU refused): keep the old ones.
+            if let Some(t) = self.textures.get_mut(&id) {
+                t.scale = scale;
+            }
+            return false;
+        };
+        for (_, m, kind, tint) in self.plant_mats.iter().filter(|e| e.0 == id) {
+            r.set_material(
+                *m,
+                &scene::plant_material_desc(
+                    *kind,
+                    (new.atlas, new.atlas_normal, new.bark, new.bark_normal),
+                    *tint,
+                ),
+            );
+        }
+        if let Some(old) = self.textures.insert(id, new) {
+            for t in [old.atlas, old.bark, old.bark_normal]
+                .into_iter()
+                .chain(old.atlas_normal)
+            {
+                r.remove_texture(t);
+            }
+        }
+        self.rebake();
+        self.rev += 1;
+        true
+    }
+
     /// How many species (with their seasons) are generated and kept.
     pub fn kept(&self) -> usize {
         self.classes.len()
@@ -383,47 +480,17 @@ impl Flora {
         if !self.retired.is_empty() {
             self.free_retired(r);
         }
+        if self.regenerate_one(r) {
+            return true;
+        }
         let Some(w) = self.queue.first() else {
             return self.bake_one(r);
         };
         let (id, class, month) = (w.id.clone(), w.class, w.month);
         if !self.textures.contains_key(&id) {
-            let t = flora::textures_at(&w.params, self.leaf_scale.max(1));
-            // Block-compressed where the device can (a quarter to an eighth of the memory; the
-            // leaf atlas keeps its cutout coverage in every mip), else RGBA8.
-            let up = |r: &mut Renderer, i: &flora::Image, srgb: bool, repeat: bool| {
-                use visioncraft_render::bc::{BcKind, compress};
-                let kind = match (srgb, repeat) {
-                    (true, false) => BcKind::Rgba, // the leaf atlas
-                    (true, true) => BcKind::Rgb,   // bark
-                    (false, _) => BcKind::Normal,
-                };
-                let space = if srgb {
-                    visioncraft_render::ColorSpace::Srgb
-                } else {
-                    visioncraft_render::ColorSpace::Linear
-                };
-                if r.supports_bc()
-                    && !cfg!(target_arch = "wasm32")
-                    && let Some(c) = compress(&i.rgba, i.width, i.height, kind, space)
-                    && let Ok(id) = r.add_compressed(&c, repeat)
-                {
-                    return Some(id);
-                }
-                scene::upload_texture(r, i.width, i.height, &i.rgba, srgb, repeat)
-            };
-            let tex = (|| {
-                Some(Tex {
-                    atlas: up(r, &t.atlas, true, false)?,
-                    atlas_normal: match &t.atlas_normal {
-                        Some(n) => Some(up(r, n, false, false)?),
-                        None => None,
-                    },
-                    bark: up(r, &t.bark, true, true)?,
-                    bark_normal: up(r, &t.bark_normal, false, true)?,
-                    leaf_mean: opaque_mean(&t.atlas.rgba),
-                })
-            })();
+            let scale = self.leaf_scale.max(1);
+            let tex = make_tex(r, &w.params, scale);
+            self.tex_params.insert(id.clone(), w.params.clone());
             match tex {
                 Some(tex) => {
                     self.textures.insert(id, tex);
@@ -436,6 +503,7 @@ impl Flora {
         }
         let w = self.queue.remove(0);
         let tex = &self.textures[&id];
+        let mut made = Vec::new();
         let mut variants = Vec::new();
         for v in 0..VARIANTS {
             let mut parts = Vec::new();
@@ -459,12 +527,14 @@ impl Flora {
                     };
                     let key = kind as usize;
                     let mat = *mats.entry(key).or_insert_with(|| {
-                        scene::plant_material(
+                        let m = scene::plant_material(
                             r,
                             kind,
                             (tex.atlas, tex.atlas_normal, tex.bark, tex.bark_normal),
                             mesh.foliage_tint,
-                        )
+                        );
+                        made.push((m, kind, mesh.foliage_tint));
+                        m
                     });
                     parts.push((m, mat, dist));
                     kinds.push(kind);
@@ -479,6 +549,9 @@ impl Flora {
                 baked: None,
                 height,
             });
+        }
+        for (m, kind, tint) in made {
+            self.plant_mats.push((id.clone(), m, kind, tint));
         }
         self.classes.insert((id, class), variants);
         self.rev += 1;
