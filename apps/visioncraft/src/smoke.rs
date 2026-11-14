@@ -5,7 +5,7 @@
 //! (`"load model path [name N] [at x y z] [rot deg] [scale s]"`, `"reimport m1 path"`,
 //! `"set camera orbit yaw pitch dist px py pz"`, `"set camera look ex ey ez tx ty tz"`,
 //! `"set camera walk x z heading_deg pitch_deg"`, `"set camera top cx cz half_height"`,
-//! `"set camera frame"`, `"set quality low|medium|high|auto"`, `"set exposure stops"`,
+//! `"set camera frame"`, `"set quality low|medium|high|ultra|auto"`, `"set exposure stops"`,
 //! `"set clay on|off"`, `"highlight owner face-name"`, `"highlight none"`,
 //! `"screenshot name w h"`, `"object file.glb name"`) or an object `{"run": "command.name", "params": {...}}`.
 
@@ -208,7 +208,12 @@ pub fn parse_step(v: &Value) -> Result<Step, String> {
             let [cx, cz, half] = nums::<3>(n)?;
             Ok(Step::Camera(Cam::Top { cx, cz, half }))
         }
-        ["set", "quality", q] if ["low", "medium", "high", "auto"].contains(q) => {
+        ["set", "quality", q]
+            if *q == "auto"
+                || visioncraft_render::Quality::PRESETS
+                    .iter()
+                    .any(|(n, _)| n == q) =>
+        {
             Ok(Step::Quality(q.to_string()))
         }
         ["set", "exposure", n] => Ok(Step::Exposure(nums::<1>(&[n])?[0])),
