@@ -313,6 +313,8 @@ impl SeasonState {
             12 | 1 | 2 | 3 if p.marcescent => (0.85, dry),
             12 | 1 | 2 | 3 => (0.0, [1.0; 3]),
             4 => (0.55, [1.15, 1.2, 0.85]),
+            // Hornbeam and beech (which keep their dead leaves) are well turned by late October.
+            10 if p.marcescent => (0.95, to_autumn(0.85)),
             10 => (0.9, to_autumn(0.6)),
             11 if p.marcescent => (0.85, to_autumn(1.0)),
             11 => (0.3, to_autumn(1.0)),
