@@ -87,6 +87,15 @@ struct ExportAll {
 /// How long a still waits for higher-resolution textures before it is captured anyway.
 const STILL_WAIT_S: f64 = 20.0;
 
+/// A photo being taken: a few of its frames each app frame.
+#[cfg(not(target_arch = "wasm32"))]
+struct PhotoJob {
+    photo: visioncraft_render::Photo,
+    matrices: (glam::Mat4, glam::Mat4, glam::Vec3),
+    lens: (f32, f32),
+    samples: u32,
+}
+
 struct ExportJob {
     still: visioncraft_render::Still,
     /// The export preset; `None` for a screenshot of the 3D view at the canvas' own size.
@@ -139,6 +148,11 @@ pub struct App {
     /// tier of what is in frame, with when it was asked for.
     still_wait: Option<(Option<usize>, f64)>,
     export_all: Option<ExportAll>,
+    /// The frames of the photo asked for (the next export is a photo).
+    #[cfg(not(target_arch = "wasm32"))]
+    photo_next: Option<u32>,
+    #[cfg(not(target_arch = "wasm32"))]
+    photo: Option<PhotoJob>,
     pending_replace: Option<Replace>,
     /// Models whose file changed, with the time to re-import them (debounce).
     changed: HashMap<String, f64>,
@@ -216,6 +230,10 @@ impl App {
             export: None,
             still_wait: None,
             export_all: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            photo_next: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            photo: None,
             pending_replace: None,
             changed: HashMap::new(),
             project_name: cc.storage.and_then(|s| s.get_string(KEY_NAME)),
@@ -423,6 +441,21 @@ impl App {
         let (name, w, h) = presets[idx];
         self.studio.prepare();
         let (view, proj, eye) = self.studio.camera.matrices(w as f32 / h as f32);
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(samples) = self.photo_next.take() {
+            match self.studio.renderer.photo_begin(w, h, Quality::ULTRA) {
+                Ok(photo) => {
+                    self.photo = Some(PhotoJob {
+                        photo,
+                        matrices: (view, proj, eye),
+                        lens: self.studio.lens(None),
+                        samples,
+                    });
+                }
+                Err(e) => self.toasts.error(format!("Photo failed: {e}")),
+            }
+            return;
+        }
         match self.studio.renderer.render_still(w, h, view, proj, eye) {
             Ok(still) => {
                 self.toasts.info(format!("Rendering {name} {w} × {h}…"));
@@ -588,6 +621,68 @@ impl App {
         match self.studio.renderer.render_still(w, h, view, proj, eye) {
             Ok(still) => job.current = Some((name, still)),
             Err(e) => self.toasts.error(format!("{}: {e}", v.name)),
+        }
+        true
+    }
+
+    /// Takes frames of the photo for up to 0.1 s, shows how far it is with a cancel button,
+    /// and saves it when done; true while it runs.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn poll_photo(&mut self, ctx: &egui::Context) -> bool {
+        let Some(job) = &mut self.photo else {
+            return false;
+        };
+        let start = std::time::Instant::now();
+        let (view, proj, eye) = job.matrices;
+        while job.photo.done < job.samples && start.elapsed().as_secs_f32() < 0.1 {
+            let k = job.photo.done;
+            if let Err(e) = self.studio.renderer.photo_sample(
+                &mut job.photo,
+                view,
+                proj,
+                eye,
+                k,
+                job.lens.0,
+                job.lens.1,
+            ) {
+                self.toasts.error(format!("Photo failed: {e}"));
+                self.photo = None;
+                return false;
+            }
+        }
+        let (done, samples) = (job.photo.done, job.samples);
+        if done >= samples {
+            let job = self.photo.take().expect("checked");
+            let (w, h) = job.photo.size();
+            match studio::png_rgb(&job.photo.pixels(), w, h) {
+                Ok(png) => files::save_as(
+                    &self.inbox,
+                    ctx,
+                    format!("visioncraft-photo-{w}x{h}.png"),
+                    png,
+                    "png",
+                ),
+                Err(e) => self.toasts.error(e),
+            }
+            return false;
+        }
+        let mut cancel = false;
+        egui::Area::new(egui::Id::new("photo"))
+            .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+            .order(egui::Order::Tooltip)
+            .show(ctx, |ui| {
+                ui::panel_frame().show(ui, |ui| {
+                    ui.set_width(320.0);
+                    ui.label(egui::RichText::new(strings::PHOTO_TAKING).size(18.0));
+                    ui.add(
+                        egui::ProgressBar::new(done as f32 / samples as f32)
+                            .text(format!("{done} / {samples}")),
+                    );
+                    cancel = ui.button(strings::CANCEL).clicked();
+                });
+            });
+        if cancel {
+            self.photo = None;
         }
         true
     }
@@ -983,6 +1078,11 @@ impl App {
             Action::New if self.dirty() => self.pending_replace = Some(Replace::New),
             Action::New => self.new_project(),
             Action::Export(i) => self.wait_for_textures(Some(i)),
+            #[cfg(not(target_arch = "wasm32"))]
+            Action::ExportPhoto(i, samples) => {
+                self.photo_next = Some(samples);
+                self.wait_for_textures(Some(i));
+            }
             Action::Screenshot => self.wait_for_textures(None),
             Action::ExportAll(i) => {
                 let (_, w, h) = visioncraft_core::export_presets()[i];
@@ -1646,6 +1746,10 @@ impl eframe::App for App {
         self.agents_pill(&ctx, now);
         busy |= self.poll_still_textures(now);
         busy |= self.poll_export(&ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            busy |= self.poll_photo(&ctx);
+        }
         busy |= self.poll_export_all(&ctx);
         let mut confirm = None;
         if self.pending_replace.is_some() {

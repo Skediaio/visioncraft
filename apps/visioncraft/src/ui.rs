@@ -417,6 +417,9 @@ pub enum Action {
     Screenshot,
     /// Every viewpoint at export preset `usize`.
     ExportAll(usize),
+    /// A photo (`u32` frames averaged) at export preset `usize`.
+    #[cfg(not(target_arch = "wasm32"))]
+    ExportPhoto(usize, u32),
 }
 
 pub struct Hud {
@@ -430,6 +433,8 @@ pub struct Hud {
     pub export_at: egui::Rect,
     /// Export every viewpoint instead of the current view.
     pub export_all: bool,
+    /// Export a photo (many frames averaged) instead of one frame, with this many samples.
+    pub export_photo: Option<u32>,
 }
 
 impl Default for Hud {
@@ -442,6 +447,7 @@ impl Default for Hud {
             export_open: false,
             export_at: egui::Rect::ZERO,
             export_all: false,
+            export_photo: None,
         }
     }
 }
@@ -682,12 +688,31 @@ impl Hud {
                     .on_hover_text(t::EXPORT_ALL_TIP);
                 });
                 let all = self.export_all && views > 0;
+                // A photo waits for each frame's pixels: the desktop app only.
+                #[cfg(not(target_arch = "wasm32"))]
+                ui.add_enabled_ui(!all, |ui| {
+                    let mut on = self.export_photo.is_some();
+                    ui.checkbox(&mut on, t::EXPORT_PHOTO)
+                        .on_hover_text(t::EXPORT_PHOTO_TIP);
+                    match (on, &mut self.export_photo) {
+                        (true, Some(n)) => {
+                            ui.add(
+                                egui::Slider::new(n, 8..=512)
+                                    .logarithmic(true)
+                                    .text(t::PHOTO_SAMPLES),
+                            );
+                        }
+                        (true, None) => self.export_photo = Some(64),
+                        (false, _) => self.export_photo = None,
+                    }
+                });
                 for (i, (name, w, h)) in visioncraft_core::export_presets().iter().enumerate() {
                     if ui.button(format!("{name}  {w} × {h}")).clicked() {
-                        actions.push(if all {
-                            Action::ExportAll(i)
-                        } else {
-                            Action::Export(i)
+                        actions.push(match (all, self.export_photo) {
+                            (true, _) => Action::ExportAll(i),
+                            #[cfg(not(target_arch = "wasm32"))]
+                            (false, Some(n)) => Action::ExportPhoto(i, n),
+                            (false, _) => Action::Export(i),
                         });
                         self.export_open = false;
                     }

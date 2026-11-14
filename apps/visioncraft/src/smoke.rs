@@ -122,6 +122,14 @@ pub enum Step {
         w: u32,
         h: u32,
     },
+    /// `photo NAME W H SAMPLES [APERTURE_M]`: `Studio::render_photo`, with the time it took.
+    Photo {
+        name: String,
+        w: u32,
+        h: u32,
+        samples: u32,
+        aperture: f32,
+    },
 }
 
 fn nums<const N: usize>(t: &[&str]) -> Result<[f32; N], String> {
@@ -328,6 +336,16 @@ pub fn parse_step(v: &Value) -> Result<Step, String> {
             name: name.to_string(),
             w: w.parse().map_err(|_| "width is not a number")?,
             h: h.parse().map_err(|_| "height is not a number")?,
+        }),
+        ["photo", name, w, h, n, rest @ ..] if rest.len() <= 1 => Ok(Step::Photo {
+            name: name.to_string(),
+            w: w.parse().map_err(|_| "width is not a number")?,
+            h: h.parse().map_err(|_| "height is not a number")?,
+            samples: n.parse().map_err(|_| "samples is not a number")?,
+            aperture: match rest {
+                [a] => a.parse().map_err(|_| "aperture is not a number")?,
+                _ => 0.0,
+            },
         }),
         _ => Err(format!("unknown step `{s}`")),
     }
@@ -857,6 +875,26 @@ mod native {
                     let file = out.join(format!("{name}.png"));
                     write_png(&file, &pixels, w, h).map_err(at)?;
                     println!("wrote {}", file.display());
+                }
+                Step::Photo {
+                    name,
+                    w,
+                    h,
+                    samples,
+                    aperture,
+                } => {
+                    s.resize(w, h);
+                    settle(&mut s, &device, &queue, false);
+                    let t = std::time::Instant::now();
+                    let lens = (aperture > 0.0).then_some((aperture, None));
+                    let pixels = s.render_photo(w, h, samples, lens).map_err(at)?;
+                    let file = out.join(format!("{name}.png"));
+                    write_png(&file, &pixels, w, h).map_err(at)?;
+                    println!(
+                        "wrote {} ({samples} samples in {:.1} s)",
+                        file.display(),
+                        t.elapsed().as_secs_f32()
+                    );
                 }
             }
             for p in s.problems.drain(..) {

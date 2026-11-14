@@ -582,6 +582,68 @@ impl Studio {
         pixels.ok_or_else(|| "reading the picture back failed".to_string())
     }
 
+    /// Gets the scene ready for a photo at `w` x `h`: plants grown, overlays off (when pictures
+    /// leave them out). Then `photo_begin`/`photo_sample` on the renderer; `photo_end` after.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn photo_prepare(&mut self, w: u32, h: u32) -> [u32; 2] {
+        let live = self.size;
+        self.resize(w, h);
+        for _ in 0..600 {
+            self.prepare();
+            if self.plants_pending() == 0 {
+                break;
+            }
+        }
+        self.prepare();
+        if !self.overlays_in_pictures {
+            self.renderer.set_overlay_lines(&[]);
+            self.renderer.set_overlay_lines_on_top(&[]);
+            self.renderer.set_highlight(None);
+        }
+        live
+    }
+
+    /// Puts the live size back after `photo_prepare`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn photo_end(&mut self, live: [u32; 2]) {
+        if live != [0, 0] && live != self.size {
+            self.resize(live[0], live[1]);
+            self.targets_changed = true;
+        }
+    }
+
+    /// A photo of the 3D view at `w` x `h`: `samples` frames at ULTRA averaged (soft shadows,
+    /// smooth edges, smooth occlusion); with `lens` `(aperture radius m, focus distance m)`,
+    /// depth of field. RGBA8. Blocks until done.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn render_photo(
+        &mut self,
+        w: u32,
+        h: u32,
+        samples: u32,
+        lens: Option<(f32, Option<f32>)>,
+    ) -> Result<Vec<u8>, String> {
+        let live = self.photo_prepare(w, h);
+        let (view, proj, eye) = self.camera.matrices(w as f32 / h as f32);
+        let (aperture, focus) = self.lens(lens);
+        let result = (|| {
+            let mut photo = self.renderer.photo_begin(w, h, Quality::ULTRA)?;
+            for k in 0..samples.max(1) {
+                self.renderer
+                    .photo_sample(&mut photo, view, proj, eye, k, aperture, focus)?;
+            }
+            Ok(photo.pixels())
+        })();
+        self.photo_end(live);
+        result
+    }
+
+    /// The lens' aperture radius and focus distance (the camera's pivot when not given).
+    pub fn lens(&self, lens: Option<(f32, Option<f32>)>) -> (f32, f32) {
+        let pivot = (self.camera.eye() - self.camera.pivot).length().max(0.1);
+        lens.map_or((0.0, pivot), |(a, f)| (a, f.unwrap_or(pivot)))
+    }
+
     /// Swaps the geometry of an existing model, touching nothing else. Returns warnings and the
     /// number of assignments that no longer match a face.
     pub fn reimport(&mut self, id: &str, source: Source) -> Result<(Vec<String>, usize), String> {

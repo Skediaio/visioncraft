@@ -289,10 +289,23 @@ impl Host for Bound<'_, '_> {
         h.studio.quality = visioncraft_render::Quality::PRESETS
             .iter()
             .position(|(n, _)| n.eq_ignore_ascii_case(&request.quality))
-            .unwrap_or(2);
-        let png = h
-            .studio
-            .render_png(h.device, h.queue, request.width, request.height);
+            .unwrap_or(if request.photo.is_some() { 3 } else { 2 });
+        let png = match &request.photo {
+            Some(p) => {
+                let (w, hh) = (request.width, request.height);
+                h.studio
+                    .render_photo(
+                        w,
+                        hh,
+                        p.samples,
+                        (p.aperture_m > 0.0).then_some((p.aperture_m, p.focus_m)),
+                    )
+                    .and_then(|px| crate::studio::png_rgb(&px, w, hh))
+            }
+            None => h
+                .studio
+                .render_png(h.device, h.queue, request.width, request.height),
+        };
         let (eye, target, fov) = (
             h.studio.camera.eye(),
             h.studio.camera.pivot,
