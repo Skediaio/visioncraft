@@ -387,6 +387,9 @@ pub struct Project {
     /// Behind an `Arc`: undo snapshots share it, and a command that edits it copies it once.
     #[serde(default)]
     pub terrain: Option<Arc<Terrain>>,
+    /// The sea level (`water.set_sea`); not written while there is none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sea: Option<crate::water::Sea>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extensions: Extensions,
 }
@@ -410,6 +413,7 @@ impl Default for Project {
             objects: Vec::new(),
             view: ViewState::default(),
             terrain: None,
+            sea: None,
             extensions: Extensions::new(),
         }
     }

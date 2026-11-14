@@ -1264,6 +1264,110 @@ pub fn terrain_chunk_mesh_on(
     m
 }
 
+/// A coast across the terrain (`terrain.shore`): heights relative to the water `level` by the
+/// signed distance from a line, positive on its right (the sea side). From the line the land
+/// drops over `bank_m` from `top_m` to `berm_m` above the water (a bank or bluff; 0 wide: none),
+/// then the beach runs down over `beach_m` to the waterline, then the bed falls to `depth_m`
+/// below the water over `shelf_m` along Dean's equilibrium profile (depth ~ distance^(2/3):
+/// R. G. Dean, "Equilibrium beach profiles: characteristics and applications", Journal of
+/// Coastal Research 7(1), 1991) and stays there. The land side keeps its ground (dry ground
+/// blends to the line's height over 6 m; ground already under the water stays).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ShoreProfile {
+    pub level: f32,
+    pub top_m: f32,
+    pub bank_m: f32,
+    pub berm_m: f32,
+    pub beach_m: f32,
+    pub shelf_m: f32,
+    pub depth_m: f32,
+}
+
+/// Land blended to the line's height over this width on the land side.
+const SHORE_BLEND_M: f32 = 6.0;
+
+impl ShoreProfile {
+    /// The height at signed distance `d` (positive seaward) over ground `old`.
+    pub fn height(&self, d: f32, old: f32) -> f32 {
+        let top = self.level + self.top_m;
+        if d <= 0.0 {
+            // Ground already under the water (another stretch of coast) stays as it is.
+            if old < self.level {
+                return old;
+            }
+            return old + (top - old) * smoothstep(1.0 + d / SHORE_BLEND_M);
+        }
+        let berm = self.level + self.berm_m;
+        if d < self.bank_m {
+            return top + (berm - top) * smoothstep(d / self.bank_m);
+        }
+        let d = d - self.bank_m;
+        if d < self.beach_m {
+            return berm - self.berm_m * d / self.beach_m.max(1e-3);
+        }
+        let x = ((d - self.beach_m) / self.shelf_m.max(1e-3)).min(1.0);
+        self.level - self.depth_m * x.powf(2.0 / 3.0)
+    }
+}
+
+/// Signed distance from `p` to the polyline: positive to the right of the direction of travel
+/// (+X east, +Z south: travelling north, the right is east). Past the ends the end segments
+/// run on, so the coast does not curl round them.
+pub fn signed_distance(p: [f32; 2], line: &[[f32; 2]]) -> f32 {
+    let mut best = (f32::INFINITY, 0.0f32);
+    let n = line.len();
+    for i in 0..n.saturating_sub(1) {
+        let (a, b) = (line[i], line[i + 1]);
+        let ab = [b[0] - a[0], b[1] - a[1]];
+        let len2 = ab[0] * ab[0] + ab[1] * ab[1];
+        if len2 <= 0.0 {
+            continue;
+        }
+        let ap = [p[0] - a[0], p[1] - a[1]];
+        let mut u = (ap[0] * ab[0] + ap[1] * ab[1]) / len2;
+        if i > 0 {
+            u = u.max(0.0);
+        }
+        if i + 2 < n {
+            u = u.min(1.0);
+        }
+        let q = [a[0] + ab[0] * u, a[1] + ab[1] * u];
+        let dist = (p[0] - q[0]).hypot(p[1] - q[1]);
+        if dist < best.0 {
+            // The right of (dx, dz) is (-dz, dx).
+            let side = ap[0] * -ab[1] + ap[1] * ab[0];
+            best = (dist, if side >= 0.0 { 1.0 } else { -1.0 });
+        }
+    }
+    best.0 * best.1
+}
+
+impl Terrain {
+    /// Shapes a coast along `line` (`ShoreProfile`); with `paint`, the beach and the bed below
+    /// it get that layer (fading in over the bank).
+    pub fn shore(
+        &mut self,
+        line: &[[f32; 2]],
+        p: &ShoreProfile,
+        paint: Option<usize>,
+    ) -> DirtyRect {
+        for iz in 0..=self.depth {
+            for ix in 0..=self.width {
+                let d = signed_distance(self.xz(ix, iz), line);
+                let i = self.at(ix, iz);
+                self.heights[i] = p.height(d, self.heights[i]);
+                if let Some(layer) = paint.filter(|l| *l < self.layers.len()) {
+                    let t = smoothstep((d - p.bank_m * 0.6) / (p.bank_m * 0.4 + 1.0));
+                    if t > 0.0 {
+                        self.paint_vertex(i, layer, t);
+                    }
+                }
+            }
+        }
+        self.whole()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
