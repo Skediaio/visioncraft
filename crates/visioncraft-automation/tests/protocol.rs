@@ -500,3 +500,28 @@ fn the_garden_example_builds_and_is_inspected() {
         "{hedges}"
     );
 }
+
+#[test]
+fn photo_parameters_are_checked_before_rendering() {
+    let mut h = Headless::new(Access::default());
+    let error = |h: &mut Headless, params: Value| {
+        execute(h, 1, "view.render", params)["error"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(
+        error(&mut h, json!({"samples": 8})),
+        "view.render: `samples`, `aperture_m` and `focus_m` need quality `photo`"
+    );
+    assert!(error(&mut h, json!({"quality": "photo", "samples": 0})).contains("`samples`"));
+    assert_eq!(
+        error(&mut h, json!({"quality": "photo", "aperture_m": 2})),
+        "view.render: `aperture_m` must be from 0 to 0.5"
+    );
+    // Valid: on to the renderer, which this host has not.
+    assert!(
+        error(&mut h, json!({"quality": "photo", "samples": 16, "aperture_m": 0.02}))
+            .contains("no renderer")
+    );
+}

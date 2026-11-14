@@ -5,7 +5,7 @@
 use crate::MAX_BATCH_STEPS;
 use crate::docs::{CommandDoc, ParamDoc, from_spec};
 use crate::fields::{Fields, describe, shorten};
-use crate::host::{Host, RenderRequest, missing_json};
+use crate::host::{Host, PhotoRequest, RenderRequest, missing_json};
 use crate::inspect::{self, Verbosity};
 use serde_json::{Map, Value, json};
 use std::path::{Path, PathBuf};
@@ -465,8 +465,35 @@ pub fn host_docs() -> Vec<CommandDoc> {
                     None,
                     false,
                     Some("\"high\""),
-                    &["low", "medium", "high"],
-                    "The renderer's quality preset",
+                    &["low", "medium", "high", "photo"],
+                    "The renderer's quality preset; photo averages `samples` frames at ULTRA (soft shadows, smooth edges and occlusion, optional depth of field)",
+                ),
+                p(
+                    "samples",
+                    "integer",
+                    None,
+                    false,
+                    Some("64"),
+                    &[],
+                    "Photo only: frames averaged, 1 to 1024",
+                ),
+                p(
+                    "aperture_m",
+                    "number",
+                    Some("m"),
+                    false,
+                    Some("0 (all sharp)"),
+                    &[],
+                    "Photo only: lens radius for depth of field, 0 to 0.5",
+                ),
+                p(
+                    "focus_m",
+                    "number",
+                    Some("m"),
+                    false,
+                    Some("the distance to the camera target"),
+                    &[],
+                    "Photo only: distance in focus, 0.1 to 1000",
                 ),
                 p(
                     "years",
@@ -898,17 +925,39 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
             "time",
             "quality",
             "years",
+            "samples",
+            "aperture_m",
+            "focus_m",
         ],
     )?;
     let width = a.integer("width", 16, 4096)?.unwrap_or(800) as u32;
     let height = a.integer("height", 16, 4096)?.unwrap_or(600) as u32;
     let quality = a.str("quality")?.unwrap_or("high");
-    if !["low", "medium", "high"].contains(&quality) {
+    if !["low", "medium", "high", "photo"].contains(&quality) {
         return Err(format!(
-            "{id}: `quality` must be low, medium or high, got `{}`",
+            "{id}: `quality` must be low, medium, high or photo, got `{}`",
             shorten(quality)
         ));
     }
+    let samples = a.integer("samples", 1, 1024)?;
+    let aperture = a.number("aperture_m")?;
+    let focus = a.number("focus_m")?;
+    if quality != "photo" && (samples.is_some() || aperture.is_some() || focus.is_some()) {
+        return Err(format!(
+            "{id}: `samples`, `aperture_m` and `focus_m` need quality `photo`"
+        ));
+    }
+    if aperture.is_some_and(|x| !(0.0..=0.5).contains(&x)) {
+        return Err(format!("{id}: `aperture_m` must be from 0 to 0.5"));
+    }
+    if focus.is_some_and(|x| !(0.1..=1000.0).contains(&x)) {
+        return Err(format!("{id}: `focus_m` must be from 0.1 to 1000"));
+    }
+    let photo = (quality == "photo").then(|| PhotoRequest {
+        samples: samples.unwrap_or(64) as u32,
+        aperture_m: aperture.unwrap_or(0.0) as f32,
+        focus_m: focus.map(|f| f as f32),
+    });
     let mut project = host.session().project().clone();
     let mut camera = None;
     if let Some(v) = a.str("viewpoint")? {
@@ -976,6 +1025,7 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
         height,
         camera,
         quality: quality.to_string(),
+        photo,
     };
     let models = host.state().models.clone();
     let rendered = host

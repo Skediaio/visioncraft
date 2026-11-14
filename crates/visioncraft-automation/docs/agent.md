@@ -245,7 +245,10 @@ default at cover 0.35) or `overcast` (soft shadows, little direct sun); they dri
 and show in reflections and in the ambient light. The rendering quality and
 the texture resolution belong to the window, not the project: set them over the control channel
 with `ui.set {"quality": "auto" | "low" | "medium" | "high" | "ultra", "textures": "auto" | "1k"
-| "2k" | "4k"}`; `view.render` takes its own `quality`.
+| "2k" | "4k"}`; `view.render` takes its own `quality`. For a final picture use `view.render
+{"quality": "photo", "samples": 64}`: many frames averaged at ULTRA give soft shadows with real
+penumbrae and smooth edges (seconds to minutes); `aperture_m` (lens radius, e.g. 0.02) and
+`focus_m` add depth of field.
 
 ### 14. Your own models
 

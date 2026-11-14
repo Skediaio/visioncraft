@@ -110,7 +110,7 @@ loaded geometry or a GPU:
 | `catalog.search` | `{query?, category?, exposure?, max_height_m?, limit? = 50}` | `{total, assets: [{id, name, category, size_m, license, author, plant}]}` |
 | `species.list` | `{filter?, category?}` | `{species: [{asset: "flora:<id>", common_name, ...}], custom: [{asset, name, base}]}` |
 | `planting.list_presets` | `{}` | `{presets: [{id, name, layers}]}` |
-| `view.render` | `{path?, width? = 800, height? = 600, viewpoint?, camera?, time?, quality? = "high"}` | a PNG: to `path`, else `{mime: "image/png", base64}`; with `camera`, `sun`, `time`, `plantsPending`, `renderer` |
+| `view.render` | `{path?, width? = 800, height? = 600, viewpoint?, camera?, time?, years?, quality? = "high", samples? = 64, aperture_m? = 0, focus_m?}`; quality `"photo"` averages `samples` frames at ULTRA (soft shadows, smooth edges; `aperture_m`/`focus_m` for depth of field) | a PNG: to `path`, else `{mime: "image/png", base64}`; with `camera`, `sun`, `time`, `plantsPending`, `renderer` |
 
 `view.render` draws with the app's own renderer (the window-free studio) on a headless GPU
 device made at the first picture; plants are grown before the picture is taken. The camera is
@@ -167,7 +167,7 @@ these, else the latest); capabilities `tools`, `resources`, `prompts`; `initiali
 | `command_run` | `id`, `params?`, `intent?` | one command; `_meta.ms`; a refused command is `isError: true` with a message that starts with its id |
 | `command_batch` | `steps: [{id, params?, intent?}]` (≤ 256), `stop_on_error? = true`, `stop_on_break? = false`, `terse? = false`, `intent?`, `atomic? = false` | as `batch`; `isError` when a command failed, the report is the content; not atomic unless `atomic` |
 | `doc_inspect` | `faces?`, `measures?`, `placements?`, `full?` | `document.inspect` |
-| `doc_render_preview` | `viewpoint?`, `camera?`, `time?`, `quality?`, `max_side?` (16..2048, default 1024) | an image block (PNG, 4:3) and the render's JSON as text |
+| `doc_render_preview` | `viewpoint?`, `camera?`, `time?`, `quality?` (also `"photo"`), `samples?`, `max_side?` (16..2048, default 1024) | an image block (PNG, 4:3) and the render's JSON as text |
 | `control_call` (only when the host has methods, i.e. a window) | `method`, `params?` | a window method; a picture comes back as an image block |
 
 Resources: `visioncraft://project` (`document.inspect` as JSON) and `visioncraft://guide` (the

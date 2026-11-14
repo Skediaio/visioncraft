@@ -60,8 +60,19 @@ pub struct RenderRequest {
     pub height: u32,
     /// `[position, target, fov_y_deg]`.
     pub camera: Option<([f32; 3], [f32; 3], f32)>,
-    /// `low`, `medium` or `high`.
+    /// `low`, `medium`, `high` or `photo`.
     pub quality: String,
+    /// With quality `photo`: how to take it.
+    pub photo: Option<PhotoRequest>,
+}
+
+/// A photo: `samples` frames averaged; depth of field when `aperture_m` is over 0, focused at
+/// `focus_m` (else the camera target).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PhotoRequest {
+    pub samples: u32,
+    pub aperture_m: f32,
+    pub focus_m: Option<f32>,
 }
 
 /// A picture: PNG bytes and what the renderer says about it (adapter, plants drawn, ...).
