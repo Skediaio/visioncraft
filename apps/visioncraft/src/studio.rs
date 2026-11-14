@@ -1099,10 +1099,20 @@ fn auto_step(frames: &[f32], current: Quality, can_rise: bool) -> AutoStep {
         return AutoStep::Wait;
     };
     if next == current {
-        AutoStep::Keep
-    } else {
-        AutoStep::To(next, p75 > budget)
+        return AutoStep::Keep;
     }
+    // A render scale step within one preset has its own dead band (the tier logic above does
+    // not see that one scale step costs (s1/s0)^2 more pixels): up only when the frames
+    // scaled by that cost still leave 15 % of the budget, down only when 10 % over it.
+    // Otherwise LOW at 55 % and 65 % took turns.
+    if preset_name(&next) == preset_name(&current) {
+        let cost = (next.render_scale / current.render_scale).powi(2);
+        let up = next.render_scale > current.render_scale;
+        if (up && p75 * cost > budget * 0.85) || (!up && p75 < budget * 1.1) {
+            return AutoStep::Keep;
+        }
+    }
+    AutoStep::To(next, p75 > budget)
 }
 
 /// The preset a quality is (at any render scale), for messages.
@@ -1299,5 +1309,17 @@ mod reach_tests {
             auto_step(&[28.0; 90], Quality::MEDIUM, true),
             AutoStep::Keep
         );
+        // Render scale within LOW: 21 ms at 55 % would be 29 ms at 65 % (over 85 % of the
+        // budget): no step up; 35 ms (5 % over) at 65 %: no step down to 55 % either.
+        let low = |s: f32| Quality {
+            render_scale: s,
+            ..Quality::LOW
+        };
+        assert_eq!(auto_step(&[21.0; 90], low(0.55), true), AutoStep::Keep);
+        assert_eq!(auto_step(&[35.0; 90], low(0.65), true), AutoStep::Keep);
+        assert!(matches!(
+            auto_step(&[40.0; 30], low(0.65), true),
+            AutoStep::To(_, true)
+        ));
     }
 }
