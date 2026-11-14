@@ -55,6 +55,7 @@ mod hdri;
 mod impostor;
 pub mod lights;
 pub mod lod;
+mod sea;
 pub mod shadow;
 pub mod sky;
 mod stats;
@@ -69,6 +70,7 @@ pub use hardware::{GpuKind, HardwareProbe, Score, calibrate, relative_cost, star
 pub use hdri::{HdriCalibration, HdriImage, OVERCAST_LUX, calibrate_hdri, estimate_sun};
 pub use impostor::{ImpostorId, atlas_layout, impostor_views};
 pub use lights::{Light, LightKind};
+pub use sea::Sea;
 pub use sky::Sun;
 pub use stats::{RenderStats, TARGET_MS, ULTRA_HEADROOM, suggest_quality};
 pub use still::Photo;
@@ -121,6 +123,7 @@ const SHADERS: [(&str, &[&str]); 12] = [
             include_str!("scene.wgsl"),
             include_str!("terrain.wgsl"),
             include_str!("impostor.wgsl"),
+            include_str!("sea.wgsl"),
         ],
     ),
     ("sky", &[COMMON, SKY]),
@@ -617,6 +620,8 @@ struct Layouts {
     terrain: wgpu::BindGroupLayout,
     /// An impostor's atlas (group 1 of the impostor pipelines).
     impostor: wgpu::BindGroupLayout,
+    /// The sea's parameters (group 1 of the sea pipelines).
+    sea: wgpu::BindGroupLayout,
     material: wgpu::BindGroupLayout,
     draw: wgpu::BindGroupLayout,
     cascade: wgpu::BindGroupLayout,
@@ -644,6 +649,7 @@ struct SampledPipelines {
     depth_fade: [wgpu::RenderPipeline; 2],
     sky: wgpu::RenderPipeline,
     resolve: wgpu::RenderPipeline,
+    sea: sea::SeaPipelines,
 }
 
 struct Pipelines {
@@ -829,6 +835,7 @@ pub struct Renderer {
     ground_look: Option<MaterialId>,
     ground_slot: u32,
     terrain: terrain::TerrainGpu,
+    sea: sea::SeaGpu,
     baker: impostor::Baker,
     impostors: Vec<Option<impostor::GpuImpostor>>,
     bloom_strength: f32,
@@ -1103,6 +1110,7 @@ impl Renderer {
             entries: &ground_entries,
         });
         let layouts_terrain = layouts.terrain.clone();
+        let layouts_sea = layouts.sea.clone();
         let baker = impostor::Baker::new(
             device,
             &layouts,
@@ -1158,6 +1166,7 @@ impl Renderer {
             },
             ground_slot: 0,
             terrain: terrain::TerrainGpu::new(device, queue, &layouts_terrain),
+            sea: sea::SeaGpu::new(device, &layouts_sea),
             baker,
             impostors: Vec::new(),
             bloom_strength: 0.025,
@@ -2423,9 +2432,11 @@ impl Renderer {
             .flatten()
             .map(|(lo, hi)| snow_cover_matrix(self.eye, lo, hi, self.quality.shadow_resolution));
         let view_proj = self.proj * self.view;
+        // The sea, seen from above, takes the planar reflection over any pond.
         let water = (self.quality.water_reflection > 0)
-            .then(|| self.water_plane(view_proj))
+            .then(|| self.sea_plane().or_else(|| self.water_plane(view_proj)))
             .flatten();
+        self.write_sea();
         let t = &self.targets;
         self.write_globals(
             &self.globals,
@@ -2674,6 +2685,7 @@ impl Renderer {
             }
             pass.set_pipeline(&self.sampled.sky);
             pass.draw(0..3, 0..1);
+            self.draw_sea(&mut pass);
             self.draw_transparent(&mut pass, view_proj);
         }
         self.counters.split("forward");
@@ -4152,6 +4164,7 @@ impl Layouts {
             ),
             terrain: terrain::layout(device),
             impostor: impostor::layout(device),
+            sea: sea::layout(device),
             post: layout(
                 "post",
                 &[
@@ -4690,6 +4703,7 @@ impl SampledPipelines {
             ground: ground_pipeline(device, l, modules, "fs_ground", samples),
             sky: sky_pipeline(device, l, modules, samples),
             resolve,
+            sea: sea::SeaPipelines::new(device, l, modules, samples),
         }
     }
 }

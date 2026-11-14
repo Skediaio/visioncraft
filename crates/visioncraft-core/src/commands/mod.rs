@@ -20,6 +20,7 @@ mod shapes;
 mod species;
 mod terrain;
 mod viewpoints;
+mod water;
 
 pub(crate) fn register(s: &mut Session) {
     layers::register(s);
@@ -35,6 +36,7 @@ pub(crate) fn register(s: &mut Session) {
     growth::register(s);
     lights::register(s);
     viewpoints::register(s);
+    water::register(s);
 }
 
 pub(super) fn fail(why: impl Into<String>) -> CommandError {
