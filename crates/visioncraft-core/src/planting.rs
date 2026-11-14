@@ -1104,7 +1104,7 @@ pub const LAWN_MAX_SLOPE_DEG: f32 = 30.0;
 /// times the blade height, on triangles no steeper than [`LAWN_MAX_SLOPE_DEG`]. At most
 /// [`MAX_PLACEMENTS`]: a larger lawn gets a lower density, evenly ([`lawn_scatter_within`]).
 pub fn lawn_scatter(model: &ImportedModel, face: usize, lawn: &Lawn3d) -> Vec<Tuft> {
-    lawn_scatter_within(model, face, lawn, None, MAX_PLACEMENTS)
+    lawn_scatter_within(model, face, lawn, None, MAX_PLACEMENTS, &[])
 }
 
 /// Where a lawn too large for its tuft budget gets them: around `center` (x, z in the model's
@@ -1163,13 +1163,45 @@ pub fn lawn_area(model: &ImportedModel, face: usize) -> f32 {
 /// over budget gets a lower density, evenly. With one, only the window is scattered: at full
 /// density within the distance of its centre that the budget allows, thinning with the square
 /// of the distance beyond (the same number of tufts per screen area, further off).
+///
+/// No tuft grows inside `holes` (outlines in the model's x, z): the areas lying on the lawn (a
+/// terrace, a path, a border, a pond) and a model's faces on the ground, on every path alike.
 pub fn lawn_scatter_within(
     model: &ImportedModel,
     face: usize,
     lawn: &Lawn3d,
     window: Option<LawnWindow>,
     max: usize,
+    holes: &[&[[f32; 2]]],
 ) -> Vec<Tuft> {
+    let hole_boxes: Vec<([f32; 4], &[[f32; 2]])> = holes
+        .iter()
+        .filter(|h| h.len() >= 3)
+        .map(|h| {
+            let b = h.iter().fold(
+                [
+                    f32::INFINITY,
+                    f32::INFINITY,
+                    f32::NEG_INFINITY,
+                    f32::NEG_INFINITY,
+                ],
+                |b, p| {
+                    [
+                        b[0].min(p[0]),
+                        b[1].min(p[1]),
+                        b[2].max(p[0]),
+                        b[3].max(p[1]),
+                    ]
+                },
+            );
+            (b, *h)
+        })
+        .collect();
+    let in_hole = |x: f32, z: f32| {
+        hole_boxes.iter().any(|(b, h)| {
+            x >= b[0] && x <= b[2] && z >= b[1] && z <= b[3] && point_in_polygon([x, z], h)
+        })
+    };
     if !(lawn.density_per_m2.is_finite() && lawn.density_per_m2 > 0.0) || max == 0 {
         return Vec::new();
     }
@@ -1291,7 +1323,7 @@ pub fn lawn_scatter_within(
                     (share(d, near, w), 0.4 + 0.6 * t)
                 }
             };
-            if threshold >= keep {
+            if threshold >= keep || in_hole(x, z) {
                 continue;
             }
             let Some(y) = cand
@@ -1856,6 +1888,55 @@ mod tests {
         q
     }
 
+    /// Areas lying on a lawn (a pond, a terrace, a gravel path, a soil border) grow no tufts,
+    /// whether the lawn is scattered whole or around the eye.
+    #[test]
+    fn no_tufts_grow_on_areas_lying_on_the_lawn() {
+        let lawn = Lawn3d {
+            density_per_m2: 600.0,
+            blade_height_m: 0.08,
+            seed: 1,
+            ..Default::default()
+        };
+        let m = lawn_rect(60.0, 40.0);
+        let top = m.faces.iter().position(|f| f.name == "S1:top").unwrap();
+        let rect =
+            |x0: f32, z0: f32, x1: f32, z1: f32| vec![[x0, z0], [x1, z0], [x1, z1], [x0, z1]];
+        let on_top = [
+            ("pond", rect(20.0, 15.0, 25.0, 20.0)),
+            ("terrace", rect(4.0, 1.0, 16.0, 4.0)),
+            ("path", rect(30.0, 0.0, 31.2, 40.0)),
+            ("border", rect(0.8, 5.0, 3.0, 35.0)),
+        ];
+        let holes: Vec<&[[f32; 2]]> = on_top.iter().map(|(_, o)| o.as_slice()).collect();
+        let window = LawnWindow {
+            center: [22.0, 17.0],
+            radius: 30.0,
+        };
+        for (path, w, max) in [
+            ("whole", None, 240_000),
+            ("around the eye", Some(window), 60_000),
+        ] {
+            let t = lawn_scatter_within(&m, top, &lawn, w, max, &holes);
+            assert!(t.len() > 10_000, "{path}: {}", t.len());
+            for (name, o) in &on_top {
+                let n = t
+                    .iter()
+                    .filter(|t| point_in_polygon([t.position[0], t.position[2]], o))
+                    .count();
+                assert_eq!(n, 0, "{path}: {n} tufts on the {name}");
+            }
+            // Next to them, the lawn is full.
+            let near_pond = t
+                .iter()
+                .filter(|t| {
+                    (18.0..20.0).contains(&t.position[0]) && (15.0..20.0).contains(&t.position[2])
+                })
+                .count();
+            assert!(near_pond > 600, "{path}: {near_pond} beside the pond");
+        }
+    }
+
     #[test]
     fn a_large_lawn_has_tufts_over_all_of_it() {
         let lawn = Lawn3d {
@@ -1869,7 +1950,7 @@ mod tests {
             let m = lawn_rect(w, d);
             let top = m.faces.iter().position(|f| f.name == "S1:top").unwrap();
             assert!((super::lawn_area(&m, top) - w * d).abs() < 0.5);
-            let t = lawn_scatter_within(&m, top, &lawn, None, 240_000);
+            let t = lawn_scatter_within(&m, top, &lawn, None, 240_000, &[]);
             assert!(t.len() <= 240_000 && t.len() > 200_000, "{}", t.len());
             let q = quadrants(&t, w, d);
             let mean = t.len() as f32 / 4.0;
@@ -1886,7 +1967,7 @@ mod tests {
         // A small lawn keeps its full density.
         let m = lawn_rect(10.0, 8.0);
         let top = m.faces.iter().position(|f| f.name == "S1:top").unwrap();
-        let t = lawn_scatter_within(&m, top, &lawn, None, 240_000);
+        let t = lawn_scatter_within(&m, top, &lawn, None, 240_000, &[]);
         assert!((t.len() as f32 - 48_000.0).abs() < 1_000.0, "{}", t.len());
         // A window: full density near its centre, every quadrant of the window covered, thinner
         // further out, within the budget.
@@ -1896,7 +1977,7 @@ mod tests {
             radius: 48.0,
         };
         let top = m.faces.iter().position(|f| f.name == "S1:top").unwrap();
-        let t = lawn_scatter_within(&m, top, &lawn, Some(w), 240_000);
+        let t = lawn_scatter_within(&m, top, &lawn, Some(w), 240_000, &[]);
         assert!(t.len() <= 240_000, "{}", t.len());
         let near = t
             .iter()
@@ -1929,7 +2010,7 @@ mod tests {
                 center: c,
                 radius: 30.0,
             };
-            lawn_scatter_within(&m, top, &lawn, Some(w), 10_000_000)
+            lawn_scatter_within(&m, top, &lawn, Some(w), 10_000_000, &[])
         };
         let (a, b) = (at([40.0, 30.0]), at([48.0, 30.0]));
         // Where both windows are at full density (more than 14 m inside each), the same tufts.

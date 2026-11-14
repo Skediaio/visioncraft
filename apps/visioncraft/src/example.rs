@@ -106,3 +106,72 @@ mod parity_tests {
         assert!((1..15).contains(&count("Over the house")), "{window:?}");
     }
 }
+
+/// Walking with the lawns scattered around the eye: every step moves the eye a cell and draws
+/// one frame, so a lawn's scatter is replaced while half drawn. Its items went with it only
+/// once drawn in full: the rest stayed, tufts of a lawn no longer there (over the terrace, the
+/// border and the pond of the example garden in the window).
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod walk_tests {
+    use crate::studio::Studio;
+
+    #[test]
+    fn walking_leaves_no_tufts_behind() {
+        let p = visioncraft_core::example("garden").unwrap();
+        let Ok((device, queue)) = pollster::block_on(visioncraft_render::headless_device()) else {
+            eprintln!("no GPU adapter: skipped");
+            return;
+        };
+        let renderer =
+            visioncraft_render::Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+        let mut studio = Studio::new(renderer, p);
+        studio.assets.extend(crate::fixtures::assets());
+        studio.resize(320, 200);
+        // A budget far under the lawn's need: its tufts follow the eye.
+        studio.gpu_lawn_budget = 0.02;
+        let start = studio.camera.pivot;
+        studio.settle_for_picture();
+        let settled = studio.renderer.item_count();
+        for i in 0..60 {
+            let t = i as f32 / 59.0;
+            studio.camera.pivot = start + glam::Vec3::new(14.0 * t, 0.0, 18.0 * t);
+            studio.prepare();
+        }
+        studio.camera.pivot = start;
+        studio.settle_for_picture();
+        for _ in 0..20 {
+            studio.prepare();
+        }
+        assert_eq!(
+            studio.renderer.item_count(),
+            settled,
+            "items left behind by the walk"
+        );
+
+        // The estate opened first, its west lawn (which covers the whole garden's plot) half
+        // drawn, then the garden: none of the estate's tufts stay.
+        let renderer =
+            visioncraft_render::Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+        let mut other = Studio::new(renderer, visioncraft_core::example("estate").unwrap());
+        other.assets.extend(crate::fixtures::assets());
+        other.resize(320, 200);
+        other.gpu_lawn_budget = 0.02;
+        other.camera.pivot = glam::Vec3::new(10.0, 0.0, 20.0);
+        let t0 = std::time::Instant::now();
+        while other.scene.lawns_pending() == 0 && t0.elapsed().as_secs() < 60 {
+            other.prepare();
+        }
+        other.prepare();
+        other.replace_project(visioncraft_core::example("garden").unwrap());
+        other.camera.pivot = start;
+        other.settle_for_picture();
+        for _ in 0..20 {
+            other.prepare();
+        }
+        assert_eq!(
+            other.renderer.item_count(),
+            settled,
+            "the estate's tufts stayed"
+        );
+    }
+}

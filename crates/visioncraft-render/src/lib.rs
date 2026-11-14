@@ -2288,6 +2288,11 @@ impl Renderer {
         self.bounds_dirty = true;
     }
 
+    /// Items drawn (for tests that nothing is left behind).
+    pub fn item_count(&self) -> usize {
+        self.items.iter().flatten().count()
+    }
+
     pub fn remove_item(&mut self, id: ItemId) {
         if let Some(slot) = self.items.get_mut(id.0 as usize) {
             if let Some(item) = slot.take() {

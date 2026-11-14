@@ -438,6 +438,15 @@ struct LawnJob {
     built: Vec<Option<ItemId>>,
 }
 
+impl LawnJob {
+    fn drop_items(self, r: &mut Renderer) {
+        self.built
+            .into_iter()
+            .flatten()
+            .for_each(|i| r.remove_item(i));
+    }
+}
+
 /// Tufts stop being drawn beyond this distance: far lawns are just the ground texture. The last
 /// `LAWN_FADE_BAND_M` dither out (`set_item_cull_fade`), so the edge is a gradient, not a line.
 const LAWN_FADE_M: f32 = 40.0;
@@ -707,9 +716,7 @@ impl Scene {
         for (_, g) in self.gens.drain() {
             Self::drop_groups(r, g.groups);
         }
-        for (_, l) in self.lawns.drain() {
-            l.items.into_iter().for_each(|i| r.remove_item(i));
-        }
+        self.drop_lawns(r);
         self.clutter.clear(r);
         self.terrain_gpu.clear(r);
         self.terrain = None;
@@ -1029,6 +1036,16 @@ impl Scene {
         self.lawn_jobs.len()
     }
 
+    /// Every lawn's tufts, drawn and half drawn.
+    fn drop_lawns(&mut self, r: &mut Renderer) {
+        for (_, l) in self.lawns.drain() {
+            l.items.into_iter().for_each(|i| r.remove_item(i));
+        }
+        for (_, j) in self.lawn_jobs.drain() {
+            j.drop_items(r);
+        }
+    }
+
     /// Denser, finer lawns (HIGH, ULTRA) or the lighter default. True when it changed: the
     /// lawns are then dropped, for the next sync to make again.
     pub fn set_dense_lawns(&mut self, r: &mut Renderer, dense: bool) -> bool {
@@ -1036,9 +1053,7 @@ impl Scene {
             return false;
         }
         self.dense_lawns = dense;
-        for (_, l) in self.lawns.drain() {
-            l.items.into_iter().for_each(|i| r.remove_item(i));
-        }
+        self.drop_lawns(r);
         true
     }
 
@@ -1049,9 +1064,7 @@ impl Scene {
             return false;
         }
         self.lawn_budget = multiple;
-        for (_, l) in self.lawns.drain() {
-            l.items.into_iter().for_each(|i| r.remove_item(i));
-        }
+        self.drop_lawns(r);
         true
     }
 
@@ -1204,11 +1217,10 @@ impl Scene {
                     };
                     // The budget shared by the lawn's faces by area.
                     let max = (max_tufts as f32 * area / total) as usize;
-                    for t in lawn_scatter_within(&geom, *face, &lawn, window, max) {
+                    // An area's matrix only lifts it: the outlines hold in its own x, z.
+                    let holes: Vec<&[[f32; 2]]> = over.iter().map(Vec::as_slice).collect();
+                    for t in lawn_scatter_within(&geom, *face, &lawn, window, max, &holes) {
                         let p = xf.transform_point3(Vec3::from(t.position));
-                        if over.iter().any(|a| inside_outline([p.x, p.z], a)) {
-                            continue;
-                        }
                         // Under a crown, three tufts in five go (shade): deterministic by place.
                         let shaded = crowns
                             .iter()
@@ -1246,7 +1258,7 @@ impl Scene {
                 }
                 by_variant
             });
-            self.lawn_jobs.insert(
+            let old = self.lawn_jobs.insert(
                 id,
                 LawnJob {
                     key,
@@ -1258,8 +1270,21 @@ impl Scene {
                     follow,
                 },
             );
+            // A job replaced half drawn: its items go too (they stayed, tufts of a lawn that
+            // was no longer there, over a terrace or a pond).
+            old.into_iter().for_each(|j| j.drop_items(r));
         }
-        self.lawn_jobs.retain(|k, _| live.contains(k));
+        let stale: Vec<String> = self
+            .lawn_jobs
+            .keys()
+            .filter(|k| !live.contains(k))
+            .cloned()
+            .collect();
+        for id in stale {
+            if let Some(j) = self.lawn_jobs.remove(&id) {
+                j.drop_items(r);
+            }
+        }
         self.finish_lawns(r);
         let gone: Vec<String> = self
             .lawns
