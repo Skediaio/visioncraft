@@ -11,7 +11,8 @@ The plan, room schedule and dimensions are in [brief.md](brief.md).
 | `beach-house.steps.json` | Generated: the 3DCraft command script (blocks, patterns, booleans, colours). |
 | `bodies.json` | Generated: body name -> 3DCraft feature id, the ids VisionCraft assigns materials to. |
 | `../../../crates/visioncraft-core/src/examples/beach-house.3dcraft` | Generated from the script by `craft3d-cli`. Do not edit by hand. |
-| `../../../crates/visioncraft-core/src/examples/beach-house.json` | Generated: the VisionCraft example (materials per body, furniture, lights, site, viewpoints). |
+| `../../../crates/visioncraft-core/src/examples/beach-house-furnished.json` | Generated: the furnished house in VisionCraft (the model, materials per body, furniture, lights), shared by the `beach-house` and `coast` examples. |
+| `../../../crates/visioncraft-core/src/examples/beach-house.json` | Generated: the rest of the `beach-house` example (sand, site, time, viewpoints). The `coast` example's own part, `coast.json`, is written by hand. |
 
 ## Regenerate
 
@@ -27,7 +28,8 @@ its `feature` should match `bodies.json`. A quick look in 3DCraft itself:
 `craft3d-cli render ../../../crates/visioncraft-core/src/examples/beach-house.3dcraft --out house.png --look studio`.
 
 Then `cargo test -p visioncraft-core examples` checks the counts. If a change adds or removes
-bodies, furniture or lights, update the numbers in `the_beach_house_builds_furnished_and_lit`.
+bodies, furniture or lights, update the numbers in `the_beach_house_builds_furnished_and_lit` and
+`the_coast_has_a_house_above_the_beach_and_the_sea_beyond`.
 
 ## How it is built
 

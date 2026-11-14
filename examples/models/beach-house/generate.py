@@ -595,8 +595,6 @@ MATERIALS = {   # body -> material id (built-in ones by name)
     "entrance": "concrete", "path": PAVER,
 }
 assert set(MATERIALS) == set(FINISHED), set(MATERIALS) ^ set(FINISHED)
-vc.append(["terrain.create", {"origin": [-30, -30], "width_m": 80, "depth_m": 60, "cell_m": 1.0,
-                              "base_material": SAND}])
 vc.append(["model.add", {"name": "Beach house", "kind": "3dcraft", "source": "example:beach-house.3dcraft",
                          "transform": {"translation": [0, 0, 0], "rotation_y_deg": 0, "scale": 1}}])
 for body in FINISHED:
@@ -675,6 +673,13 @@ for k, x in enumerate(range(2000, W, 4000)):   # soffit lights along the covered
 vc.append(["light.add", {"name": "Front door light", "position": w((FD_A + FD_B) / 2, D + 900, WALL_TOP - 50),
                          "lumens": 400, "color_temperature_k": 2700, "range_m": 8}])
 
+# The furnished house above is shared: the `beach-house` example puts it on sand (below), the
+# `coast` example (coast.json, its own file) on a bluff above the sea.
+EX = os.path.join(ROOT, "crates", "visioncraft-core", "src", "examples")
+with open(os.path.join(EX, "beach-house-furnished.json"), "w") as f:
+    f.write("[\n" + ",\n".join("  " + json.dumps(s) for s in vc) + "\n]\n")
+vc = [["terrain.create", {"origin": [-30, -30], "width_m": 80, "depth_m": 60, "cell_m": 1.0,
+                          "base_material": SAND}]]
 # Malibu, midsummer afternoon; the dusk view keeps its own hour.
 vc.append(["site.set", {"latitude": 34.03, "longitude": -118.78, "utc_offset_hours": -7}])
 vc.append(["time.set", {"month": 6, "day": 21, "hour": 16.0}])
@@ -695,7 +700,7 @@ for name, eye, target, fov, hour in VIEWS:
     if hour is not None:
         v["time"] = {"hour": hour}
     vc.append(["viewpoint.add", v])
-with open(os.path.join(ROOT, "crates", "visioncraft-core", "src", "examples", "beach-house.json"), "w") as f:
+with open(os.path.join(EX, "beach-house.json"), "w") as f:
     f.write("[\n" + ",\n".join("  " + json.dumps(s) for s in vc) + "\n]\n")
 
 with open(os.path.join(here, "beach-house.steps.json"), "w") as f:

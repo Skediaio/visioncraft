@@ -394,7 +394,8 @@ the bed falling to `depth_m` over `shelf_m`, heights measured from the water lev
 behind the line keeps its ground. Plantings and objects are not placed where the water covers
 the ground (the grass stops at the waterline: `document.inspect` counts what stands), and in
 the window walking stops where the water is deeper than 0.6 m. `project.load_example {"name":
-"coast"}` is a beach house on a bluff built the same way.
+"coast"}` puts the furnished house of the `beach-house` example on a bluff built the same way,
+its deck steps leading down a path to the beach.
 
 ## Known traps
 
