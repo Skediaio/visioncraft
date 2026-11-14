@@ -23,7 +23,8 @@ fn width(s: &Species, m: &PlantMesh) -> f32 {
 fn expected_budget(s: &Species) -> BudgetClass {
     match s.category {
         Category::Tree if s.mature_height_m >= 12.0 => BudgetClass::LargeTree,
-        Category::Tree | Category::Conifer | Category::Palm => BudgetClass::SmallTree,
+        Category::Tree => BudgetClass::SmallTree,
+        Category::Conifer | Category::Palm => BudgetClass::Conifer,
         Category::Shrub | Category::Hedge | Category::Climber => BudgetClass::Shrub,
         Category::GroundCover => BudgetClass::Tuft,
         Category::Grass if s.id == "lawn-tuft" => BudgetClass::Tuft,
@@ -216,8 +217,8 @@ fn golden_hashes() {
     let lib = species();
     let mut got = Vec::new();
     for (id, lod, want) in [
-        ("quercus-robur", Lod::Lod0, 0x6a0b_a466_ba3b_b9b3_u64),
-        ("hosta", Lod::Lod1, 0xa334_e697_a230_f815),
+        ("quercus-robur", Lod::Lod0, 0x46e6_d4a8_a2b9_4b8a_u64),
+        ("hosta", Lod::Lod1, 0xbf24_e811_9f50_ee6c),
         ("carpinus-hedge", Lod::Lod2, 0xc567_f698_a41b_6c32),
         ("picea-abies", Lod::Lod1, 0xdd72_8a9a_25eb_1bc2),
     ] {
@@ -627,4 +628,99 @@ fn a_young_hedge_is_see_through() {
     };
     // No solid core, fewer leaves.
     assert!(at(0.4).triangles_of(Material::Foliage) < at(1.0).triangles_of(Material::Foliage) / 2);
+}
+
+#[test]
+fn young_broadleaf_trees_are_in_leaf_in_summer() {
+    for s in species()
+        .iter()
+        .filter(|s| s.category == Category::Tree && matches!(s.params.form, Form::Branching(_)))
+    {
+        for age in [0.2, 0.3, 0.5] {
+            let mut p = s.params.clone();
+            p.age = age;
+            let m = generate_in_season(&p, 7, Lod::Lod0, Season { month: 7 });
+            assert!(
+                m.triangles_of(Material::Foliage) > 0,
+                "{} bare in July at age {age}",
+                s.id
+            );
+        }
+    }
+}
+
+/// Every level of a broadleaf tree draws its leaves at about their own size: a card's side
+/// against the size its atlas cell was drawn for (`card_m` for a spray in row 0, twice that for
+/// a clump in row 1).
+#[test]
+fn tree_cards_draw_leaves_at_their_own_size_at_every_level() {
+    for s in species()
+        .iter()
+        .filter(|s| s.category == Category::Tree && matches!(s.params.form, Form::Branching(_)))
+    {
+        for lod in Lod::ALL {
+            let m = generate_in_season(&s.params, 7, lod, Season { month: 7 });
+            let part = m
+                .parts
+                .iter()
+                .find(|q| q.material == Material::Foliage)
+                .unwrap();
+            let i = &m.indices[part.index_range.start as usize..];
+            let (a, b) = (m.positions[i[0] as usize], m.positions[i[1] as usize]);
+            let side = (0..3).map(|k| (a[k] - b[k]).powi(2)).sum::<f32>().sqrt();
+            let row = (m.uvs[i[0] as usize][1] * 4.0) as u32;
+            let drawn_for = s.params.leaves.card_m * if row == 1 { 2.0 } else { 1.0 };
+            let x = side / drawn_for;
+            assert!(
+                (0.65..1.45).contains(&x),
+                "{} {lod:?}: leaves drawn at {x:.2} times their size",
+                s.id
+            );
+        }
+    }
+}
+
+/// The app draws seeds 1, 2 and 3 as a species' forms: their crowns differ in proportion, not
+/// only in branch detail.
+#[test]
+fn tree_forms_differ_by_seed() {
+    for id in ["quercus-robur", "betula-pendula", "malus-domestica"] {
+        let s = visioncraft_flora::Species::by_id(id).unwrap();
+        let shape: Vec<(f32, f32)> = (1..=3)
+            .map(|seed| {
+                let m = generate(&s.params, seed, Lod::Lod2);
+                (height(&m), width(s, &m))
+            })
+            .collect();
+        for a in 0..3 {
+            for b in a + 1..3 {
+                let (ha, wa) = shape[a];
+                let (hb, wb) = shape[b];
+                let d = ((ha / hb - 1.0).abs()).max((wa / wb - 1.0).abs());
+                assert!(
+                    d > 0.02,
+                    "{id}: seeds {} and {} alike: {shape:?}",
+                    a + 1,
+                    b + 1
+                );
+            }
+        }
+    }
+}
+
+/// The summer picture (21 June) shows the plants that flower in July and August too.
+#[test]
+fn summer_bloomers_flower_in_the_summer_picture() {
+    for id in [
+        "hydrangea-macrophylla",
+        "echinacea-purpurea",
+        "phlox-paniculata",
+    ] {
+        let p = &Species::by_id(id).unwrap().params;
+        let flowers = |month| {
+            generate_in_season(p, 7, Lod::Lod0, Season { month }).triangles_of(Material::Flower)
+        };
+        assert!(flowers(6) > 0, "{id} without flowers in June");
+        assert_eq!(flowers(1), 0, "{id} flowers in January");
+    }
 }

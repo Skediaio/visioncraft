@@ -23,6 +23,9 @@ use std::sync::Arc;
 
 pub const ATLAS_SIZE: u32 = 1024;
 pub const ATLAS_CELLS: u32 = 4;
+/// A clump cell (row 1) draws the leaves at their true size on a card this many times the
+/// species' card size (`LeafParams::card_m`).
+pub(crate) const CLUMP_SCALE: f32 = 2.0;
 pub const BARK_SIZE: u32 = 256;
 pub(crate) const CELL_PX: u32 = ATLAS_SIZE / ATLAS_CELLS;
 pub(crate) const CELL_MARGIN: u32 = 6;
@@ -888,8 +891,7 @@ fn spray(
 fn clump(cv: &mut Canvas, p: &PlantParams, rng: &mut Rng, tint: f32) {
     let c = (CELL_PX as f32 * 0.5, CELL_PX as f32 * 0.5);
     let r = CELL_PX as f32 * 0.5 - CELL_MARGIN as f32 - 2.0;
-    // A clump card stands for an enlarged card, about 2.5 LOD0 cards across.
-    let px_per_m = (2.0 * r) / (p.leaves.card_m * 2.5);
+    let px_per_m = (2.0 * r) / (p.leaves.card_m * CLUMP_SCALE);
     let leaf_px = (p.leaves.leaf_m * px_per_m).max(3.0);
     let col = mul(p.leaves.colour, tint);
     let n = 34;
@@ -904,7 +906,9 @@ fn clump(cv: &mut Canvas, p: &PlantParams, rng: &mut Rng, tint: f32) {
         // volume of leaves that shade each other, drawn on one flat card: a fifth darker
         // than single leaves, so far crowns do not show pale patches where cards face the sun.
         let shade = 0.72 + 0.08 * f + 0.05 * (-cos(a));
-        let len = r * (0.45 + 0.25 * rng.f());
+        // Twig and its end leaf stay inside the cell: leaves cut by the cell's edge read as a
+        // straight, polygonal crown outline.
+        let len = (r - rad - leaf_px).max(r * 0.2) * (0.65 + 0.35 * rng.f());
         let depth = if len / leaf_px > 5.0 { 1 } else { 0 };
         twig(
             cv,
@@ -934,11 +938,12 @@ fn clump(cv: &mut Canvas, p: &PlantParams, rng: &mut Rng, tint: f32) {
         serration: p.leaves.serration,
         veins: false,
     };
-    for _ in 0..90 {
+    for _ in 0..140 {
         let a = rng.f() * TAU;
         let rad = r * 0.4 * rng.f().sqrt();
         let q = (c.0 + sin(a) * rad, c.1 - cos(a) * rad);
-        let len = leaf_px * (1.2 + 0.6 * rng.f());
+        // At their own size: enlarged leaves here read as blotches on a far crown.
+        let len = leaf_px * (0.85 + 0.3 * rng.f());
         draw_leaf(
             cv,
             q,

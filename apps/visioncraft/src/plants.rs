@@ -7,7 +7,8 @@ use visioncraft_core::Project;
 use visioncraft_flora as flora;
 use visioncraft_render::{ImpostorId, Renderer, TextureId};
 
-pub const VARIANTS: u32 = 3;
+/// Forms per species, as the planting tools spread them over neighbouring plants.
+pub const VARIANTS: u32 = visioncraft_core::planting::PLANT_VARIANTS;
 
 pub struct Resolved {
     pub params: flora::PlantParams,
@@ -55,7 +56,7 @@ pub fn class(p: &flora::PlantParams, month: u8) -> u32 {
             _ => 4,
         }
     };
-    season | (u32::from(p.bloom_months.contains(&month)) << 4)
+    season | (u32::from(flora::in_bloom(p, month)) << 4)
 }
 
 /// (mesh, material, LOD max distance)

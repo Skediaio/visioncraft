@@ -22,6 +22,10 @@ pub enum Outward {
     Axis { centre: V3, up: f32 },
     /// A fixed direction (walls, ground cover).
     Dir(V3),
+    /// A tree crown's leaves: the ellipsoid's gradient with its vertical part halved. A crown
+    /// shaded as one ellipsoid reads as a pale cap (its top faces the high sun squarely) over a
+    /// black underside; real leaves face every way, most of them sideways.
+    Crown { centre: V3, radii: V3 },
 }
 
 impl Outward {
@@ -41,6 +45,10 @@ impl Outward {
                 (v3(d.x, 0.0, d.z).norm_or_zero() + UP * up).norm()
             }
             Outward::Dir(d) => d,
+            Outward::Crown { centre, radii } => {
+                let o = Outward::Ellipsoid { centre, radii }.at(p);
+                v3(o.x, o.y * 0.5, o.z).norm()
+            }
         }
     }
 }

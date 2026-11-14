@@ -449,7 +449,9 @@ pub fn rosette(
                 ph,
             );
             for k in 0..per_stalk {
-                let fs = f.card_m * if li == 2 { 1.3 } else { 1.0 };
+                // Fewer stalks at the coarser levels carry larger heads, so a border keeps its
+                // colour from 8 to 15 m instead of fading to leaves.
+                let fs = f.card_m * (m0 as f32 / mk.max(1) as f32).sqrt().clamp(1.0, 1.8);
                 if spike {
                     let card = Card {
                         base: base + dir * (stalk_len - fs * 0.4 - k as f32 * fs * 0.3),

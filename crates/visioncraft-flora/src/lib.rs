@@ -217,7 +217,8 @@ pub fn generate(params: &PlantParams, seed: u64, lod: Lod) -> PlantMesh {
 }
 
 /// Generate a plant as it looks in `season`: deciduous plants are bare in winter, tinted in
-/// spring and autumn; flowers appear only in the bloom months.
+/// spring and autumn; flowers appear when a bloom month falls in the month's season (March to
+/// May, June to August, September to November, December to February).
 pub fn generate_in_season(params: &PlantParams, seed: u64, lod: Lod, season: Season) -> PlantMesh {
     generate_in(params, seed, lod, Some(season))
 }
@@ -269,6 +270,17 @@ pub fn textures_scanned(params: &PlantParams, scale: usize, scans: &scan::Scans)
     texture::generate_scanned(params, scale, scans)
 }
 
+/// Whether a plant shown in `month` flowers: a month stands for its season (March to May, June
+/// to August, September to November, December to February). The app shows a season by one day
+/// of it (21 June for summer), and a plant that flowers in July or August belongs in the summer
+/// picture too.
+pub fn in_bloom(p: &PlantParams, month: u8) -> bool {
+    let season_of = |m: u8| (m % 12) / 3;
+    p.bloom_months
+        .iter()
+        .any(|&b| season_of(b) == season_of(month))
+}
+
 /// What the season does to a plant.
 pub(crate) struct SeasonState {
     /// Fraction of foliage cards kept.
@@ -286,7 +298,7 @@ impl SeasonState {
                 flowers: !p.bloom_months.is_empty(),
             };
         };
-        let flowers = p.bloom_months.contains(&month);
+        let flowers = in_bloom(p, month);
         if !p.deciduous {
             return SeasonState {
                 leaf_fraction: 1.0,

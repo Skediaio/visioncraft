@@ -252,7 +252,8 @@ fn sp(
 ) -> Species {
     let budget = match category {
         Category::Tree if h >= 12.0 => BudgetClass::LargeTree,
-        Category::Tree | Category::Conifer | Category::Palm => BudgetClass::SmallTree,
+        Category::Tree => BudgetClass::SmallTree,
+        Category::Conifer | Category::Palm => BudgetClass::Conifer,
         Category::Shrub | Category::Hedge | Category::Climber => BudgetClass::Shrub,
         Category::GroundCover => BudgetClass::Tuft,
         Category::Grass if h < 0.15 => BudgetClass::Tuft,

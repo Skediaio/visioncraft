@@ -18,7 +18,7 @@
 
 use crate::math::{GOLDEN_ANGLE, PI, Rng, TAU, UP, V3, cos, deg, sin, v3};
 use crate::mesh::{Builder, Card, Node, Outward, rand_dir, shuffled};
-use crate::{BranchingParams, Lod, Material, PlantMesh, PlantParams, SeasonState};
+use crate::{BranchingParams, BudgetClass, Lod, Material, PlantMesh, PlantParams, SeasonState};
 
 struct Branch {
     nodes: Vec<Node>,
@@ -180,7 +180,9 @@ fn grow(
         }
     }
 
-    if level >= b.leaf_level as usize {
+    // A young tree without the leaf-bearing branch order yet carries its leaves on its finest
+    // branches (otherwise it stands bare in summer).
+    if level >= (b.leaf_level as usize).min(c.max_level) {
         let spacing = c.p.leaves.card_m * 0.28;
         let span = total_len * (1.0 - b.leaf_start);
         let count = ((span / spacing).floor() as usize + 1).min(64);
@@ -209,8 +211,16 @@ fn skeleton(p: &PlantParams, b: &BranchingParams, seed: u64) -> Skeleton {
     // Age changes the form, not only the size: a young tree is slender (the crown widens later
     // than the tree rises), has a thin trunk and fewer branch orders; its leaves keep their real
     // size, so they are large for the tree. At age 1 nothing changes.
-    let h = p.height_m * p.age;
-    let w = p.width_m * p.age.powf(1.25);
+    // Each seed of a tree its own form within the species: a little taller or broader (own
+    // stream, so the branching draws stay as they were).
+    let mut form = Rng::new(seed, 7);
+    let (fh, fw) = if matches!(p.budget, BudgetClass::LargeTree | BudgetClass::SmallTree) {
+        (form.range(0.93, 1.07), form.range(0.88, 1.12))
+    } else {
+        (1.0, 1.0)
+    };
+    let h = p.height_m * p.age * fh;
+    let w = p.width_m * p.age.powf(1.25) * fw;
     let max_level = if p.age < 0.25 {
         1
     } else if p.age < 0.55 {
@@ -399,7 +409,11 @@ pub fn generate(
     };
     let area = 4.0 * PI * (radii.x * radii.y + radii.y * radii.z + radii.z * radii.x) / 3.0;
     // `density` 1 means the cards' total area covers the crown envelope's surface 1.5 times.
-    let desired = (1.5 * p.leaves.density * area / (card0 * card0)).ceil() as usize;
+    // Tree crowns half as dense again: at 1.5 their cards left two fifths of the crown's side
+    // view open (`examples/crown_stats.rs`), a lumpy crown of separate clumps.
+    let tree = matches!(p.budget, BudgetClass::LargeTree | BudgetClass::SmallTree);
+    let cover = if tree { 2.2 } else { 1.5 };
+    let desired = (cover * p.leaves.density * area / (card0 * card0)).ceil() as usize;
     let cap = |l: usize, wood: usize| (full_budget(l).saturating_sub(wood)) / 2;
     let npts = sk.leaves.len();
     // One card per point, enlarged up to twice when there are fewer points than coverage wants.
@@ -429,9 +443,9 @@ pub fn generate(
     let n_leaf = ((nk as f32 * st.leaf_fraction).round() as usize).min(nk - n_flower.min(nk));
     // Bare twigs as cards are a haze, not a crown: a few of the cards the leaves had (the
     // branches themselves carry the shape); at a third, a winter cherry read as red-brown
-    // foliage.
+    // foliage. As many as before tree crowns grew denser (`cover`).
     let n_twig = if p.deciduous {
-        ((nk - n_leaf - n_flower) as f32 * 0.12) as usize
+        ((nk - n_leaf - n_flower) as f32 * 0.18 / cover) as usize
     } else {
         0
     };
@@ -465,9 +479,20 @@ pub fn generate(
         out.tube(&stake, 4, 0.0);
     }
 
+    let Outward::Ellipsoid { centre, radii } = crown else {
+        unreachable!()
+    };
+    let leaves_out = Outward::Crown { centre, radii };
     let mut prng = Rng::new(seed, 2);
     let order = shuffled(npts, &mut prng);
-    let leaf_cells: [u8; 3] = if grow_k < 1.5 { [0, 1, 2] } else { [4, 5, 6] };
+    // A spray cell draws its leaves at their true size on a card of `card0`, a clump cell on a
+    // card `CLUMP_SCALE` times that. A card enlarged past 1.4 times takes a clump, so leaves are
+    // drawn at 0.7 to 1.4 times their size at every level instead of up to 2.5 times.
+    let leaf_cells: &[u8] = if ck / card0 < 1.4 {
+        &[0, 1, 2, 3]
+    } else {
+        &[4, 5, 6]
+    };
     // Per-point random draws come from a per-point stream so every LOD sees the same card.
     let emit = |out: &mut Builder,
                 k: usize,
@@ -488,8 +513,9 @@ pub fn generate(
         let up = n.cross(side).norm();
         let mut centre = lp.p + o * push_out;
         if rep > 0 {
-            // A point's further cards spread around it, within the spray of its twig.
-            centre += rand_dir(&mut r) * (card0 * 0.5);
+            // A point's further cards spread around it and out towards the crown's shell, where
+            // a crown is densest, into the gaps between its branch systems.
+            centre += rand_dir(&mut r) * card0 + o * (card0 * 0.6);
         }
         let card = Card {
             base: centre - up * (size * 0.5),
@@ -505,7 +531,7 @@ pub fn generate(
             segments: 1,
             outward_mix: 0.75,
         };
-        out.card(&card, &crown);
+        out.card(&card, &leaves_out);
     };
     // Leaf and twig cards go through the points' order and, past its end, round it again
     // (`emit` takes the place in that sequence).
@@ -515,7 +541,7 @@ pub fn generate(
             &mut out,
             k,
             ck,
-            leaf_cells[k % 3],
+            leaf_cells[k % leaf_cells.len()],
             Material::Foliage,
             -(ck - c0) * 0.5,
             // Grown cards (the far levels) lie less flat: a card several leaves wide facing the

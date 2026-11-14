@@ -39,9 +39,11 @@ pub struct PlantParams {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum BudgetClass {
     LargeTree,
-    /// Small trees, conifers and palms.
+    /// Broadleaf trees under 12 m.
     #[default]
     SmallTree,
+    /// Conifers and palms: their far level draws whole tiers or fronds, not leaf cards.
+    Conifer,
     /// Shrubs, clipped forms, hedge segments, wall climbers.
     Shrub,
     /// Perennials, ferns, ornamental grass clumps.
@@ -53,8 +55,11 @@ pub enum BudgetClass {
 impl BudgetClass {
     pub fn triangles(self, lod: Lod) -> usize {
         let t = match self {
-            BudgetClass::LargeTree => [12_000, 3_500, 1_500],
-            BudgetClass::SmallTree => [8_000, 2_500, 1_000],
+            // The mid and far levels at about half and a quarter of the near one: with less,
+            // a broadleaf crown's cards grow to twice the leaves' size and read as blotches.
+            BudgetClass::LargeTree => [12_000, 7_000, 3_000],
+            BudgetClass::SmallTree => [8_000, 4_500, 2_000],
+            BudgetClass::Conifer => [8_000, 2_500, 1_000],
             BudgetClass::Shrub => [2_500, 800, 150],
             BudgetClass::Herb => [600, 200, 40],
             BudgetClass::Tuft => [60, 24, 8],

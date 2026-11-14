@@ -87,6 +87,9 @@ nothing here is a promise of a date.
 - Loading still hitches on weak integrated GPUs.
 - Tree crowns still read paler from above than from the side: leaves at the top of a crown face
   the noon sun squarely.
-- Large crowns seen from above at a distance (the far mesh level and the impostor baked from it)
-  still show their grown cards as large leaf patches; near levels now carry several cards of the
-  leaves' own size per leaf point instead.
+- Every mesh level of a broadleaf tree now draws its leaves at 0.7 to 1.4 times their real size
+  (`crates/visioncraft-flora/examples/crown_stats.rs` prints the numbers); crowns still show gaps
+  between branch systems from the side and read as clumps, because leaves sit only along the
+  generated branches (no space colonisation filling the crown yet).
+- Bare winter crowns lack a fine fourth branch order: their twig cards read as dark tufts from
+  15 m and further, so a winter tree does not yet look like its species.
