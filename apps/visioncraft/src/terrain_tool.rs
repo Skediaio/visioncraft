@@ -679,7 +679,8 @@ mod pond_tests {
         let s = |x: f32| x * x * (3.0 - 2.0 * x);
         let lowered = 0.8 * (1.0 - s(d / POND_BANK_M));
         assert!((lowered - POND_MARGIN_M).abs() < 1e-3 && d > 0.5 && d < POND_BANK_M);
-        assert_eq!(wet_bank(0.1, POND_BANK_M, POND_MARGIN_M), 0.0);
+        // A pond no deeper than the margin has no wet bank.
+        assert_eq!(wet_bank(0.04, POND_BANK_M, POND_MARGIN_M), 0.0);
         // A 4 by 2 square, either winding, grows by d on every side.
         for sq in [
             vec![[0.0, 0.0], [4.0, 0.0], [4.0, 2.0], [0.0, 2.0]],
