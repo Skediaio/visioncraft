@@ -136,8 +136,11 @@ fn look_of(m: &Material, lib: &mut Library, month: u32) -> Look {
             surface: 1,
             ..plain
         },
+        // The light the water body scatters back is a few per cent at most (a sunlit pond is
+        // dark green, not teal): the reflection of the sky and garden carries the surface, the
+        // bed shows looking down near the edge.
         SurfaceKind::AnimatedWater { tint, .. } => Look {
-            color: [tint[0] * 0.25, tint[1] * 0.25, tint[2] * 0.25, 0.3],
+            color: [tint[0] * 0.08, tint[1] * 0.08, tint[2] * 0.08, 0.3],
             roughness: 0.05,
             surface: 2,
             ..plain
