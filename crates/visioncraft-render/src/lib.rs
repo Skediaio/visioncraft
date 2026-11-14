@@ -810,6 +810,9 @@ pub struct Renderer {
     /// Below the horizon for the environment: an HDRI's ground radiance
     /// (kcd/m2), or the ground albedo the GPU lights (analytic skies).
     ground_kcd: Vec3,
+    /// The albedo light bounces off below the horizon (`set_bounce_albedo`); `None`: the
+    /// ground plane's colour.
+    bounce_albedo: Option<Vec3>,
     atmosphere: Atmosphere,
     ground: Option<Ground>,
     ground_material: GpuMaterial,
@@ -1119,6 +1122,7 @@ impl Renderer {
             sky_source: SkySource::Physical,
             sky_view_dirty: true,
             ground_kcd: Vec3::ZERO,
+            bounce_albedo: None,
             atmosphere: Atmosphere::default(),
             ground: None,
             ground_look: None,
@@ -3203,8 +3207,10 @@ impl Renderer {
         let albedo = if self.clay {
             Vec3::splat(0.8) // clay surfaces' albedo (scene.wgsl `light`)
         } else {
-            self.ground
-                .map_or(Vec3::splat(0.2), |g| Vec3::from(g.color))
+            self.bounce_albedo.unwrap_or_else(|| {
+                self.ground
+                    .map_or(Vec3::splat(0.2), |g| Vec3::from(g.color))
+            })
         };
         self.ground_kcd = match &self.sky_source {
             SkySource::Hdri {
