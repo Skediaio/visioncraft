@@ -1117,6 +1117,8 @@ pub struct LawnWindow {
 
 /// Lawn tufts are scattered on a grid of cells this wide (metres), seeded by cell.
 const LAWN_CELL_M: f32 = 1.0;
+/// Over a lawn window's last metres its tufts thin out to none and grow shorter.
+const LAWN_FADE_OUT_M: f32 = 14.0;
 
 /// The triangles of `face` flat enough for blades, and their area seen from above (m²).
 fn lawn_triangles(model: &ImportedModel, face: usize) -> (Vec<[[f32; 3]; 3]>, f32) {
@@ -1211,67 +1213,85 @@ pub fn lawn_scatter_within(
     // A little under the budget: the count is random, and cutting it off would leave the last
     // cells bare.
     let budget = max as f32 * 0.97;
-    // The density of a cell: uniform without a window; with one, full out to `near`.
     let mut cells: Vec<(i32, i32)> = buckets.keys().copied().collect();
     cells.sort_unstable();
-    let dist = |c: (i32, i32), w: &LawnWindow| {
-        let (x, z) = ((c.0 as f32 + 0.5) * cell, (c.1 as f32 + 0.5) * cell);
+    // The share of the full density kept at distance `d` from the window's centre for a near
+    // radius `near`: all of it inside, falling with the square of the distance beyond, and to
+    // nothing over the window's last `LAWN_FADE_OUT_M`, so the grass thins into the texture
+    // instead of ending on a line.
+    let share = |d: f32, near: f32, w: &LawnWindow| {
+        let t = ((w.radius - d) / LAWN_FADE_OUT_M).clamp(0.0, 1.0);
+        (near / d.max(near).max(1e-6)).powi(2) * t * t * (3.0 - 2.0 * t)
+    };
+    // The nearest point of a cell to the centre: no tuft of the cell is kept more than there.
+    let nearest = |c: (i32, i32), w: &LawnWindow| {
+        let x = w.center[0].clamp(c.0 as f32 * cell, (c.0 + 1) as f32 * cell);
+        let z = w.center[1].clamp(c.1 as f32 * cell, (c.1 + 1) as f32 * cell);
         ((x - w.center[0]).powi(2) + (z - w.center[1]).powi(2)).sqrt()
     };
     let (uniform, near) = match window {
-        None => (full.min(budget / area.max(1e-6)), 0.0),
+        None => ((budget / area.max(1e-6) / full).min(1.0), 0.0),
         Some(w) => {
             // The count if the cells were full of lawn (an upper bound) for a near radius `r`.
             let count = |r: f32| -> f32 {
+                let centre = |c: (i32, i32)| {
+                    let (x, z) = ((c.0 as f32 + 0.5) * cell, (c.1 as f32 + 0.5) * cell);
+                    ((x - w.center[0]).powi(2) + (z - w.center[1]).powi(2)).sqrt()
+                };
                 cells
                     .iter()
-                    .map(|&c| {
-                        let d = dist(c, &w);
-                        if d > w.radius {
-                            0.0
-                        } else {
-                            full * (r / d.max(r)).powi(2) * cell * cell
-                        }
-                    })
+                    .map(|&c| full * share(centre(c), r, &w) * cell * cell)
                     .sum()
             };
             if count(w.radius) <= budget {
-                (full, w.radius)
+                (1.0, w.radius)
             } else {
                 let (mut a, mut b) = (0.0f32, w.radius);
                 for _ in 0..24 {
                     let m = (a + b) / 2.0;
                     if count(m) <= budget { a = m } else { b = m }
                 }
-                (full, a)
+                (1.0, a)
             }
         }
     };
+    // Every cell has the same candidates whatever the window (seeded by the cell), each with a
+    // rising threshold; a candidate is kept while the share at its own distance is above it.
+    // So the density changes smoothly with distance, no cell edge shows, and a moved window
+    // keeps the tufts it had wherever the share did not fall: nothing pops.
+    let per_cell = (full * cell * cell).ceil().max(1.0);
     let mut out = Vec::new();
     for c in cells {
-        let density = match &window {
+        let top = match &window {
             None => uniform,
-            Some(w) => {
-                let d = dist(c, w);
-                if d > w.radius + cell {
-                    continue;
-                }
-                uniform * (near / d.max(near).max(1e-6)).powi(2).min(1.0)
-            }
+            Some(w) => share(nearest(c, w), near, w),
         };
+        if top <= 0.0 {
+            continue;
+        }
         let mut rng = Rng::new(mix(mix(lawn.seed, i64::from(c.0)), i64::from(c.1)));
-        let expected = density * cell * cell;
-        let n = expected.floor() as usize + usize::from(rng.f32() < expected.fract());
         let cand = &buckets[&c];
-        for _ in 0..n {
+        let thin = full * cell * cell / per_cell;
+        for i in 0..per_cell as usize {
             let (x, z) = (
                 (c.0 as f32 + rng.f32()) * cell,
                 (c.1 as f32 + rng.f32()) * cell,
             );
-            let (rot, h) = (rng.f32(), rng.f32());
-            if let Some(w) = &window
-                && (x - w.center[0]).powi(2) + (z - w.center[1]).powi(2) > w.radius * w.radius
-            {
+            let (rot, h, u) = (rng.f32(), rng.f32(), rng.f32());
+            let threshold = (i as f32 + u) / per_cell / thin;
+            if threshold >= top {
+                break;
+            }
+            let (keep, fade) = match &window {
+                None => (uniform, 1.0),
+                Some(w) => {
+                    let d = ((x - w.center[0]).powi(2) + (z - w.center[1]).powi(2)).sqrt();
+                    // Shorter blades over the last metres too, sinking into the texture.
+                    let t = ((w.radius - d) / LAWN_FADE_OUT_M).clamp(0.0, 1.0);
+                    (share(d, near, w), 0.4 + 0.6 * t)
+                }
+            };
+            if threshold >= keep {
                 continue;
             }
             let Some(y) = cand
@@ -1283,7 +1303,7 @@ pub fn lawn_scatter_within(
             out.push(Tuft {
                 position: [x, y, z],
                 rotation_y_deg: 360.0 * rot,
-                height_m: lawn.blade_height_m * (0.75 + 0.5 * h),
+                height_m: lawn.blade_height_m * (0.75 + 0.5 * h) * fade,
             });
             if out.len() >= max {
                 return out;
@@ -1889,6 +1909,56 @@ mod tests {
         assert!(
             q.iter().all(|&n| (n as f32 - mean).abs() < mean * 0.05),
             "{q:?}"
+        );
+    }
+
+    #[test]
+    fn a_moved_lawn_window_keeps_the_tufts_it_shares_and_thins_smoothly() {
+        let lawn = Lawn3d {
+            density_per_m2: 200.0,
+            blade_height_m: 0.08,
+            seed: 3,
+        };
+        let m = lawn_rect(90.0, 60.0);
+        let top = m.faces.iter().position(|f| f.name == "S1:top").unwrap();
+        let at = |c: [f32; 2]| {
+            let w = LawnWindow {
+                center: c,
+                radius: 30.0,
+            };
+            lawn_scatter_within(&m, top, &lawn, Some(w), 10_000_000)
+        };
+        let (a, b) = (at([40.0, 30.0]), at([48.0, 30.0]));
+        // Where both windows are at full density (more than 14 m inside each), the same tufts.
+        let inner =
+            |t: &Tuft, c: [f32; 2]| (t.position[0] - c[0]).hypot(t.position[2] - c[1]) < 15.0;
+        let pick = |v: &[Tuft]| {
+            let mut p: Vec<[u32; 2]> = v
+                .iter()
+                .filter(|t| inner(t, [40.0, 30.0]) && inner(t, [48.0, 30.0]))
+                .map(|t| [t.position[0].to_bits(), t.position[2].to_bits()])
+                .collect();
+            p.sort_unstable();
+            p
+        };
+        assert!(!pick(&a).is_empty());
+        assert_eq!(pick(&a), pick(&b));
+        // Over the window's last 14 m the density falls in steps of no more than a quarter.
+        let ring = |r0: f32| {
+            a.iter()
+                .filter(|t| {
+                    (r0..r0 + 2.0).contains(&(t.position[0] - 40.0).hypot(t.position[2] - 30.0))
+                })
+                .count() as f32
+                / (std::f32::consts::PI * ((r0 + 2.0).powi(2) - r0 * r0))
+        };
+        let rings: Vec<f32> = (0..7).map(|k| ring(14.0 + 2.0 * k as f32)).collect();
+        assert!(rings[0] > 150.0 && rings[6] < 40.0, "{rings:?}");
+        assert!(
+            rings
+                .windows(2)
+                .all(|w| w[1] <= w[0] * 1.05 && w[0] - w[1] < 60.0),
+            "{rings:?}"
         );
     }
 

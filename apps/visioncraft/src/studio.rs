@@ -56,6 +56,9 @@ pub struct Studio {
     pub auto_rose_at: f64,
     /// What the hardware probe found and chose (`hardware::Measured::line`), for the Quality menu.
     pub hardware_line: Option<String>,
+    /// What the GPU affords in lawn tufts over the quality's budget: 1 on integrated GPUs, more
+    /// when the hardware probe measured a fast one (set by the window and the CLI).
+    pub gpu_lawn_budget: f32,
     /// The Textures choice of the Quality menu: `None` follows the quality, else "1k", "2k" or
     /// "4k".
     pub textures: Option<&'static str>,
@@ -275,6 +278,7 @@ impl Studio {
             auto_hold: 10.0,
             auto_rose_at: f64::NEG_INFINITY,
             hardware_line: None,
+            gpu_lawn_budget: 1.0,
             textures: None,
             still_textures: None,
             remeasure: false,
@@ -1086,6 +1090,10 @@ impl Studio {
         self.scene.flora.leaf_scale = if fine { 2 } else { 1 };
         if self.scene.set_dense_lawns(&mut self.renderer, fine) {
             self.synced = None; // the lawns are made again on the next sync
+        }
+        let budget = self.gpu_lawn_budget * if preset_name(&q) == "ultra" { 2.0 } else { 1.0 };
+        if self.scene.set_lawn_budget(&mut self.renderer, budget) {
+            self.synced = None;
         }
         if self.scene.set_clutter_low(preset_name(&q) == "low") {
             self.synced = None;

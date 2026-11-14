@@ -27,6 +27,17 @@ pub struct Measured {
     pub scale: f32,
 }
 
+/// The lawn tuft budget's multiple for a GPU that renders a megapixel in `ms_per_megapixel`:
+/// an integrated GPU (about 10 ms) keeps the quality's budget, a fast desktop GPU (well under
+/// one) draws four times as many.
+pub fn lawn_budget(ms_per_megapixel: Option<f32>) -> f32 {
+    match ms_per_megapixel {
+        Some(ms) if ms < 1.0 => 4.0,
+        Some(ms) if ms < 3.0 => 2.0,
+        _ => 1.0,
+    }
+}
+
 impl Measured {
     pub fn quality(&self) -> Quality {
         let base = Quality::PRESETS

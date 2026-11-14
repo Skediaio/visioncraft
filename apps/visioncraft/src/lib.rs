@@ -1441,6 +1441,7 @@ impl eframe::App for App {
             self.studio.frame_ms.clear();
             hardware::note(&format!("starting quality: {}", m.line()));
             self.studio.hardware_line = Some(m.line());
+            self.studio.gpu_lawn_budget = hardware::lawn_budget(m.ms_per_megapixel);
         }
         self.studio.measuring = self.hardware.busy();
         busy |= self.studio.measuring;

@@ -378,6 +378,9 @@ struct LawnGpu {
 /// A lawn's tufts being scattered: per variant, their matrices.
 struct LawnJob {
     key: LawnKey,
+    /// Scattered around the eye: drawn out to the window's edge, where its tufts have thinned
+    /// out, rather than culled by distance cluster by cluster (`LAWN_FADE_M`).
+    follow: bool,
     class: u32,
     color: [f32; 3],
     slot: plants::Slot<Vec<Vec<Mat4>>>,
@@ -554,6 +557,8 @@ pub struct Scene {
     /// around it (`lawns_follow`), and again when it moves to another cell.
     lawn_eye: [i32; 2],
     lawns_follow: bool,
+    /// The tuft budget's multiple of the quality's (`set_lawn_budget`): more on fast GPUs.
+    lawn_budget: f32,
     /// Fallen leaves, stones, twigs and lawn edges (`clutter`).
     clutter: clutter::Clutter,
     /// LOW quality: no clutter whatever the project says (`set_clutter_low`).
@@ -895,10 +900,27 @@ impl Scene {
                     self.flora
                         .tinted(r, LAWN_SPECIES, job.class, v as u32, job.color)
                         .map(|parts| {
-                            // The coarsest level is the last one drawn, fading out, then nothing.
+                            // Levels switch by 8 m cluster: the coarsest level (a few cards)
+                            // read as paler blocks across a large lawn, so lawns stop at the
+                            // middle one; the last level drawn ends at `end`, then nothing.
+                            let end = if job.follow {
+                                LAWN_FADE_M + 2.0 * LAWN_EYE_CELL_M
+                            } else {
+                                LAWN_FADE_M
+                            };
+                            let mut ds: Vec<f32> = parts.iter().map(|p| p.2).collect();
+                            ds.sort_by(f32::total_cmp);
+                            ds.dedup();
+                            if ds.len() > 2 {
+                                ds.pop();
+                            }
+                            let last = ds.last().copied().unwrap_or(f32::INFINITY);
                             let parts: Vec<_> = parts
                                 .iter()
-                                .map(|&(m, mat, d)| (m, mat, d.min(LAWN_FADE_M)))
+                                .filter(|p| p.2 <= last)
+                                .map(|&(m, mat, d)| {
+                                    (m, mat, if d >= last { end } else { d.min(end) })
+                                })
                                 .collect();
                             let item = r.add_lod_item(&parts, list);
                             r.set_item_cull_fade(item, LAWN_FADE_BAND_M);
@@ -946,6 +968,19 @@ impl Scene {
         true
     }
 
+    /// The lawn tuft budget as a multiple of the quality's own (ULTRA and fast GPUs draw more).
+    /// True when it changed: the lawns are then dropped, for the next sync to make again.
+    pub fn set_lawn_budget(&mut self, r: &mut Renderer, multiple: f32) -> bool {
+        if self.lawn_budget == multiple {
+            return false;
+        }
+        self.lawn_budget = multiple;
+        for (_, l) in self.lawns.drain() {
+            l.items.into_iter().for_each(|i| r.remove_item(i));
+        }
+        true
+    }
+
     /// The colour of a lawn's blades: the ground they stand in, in the season.
     fn blade_color(&self, m: &Material, month: u32) -> [f32; 3] {
         let ground = if material_library::overlay(&self.library, m).is_some() {
@@ -981,6 +1016,7 @@ impl Scene {
         } else {
             (LAWN_MAX_DENSITY, LAWN_MAX_TUFTS, 1.0)
         };
+        let max_tufts = (max_tufts as f32 * self.lawn_budget.max(1.0)) as usize;
         self.lawns_follow = false;
         for id in owners {
             let o = &self.owners[id];
@@ -1122,6 +1158,7 @@ impl Scene {
                     slot,
                     matrices: None,
                     built: Vec::new(),
+                    follow,
                 },
             );
         }

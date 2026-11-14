@@ -48,8 +48,15 @@ impl Pictures for GpuPictures {
         let gpu = self.gpu.get_or_insert_with(|| {
             let (device, queue) = pollster::block_on(visioncraft_render::headless_device())?;
             let renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+            let mut studio = Studio::new(renderer, Project::default());
+            // No calibration without a window: a discrete GPU counts as a fast one.
+            if visioncraft_render::hardware::HardwareProbe::from_device(&device).kind
+                == visioncraft_render::hardware::GpuKind::Discrete
+            {
+                studio.gpu_lawn_budget = 4.0;
+            }
             Ok(Gpu {
-                studio: Studio::new(renderer, Project::default()),
+                studio,
                 device,
                 queue,
                 installed: HashMap::new(),
