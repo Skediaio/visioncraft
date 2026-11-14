@@ -745,7 +745,11 @@ mod native {
                 } => {
                     place(&mut s, &asset, x, z, y, rot, scale).map_err(at)?;
                 }
-                Step::Lights(on) => s.lights_on = on,
+                Step::Lights(on) => {
+                    s.session
+                        .run("view.set", serde_json::json!({"lights": on}))
+                        .map_err(|e| at(e.to_string()))?;
+                }
                 Step::SkySun(on) => s.sky.use_sun = on,
                 Step::Sky { id, rot, stops } => match id {
                     None => {

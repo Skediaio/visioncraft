@@ -94,7 +94,6 @@ pub struct Studio {
     pub people: Vec<Vec3>,
     pub show_people: bool,
     pub placing_person: bool,
-    pub lights_on: bool,
     /// How many lights the project had last frame (`None` before the first), so the first one
     /// placed switches the lights on.
     pub lights_seen: Option<usize>,
@@ -298,7 +297,6 @@ impl Studio {
             people: Vec::new(),
             show_people: true,
             placing_person: false,
-            lights_on: false,
             lights_seen: None,
             ev_used: (0.0, 0.0),
             light_markers: false,
@@ -438,6 +436,11 @@ impl Studio {
 
     pub fn time(&self) -> SunTime {
         self.time_draft.unwrap_or(self.project().time)
+    }
+
+    /// Lamps and lit rooms: the project's view setting, else on after sunset at the time shown.
+    pub fn lights_on(&self) -> bool {
+        self.project().lights_on(&self.time())
     }
 
     pub fn site(&self) -> Site {
@@ -775,7 +778,7 @@ impl Studio {
     /// Sky, haze, ground, wind, exposure and lights from the project's view state.
     fn apply_view(&mut self, elevation: f32) {
         let v = self.project().view.clone();
-        let lamps = self.lights_on && self.project().lights.iter().any(|l| l.enabled);
+        let lamps = self.lights_on() && self.project().lights.iter().any(|l| l.enabled);
         let (brighter, power, saturation) = look_grade(v.look, elevation);
         let ev = v
             .exposure_ev
@@ -864,7 +867,7 @@ impl Studio {
             ..Default::default()
         });
         self.renderer.set_time(self.clock);
-        let lights = if self.lights_on {
+        let lights = if self.lights_on() {
             render_lights(self.project())
         } else {
             Vec::new()
@@ -989,7 +992,7 @@ impl Studio {
 
     /// Sets everything the renderer needs for the next frame.
     pub fn prepare(&mut self) {
-        self.scene.library.lamps_on = self.lights_on;
+        self.scene.library.lamps_on = self.lights_on();
         let eye = self.camera.eye();
         let h = self.still_textures.unwrap_or(self.size[1]).max(1) as f32;
         let cam = &self.camera;
@@ -1022,7 +1025,7 @@ impl Studio {
         self.apply_view(elevation);
         crate::sky_panel::apply(self);
         if elevation < 0.0
-            && !self.lights_on
+            && !self.lights_on()
             && !self.suggested
             && !self.project().lights.is_empty()
         {

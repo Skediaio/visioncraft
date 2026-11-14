@@ -105,8 +105,8 @@ pub fn reconcile(cx: &mut Cx) {
     }
     // The first light of a project switches the lights on: whoever places a lamp wants to see it.
     let n = cx.s.project().lights.len();
-    if cx.s.lights_seen == Some(0) && n > 0 {
-        cx.s.lights_on = true;
+    if cx.s.lights_seen == Some(0) && n > 0 && !cx.s.lights_on() {
+        cx.run("view.set", serde_json::json!({"lights": true}));
     }
     cx.s.lights_seen = Some(n);
 }

@@ -553,10 +553,11 @@ impl Hud {
                     self.layers_open = !self.layers_open;
                 }
                 if ui
-                    .selectable_label(cx.s.lights_on, t::LIGHTS_BUTTON)
+                    .selectable_label(cx.s.lights_on(), t::LIGHTS_BUTTON)
                     .clicked()
                 {
-                    cx.s.lights_on = !cx.s.lights_on;
+                    let on = !cx.s.lights_on();
+                    cx.run("view.set", serde_json::json!({"lights": on}));
                 }
                 if cx.s.dropped_lights > 0 {
                     ui.weak(format!("{} {}", cx.s.dropped_lights, t::LIGHTS_DROPPED));
