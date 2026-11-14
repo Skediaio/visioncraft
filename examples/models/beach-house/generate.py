@@ -563,7 +563,7 @@ SAND = lib_material("ground052")
 OAK = lib_material("woodfloor032", gloss=0.3)
 # Pale pine boards: the red-painted planks007 read pink on a ceiling.
 CEDAR = lib_material("planks021")
-SHINGLES = lib_material("woodsiding013")
+CLADDING = lib_material("planks007")  # weathered boards; shingles read as brick courses from afar
 DECKING = lib_material("planks029s")
 TILE = lib_material("tiles038", gloss=0.4)
 HEX = lib_material("tiles071", gloss=0.4)
@@ -582,7 +582,7 @@ CERAMIC = plain_material("ceramic", "White ceramic", [0.85, 0.85, 0.84], 0.0, 0.
 MIRROR = plain_material("mirror", "Mirror", [0.92, 0.92, 0.92], 1.0, 0.02)
 DARK_WOOD = plain_material("darkwood", "Dark stained timber", [0.045, 0.032, 0.024], 0.0, 0.8)
 MATERIALS = {   # body -> material id (built-in ones by name)
-    "walls-ext": "plaster", "walls-int": "plaster", "cladding+": SHINGLES, "plinth": BOARD_CONCRETE,
+    "walls-ext": "plaster", "walls-int": "plaster", "cladding+": CLADDING, "plinth": BOARD_CONCRETE,
     "slab": BOARD_CONCRETE, "roof": CEDAR, "roof-membrane": MEMBRANE, "fascia": BRONZE,
     "columns": BRONZE, "ceiling": WHITE, "ceiling-living": CEDAR, "glass": "glass", "frames": BRONZE,
     "sills": BRONZE, "doors": OAK, "door-frames": WHITE, "hardware": BRONZE,

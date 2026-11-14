@@ -42,6 +42,7 @@ struct Globals {
     sky_vol_size: vec4<f32>,    // xyz 1 / cells, w volume on (0/1)
     coast_info: vec4<f32>,      // x coast points (0: none), y sea level (m), z endless ground on the sea side (m), w 0
     coast: array<vec4<f32>, 8>, // the coastline, two [x, z] points per entry, the sea to its right
+    ssr: vec4<f32>,             // screen-space reflections: x on (0/1), y step (px), z most steps, w thickness (m)
     sh: array<vec4<f32>, 9>,    // sky irradiance as L2 SH (kcd/m2 * sr), written on the GPU (env.wgsl)
 }
 @group(0) @binding(0) var<uniform> g: Globals;
@@ -53,36 +54,109 @@ struct Globals {
 // The sky's visibility round the buildings (lib.rs `set_sky_volume`): r the visible fraction of
 // directions, gba the mean visible direction as 0.5 + 2 a; mipmapped.
 @group(0) @binding(6) var sky_vis: texture_3d<f32>;
-// Its room light: rgb the lamps' light passed round the room (lux), a the room's average open
-// fraction (never through a wall); one level.
+// Its room light: rgb the lamps' and the sun's light passed round the rooms (lux), a the sky's
+// (per unit of its mean illuminance), or -1 minus its neighbours' inside a wall or a thin gap;
+// one level (sky_volume.rs).
 @group(0) @binding(7) var room_vis: texture_3d<f32>;
+// Its occluders' voxels, 0.2 m from the same origin: r 1 where solid.
+@group(0) @binding(8) var occupancy: texture_3d<f32>;
+// Voxels per metre (sky_volume.rs `VOXEL_M` is 0.2 m); a cell is 1 / g.sky_vol.w metres.
+const VOXELS_PER_M: f32 = 5.0;
 
-// The sky visibility volume at `world`, lifted off the surface along `n` by most of a cell so a
-// surface reads the air in front of it, at mip `level` (0 the cells, higher a room's average):
-// (visible fraction a0, mean visible direction a). Open sky outside the volume.
-fn sky_volume(world: vec3<f32>, n: vec3<f32>, level: f32) -> vec4<f32> {
-    if g.sky_vol_size.w < 0.5 {
-        return vec4<f32>(1.0, 0.0, 0.0, 0.0);
-    }
-    let cells = (world - g.sky_vol.xyz) * g.sky_vol.w + n * 0.7;
-    let uvw = (cells + 0.5) * g.sky_vol_size.xyz;
-    if any(uvw < vec3<f32>(0.0)) || any(uvw > vec3<f32>(1.0)) {
-        return vec4<f32>(1.0, 0.0, 0.0, 0.0);
-    }
-    let t = textureSampleLevel(sky_vis, env_sampler, uvw, level);
-    return vec4<f32>(t.r, (t.gba - 0.5) * 0.5);
+// The sky volume (`sky`: visible fraction a0, mean visible direction a) and its room light
+// (`room`, see `room_vis`) for a surface at `world` facing `n`: the eight samples round the
+// point half a cell in front of the surface, weighted trilinearly but leaving out those behind
+// the surface, those inside a wall (room light's a < 0) and those a wall parts from the point
+// (the occluders' voxels, `occupancy`), so a wall does not take the light of the room on its
+// other side, nor a floor the void under it (after the backface and visibility weights of Majercik et al., "Dynamic Diffuse Global Illumination with
+// Ray-Traced Irradiance Fields", JCGT 8(2), 2019).
+// Open sky and no room light outside the volume; none of either where only walls are round.
+struct Volume {
+    sky: vec4<f32>,
+    room: vec4<f32>,
+    // The weight of the valid samples it was made of (0: only samples inside walls).
+    valid: f32,
 }
 
-// The room light at `world` (see `room_vis`), read like `sky_volume`; none and open outside.
-fn room_light(world: vec3<f32>, n: vec3<f32>) -> vec4<f32> {
+fn volume_at(world: vec3<f32>, n: vec3<f32>) -> Volume {
+    let near = volume_lifted(world, n, 0.5);
+    if near.valid > 1e-4 {
+        return near;
+    }
+    // Only samples inside walls or thin gaps round the point (under a vanity, in a corner):
+    // from a little further out.
+    let far = volume_lifted(world, n, 1.5);
+    if far.valid > 1e-4 {
+        return far;
+    }
+    return near;
+}
+
+fn volume_lifted(world: vec3<f32>, n: vec3<f32>, lift: f32) -> Volume {
+    let open = Volume(vec4<f32>(1.0, 0.0, 0.0, 0.0), vec4<f32>(0.0), 1.0);
     if g.sky_vol_size.w < 0.5 {
-        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+        return open;
     }
-    let uvw = ((world - g.sky_vol.xyz) * g.sky_vol.w + n * 0.7 + 0.5) * g.sky_vol_size.xyz;
-    if any(uvw < vec3<f32>(0.0)) || any(uvw > vec3<f32>(1.0)) {
-        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    let dims = vec3<i32>(textureDimensions(room_vis));
+    let surface = (world - g.sky_vol.xyz) * g.sky_vol.w;
+    let p = surface + n * lift;
+    if any(p < vec3<f32>(0.0)) || any(p > vec3<f32>(dims - 1)) {
+        return open;
     }
-    return textureSampleLevel(room_vis, env_sampler, uvw, 0.0);
+    let base = vec3<i32>(floor(p));
+    let f = p - floor(p);
+    let vdims = vec3<i32>(textureDimensions(occupancy)) - 1;
+    var sky = vec4<f32>(0.0);
+    var room = vec4<f32>(0.0);
+    var total = 0.0;
+    var valid_weight = 0.0;
+    for (var c = 0; c < 8; c++) {
+        let o = vec3<i32>(c & 1, (c >> 1) & 1, c >> 2);
+        let at = min(base + o, dims - 1);
+        var r = textureLoad(room_vis, at, 0);
+        // Inside a wall or a thin gap: the mean of the samples round it, only as a last resort.
+        let valid = r.a >= 0.0;
+        r.a = select(-1.0 - r.a, r.a, valid);
+        // Behind the surface, or a wall between the point and the sample (its voxels at a
+        // quarter, half and three quarters of the way): only as a last resort.
+        var seen = valid && dot(vec3<f32>(at) - surface, n) > 0.05;
+        for (var s = 1; s < 4 && seen; s++) {
+            let q = mix(p, vec3<f32>(at), f32(s) * 0.25) * (VOXELS_PER_M / g.sky_vol.w);
+            seen = textureLoad(occupancy, clamp(vec3<i32>(floor(q)), vec3<i32>(0), vdims), 0).r < 0.5;
+        }
+        let tri = select(1.0 - f, f, o == vec3<i32>(1));
+        let w = tri.x * tri.y * tri.z * select(select(1e-5, 1e-3, valid), 1.0, seen) + 1e-7;
+        let t = textureLoad(sky_vis, at, 0);
+        sky += w * vec4<f32>(t.r, (t.gba - 0.5) * 0.5);
+        room += w * r;
+        total += w;
+        valid_weight += select(0.0, w, valid);
+    }
+    if total <= 0.0 {
+        return Volume(vec4<f32>(0.0), vec4<f32>(0.0), 0.0);
+    }
+    return Volume(sky / total, room / total, valid_weight);
+}
+
+// Whether a sharp reflection from `world` along `r` leaves the volume's occluders (1) or meets
+// one within the volume (0): a march through their voxels (`occupancy`) in steps of a voxel, a
+// mirror's own answer where the L1 visibility is only a broad lobe's. 1 without a volume.
+fn ray_open(world: vec3<f32>, r: vec3<f32>) -> f32 {
+    if g.sky_vol_size.w < 0.5 {
+        return 1.0;
+    }
+    let dims = vec3<f32>(textureDimensions(occupancy));
+    let start = (world - g.sky_vol.xyz) * VOXELS_PER_M + r * 0.75;
+    for (var i = 0; i < 64; i++) {
+        let q = start + r * f32(i);
+        if any(q < vec3<f32>(0.0)) || any(q >= dims) {
+            return 1.0;
+        }
+        if textureLoad(occupancy, vec3<i32>(floor(q)), 0).r > 0.5 {
+            return 0.0;
+        }
+    }
+    return 1.0;
 }
 
 // The cosine-weighted visibility of the sky for a surface facing `n` from an L1 sample: 1 under
