@@ -438,6 +438,14 @@ export async function vc_decode(bytes) {
 /// read from a bundle), by path.
 pub type MemoryFiles = Arc<Mutex<HashMap<String, Arc<[u8]>>>>;
 
+/// Compresses on one loader thread at a time: four threads compressing 4k maps at once left
+/// the frame's own thread waiting for a core (upload steps of 60-100 ms on a 4-core laptop).
+fn compress_one(px: &[u8], w: u32, h: u32, kind: BcKind, space: ColorSpace) -> Option<Compressed> {
+    static ONE: Mutex<()> = Mutex::new(());
+    let _turn = ONE.lock().unwrap_or_else(|e| e.into_inner());
+    visioncraft_render::bc::compress(px, w, h, kind, space)
+}
+
 /// `compress`: block-compress library material maps (natively, on a device with BC formats; the
 /// loader runs on its own thread there, so the frame does not pay for it).
 async fn load(
@@ -461,9 +469,7 @@ async fn load(
                 } else {
                     ColorSpace::Linear
                 };
-                if let Some(c) =
-                    visioncraft_render::bc::compress(&img.px, img.w, img.h, kind, space)
-                {
+                if let Some(c) = compress_one(&img.px, img.w, img.h, kind, space) {
                     img.bc = Some(Arc::new(c));
                     img.px = Vec::new();
                 }
@@ -500,9 +506,7 @@ async fn load(
                     {
                         kind = BcKind::Rgba;
                     }
-                    if let Some(c) =
-                        visioncraft_render::bc::compress(&img.px, img.w, img.h, kind, space)
-                    {
+                    if let Some(c) = compress_one(&img.px, img.w, img.h, kind, space) {
                         img.bc = Some(Arc::new(c));
                         img.px = Vec::new();
                     }
@@ -582,8 +586,9 @@ pub struct AssetStore {
     pub texture_bytes: u64,
 }
 
-/// Bytes of a compressed picture written per frame (a 4k BC1 map with mips is about 11 MB).
-const STREAM_BYTES_PER_FRAME: usize = 1 << 20;
+/// Bytes of a compressed picture written per frame (a 4k BC1 map with mips is about 11 MB, 44
+/// frames): small writes keep each step to a few milliseconds.
+const STREAM_BYTES_PER_FRAME: usize = 256 << 10;
 
 /// Entries used within this many ticks (frames) are never evicted.
 const PROTECT_TICKS: u64 = 90;
