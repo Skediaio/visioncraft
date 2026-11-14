@@ -489,7 +489,7 @@ pub fn generate(
         let mut centre = lp.p + o * push_out;
         if rep > 0 {
             // A point's further cards spread around it, within the spray of its twig.
-            centre = centre + rand_dir(&mut r) * (card0 * 0.5);
+            centre += rand_dir(&mut r) * (card0 * 0.5);
         }
         let card = Card {
             base: centre - up * (size * 0.5),
