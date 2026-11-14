@@ -65,7 +65,7 @@ mod timing;
 pub mod tonemap;
 
 pub use atmosphere::{Atmosphere, fog_transmittance};
-pub use hardware::{GpuKind, HardwareProbe, Score, calibrate, starting_quality};
+pub use hardware::{GpuKind, HardwareProbe, Score, calibrate, relative_cost, starting_quality};
 pub use hdri::{HdriCalibration, HdriImage, OVERCAST_LUX, calibrate_hdri, estimate_sun};
 pub use impostor::{ImpostorId, atlas_layout, impostor_views};
 pub use lights::{Light, LightKind};

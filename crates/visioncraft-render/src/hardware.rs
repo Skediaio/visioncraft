@@ -171,6 +171,18 @@ pub async fn calibrate(
 /// of `examples/bench.rs --garden` at 1280x720 took 9.4-10.9 ms on LOW,
 /// 15.0 on MEDIUM, 37.5-39.9 on HIGH and 60.3-63.2 on ULTRA.
 const PRESET_COST: [f32; 4] = [1.5, 2.0, 3.7, 6.2];
+/// What a frame at quality `q` costs per output megapixel, relative to the calibration
+/// workload: its preset's `PRESET_COST` times the share of the pixels it renders (`render_scale`
+/// squared). The ratio of two of these predicts the frame time of one quality from another's.
+pub fn relative_cost(q: &Quality) -> f32 {
+    let preset = Quality::PRESETS
+        .iter()
+        .position(|(_, p)| crate::stats::same_except_scale(p, q))
+        .unwrap_or(1);
+    let s = q.render_scale.clamp(0.5, 1.0);
+    PRESET_COST[preset] * s * s
+}
+
 /// The share of the frame budget a starting quality may take: the rest is
 /// headroom for heavier views, the UI and `suggest_quality`'s first step.
 const BUDGET: f32 = 0.7;
