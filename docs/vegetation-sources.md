@@ -117,7 +117,8 @@ first is the faster way to more silhouettes.
 2. Bark: 19 sets, 7 used by genus (Scots pine keeps its drawn bark: the scan read salmon in a stand).
 3. Tree form: generated; a better branch solver would give more believable silhouettes.
 4. Variety: one form per species reads as a catalogue, several variants per species read as a
-   garden. The generator has variants by seed; planting tools should use more of them.
+   garden. Trees take a form per seed (crown a little taller or broader, its own branching), and
+   the planting tools give neighbouring plants of one species different forms.
 5. The ground: no fallen leaves, stones or soft lawn edges yet.
 
 ## Plan

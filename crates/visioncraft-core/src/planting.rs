@@ -914,7 +914,76 @@ pub fn blocked_by_buildings(
         .any(|[x, z]| up([x, place[1] + 0.3, z]).is_some_and(|d| d < clear))
 }
 
+/// Forms of one species the app draws: it takes [`Placement::variant`] modulo this.
+pub const PLANT_VARIANTS: u32 = 3;
+/// Plants of one species closer than this get different variants where they can.
+const VARIANT_SPREAD_M: f32 = 12.0;
+
+/// Re-picks each placement's variant as the one whose nearest use by another plant of the same
+/// asset within [`VARIANT_SPREAD_M`] is farthest away (its own when that is free), a few passes
+/// over all plants, so neighbouring plants of one species are not the same form. Keeps the
+/// higher bits; deterministic.
+fn spread_variants(ps: &mut [Placement]) {
+    // shortcut: skipped for mass plantings (cost grows with plants per cell); spin and scale
+    // vary those already. Upgrade to a k-nearest search if large tree plantings repeat.
+    if ps.len() > 2000 {
+        return;
+    }
+    let n = PLANT_VARIANTS as usize;
+    let cell = |p: [f32; 3]| {
+        (
+            (p[0] / VARIANT_SPREAD_M).floor() as i32,
+            (p[2] / VARIANT_SPREAD_M).floor() as i32,
+        )
+    };
+    let mut grid: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
+    for (i, p) in ps.iter().enumerate() {
+        grid.entry(cell(p.position)).or_default().push(i);
+    }
+    for _ in 0..4 {
+        let mut changed = false;
+        for i in 0..ps.len() {
+            let (cx, cz) = cell(ps[i].position);
+            let mut near = vec![f32::INFINITY; n];
+            for dx in -1..=1 {
+                for dz in -1..=1 {
+                    for &j in grid.get(&(cx + dx, cz + dz)).into_iter().flatten() {
+                        if j != i && ps[j].asset == ps[i].asset {
+                            let d = (ps[j].position[0] - ps[i].position[0])
+                                .hypot(ps[j].position[2] - ps[i].position[2]);
+                            let v = (ps[j].variant % PLANT_VARIANTS) as usize;
+                            near[v] = near[v].min(d);
+                        }
+                    }
+                }
+            }
+            let own = (ps[i].variant % PLANT_VARIANTS) as usize;
+            let best = (0..n)
+                .max_by(|&a, &b| {
+                    near[a]
+                        .total_cmp(&near[b])
+                        .then((a == own).cmp(&(b == own)))
+                })
+                .unwrap_or(own);
+            if near[best] > near[own] {
+                ps[i].variant = ps[i].variant - own as u32 + best as u32;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+}
+
 pub fn evaluate(generator: &Generator, ground: &dyn Fn(f32, f32) -> Option<f32>) -> Evaluation {
+    let mut e = evaluate_forms(generator, ground);
+    spread_variants(&mut e.placements);
+    e
+}
+
+/// [`evaluate`] with each placement's variant as drawn.
+fn evaluate_forms(generator: &Generator, ground: &dyn Fn(f32, f32) -> Option<f32>) -> Evaluation {
     let y_at = |p: [f32; 2]| [p[0], ground(p[0], p[1]).unwrap_or(0.0), p[1]];
     let done = |placements, truncated| Evaluation {
         placements,
@@ -2043,6 +2112,44 @@ mod tests {
                 .windows(2)
                 .all(|w| w[1] <= w[0] * 1.05 && w[0] - w[1] < 60.0),
             "{rings:?}"
+        );
+    }
+
+    #[test]
+    fn neighbouring_plants_of_one_species_differ() {
+        let mut g = area(
+            vec![[0.0, 0.0], [60.0, 0.0], [60.0, 60.0], [0.0, 60.0]],
+            0.04,
+        );
+        g.asset_palette = vec![Weighted {
+            asset: "flora:quercus-robur".into(),
+            weight: 1.0,
+        }];
+        g.min_distance_m = 3.0;
+        let ps = evaluate(&Generator::AreaScatter(g), &flat).placements;
+        assert!(ps.len() > 50, "{}", ps.len());
+        let d = |a: &Placement, b: &Placement| {
+            (a.position[0] - b.position[0]).hypot(a.position[2] - b.position[2])
+        };
+        let same = ps
+            .iter()
+            .enumerate()
+            .filter(|&(i, p)| {
+                let nearest = ps
+                    .iter()
+                    .enumerate()
+                    .filter(|&(j, _)| j != i)
+                    .min_by(|a, b| d(p, a.1).total_cmp(&d(p, b.1)))
+                    .unwrap()
+                    .1;
+                nearest.variant % PLANT_VARIANTS == p.variant % PLANT_VARIANTS
+            })
+            .count();
+        assert_eq!(
+            same,
+            0,
+            "{same} of {} share their nearest neighbour's form",
+            ps.len()
         );
     }
 
