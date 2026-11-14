@@ -5,7 +5,7 @@
 // chosen per instance from the direction to the viewer in the plant's own
 // frame: the two nearest ring views are blended (colour, normal and alpha
 // mixed before the alpha test, so the silhouette morphs instead of
-// popping), and the top view is blended in as the viewer climbs above 45
+// popping), and the top view is blended in as the viewer climbs above 62
 // degrees. The ring-plus-top layout is the simple variant of the atlas
 // impostors in Brucks, "Octahedral Impostors" (Epic Games / Shaderbits,
 // 2018); a hemi-octahedral layout would add elevation steps and was not
@@ -53,7 +53,9 @@ fn impostor_views(d: vec3<f32>) -> vec4<f32> {
     let i0 = floor(f);
     let i1 = (i0 + 1.0) % n;
     let elevation = asin(clamp(d.y / max(length(d), 1e-6), -1.0, 1.0));
-    let top = smoothstep(0.785, 1.22, elevation);
+    // From 62 to 82 degrees: below, the ring views hold up and a half-blended top view only
+    // ghosts a pale disk over the crown.
+    let top = smoothstep(1.08, 1.43, elevation);
     return vec4<f32>(i0 % n, i1, f - i0, top);
 }
 
@@ -129,13 +131,17 @@ fn vs_impostor_shadow(@builtin(vertex_index) vi: u32, v: ImpostorIn) -> Impostor
 
 // Atlas texture coordinates of quad position `st` in tile `tile`: ring
 // tiles are the ortho views (u right, v down); the top tile maps model x to
-// u and model z to v, so the quad's own axes pick the point.
+// u and model z to v: the view ray through the quad's point, followed to the
+// horizontal plane through the centre, picks the point (a tilted quad's own
+// x and z would squash and shift the crown seen from above).
 fn impostor_uv(in: ImpostorVarying, tile: f32, top: bool) -> vec2<f32> {
     // Model-space offset from the centre, then into the tile's extents.
     let e = impostor.extent;
     var local = vec2<f32>(in.st.x * in.ext.x / e.x * 0.5 + 0.5, 0.5 - in.st.y * in.ext.y / e.y * 0.5);
     if top {
-        let p = (in.right * in.st.x * in.ext.x + in.up * in.st.y * in.ext.y) / e.x;
+        let o = in.right * in.st.x * in.ext.x + in.up * in.st.y * in.ext.y;
+        let towards = cross(in.right, in.up);
+        let p = (o - towards * (o.y / max(towards.y, 0.3))) / e.x;
         local = vec2<f32>(p.x * 0.5 + 0.5, p.z * 0.5 + 0.5);
     }
     let cols = impostor.grid.y;

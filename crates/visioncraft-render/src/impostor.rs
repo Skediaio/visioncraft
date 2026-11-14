@@ -39,7 +39,7 @@ pub fn impostor_views(d: Vec3, views: u32) -> (u32, u32, f32, f32) {
     let f = (a + 1.0).fract() * n;
     let i0 = f.floor();
     let elevation = (d.y / d.length().max(1e-6)).clamp(-1.0, 1.0).asin();
-    let t = ((elevation - 0.785) / (1.22 - 0.785)).clamp(0.0, 1.0);
+    let t = ((elevation - 1.08) / (1.43 - 1.08)).clamp(0.0, 1.0);
     (
         i0 as u32 % views,
         (i0 as u32 + 1) % views,
