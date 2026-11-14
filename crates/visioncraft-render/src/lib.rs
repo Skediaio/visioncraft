@@ -71,7 +71,6 @@ pub use impostor::{ImpostorId, atlas_layout, impostor_views};
 pub use lights::{Light, LightKind};
 pub use sky::Sun;
 pub use stats::{RenderStats, TARGET_MS, ULTRA_HEADROOM, suggest_quality};
-#[cfg(not(target_arch = "wasm32"))]
 pub use still::Photo;
 pub use still::Still;
 pub use terrain::{TerrainChunk, TerrainLayer};
@@ -835,6 +834,8 @@ pub struct Renderer {
     /// disc, and the noise seed of ambient occlusion; zero for live frames.
     shadow_jitter: Vec3,
     photo_seed: f32,
+    /// Photo mode's accumulate and resolve passes, made at the first photo.
+    photo_pipes: Option<still::PhotoPipes>,
     light_buffer: wgpu::Buffer,
     grid_buffer: wgpu::Buffer,
     grid: lights::Grid,
@@ -1151,6 +1152,7 @@ impl Renderer {
             clouds: Clouds::default(),
             shadow_jitter: Vec3::ZERO,
             photo_seed: 0.0,
+            photo_pipes: None,
             light_buffer,
             grid_buffer,
             grid,

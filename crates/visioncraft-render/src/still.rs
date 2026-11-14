@@ -138,8 +138,7 @@ impl Renderer {
             quality,
             (width, height),
             (view, proj, eye),
-            &buffer,
-            stride,
+            Some((&buffer, stride)),
         );
         self.queue.submit([encoder.finish()]);
         let mapped = Arc::new(Mutex::new(None));
@@ -172,8 +171,7 @@ impl Renderer {
         quality: Quality,
         (width, height): (u32, u32),
         (view, proj, eye): (Mat4, Mat4, Vec3),
-        buffer: &wgpu::Buffer,
-        stride: u32,
+        copy: Option<(&wgpu::Buffer, u32)>,
     ) -> (Targets, Option<SampledPipelines>, wgpu::CommandEncoder) {
         // Swap the live state out, render, swap it back.
         let live_targets = std::mem::replace(&mut self.targets, targets);
@@ -207,22 +205,15 @@ impl Renderer {
         let mut encoder = self.device.create_command_encoder(&Default::default());
         self.env.finish();
         self.render(&mut encoder);
-        encoder.copy_texture_to_buffer(
-            self.targets.output.as_image_copy(),
-            wgpu::TexelCopyBufferInfo {
+        if let Some((buffer, stride)) = copy {
+            copy_out(
+                &mut encoder,
+                &self.targets.output,
                 buffer,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(stride),
-                    rows_per_image: Some(height),
-                },
-            },
-            wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-        );
+                stride,
+                (width, height),
+            );
+        }
 
         let used_targets = std::mem::replace(&mut self.targets, live_targets);
         let used_sampled = live_sampled.map(|s| std::mem::replace(&mut self.sampled, s));
@@ -242,27 +233,141 @@ impl Renderer {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-/// A photo: many frames of the same view averaged, each with a sub-pixel shift (antialiasing),
-/// the sun's light direction moved within its disc (shadows with true penumbrae that widen with
-/// the distance to what casts them) and ambient occlusion sampled in other directions; and,
-/// with a lens aperture, the eye moved over it (depth of field). Native only: each sample waits
-/// for its pixels.
+/// Copies `texture` into `buffer` rows `stride` bytes apart.
+fn copy_out(
+    encoder: &mut wgpu::CommandEncoder,
+    texture: &wgpu::Texture,
+    buffer: &wgpu::Buffer,
+    stride: u32,
+    (width, height): (u32, u32),
+) {
+    encoder.copy_texture_to_buffer(
+        texture.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(stride),
+                rows_per_image: Some(height),
+            },
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+}
+
+/// A photo: many frames of the same view averaged on the GPU, each with a sub-pixel shift
+/// (antialiasing), the sun's light direction moved within its disc (shadows with true penumbrae
+/// that widen with the distance to what casts them) and ambient occlusion sampled in other
+/// directions; and, with a lens aperture, the eye moved over it (depth of field). Nothing waits
+/// for a sample, so it runs on the web too: `photo_finish` gives a [`Still`] to poll.
 pub struct Photo {
     targets: Option<Targets>,
     sampled: Option<SampledPipelines>,
     quality: Quality,
     size: (u32, u32),
-    buffer: wgpu::Buffer,
-    stride: u32,
-    /// Linear RGB sums.
-    sum: Vec<f32>,
+    /// Linear RGB sums (16-bit float: 64 samples of values up to 1 keep about 0.05 %).
+    accum: wgpu::Texture,
     /// Samples summed.
     pub done: u32,
 }
 
+/// The accumulate and resolve passes: one fullscreen triangle reading a texture and scaling it.
+pub(crate) struct PhotoPipes {
+    layout: wgpu::BindGroupLayout,
+    add: wgpu::RenderPipeline,
+    resolve: wgpu::RenderPipeline,
+}
+
+const ACCUM: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+const RESOLVED: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+
+impl PhotoPipes {
+    fn new(device: &wgpu::Device) -> PhotoPipes {
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("photo"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("photo.wgsl").into()),
+        });
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("photo"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("photo"),
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
+        });
+        let pipe = |format: wgpu::TextureFormat, blend: Option<wgpu::BlendState>| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("photo"),
+                layout: Some(&pl),
+                vertex: wgpu::VertexState {
+                    module: &module,
+                    entry_point: Some("vs"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &module,
+                    entry_point: Some("fs"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: Default::default(),
+                depth_stencil: None,
+                multisample: Default::default(),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let one = wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::One,
+            dst_factor: wgpu::BlendFactor::One,
+            operation: wgpu::BlendOperation::Add,
+        };
+        PhotoPipes {
+            add: pipe(
+                ACCUM,
+                Some(wgpu::BlendState {
+                    color: one,
+                    alpha: one,
+                }),
+            ),
+            resolve: pipe(RESOLVED, None),
+            layout,
+        }
+    }
+}
+
 /// The `i`-th point of the base-`b` Halton sequence, in [0, 1).
-#[cfg(not(target_arch = "wasm32"))]
 fn halton(mut i: u32, b: u32) -> f32 {
     let (mut f, mut r) = (1.0f32, 0.0f32);
     while i > 0 {
@@ -273,28 +378,6 @@ fn halton(mut i: u32, b: u32) -> f32 {
     r
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-fn to_linear(c: u8) -> f32 {
-    let c = f32::from(c) / 255.0;
-    if c <= 0.04045 {
-        c / 12.92
-    } else {
-        ((c + 0.055) / 1.055).powf(2.4)
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn to_srgb(c: f32) -> u8 {
-    let c = c.clamp(0.0, 1.0);
-    let s = if c <= 0.0031308 {
-        c * 12.92
-    } else {
-        1.055 * c.powf(1.0 / 2.4) - 0.055
-    };
-    (s * 255.0 + 0.5) as u8
-}
-
-#[cfg(not(target_arch = "wasm32"))]
 impl Renderer {
     /// Starts a photo at `width` x `height` with `quality` (its targets are kept for every
     /// sample). Plants keep their finest levels (and leaf-cut shadows) twice as far as `quality`
@@ -330,27 +413,96 @@ impl Renderer {
                 quality.samples(),
             )
         });
-        let stride = (width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
-        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("photo readback"),
-            size: stride as u64 * height as u64,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
+        let accum = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("photo sum"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: ACCUM,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
         });
         Ok(Photo {
             targets: Some(targets),
             sampled,
             quality,
             size: (width, height),
-            buffer,
-            stride,
-            sum: vec![0.0; (width * height * 3) as usize],
+            accum,
             done: 0,
         })
     }
 
-    /// Renders sample `k` of the photo from `view`/`proj`/`eye` and adds it. `aperture_m`
-    /// (0: none) is the lens' radius, focused at `focus_m` along the view.
+    /// Draws `src` scaled by `scale` into `dst`: into the sum (`Some(first)`: cleared first),
+    /// or (`None`) into the sRGB picture.
+    fn photo_pass(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        src: &wgpu::TextureView,
+        dst: &wgpu::TextureView,
+        scale: f32,
+        sum: Option<bool>,
+    ) {
+        let pipes = self
+            .photo_pipes
+            .get_or_insert_with(|| PhotoPipes::new(&self.device));
+        let uniform = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("photo scale"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.queue.write_buffer(
+            &uniform,
+            0,
+            &[scale, 0.0, 0.0, 0.0].map(f32::to_le_bytes).concat(),
+        );
+        let bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("photo"),
+            layout: &pipes.layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(src),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: uniform.as_entire_binding(),
+                },
+            ],
+        });
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("photo"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: dst,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: if sum == Some(false) {
+                        wgpu::LoadOp::Load
+                    } else {
+                        wgpu::LoadOp::Clear(wgpu::Color::BLACK)
+                    },
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+        pass.set_pipeline(if sum.is_some() {
+            &pipes.add
+        } else {
+            &pipes.resolve
+        });
+        pass.set_bind_group(0, &bind, &[]);
+        pass.draw(0..3, 0..1);
+    }
+
+    /// Renders sample `k` of the photo from `view`/`proj`/`eye` and adds it on the GPU.
+    /// `aperture_m` (0: none) is the lens' radius, focused at `focus_m` along the view.
     #[allow(clippy::too_many_arguments)]
     pub fn photo_sample(
         &mut self,
@@ -395,77 +547,86 @@ impl Renderer {
         // `render_offscreen` starts without cached shadows, so each sample casts its own.
         let targets = photo.targets.take().ok_or("photo targets missing")?;
         let sampled = photo.sampled.take();
-        let (targets, sampled, encoder) = self.render_offscreen(
+        let (targets, sampled, mut encoder) = self.render_offscreen(
             targets,
             sampled,
             photo.quality,
             photo.size,
             (view, proj, eye),
-            &photo.buffer,
-            photo.stride,
+            None,
         );
-        photo.targets = Some(targets);
-        photo.sampled = sampled;
         self.shadow_jitter = Vec3::ZERO;
         self.photo_seed = 0.0;
+        let src = targets.output.create_view(&wgpu::TextureViewDescriptor {
+            format: Some(self.output_format.add_srgb_suffix()),
+            ..Default::default()
+        });
+        let dst = photo.accum.create_view(&Default::default());
+        self.photo_pass(&mut encoder, &src, &dst, 1.0, Some(photo.done == 0));
+        photo.targets = Some(targets);
+        photo.sampled = sampled;
         self.queue.submit([encoder.finish()]);
-        let (tx, rx) = std::sync::mpsc::channel();
-        photo
-            .buffer
-            .slice(..)
-            .map_async(wgpu::MapMode::Read, move |r| {
-                let _ = tx.send(r);
-            });
-        self.device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .map_err(|e| format!("poll: {e}"))?;
-        rx.recv()
-            .map_err(|e| e.to_string())?
-            .map_err(|e| format!("photo readback failed: {e}"))?;
-        {
-            let view = photo
-                .buffer
-                .slice(..)
-                .get_mapped_range()
-                .map_err(|e| format!("photo readback failed: {e}"))?;
-            let lut: [f32; 256] = std::array::from_fn(|c| to_linear(c as u8));
-            for (y, row) in view
-                .chunks(photo.stride as usize)
-                .take(h as usize)
-                .enumerate()
-            {
-                let sum = &mut photo.sum[y * w as usize * 3..(y + 1) * w as usize * 3];
-                for (s, px) in sum
-                    .as_chunks_mut::<3>()
-                    .0
-                    .iter_mut()
-                    .zip(row.as_chunks::<4>().0)
-                {
-                    for c in 0..3 {
-                        s[c] += lut[px[c] as usize];
-                    }
-                }
-            }
-        }
-        photo.buffer.unmap();
         photo.done += 1;
         Ok(())
     }
+
+    /// The average of the samples so far, read back as a [`Still`].
+    pub fn photo_finish(&mut self, photo: &Photo) -> Still {
+        let (width, height) = photo.size;
+        let resolved = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("photo"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: RESOLVED,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let stride = (width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("photo readback"),
+            size: stride as u64 * height as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        let src = photo.accum.create_view(&Default::default());
+        let dst = resolved.create_view(&Default::default());
+        self.photo_pass(
+            &mut encoder,
+            &src,
+            &dst,
+            1.0 / photo.done.max(1) as f32,
+            None,
+        );
+        copy_out(&mut encoder, &resolved, &buffer, stride, (width, height));
+        self.queue.submit([encoder.finish()]);
+        let mapped = Arc::new(Mutex::new(None));
+        let slot = mapped.clone();
+        buffer.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+            if let Ok(mut s) = slot.lock() {
+                *s = Some(r.map_err(|e| e.to_string()));
+            }
+        });
+        Still {
+            device: self.device.clone(),
+            buffer,
+            size: (width, height),
+            stride,
+            mapped,
+            errors: Vec::new(),
+        }
+    }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl Photo {
     pub fn size(&self) -> (u32, u32) {
         self.size
-    }
-
-    /// The average so far as RGBA8 (sRGB-encoded, top to bottom).
-    pub fn pixels(&self) -> Vec<u8> {
-        let n = self.done.max(1) as f32;
-        self.sum
-            .chunks(3)
-            .flat_map(|c| [to_srgb(c[0] / n), to_srgb(c[1] / n), to_srgb(c[2] / n), 255])
-            .collect()
     }
 }
 
@@ -475,8 +636,5 @@ mod tests {
     fn halton_fills_the_unit_interval_evenly() {
         let xs: Vec<f32> = (1..=8).map(|i| super::halton(i, 2)).collect();
         assert_eq!(xs[..4], [0.5, 0.25, 0.75, 0.125]);
-        for c in [0u8, 1, 50, 128, 200, 255] {
-            assert_eq!(super::to_srgb(super::to_linear(c)), c);
-        }
     }
 }
