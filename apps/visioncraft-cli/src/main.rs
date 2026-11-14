@@ -130,11 +130,13 @@ Options:
   --quality Q     low, medium or high (default)";
 
 const HELP_EXPORT: &str = "\
-Usage: visioncraft-cli export FILE --out DIR [--preset NAME]... [--viewpoint V]...
+Usage: visioncraft-cli export FILE --out DIR [--preset NAME]... [--viewpoint V]... [--years Y]...
 
 Renders every viewpoint (or those given; the whole scene framed when the
 project has none) at every preset given (default Screen) into DIR as
-<viewpoint>-<preset>.png, one line of JSON per picture. Presets: {presets}.";
+<viewpoint>-<preset>.png, one line of JSON per picture. With --years (each
+0..60), a growth series: <viewpoint>-<preset>-y<years>.png for every year
+given. Presets: {presets}.";
 
 const HELP_REPLAY: &str = "\
 Usage: visioncraft-cli replay FILE --out DIR [--size WxH] [--frames-per-step N]
@@ -703,7 +705,7 @@ fn slug(text: &str) -> String {
 }
 
 fn cmd_export(raw: &[String]) -> Res {
-    let a = Args::parse(raw, &["--out", "--preset", "--viewpoint"], &[])?;
+    let a = Args::parse(raw, &["--out", "--preset", "--viewpoint", "--years"], &[])?;
     let names: Vec<&str> = visioncraft_core::export_presets()
         .iter()
         .map(|p| p.0)
@@ -760,16 +762,37 @@ fn cmd_export(raw: &[String]) -> Res {
     }
     std::fs::create_dir_all(dir)
         .map_err(|e| CliError::Failed(format!("cannot make `{dir}`: {e}")))?;
+    let mut years: Vec<Option<f32>> = Vec::new();
+    for y in a.all("--years") {
+        let v: f32 = y
+            .parse()
+            .ok()
+            .filter(|v| (0.0..=visioncraft_core::YEARS_MAX).contains(v))
+            .ok_or_else(|| CliError::Usage(format!("`--years {y}`: a number from 0 to 60")))?;
+        years.push(Some(v));
+    }
+    if years.is_empty() {
+        years.push(None);
+    }
     for (vp, name) in &views {
         for (preset, w, h) in &presets {
-            let path = Path::new(dir).join(format!("{name}-{}.png", slug(preset)));
-            let mut params = json!({"path": path.to_string_lossy(), "width": w, "height": h});
-            if let Some(vp) = vp {
-                params["viewpoint"] = vp.as_str().into();
+            for y in &years {
+                let file = match y {
+                    Some(y) => format!("{name}-{}-y{y}.png", slug(preset)),
+                    None => format!("{name}-{}.png", slug(preset)),
+                };
+                let path = Path::new(dir).join(file);
+                let mut params = json!({"path": path.to_string_lossy(), "width": w, "height": h});
+                if let Some(vp) = vp {
+                    params["viewpoint"] = vp.as_str().into();
+                }
+                if let Some(y) = y {
+                    params["years"] = (*y).into();
+                }
+                let mut r = exec(&mut host, "view.render", params)?;
+                r["preset"] = (*preset).into();
+                print_json(&r)?;
             }
-            let mut r = exec(&mut host, "view.render", params)?;
-            r["preset"] = (*preset).into();
-            print_json(&r)?;
         }
     }
     Ok(())
