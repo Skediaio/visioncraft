@@ -100,6 +100,18 @@ pub(super) fn register(s: &mut Session) {
         ),
         set_plinth,
     );
+    s.register_with_spec(
+        spec(
+            "shape.set_lit_rooms",
+            "Set Lit Rooms",
+            "Share of a house's windows with a lit room behind them when the lamps are on \
+             (0: none, 1: every window); the same windows stay lit as the share grows.",
+            vec![id(), param("share", T::Number, "0..1.").required()],
+            "null",
+            json!({"id": "S2", "share": 0.5}),
+        ),
+        set_lit_rooms,
+    );
 }
 
 /// The materials a house's new faces start with, where nothing is assigned to them yet and the
@@ -114,6 +126,8 @@ pub(crate) fn default_materials(project: &mut Project, id: &str) {
         ("interior", "interior"),
         ("plinth", "concrete"),
         ("parapet", "concrete"),
+        ("sill", "concrete"),
+        ("handle", "metal"),
     ] {
         let target = Target::Face {
             owner: id.to_string(),
@@ -303,6 +317,20 @@ fn set_plinth(project: &mut Project, params: &Value) -> Result<Value, CommandErr
     })
 }
 
+fn set_lit_rooms(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct P {
+        id: String,
+        share: f32,
+    }
+    let p: P = parse(params)?;
+    edit_house(project, &p.id, |h, _| {
+        h.lit_rooms = number(p.share, "share", 0.0, 1.0)?;
+        Ok(Value::Null)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{Project, Session};
@@ -347,11 +375,33 @@ mod tests {
                 .count()
         };
         for f in [
-            "roof", "gable", "glass", "frame", "door", "interior", "plinth",
+            "roof", "gable", "glass", "frame", "door", "interior", "plinth", "sill", "handle",
         ] {
             assert!(tris(f) > 0, "{f}");
         }
         assert_eq!(tris("parapet"), 0);
+        // Lit rooms: none by default, then one lamp per window, inside the outline.
+        let block = |s: &Session| match &s.project().shapes[0] {
+            crate::Shape::Extrusion(e) => e.clone(),
+            _ => unreachable!(),
+        };
+        let e = block(&s);
+        let lamps = |e: &crate::shape::Extrusion| {
+            crate::house::lit_windows(&e.outline, e.house.as_ref().unwrap(), e.base)
+        };
+        assert!(lamps(&e).is_empty());
+        s.run("shape.set_lit_rooms", json!({"id": id, "share": 1}))
+            .unwrap();
+        let l = lamps(&block(&s));
+        assert_eq!(l.len(), 1);
+        assert!(
+            l[0][0] > 0.0 && l[0][0] < 10.0 && l[0][2] > 0.0 && l[0][2] < 8.0,
+            "{l:?}"
+        );
+        assert!(
+            s.run("shape.set_lit_rooms", json!({"id": id, "share": 2}))
+                .is_err()
+        );
         // The ridge stands above the 6 m walls: 4 m half-width at 35 degrees, 2.8 m.
         let top = mesh.positions.iter().map(|p| p[1]).fold(0.0, f32::max);
         assert!(

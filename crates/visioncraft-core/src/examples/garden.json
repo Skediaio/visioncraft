@@ -2,6 +2,7 @@
   ["terrain.create", {"origin": [-6, -6], "width_m": 32, "depth_m": 42, "cell_m": 0.5, "base_material": "lawn"}],
   ["shape.add_extrusion", {"name": "House", "outline": [[4, 1.5], [16, 1.5], [16, 9], [4, 9]], "height": 6.0, "material": "plaster", "roof": {"kind": "gable", "pitch_deg": 38, "overhang_m": 0.45}}],
   ["shape.set_plinth", {"id": "S1", "height_m": 0.35}],
+  ["shape.set_lit_rooms", {"id": "S1", "share": 0.6}],
   ["shape.add_opening", {"id": "S1", "side": 2, "offset_m": 6.0, "kind": "door", "width_m": 1.0, "height_m": 2.2}],
   ["shape.add_opening", {"id": "S1", "side": 2, "offset_m": 2.6, "width_m": 2.0, "height_m": 1.6, "sill_m": 0.6, "frame": "split"}],
   ["shape.add_opening", {"id": "S1", "side": 2, "offset_m": 9.4, "width_m": 2.0, "height_m": 1.6, "sill_m": 0.6, "frame": "split"}],

@@ -104,11 +104,14 @@ pub struct House {
     pub openings: Vec<Opening>,
     /// Height of the plinth band at the foot of the walls (0: none).
     pub plinth_m: f32,
+    /// Share of the windows with a lit room behind them when the lamps are on (0..1), chosen
+    /// by each window's id (`lit_windows`).
+    pub lit_rooms: f32,
 }
 
 /// Faces a house adds after the block's own, in this order.
-pub const HOUSE_FACES: [&str; 8] = [
-    "roof", "gable", "glass", "frame", "door", "interior", "plinth", "parapet",
+pub const HOUSE_FACES: [&str; 10] = [
+    "roof", "gable", "glass", "frame", "door", "interior", "plinth", "parapet", "sill", "handle",
 ];
 const ROOF: usize = 0;
 const GABLE: usize = 1;
@@ -118,6 +121,8 @@ const DOOR: usize = 4;
 const INTERIOR: usize = 5;
 const PLINTH: usize = 6;
 const PARAPET: usize = 7;
+const SILL: usize = 8;
+const HANDLE: usize = 9;
 
 /// How deep windows sit in the wall, and how deep the dark room behind them is.
 const REVEAL_M: f32 = 0.12;
@@ -288,36 +293,148 @@ fn opening(
         ],
         back,
     );
-    // Frame: a ring in the reveal's back plane, and a mullion for split windows.
+    // Frame: a ring in the reveal's back plane standing 6 cm proud of the glass, with its
+    // inner sides, and a mullion for split windows.
     let f = o.frame.width().min((u1 - u0) / 4.0).min((v1 - v0) / 4.0);
     let z = REVEAL_M;
-    let ring =
-        |a: f32, b: f32, c: f32, e: f32| [at(a, c, z), at(b, c, z), at(b, e, z), at(a, e, z)];
+    let ring = |a: f32, b: f32, c: f32, e: f32, z: f32| {
+        [at(a, c, z), at(b, c, z), at(b, e, z), at(a, e, z)]
+    };
+    let proud = 0.06;
+    let fz = z - proud;
+    let (a, b, c, e) = (u0 + f, u1 - f, v0 + f, v1 - f);
     if f > 0.0 {
         for r in [
-            ring(u0, u1, v0, v0 + f),
-            ring(u0, u1, v1 - f, v1),
-            ring(u0, u0 + f, v0 + f, v1 - f),
-            ring(u1 - f, u1, v0 + f, v1 - f),
+            ring(u0, u1, v0, v0 + f, fz),
+            ring(u0, u1, v1 - f, v1, fz),
+            ring(u0, u0 + f, v0 + f, v1 - f, fz),
+            ring(u1 - f, u1, v0 + f, v1 - f, fz),
         ] {
             quad(s, first + FRAME, r, out);
         }
+        // The frame's inner sides, from its face back to the glass.
+        quad(
+            s,
+            first + FRAME,
+            [at(a, c, fz), at(b, c, fz), at(b, c, z), at(a, c, z)],
+            up,
+        );
+        quad(
+            s,
+            first + FRAME,
+            [at(a, e, fz), at(b, e, fz), at(b, e, z), at(a, e, z)],
+            down,
+        );
+        quad(
+            s,
+            first + FRAME,
+            [at(a, c, fz), at(a, e, fz), at(a, e, z), at(a, c, z)],
+            along,
+        );
+        quad(
+            s,
+            first + FRAME,
+            [at(b, c, fz), at(b, e, fz), at(b, e, z), at(b, c, z)],
+            back,
+        );
         if o.frame == FrameStyle::Split && o.kind == OpeningKind::Window {
             let m = (u0 + u1) / 2.0;
             quad(
                 s,
                 first + FRAME,
-                ring(m - f / 2.0, m + f / 2.0, v0 + f, v1 - f),
+                ring(m - f / 2.0, m + f / 2.0, c, e, fz),
                 out,
             );
         }
     }
-    let (a, b, c, e) = (u0 + f, u1 - f, v0 + f, v1 - f);
     match o.kind {
-        OpeningKind::Door => quad(s, first + DOOR, ring(a, b, c, e), out),
+        OpeningKind::Door => {
+            // A panelled door: its leaf flush with the frame, four panels set 1.5 cm back in it,
+            // and a handle at the right height on the side away from the hinges.
+            let (w, h) = (b - a, e - c);
+            let (bx, by) = ((w * 0.12).max(0.06), (h * 0.08).max(0.06));
+            let mid_u = (a + b) / 2.0;
+            let mid_v = c + h * 0.45;
+            let panels = [
+                (a + bx, mid_u - bx / 2.0, c + by, mid_v - by / 2.0),
+                (mid_u + bx / 2.0, b - bx, c + by, mid_v - by / 2.0),
+                (a + bx, mid_u - bx / 2.0, mid_v + by / 2.0, e - by),
+                (mid_u + bx / 2.0, b - bx, mid_v + by / 2.0, e - by),
+            ];
+            // The leaf around the panels, on a grid less the panels.
+            let mut us = vec![a, b];
+            let mut vs = vec![c, e];
+            for p in &panels {
+                us.extend([p.0, p.1]);
+                vs.extend([p.2, p.3]);
+            }
+            for v in [&mut us, &mut vs] {
+                v.sort_by(f32::total_cmp);
+                v.dedup_by(|a, b| (*a - *b).abs() < 1e-4);
+            }
+            let inset = 0.025;
+            // The leaf sits 2 cm behind the frame's face, so the frame reads around it.
+            let fz = fz + 0.02;
+            for uw in us.windows(2) {
+                for vw in vs.windows(2) {
+                    let (cu, cv) = ((uw[0] + uw[1]) / 2.0, (vw[0] + vw[1]) / 2.0);
+                    let inside = panels
+                        .iter()
+                        .any(|p| cu > p.0 && cu < p.1 && cv > p.2 && cv < p.3);
+                    let depth = if inside { fz + inset } else { fz };
+                    quad(
+                        s,
+                        first + DOOR,
+                        ring(uw[0], uw[1], vw[0], vw[1], depth),
+                        out,
+                    );
+                }
+            }
+            // The panels' sides.
+            for p in &panels {
+                let (p0, p1, q0, q1) = *p;
+                let d = fz + inset;
+                quad(
+                    s,
+                    first + DOOR,
+                    [at(p0, q0, fz), at(p1, q0, fz), at(p1, q0, d), at(p0, q0, d)],
+                    up,
+                );
+                quad(
+                    s,
+                    first + DOOR,
+                    [at(p0, q1, fz), at(p1, q1, fz), at(p1, q1, d), at(p0, q1, d)],
+                    down,
+                );
+                quad(
+                    s,
+                    first + DOOR,
+                    [at(p0, q0, fz), at(p0, q1, fz), at(p0, q1, d), at(p0, q0, d)],
+                    along,
+                );
+                quad(
+                    s,
+                    first + DOOR,
+                    [at(p1, q0, fz), at(p1, q1, fz), at(p1, q1, d), at(p1, q0, d)],
+                    back,
+                );
+            }
+            // The handle: a small block 6 cm out from the leaf, 1.05 m up.
+            let hu = b - (w * 0.1).max(0.07);
+            let hv = (c + 1.05).min(e - 0.1);
+            block(
+                s,
+                first + HANDLE,
+                at,
+                (hu - 0.06, hu + 0.03),
+                (hv - 0.015, hv + 0.015),
+                (fz - 0.06, fz),
+                (out, along, up),
+            );
+        }
         OpeningKind::Window => {
-            // The pane a little in front of the frame's back, then the room behind it: its back
-            // wall, floor, ceiling and sides, dark unless a lamp inside lights them.
+            // The pane a little behind the frame, then the room behind it: its back wall,
+            // floor, ceiling and sides, dark unless a lamp inside lights them.
             let g = z - 0.01;
             quad(
                 s,
@@ -357,8 +474,128 @@ fn opening(
                 [at(u1, v0, z), at(u1, v1, z), at(u1, v1, r), at(u1, v0, r)],
                 back,
             );
+            // A sill under it: 5 cm thick, reaching 6 cm past the wall and 5 cm past each side.
+            if o.sill_m > 0.05 {
+                block(
+                    s,
+                    first + SILL,
+                    at,
+                    (u0 - 0.05, u1 + 0.05),
+                    (v0 - 0.05, v0),
+                    (-0.06, REVEAL_M),
+                    (out, along, up),
+                );
+            }
         }
     }
+}
+
+/// A box on the wall: `u` along it, `v` up, `z` into it (negative: out in front), its faces
+/// facing `out` (front), `along` (right), up and their opposites.
+fn block(
+    s: &mut dyn Sink,
+    face: usize,
+    at: &dyn Fn(f32, f32, f32) -> [f32; 3],
+    (u0, u1): (f32, f32),
+    (v0, v1): (f32, f32),
+    (z0, z1): (f32, f32),
+    (out, along, up): ([f32; 3], [f32; 3], [f32; 3]),
+) {
+    let neg = |v: [f32; 3]| v.map(|c| -c);
+    quad(
+        s,
+        face,
+        [
+            at(u0, v0, z0),
+            at(u1, v0, z0),
+            at(u1, v1, z0),
+            at(u0, v1, z0),
+        ],
+        out,
+    );
+    quad(
+        s,
+        face,
+        [
+            at(u0, v1, z0),
+            at(u1, v1, z0),
+            at(u1, v1, z1),
+            at(u0, v1, z1),
+        ],
+        up,
+    );
+    quad(
+        s,
+        face,
+        [
+            at(u0, v0, z0),
+            at(u1, v0, z0),
+            at(u1, v0, z1),
+            at(u0, v0, z1),
+        ],
+        neg(up),
+    );
+    quad(
+        s,
+        face,
+        [
+            at(u0, v0, z0),
+            at(u0, v1, z0),
+            at(u0, v1, z1),
+            at(u0, v0, z1),
+        ],
+        neg(along),
+    );
+    quad(
+        s,
+        face,
+        [
+            at(u1, v0, z0),
+            at(u1, v1, z0),
+            at(u1, v1, z1),
+            at(u1, v0, z1),
+        ],
+        along,
+    );
+}
+
+/// Where the lit rooms' lamps hang: for each window chosen by `House::lit_rooms` (by a hash of
+/// its id, so the same windows stay lit), a point in the room behind it, above the middle, in the
+/// block's own coordinates (add the block's lift).
+pub fn lit_windows(outline: &[P2], house: &House, base: f32) -> Vec<[f32; 3]> {
+    if house.lit_rooms <= 0.0 || outline.len() < 3 {
+        return Vec::new();
+    }
+    let sign = if crate::shape::shoelace_f32(outline) > 0.0 {
+        1.0
+    } else {
+        -1.0
+    };
+    house
+        .openings
+        .iter()
+        .filter(|o| o.kind == OpeningKind::Window && o.side < outline.len())
+        .filter(|o| {
+            let h = o.id.bytes().fold(2166136261u32, |h, b| {
+                (h ^ u32::from(b)).wrapping_mul(16777619)
+            });
+            (h % 1000) as f32 / 1000.0 < house.lit_rooms
+        })
+        .map(|o| {
+            let (p, q) = (outline[o.side], outline[(o.side + 1) % outline.len()]);
+            let len = ((q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2))
+                .sqrt()
+                .max(1e-6);
+            let d = [(q[0] - p[0]) / len, (q[1] - p[1]) / len];
+            let n = [sign * d[1], -sign * d[0]];
+            let depth = REVEAL_M + ROOM_M * 0.5;
+            [
+                p[0] + d[0] * o.offset_m - n[0] * depth,
+                base + o.sill_m + o.height_m * 0.75,
+                p[1] + d[1] * o.offset_m - n[1] * depth,
+            ]
+        })
+        .collect()
 }
 
 /// A rectangle as its four corners (as given) when `ring` is one: four corners at right angles.
