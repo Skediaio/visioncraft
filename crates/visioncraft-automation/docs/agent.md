@@ -302,9 +302,7 @@ the terrain, path lights, a walnut on a hidden layer and three viewpoints. `{"na
 (`example:beach-house.3dcraft`, one body per element group, from
 `examples/models/beach-house/`), with library materials, catalogue furniture, downlights in
 every room and ten viewpoints inside and out. For a furnished plan from above, take its roof
-off: `{"id": "model.set_hidden_bodies", "params": {"id": "m1", "bodies": ["roof",
-"roof-membrane", "fascia", "ceiling", "ceiling-living"]}}` (body names or feature ids; saved with
-the project; an empty list shows them again).
+off (recipe 19).
 
 ### 16. How the garden grows
 
@@ -399,6 +397,25 @@ the ground (the grass stops at the waterline: `document.inspect` counts what sta
 the window walking stops where the water is deeper than 0.6 m. `project.load_example {"name":
 "coast"}` puts the furnished house of the `beach-house` example on a bluff built the same way,
 its deck steps leading down a path to the beach.
+
+### 19. A furnished plan from above: hide the roof
+
+```json recipe
+{"intent": "the beach house's rooms and furniture seen from above", "steps": [
+  {"id": "project.load_example", "params": {"name": "beach-house"}},
+  {"id": "model.set_hidden_bodies", "params": {"id": "m1", "bodies": ["roof", "roof-membrane", "fascia", "ceiling", "ceiling-living"]}},
+  {"id": "document.inspect", "params": {"faces": false}},
+  {"id": "view.render", "params": {"camera": {"position": [12, 30, -4.49], "target": [12, 0, -4.5], "fov_y_deg": 40}, "time": {"hour": 12.5}, "width": 1280, "height": 720, "path": "plan.png"}}
+]}
+```
+
+`model.set_hidden_bodies` leaves bodies of an imported model out of the view, by body name or
+feature id (`document.inspect` with faces lists them); it is saved with the project, and an
+empty list shows them all again. Hidden bodies cast no shadow and block no sky, so by day the
+rooms take the sun and sky from above, as in an architect's cut-away plan. The camera here is
+given, not a viewpoint, so the recipe works whatever viewpoints the project has: straight down
+over the house's middle (a hair off vertical so the picture keeps north up), high enough for the
+whole house and its deck in a 40 degree field.
 
 ## Known traps
 

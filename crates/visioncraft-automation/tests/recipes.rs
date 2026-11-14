@@ -19,7 +19,7 @@ pub fn recipes() -> Vec<Value> {
 #[test]
 fn every_recipe_of_the_guide_runs() {
     let recipes = recipes();
-    assert_eq!(recipes.len(), 18);
+    assert_eq!(recipes.len(), 19);
     for (n, recipe) in recipes.into_iter().enumerate() {
         let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("recipe-{n}"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -98,6 +98,17 @@ fn every_recipe_of_the_guide_runs() {
                 assert_eq!(years.len(), 21, "{report}");
                 assert_eq!(
                     results[4]["result"]["conflicts"][0]["kind"], "wall",
+                    "{report}"
+                );
+            }
+            19 => {
+                // Hidden, not removed: the house model keeps all its bodies.
+                assert_eq!(results[1]["result"], Value::Null, "{report}");
+                assert!(
+                    results[2]["result"]["models"][0]["bodies"]
+                        .as_u64()
+                        .unwrap()
+                        > 20,
                     "{report}"
                 );
             }
