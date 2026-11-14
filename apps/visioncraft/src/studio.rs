@@ -1120,16 +1120,19 @@ fn auto_step(frames: &[f32], current: Quality, can_rise: bool) -> AutoStep {
     if next == current {
         return AutoStep::Keep;
     }
-    // A render scale step within one preset has its own dead band (the tier logic above does
-    // not see that one scale step costs (s1/s0)^2 more pixels): up only when the frames
-    // scaled by that cost still leave 15 % of the budget, down only when 10 % over it.
-    // Otherwise LOW at 55 % and 65 % took turns.
-    if preset_name(&next) == preset_name(&current) {
-        let cost = (next.render_scale / current.render_scale).powi(2);
-        let up = next.render_scale > current.render_scale;
-        if (up && p75 * cost > budget * 0.85) || (!up && p75 < budget * 1.1) {
-            return AutoStep::Keep;
-        }
+    // A step up only when it is predicted to fit: the measured frames scaled by the renderer's
+    // cost of the next quality over this one (preset cost table times pixels), with 15 % of the
+    // budget to spare; a render scale step down within one preset only when 10 % over (a dead
+    // band of its own). Without the prediction Auto rose to HIGH from MEDIUM's 60 fps, missed,
+    // and went back, again and again.
+    let cost =
+        visioncraft_render::relative_cost(&next) / visioncraft_render::relative_cost(&current);
+    let up = cost > 1.0;
+    if up && p75 * cost > budget * 0.85 {
+        return AutoStep::Keep;
+    }
+    if !up && preset_name(&next) == preset_name(&current) && p75 < budget * 1.1 {
+        return AutoStep::Keep;
     }
     AutoStep::To(next, p75 > budget)
 }
@@ -1335,6 +1338,12 @@ mod reach_tests {
             ..Quality::LOW
         };
         assert_eq!(auto_step(&[21.0; 90], low(0.55), true), AutoStep::Keep);
+        // MEDIUM at 60 fps (16.7 ms): HIGH at 80 % costs about 2.1 times as much, 35 ms, over
+        // the budget: stay (the woodland's see-saw).
+        assert_eq!(
+            auto_step(&[16.7; 90], Quality::MEDIUM, true),
+            AutoStep::Keep
+        );
         assert_eq!(auto_step(&[35.0; 90], low(0.65), true), AutoStep::Keep);
         assert!(matches!(
             auto_step(&[40.0; 30], low(0.65), true),
