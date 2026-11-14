@@ -90,7 +90,7 @@ pub(super) fn register(s: &mut Session) {
         spec(
             "view.set",
             "Set View",
-            "Sets exposure, look, sky, clouds, years after planting, haze, wind, the ground plane and the view distance stored with the project; only the fields given change.",
+            "Sets exposure, look, sky, clouds, years after planting, haze, wind, the ground plane, ground clutter and the view distance stored with the project; only the fields given change.",
             vec![
                 param("exposure_ev", T::Number, "Exposure offset in stops; null for automatic exposure."),
                 param("sky", T::Object, "{type: \"physical\"} or {type: \"hdri\", id: string, rotation_deg: number, intensity: number >= 0}.")
@@ -102,6 +102,7 @@ pub(super) fn register(s: &mut Session) {
                     .default(json!({"height": 0, "color": [0.065, 0.12, 0.035]})),
                 param("clouds", T::Object, "The cloud layer over the analytic sky: {kind: \"clear\" | \"cumulus\" (light fair-weather clouds) | \"overcast\", cover: 0..1}; overcast softens shadows and dims the sun.").default(json!({"kind": "cumulus", "cover": 0.35})),
                 param("lights", T::Boolean, "Lamps and lit rooms on (true) or off (false); null: on while the sun is below the horizon at the time shown."),
+                param("clutter", T::Boolean, "Ground clutter: fallen leaves under deciduous trees (most in October and November), stones and twigs on soil and gravel, grass hanging over the lawn's edge. Off at LOW quality whatever this says.").default(json!(true)),
                 param("years", T::Number, "Years after planting to show the plants at (0..60): each grows from its planting age along its species' curve; null shows everything full grown.").unit("years"),
                 param("look", T::String, "neutral, natural or vivid: the picture's exposure, contrast and colour on top of the tone map.").default(json!("natural")),
                 param("view_distance", T::Number, "How far plants, shadows and a clear view reach, as a multiple of the default; 0.25 to 4.")
@@ -209,7 +210,14 @@ fn view_set(project: &mut Project, params: &Value) -> Result<Value, CommandError
     let view = super::merge_update(
         &project.view,
         params,
-        &["view_distance", "look", "clouds", "years", "lights"],
+        &[
+            "view_distance",
+            "look",
+            "clouds",
+            "years",
+            "lights",
+            "clutter",
+        ],
     )?;
     view.validate().map_err(|e| crate::session::bad(&e))?;
     project.view = view;

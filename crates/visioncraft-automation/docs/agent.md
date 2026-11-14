@@ -254,6 +254,12 @@ Lamps and lit rooms follow the sun: on after sunset at the time shown, off befor
 {"lights": true}` or `false` fixes them for the project (the window's Lights button does the same),
 `null` returns to the sun's rule; every picture, from the window, the CLI or `view.render`, uses it.
 
+Ground clutter is on by default: fallen leaves under deciduous trees (their own leaf shapes, most
+in October and November, a few in summer), small stones and twigs on soil and gravel, and grass
+blades hanging over the lawn's edge onto borders and paving. All of it fades out within about
+25 m and is left out at LOW quality. `view.set {"clutter": false}` switches it off for the
+project, `true` back on.
+
 ### 14. Your own models
 
 ```json recipe

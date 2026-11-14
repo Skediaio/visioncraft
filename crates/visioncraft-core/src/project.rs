@@ -158,6 +158,15 @@ pub struct ViewState {
     /// horizon at the time shown (`Project::lights_on`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lights: Option<bool>,
+    /// Ground clutter: fallen leaves under deciduous trees, stones and twigs on soil and gravel,
+    /// grass hanging over the lawn's edge. On by default (not written then); the window still
+    /// leaves it out at LOW quality.
+    #[serde(skip_serializing_if = "is_true")]
+    pub clutter: bool,
+}
+
+fn is_true(v: &bool) -> bool {
+    *v
 }
 
 /// The longest look ahead the years setting allows.
@@ -243,6 +252,7 @@ impl Default for ViewState {
             clouds: Clouds::default(),
             years: None,
             lights: None,
+            clutter: true,
         }
     }
 }
@@ -543,7 +553,7 @@ impl Project {
 
 #[cfg(test)]
 mod lights_tests {
-    use super::Project;
+    use super::{Project, ViewState};
 
     #[test]
     fn lights_follow_the_sun_unless_set() {
@@ -560,5 +570,19 @@ mod lights_tests {
         p.view.lights = Some(true);
         t.hour = 13.0;
         assert!(p.lights_on(&t));
+    }
+
+    #[test]
+    fn clutter_is_on_unless_switched_off_and_only_off_is_written() {
+        let v = ViewState::default();
+        assert!(v.clutter);
+        assert!(!serde_json::to_string(&v).unwrap().contains("clutter"));
+        let off = ViewState {
+            clutter: false,
+            ..v
+        };
+        let json = serde_json::to_string(&off).unwrap();
+        assert!(json.contains("\"clutter\":false"));
+        assert!(!serde_json::from_str::<ViewState>(&json).unwrap().clutter);
     }
 }
