@@ -89,7 +89,7 @@ impl Scene {
     }
 
     pub(super) fn sync_clutter(&mut self, r: &mut Renderer, project: &Project) {
-        let month = project.time.month;
+        let month = u32::from(project.plant_month());
         let on = project.view.clutter && !self.clutter_low;
         // shortcut: only trees placed one by one drop leaves; scattered trees in a planting
         // area do not yet

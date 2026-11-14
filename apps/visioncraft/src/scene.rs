@@ -835,7 +835,11 @@ impl Scene {
                         if clay {
                             CLAY
                         } else if let Some(i) = m {
-                            look_of(&project.materials[i], &mut self.library, project.time.month)
+                            look_of(
+                                &project.materials[i],
+                                &mut self.library,
+                                u32::from(project.plant_month()),
+                            )
                         } else if let Some(c) = model.bodies[f.body as usize].color {
                             Look {
                                 color: c,
@@ -1036,7 +1040,7 @@ impl Scene {
     /// 3D grass on every face whose material is a lawn: tufts of `flora:lawn-tuft` scattered with
     /// the core's `lawn_scatter`, an LOD item that stops drawing at `LAWN_FADE_M`.
     fn sync_lawns(&mut self, r: &mut Renderer, project: &Project) {
-        let month = project.time.month as u8;
+        let month = project.plant_month();
         let mut live: Vec<String> = Vec::new();
         let Some(res) = plants::resolve(project, LAWN_SPECIES) else {
             return;
@@ -1071,7 +1075,7 @@ impl Scene {
                     let m = project.materials.get(m?)?;
                     match &m.kind {
                         SurfaceKind::Lawn3d(l) => {
-                            Some((f, *l, self.blade_color(m, project.time.month)))
+                            Some((f, *l, self.blade_color(m, u32::from(project.plant_month()))))
                         }
                         _ => None,
                     }
@@ -1312,7 +1316,7 @@ impl Scene {
                 Self::drop_groups(r, g.groups);
             }
         }
-        let month = project.time.month as u8;
+        let month = project.plant_month();
         for g in &project.generators {
             let sig = (
                 g.clone(),

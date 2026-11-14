@@ -54,7 +54,7 @@ pub(crate) fn species_label(s: &flora::Species, month: u8) -> String {
 
 pub(crate) fn display_name(cx: &Cx, id: &str) -> String {
     if let Some(s) = id.strip_prefix("flora:").and_then(flora::Species::by_id) {
-        return species_label(s, cx.s.project().time.month as u8);
+        return species_label(s, cx.s.project().plant_month());
     }
     if let Some(c) = cx.s.project().species.iter().find(|c| c.id == id) {
         return c.name.clone();
@@ -116,7 +116,7 @@ impl ObjectsState {
             ui.checkbox(&mut self.evergreen, t::EVERGREEN);
             ui.checkbox(&mut self.in_bloom, t::IN_BLOOM);
         });
-        let month = cx.s.project().time.month as u8;
+        let month = cx.s.project().plant_month();
         let needle = self.search.to_lowercase();
         let mut add: Option<String> = None;
         let mut edit: Option<String> = None;
