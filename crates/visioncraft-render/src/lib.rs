@@ -1620,6 +1620,67 @@ impl Renderer {
         }
     }
 
+    /// Makes and touches a texture of about `mb` megabytes, then lets it go: the GPU memory it
+    /// took stays with the device for the textures a load makes next. Without it, the first use
+    /// of a new texture mid-load (an impostor atlas, a streamed picture) could stall a frame by
+    /// up to 100 ms on an integrated GPU while the driver took and cleared fresh memory.
+    pub fn warm_texture_memory(&mut self, mb: u32) {
+        let max = self.device.limits().max_texture_dimension_2d;
+        let width = 4096.min(max);
+        let height = ((mb as u64) << 20)
+            .div_ceil(width as u64 * 4)
+            .min(max as u64) as u32;
+        if height == 0 {
+            return;
+        }
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("memory warm-up"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&Default::default());
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("memory warm-up"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    // Stored: a discarded clear may never touch the memory.
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        self.queue.submit([encoder.finish()]);
+    }
+
+    /// Makes `count` impostor atlases for `views` views at the quality's resolution ahead of a
+    /// load, and touches them, so bakes during the load do not stall a frame on fresh memory.
+    pub fn reserve_impostors(&mut self, views: u32, count: usize) {
+        self.baker.reserve(
+            &self.device,
+            &self.queue,
+            views.clamp(4, 16),
+            self.quality.impostor_resolution,
+            count,
+        );
+    }
+
     /// `bake_impostor` spread over frames: start it here, then call `impostor_bake_step` once
     /// a frame until it returns the impostor. Each step submits a few views (or the final
     /// dilation and mips), so no frame carries a whole atlas.

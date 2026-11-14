@@ -112,6 +112,13 @@ pub(crate) struct Baker {
     dilate_layout: wgpu::BindGroupLayout,
     dilate: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
+    /// Atlas pairs (albedo, normal, with mips) made ahead (`reserve`), by size: a texture's
+    /// first use mid-load can stall a frame by up to 100 ms on an integrated GPU (the driver
+    /// takes a new memory block), so they are made and touched before the plants come.
+    pool: Vec<(u32, wgpu::Texture, wgpu::Texture)>,
+    /// The bake's working targets (second albedo and normal for the dilation, depth), kept for
+    /// the next bake of the same size.
+    scratch: Option<(u32, wgpu::Texture, wgpu::Texture, wgpu::TextureView)>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -210,47 +217,38 @@ impl Baker {
             dilate_layout,
             dilate,
             sampler,
+            pool: Vec::new(),
+            scratch: None,
         }
     }
 
-    /// The first part of a bake spread over frames: the atlas, its working targets and the
-    /// views' matrices; nothing is drawn yet.
-    pub fn begin(
-        &self,
+    fn atlas(
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        l: &crate::Layouts,
-        bounds: (Vec3, Vec3),
-        views: u32,
-        tile: u32,
-    ) -> BakeState {
-        let (cols, size) = atlas_layout_with(views, tile);
-        let target = |label, format, mips| {
-            device.create_texture(&wgpu::TextureDescriptor {
-                label: Some(label),
-                size: wgpu::Extent3d {
-                    width: size,
-                    height: size,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: mips,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::RENDER_ATTACHMENT,
-                view_formats: &[],
-            })
-        };
-        let mips = crate::texture::mip_count(size, size);
-        let albedo = [
-            target("impostor albedo", ALBEDO, mips),
-            target("impostor albedo", ALBEDO, 1),
-        ];
-        let normal = [
-            target("impostor normal", NORMAL, mips),
-            target("impostor normal", NORMAL, 1),
-        ];
+        size: u32,
+        label: &str,
+        format: wgpu::TextureFormat,
+        mips: u32,
+    ) -> wgpu::Texture {
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d {
+                width: size,
+                height: size,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: mips,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        })
+    }
+
+    fn scratch_set(
+        device: &wgpu::Device,
+        size: u32,
+    ) -> (u32, wgpu::Texture, wgpu::Texture, wgpu::TextureView) {
         let depth = device
             .create_texture(&wgpu::TextureDescriptor {
                 label: Some("impostor depth"),
@@ -267,6 +265,100 @@ impl Baker {
                 view_formats: &[],
             })
             .create_view(&Default::default());
+        (
+            size,
+            Self::atlas(device, size, "impostor albedo scratch", ALBEDO, 1),
+            Self::atlas(device, size, "impostor normal scratch", NORMAL, 1),
+            depth,
+        )
+    }
+
+    /// Makes `count` atlas pairs for `views` views of `tile` pixels, and the working targets,
+    /// and touches each once (a clear), so bakes during a load take them without a stall.
+    /// Replaces a pool of another size.
+    pub fn reserve(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        views: u32,
+        tile: u32,
+        count: usize,
+    ) {
+        let (_, size) = atlas_layout_with(views, tile);
+        self.pool.retain(|p| p.0 == size);
+        if self.scratch.as_ref().is_none_or(|s| s.0 != size) {
+            self.scratch = Some(Self::scratch_set(device, size));
+        }
+        let mips = crate::texture::mip_count(size, size);
+        let mut fresh = Vec::new();
+        while self.pool.len() + fresh.len() < count {
+            fresh.push((
+                size,
+                Self::atlas(device, size, "impostor albedo", ALBEDO, mips),
+                Self::atlas(device, size, "impostor normal", NORMAL, mips),
+            ));
+        }
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let mut touch = |t: &wgpu::Texture| {
+            let view = level0(t);
+            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("impostor reserve"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+        };
+        for (_, a, n) in &fresh {
+            touch(a);
+            touch(n);
+        }
+        if let Some((_, a, n, _)) = &self.scratch {
+            touch(a);
+            touch(n);
+        }
+        queue.submit([encoder.finish()]);
+        self.pool.extend(fresh);
+    }
+
+    /// The first part of a bake spread over frames: the atlas, its working targets and the
+    /// views' matrices; nothing is drawn yet.
+    pub fn begin(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        l: &crate::Layouts,
+        bounds: (Vec3, Vec3),
+        views: u32,
+        tile: u32,
+    ) -> BakeState {
+        let (cols, size) = atlas_layout_with(views, tile);
+        let mips = crate::texture::mip_count(size, size);
+        let (atlas_albedo, atlas_normal) = match self.pool.iter().position(|p| p.0 == size) {
+            Some(i) => {
+                let (_, a, n) = self.pool.swap_remove(i);
+                (a, n)
+            }
+            None => (
+                Self::atlas(device, size, "impostor albedo", ALBEDO, mips),
+                Self::atlas(device, size, "impostor normal", NORMAL, mips),
+            ),
+        };
+        let (_, scratch_albedo, scratch_normal, depth) = match self.scratch.take() {
+            Some(s) if s.0 == size => s,
+            _ => Self::scratch_set(device, size),
+        };
+        let albedo = [atlas_albedo, scratch_albedo];
+        let normal = [atlas_normal, scratch_normal];
         // One view-projection per tile, in dynamic uniform slots.
         let count = views + 1;
         let matrices = device.create_buffer(&wgpu::BufferDescriptor {
@@ -393,7 +485,7 @@ impl Baker {
 
     /// The last part: dilation, mips and the impostor's bindings.
     pub fn finish(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         l: &crate::Layouts,
@@ -407,6 +499,7 @@ impl Baker {
             size,
             albedo,
             normal,
+            depth,
             ..
         } = state;
         let centre = (bounds.0 + bounds.1) * 0.5;
@@ -456,6 +549,9 @@ impl Baker {
         mipmapper.generate(device, &mut encoder, &albedo[0], false);
         mipmapper.generate(device, &mut encoder, &normal[0], true);
         queue.submit([encoder.finish()]);
+        let [albedo0, albedo1] = albedo;
+        let [normal0, normal1] = normal;
+        self.scratch = Some((size, albedo1, normal1, depth));
         let info = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("impostor info"),
             size: 48,
@@ -491,13 +587,13 @@ impl Baker {
                 wgpu::BindGroupEntry {
                     binding: 21,
                     resource: wgpu::BindingResource::TextureView(
-                        &albedo[0].create_view(&Default::default()),
+                        &albedo0.create_view(&Default::default()),
                     ),
                 },
                 wgpu::BindGroupEntry {
                     binding: 22,
                     resource: wgpu::BindingResource::TextureView(
-                        &normal[0].create_view(&Default::default()),
+                        &normal0.create_view(&Default::default()),
                     ),
                 },
                 wgpu::BindGroupEntry {
