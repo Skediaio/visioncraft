@@ -86,6 +86,9 @@ const VERTEX_STRIDE: u64 = 44; // position, normal, face id, uv, wind
 const MATERIAL_SIZE: u64 = 80;
 const CASCADE_SIZE: u64 = 80;
 const AO_RADIUS: f32 = 0.6; // metres
+/// Staging chunk of the upload belt: a streamed step (256 KB a frame) with row padding fits.
+#[cfg(not(target_arch = "wasm32"))]
+const UPLOAD_CHUNK: u64 = 1 << 20;
 const AO_INTENSITY: f32 = 1.5;
 /// Bloom levels (half size down to 1/32).
 /// Four half-size levels (render size / 2 .. / 16): a fifth (/ 32) widened
@@ -822,6 +825,10 @@ pub struct Renderer {
     grid: lights::Grid,
     light_count: usize,
     lights_cpu: Vec<Light>,
+    /// Staging memory for streamed texture uploads, kept mapped and reused (`upload_step`):
+    /// `write_texture` makes and frees a staging buffer per call, which showed as frame spikes.
+    #[cfg(not(target_arch = "wasm32"))]
+    upload_belt: wgpu::util::StagingBelt,
 
     meshes: Vec<Option<GpuMesh>>,
     materials: Vec<Option<GpuMaterial>>,
@@ -1126,6 +1133,8 @@ impl Renderer {
             grid,
             light_count: 0,
             lights_cpu: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            upload_belt: wgpu::util::StagingBelt::new(device.clone(), UPLOAD_CHUNK),
             meshes: Vec::new(),
             materials: Vec::new(),
             textures: Vec::new(),
@@ -1721,28 +1730,81 @@ impl Renderer {
                 .max(1)
                 .min(bh - job.row);
             let start = job.row as usize * row_bytes;
-            self.queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture,
-                    mip_level: i as u32,
-                    origin: wgpu::Origin3d {
-                        x: 0,
-                        y: job.row * 4,
-                        z: 0,
-                    },
-                    aspect: wgpu::TextureAspect::All,
+            let data = &c.levels[i][start..start + rows as usize * row_bytes];
+            let dst = wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: i as u32,
+                origin: wgpu::Origin3d {
+                    x: 0,
+                    y: job.row * 4,
+                    z: 0,
                 },
-                &c.levels[i][start..start + rows as usize * row_bytes],
+                aspect: wgpu::TextureAspect::All,
+            };
+            let size = wgpu::Extent3d {
+                width: bw * 4,
+                height: rows * 4,
+                depth_or_array_layers: 1,
+            };
+            // Streamed parts go through the belt; a whole image at once (`add_compressed`)
+            // and the web, where the browser stages `writeTexture` itself, write directly.
+            #[cfg(not(target_arch = "wasm32"))]
+            if max_bytes != usize::MAX {
+                let padded =
+                    row_bytes.next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize);
+                let total = (padded * rows as usize) as u64;
+                let mut encoder = self.device.create_command_encoder(&Default::default());
+                let slice = self.upload_belt.allocate(
+                    wgpu::BufferSize::new(total)?,
+                    wgpu::BufferSize::new(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as u64)?,
+                );
+                let offset = slice.offset();
+                let buffer = slice.buffer().clone();
+                {
+                    let Ok(mut view) = slice.get_mapped_range_mut() else {
+                        return Some(Err("the upload staging memory is not mapped".into()));
+                    };
+                    for (k, row) in data.chunks_exact(row_bytes).enumerate() {
+                        view.slice(k * padded..k * padded + row_bytes)
+                            .copy_from_slice(row);
+                    }
+                }
+                encoder.copy_buffer_to_texture(
+                    wgpu::TexelCopyBufferInfo {
+                        buffer: &buffer,
+                        layout: wgpu::TexelCopyBufferLayout {
+                            offset,
+                            bytes_per_row: Some(padded as u32),
+                            rows_per_image: Some(rows),
+                        },
+                    },
+                    dst,
+                    size,
+                );
+                self.upload_belt.finish_and_recall_on_submit(&encoder);
+                self.queue.submit([encoder.finish()]);
+            } else {
+                self.queue.write_texture(
+                    dst,
+                    data,
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(bw * block),
+                        rows_per_image: Some(rows),
+                    },
+                    size,
+                );
+            }
+            #[cfg(target_arch = "wasm32")]
+            self.queue.write_texture(
+                dst,
+                data,
                 wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(bw * block),
                     rows_per_image: Some(rows),
                 },
-                wgpu::Extent3d {
-                    width: bw * 4,
-                    height: rows * 4,
-                    depth_or_array_layers: 1,
-                },
+                size,
             );
             budget = budget.saturating_sub(rows as usize * row_bytes);
             job.row += rows;
