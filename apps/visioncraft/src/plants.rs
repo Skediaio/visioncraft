@@ -555,7 +555,7 @@ impl Flora {
                 ..t
             })
         };
-        let Some(mut new) = new else {
+        let Some(new) = new else {
             // Cannot make them (no parameters, or the GPU refused): keep the old ones.
             if let Some(t) = self.textures.get_mut(&id) {
                 t.scale = scale;
