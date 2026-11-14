@@ -444,6 +444,23 @@ fn i_pond() {
     check("i_pond", &px);
 }
 
+/// A beach and the sea: the surf breaking over the shallows, the swash on the sand, the water
+/// ending at the waterline (never over the dry sand above it).
+#[test]
+fn v_sea_beach() {
+    let mut r = renderer(W, H);
+    demo::beach(&mut r);
+    setup(
+        &mut r,
+        demo::beach_camera(W as f32 / H as f32),
+        demo::afternoon_sun(),
+        14.0,
+    );
+    r.set_time(20.0);
+    let px = capture(&mut r, W, H);
+    check("v_sea_beach", &px);
+}
+
 /// The house at night: three point lights and a spot, manual exposure.
 #[test]
 fn j_night_lights() {

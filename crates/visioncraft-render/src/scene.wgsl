@@ -81,7 +81,8 @@ struct Draw {
 @group(3) @binding(3) var linear_depth: texture_2d<f32>;
 // The scene mirrored about the water plane (reflection pass), pre-exposed HDR.
 @group(3) @binding(4) var planar_reflection: texture_2d<f32>;
-// A photo's previous sample, pre-exposed HDR (1x1 outside photos): the bounce light's source.
+// A photo's previous sample, pre-exposed HDR (1x1 outside photos and without screen-space
+// reflections): the bounce light's source; with those, the opaque scene before the glass.
 @group(3) @binding(5) var previous_hdr: texture_2d<f32>;
 
 // MSAA sample count of the pipeline (depth pre-pass coverage mask).
@@ -361,31 +362,35 @@ const AMBIENT_CHROMA: f32 = 0.55;
 // The mean reflectance of a room's surfaces (pale walls and ceiling, a wooden floor).
 const ROOM_REFLECTANCE: f32 = 0.45;
 
-// Irradiance bounced round an enclosed space: the sky and sun that come in through its openings,
-// spread over its surfaces. After the split-flux principle of the daylight factor's
-// internally reflected component (Hopkinson, Longmore and Petherbridge, "An empirical formula
-// for the computation of the indirect component of daylight factor", Transactions of the
-// Illuminating Engineering Society 19(7), 1954): the light let in, times R / (1 - R) for the
-// reflections that follow. The light let in is read from the sky volume a room's width round
-// the point: its open fraction lets in the sky, the share of it that sees the sun lets in
-// sunlight on the floor (a third of a room's surfaces). The open fraction is the room's own
-// average (never through a wall, `room_light`'s a); the direction the light comes from is read
-// from the coarse mips 2 and 3 (about 1.6 and 3.2 m), which do reach through walls, so they are
-// scaled down to that average. Plus the lamps' light passed round the room (`room_light`'s rgb,
-// sky_volume.rs). Nothing outside a volume.
-fn room_bounce(world: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
+// Irradiance bounced round an enclosed space, for a surface that sees only room (`volume_at`'s
+// room light, gathered round the rooms on the CPU, sky_volume.rs): the sky's share per unit of
+// its mean illuminance (half the up- and down-facing irradiance: the sky and the sunlit ground
+// that windows show), and the lamps' and the sun patches' light in lux. The daylight passed
+// round a room takes the colour of its surfaces, not of the sky (`ROOM_CHROMA`, `ROOM_TINT`).
+// Nothing outside a volume.
+fn room_bounce(room: vec4<f32>) -> vec3<f32> {
     if g.sky_vol_size.w < 0.5 {
         return vec3<f32>(0.0);
     }
-    let room = 0.5 * (sky_volume(world, n, 2.0) + sky_volume(world, n, 3.0));
-    let lit = room_light(world, n);
-    let open = lit.a;
-    let l = g.sun_dir.xyz;
-    let towards = 3.0 * dot(room.yzw, l) * min(open / max(room.x, 1e-3), 1.0);
-    let sun_in = clamp(open + towards, 0.0, 1.0) * max(l.y, 0.0) / 3.0;
-    let let_in = sh_irradiance(vec3<f32>(0.0, 1.0, 0.0)) * open + g.sun_light.rgb * sun_in;
-    return let_in * ROOM_REFLECTANCE / (1.0 - ROOM_REFLECTANCE) + lit.rgb * g.time.y;
+    let sky = 0.5 * (sh_irradiance(vec3<f32>(0.0, 1.0, 0.0)) + sh_irradiance(vec3<f32>(0.0, -1.0, 0.0)));
+    let luma = dot(sky, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let daylight = mix(vec3<f32>(luma), sky, ROOM_CHROMA) * max(room.a, 0.0);
+    return (daylight + room.rgb * g.time.y) * ROOM_TINT;
 }
+
+// The room a reflection along `r` meets (radiance): a surface of the room's reflectance facing
+// back along it, lit by the sky it sees from here (`vis`) and the light passed round (`bounce`).
+fn room_seen(vis: vec4<f32>, bounce: vec3<f32>, r: vec3<f32>) -> vec3<f32> {
+    let back = sky_seen(vis, -r);
+    return (sh_irradiance(-r) * back + bounce * (1.0 - back)) * (ROOM_REFLECTANCE / PI);
+}
+
+// How much of the sky's colour the light passed round a room keeps after a few reflections off
+// its surfaces, and the colour those reflections give it: pale walls and a wooden floor and
+// ceiling, a mean reflectance of about (0.50, 0.45, 0.40) over several bounces, relative to the
+// grey `ROOM_REFLECTANCE` the volume is gathered with.
+const ROOM_CHROMA: f32 = 0.3;
+const ROOM_TINT: vec3<f32> = vec3<f32>(1.15, 1.0, 0.86);
 
 // Split-sum environment BRDF, analytic fit: Karis, "Physically Based Shading
 // on Mobile" (Unreal Engine blog, 2014).
@@ -941,9 +946,10 @@ fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, screen_effe
     let r = reflect(-v, n);
     // Under a roof and between walls only the sky the openings show lights a surface; the rest
     // of its hemisphere is the room, lit by what comes in (`room_bounce`).
-    let vis = sky_volume(in.world, n, 0.0);
+    let vol = volume_at(in.world, n);
+    let vis = vol.sky;
     let seen = sky_seen(vis, n);
-    let bounce = room_bounce(in.world, n);
+    let bounce = room_bounce(vol.room);
     var ambient_diffuse = diffuse_color * (sh_irradiance(n) * seen + bounce * (1.0 - seen)) / PI * ao;
     // Photos from their second sample on: the diffuse light arriving from the scene itself,
     // gathered along two cosine-distributed rays per sample against the depth buffer and lit
@@ -961,7 +967,15 @@ fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, screen_effe
     let spec_ao = clamp(pow(nov + ao, exp2(-16.0 * s.roughness - 1.0)) - 1.0 + ao, 0.0, 1.0);
     // A reflection that the sky volume says meets the room shows the room's own light, not sky.
     let seen_r = sky_seen(vis, r);
-    let reflected = environment(r, s.roughness) * seen_r + bounce * (ROOM_REFLECTANCE / PI) * (1.0 - seen_r);
+    var reflected = environment(r, s.roughness) * seen_r + room_seen(vis, bounce, r) * (1.0 - seen_r);
+    // A mirror (drawn after the opaque scene, lib.rs `Material::mirror`) shows what the screen
+    // does, else the sky or the room as its exact ray finds them.
+    if screen_effects && s.metallic >= 0.5 && s.roughness <= 0.1 {
+        let open = ray_open(in.world, r);
+        reflected = environment(r, s.roughness) * open + room_seen(vis, bounce, r) * (1.0 - open);
+        let ssr = screen_reflection(in.world, r);
+        reflected = mix(reflected, ssr.rgb, ssr.a);
+    }
     let ambient_specular = env_brdf_approx(f0, s.roughness, nov) * reflected * spec_ao;
     let local = local_lights(in.world, n, v, nov, diffuse_color, f0, a, foliage);
     let emitted = s.emissive * g.time.y;
@@ -1122,7 +1136,8 @@ fn vs_ground(@builtin(vertex_index) vi: u32) -> Varying {
     let r = ring + dr[k];
     let radius = select(0.0, 0.5 * pow(GROUND_GROWTH, f32(r) - 1.0), r > 0u);
     let angle = f32(seg + ds[k]) * 2.0 * PI / f32(GROUND_SEGMENTS);
-    let world = vec3<f32>(g.camera.x + radius * cos(angle), g.options.w, g.camera.z + radius * sin(angle));
+    let xz = g.camera.xz + radius * vec2<f32>(cos(angle), sin(angle));
+    let world = vec3<f32>(xz.x, ground_height_at(xz), xz.y);
     var out: Varying;
     out.clip = g.view_proj * vec4<f32>(world, 1.0);
     out.clip.z = out.clip.w * GROUND_DEPTH;
@@ -1153,6 +1168,13 @@ fn fs_ground(in: Varying) -> @location(0) vec4<f32> {
     let ndc = vec2<f32>(in.clip.x * g.viewport.z * 2.0 - 1.0, 1.0 - in.clip.y * g.viewport.w * 2.0);
     let p = g.inv_view_proj * vec4<f32>(ndc, 0.5, 1.0);
     let ray = p.xyz / p.w - g.camera.xyz;
+    // Land of a coast higher than the eye (the camera low on the beach, the terrain holding it
+    // up) would show its underside overhead as a ceiling: open sky there instead.
+    // shortcut: far land above eye height is lost with it (a band well under a pixel tall from
+    // a few hundred metres); upgrade by drawing the ground only beyond the terrain.
+    if ray.y > 0.0 && in.world.y > g.camera.y {
+        discard;
+    }
     let flat = vec3<f32>(ray.x, 0.0, ray.z);
     let horizon = fog_inscatter(flat / max(length(flat), 1e-6), 1.0);
     // Over the slope below the horizon that eye height (1.7 m) sees from
@@ -1223,6 +1245,7 @@ struct GlassTerms {
 }
 
 fn glass_terms(in: Varying) -> GlassTerms {
+    let curvature = length(fwidth(normalize(in.normal)));
     let v = normalize(to_eye(in.world));
     var n = normalize(in.normal);
     if dot(n, v) < 0.0 {
@@ -1264,15 +1287,17 @@ fn glass_terms(in: Varying) -> GlassTerms {
     // the room on this side of the pane, lit by what comes in and by its lamps (seen as a pale
     // wall at the pane). Without a volume, the camera in a room (`grade.z`) means the room.
     let r = reflect(-v, n);
-    let vis = sky_volume(in.world, n, 0.0);
-    var seen_r = sky_seen(vis, r);
+    let vol = volume_at(in.world, n);
+    var seen_r = sky_seen(vol.sky, r);
     if g.sky_vol_size.w < 0.5 && g.grade.z > 0.5 {
         seen_r = 0.0;
     }
     let wall = local_lights(in.world, n, v, nov, vec3<f32>(ROOM_REFLECTANCE), vec3<f32>(0.0), 1.0, false);
     let room = ROOM_ALBEDO * sh_irradiance(n) / PI * select(1.0, 0.0, g.sky_vol_size.w > 0.5)
-        + room_bounce(in.world, n) * (ROOM_REFLECTANCE / PI) + wall;
-    let mirrored = environment(r, roughness) * seen_r + room * (1.0 - seen_r);
+        + room_seen(vol.sky, room_bounce(vol.room), r) + wall;
+    // Screen-space reflections only in flat panes: a curved one (a lamp's globe) would sparkle.
+    let ssr = screen_reflection(in.world, r) * (1.0 - smoothstep(0.004, 0.02, curvature));
+    let mirrored = mix(environment(r, roughness) * seen_r + room * (1.0 - seen_r), ssr.rgb, ssr.a);
     var out: GlassTerms;
     out.reflected = fr * mirrored + sun + lamps + (1.0 - fr) * opacity * lit;
     // Clear float glass: about 0.9 at normal incidence through both faces, a slight grey
@@ -1281,6 +1306,85 @@ fn glass_terms(in: Varying) -> GlassTerms {
     out.transmitted = tint * ((1.0 - fr) * (1.0 - opacity));
     return out;
 }
+
+// Screen-space reflection (McGuire and Mara, "Efficient GPU Screen-Space Ray Tracing", JCGT
+// 3(4), 2014): the reflected ray from `world` along `r`, clipped before the near plane, is
+// projected and walked across the screen `g.ssr.y` pixels a step (at most `g.ssr.z` steps), its
+// depth interpolated perspective-correctly (1/w), until it passes behind the depth pre-pass by
+// less than a thickness; the colour there is the opaque scene's before the glass and mirrors
+// (`previous_hdr`, lib.rs `Pass::Mirrors`). Returns that colour and a confidence fading out towards the screen's edges and
+// the ray's reach; 0 where the ray leaves the screen or meets nothing (the sky): the caller's
+// estimate stands there.
+fn screen_reflection(world: vec3<f32>, r: vec3<f32>) -> vec4<f32> {
+    if g.ssr.x < 0.5 {
+        return vec4<f32>(0.0);
+    }
+    let size = vec2<f32>(textureDimensions(linear_depth));
+    let v0 = (g.view * vec4<f32>(world, 1.0)).xyz;
+    let vr = (g.view * vec4<f32>(r, 0.0)).xyz;
+    var reach = SSR_REACH_M;
+    if vr.z > 1e-4 {
+        reach = min(reach, (-0.1 - v0.z) / vr.z);
+    }
+    if reach <= 0.0 {
+        return vec4<f32>(0.0);
+    }
+    let v1 = v0 + vr * reach;
+    let h0 = g.proj * vec4<f32>(v0, 1.0);
+    let h1 = g.proj * vec4<f32>(v1, 1.0);
+    let k0 = 1.0 / h0.w;
+    let k1 = 1.0 / h1.w;
+    let p0 = (h0.xy * k0 * vec2<f32>(0.5, -0.5) + 0.5) * size;
+    let p1 = (h1.xy * k1 * vec2<f32>(0.5, -0.5) + 0.5) * size;
+    let steps = min(max(abs(p1.x - p0.x), abs(p1.y - p0.y)) / g.ssr.y, g.ssr.z);
+    if steps < 1.0 {
+        return vec4<f32>(0.0);
+    }
+    // A pixel's own offset along the first step hides the steps' bands (interleaved gradient
+    // noise: Jimenez, "Next Generation Post Processing in Call of Duty: Advanced Warfare",
+    // SIGGRAPH 2014).
+    let jitter = fract(52.982918 * fract(dot(floor(p0), vec2<f32>(0.06711056, 0.00583715))));
+    var before = 0.0;
+    var hit = -1.0;
+    for (var i = 0.0; i < steps; i += 1.0) {
+        let t = (i + jitter) / steps;
+        let p = mix(p0, p1, t);
+        if any(p < vec2<f32>(0.0)) || any(p >= size) {
+            break;
+        }
+        let depth = -(v0.z * k0 + (v1.z * k1 - v0.z * k0) * t) / mix(k0, k1, t);
+        let scene = textureLoad(linear_depth, vec2<i32>(p), 0).r;
+        if depth > scene + 0.01 {
+            if depth < scene + g.ssr.w + 0.02 * scene {
+                hit = t;
+            }
+            break;
+        }
+        before = t;
+    }
+    if hit < 0.0 {
+        return vec4<f32>(0.0);
+    }
+    // Four halvings between the last step in front and the first behind.
+    var lo = before;
+    for (var i = 0; i < 4; i++) {
+        let t = 0.5 * (lo + hit);
+        let depth = -(v0.z * k0 + (v1.z * k1 - v0.z * k0) * t) / mix(k0, k1, t);
+        if depth > textureLoad(linear_depth, vec2<i32>(mix(p0, p1, t)), 0).r {
+            hit = t;
+        } else {
+            lo = t;
+        }
+    }
+    let p = mix(p0, p1, hit);
+    let edge = min(min(p.x, size.x - p.x), min(p.y, size.y - p.y)) / (0.08 * size.y);
+    let fade = clamp(edge, 0.0, 1.0) * (1.0 - smoothstep(0.7, 1.0, hit));
+    let colour = textureLoad(previous_hdr, vec2<i32>(p), 0).rgb;
+    return vec4<f32>(colour, fade);
+}
+
+// How far a screen-space reflection ray goes (m).
+const SSR_REACH_M: f32 = 40.0;
 
 // Pass 1: what shows through (multiplied into the target).
 @fragment

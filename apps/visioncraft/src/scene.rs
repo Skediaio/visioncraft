@@ -157,8 +157,8 @@ fn look_of(m: &Material, lib: &mut Library, month: u32) -> Look {
             gloss,
             weathering,
         } => Look {
-            relief: if ov.is_some() { 1.0 } else { *relief },
-            gloss: *gloss,
+            relief: ov.as_ref().map_or(*relief, |o| o.relief),
+            gloss: ov.as_ref().map_or(*gloss, |o| o.gloss),
             weathering: *weathering,
             scale_m: ov.as_ref().map_or(*map_scale_m, |o| o.scale_m),
             ..plain
@@ -171,7 +171,8 @@ fn look_of(m: &Material, lib: &mut Library, month: u32) -> Look {
                 color: [c[0] * t[0], c[1] * t[1], c[2] * t[2], c[3]],
                 variation: plain.variation.max(0.6),
                 scale_m: ov.as_ref().map_or(1.0, |o| o.scale_m),
-                relief: if ov.is_some() { 1.0 } else { 0.0 },
+                relief: ov.as_ref().map_or(0.0, |o| o.relief),
+                gloss: ov.as_ref().map_or(0.0, |o| o.gloss),
                 stripes: stripes_packed(l),
                 ..plain
             }

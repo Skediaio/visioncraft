@@ -366,9 +366,9 @@ and so does the CLI: `visioncraft-cli render garden.visioncraft --viewpoint Pond
 ```json recipe
 {"intent": "a house above a beach, the sea to the horizon", "steps": [
   {"id": "terrain.create", "params": {"origin": [-60, -40], "width_m": 120, "depth_m": 120, "cell_m": 1, "base_material": "lawn"}},
-  {"id": "water.set_sea", "params": {"level": -2, "sea_state": 3}},
+  {"id": "water.set_sea", "params": {"level": -2, "sea_state": 3, "coast": [[-70, 35], [70, 35]]}},
   {"id": "terrain.shore", "params": {"points": [[-70, 10], [70, 10]], "top_m": 2, "bank_m": 5, "berm_m": 0.8, "beach_m": 20, "shelf_m": 40, "depth_m": 5, "material": "sand"}},
-  {"id": "view.set", "params": {"ground": {"height": -10, "color": [0.2, 0.18, 0.14]}}},
+  {"id": "view.set", "params": {"ground": {"height": 0, "color": [0.2, 0.18, 0.14]}}},
   {"id": "shape.add_extrusion", "params": {"name": "House", "outline": [[-6, -8], [6, -8], [6, 0], [-6, 0]], "height": 3.2, "roof": {"kind": "flat", "parapet_m": 0}}},
   {"id": "planting.add_area", "params": {"name": "Grass to the water", "asset_palette": [{"asset": "flora:festuca-glauca", "weight": 1}], "outline": [[-20, 5], [20, 5], [20, 60], [-20, 60]], "density_per_m2": 0.3}},
   {"id": "query.ground_height", "params": {"x": 0, "z": 30}},
@@ -380,9 +380,12 @@ and so does the CLI: `visioncraft-cli render garden.visioncraft --viewpoint Pond
 ```
 
 `water.set_sea` gives the project a sea level: water at `level` out to the horizon, cut by the
-terrain and by the endless ground where they rise above it (here the ground is set under the
-water, so the sea runs on past the terrain's edge; with the ground above it, the sea shows only
-over the terrain). Only the fields given change; `water.remove_sea` takes it away.
+terrain and by the endless ground where they rise above it. `coast` makes a mainland: a line
+to the horizon (the sea to its right, its first and last stretches running on without end) that
+the endless ground follows, land at its own height on the left, under the water on the right,
+so the land runs on behind the house and the sea in front of it, both to the horizon (here
+along the waterline the shore makes). Without a coast the endless ground lies wholly above the
+water (the sea shows only over the terrain) or wholly below it (the sea runs on everywhere). Only the fields given change; `water.remove_sea` takes it away.
 `sea_state` is the WMO code, 0 (glassy) to 6 (very rough); `document.inspect` reports `sea`
 with the `wave_height_m` and `peak_wavelength_m` it means. `kind` is `sea`, `lake` (shorter,
 steeper waves; still water freezes in a snowy winter, the sea never does) or `river` (with
@@ -395,8 +398,8 @@ the bed falling to `depth_m` over `shelf_m`, heights measured from the water lev
 behind the line keeps its ground. Plantings and objects are not placed where the water covers
 the ground (the grass stops at the waterline: `document.inspect` counts what stands), and in
 the window walking stops where the water is deeper than 0.6 m. `project.load_example {"name":
-"coast"}` puts the furnished house of the `beach-house` example on a bluff built the same way,
-its deck steps leading down a path to the beach.
+"coast"}` puts the furnished house of the `beach-house` example on a mainland beach built the
+same way, its deck steps leading to the sand, with a coastal garden round it.
 
 ### 19. A furnished plan from above: hide the roof
 

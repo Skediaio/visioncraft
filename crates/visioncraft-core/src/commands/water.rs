@@ -26,12 +26,13 @@ pub(super) fn register(s: &mut Session) {
                     .default(json!("sea")),
                 param("sea_state", T::Number, "WMO sea state 0 (calm, glassy) to 6 (very rough): 1 rippled (0-0.1 m waves), 2 smooth (0.1-0.5 m), 3 slight (0.5-1.25 m), 4 moderate (1.25-2.5 m), 5 rough (2.5-4 m). A lake stops at 1 m, a river at 0.3 m.").default(json!(2)),
                 param("direction_deg", T::Number, "Direction the waves travel towards, clockwise from north; null: the wind's (view.set wind_direction_deg).").unit("deg"),
-                param("color", T::Array, "Linear RGB of deep water, each 0..1.").default(json!([0.01, 0.05, 0.07])),
-                param("clarity", T::Number, "0 (murky) to 1 (clear: the bed shows through metres of water).").default(json!(0.6)),
+                param("color", T::Array, "Linear RGB of deep water, each 0..1.").default(json!([0.004, 0.026, 0.075])),
+                param("clarity", T::Number, "0 (murky) to 1 (clear: the bed shows through metres of water).").default(json!(0.75)),
                 param("flow_deg", T::Number, "River: direction the water runs towards, clockwise from north.").unit("deg").default(json!(0)),
                 param("flow_speed", T::Number, "River: surface speed, 0..10.").unit("m/s").default(json!(0)),
                 param("foam", T::Number, "Foam on crests and along the shore, 0..1.").default(json!(0.5)),
                 param("outline", T::Outline, "Limits the water to this polygon ([x, z], 3..64 points); [] for water to the horizon.").default(json!([])),
+                param("coast", T::Outline, "A coastline to the horizon ([x, z], 2..16 points, the sea to its right as with terrain.shore; the first and last stretches run on without end): the endless ground stays land, at its own height, on the left and drops under the water on the right, so a mainland coast reaches the horizon. Give the endless ground (view.set ground) a height above the level. [] for none.").default(json!([])),
             ],
             "null",
             json!({"level": 0, "sea_state": 3}),
@@ -74,8 +75,8 @@ pub(super) fn register(s: &mut Session) {
 
 fn set_sea(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
     let base = project.sea.clone().unwrap_or_default();
-    // `direction_deg` is not written while it follows the wind, `outline` while empty.
-    let sea: Sea = super::merge_update(&base, params, &["direction_deg", "outline"])?;
+    // `direction_deg` is not written while it follows the wind, `outline` and `coast` while empty.
+    let sea: Sea = super::merge_update(&base, params, &["direction_deg", "outline", "coast"])?;
     sea.validate().map_err(|e| bad(&e))?;
     project.sea = Some(sea);
     Ok(Value::Null)
