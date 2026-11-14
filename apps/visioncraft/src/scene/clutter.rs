@@ -90,10 +90,19 @@ impl Scene {
 
     pub(super) fn sync_clutter(&mut self, r: &mut Renderer, project: &Project) {
         let month = u32::from(project.plant_month());
-        let on = project.view.clutter && !self.clutter_low;
-        // shortcut: only trees placed one by one drop leaves; scattered trees in a planting
-        // area do not yet
-        let trees: Vec<(String, flora::PlantParams, Option<String>, [f32; 3])> =
+        // Fallen leaves, stones and edge grass lie under the snow.
+        let on = project.view.clutter && !self.clutter_low && project.view.snow < SNOW_BURIES;
+        // Deciduous trees drop leaves round their crowns: those placed one by one, and those a
+        // planting area, line, brush or cluster scatters (their placements, as drawn).
+        let deciduous = |asset: &str| {
+            let g = visioncraft_core::growth::growth_of(asset, None);
+            matches!(g.grower, visioncraft_core::growth::Grower::Tree)
+                .then(|| plants::resolve(project, asset))
+                .flatten()
+                .filter(|r| r.params.deciduous)
+                .map(|r| (g, r))
+        };
+        let mut trees: Vec<(String, flora::PlantParams, Option<String>, [f32; 3])> =
             tree_crowns(project)
                 .into_iter()
                 .filter(|(s, _)| on && project.layer_visible(&s.layer))
@@ -109,6 +118,30 @@ impl Scene {
                     })
                 })
                 .collect();
+        for g in project.generators.iter().filter(|g| {
+            on && !matches!(g, visioncraft_core::Generator::Single(_))
+                && project.layer_visible(g.layer())
+                && g.assets().into_iter().any(|a| deciduous(a).is_some())
+        }) {
+            for p in self.evaluate_generator(g).placements {
+                let Some((gr, res)) = deciduous(&p.asset) else {
+                    continue;
+                };
+                let width = match project.view.years {
+                    Some(y) => {
+                        let planted = g.planted_age_years().unwrap_or(gr.planted_age_years);
+                        gr.mature_width_m * gr.size(planted + y).width
+                    }
+                    None => gr.mature_width_m,
+                };
+                trees.push((
+                    format!("{CLUTTER_PREFIX}leaves:{}", p.asset),
+                    litter(&res.params),
+                    res.scan_id,
+                    [p.position[0], p.position[2], width * p.scale * 0.5],
+                ));
+            }
+        }
         let mut owners: Vec<&String> = self.owners.keys().collect();
         owners.sort();
         let mut grounds: Vec<(String, Vec<(usize, Ground)>)> = Vec::new();
