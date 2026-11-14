@@ -154,6 +154,10 @@ pub struct ViewState {
     /// at its full size, as projects did before growth existed (the default).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub years: Option<f32>,
+    /// Lamps and lit rooms on or off; `None` (the default): on while the sun is below the
+    /// horizon at the time shown (`Project::lights_on`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lights: Option<bool>,
 }
 
 /// The longest look ahead the years setting allows.
@@ -238,6 +242,7 @@ impl Default for ViewState {
             look: Look::Natural,
             clouds: Clouds::default(),
             years: None,
+            lights: None,
         }
     }
 }
@@ -524,5 +529,36 @@ mod tests {
                 known: FORMAT_VERSION
             })
         );
+    }
+}
+
+impl Project {
+    /// Whether lamps and lit rooms are on at `time`: the view's setting, else after sunset.
+    pub fn lights_on(&self, time: &SunTime) -> bool {
+        self.view
+            .lights
+            .unwrap_or_else(|| crate::sun::sun_position(&self.site, time).elevation_deg < 0.0)
+    }
+}
+
+#[cfg(test)]
+mod lights_tests {
+    use super::Project;
+
+    #[test]
+    fn lights_follow_the_sun_unless_set() {
+        let mut p = Project::default();
+        let mut t = p.time;
+        t.month = 6;
+        t.day = 21;
+        t.hour = 13.0;
+        assert!(!p.lights_on(&t));
+        t.hour = 23.5;
+        assert!(p.lights_on(&t));
+        p.view.lights = Some(false);
+        assert!(!p.lights_on(&t));
+        p.view.lights = Some(true);
+        t.hour = 13.0;
+        assert!(p.lights_on(&t));
     }
 }

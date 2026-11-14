@@ -250,6 +250,10 @@ with `ui.set {"quality": "auto" | "low" | "medium" | "high" | "ultra", "textures
 penumbrae and smooth edges (seconds to minutes); `aperture_m` (lens radius, e.g. 0.02) and
 `focus_m` add depth of field.
 
+Lamps and lit rooms follow the sun: on after sunset at the time shown, off before. `view.set
+{"lights": true}` or `false` fixes them for the project (the window's Lights button does the same),
+`null` returns to the sun's rule; every picture, from the window, the CLI or `view.render`, uses it.
+
 ### 14. Your own models
 
 ```json recipe
