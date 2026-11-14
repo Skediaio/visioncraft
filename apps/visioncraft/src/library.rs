@@ -927,8 +927,16 @@ impl Library {
     #[cfg(target_arch = "wasm32")]
     fn publish_stats(&self, r: &Renderer) {
         let s = &self.store.stats;
+        // What the texture memory is, by kind (the browser runs read it to find a peak).
+        let breakdown: Vec<String> = r
+            .stats()
+            .texture_breakdown
+            .iter()
+            .map(|(k, b)| format!("\"{k}\":{b}"))
+            .collect();
         let json = format!(
-            "{{\"texture_bytes\":{},\"peak_texture_bytes\":{},\"uploads\":{},\"worst_upload_ms\":{:.2},\"total_upload_ms\":{:.1},\"evictions\":{},\"queued\":{},\"models\":{},\"worst_pump_ms\":{:.2}}}",
+            "{{\"breakdown\":{{{}}},\"texture_bytes\":{},\"peak_texture_bytes\":{},\"uploads\":{},\"worst_upload_ms\":{:.2},\"total_upload_ms\":{:.1},\"evictions\":{},\"queued\":{},\"models\":{},\"worst_pump_ms\":{:.2}}}",
+            breakdown.join(","),
             r.stats().texture_bytes,
             s.peak_texture_bytes,
             s.uploads,
