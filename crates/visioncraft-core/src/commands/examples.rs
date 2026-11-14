@@ -64,7 +64,7 @@ pub(super) fn register(s: &mut Session) {
         spec(
             "project.load_example",
             "Open Example",
-            "Replaces the project with an example built from commands: `garden`, a 20 by 30 m plot with a house block, terrace, lawn, border, path, carved pond, hornbeam hedge, three trees, path lights, a bollard and six viewpoints; `estate`, a 100 by 60 m plot round an imported 3DCraft villa with two large lawns, a brushed woodland, a border, a pond in the terrain, path lights, a planting on a hidden layer and three viewpoints; `beach-house`, a furnished single-storey beach house imported from 3DCraft (walls, glass, doors, kitchen, bathrooms, deck, carport) on sand, with library materials per element, catalogue furniture, interior downlights and ten viewpoints inside and out, one at dusk; `coast`, the same furnished house on the mainland coast of southern California, 1.8 m above the sea with 25 m of beach from its deck steps to the surf, its glass wall to the sea, the land rising inland to dunes and pines and a headland in the far west, and a coastal garden round it on the land side and the flanks (a gravel drive between Italian cypresses, an entrance court with an olive, a hedged garden room with a lawn and layered borders in drifts, a gravel garden of palms, grasses and succulents, dune grass and ice plant towards the beach, pots on the deck, path lights) and fifteen viewpoints: the beach, the deck, the living room, a drone along the coast, golden hour, dusk, the water, the surf, the garden in summer, in winter and after 10 years.",
+            "Replaces the project with an example built from commands: `garden`, a 20 by 30 m plot with a house block, terrace, lawn, border, path, carved pond, hornbeam hedge, three trees, path lights, a bollard and six viewpoints; `estate`, a 100 by 60 m plot round an imported 3DCraft villa with two large lawns, a brushed woodland, a border, a pond in the terrain, path lights, a planting on a hidden layer and three viewpoints; `beach-house`, a furnished single-storey beach house imported from 3DCraft (walls, glass, doors, kitchen, bathrooms, deck, carport) on sand, with library materials per element, catalogue furniture, interior downlights and ten viewpoints inside and out, one at dusk; `coast`, the same furnished house on the mainland coast of southern California, 1.8 m above the sea with 20 m of beach from its deck to the waterline, its glass wall to the sea, the land rising inland to dunes of tussock grass and scrub with pines and olives in groups and a headland in the far west, and a coastal garden round it (a gravel drive between Italian cypresses, an entrance court on the front door's axis with bay standards and an olive, a garden room off the living side with a lawn, yew hedges and deep layered borders in drifts, a gravel garden of palms, pines, grasses and succulents, dune grass and ice plant towards the beach, pots on the deck, path lights) and fifteen viewpoints: the beach, the deck, the living room, a drone along the coast, golden hour, dusk, the water, the surf, the garden in summer, in winter and after 10 years.",
             vec![param("name", T::String, "The example: garden, estate, beach-house or coast.").required()],
             "{name, steps}",
             json!({"name": "garden"}),
@@ -242,16 +242,21 @@ mod tests {
         let h = |x, z| t.height_at(x, z).unwrap();
         // The house stands on its level plot 1.8 m above the sea.
         for (x, z) in [(-6.6, -10.5), (24.6, -12.3), (-0.6, 7.65), (24.6, 6.6)] {
-            assert!(h(x, z).abs() < 0.05, "ground at the house: {}", h(x, z));
+            assert!(
+                h(x, z).abs() < 0.05,
+                "ground at the house at {x}, {z}: {}",
+                h(x, z)
+            );
         }
         assert!((sea.level + 1.8).abs() < 1e-4);
-        // Sand from the deck steps down to the waterline 20 to 30 m beyond the deck (z 6.6).
+        // Sand from the deck steps down to the waterline 18 to 22 m beyond the deck (z 6.6), so the
+        // sea fills the view from the house; the swash runs up to about 15 m from it.
         let dry = |z| h(8.0, z) > sea.level;
         assert!(dry(20.0) && h(8.0, 20.0) < sea.level + 1.2);
-        let waterline = (66..=80).map(|z| z as f32 * 0.5).find(|z| !dry(*z));
+        let waterline = (40..=80).map(|z| z as f32 * 0.5).find(|z| !dry(*z));
         let waterline = waterline.expect("the waterline in front of the house");
         assert!(
-            (26.6..=36.6).contains(&waterline),
+            (24.6..=28.6).contains(&waterline),
             "waterline at z {waterline}"
         );
         assert!(h(8.0, 200.0) < sea.level - 3.0, "the bed deepens offshore");
@@ -281,7 +286,7 @@ mod tests {
                 "Garden room lawn",
                 "Garden path",
                 "Beach walk",
-                "West gravel garden"
+                "East gravel garden"
             ]
         );
         assert_eq!(p.assignments.len(), 46 + names.len());
