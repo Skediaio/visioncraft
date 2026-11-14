@@ -13,8 +13,8 @@
 // own layout, bindings 13-17, so it never collides with the material's).
 
 struct TerrainLayer {
-    color: vec4<f32>,  // linear base colour factor
-    params: vec4<f32>, // x roughness, y 1 / scale (m), z macro variation
+    color: vec4<f32>,  // rgb linear base colour factor, a added to the roughness
+    params: vec4<f32>, // x roughness, y 1 / scale (m), z macro variation, w normal map strength
 }
 
 struct Terrain {
@@ -78,12 +78,13 @@ fn terrain_sample(tex: texture_2d_array<f32>, l: Lookup, layer: i32) -> vec4<f32
 }
 
 // Whiteout-blended triplanar normal (as triplanar_normal) from the array.
-fn terrain_normal_sample(l: Lookup, n: vec3<f32>, layer: i32) -> vec3<f32> {
+fn terrain_normal_sample(l: Lookup, n: vec3<f32>, layer: i32, relief: f32) -> vec3<f32> {
     var sum = vec3<f32>(0.0);
     for (var i = 0; i < 3; i++) {
         if l.weight[i] > 0.0 {
             // X and Y with Z rebuilt (scene.wgsl decode_normal): a BC5 layer map keeps no Z.
-            let tn = decode_normal(textureSampleGrad(terrain_normal, terrain_smp, l.uv[i], layer, l.dx[i], l.dy[i]));
+            var tn = decode_normal(textureSampleGrad(terrain_normal, terrain_smp, l.uv[i], layer, l.dx[i], l.dy[i]));
+            tn = vec3<f32>(tn.xy * relief, tn.z);
             let t = l.t[i];
             let b = l.b[i];
             let axis = cross(t, b);
@@ -132,8 +133,8 @@ fn terrain_surface(in: TerrainVarying) -> Surface {
             if b > 0.0 {
                 let layer = terrain.layers[i];
                 base += terrain_sample(terrain_base, lookups[i], i).rgb * layer.color.rgb * b;
-                nsum += terrain_normal_sample(lookups[i], n, i) * b;
-                rough += layer.params.x * orm[i].g * b;
+                nsum += terrain_normal_sample(lookups[i], n, i, layer.params.w) * b;
+                rough += (layer.params.x * orm[i].g + layer.color.a) * b;
                 metal += orm[i].b * b;
                 ao += orm[i].r * b;
                 variation += layer.params.z * b;

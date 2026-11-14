@@ -1122,7 +1122,8 @@ fn vs_ground(@builtin(vertex_index) vi: u32) -> Varying {
     let r = ring + dr[k];
     let radius = select(0.0, 0.5 * pow(GROUND_GROWTH, f32(r) - 1.0), r > 0u);
     let angle = f32(seg + ds[k]) * 2.0 * PI / f32(GROUND_SEGMENTS);
-    let world = vec3<f32>(g.camera.x + radius * cos(angle), g.options.w, g.camera.z + radius * sin(angle));
+    let xz = g.camera.xz + radius * vec2<f32>(cos(angle), sin(angle));
+    let world = vec3<f32>(xz.x, ground_height_at(xz), xz.y);
     var out: Varying;
     out.clip = g.view_proj * vec4<f32>(world, 1.0);
     out.clip.z = out.clip.w * GROUND_DEPTH;
@@ -1153,6 +1154,13 @@ fn fs_ground(in: Varying) -> @location(0) vec4<f32> {
     let ndc = vec2<f32>(in.clip.x * g.viewport.z * 2.0 - 1.0, 1.0 - in.clip.y * g.viewport.w * 2.0);
     let p = g.inv_view_proj * vec4<f32>(ndc, 0.5, 1.0);
     let ray = p.xyz / p.w - g.camera.xyz;
+    // Land of a coast higher than the eye (the camera low on the beach, the terrain holding it
+    // up) would show its underside overhead as a ceiling: open sky there instead.
+    // shortcut: far land above eye height is lost with it (a band well under a pixel tall from
+    // a few hundred metres); upgrade by drawing the ground only beyond the terrain.
+    if ray.y > 0.0 && in.world.y > g.camera.y {
+        discard;
+    }
     let flat = vec3<f32>(ray.x, 0.0, ray.z);
     let horizon = fog_inscatter(flat / max(length(flat), 1e-6), 1.0);
     // Over the slope below the horizon that eye height (1.7 m) sees from
