@@ -82,7 +82,8 @@ fn terrain_normal_sample(l: Lookup, n: vec3<f32>, layer: i32) -> vec3<f32> {
     var sum = vec3<f32>(0.0);
     for (var i = 0; i < 3; i++) {
         if l.weight[i] > 0.0 {
-            let tn = textureSampleGrad(terrain_normal, terrain_smp, l.uv[i], layer, l.dx[i], l.dy[i]).xyz * 2.0 - 1.0;
+            // X and Y with Z rebuilt (scene.wgsl decode_normal): a BC5 layer map keeps no Z.
+            let tn = decode_normal(textureSampleGrad(terrain_normal, terrain_smp, l.uv[i], layer, l.dx[i], l.dy[i]));
             let t = l.t[i];
             let b = l.b[i];
             let axis = cross(t, b);

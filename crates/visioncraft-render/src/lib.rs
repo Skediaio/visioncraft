@@ -808,6 +808,8 @@ pub struct Renderer {
     atmosphere: Atmosphere,
     ground: Option<Ground>,
     ground_material: GpuMaterial,
+    /// A scene material the ground is drawn with (`set_ground_material`).
+    ground_look: Option<MaterialId>,
     ground_slot: u32,
     terrain: terrain::TerrainGpu,
     baker: impostor::Baker,
@@ -1106,6 +1108,7 @@ impl Renderer {
             ground_kcd: Vec3::ZERO,
             atmosphere: Atmosphere::default(),
             ground: None,
+            ground_look: None,
             ground_material: GpuMaterial {
                 buffer: ground_buffer,
                 bind: ground_bind,
@@ -1353,6 +1356,12 @@ impl Renderer {
             self.ground_material.cpu = material;
         }
         self.update_ambient(true);
+    }
+
+    /// Draws the endless ground with `material` (its maps, scale and variation) instead of the
+    /// plain colour of `set_ground`, which still lights the environment below the horizon.
+    pub fn set_ground_material(&mut self, material: Option<MaterialId>) {
+        self.ground_look = material;
     }
 
     /// The sky's source of light: the physical model (default), the
@@ -2155,8 +2164,9 @@ impl Renderer {
             slots[i * SLOT as usize..i * SLOT as usize + b.0.len()].copy_from_slice(&b.0);
         }
         self.queue.write_buffer(&self.cascade_buffer, 0, &slots);
-        self.terrain
-            .write(&self.queue, self.ground.map(|g| g.color));
+        // A ground drawn in the terrain's own base material needs no blend band at the edge.
+        let blend = self.ground.filter(|_| self.ground_look.is_none());
+        self.terrain.write(&self.queue, blend.map(|g| g.color));
         // Settled impostors draw whole (fade 1); a buffer regrowth in
         // `alloc_slot` writes plain mesh slots, so every frame.
         for item in self.items.iter().flatten() {
@@ -2532,7 +2542,13 @@ impl Renderer {
         const RINGS: u32 = 48;
         const SEGMENTS: u32 = 64;
         pass.set_pipeline(pipeline);
-        pass.set_bind_group(1, &self.ground_material.bind, &[]);
+        // A material of the scene (the terrain's base layer) when one is set: the ground then
+        // looks like it, texture, tiling phase and variation alike, so their border vanishes.
+        let bind = self
+            .ground_look
+            .and_then(|id| self.materials.get(id.0 as usize)?.as_ref())
+            .map_or(&self.ground_material.bind, |m| &m.bind);
+        pass.set_bind_group(1, bind, &[]);
         pass.set_bind_group(
             2,
             &self.draw_bind,
