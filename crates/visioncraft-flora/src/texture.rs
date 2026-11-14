@@ -782,8 +782,10 @@ fn clump(cv: &mut Canvas, p: &PlantParams, rng: &mut Rng, tint: f32) {
         let rad = r * 0.3 * (1.0 - f).sqrt();
         let q = (c.0 + sin(a) * rad, c.1 - cos(a) * rad);
         // Later (inner, top) twigs a little lighter, outer ones slightly darker: a lit dome,
-        // gently, or a card facing the sky reads as one pale disc.
-        let shade = 0.88 + 0.1 * f + 0.06 * (-cos(a));
+        // gently, or a card facing the sky reads as one pale disc. A clump stands for a
+        // volume of leaves that shade each other, drawn on one flat card: a fifth darker
+        // than single leaves, so far crowns do not show pale patches where cards face the sun.
+        let shade = 0.72 + 0.08 * f + 0.05 * (-cos(a));
         let len = r * (0.45 + 0.25 * rng.f());
         let depth = if len / leaf_px > 5.0 { 1 } else { 0 };
         twig(
