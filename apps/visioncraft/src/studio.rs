@@ -1097,14 +1097,12 @@ impl Studio {
         let q = self.current_quality();
         // Textures follow the quality unless the person chose a tier.
         // A still waiting for its textures takes the highest tier at its own resolution.
-        let tier = if let Some(h) = self.still_textures {
-            // In the browser the 4k tier of a close-up's materials took over 600 MB and did not
-            // arrive within the still's wait: up to QHD there, 2k is what the pixels show.
-            if cfg!(target_arch = "wasm32") && h <= 1440 {
-                "2k"
-            } else {
-                "4k"
-            }
+        // A still takes the highest tier natively. Not in the browser: there an HD photo's step
+        // up (two dozen maps, decoded and compressed by the page's worker) had not arrived after
+        // the 20 s wait on an integrated GPU and took texture memory from 75 to 576 MB with the
+        // photo's own targets; it keeps the live tier.
+        let tier = if self.still_textures.is_some() && cfg!(not(target_arch = "wasm32")) {
+            "4k"
         } else {
             self.textures.unwrap_or(match preset_name(&q) {
                 "ultra" => "4k",

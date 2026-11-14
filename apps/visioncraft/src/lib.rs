@@ -447,7 +447,19 @@ impl App {
         self.studio.prepare();
         let (view, proj, eye) = self.studio.camera.matrices(w as f32 / h as f32);
         if let Some(samples) = self.photo_next.take() {
-            match self.studio.renderer.photo_begin(w, h, Quality::ULTRA) {
+            // A photo has targets of its own beside the live view's. In the browser ULTRA's
+            // 4096 shadow maps (five layers of 64 MB) took the page from 75 to 610 MB on an
+            // integrated GPU: there the photo's shadows are 2048 (its jittered samples soften
+            // them anyway).
+            let quality = if cfg!(target_arch = "wasm32") {
+                Quality {
+                    shadow_resolution: 2048,
+                    ..Quality::ULTRA
+                }
+            } else {
+                Quality::ULTRA
+            };
+            match self.studio.renderer.photo_begin(w, h, quality) {
                 Ok(photo) => {
                     self.photo = Some(PhotoJob {
                         photo,

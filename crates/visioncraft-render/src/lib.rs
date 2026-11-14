@@ -2791,7 +2791,8 @@ impl Renderer {
                 .sum::<u64>()
             + hdri;
         let shadow =
-            u64::from(self.quality.shadow_resolution).pow(2) * 4 * u64::from(self.quality.cascades);
+            // The cascades and the snow cover map.
+            u64::from(self.quality.shadow_resolution).pow(2) * 4 * u64::from(self.quality.cascades + 1);
         let texture_breakdown = vec![
             (
                 "textures",
