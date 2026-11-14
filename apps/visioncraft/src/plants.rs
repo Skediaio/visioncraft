@@ -156,7 +156,7 @@ fn make_tex(r: &mut Renderer, params: &flora::PlantParams, scale: usize) -> Opti
 }
 
 /// Mean linear RGB of the texels with alpha over one half (sRGB RGBA8 input).
-fn opaque_mean(rgba: &[u8]) -> [f32; 3] {
+pub(crate) fn opaque_mean(rgba: &[u8]) -> [f32; 3] {
     let lin = |c: u8| {
         let c = f32::from(c) / 255.0;
         if c <= 0.04045 {
@@ -205,7 +205,13 @@ pub struct Flora {
     tex_params: HashMap<String, flora::PlantParams>,
     /// Every plant material made, with what it was made from, to point it at new textures.
     plant_mats: Vec<(String, MaterialId, flora::Material, [f32; 3])>,
+    /// The species whose textures are being made off the frame (a thread, the web worker),
+    /// and where the answer lands: `None` inside when they could not be made there.
+    from_worker: Option<(String, Answer)>,
 }
+
+type Answer =
+    std::sync::Arc<std::sync::Mutex<Option<Option<crate::texture_worker::PlantCompressed>>>>;
 
 impl Flora {
     pub fn ready(&self, id: &str, class: u32) -> bool {
@@ -469,6 +475,73 @@ impl Flora {
         true
     }
 
+    /// A species' textures made off the frame: `Some(None)` while that runs, `Some(Some(_))`
+    /// when they are uploaded, `None` when they must be made here.
+    fn worker_tex(
+        &mut self,
+        r: &mut Renderer,
+        id: &str,
+        params: &flora::PlantParams,
+        scale: usize,
+    ) -> Option<Option<Tex>> {
+        if let Some((key, slot)) = &self.from_worker
+            && key == id
+        {
+            let Some(answer) = slot.lock().ok()?.take() else {
+                return Some(None);
+            };
+            self.from_worker = None;
+            let (leaf_mean, images) = answer?;
+            let mut ids = Vec::new();
+            for (c, repeat) in images {
+                match r.add_compressed(c, repeat) {
+                    Ok(t) => ids.push(t),
+                    Err(_) => {
+                        ids.into_iter().for_each(|t| r.remove_texture(t));
+                        return None;
+                    }
+                }
+            }
+            let (atlas, atlas_normal, bark, bark_normal) = match ids[..] {
+                [a, n, b, bn] => (a, Some(n), b, bn),
+                [a, b, bn] => (a, None, b, bn),
+                _ => {
+                    ids.into_iter().for_each(|t| r.remove_texture(t));
+                    return None;
+                }
+            };
+            return Some(Some(Tex {
+                scale,
+                atlas,
+                atlas_normal,
+                bark,
+                bark_normal,
+                leaf_mean,
+            }));
+        }
+        let slot = Answer::default();
+        let (answer, params) = (slot.clone(), params.clone());
+        #[cfg(target_arch = "wasm32")]
+        wasm_bindgen_futures::spawn_local(async move {
+            let got = crate::texture_worker::plant(&params, scale).await;
+            if let Ok(mut a) = answer.lock() {
+                *a = Some(got);
+            }
+        });
+        #[cfg(not(target_arch = "wasm32"))]
+        std::thread::Builder::new()
+            .name("plant textures".into())
+            .spawn(move || {
+                let got = crate::texture_worker::plant_compressed(&params, scale);
+                if let Ok(mut a) = answer.lock() {
+                    *a = Some(got);
+                }
+            })
+            .ok()?;
+        self.from_worker = Some((id.to_string(), slot));
+        Some(None)
+    }
+
     /// How many species (with their seasons) are generated and kept.
     pub fn kept(&self) -> usize {
         self.classes.len()
@@ -489,8 +562,21 @@ impl Flora {
         let (id, class, month) = (w.id.clone(), w.class, w.month);
         if !self.textures.contains_key(&id) {
             let scale = self.leaf_scale.max(1);
-            let tex = make_tex(r, &w.params, scale);
-            self.tex_params.insert(id.clone(), w.params.clone());
+            let params = w.params.clone();
+            // A thread (on the web the worker) makes and compresses them; frames go on.
+            if r.supports_bc() {
+                match self.worker_tex(r, &id, &params, scale) {
+                    Some(None) => return false,
+                    Some(Some(tex)) => {
+                        self.tex_params.insert(id.clone(), params);
+                        self.textures.insert(id, tex);
+                        return false;
+                    }
+                    None => {}
+                }
+            }
+            let tex = make_tex(r, &params, scale);
+            self.tex_params.insert(id.clone(), params);
             match tex {
                 Some(tex) => {
                     self.textures.insert(id, tex);
