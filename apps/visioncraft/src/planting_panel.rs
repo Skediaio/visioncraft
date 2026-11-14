@@ -63,6 +63,30 @@ fn checkbox(ui: &mut egui::Ui, v: &mut bool, label: &str) -> Edit {
     }
 }
 
+/// What the palette's plants grow to, as a spacing to plant at: in a line their full width
+/// (a hedge closes up when grown), in a bed a little closer (one plant per square that width).
+fn spacing_hint(ui: &mut egui::Ui, palette: &[Weighted], line: bool) {
+    let Some(w) = palette
+        .iter()
+        .map(|p| visioncraft_core::growth::growth_of(&p.asset, None))
+        .filter(|g| g.from_table)
+        .map(|g| g.mature_width_m)
+        .reduce(f32::max)
+    else {
+        return;
+    };
+    let text = if line {
+        format!("{} {:.2} m", t::SPACING_HINT_LINE, w * 0.6)
+    } else {
+        format!(
+            "{} {:.1} / m²",
+            t::SPACING_HINT_BED,
+            1.0 / (w * 0.8).powi(2)
+        )
+    };
+    ui.small(text).on_hover_text(t::SPACING_HINT_TIP);
+}
+
 fn palette_ui(
     ui: &mut egui::Ui,
     palette: &mut Vec<Weighted>,
@@ -261,6 +285,7 @@ fn form_ui(
             );
             edit = merge(edit, checkbox(ui, &mut form.closed, t::PT_CLOSED));
             edit = merge(edit, checkbox(ui, &mut form.straight, t::PT_STRAIGHT));
+            spacing_hint(ui, &form.palette, true);
         }
         Tool::Cluster => {
             let mut c = form.count as f32;
@@ -293,6 +318,7 @@ fn form_ui(
                     slider(ui, t::PT_JITTER, &mut form.pos_jitter, 0.0..=1.0),
                 );
             }
+            spacing_hint(ui, &form.palette, false);
             if kind == Tool::Surface {
                 edit = merge(
                     edit,
