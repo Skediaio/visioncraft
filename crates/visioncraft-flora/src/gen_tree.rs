@@ -325,7 +325,7 @@ pub(crate) fn skeleton(
             let mut g = pull.norm() + trop;
             if tip {
                 // Tortuous species hold their course less (an oak's zigzag).
-                g = g + d0 * (0.8 * (1.0 - rough));
+                g += d0 * (0.8 * (1.0 - rough));
             }
             let mut g = g.norm();
             if !tip {
@@ -408,7 +408,7 @@ fn finish(
     let ls = shoot_m(p);
     // Weeping species (birch) hang long thin strands.
     let twig_l = (step * 1.6).max(ls * 2.2) * (1.0 + 0.6 * (-b.levels[1].gravity).max(0.0));
-    let l2 = &b.levels[1.min(2)];
+    let l2 = &b.levels[1];
     let l3 = &b.levels[2];
     let floor = (h * 0.05).min(0.8);
     let periph = 6;
