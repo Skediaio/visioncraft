@@ -307,6 +307,36 @@ perennials 1). The growth data are estimates, one table per species (`planting.g
 which). `visioncraft-cli export FILE --out DIR --years 0 --years 5 --years 10` renders a growth
 series of every viewpoint.
 
+### 17. The four seasons, and snow
+
+```json recipe
+{"intent": "the garden through the year", "steps": [
+  {"id": "shape.add_area", "params": {"name": "Lawn", "outline": [[-10, -10], [10, -10], [10, 10], [-10, 10]], "material": "lawn"}},
+  {"id": "shape.add_extrusion", "params": {"name": "House", "outline": [[-5, -9], [5, -9], [5, -3], [-5, -3]], "height": 6, "material": "plaster", "roof": {"kind": "gable", "pitch_deg": 38}}},
+  {"id": "planting.add_single", "params": {"name": "Field maple", "asset": "flora:acer-campestre", "position": [4, 0, 4]}},
+  {"id": "planting.add_spline", "params": {"name": "Yew hedge", "asset_palette": [{"asset": "flora:taxus-hedge", "weight": 1}], "points": [[-10, 10], [10, 10]], "spacing": {"every": 0.6}}},
+  {"id": "view.set", "params": {"season": "autumn"}},
+  {"id": "viewpoint.add", "params": {"name": "Lawn in spring", "position": [0, 1.7, 18], "target": [0, 1.5, 0], "season": "spring", "time": {"hour": 11}}},
+  {"id": "view.set", "params": {"season": "winter", "snow": 0.7}},
+  {"id": "document.inspect", "params": {"faces": false}},
+  {"id": "view.render", "params": {"camera": {"position": [0, 1.7, 18], "target": [0, 1.5, 0]}, "quality": "high", "width": 960, "height": 540, "path": "snowy.png"}},
+  {"id": "view.render", "params": {"viewpoint": "Lawn in spring", "width": 960, "height": 540, "path": "spring.png"}},
+  {"id": "view.set", "params": {"season": "summer", "snow": 0}}
+]}
+```
+
+`view.set {season}` (`spring`, `summer`, `autumn`, `winter`) shows the plants as they are then
+and moves the project's date to the season's day at the site (20 April, 21 June, 20 October,
+15 January in the north, six months on in the south), keeping the hour; `document.inspect` reports
+`season`. Plants have one state per season: an exact date (`time.set`, for a sun study) shows the
+plants of its season. A viewpoint keeps its own season (`season` on `viewpoint.add` and
+`viewpoint.update`). `view.set {snow: 0..1}` lays snow on what faces up and lies open to the sky:
+ground, lawns, roofs, terraces, hedge tops, evergreen crowns, branches, wall tops and sills, not
+under roofs or dense evergreens; from about 0.55 it buries the lawn's blades, from 0.3 the fallen
+leaves, and from about 0.5 the pond freezes. About 0.7 is a snowy winter (the window's Snowy);
+with snow and the default sky the sky turns a bright overcast. Snow is kept whatever the season:
+set it back to 0 for spring.
+
 ## Known traps
 
 - **Ids are not names**: `S2`, not `House`; viewpoints are `v1`, lights `li1`.

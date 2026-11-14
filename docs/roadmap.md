@@ -11,12 +11,12 @@ nothing here is a promise of a date.
   the browser.
 - **Ground detail:** fallen leaves by species and season, stones and twigs on soil and gravel,
   a soft edge where lawn meets border or paving.
+- **Four seasons, with snow:** Spring, Summer, Autumn, Winter and Snowy in Sun & sky
+  (`view.set {season, snow}`), one plant state per season, the exact date folded away for sun
+  studies. Next: snow on ledges narrower than the cover map's texels, falling snow.
 
 ## Next
 
-- **Four seasons, with snow.** One choice of Spring, Summer, Autumn or Winter instead of twelve
-  monthly plant states; the exact date stays available for sun studies. Winter can have snow:
-  on the ground, roofs, hedge tops, branches and sills, not under roofs and dense evergreens.
 - **More leaf sets:** the remaining CC0 atlases, then coverage reported again.
 - **Growth data checked against open data,** with the source of each value recorded. The table
   is estimated today.
@@ -59,6 +59,6 @@ nothing here is a promise of a date.
 ## Known gaps
 
 - Nothing has been verified on Windows or macOS.
-- Photo mode is desktop only.
 - Loading still hitches on weak integrated GPUs.
-- Tree crowns read pale in the plan view.
+- Tree crowns still read paler from above than from the side: leaves at the top of a crown face
+  the noon sun squarely.
