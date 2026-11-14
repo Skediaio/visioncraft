@@ -54,6 +54,13 @@ nothing here is a promise of a date.
 - **Denser borders:** layered perennial plantings that close up, with flowers that read from
   eye level.
 
+- **Furniture and interiors library:** far more furniture than today, indoors and outdoors:
+  sofas, chairs, tables, beds, storage, kitchens and appliances, bathroom fixtures, rugs,
+  curtains, lamps, plants in pots, garden sets, loungers, parasols, barbecues, with variants in
+  size, colour and material. From open sources (CC0 or CC-BY) and as parametric pieces generated
+  like plants are, so a sofa or a table can be given a length. Placed with snapping to floors and
+  walls, grouped as room sets, and listed with dimensions.
+
 ## Later
 
 - User species made of several models as growth stages.
