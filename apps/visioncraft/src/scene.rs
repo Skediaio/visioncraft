@@ -373,7 +373,8 @@ fn upload(r: &mut Renderer, d: &MeshData, face_ids: bool) -> Option<MeshId> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Geom {
-    Model(u64),
+    /// The loaded model's version and the bodies hidden in it.
+    Model(u64, Vec<String>),
     /// The shape as meshed (an area's lift already in its elevation) and, for an area lying on
     /// the terrain, which terrain it was draped over.
     Shape(Box<Shape>, usize),
@@ -837,10 +838,29 @@ impl Scene {
                 if visible {
                     on_ground.extend(faces.iter());
                 }
+                // Hidden bodies keep their faces (so face indices and names stay) but lose their
+                // triangles.
+                let model = if m.hidden_bodies.is_empty() {
+                    l.model.clone()
+                } else {
+                    let mut kept = (*l.model).clone();
+                    let (mut triangles, mut faces) = (Vec::new(), Vec::new());
+                    for b in &mut kept.bodies {
+                        let start = triangles.len() as u32;
+                        if !m.hides(b) {
+                            let r = b.triangles.start as usize..b.triangles.end as usize;
+                            triangles.extend_from_slice(&l.model.triangles[r.clone()]);
+                            faces.extend_from_slice(&l.model.triangle_faces[r]);
+                        }
+                        b.triangles = start..triangles.len() as u32;
+                    }
+                    (kept.triangles, kept.triangle_faces) = (triangles, faces);
+                    Arc::new(kept)
+                };
                 wanted.push((
                     m.id.clone(),
-                    Geom::Model(l.version),
-                    l.model.clone(),
+                    Geom::Model(l.version, m.hidden_bodies.clone()),
+                    model,
                     Mat4::from_translation(Vec3::Y * lift) * mx,
                     visible,
                     false,
@@ -2146,6 +2166,43 @@ impl Scene {
         })
     }
 
+    /// The world triangles that block the sky for the sky visibility volume: the visible
+    /// imported models' faces, less glass (drawn shapes and objects are left out: a garden's
+    /// walls and furniture are the screen-space occlusion's to darken).
+    pub fn sky_occluders(&self, project: &Project) -> Vec<[[f32; 3]; 3]> {
+        let mut ids: Vec<&String> = self.owners.keys().collect();
+        ids.sort();
+        let mut out = Vec::new();
+        for id in ids {
+            let o = &self.owners[id];
+            if !o.key.visible || o.is_shape || o.is_area {
+                continue;
+            }
+            let materials = resolve_materials(project, id, &o.geom);
+            let clear = |face: u32| {
+                materials
+                    .get(face as usize)
+                    .copied()
+                    .flatten()
+                    .and_then(|m| project.materials.get(m))
+                    .is_some_and(|m| {
+                        matches!(m.kind, SurfaceKind::ArchitecturalGlass { .. })
+                            || m.base_color[3] < 0.99
+                    })
+            };
+            for (t, face) in o.geom.triangles.iter().zip(&o.geom.triangle_faces) {
+                if clear(*face) || o.face_piece.get(*face as usize).is_some_and(Option::is_none) {
+                    continue;
+                }
+                out.push(t.map(|v| {
+                    o.xf.transform_point3(Vec3::from(o.geom.positions[v as usize]))
+                        .to_array()
+                }));
+            }
+        }
+        out
+    }
+
     pub fn raycast(&self, origin: Vec3, dir: Vec3, shapes_only: bool) -> Option<Pick> {
         let mut best: Option<Pick> = None;
         for (id, o) in &self.owners {
@@ -2316,7 +2373,7 @@ mod tests {
 
     fn key(version: u64, looks: Vec<LookKey>, visible: bool) -> OwnerKey {
         OwnerKey {
-            geom: Geom::Model(version),
+            geom: Geom::Model(version, Vec::new()),
             visible,
             looks,
         }
@@ -2355,6 +2412,7 @@ mod tests {
                 scale: 2.0,
             },
             layer: "model".into(),
+            hidden_bodies: Vec::new(),
             extensions: Default::default(),
         };
         let p = model_matrix(&m).transform_point3(Vec3::X);

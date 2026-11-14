@@ -106,7 +106,7 @@ const CLUSTER_CELL: f32 = 8.0;
 /// `set_time` wraps here (seconds) to keep f32 precision in the shaders.
 const TIME_WRAP: f64 = 4096.0;
 /// Byte offset of the SH in the globals (written by the GPU, see env.rs).
-const SH_OFFSET: u64 = 9 * 64 + 29 * 16;
+const SH_OFFSET: u64 = 9 * 64 + 31 * 16;
 
 const COMMON: &str = include_str!("common.wgsl");
 const SKY: &str = include_str!("sky.wgsl");
@@ -836,6 +836,11 @@ pub struct Renderer {
     grade: (f32, f32),
     /// The camera is in a room (`set_indoors`): glass mirrors the room, not the sky.
     indoors: bool,
+    /// The sky visibility volume (`set_sky_volume`) and its view; 1 texel of open sky when unset.
+    sky_volume: (wgpu::Texture, wgpu::TextureView),
+    /// Globals `sky_vol` and `sky_vol_size`: origin (m) and 1 / cell, 1 / texture size in
+    /// cells and on (0/1).
+    sky_volume_box: [f32; 8],
     /// The procedural cloud layer of the analytic skies (`set_clouds`).
     clouds: Clouds,
     /// Snow cover 0..1 (`set_snow`), and the top-down depth map of what lies over the ground
@@ -989,6 +994,7 @@ impl Renderer {
             },
         );
         let white = white_texture.create_view(&Default::default());
+        let sky_volume = sky_volume_texture(device, queue, [1, 1, 1], &[[1.0, 0.0, 0.0, 0.0]]);
         // Material samplers: trilinear with 16x anisotropy (WebGPU core
         // allows up to 16 when all filters are linear).
         let material_sampler = |label, mode| {
@@ -1048,6 +1054,7 @@ impl Renderer {
             &light_buffer,
             &grid_buffer,
             &physical.sky_view,
+            &sky_volume.1,
         );
         let reflect_globals_bind = globals_bind_group(
             device,
@@ -1058,6 +1065,7 @@ impl Renderer {
             &light_buffer,
             &grid_buffer,
             &physical.sky_view,
+            &sky_volume.1,
         );
         let sky_bind = sky_bind_group(
             device,
@@ -1163,6 +1171,8 @@ impl Renderer {
             bloom_strength: 0.025,
             grade: (1.0, 1.0),
             indoors: false,
+            sky_volume,
+            sky_volume_box: [0.0; 8],
             clouds: Clouds::default(),
             snow: 0.0,
             snow_cover: None,
@@ -1480,6 +1490,38 @@ impl Renderer {
         self.indoors
     }
 
+    /// The sky's visibility round the buildings (`visioncraft_core::sky_volume`): sample
+    /// `(x, y, z)` at `origin + cell * (x, y, z)` holds the visible fraction of directions and
+    /// the mean visible direction, x fastest. It dims the sky's ambient light and reflections
+    /// where little sky is seen and adds the light bounced round a room. `None`: open sky
+    /// everywhere.
+    pub fn set_sky_volume(&mut self, volume: Option<([f32; 3], f32, [u32; 3], &[[f32; 4]])>) {
+        let (dims, samples, open) = match volume {
+            Some((_, _, dims, samples))
+                if dims.iter().all(|&d| d > 0)
+                    && samples.len() == dims.iter().map(|&d| d as usize).product::<usize>() =>
+            {
+                (dims, samples, false)
+            }
+            _ => ([1, 1, 1], &[[1.0, 0.0, 0.0, 0.0]][..], true),
+        };
+        self.sky_volume = sky_volume_texture(&self.device, &self.queue, dims, samples);
+        self.sky_volume_box = match volume.filter(|_| !open) {
+            Some((origin, cell, ..)) => [
+                origin[0],
+                origin[1],
+                origin[2],
+                1.0 / cell,
+                1.0 / dims[0] as f32,
+                1.0 / dims[1] as f32,
+                1.0 / dims[2] as f32,
+                1.0,
+            ],
+            None => [0.0; 8],
+        };
+        self.rebind_globals();
+    }
+
     /// The cloud layer over the analytic skies (an HDRI brings its own). It shows in the sky,
     /// in reflections and in the ambient light, and takes its share of the sun.
     /// Snow over the up-facing surfaces, 0 (none) to 1, except where something lies over them.
@@ -1532,6 +1574,7 @@ impl Renderer {
                 &self.light_buffer,
                 &self.grid_buffer,
                 sky_view,
+                &self.sky_volume.1,
             );
         }
         self.sky_bind = sky_bind_group(
@@ -2346,6 +2389,13 @@ impl Renderer {
     /// The tone-mapped output texture, for readback (`COPY_SRC`).
     pub fn output_texture(&self) -> &wgpu::Texture {
         &self.targets.output
+    }
+
+    /// The next `render` finishes the environment cube instead of spreading
+    /// it over frames: a single-frame picture after a change of sky or sun
+    /// would otherwise keep the old sky in its haze and reflections.
+    pub fn finish_environment(&mut self) {
+        self.env.finish();
     }
 
     /// Records every pass of a frame; returns the output view. Submit the
@@ -3589,6 +3639,7 @@ impl Renderer {
             if self.snow_cover.is_some() { 1.0 } else { 0.0 },
             0.0,
         ]);
+        b.floats(&self.sky_volume_box);
         debug_assert_eq!(b.0.len() as u64, SH_OFFSET);
         self.queue.write_buffer(buffer, 0, &b.0);
     }
@@ -3931,6 +3982,7 @@ fn globals_bind_group(
     lights: &wgpu::Buffer,
     grid: &wgpu::Buffer,
     sky: &wgpu::TextureView,
+    sky_volume: &wgpu::TextureView,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("globals"),
@@ -3960,8 +4012,91 @@ fn globals_bind_group(
                 binding: 5,
                 resource: wgpu::BindingResource::TextureView(sky),
             },
+            wgpu::BindGroupEntry {
+                binding: 6,
+                resource: wgpu::BindingResource::TextureView(sky_volume),
+            },
         ],
     })
+}
+
+/// The sky visibility volume as an RGBA8 3D texture with its mips (averages of 2 x 2 x 2): r the
+/// visible fraction, gba the mean visible direction (at most 0.25 long) as `0.5 + 2 * a`.
+fn sky_volume_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    dims: [u32; 3],
+    samples: &[[f32; 4]],
+) -> (wgpu::Texture, wgpu::TextureView) {
+    let levels = 32 - dims.iter().max().copied().unwrap_or(1).leading_zeros();
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("sky volume"),
+        size: wgpu::Extent3d {
+            width: dims[0],
+            height: dims[1],
+            depth_or_array_layers: dims[2],
+        },
+        mip_level_count: levels,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D3,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let (mut d, mut level) = (dims, samples.to_vec());
+    for mip in 0..levels {
+        let bytes: Vec<u8> = level
+            .iter()
+            .flat_map(|s| {
+                let enc = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+                [enc(s[0]), enc(0.5 + 2.0 * s[1]), enc(0.5 + 2.0 * s[2]), enc(0.5 + 2.0 * s[3])]
+            })
+            .collect();
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: mip,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &bytes,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * d[0]),
+                rows_per_image: Some(d[1]),
+            },
+            wgpu::Extent3d {
+                width: d[0],
+                height: d[1],
+                depth_or_array_layers: d[2],
+            },
+        );
+        let next = d.map(|n| (n / 2).max(1));
+        let at = |p: [u32; 3]| level[(p[0] + d[0] * (p[1] + d[1] * p[2])) as usize];
+        let mut down = Vec::with_capacity(next.iter().map(|&n| n as usize).product());
+        for z in 0..next[2] {
+            for y in 0..next[1] {
+                for x in 0..next[0] {
+                    let mut sum = [0.0f32; 4];
+                    for k in 0..8u32 {
+                        let p = [
+                            (2 * x + (k & 1)).min(d[0] - 1),
+                            (2 * y + (k >> 1 & 1)).min(d[1] - 1),
+                            (2 * z + (k >> 2)).min(d[2] - 1),
+                        ];
+                        let s = at(p);
+                        for c in 0..4 {
+                            sum[c] += s[c] / 8.0;
+                        }
+                    }
+                    down.push(sum);
+                }
+            }
+        }
+        (d, level) = (next, down);
+    }
+    let view = texture.create_view(&Default::default());
+    (texture, view)
 }
 
 fn sky_bind_group(
@@ -4133,6 +4268,7 @@ impl Layouts {
                     storage_entry(3),
                     storage_entry(4),
                     texture_entry(5, filterable, D::D2, false),
+                    texture_entry(6, filterable, D::D3, false),
                 ],
             ),
             globals_only: layout("globals only", &[uniform_entry(0, vfs, None)]),
@@ -5335,7 +5471,7 @@ mod tests {
     #[test]
     fn globals_match_the_shader_layout() {
         // common.wgsl: 8 mat4, 28 vec4, the snow cover's mat4 and the snow vec4, then the 9 SH vec4.
-        assert_eq!(SH_OFFSET, 9 * 64 + 29 * 16);
+        assert_eq!(SH_OFFSET, 9 * 64 + 31 * 16);
         assert_eq!(SH_OFFSET % 16, 0, "SH copy needs 16-byte texel alignment");
         assert_eq!(globals_size(), SH_OFFSET + 144);
     }

@@ -23,6 +23,7 @@ pub mod raycast;
 pub mod season;
 pub mod session;
 pub mod shape;
+pub mod sky_volume;
 pub mod spec;
 pub mod sun;
 pub mod terrain;
@@ -56,6 +57,7 @@ pub use project::{
 };
 pub use raycast::{Hit, ground_height, raycast};
 pub use season::Season;
+pub use sky_volume::{SkyVolume, sky_volume};
 pub use session::{Command, CommandError, Session};
 pub use shape::{
     AREA_LIFT_M, GROUND_FACE_M, STACK_STEP_M, Shape, ShapeError, area_lifts, areas_over, footing,

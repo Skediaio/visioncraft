@@ -358,6 +358,29 @@ fn sh_irradiance(n: vec3<f32>) -> vec3<f32> {
 // How much of the sky's colour the ambient light keeps (see `sh_irradiance`).
 const AMBIENT_CHROMA: f32 = 0.55;
 
+// The mean reflectance of a room's surfaces (pale walls and ceiling, a wooden floor).
+const ROOM_REFLECTANCE: f32 = 0.45;
+
+// Irradiance bounced round an enclosed space: the sky and sun that come in through its openings,
+// spread over its surfaces. After the split-flux principle of the daylight factor's
+// internally reflected component (Hopkinson, Longmore and Petherbridge, "An empirical formula
+// for the computation of the indirect component of daylight factor", Transactions of the
+// Illuminating Engineering Society 19(7), 1954): the light let in, times R / (1 - R) for the
+// reflections that follow. The light let in is read from the sky volume a room's width round
+// the point (mips 2 and 3, about 1.6 and 3.2 m): its open fraction lets in the sky, the share of it that sees
+// the sun lets in sunlight on the floor (a third of a room's surfaces). Nothing outside a volume.
+fn room_bounce(world: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
+    if g.sky_vol_size.w < 0.5 {
+        return vec3<f32>(0.0);
+    }
+    // A room's width and the next size up: a hall or corridor off a lit room gets some of it.
+    let room = 0.5 * (sky_volume(world, n, 2.0) + sky_volume(world, n, 3.0));
+    let l = g.sun_dir.xyz;
+    let sun_in = clamp(room.x + 3.0 * dot(room.yzw, l), 0.0, 1.0) * max(l.y, 0.0) / 3.0;
+    let let_in = sh_irradiance(vec3<f32>(0.0, 1.0, 0.0)) * room.x + g.sun_light.rgb * sun_in;
+    return let_in * ROOM_REFLECTANCE / (1.0 - ROOM_REFLECTANCE);
+}
+
 // Split-sum environment BRDF, analytic fit: Karis, "Physically Based Shading
 // on Mobile" (Unreal Engine blog, 2014).
 fn env_brdf_approx(f0: vec3<f32>, roughness: f32, nov: f32) -> vec3<f32> {
@@ -905,7 +928,12 @@ fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, screen_effe
     // Ambient: diffuse irradiance from the sky's SH, specular from the
     // prefiltered environment cube with the split-sum BRDF fit.
     let r = reflect(-v, n);
-    var ambient_diffuse = diffuse_color * sh_irradiance(n) / PI * ao;
+    // Under a roof and between walls only the sky the openings show lights a surface; the rest
+    // of its hemisphere is the room, lit by what comes in (`room_bounce`).
+    let vis = sky_volume(in.world, n, 0.0);
+    let seen = sky_seen(vis, n);
+    let bounce = room_bounce(in.world, n);
+    var ambient_diffuse = diffuse_color * (sh_irradiance(n) * seen + bounce * (1.0 - seen)) / PI * ao;
     // Photos from their second sample on: the diffuse light arriving from the scene itself,
     // gathered along two cosine-distributed rays per sample against the depth buffer and lit
     // by the previous sample (so bounces add up over the samples); where a ray leaves the
@@ -920,7 +948,10 @@ fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, screen_effe
     }
     // Specular occlusion from AO: Lagarde & de Rousiers 2014, section 4.10.2.
     let spec_ao = clamp(pow(nov + ao, exp2(-16.0 * s.roughness - 1.0)) - 1.0 + ao, 0.0, 1.0);
-    let ambient_specular = env_brdf_approx(f0, s.roughness, nov) * environment(r, s.roughness) * spec_ao;
+    // A reflection that the sky volume says meets the room shows the room's own light, not sky.
+    let seen_r = sky_seen(vis, r);
+    let reflected = environment(r, s.roughness) * seen_r + bounce * (ROOM_REFLECTANCE / PI) * (1.0 - seen_r);
+    let ambient_specular = env_brdf_approx(f0, s.roughness, nov) * reflected * spec_ao;
     let local = local_lights(in.world, n, v, nov, diffuse_color, f0, a, foliage);
     let emitted = s.emissive * g.time.y;
     return Shaded(apply_fog(sun + ambient_diffuse + ambient_specular + local + emitted, in.world), s.base.a);
@@ -1218,11 +1249,19 @@ fn glass_terms(in: Varying) -> GlassTerms {
     let lamps = local_lights(in.world, n, v, nov, vec3<f32>(0.0), vec3<f32>(0.04), a, false) * 2.0;
     let opacity = clamp(material.base_color.a, 0.0, 1.0);
     let lit = material.base_color.rgb * (sh_irradiance(n) / PI + g.sun_light.rgb * nol / PI);
-    // Indoors (the camera in a room, `grade.z`) the pane mirrors the dim room, not the sky.
-    var mirrored = environment(reflect(-v, n), roughness);
-    if g.grade.z > 0.5 {
-        mirrored = ROOM_ALBEDO * sh_irradiance(n) / PI;
+    // What the pane mirrors: the sky where the sky volume says the reflected ray gets out, else
+    // the room on this side of the pane, lit by what comes in and by its lamps (seen as a pale
+    // wall at the pane). Without a volume, the camera in a room (`grade.z`) means the room.
+    let r = reflect(-v, n);
+    let vis = sky_volume(in.world, n, 0.0);
+    var seen_r = sky_seen(vis, r);
+    if g.sky_vol_size.w < 0.5 && g.grade.z > 0.5 {
+        seen_r = 0.0;
     }
+    let wall = local_lights(in.world, n, v, nov, vec3<f32>(ROOM_REFLECTANCE), vec3<f32>(0.0), 1.0, false);
+    let room = ROOM_ALBEDO * sh_irradiance(n) / PI * select(1.0, 0.0, g.sky_vol_size.w > 0.5)
+        + room_bounce(in.world, n) * (ROOM_REFLECTANCE / PI) + wall;
+    let mirrored = environment(r, roughness) * seen_r + room * (1.0 - seen_r);
     var out: GlassTerms;
     out.reflected = fr * mirrored + sun + lamps + (1.0 - fr) * opacity * lit;
     // Clear float glass: about 0.9 at normal incidence through both faces, a slight grey
