@@ -53,7 +53,7 @@ pub(super) fn register(s: &mut Session) {
         spec(
             "terrain.shore",
             "Shape Shore",
-            "Shapes a coast across the whole terrain along a line, the sea to its right (travelling north, the sea lies east): from the line the land drops over `bank_m` to the beach (a bluff or bank), the beach runs down to the waterline over `beach_m`, then the bed deepens to `depth_m` over `shelf_m` (Dean's equilibrium profile). Heights are relative to the water level; the dry land behind the line keeps its ground, blended to the line over 6 m.",
+            "Shapes a coast across the whole terrain along a line, the sea to its right (travelling north, the sea lies east): from the line the land drops over `bank_m` to the beach (a bluff or bank), the beach runs down to the waterline over `beach_m`, then the bed deepens to `depth_m` over `shelf_m` (Dean's equilibrium profile). Heights are relative to the water level. It only lowers the ground (the coast is cut out of the land, so stretches of coast can cross): land behind the line higher than `top_m` comes down to it over 6 m; raise the land first for a higher bluff.",
             vec![
                 param("points", T::Outline, "The line, [x, z] pairs, at least 2.").required(),
                 param("level", T::Number, "Water level the profile is measured from; default the sea level, else 0.").unit("m"),
@@ -216,7 +216,8 @@ mod tests {
             json!({"origin": [-50, -50], "width_m": 100, "depth_m": 100, "cell_m": 1, "base_material": "lawn"}),
         )
         .unwrap();
-        s.run("water.set_sea", json!({"level": 0})).unwrap();
+        // The land at 0, the sea 3 m below it.
+        s.run("water.set_sea", json!({"level": -3})).unwrap();
         // Travelling east along z = 0: the sea lies south (+z).
         s.run(
             "terrain.shore",
@@ -224,17 +225,24 @@ mod tests {
         )
         .unwrap();
         let t = s.project().terrain.clone().unwrap();
-        let h = |z: f32| t.height_at(0.0, z).unwrap();
-        assert!((h(0.0) - 3.0).abs() < 0.01, "the line at its top");
-        assert!(
-            h(-30.0) < 0.01,
-            "the land side keeps its ground beyond the blend"
-        );
-        assert!((h(5.0) - 1.0).abs() < 0.01, "the berm");
-        assert!(h(15.0).abs() < 0.01, "the waterline");
-        assert!((h(35.0) + 3.0).abs() < 0.01, "full depth");
-        assert!(h(25.0) < 0.0 && h(25.0) > -3.0);
+        let h = |t: &crate::Terrain, z: f32| t.height_at(0.0, z).unwrap();
+        assert!(h(&t, 0.0).abs() < 0.01, "the line at the land's height");
+        assert!(h(&t, -30.0).abs() < 0.01, "the land side keeps its ground");
+        assert!((h(&t, 5.0) + 2.0).abs() < 0.01, "the berm");
+        assert!((h(&t, 15.0) + 3.0).abs() < 0.01, "the waterline");
+        assert!((h(&t, 35.0) + 6.0).abs() < 0.01, "full depth");
+        assert!(h(&t, 25.0) < -3.0 && h(&t, 25.0) > -6.0);
         assert!(t.layers.iter().any(|l| l.material == "soil"));
+        // A second stretch of coast across the first only lowers: no ridge over the beach.
+        s.run(
+            "terrain.shore",
+            json!({"points": [[20, 60], [20, -60]], "top_m": 3, "bank_m": 10, "beach_m": 5}),
+        )
+        .unwrap();
+        let u = s.project().terrain.clone().unwrap();
+        for (x, z) in [(25.0, 12.0), (35.0, 30.0), (0.0, 10.0)] {
+            assert!(u.height_at(x, z) <= t.height_at(x, z), "raised at {x}, {z}");
+        }
         assert!(
             s.run("terrain.shore", json!({"points": [[0, 0]]})).is_err(),
             "a line needs two points"

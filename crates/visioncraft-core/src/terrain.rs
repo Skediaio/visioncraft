@@ -1270,8 +1270,9 @@ pub fn terrain_chunk_mesh_on(
 /// then the beach runs down over `beach_m` to the waterline, then the bed falls to `depth_m`
 /// below the water over `shelf_m` along Dean's equilibrium profile (depth ~ distance^(2/3):
 /// R. G. Dean, "Equilibrium beach profiles: characteristics and applications", Journal of
-/// Coastal Research 7(1), 1991) and stays there. The land side keeps its ground (dry ground
-/// blends to the line's height over 6 m; ground already under the water stays).
+/// Coastal Research 7(1), 1991) and stays there. It only lowers ground: on the sea side to the
+/// profile, on the land side what stands above `top_m` down to it over 6 m; raise the land first
+/// for a higher bluff.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ShoreProfile {
     pub level: f32,
@@ -1290,13 +1291,22 @@ impl ShoreProfile {
     /// The height at signed distance `d` (positive seaward) over ground `old`.
     pub fn height(&self, d: f32, old: f32) -> f32 {
         let top = self.level + self.top_m;
+        // The coast is cut out of the land: ground is only ever lowered, so a second stretch
+        // of coast crossing the first neither builds a wall across its beach nor a spit into
+        // its sea.
         if d <= 0.0 {
-            // Ground already under the water (another stretch of coast) stays as it is.
-            if old < self.level {
-                return old;
-            }
-            return old + (top - old) * smoothstep(1.0 + d / SHORE_BLEND_M);
+            return if old > top {
+                old + (top - old) * smoothstep(1.0 + d / SHORE_BLEND_M)
+            } else {
+                old
+            };
         }
+        old.min(self.profile(d))
+    }
+
+    /// The profile's height at signed distance `d` > 0 (seaward).
+    fn profile(&self, d: f32) -> f32 {
+        let top = self.level + self.top_m;
         let berm = self.level + self.berm_m;
         if d < self.bank_m {
             return top + (berm - top) * smoothstep(d / self.bank_m);
