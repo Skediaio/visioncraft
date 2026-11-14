@@ -47,6 +47,11 @@ pub struct Studio {
     pub quality_auto: bool,
     pub auto_quality: Quality,
     pub frame_ms: Vec<f32>,
+    /// Auto does not step up before this `clock` (seconds): it just stepped down.
+    pub auto_hold_until: f64,
+    /// The wait after a step down (s) and when Auto last stepped up.
+    pub auto_hold: f64,
+    pub auto_rose_at: f64,
     /// What the hardware probe found and chose (`hardware::Measured::line`), for the Quality menu.
     pub hardware_line: Option<String>,
     /// The Quality menu's Re-measure: calibrate again on the next frame.
@@ -227,6 +232,9 @@ impl Studio {
             quality_auto: true,
             auto_quality: Quality::MEDIUM,
             frame_ms: Vec::new(),
+            auto_hold_until: 0.0,
+            auto_hold: 10.0,
+            auto_rose_at: f64::NEG_INFINITY,
             hardware_line: None,
             remeasure: false,
             measuring: false,
@@ -706,19 +714,45 @@ impl Studio {
         }
     }
 
-    /// Feeds one frame time (ms); every 45 frames of continuous drawing Auto may change the quality.
+    /// Feeds one frame time (ms); Auto may change the quality. Down as soon as 30 frames show
+    /// the budget missed (the 75th percentile over 30 fps, so hitches count too), up only after
+    /// 90 frames well inside it, never while plants or textures load (those frames say nothing
+    /// about the scene) and not for 10 s after a step down (else it climbs back into the tier it
+    /// just left and settles below 30 fps).
     pub fn record_frame(&mut self, ms: f32) {
-        if !self.quality_auto {
+        if !self.quality_auto || self.plants_pending() > 0 || !self.scene.library.idle() {
             self.frame_ms.clear();
             return;
         }
         self.frame_ms.push(ms);
-        if self.frame_ms.len() >= 45 {
-            let next = visioncraft_render::suggest_quality(&self.frame_ms, self.auto_quality);
-            if next != self.auto_quality {
-                self.auto_quality = next;
+        let can_rise = self.clock >= self.auto_hold_until;
+        match auto_step(&self.frame_ms, self.auto_quality, can_rise) {
+            AutoStep::Wait => {}
+            AutoStep::Keep => {
+                let n = self.frame_ms.len();
+                self.frame_ms.drain(..n - 30);
             }
-            self.frame_ms.clear();
+            AutoStep::To(next, down) => {
+                if down {
+                    // Falling back soon after a rise: that rung does not hold, wait longer
+                    // before trying it again (10 s doubling up to 2 min), so it does not see-saw.
+                    self.auto_hold = if self.clock - self.auto_rose_at < 15.0 {
+                        (self.auto_hold * 2.0).min(120.0)
+                    } else {
+                        10.0
+                    };
+                    self.auto_hold_until = self.clock + self.auto_hold;
+                } else {
+                    self.auto_rose_at = self.clock;
+                }
+                crate::hardware::note(&format!(
+                    "auto quality: {} at {:.0}%",
+                    preset_name(&next),
+                    next.render_scale * 100.0
+                ));
+                self.auto_quality = next;
+                self.frame_ms.clear();
+            }
         }
     }
 
@@ -998,6 +1032,59 @@ pub fn png_bytes(rgba: &[u8], w: u32, h: u32) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+#[derive(Debug, PartialEq)]
+enum AutoStep {
+    /// Too few frames yet.
+    Wait,
+    /// Inside the budget: keep the last 30 frames and look again.
+    Keep,
+    /// Change to this quality; true when it is a step down.
+    To(Quality, bool),
+}
+
+/// Auto's decision from frame times (ms, oldest first): one rung down the renderer's ladder as
+/// soon as 30 frames have their 75th percentile over the 30 fps budget, one up (the renderer's
+/// `suggest_quality`, with its ULTRA headroom) after 90 frames with it under 65 % of it, when
+/// `can_rise`.
+fn auto_step(frames: &[f32], current: Quality, can_rise: bool) -> AutoStep {
+    let n = frames.len();
+    if n < 30 {
+        return AutoStep::Wait;
+    }
+    let mut recent = frames[n - 30..].to_vec();
+    recent.sort_by(f32::total_cmp);
+    let p75 = recent[22];
+    let budget = visioncraft_render::TARGET_MS;
+    let next = if p75 > budget {
+        // A history that misses the budget asks the ladder for the next rung down.
+        visioncraft_render::suggest_quality(&[budget * 1.5; 30], current)
+    } else if n >= 90 && can_rise && p75 < budget * 0.65 {
+        visioncraft_render::suggest_quality(frames, current)
+    } else if n >= 90 {
+        return AutoStep::Keep;
+    } else {
+        return AutoStep::Wait;
+    };
+    if next == current {
+        AutoStep::Keep
+    } else {
+        AutoStep::To(next, p75 > budget)
+    }
+}
+
+/// The preset a quality is (at any render scale), for messages.
+pub fn preset_name(q: &Quality) -> &'static str {
+    Quality::PRESETS
+        .iter()
+        .find(|(_, p)| {
+            *p == Quality {
+                render_scale: p.render_scale,
+                ..*q
+            }
+        })
+        .map_or("custom", |p| p.0)
+}
+
 /// Truecolour RGB, lossless: what a screenshot is sent as (no alpha, no palette).
 pub fn png_rgb(rgba: &[u8], w: u32, h: u32) -> Result<Vec<u8>, String> {
     let rgb: Vec<u8> = rgba
@@ -1147,5 +1234,37 @@ mod reach_tests {
             .flat_map(|p| [p[0], p[1], p[2]])
             .collect();
         assert_eq!(out, back);
+    }
+
+    #[test]
+    fn auto_steps_down_at_once_and_up_only_when_well_inside_the_budget() {
+        use super::{AutoStep, auto_step};
+        use visioncraft_render::Quality;
+        let high = Quality::HIGH;
+        // 28 fps with hitches: under the old 110 % median rule this stayed; now it steps down.
+        let mut frames = vec![34.0; 20];
+        frames.extend([45.0; 10]);
+        assert!(matches!(
+            auto_step(&frames, high, true),
+            AutoStep::To(_, true)
+        ));
+        // Fast but too few frames, or held after a step down: no rise.
+        assert_eq!(
+            auto_step(&[10.0; 60], Quality::MEDIUM, true),
+            AutoStep::Wait
+        );
+        assert_eq!(
+            auto_step(&[10.0; 90], Quality::MEDIUM, false),
+            AutoStep::Keep
+        );
+        assert!(matches!(
+            auto_step(&[10.0; 90], Quality::MEDIUM, true),
+            AutoStep::To(_, false)
+        ));
+        // Inside the band: keep.
+        assert_eq!(
+            auto_step(&[28.0; 90], Quality::MEDIUM, true),
+            AutoStep::Keep
+        );
     }
 }
