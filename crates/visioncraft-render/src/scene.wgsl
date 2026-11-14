@@ -742,6 +742,13 @@ struct Shaded {
 // and contact shadows (not for transparent surfaces, which are not in the
 // depth pre-pass).
 fn shade(in: Varying, front: bool, screen_effects: bool) -> Shaded {
+    // Glass drawn as an opaque pane (the water's reflection): what the glass passes show, its
+    // reflection over the dim room behind it, so the reflected house matches the house.
+    if material.alpha.z == 1.0 && g.time.w < 0.5 {
+        let t = glass_terms(in);
+        let room = t.transmitted * ROOM_ALBEDO * sh_irradiance(normalize(in.normal)) / PI;
+        return Shaded(apply_fog(t.reflected + room, in.world), 1.0);
+    }
     return light(in, surface(in, front), material.alpha.w > 0.0, material.emissive.w, screen_effects);
 }
 
@@ -807,7 +814,9 @@ fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, screen_effe
             diffuse = max((nol_raw + wrap) / (1.0 + wrap), 0.0) / (1.0 + wrap);
             let lt = normalize(l + n * 0.3);
             let through = pow(clamp(dot(v, -lt), 0.0, 1.0), 4.0) * 0.8 + 0.15 * max(-nol_raw, 0.0);
-            sun += base * base * 2.0 * through * g.sun_light.rgb * shadow;
+            // Capped below the leaf's sunlit front (base / PI) and in the leaf's own hue, so a
+            // backlit crown glows green-yellow and never burns out to white.
+            sun += min(base * base * 2.0 * through, base * 0.25) * g.sun_light.rgb * shadow;
         }
         var fr = vec3<f32>(0.0);
         // No sun glints off leaves facing away from the viewer.
@@ -953,6 +962,9 @@ fn fog_premultiplied(c: vec4<f32>, world: vec3<f32>) -> vec4<f32> {
 // even head-on, reflecting the environment cube, the sun and the lamps.
 // base_color.rgb tints the pane's own scattered light, base_color.a is its
 // opacity (frosted / opaque panes). No refraction offset.
+// A room seen through or mirrored in a window: dark walls and furniture.
+const ROOM_ALBEDO: f32 = 0.05;
+
 struct GlassTerms {
     reflected: vec3<f32>,
     transmitted: vec3<f32>,
@@ -989,12 +1001,17 @@ fn glass_terms(in: Varying) -> GlassTerms {
     let lamps = local_lights(in.world, n, v, nov, vec3<f32>(0.0), vec3<f32>(0.04), a, false) * 2.0;
     let opacity = clamp(material.base_color.a, 0.0, 1.0);
     let lit = material.base_color.rgb * (sh_irradiance(n) / PI + g.sun_light.rgb * nol / PI);
+    // Indoors (the camera in a room, `grade.z`) the pane mirrors the dim room, not the sky.
+    var mirrored = environment(reflect(-v, n), roughness);
+    if g.grade.z > 0.5 {
+        mirrored = ROOM_ALBEDO * sh_irradiance(n) / PI;
+    }
     var out: GlassTerms;
-    out.reflected = fr * environment(reflect(-v, n), roughness) + sun + lamps + (1.0 - fr) * opacity * lit;
-    // Neutral: a slight grey absorption that deepens with the path through
-    // the pane (1 / cos theta); a colour comes only from base_color.
+    out.reflected = fr * mirrored + sun + lamps + (1.0 - fr) * opacity * lit;
+    // Clear float glass: about 0.9 at normal incidence through both faces, a slight grey
+    // absorption that deepens with the path (1 / cos theta); a colour only from base_color.
     let tint = pow(vec3<f32>(0.93), vec3<f32>(1.0 / max(nov, 0.15)));
-    out.transmitted = tint * ((1.0 - fr) * (1.0 - opacity) * 0.5);
+    out.transmitted = tint * ((1.0 - fr) * (1.0 - opacity));
     return out;
 }
 
