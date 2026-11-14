@@ -956,6 +956,15 @@ fn glass_terms(in: Varying) -> GlassTerms {
     if dot(n, v) < 0.0 {
         n = -n;
     }
+    // Float glass is never quite flat: a slow tilt of a degree or so with the position, so
+    // each pane mirrors the sky and garden a little differently, without seams within one.
+    let w = in.world;
+    let wob = vec3<f32>(
+        sin(w.x * 1.7 + w.z * 0.9 + 1.3 * sin(w.y * 2.1)),
+        sin(w.y * 1.1 + w.x * 0.6),
+        cos(w.z * 1.9 - w.x * 0.7 + w.y * 1.3),
+    ) * 0.018;
+    n = normalize(n + wob - n * dot(n, wob));
     let nov = max(dot(n, v), 1e-4);
     let roughness = clamp(material.params.y - material.params.w, 0.02, 1.0);
     let f = f_schlick(nov, vec3<f32>(0.04)).r;
