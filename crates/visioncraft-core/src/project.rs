@@ -143,6 +143,29 @@ pub struct ViewState {
     /// written when 1, so files from before it existed round-trip unchanged.
     #[serde(skip_serializing_if = "is_one")]
     pub view_distance: f32,
+    /// The picture's look: exposure and contrast on top of the tone map. Not written when
+    /// `natural`, the default.
+    #[serde(skip_serializing_if = "Look::is_natural")]
+    pub look: Look,
+}
+
+/// How the picture is developed, as a photographer would choose a film.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Look {
+    /// Plain AgX at the sky's exposure: flat, nothing clips, for checking values.
+    Neutral,
+    /// Exposed for an average scene as a camera meters it, a little contrast and colour.
+    #[default]
+    Natural,
+    /// More contrast and colour, as a holiday photograph.
+    Vivid,
+}
+
+impl Look {
+    fn is_natural(&self) -> bool {
+        *self == Look::Natural
+    }
 }
 
 fn is_one(v: &f32) -> bool {
@@ -165,6 +188,7 @@ impl Default for ViewState {
                 color: [0.10, 0.17, 0.08],
             }),
             view_distance: 1.0,
+            look: Look::Natural,
         }
     }
 }
