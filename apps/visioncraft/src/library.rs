@@ -723,9 +723,13 @@ impl Library {
         }
         if !self.indexes_asked {
             self.indexes_asked = true;
-            for f in ["catalog.json", "materials.json", "skies.json", "tiers.json"] {
+            for f in ["catalog.json", "materials.json", "skies.json"] {
                 self.store.want(Key::Bytes(f.into()), 0.0);
             }
+        }
+        // The tier index only once a higher tier is wanted: the first load stays as light.
+        if self.texture_tier != "1k" && self.tiers.is_none() {
+            self.store.want(Key::Bytes("tiers.json".into()), 0.0);
         }
         self.store.pump(r, &budget);
         for key in self.store.take_evicted() {
