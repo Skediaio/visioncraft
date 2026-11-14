@@ -417,7 +417,8 @@ impl App {
             return false;
         };
         let waited = now - since;
-        let idle = !self.studio.scene.library.store.busy();
+        // Plants too: a still taken while they are generated shows their stand-ins.
+        let idle = !self.studio.scene.library.store.busy() && self.studio.plants_pending() == 0;
         if !(waited > 0.5 && idle) && waited < STILL_WAIT_S {
             return true;
         }

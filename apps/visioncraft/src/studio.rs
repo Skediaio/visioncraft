@@ -562,13 +562,8 @@ impl Studio {
         }
         let live = self.size;
         self.resize(w, h);
-        for _ in 0..600 {
-            self.prepare();
-            if self.plants_pending() == 0 {
-                break;
-            }
-        }
-        self.prepare();
+        let (_, mut problems) = self.settle_for_picture();
+        self.problems.append(&mut problems);
         if !self.overlays_in_pictures {
             self.renderer.set_overlay_lines(&[]);
             self.renderer.set_overlay_lines_on_top(&[]);
@@ -585,19 +580,40 @@ impl Studio {
         pixels.ok_or_else(|| "reading the picture back failed".to_string())
     }
 
+    /// Steps the scene until every plant is generated and the library has nothing on its way,
+    /// by the clock (plants are made on threads: frames alone pass faster than they do on a fast
+    /// GPU), for at most `PICTURE_WAIT_S`. Returns the steps taken and, in plain words, what was
+    /// not ready in time and what the library could not load.
+    pub fn settle_for_picture(&mut self) -> (u32, Vec<String>) {
+        let start = crate::assets::now_ms();
+        let mut steps = 0;
+        loop {
+            self.prepare();
+            steps += 1;
+            if self.plants_pending() == 0 && self.scene.library.idle() {
+                break;
+            }
+            if crate::assets::now_ms() - start > PICTURE_WAIT_S * 1000.0 {
+                break;
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        self.prepare();
+        let mut problems = picture_problems(self.plants_pending(), self.scene.library.idle());
+        problems.append(&mut self.scene.library.messages);
+        problems.append(&mut self.scene.library.store.messages);
+        (steps, problems)
+    }
+
     /// Gets the scene ready for a photo at `w` x `h`: plants grown, overlays off (when pictures
     /// leave them out). Then `photo_begin`/`photo_sample` on the renderer; `photo_end` after.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn photo_prepare(&mut self, w: u32, h: u32) -> [u32; 2] {
         let live = self.size;
         self.resize(w, h);
-        for _ in 0..600 {
-            self.prepare();
-            if self.plants_pending() == 0 {
-                break;
-            }
-        }
-        self.prepare();
+        let (_, mut problems) = self.settle_for_picture();
+        self.problems.append(&mut problems);
         if !self.overlays_in_pictures {
             self.renderer.set_overlay_lines(&[]);
             self.renderer.set_overlay_lines_on_top(&[]);
@@ -1571,5 +1587,37 @@ mod reach_tests {
             auto_step(&[40.0; 30], low(0.65), true),
             AutoStep::To(_, true)
         ));
+    }
+}
+
+/// How long a picture waits for plants and library files before it is taken anyway.
+pub const PICTURE_WAIT_S: f64 = 120.0;
+
+/// What a picture taken with `pending` plants still being made, or the library still loading,
+/// says about it.
+pub fn picture_problems(pending: usize, library_idle: bool) -> Vec<String> {
+    let mut out = Vec::new();
+    if pending > 0 {
+        out.push(format!(
+            "{pending} plant generations were not finished after {PICTURE_WAIT_S:.0} s: those plants show as stand-ins"
+        ));
+    }
+    if !library_idle {
+        out.push(format!(
+            "library files were still loading after {PICTURE_WAIT_S:.0} s: some materials or objects show their stand-ins"
+        ));
+    }
+    out
+}
+
+#[cfg(test)]
+mod picture_tests {
+    #[test]
+    fn a_picture_with_plants_pending_says_so() {
+        assert!(super::picture_problems(0, true).is_empty());
+        let p = super::picture_problems(7, true);
+        assert_eq!(p.len(), 1);
+        assert!(p[0].starts_with("7 plant generations"));
+        assert_eq!(super::picture_problems(0, false).len(), 1);
     }
 }

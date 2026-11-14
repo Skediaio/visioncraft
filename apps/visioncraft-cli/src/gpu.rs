@@ -109,20 +109,9 @@ impl Pictures for GpuPictures {
             }
         };
         // Plants are generated on worker threads and library textures arrive from loader
-        // threads: wait for both by the clock, since frames alone pass faster than the
-        // threads on a fast GPU.
-        let mut frames = 0;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
-        loop {
-            s.prepare();
-            frames += 1;
-            let ready = s.plants_pending() == 0 && s.scene.library.idle();
-            if ready || std::time::Instant::now() > deadline {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(2));
-        }
-        s.prepare();
+        // threads: wait for both by the clock (`settle_for_picture`).
+        let (frames, problems) = s.settle_for_picture();
+        s.problems.extend(problems);
         let pending = s.plants_pending();
         let pixels = match &request.photo {
             Some(p) => s.render_photo(
@@ -141,6 +130,9 @@ impl Pictures for GpuPictures {
             }
         };
         let problems = std::mem::take(&mut s.problems);
+        for p in &problems {
+            eprintln!("visioncraft-cli: {p}");
+        }
         Ok(Rendered {
             png: encode_png(&pixels, request.width, request.height)?,
             info: json!({

@@ -290,6 +290,7 @@ impl Host for Bound<'_, '_> {
             .iter()
             .position(|(n, _)| n.eq_ignore_ascii_case(&request.quality))
             .unwrap_or(if request.photo.is_some() { 3 } else { 2 });
+        let before = h.studio.problems.len();
         let png = match &request.photo {
             Some(p) => {
                 let (w, hh) = (request.width, request.height);
@@ -322,6 +323,7 @@ impl Host for Bound<'_, '_> {
             png: png?,
             info: json!({
                 "renderer": "window",
+                "problems": h.studio.problems.get(before..).unwrap_or_default(),
                 "camera": {"position": eye.to_array(), "target": target.to_array(), "fov_y_deg": fov},
                 "quality": request.quality,
                 "lightsDropped": h.studio.dropped_lights,
