@@ -411,7 +411,15 @@ impl DrawState {
         }
         // Typed sizes: digits set the length of the segment being drawn (towards the pointer);
         // with the first corner down, `20` Tab (or x) `30` Enter makes a 20 by 30 m rectangle.
-        let typing_field = cx.ctx.egui_wants_keyboard_input();
+        // Tab moves egui's focus to a button, which would swallow the digits and Enter after it:
+        // while drawing, only a text field keeps the keyboard.
+        if !self.points.is_empty()
+            && !cx.ctx.text_edit_focused()
+            && let Some(id) = cx.ctx.memory(|m| m.focused())
+        {
+            cx.ctx.memory_mut(|m| m.surrender_focus(id));
+        }
+        let typing_field = cx.ctx.text_edit_focused();
         let (text, tab) = cx.ctx.input(|i| {
             let mut text = String::new();
             let mut tab = false;
