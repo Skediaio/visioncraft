@@ -930,11 +930,11 @@ impl Studio {
             })
         };
         self.scene.library.set_texture_tier(tier);
-        self.scene.flora.leaf_scale = if matches!(preset_name(&q), "high" | "ultra") {
-            2
-        } else {
-            1
-        };
+        let fine = matches!(preset_name(&q), "high" | "ultra");
+        self.scene.flora.leaf_scale = if fine { 2 } else { 1 };
+        if self.scene.set_dense_lawns(&mut self.renderer, fine) {
+            self.synced = None; // the lawns are made again on the next sync
+        }
         let rebake = q.impostor_resolution != self.renderer.quality().impostor_resolution;
         self.renderer.set_quality(q);
         if rebake {

@@ -353,9 +353,16 @@ const LAWN_FADE_M: f32 = 40.0;
 const LAWN_FADE_BAND_M: f32 = 15.0;
 /// Shrubs, ground plants and small objects fade out over this share of their cull distance.
 const CULL_FADE_SHARE: f32 = 0.25;
-/// At most this many tufts per square metre are drawn, and this many per lawn.
+/// At most this many tufts per square metre are drawn, and this many per lawn; twice the
+/// density and four times the count, with narrower blades, when dense (HIGH and ULTRA).
 const LAWN_MAX_DENSITY: f32 = 300.0;
 const LAWN_MAX_TUFTS: usize = 60_000;
+/// Linear mean of the grass picture a plain lawn shows from the library (grass001), so the
+/// tufts take the colour of the ground they stand in.
+const LAWN_PICTURE_MEAN: [f32; 3] = [0.059, 0.107, 0.022];
+/// Upright blades catch less of a high sun than the flat ground under them: lifted this much,
+/// they read as the same lawn in sun and shade instead of dark strokes on it.
+const LAWN_BLADE_LIFT: f32 = 1.6;
 
 /// Catalogue objects smaller than this (largest side, metres) are culled far away, at
 /// `OBJECT_CULL_PER_M` metres per metre of size.
@@ -443,6 +450,8 @@ pub struct Scene {
     /// The asset library: models, textures and lamps streamed in.
     pub library: Library,
     people: Option<ItemId>,
+    /// Denser, finer lawn tufts (HIGH and ULTRA; `set_dense_lawns`).
+    dense_lawns: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -754,6 +763,19 @@ impl Scene {
         problems
     }
 
+    /// Denser, finer lawns (HIGH, ULTRA) or the lighter default. True when it changed: the
+    /// lawns are then dropped, for the next sync to make again.
+    pub fn set_dense_lawns(&mut self, r: &mut Renderer, dense: bool) -> bool {
+        if self.dense_lawns == dense {
+            return false;
+        }
+        self.dense_lawns = dense;
+        for (_, l) in self.lawns.drain() {
+            l.items.into_iter().for_each(|i| r.remove_item(i));
+        }
+        true
+    }
+
     /// 3D grass on every face whose material is a lawn: tufts of `flora:lawn-tuft` scattered with
     /// the core's `lawn_scatter`, an LOD item that stops drawing at `LAWN_FADE_M`.
     fn sync_lawns(&mut self, r: &mut Renderer, project: &Project) {
@@ -779,7 +801,12 @@ impl Scene {
                     let m = project.materials.get(m?)?;
                     match &m.kind {
                         SurfaceKind::Lawn3d(l) => {
-                            Some((f, *l, [m.base_color[0], m.base_color[1], m.base_color[2]]))
+                            let ground = if material_library::overlay(&self.library, m).is_some() {
+                                LAWN_PICTURE_MEAN
+                            } else {
+                                [m.base_color[0], m.base_color[1], m.base_color[2]]
+                            };
+                            Some((f, *l, ground.map(|c| c * LAWN_BLADE_LIFT)))
                         }
                         _ => None,
                     }
@@ -831,15 +858,20 @@ impl Scene {
             // One matrix list per variant, so the lawn does not repeat one tuft.
             let mut by_variant: Vec<Vec<Mat4>> = vec![Vec::new(); plants::VARIANTS as usize];
             let mut n = 0usize;
+            let (max_density, max_tufts, narrow) = if self.dense_lawns {
+                (LAWN_MAX_DENSITY * 2.0, LAWN_MAX_TUFTS * 4, 0.7)
+            } else {
+                (LAWN_MAX_DENSITY, LAWN_MAX_TUFTS, 1.0)
+            };
             // shortcut: one colour per lawn (its first lawn face's), fine until lawns mix colours
             let color = faces[0].2;
             for (face, lawn, _) in &faces {
                 let lawn = visioncraft_core::material::Lawn3d {
-                    density_per_m2: lawn.density_per_m2.min(LAWN_MAX_DENSITY),
+                    density_per_m2: lawn.density_per_m2.min(max_density),
                     ..*lawn
                 };
                 for t in lawn_scatter(&o.geom, *face, &lawn) {
-                    if n >= LAWN_MAX_TUFTS {
+                    if n >= max_tufts {
                         break;
                     }
                     let p = o.xf.transform_point3(Vec3::from(t.position));
@@ -850,7 +882,7 @@ impl Scene {
                     by_variant[n % plants::VARIANTS as usize].push(
                         Mat4::from_translation(p)
                             * Mat4::from_rotation_y(t.rotation_y_deg.to_radians())
-                            * Mat4::from_scale(Vec3::splat(s)),
+                            * Mat4::from_scale(Vec3::new(s * narrow, s, s * narrow)),
                     );
                     n += 1;
                 }
