@@ -5128,7 +5128,13 @@ impl Targets {
 /// Adapter and device without a surface, for tests and the offscreen bench.
 /// Fails (never falls back silently) when no adapter exists.
 pub async fn headless_device() -> Result<(wgpu::Device, wgpu::Queue), String> {
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    // One instance at a time: the Vulkan loader crashes (null call in
+    // `vkEnumerateInstanceExtensionProperties`) when threads create instances at once.
+    static CREATING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let instance = {
+        let _one_at_a_time = CREATING.lock().unwrap_or_else(|e| e.into_inner());
+        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle())
+    };
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions::default())
         .await
