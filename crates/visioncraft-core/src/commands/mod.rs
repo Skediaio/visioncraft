@@ -7,6 +7,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
+pub(crate) mod examples;
 mod layers;
 mod lights;
 mod materials;
@@ -20,6 +21,7 @@ mod viewpoints;
 
 pub(crate) fn register(s: &mut Session) {
     layers::register(s);
+    examples::register(s);
     shapes::register(s);
     species::register(s);
     objects::register(s);
