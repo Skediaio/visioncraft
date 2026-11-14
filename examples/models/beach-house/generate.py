@@ -561,7 +561,8 @@ def plain_material(key, name, rgb, metallic, roughness, gloss=0.0):
 
 SAND = lib_material("ground052")
 OAK = lib_material("woodfloor032", gloss=0.3)
-CEDAR = lib_material("planks007")
+# Pale pine boards: the red-painted planks007 read pink on a ceiling.
+CEDAR = lib_material("planks021")
 SHINGLES = lib_material("woodsiding013")
 DECKING = lib_material("planks029s")
 TILE = lib_material("tiles038", gloss=0.4)
@@ -665,7 +666,8 @@ DOWN += [("Den", 2300, YC + 1800), ("Utility", (X_DEN + X_UTIL) / 2, YC + 1800),
          ("Guest WC", (X_UTIL + XA) / 2, YC + 1800)]
 DOWN += [("Bedroom 2", (XB + X_BED2) / 2, YC + 2000), ("Bathroom", (X_BED2 + X_BATH) / 2, YC + 1800),
          ("Bedroom 3", (X_BATH + IX) / 2, YC + 2000)]
-SPOT = {"type": "spot", "direction": [0, -1, 0], "inner_cone_deg": 35, "outer_cone_deg": 70}
+# A downlight's beam of about 70 degrees (half-angles here), so its pool reads on the floor.
+SPOT = {"type": "spot", "direction": [0, -1, 0], "inner_cone_deg": 20, "outer_cone_deg": 35}
 for name, x, y in DOWN:
     vc.append(["light.add", {"name": f"{name} downlight", "position": w(x, y, CEIL_Z - 300), "lumens": 600,
                              "color_temperature_k": 2700, "range_m": 8, "kind": SPOT}])

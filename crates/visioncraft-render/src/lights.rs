@@ -3,9 +3,12 @@
 //!
 //! Units: `intensity` is the luminous flux in lumens, as on a lamp's box.
 //! Point lights emit it over the full sphere, I = flux / (4 pi) candela;
-//! spot lights use I = flux / pi regardless of the cone, so narrowing a spot
-//! does not change its brightness (Filament's documentation, "Physically
-//! based rendering in Filament", section 5.2.2, punctual lights).
+//! a spot sends the flux into its cone, I = flux / (2 pi ((1 - cos inner) +
+//! (cos inner - cos outer) / 3)), the solid angle its squared smooth edge
+//! (`pack`) weighs, so a narrow 600 lm downlight throws a pool as a real one
+//! does (Filament's documentation, "Physically based rendering in Filament",
+//! section 5.2.2, punctual lights: the physically correct spot, with the
+//! cone's falloff counted).
 //!
 //! Grid: square cells over world X/Z (no subdivision in height), at most
 //! `MAX_GRID` cells per side; the cell size grows with the area the lights
@@ -54,7 +57,11 @@ impl Light {
     pub fn candela(&self) -> f32 {
         match self.kind {
             LightKind::Point => self.intensity / (4.0 * std::f32::consts::PI),
-            LightKind::Spot { .. } => self.intensity / std::f32::consts::PI,
+            LightKind::Spot { inner, outer, .. } => {
+                let outer = outer.clamp(1e-3, std::f32::consts::FRAC_PI_2);
+                let (ci, co) = (inner.clamp(0.0, outer).cos(), outer.cos());
+                self.intensity / (std::f32::consts::TAU * ((1.0 - ci) + (ci - co) / 3.0))
+            }
         }
     }
 }
@@ -257,7 +264,17 @@ mod tests {
         let cone = |angle: f32| (angle.cos() * scale + offset).clamp(0.0, 1.0);
         assert!((cone(0.0) - 1.0).abs() < 1e-6 && (cone(0.3) - 1.0).abs() < 1e-3);
         assert!(cone(0.5).abs() < 1e-3 && cone(0.4) > 0.2 && cone(0.4) < 0.8);
-        // Candela: spots use flux / pi, points flux / 4 pi.
-        assert!((l.candela() * std::f32::consts::PI - 800.0).abs() < 1e-3);
+        // Candela: a spot's cone, weighed by its edge, carries the whole flux (800 lm).
+        let steps = 20_000;
+        let flux: f32 = (0..steps)
+            .map(|i| {
+                let angle = (i as f32 + 0.5) / steps as f32 * std::f32::consts::FRAC_PI_2;
+                let d_omega = std::f32::consts::TAU * angle.sin() * std::f32::consts::FRAC_PI_2
+                    / steps as f32;
+                l.candela() * cone(angle).powi(2) * d_omega
+            })
+            .sum();
+        assert!((flux - 800.0).abs() < 2.0, "{flux}");
+        assert!((point(0.0, 0.0, 1.0).candela() * 4.0 * std::f32::consts::PI - 800.0).abs() < 1e-2);
     }
 }
