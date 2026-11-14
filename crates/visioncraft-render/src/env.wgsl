@@ -107,6 +107,7 @@ fn sh_basis(i: u32, n: vec3<f32>) -> f32 {
 @fragment
 fn fs_sh(in: EnvOut) -> @location(0) vec4<f32> {
     let k = u32(in.clip.x);
+    clouds_off = env_face.info.w < 0.0;
     // 512 directions: plenty for nine smooth coefficients, and each of the
     // nine fragments loops over all of them serially.
     let rows = 16;

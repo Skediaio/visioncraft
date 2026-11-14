@@ -38,6 +38,8 @@ struct Globals {
     clouds: vec4<f32>,          // x cover 0..1, y overcast (0/1), zw drift (m)
     snow_cover: mat4x4<f32>,    // world -> the snow cover map (straight down, last shadow layer)
     snow: vec4<f32>,            // x snow 0..1, y the cover map's shadow layer, z cover map on (0/1)
+    sky_vol: vec4<f32>,         // sky visibility volume: xyz origin (m), w 1 / cell (m)
+    sky_vol_size: vec4<f32>,    // xyz 1 / cells, w volume on (0/1)
     sh: array<vec4<f32>, 9>,    // sky irradiance as L2 SH (kcd/m2 * sr), written on the GPU (env.wgsl)
 }
 @group(0) @binding(0) var<uniform> g: Globals;
@@ -46,6 +48,31 @@ struct Globals {
 @group(0) @binding(1) var env_map: texture_cube<f32>;
 @group(0) @binding(2) var env_sampler: sampler;
 @group(0) @binding(5) var sky_tex: texture_2d<f32>;
+// The sky's visibility round the buildings (lib.rs `set_sky_volume`): r the visible fraction of
+// directions, gba the mean visible direction as 0.5 + 2 a; mipmapped.
+@group(0) @binding(6) var sky_vis: texture_3d<f32>;
+
+// The sky visibility volume at `world`, lifted off the surface along `n` by most of a cell so a
+// surface reads the air in front of it, at mip `level` (0 the cells, higher a room's average):
+// (visible fraction a0, mean visible direction a). Open sky outside the volume.
+fn sky_volume(world: vec3<f32>, n: vec3<f32>, level: f32) -> vec4<f32> {
+    if g.sky_vol_size.w < 0.5 {
+        return vec4<f32>(1.0, 0.0, 0.0, 0.0);
+    }
+    let cells = (world - g.sky_vol.xyz) * g.sky_vol.w + n * 0.7;
+    let uvw = (cells + 0.5) * g.sky_vol_size.xyz;
+    if any(uvw < vec3<f32>(0.0)) || any(uvw > vec3<f32>(1.0)) {
+        return vec4<f32>(1.0, 0.0, 0.0, 0.0);
+    }
+    let t = textureSampleLevel(sky_vis, env_sampler, uvw, level);
+    return vec4<f32>(t.r, (t.gba - 0.5) * 0.5);
+}
+
+// The cosine-weighted visibility of the sky for a surface facing `n` from an L1 sample: 1 under
+// the open sky or facing away from a lone wall, 0 in a closed room.
+fn sky_seen(v: vec4<f32>, n: vec3<f32>) -> f32 {
+    return clamp(v.x + 2.0 * dot(v.yzw, n), 0.0, 1.0);
+}
 
 const PI: f32 = 3.14159265;
 const SKY_DEPTH: f32 = 1e9; // linear depth written where nothing was drawn

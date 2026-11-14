@@ -124,6 +124,20 @@ impl Session {
         );
         s.register_with_spec(
             spec(
+                "model.set_hidden_bodies",
+                "Hide Bodies",
+                "Hides bodies of an imported model by body name or feature id (the roof, for a furnished plan from above); the list replaces the previous one, an empty list shows every body. Saved with the project.",
+                vec![
+                    param("id", ParamType::String, "Model id.").required(),
+                    param("bodies", ParamType::Array, "Body names or feature ids, such as \"roof\" or \"F606\".").required(),
+                ],
+                "null",
+                json!({"id": "m1", "bodies": ["roof", "roof-membrane"]}),
+            ),
+            model_set_hidden_bodies,
+        );
+        s.register_with_spec(
+            spec(
                 "site.set",
                 "Set Site",
                 "Sets where the project stands on Earth, which decides the sun.",
@@ -396,6 +410,7 @@ fn model_add(project: &mut Project, params: &Value) -> Result<Value, CommandErro
         source: p.source,
         transform: p.transform,
         layer,
+        hidden_bodies: Vec::new(),
         extensions: BTreeMap::new(),
     });
     Ok(json!({ "id": id }))
@@ -440,6 +455,23 @@ fn model_set_transform(project: &mut Project, params: &Value) -> Result<Value, C
     t.scale = p.scale.unwrap_or(t.scale);
     check_transform(&t)?;
     model.transform = t;
+    Ok(Value::Null)
+}
+
+fn model_set_hidden_bodies(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct P {
+        id: String,
+        bodies: Vec<String>,
+    }
+    let p: P = parse(params)?;
+    let mut bodies: Vec<String> = p.bodies.iter().map(|b| b.trim().to_string()).collect();
+    if bodies.iter().any(String::is_empty) {
+        return Err(CommandError::Failed("a body name cannot be empty".into()));
+    }
+    bodies.dedup();
+    find(project, &p.id)?.hidden_bodies = bodies;
     Ok(Value::Null)
 }
 
@@ -535,6 +567,46 @@ mod tests {
         while s.redo() {}
         assert_eq!(*s.project(), end);
         assert!(s.revision() > rev);
+    }
+
+    #[test]
+    fn hidden_bodies_are_kept_with_the_model() {
+        let mut s = Session::new(Project::default());
+        let id = add(&mut s);
+        s.run(
+            "model.set_hidden_bodies",
+            json!({"id": id, "bodies": ["roof", "F606"]}),
+        )
+        .unwrap();
+        let m = &s.project().models[0];
+        let body = |id: &str, name: &str| crate::Body {
+            id: id.into(),
+            name: name.into(),
+            color: None,
+            triangles: 0..0,
+            bounds: [[0.0; 3]; 2],
+        };
+        assert!(m.hides(&body("F1", "Roof")) && m.hides(&body("F606", "x")));
+        assert!(!m.hides(&body("F2", "walls")));
+        let saved = Project::from_json_bytes(&s.project().to_json_bytes()).unwrap();
+        assert_eq!(saved.models[0].hidden_bodies, ["roof", "F606"]);
+        s.run("model.set_hidden_bodies", json!({"id": id, "bodies": []}))
+            .unwrap();
+        assert!(s.project().models[0].hidden_bodies.is_empty());
+        assert!(
+            s.run(
+                "model.set_hidden_bodies",
+                json!({"id": "nope", "bodies": []})
+            )
+            .is_err()
+        );
+        assert!(
+            s.run(
+                "model.set_hidden_bodies",
+                json!({"id": id, "bodies": [" "]})
+            )
+            .is_err()
+        );
     }
 
     #[test]

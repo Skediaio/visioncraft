@@ -59,8 +59,21 @@ pub struct ModelRef {
     pub transform: Transform,
     #[serde(default = "model_layer")]
     pub layer: String,
+    /// Bodies left out of the view, by body name or feature id (`model.set_hidden_bodies`):
+    /// a roof taken off for a furnished plan from above.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden_bodies: Vec<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extensions: Extensions,
+}
+
+impl ModelRef {
+    /// Whether `body` (a body of this model's file) is hidden: its name or feature id is listed.
+    pub fn hides(&self, body: &crate::Body) -> bool {
+        self.hidden_bodies
+            .iter()
+            .any(|h| h == &body.id || h.eq_ignore_ascii_case(&body.name))
+    }
 }
 
 pub const LAYER_MODEL: &str = "model";
@@ -514,6 +527,7 @@ mod tests {
                 scale: 2.0,
             },
             layer: LAYER_MODEL.into(),
+            hidden_bodies: Vec::new(),
             extensions: [("nl.example.model".to_string(), json!({"tag": [1, 2]}))].into(),
         });
         p

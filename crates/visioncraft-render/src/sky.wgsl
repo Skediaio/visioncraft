@@ -134,9 +134,12 @@ fn cloud_fbm(p_in: vec2<f32>) -> f32 {
 // thins towards it, a forward-scattering glow round the sun) and the sky; an overcast layer
 // is an even grey of the sun's diffused light. Their share of the sun goes from the direct
 // light (lib.rs `Clouds::sun_share`); here it is put back for the light on the clouds.
+// The SH's clear-sky pass (env.wgsl `fs_sh`): no clouds.
+var<private> clouds_off: bool = false;
+
 fn cloud(dir: vec3<f32>) -> vec4<f32> {
     let cover = g.clouds.x;
-    if cover <= 0.0 || dir.y <= 0.0 {
+    if clouds_off || cover <= 0.0 || dir.y <= 0.0 {
         return vec4<f32>(0.0);
     }
     let overcast = g.clouds.y > 0.5;

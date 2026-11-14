@@ -110,6 +110,8 @@ pub struct Studio {
     pub dropped_lights: usize,
     /// The half-metre cell the ground bounce and indoors were last sampled in (`apply_view`).
     bounce_cell: Option<glam::IVec4>,
+    /// A hash of the triangles the sky visibility volume was last made from.
+    sky_volume_key: u64,
     /// Impostor atlases have been made ahead for the current quality.
     impostors_reserved: bool,
     /// The revision (and whether the catalogue was there) the lamp lights were last made for.
@@ -308,6 +310,7 @@ impl Studio {
             suggested: false,
             dropped_lights: 0,
             bounce_cell: None,
+            sky_volume_key: 0,
             impostors_reserved: false,
             lamps_reconciled: (u64::MAX, false),
             lamps_skipped: 0,
@@ -423,6 +426,8 @@ impl Studio {
     pub fn set_session(&mut self, session: Session) {
         self.session = session;
         self.lamps_reconciled = (u64::MAX, false);
+        // A new session counts its revisions from zero again: the scene must look at it anew.
+        self.synced = None;
     }
 
     /// Makes the next `sync` look at the scene again although the project did not change.
@@ -786,6 +791,29 @@ impl Studio {
             .scene
             .sync(&mut self.renderer, &project, &self.loaded, &self.assets);
         self.problems.extend(problems);
+        self.update_sky_volume(&project);
+    }
+
+    /// Remakes the sky visibility volume when the buildings that block the sky changed.
+    fn update_sky_volume(&mut self, project: &Project) {
+        use std::hash::{Hash, Hasher};
+        let triangles = self.scene.sky_occluders(project);
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        for t in &triangles {
+            t.as_flattened()
+                .iter()
+                .for_each(|v| v.to_bits().hash(&mut h));
+        }
+        let key = h.finish() | 1;
+        if key == self.sky_volume_key {
+            return;
+        }
+        self.sky_volume_key = key;
+        let v = visioncraft_core::sky_volume(&triangles);
+        self.renderer.set_sky_volume(
+            v.as_ref()
+                .map(|v| (v.origin, v.cell, v.dims, v.samples.as_slice())),
+        );
     }
 
     pub fn frame_all(&mut self) {
@@ -838,12 +866,6 @@ impl Studio {
         let clouds = v.clouds;
         // A camera metering a snowy scene greys the snow; a photographer opens up a little, not
         // so far that sunlit snow clips or the rest of the picture lifts (`SNOW_EV`).
-        let ev = v
-            .exposure_ev
-            .unwrap_or_else(|| self.sky.auto_ev(elevation, lamps) - brighter - snow * SNOW_EV)
-            - self.exposure;
-        self.ev_used = (ev, elevation);
-        self.renderer.set_exposure(ev);
         self.renderer.set_grade(power, saturation);
         self.renderer.set_snow(snow);
         self.renderer.set_clouds(&visioncraft_render::Clouds {
@@ -888,6 +910,18 @@ impl Studio {
             let indoors = hit(Vec3::Y) && walls >= 6;
             self.renderer.set_indoors(indoors);
         }
+        // In a room by day a photographer opens up: the room gets only the sky its windows show
+        // (the sky visibility volume), some stops under the open air.
+        let room = if self.renderer.indoors() {
+            INDOOR_EV * (elevation / 10.0).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let ev = v.exposure_ev.unwrap_or_else(|| {
+            self.sky.auto_ev(elevation, lamps) - brighter - snow * SNOW_EV - room
+        }) - self.exposure;
+        self.ev_used = (ev, elevation);
+        self.renderer.set_exposure(ev);
         self.renderer.set_clay(self.project().style.clay);
         // Below the horizon the haze only scatters the dim, pink twilight sky back at the camera
         // and washes the garden out: thin it as the sun sinks, and no sun glow.
@@ -1275,6 +1309,9 @@ impl Readback {
     pub fn start(studio: &mut Studio, device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
         let [w, h] = studio.size;
         let mut encoder = device.create_command_encoder(&Default::default());
+        // A picture is one frame: the environment may not lag behind it (a dusk picture after a
+        // daytime one kept the day's sky in its haze).
+        studio.renderer.finish_environment();
         studio.renderer.render(&mut encoder);
         let stride = (w * 4).next_multiple_of(256);
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -1654,6 +1691,9 @@ mod reach_tests {
 /// How long a picture waits for plants and library files before it is taken anyway.
 pub const PICTURE_WAIT_S: f64 = 120.0;
 
+/// Stops the automatic exposure opens up with the camera in a room by day.
+const INDOOR_EV: f32 = 2.5;
+
 /// Stops the exposure opens up per unit of snow.
 const SNOW_EV: f32 = 1.2;
 
@@ -1683,6 +1723,58 @@ mod picture_tests {
         assert_eq!(p.len(), 1);
         assert!(p[0].starts_with("7 plant generations"));
         assert_eq!(super::picture_problems(0, false).len(), 1);
+    }
+}
+
+/// Pictures in one session do not inherit each other's sky: a dusk picture after a noon one
+/// matches a dusk picture from a fresh studio (the environment cube, which the haze and
+/// reflections read, was only partly redone in a one-frame picture).
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod session_leak_tests {
+    use super::Studio;
+
+    fn picture(s: &mut Studio, device: &wgpu::Device, queue: &wgpu::Queue, hour: f32) -> Vec<u8> {
+        let mut p = s.project().clone();
+        p.time.hour = hour;
+        s.set_session(visioncraft_core::Session::new(p));
+        s.render_pixels(device, queue, 160, 100).unwrap()
+    }
+
+    #[test]
+    fn a_dusk_picture_after_a_noon_one_matches_a_fresh_dusk_picture() {
+        let Ok((device, queue)) = pollster::block_on(visioncraft_render::headless_device()) else {
+            eprintln!("no GPU adapter: skipped");
+            return;
+        };
+        let p = visioncraft_core::example("beach-house").unwrap();
+        let studio = |p: &visioncraft_core::Project| {
+            let r =
+                visioncraft_render::Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+            let mut s = Studio::new(r, p.clone());
+            s.camera.look_from(
+                glam::Vec3::new(16.0, 2.5, 24.0),
+                glam::Vec3::new(11.0, 2.0, -4.0),
+            );
+            s
+        };
+        let mut fresh = studio(&p);
+        let want = picture(&mut fresh, &device, &queue, 20.3);
+        let mut used = studio(&p);
+        picture(&mut used, &device, &queue, 13.0);
+        let got = picture(&mut used, &device, &queue, 20.3);
+        let mean = |px: &[u8]| px.iter().map(|&v| f64::from(v)).sum::<f64>() / px.len() as f64;
+        let diff = want
+            .iter()
+            .zip(&got)
+            .map(|(a, b)| f64::from(a.abs_diff(*b)))
+            .sum::<f64>()
+            / want.len() as f64;
+        assert!(
+            diff < 3.0,
+            "dusk after noon differs from a fresh dusk by {diff:.1} per channel (means {:.1} and {:.1})",
+            mean(&want),
+            mean(&got)
+        );
     }
 }
 

@@ -829,6 +829,10 @@ fn file_save(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
     let mut project = session.project().clone();
     let mut moved = false;
     for m in &mut project.models {
+        // An example's model travels inside the program: its source is a name, not a path.
+        if visioncraft_core::example_file(&m.source).is_some() {
+            continue;
+        }
         if let Some(l) = state.models.get_mut(&m.id) {
             let source = source_from(&folder, &l.path);
             if source != m.source {

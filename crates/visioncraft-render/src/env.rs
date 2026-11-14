@@ -76,11 +76,12 @@ impl Env {
             .collect();
         let faces = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("environment faces"),
-            size: SLOT * (6 * MIPS) as u64,
+            // One more slot: the clear-sky pass of the SH (`update`).
+            size: SLOT * (6 * MIPS + 1) as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let mut slots = vec![0u8; (SLOT * (6 * MIPS) as u64) as usize];
+        let mut slots = vec![0u8; (SLOT * (6 * MIPS + 1) as u64) as usize];
         for mip in 0..MIPS {
             for face in 0..6 {
                 let roughness = mip as f32 / (MIPS - 1) as f32;
@@ -92,6 +93,10 @@ impl Env {
                 slots[at..at + b.0.len()].copy_from_slice(&b.0);
             }
         }
+        let mut b = Bytes::default();
+        b.floats(&[0.0, 0.0, 0.0, -1.0]);
+        let at = (6 * MIPS) as usize * SLOT as usize;
+        slots[at..at + b.0.len()].copy_from_slice(&b.0);
         queue.write_buffer(&faces, 0, &slots);
         let faces_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("environment face"),
@@ -181,8 +186,12 @@ impl Env {
         sh_offset: u64,
         timer: Option<&crate::timing::Timer>,
     ) {
-        if self.sh_dirty {
-            self.sh_dirty = false;
+        // Twice: the clouds are lit by the sky's SH, so the clear sky's comes first and the
+        // clouds read that one, never the last sky's (a dusk picture after a noon one kept the
+        // noon light in its clouds).
+        let passes: &[u32] = if self.sh_dirty { &[6 * MIPS, 0] } else { &[] };
+        self.sh_dirty = false;
+        for &slot in passes {
             let view = self.sh.create_view(&Default::default());
             let mut pass = crate::color_pass(
                 encoder,
@@ -194,7 +203,7 @@ impl Env {
             );
             pass.set_pipeline(&self.sh_pipeline);
             pass.set_bind_group(0, sky, &[]);
-            pass.set_bind_group(1, &self.faces_bind, &[0]);
+            pass.set_bind_group(1, &self.faces_bind, &[(u64::from(slot) * SLOT) as u32]);
             pass.draw(0..3, 0..1);
             drop(pass);
             for buffer in globals {
