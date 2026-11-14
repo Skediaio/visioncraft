@@ -316,10 +316,18 @@ impl TerrainTool {
             ring.extend(water.iter().skip(1));
             ring.push(a);
             ring.push(mid(0.5 - 0.01 / len));
+            // The band stands on the lowest ground under it: it is as much taller as the ground
+            // under it rises, so it shows the same height all round.
+            let (lo, hi) = s.project().terrain.as_ref().map_or((0.0, 0.0), |t| {
+                ring.iter()
+                    .filter_map(|p| t.height_at(p[0], p[1]))
+                    .fold((f32::MAX, f32::MIN), |(a, b), h| (a.min(h), b.max(h)))
+            });
+            let rise = if hi >= lo { hi - lo } else { 0.0 };
             s.run(
                 "shape.add_extrusion",
                 json!({"name": t::TR_POND_EDGE, "outline": ring, "closed": false, "thickness": POND_COPING_M,
-                       "height": POND_COPING_H, "material": "paving"}),
+                       "height": POND_COPING_H + rise, "material": "paving"}),
             )?;
             follow_ground(s, before.as_deref())
         });
@@ -656,16 +664,35 @@ fn offset_outline(outline: &[[f32; 2]], d: f32) -> Vec<[f32; 2]> {
         let l = dx.hypot(dz).max(1e-6);
         [side * dz / l, -side * dx / l]
     };
-    (0..n)
-        .map(|i| {
-            let p = outline[i];
-            let n1 = normal(outline[(i + n - 1) % n], p);
-            let n2 = normal(p, outline[(i + 1) % n]);
+    let mut out = Vec::new();
+    for i in 0..n {
+        let (prev, p, next) = (outline[(i + n - 1) % n], outline[i], outline[(i + 1) % n]);
+        let n1 = normal(prev, p);
+        let n2 = normal(p, next);
+        let turn = (p[0] - prev[0]) * (next[1] - p[1]) - (p[1] - prev[1]) * (next[0] - p[0]);
+        if turn * area2 > 0.0 {
+            // A convex corner rounds, as the carve's bank does (it follows the distance to the
+            // outline): a mitred corner would reach past the bank onto dry ground.
+            let (a1, a2) = (n1[1].atan2(n1[0]), n2[1].atan2(n2[0]));
+            let mut da = a2 - a1;
+            while da > std::f32::consts::PI {
+                da -= std::f32::consts::TAU;
+            }
+            while da < -std::f32::consts::PI {
+                da += std::f32::consts::TAU;
+            }
+            let steps = ((da.abs() / 15f32.to_radians()).ceil() as usize).max(1);
+            for k in 0..=steps {
+                let a = a1 + da * k as f32 / steps as f32;
+                out.push([p[0] + a.cos() * d, p[1] + a.sin() * d]);
+            }
+        } else {
             let dot = (n1[0] * n2[0] + n1[1] * n2[1]).max(-0.9);
             let k = (d / (1.0 + dot)).min(3.0 * d);
-            [p[0] + (n1[0] + n2[0]) * k, p[1] + (n1[1] + n2[1]) * k]
-        })
-        .collect()
+            out.push([p[0] + (n1[0] + n2[0]) * k, p[1] + (n1[1] + n2[1]) * k]);
+        }
+    }
+    out
 }
 
 #[cfg(test)]
