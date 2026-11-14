@@ -724,11 +724,14 @@ impl Flora {
     }
 }
 
+/// A level's meshes, one per material.
+type Parts = Vec<(flora::Material, flora::MeshPart)>;
+
 /// One variant's meshes at every level, generated away from the renderer.
 struct Generated {
     height: f32,
     /// (level, parts by material, foliage tint)
-    levels: Vec<(usize, Vec<(flora::Material, flora::MeshPart)>, [f32; 3])>,
+    levels: Vec<(usize, Parts, [f32; 3])>,
 }
 
 fn generate_variant(params: &flora::PlantParams, v: u32, month: u8) -> Generated {
