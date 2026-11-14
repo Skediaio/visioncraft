@@ -36,6 +36,8 @@ struct Globals {
     reflection: vec4<f32>,      // x planar reflection available (0/1), y water height (m), z clip below (0/1), w clip height (m)
     grade: vec4<f32>,           // x look contrast power, y look saturation (1, 1: plain AgX), z camera indoors (0/1), w photo sample seed
     clouds: vec4<f32>,          // x cover 0..1, y overcast (0/1), zw drift (m)
+    snow_cover: mat4x4<f32>,    // world -> the snow cover map (straight down, last shadow layer)
+    snow: vec4<f32>,            // x snow 0..1, y the cover map's shadow layer, z cover map on (0/1)
     sh: array<vec4<f32>, 9>,    // sky irradiance as L2 SH (kcd/m2 * sr), written on the GPU (env.wgsl)
 }
 @group(0) @binding(0) var<uniform> g: Globals;

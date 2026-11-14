@@ -15,6 +15,8 @@ use visioncraft_core::{
 use visioncraft_flora as flora;
 use visioncraft_render::{ItemId, Renderer};
 
+/// Snow this deep (`view.snow`) covers the clutter.
+const SNOW_BURIES: f32 = 0.3;
 /// Clutter is drawn to here; the last `FADE_BAND_M` dither out.
 const FADE_M: f32 = 25.0;
 const FADE_BAND_M: f32 = 10.0;

@@ -106,7 +106,7 @@ const CLUSTER_CELL: f32 = 8.0;
 /// `set_time` wraps here (seconds) to keep f32 precision in the shaders.
 const TIME_WRAP: f64 = 4096.0;
 /// Byte offset of the SH in the globals (written by the GPU, see env.rs).
-const SH_OFFSET: u64 = 8 * 64 + 28 * 16;
+const SH_OFFSET: u64 = 9 * 64 + 29 * 16;
 
 const COMMON: &str = include_str!("common.wgsl");
 const SKY: &str = include_str!("sky.wgsl");
@@ -834,6 +834,10 @@ pub struct Renderer {
     indoors: bool,
     /// The procedural cloud layer of the analytic skies (`set_clouds`).
     clouds: Clouds,
+    /// Snow cover 0..1 (`set_snow`), and the top-down depth map of what lies over the ground
+    /// around the eye (the last shadow layer): where it shows something overhead, no snow.
+    snow: f32,
+    snow_cover: Option<Mat4>,
     /// A photo's sample (`still::Photo`): the shadow's light direction moved within the sun's
     /// disc, and the noise seed of ambient occlusion; zero for live frames.
     shadow_jitter: Vec3,
@@ -936,7 +940,8 @@ impl Renderer {
             module(&modules, "atmosphere"),
             &layouts.globals_only,
         );
-        let cascade_buffer = uniform("cascades", SLOT * shadow::MAX_CASCADES as u64);
+        // The cascades, then the snow cover map's slot.
+        let cascade_buffer = uniform("cascades", SLOT * (shadow::MAX_CASCADES as u64 + 1));
         let cascade_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("cascade"),
             layout: &layouts.cascade,
@@ -1155,6 +1160,8 @@ impl Renderer {
             grade: (1.0, 1.0),
             indoors: false,
             clouds: Clouds::default(),
+            snow: 0.0,
+            snow_cover: None,
             shadow_jitter: Vec3::ZERO,
             photo_seed: 0.0,
             photo_pipes: None,
@@ -1471,6 +1478,11 @@ impl Renderer {
 
     /// The cloud layer over the analytic skies (an HDRI brings its own). It shows in the sky,
     /// in reflections and in the ambient light, and takes its share of the sun.
+    /// Snow over the up-facing surfaces, 0 (none) to 1, except where something lies over them.
+    pub fn set_snow(&mut self, amount: f32) {
+        self.snow = amount.clamp(0.0, 1.0);
+    }
+
     pub fn set_clouds(&mut self, clouds: &Clouds) {
         if *clouds != self.clouds {
             self.clouds = *clouds;
@@ -2396,6 +2408,11 @@ impl Renderer {
                 self.cascade_rendered[c] = Some(cascades.view_proj[c]);
             }
         }
+        // The snow cover map: straight down over a square round the eye, in whole texels.
+        self.snow_cover = (self.snow > 0.0)
+            .then(|| self.scene_bounds)
+            .flatten()
+            .map(|(lo, hi)| snow_cover_matrix(self.eye, lo, hi, self.quality.shadow_resolution));
         let view_proj = self.proj * self.view;
         let water = (self.quality.water_reflection > 0)
             .then(|| self.water_plane(view_proj))
@@ -2420,11 +2437,12 @@ impl Renderer {
                 Some(h),
             );
         }
-        let mut slots = vec![0u8; SLOT as usize * shadow::MAX_CASCADES];
-        for (i, m) in cascades.view_proj.iter().enumerate() {
+        let mut slots = vec![0u8; SLOT as usize * (shadow::MAX_CASCADES + 1)];
+        let cover = self.snow_cover.unwrap_or(Mat4::IDENTITY);
+        for (i, m) in cascades.view_proj.iter().chain([&cover]).enumerate() {
             let mut b = Bytes::default();
             b.floats(&m.to_cols_array());
-            let far = cached && i == last;
+            let far = (cached && i == last) || i == shadow::MAX_CASCADES;
             b.floats(&[if far { 0.0 } else { 1.0 }, 0.0, 0.0, 0.0]);
             slots[i * SLOT as usize..i * SLOT as usize + b.0.len()].copy_from_slice(&b.0);
         }
@@ -2458,7 +2476,8 @@ impl Renderer {
 
         let t = &self.targets;
         for (c, layer) in t.shadow_layers.iter().enumerate() {
-            if !refresh[c] {
+            // The last layer is the snow cover map, drawn after the cascades.
+            if c >= refresh.len() || c + 1 == t.shadow_layers.len() || !refresh[c] {
                 continue;
             }
             let mut pass = depth_pass(
@@ -2476,6 +2495,32 @@ impl Renderer {
                 cascades.view_proj[c],
                 false,
                 Pass::Shadow { far, coarse: c > 0 },
+            );
+        }
+        if let (Some(m), Some(layer)) = (self.snow_cover, t.shadow_layers.last()) {
+            let mut pass = depth_pass(
+                encoder,
+                "snow cover",
+                layer,
+                wgpu::StoreOp::Store,
+                None,
+            );
+            pass.set_bind_group(0, &self.globals_bind, &[]);
+            pass.set_bind_group(
+                2,
+                &self.cascade_bind,
+                &[(shadow::MAX_CASCADES as u64 * SLOT) as u32],
+            );
+            self.draw_items(
+                &mut pass,
+                m,
+                false,
+                // The view's own levels: a bare tree's coarsest level is a few large twig
+                // cards, which kept the snow off a patch of lawn under a birch.
+                Pass::Shadow {
+                    far: false,
+                    coarse: false,
+                },
             );
         }
         self.counters.split("shadow");
@@ -3533,6 +3578,13 @@ impl Renderer {
             drift.x,
             drift.y,
         ]);
+        b.floats(&self.snow_cover.unwrap_or(Mat4::ZERO).to_cols_array());
+        b.floats(&[
+            self.snow,
+            self.quality.cascades as f32,
+            if self.snow_cover.is_some() { 1.0 } else { 0.0 },
+            0.0,
+        ]);
         debug_assert_eq!(b.0.len() as u64, SH_OFFSET);
         self.queue.write_buffer(buffer, 0, &b.0);
     }
@@ -3749,6 +3801,21 @@ fn f32_bytes(f: &[f32]) -> Vec<u8> {
 fn u32_bytes(u: &[u32]) -> Vec<u8> {
     u.iter().flat_map(|x| x.to_le_bytes()).collect()
 }
+
+/// The snow cover map's camera: straight down from over the scene onto a square of
+/// `SNOW_COVER_M` round the eye, its centre moved in whole texels so the cover does not crawl.
+fn snow_cover_matrix(eye: Vec3, lo: Vec3, hi: Vec3, resolution: u32) -> Mat4 {
+    let half = SNOW_COVER_M / 2.0;
+    let texel = SNOW_COVER_M / resolution.max(1) as f32;
+    let c = (glam::Vec2::new(eye.x, eye.z) / texel).round() * texel;
+    let top = hi.y + 1.0;
+    let view = Mat4::look_to_rh(Vec3::new(c.x, top, c.y), Vec3::NEG_Y, Vec3::NEG_Z);
+    Mat4::orthographic_rh(-half, half, -half, half, 0.0, (top - lo.y + 1.0).max(1.0)) * view
+}
+
+/// The snow cover map spans this square round the eye (metres); beyond, snow lies everywhere
+/// that faces up.
+const SNOW_COVER_M: f32 = 160.0;
 
 fn globals_size() -> u64 {
     // 8 matrices, 28 vec4s, the 9 SH vec4s last; see common.wgsl.
@@ -4930,7 +4997,8 @@ impl Targets {
             size: wgpu::Extent3d {
                 width: res,
                 height: res,
-                depth_or_array_layers: quality.cascades,
+                // The cascades and the snow cover map.
+                depth_or_array_layers: quality.cascades + 1,
             },
             mip_level_count: 1,
             sample_count: 1,
@@ -4939,7 +5007,7 @@ impl Targets {
             usage: sampled,
             view_formats: &[],
         });
-        let shadow_layers = (0..quality.cascades)
+        let shadow_layers = (0..=quality.cascades)
             .map(|i| {
                 shadow.create_view(&wgpu::TextureViewDescriptor {
                     label: Some("shadow layer"),
@@ -5245,8 +5313,8 @@ mod tests {
 
     #[test]
     fn globals_match_the_shader_layout() {
-        // common.wgsl: 8 mat4, then 28 vec4 before the 9 SH vec4.
-        assert_eq!(SH_OFFSET, 8 * 64 + 28 * 16);
+        // common.wgsl: 8 mat4, 28 vec4, the snow cover's mat4 and the snow vec4, then the 9 SH vec4.
+        assert_eq!(SH_OFFSET, 9 * 64 + 29 * 16);
         assert_eq!(SH_OFFSET % 16, 0, "SH copy needs 16-byte texel alignment");
         assert_eq!(globals_size(), SH_OFFSET + 144);
     }

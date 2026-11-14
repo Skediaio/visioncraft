@@ -435,6 +435,8 @@ const LAWN_MAX_TUFTS: usize = 60_000;
 /// A lawn over its tuft budget is scattered around the eye's cell of this size, out to
 /// `LAWN_FADE_M` plus this from the cell's centre, and again when the eye moves to another cell.
 const LAWN_EYE_CELL_M: f32 = 8.0;
+/// Snow deeper than this (`view.snow`) covers the lawn's blades.
+const LAWN_SNOW_BURIES: f32 = 0.55;
 /// Linear mean of the grass picture a plain lawn shows from the library (grass001), so the
 /// tufts take the colour of the ground they stand in.
 const LAWN_PICTURE_MEAN: [f32; 3] = [0.059, 0.107, 0.022];
@@ -1056,6 +1058,8 @@ impl Scene {
         owners.sort();
         type Faces = Vec<(usize, visioncraft_core::material::Lawn3d, [f32; 3])>;
         let mut todo: Vec<(String, Faces)> = Vec::new();
+        // Deep snow buries the lawn's blades: only the snow over the lawn shows.
+        let buried = project.view.snow > LAWN_SNOW_BURIES;
         let (max_density, max_tufts, narrow) = if self.dense_lawns {
             (LAWN_MAX_DENSITY * 2.0, LAWN_MAX_TUFTS * 4, 0.7)
         } else {
@@ -1065,7 +1069,7 @@ impl Scene {
         self.lawns_follow = false;
         for id in owners {
             let o = &self.owners[id];
-            if !o.key.visible || !o.is_shape {
+            if !o.key.visible || !o.is_shape || buried {
                 continue;
             }
             let faces: Faces = resolve_materials(project, id, &o.geom)

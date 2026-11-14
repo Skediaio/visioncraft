@@ -790,6 +790,15 @@ fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, screen_effe
         s.ao = 1.0;
         s.emissive = vec3<f32>(0.0);
     }
+    // Snow over the surface (`snow_on`): matt and smoother, its bumps buried; its albedo goes
+    // over the surface's after weathering below.
+    var snow = 0.0;
+    if !clay && g.snow.x > 0.0 {
+        snow = snow_on(in.world, s.geometric);
+        s.metallic = mix(s.metallic, 0.0, snow);
+        s.roughness = mix(s.roughness, 0.6, snow);
+        s.n = normalize(mix(s.n, s.geometric, snow * 0.8));
+    }
     var base = s.base.rgb;
     if in.face == g.highlight.y && draw.mesh.x == g.highlight.x {
         base = mix(base, vec3<f32>(0.25, 0.55, 1.0), 0.35);
@@ -818,6 +827,7 @@ fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, screen_effe
             base *= vec3<f32>(1.0 + 0.16 * k, 1.0 + 0.05 * k, 1.0 - 0.14 * k);
         }
     }
+    base = mix(base, SNOW_ALBEDO, snow);
     // Leaves have a waxy but thin cuticle: half the specular of other dielectrics.
     let f0 = mix(vec3<f32>(select(0.04, 0.02, foliage)), base, s.metallic);
     let diffuse_color = base * (1.0 - s.metallic);
@@ -853,6 +863,12 @@ fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, screen_effe
             }
         }
         sun += (diffuse_color / PI * diffuse + fr) * g.sun_light.rgb * shadow;
+        // Snow sparkles: a few crystals catch the sun, fixed in place.
+        if snow > 0.0 {
+            let cell = floor(in.world * 180.0);
+            let h = fract(sin(dot(cell, vec3<f32>(12.9898, 78.233, 37.719))) * 43758.547);
+            sun += step(0.9985, h) * snow * nol * 3.0 * g.sun_light.rgb * shadow;
+        }
         if foliage {
             // Leaves deep in a crown are mostly in the shade of the leaves above them, finer
             // than the shadow map resolves: their place in the crown (`crown_sky`, in the
@@ -879,6 +895,50 @@ fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, screen_effe
     let emitted = s.emissive * g.time.y;
     return Shaded(apply_fog(sun + ambient_diffuse + ambient_specular + local + emitted, in.world), s.base.a);
 }
+
+// ---- snow ------------------------------------------------------------------
+
+// Whether the sky is open straight above `world` (1) or something lies over it (0: a roof, a
+// canopy, a dense crown): the snow cover map, a depth map rendered looking straight down, with
+// a wide filter for a soft edge. Outside the map: open.
+fn snow_open(world: vec3<f32>) -> f32 {
+    if g.snow.z < 0.5 {
+        return 1.0;
+    }
+    // A hand above the surface, so the surface itself does not cover it.
+    let p = g.snow_cover * vec4<f32>(world + vec3<f32>(0.0, 0.15, 0.0), 1.0);
+    let uv = vec2<f32>(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);
+    if any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0)) {
+        return 1.0;
+    }
+    var sum = 0.0;
+    for (var y = -1; y <= 1; y++) {
+        for (var x = -1; x <= 1; x++) {
+            let o = vec2<f32>(f32(x), f32(y)) * g.shadow.z * 2.5;
+            sum += textureSampleCompareLevel(shadow_map, shadow_sampler, uv + o, i32(g.snow.y), p.z);
+        }
+    }
+    return sum / 9.0;
+}
+
+// How much snow lies on a surface: snow settles on what faces up (steeper as there is more of
+// it), not under cover, broken up at its edge by noise into drifts and bare patches.
+fn snow_on(world: vec3<f32>, n: vec3<f32>) -> f32 {
+    let a = g.snow.x;
+    if a <= 0.0 {
+        return 0.0;
+    }
+    let up = smoothstep(mix(0.92, 0.45, a), mix(0.99, 0.75, a), n.y);
+    if up <= 0.0 {
+        return 0.0;
+    }
+    let nz = value_noise(world * 1.7) * 0.6 + value_noise(world * 7.3 + 11.0) * 0.4;
+    let c = up * snow_open(world) * (0.45 + a) + (nz - 0.5) * 0.7 - 0.2;
+    return smoothstep(0.0, 0.45, c) * smoothstep(0.0, 0.12, a);
+}
+
+// Fresh snow: a high, slightly blue-white albedo, matt with a soft sheen.
+const SNOW_ALBEDO: vec3<f32> = vec3<f32>(0.80, 0.83, 0.88);
 
 // One cosine-weighted ray from `p` along a direction about `n`: the radiance it brings (the
 // previous sample's colour where it meets a surface in the depth buffer, else the sky, dimmed
@@ -1207,8 +1267,20 @@ fn water(in: Varying) -> vec4<f32> {
     let transmit = water_transmittance(path, material.base_color.a);
     let deep = material.base_color.rgb * (sh_irradiance(vec3<f32>(0.0, 1.0, 0.0)) + g.sun_light.rgb * max(l.y, 0.0) * sun_on) / PI;
     let shore = smoothstep(0.0, 0.12, path);
-    let color = (f * reflected + glint + (1.0 - f) * (1.0 - transmit) * deep) * shore;
-    let alpha = (f + (1.0 - f) * (1.0 - transmit)) * shore;
+    var color = (f * reflected + glint + (1.0 - f) * (1.0 - transmit) * deep) * shore;
+    var alpha = (f + (1.0 - f) * (1.0 - transmit)) * shore;
+    // Deep in a snowy winter the pond freezes: dull grey-blue ice, snow drifted over it in places.
+    let ice = smoothstep(0.45, 0.75, g.snow.x);
+    if ice > 0.0 {
+        let up = vec3<f32>(0.0, 1.0, 0.0);
+        let nz = value_noise(in.world * 0.9) * 0.6 + value_noise(in.world * 4.1) * 0.4;
+        let drift = smoothstep(0.55, 0.8, nz + (g.snow.x - 0.7) * 0.6) * snow_open(in.world);
+        let albedo = mix(vec3<f32>(0.32, 0.38, 0.42), SNOW_ALBEDO, drift);
+        let lit = albedo * (sh_irradiance(up) + g.sun_light.rgb * max(l.y, 0.0) * sun_on) / PI
+            + f * reflected * (1.0 - drift) * 0.5;
+        color = mix(color, lit, ice);
+        alpha = mix(alpha, 1.0, ice);
+    }
     return fog_premultiplied(vec4<f32>(color, alpha), in.world);
 }
 
