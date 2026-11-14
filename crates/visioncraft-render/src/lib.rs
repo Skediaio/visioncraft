@@ -2410,7 +2410,7 @@ impl Renderer {
         }
         // The snow cover map: straight down over a square round the eye, in whole texels.
         self.snow_cover = (self.snow > 0.0)
-            .then(|| self.scene_bounds)
+            .then_some(self.scene_bounds)
             .flatten()
             .map(|(lo, hi)| snow_cover_matrix(self.eye, lo, hi, self.quality.shadow_resolution));
         let view_proj = self.proj * self.view;
@@ -2498,13 +2498,7 @@ impl Renderer {
             );
         }
         if let (Some(m), Some(layer)) = (self.snow_cover, t.shadow_layers.last()) {
-            let mut pass = depth_pass(
-                encoder,
-                "snow cover",
-                layer,
-                wgpu::StoreOp::Store,
-                None,
-            );
+            let mut pass = depth_pass(encoder, "snow cover", layer, wgpu::StoreOp::Store, None);
             pass.set_bind_group(0, &self.globals_bind, &[]);
             pass.set_bind_group(
                 2,

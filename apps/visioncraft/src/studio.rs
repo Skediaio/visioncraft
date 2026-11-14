@@ -850,7 +850,10 @@ impl Studio {
         // garden), with most of its colour taken out: a green lawn tints a wall only a little.
         let eye = self.camera.eye();
         // The cell, and the snow in the w (the ground bounces snow's white).
-        let cell = (eye * 2.0).round().as_ivec3().extend((v.snow * 100.0) as i32);
+        let cell = (eye * 2.0)
+            .round()
+            .as_ivec3()
+            .extend((v.snow * 100.0) as i32);
         if self.bounce_cell != Some(cell) {
             self.bounce_cell = Some(cell);
             let albedo = self
