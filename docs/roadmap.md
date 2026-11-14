@@ -48,6 +48,12 @@ nothing here is a promise of a date.
   coordinates converted to the drawing's metres and north, the site set for the sun, and each
   source's licence and attribution shown. The model is then placed on that ground. Import from
   common geodata files and services as well.
+- **Films from camera moves:** a film described as commands, so a person or an agent can compose
+  it: a camera path through points with a speed, height and look-at target per stretch (walk,
+  glide, rise, orbit round a spot, a drone-like fly-over), eased starts and stops, the sun's
+  course, a season or the years of growth changing along the way, rendered to numbered frames or
+  a video file. An agent gets the garden's layout from the same queries it designs with and
+  proposes the shots.
 - **Quantities:** areas, lengths, volumes and counts per object and per material as a query, so
   tools built on top can list what a design contains.
 
@@ -69,7 +75,6 @@ nothing here is a promise of a date.
 ## Later
 
 - User species made of several models as growth stages.
-- A film along viewpoints, with growth or the sun's course as animation.
 - Live reload of a linked 3dcraft model in the browser (desktop has it).
 - Interiors and closed buildings.
 - Rain and wet surfaces.

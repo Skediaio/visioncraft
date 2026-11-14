@@ -4,7 +4,8 @@ use glam::{Mat4, Vec2, Vec3};
 use visioncraft_core::{Viewpoint, interpolate};
 
 pub const EYE_HEIGHT: f32 = 1.7;
-pub const WALK_SPEED: f32 = 1.4;
+/// A brisk walk in m/s: a true stroll (1.4) felt slow on screen.
+pub const WALK_SPEED: f32 = 1.9;
 /// The top view is orthographic; its eye stands as far above the ground as a 6 degree view
 /// showing the same would (where the asset library measures distances from).
 const TOP_FOV: f32 = 0.105;
