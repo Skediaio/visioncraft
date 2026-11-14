@@ -197,7 +197,7 @@ pub struct PlantTextures {
     /// Tangent-space normal map of the atlas (leaf curl and veins, the bark normal's
     /// convention), made with the finer atlases of [`textures_at`] only.
     pub atlas_normal: Option<Image>,
-    /// Tileable bark albedo, [`BARK_SIZE`] square, opaque.
+    /// Tileable bark albedo, [`BARK_SIZE`] square (twice that from atlas scale 2), opaque.
     pub bark: Image,
     /// Tileable tangent-space normal map for the bark (RGB = xyz * 0.5 + 0.5, +Z out of the
     /// surface, U around the branch, V along it).

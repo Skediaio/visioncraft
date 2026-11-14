@@ -355,6 +355,12 @@ fn finer_atlases_keep_the_layout_and_bring_a_leaf_normal_map() {
         rgba.chunks(4).filter(|p| p[3] > 127).count() as f32 / (scale * scale) as f32
     };
     let (a, b) = (opaque(&base.atlas.rgba, 1), opaque(&fine.atlas.rgba, 2));
+    // Bark doubles from scale 2.
+    assert_eq!(fine.bark.width, 2 * BARK_SIZE);
+    assert_eq!(
+        fine.bark_normal.rgba.len(),
+        (4 * BARK_SIZE * BARK_SIZE * 4) as usize
+    );
     assert!((a - b).abs() < 0.05 * a, "{a} vs {b}");
     // Leaves are not flat: many texels lean away from +Z.
     let tilted = normal.rgba.chunks(4).filter(|p| p[2] < 245).count();

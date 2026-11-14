@@ -1462,7 +1462,8 @@ pub fn generate_at(p: &PlantParams, scale: usize) -> PlantTextures {
     // The finer atlases get a normal map: the same cost as before at scale 1.
     let atlas_normal = (scale > 1).then(|| leaf_normals(&cv));
     let atlas = finish_atlas(cv);
-    let (bark, bark_normal) = bark(p);
+    // Bark gains detail with the atlas: 512 px from scale 2 (HIGH and ULTRA).
+    let (bark, bark_normal) = bark(p, BARK_SIZE as usize * scale.min(2));
     PlantTextures {
         atlas,
         atlas_normal,
@@ -1667,8 +1668,7 @@ fn worley(u: f32, v: f32, gx: i32, gy: i32, salt: u32) -> (f32, f32, u32) {
     (f1, f2, id)
 }
 
-fn bark(p: &PlantParams) -> (Image, Image) {
-    let n = BARK_SIZE as usize;
+fn bark(p: &PlantParams, n: usize) -> (Image, Image) {
     let b = &p.bark;
     let mut height = vec![0.0f32; n * n];
     let mut col = vec![[0.0f32; 3]; n * n];
@@ -1760,7 +1760,8 @@ fn bark(p: &PlantParams) -> (Image, Image) {
         .iter()
         .flat_map(|c| [to8(c[0]), to8(c[1]), to8(c[2]), 255])
         .collect();
-    let strength = 3.0;
+    // The same slopes at any size: height steps per texel shrink as the texels do.
+    let strength = 3.0 * n as f32 / BARK_SIZE as f32;
     let mut normal = Vec::with_capacity(n * n * 4);
     for y in 0..n {
         for x in 0..n {
@@ -1778,13 +1779,13 @@ fn bark(p: &PlantParams) -> (Image, Image) {
     }
     (
         Image {
-            width: BARK_SIZE,
-            height: BARK_SIZE,
+            width: n as u32,
+            height: n as u32,
             rgba: albedo,
         },
         Image {
-            width: BARK_SIZE,
-            height: BARK_SIZE,
+            width: n as u32,
+            height: n as u32,
             rgba: normal,
         },
     )
