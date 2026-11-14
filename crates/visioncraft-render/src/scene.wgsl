@@ -345,8 +345,16 @@ fn sh_irradiance(n: vec3<f32>) -> vec3<f32> {
     e += g.sh[6].rgb * 0.315392 * (3.0 * n.z * n.z - 1.0);
     e += g.sh[7].rgb * 1.092548 * n.x * n.z;
     e += g.sh[8].rgb * 0.546274 * (n.x * n.x - n.y * n.y);
+    // Shade is lit by more than the open sky: the walls, trees and ground round it pass the
+    // sun's white on, which the two-band harmonics of an open site miss. Part of the sky's blue
+    // goes, so a shadow reads cool, not blue (as a camera balanced for daylight shows it).
+    let luma = dot(e, vec3<f32>(0.2126, 0.7152, 0.0722));
+    e = mix(vec3<f32>(luma), e, AMBIENT_CHROMA);
     return max(e, vec3<f32>(0.0)) * g.night.w;
 }
+
+// How much of the sky's colour the ambient light keeps (see `sh_irradiance`).
+const AMBIENT_CHROMA: f32 = 0.55;
 
 // Split-sum environment BRDF, analytic fit: Karis, "Physically Based Shading
 // on Mobile" (Unreal Engine blog, 2014).
