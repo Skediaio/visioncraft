@@ -2191,7 +2191,11 @@ impl Scene {
                     })
             };
             for (t, face) in o.geom.triangles.iter().zip(&o.geom.triangle_faces) {
-                if clear(*face) || o.face_piece.get(*face as usize).is_some_and(Option::is_none) {
+                if clear(*face)
+                    || o.face_piece
+                        .get(*face as usize)
+                        .is_some_and(Option::is_none)
+                {
                     continue;
                 }
                 out.push(t.map(|v| {

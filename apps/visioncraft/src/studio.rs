@@ -800,7 +800,9 @@ impl Studio {
         let triangles = self.scene.sky_occluders(project);
         let mut h = std::collections::hash_map::DefaultHasher::new();
         for t in &triangles {
-            t.as_flattened().iter().for_each(|v| v.to_bits().hash(&mut h));
+            t.as_flattened()
+                .iter()
+                .for_each(|v| v.to_bits().hash(&mut h));
         }
         let key = h.finish() | 1;
         if key == self.sky_volume_key {
@@ -1747,7 +1749,10 @@ mod session_leak_tests {
             let r =
                 visioncraft_render::Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
             let mut s = Studio::new(r, p.clone());
-            s.camera.look_from(glam::Vec3::new(16.0, 2.5, 24.0), glam::Vec3::new(11.0, 2.0, -4.0));
+            s.camera.look_from(
+                glam::Vec3::new(16.0, 2.5, 24.0),
+                glam::Vec3::new(11.0, 2.0, -4.0),
+            );
             s
         };
         let mut fresh = studio(&p);

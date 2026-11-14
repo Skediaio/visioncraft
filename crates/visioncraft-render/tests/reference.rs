@@ -1533,7 +1533,12 @@ fn p_dusk_after_noon_matches_a_fresh_dusk() {
     };
     let dusk = Sun::from_angles(300.0, -1.0);
     let mut diffs = Vec::new();
-    for (haze, glow, cover) in [(0.8, 0.36, 0.3), (0.8, 0.36, 0.0), (1.0, 0.5, 0.0), (1.0, 0.5, 0.3)] {
+    for (haze, glow, cover) in [
+        (0.8, 0.36, 0.3),
+        (0.8, 0.36, 0.0),
+        (1.0, 0.5, 0.0),
+        (1.0, 0.5, 0.3),
+    ] {
         let want = frame(&mut fresh(), dusk, 8.0, 0.8, 0.36, cover);
         let mut used = fresh();
         frame(&mut used, demo::afternoon_sun(), 15.0, haze, glow, cover);

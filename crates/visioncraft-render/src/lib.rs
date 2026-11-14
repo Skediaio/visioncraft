@@ -4049,7 +4049,12 @@ fn sky_volume_texture(
             .iter()
             .flat_map(|s| {
                 let enc = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-                [enc(s[0]), enc(0.5 + 2.0 * s[1]), enc(0.5 + 2.0 * s[2]), enc(0.5 + 2.0 * s[3])]
+                [
+                    enc(s[0]),
+                    enc(0.5 + 2.0 * s[1]),
+                    enc(0.5 + 2.0 * s[2]),
+                    enc(0.5 + 2.0 * s[3]),
+                ]
             })
             .collect();
         queue.write_texture(

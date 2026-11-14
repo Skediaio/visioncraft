@@ -573,8 +573,11 @@ mod tests {
     fn hidden_bodies_are_kept_with_the_model() {
         let mut s = Session::new(Project::default());
         let id = add(&mut s);
-        s.run("model.set_hidden_bodies", json!({"id": id, "bodies": ["roof", "F606"]}))
-            .unwrap();
+        s.run(
+            "model.set_hidden_bodies",
+            json!({"id": id, "bodies": ["roof", "F606"]}),
+        )
+        .unwrap();
         let m = &s.project().models[0];
         let body = |id: &str, name: &str| crate::Body {
             id: id.into(),
@@ -587,10 +590,23 @@ mod tests {
         assert!(!m.hides(&body("F2", "walls")));
         let saved = Project::from_json_bytes(&s.project().to_json_bytes()).unwrap();
         assert_eq!(saved.models[0].hidden_bodies, ["roof", "F606"]);
-        s.run("model.set_hidden_bodies", json!({"id": id, "bodies": []})).unwrap();
+        s.run("model.set_hidden_bodies", json!({"id": id, "bodies": []}))
+            .unwrap();
         assert!(s.project().models[0].hidden_bodies.is_empty());
-        assert!(s.run("model.set_hidden_bodies", json!({"id": "nope", "bodies": []})).is_err());
-        assert!(s.run("model.set_hidden_bodies", json!({"id": id, "bodies": [" "]})).is_err());
+        assert!(
+            s.run(
+                "model.set_hidden_bodies",
+                json!({"id": "nope", "bodies": []})
+            )
+            .is_err()
+        );
+        assert!(
+            s.run(
+                "model.set_hidden_bodies",
+                json!({"id": id, "bodies": [" "]})
+            )
+            .is_err()
+        );
     }
 
     #[test]

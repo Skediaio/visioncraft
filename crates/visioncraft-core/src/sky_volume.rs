@@ -145,7 +145,8 @@ pub fn sky_volume(triangles: &[[[f32; 3]; 3]]) -> Option<SkyVolume> {
     let lo: [f32; 3] = std::array::from_fn(|k| lo[k] - PAD_M);
     let hi: [f32; 3] = std::array::from_fn(|k| hi[k] + PAD_M);
     let mut cell = CELL_M;
-    let count = |c: f32| -> [u32; 3] { std::array::from_fn(|k| ((hi[k] - lo[k]) / c).ceil() as u32 + 1) };
+    let count =
+        |c: f32| -> [u32; 3] { std::array::from_fn(|k| ((hi[k] - lo[k]) / c).ceil() as u32 + 1) };
     while count(cell).iter().map(|&n| n as usize).product::<usize>() > MAX_CELLS {
         cell *= 1.25;
     }
@@ -185,7 +186,9 @@ pub fn sky_volume(triangles: &[[[f32; 3]; 3]]) -> Option<SkyVolume> {
                     lo[2] + cell * z as f32,
                 ];
                 // Its own turn of the ray set about the vertical.
-                let h = (x.wrapping_mul(73_856_093) ^ y.wrapping_mul(19_349_663) ^ z.wrapping_mul(83_492_791))
+                let h = (x.wrapping_mul(73_856_093)
+                    ^ y.wrapping_mul(19_349_663)
+                    ^ z.wrapping_mul(83_492_791))
                     % 1024;
                 let (s, c) = (h as f32 * std::f32::consts::TAU / 1024.0).sin_cos();
                 let mut sum = [0.0f32; 4];
@@ -205,17 +208,28 @@ pub fn sky_volume(triangles: &[[[f32; 3]; 3]]) -> Option<SkyVolume> {
     // Each sample averaged with the neighbours it sees (3 x 3 x 3, never through a wall): the
     // ray count's noise goes, the rooms stay apart.
     let at = |x: i64, y: i64, z: i64| -> Option<usize> {
-        let ok = x >= 0 && y >= 0 && z >= 0 && x < dims[0] as i64 && y < dims[1] as i64 && z < dims[2] as i64;
+        let ok = x >= 0
+            && y >= 0
+            && z >= 0
+            && x < dims[0] as i64
+            && y < dims[1] as i64
+            && z < dims[2] as i64;
         ok.then(|| (x + dims[0] as i64 * (y + dims[1] as i64 * z)) as usize)
     };
     let mut smooth = samples.clone();
     for z in 0..dims[2] as i64 {
         for y in 0..dims[1] as i64 {
             for x in 0..dims[0] as i64 {
-                let p = [lo[0] + cell * x as f32, lo[1] + cell * y as f32, lo[2] + cell * z as f32];
+                let p = [
+                    lo[0] + cell * x as f32,
+                    lo[1] + cell * y as f32,
+                    lo[2] + cell * z as f32,
+                ];
                 let (mut sum, mut n) = ([0.0f32; 4], 0.0);
                 for (dx, dy, dz) in (0..27).map(|k| (k % 3 - 1, k / 3 % 3 - 1, k / 9 - 1)) {
-                    let Some(i) = at(x + dx, y + dy, z + dz) else { continue };
+                    let Some(i) = at(x + dx, y + dy, z + dz) else {
+                        continue;
+                    };
                     let d = [dx as f32, dy as f32, dz as f32];
                     let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
                     if len > 0.0 && !voxels.free(p, d.map(|c| c / len), len * cell) {
@@ -253,8 +267,16 @@ mod tests {
             p
         };
         vec![
-            [corner(false, false), corner(true, false), corner(true, true)],
-            [corner(false, false), corner(true, true), corner(false, true)],
+            [
+                corner(false, false),
+                corner(true, false),
+                corner(true, true),
+            ],
+            [
+                corner(false, false),
+                corner(true, true),
+                corner(false, true),
+            ],
         ]
     }
 
@@ -288,7 +310,10 @@ mod tests {
     fn an_opening_lets_in_sky_from_its_side_only() {
         let v = sky_volume(&room(2.0)).unwrap();
         let near = v.nearest([5.2, 1.5, 3.0]).unwrap();
-        let (towards, away) = (v.facing(near, [-1.0, 0.0, 0.0]), v.facing(near, [1.0, 0.0, 0.0]));
+        let (towards, away) = (
+            v.facing(near, [-1.0, 0.0, 0.0]),
+            v.facing(near, [1.0, 0.0, 0.0]),
+        );
         // A wall facing the opening sees it; one with its back to it does not.
         assert!(away > 0.15 && towards < 0.05, "{away} {towards}");
         let deep = v.nearest([0.8, 1.5, 3.0]).unwrap();
