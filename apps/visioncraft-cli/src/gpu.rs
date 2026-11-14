@@ -108,14 +108,19 @@ impl Pictures for GpuPictures {
                 )
             }
         };
-        // Plants are generated a step per frame: let them finish (as smoke.rs does).
+        // Plants are generated on worker threads and library textures arrive from loader
+        // threads: wait for both by the clock, since frames alone pass faster than the
+        // threads on a fast GPU.
         let mut frames = 0;
-        for _ in 0..600 {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        loop {
             s.prepare();
             frames += 1;
-            if s.plants_pending() == 0 {
+            let ready = s.plants_pending() == 0 && s.scene.library.idle();
+            if ready || std::time::Instant::now() > deadline {
                 break;
             }
+            std::thread::sleep(std::time::Duration::from_millis(2));
         }
         s.prepare();
         let pending = s.plants_pending();
