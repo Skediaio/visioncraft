@@ -603,7 +603,12 @@ fn a_young_tree_is_slender_and_simpler_than_a_mature_one() {
         (hi[0] - lo[0]).max(hi[2] - lo[2]) / hi[1].max(1e-3)
     };
     // Narrower for its height, and fewer triangles of wood (fewer branch orders).
-    assert!(ratio(&young) < ratio(&old), "{} vs {}", ratio(&young), ratio(&old));
+    assert!(
+        ratio(&young) < ratio(&old),
+        "{} vs {}",
+        ratio(&young),
+        ratio(&old)
+    );
     assert!(
         young.triangles_of(Material::Bark) < old.triangles_of(Material::Bark),
         "{} vs {}",
