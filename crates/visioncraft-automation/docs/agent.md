@@ -142,7 +142,9 @@ gives the plant `count`.
 
 The water surface sits 0.3 m below the lawn, 0.5 m above the pond bed. It is level
 (`drape: false`): an area lies on the terrain by default, and a draped water surface 0.3 m under
-the carved bed is no water at all.
+the carved bed is no water at all. A carve holds no water by itself: its result's `note` says
+so when no water area lies over it. A lawn drawn over the pond is cut out exactly along the
+water's edge; on a sloped bank it keeps its grass down to the water.
 
 ### 8. Lamps, and the garden at dusk
 
@@ -231,8 +233,9 @@ on, for `material.assign`. Lit rooms show when the lamps are on.
 
 The water is the outline as drawn, the carve a centimetre wider with a straight wall, the coping
 an open band (a closed outline would be a solid block) at least one ground cell wide, standing on
-the lowest ground under it: give it the height that brings its top to the lawn plus 12 cm. The
-Pond tool in the Landscape panel does all this in one step.
+the lowest ground under it: give it the height that brings its top to the lawn plus 12 cm.
+`terrain.add_pond {"outline": ..., "depth_m": 0.8}` does all this in one step (the Pond tool in
+the Landscape panel runs it).
 
 ### 13. The picture's look and air
 
