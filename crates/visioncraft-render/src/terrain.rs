@@ -44,6 +44,10 @@ pub struct TerrainLayer {
     pub roughness: f32,
     /// As `Material::variation`.
     pub variation: f32,
+    /// Strength of the normal map (1: as drawn).
+    pub relief: f32,
+    /// Added to the roughness after the map (negative glossier, positive rougher).
+    pub roughness_offset: f32,
 }
 
 impl Default for TerrainLayer {
@@ -56,6 +60,8 @@ impl Default for TerrainLayer {
             base_color: [1.0; 4],
             roughness: 0.9,
             variation: 0.4,
+            relief: 1.0,
+            roughness_offset: 0.0,
         }
     }
 }
@@ -254,12 +260,13 @@ impl TerrainGpu {
         let mut b = Bytes::default();
         for i in 0..MAX_LAYERS {
             let l = self.layers.get(i).copied().unwrap_or_default();
-            b.floats(&l.base_color);
+            let c = l.base_color;
+            b.floats(&[c[0], c[1], c[2], l.roughness_offset.clamp(-1.0, 1.0)]);
             b.floats(&[
                 l.roughness.clamp(0.0, 1.0),
                 1.0 / l.scale_m.max(1e-3),
                 l.variation.clamp(0.0, 1.0),
-                0.0,
+                l.relief.clamp(0.0, 2.0),
             ]);
         }
         b.floats(&self.edge);
