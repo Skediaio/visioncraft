@@ -9,9 +9,13 @@
 //! marching rays through a voxelisation of the occluders. It is computed on the CPU once per
 //! change of geometry, cheap enough for the browser.
 //!
-//! Two room-scale fields ride along. `room`: the open fraction averaged over the room round a
-//! sample, never through a wall (a screened diffusion over the samples that see each other), for
-//! the daylight a room's surfaces pass round. `lamp_bounce`: the light of the lamps passed round
+//! Light passed round the rooms rides along, gathered over the same rays: each ray that meets a
+//! face (rather than the sky, or ground under the open sky) keeps which face, and a sample's
+//! bounced light is the mean over its rays of what the faces they meet receive, reflected, a few
+//! times over (Jacobi iterations of the radiosity equation gathered along fixed rays: Cohen and
+//! Greenberg, "The Hemi-Cube", SIGGRAPH 1985, with the faces' light read from the volume). `room`
+//! is the sky's light passed round so; `sun_bounce` the sun's, from the faces its parallel rays
+//! reach (the sun patch on a floor), when the sun moves. `lamp_bounce`: the light of the lamps passed round
 //! the room they hang in, by the integrating-sphere relation for an enclosure's interreflected
 //! illuminance, E = F R / (A (1 - R)) (Sumpner, "The diffusion of light", Proceedings of the
 //! Physical Society of London 12, 1892; the lumen method's indirect part), with the lamp's flux
@@ -32,10 +36,45 @@ const PAD_M: f32 = 1.0;
 /// The mean reflectance of a room's surfaces (pale walls and ceiling, a wooden floor): the
 /// renderer's `ROOM_REFLECTANCE` (scene.wgsl).
 pub const ROOM_REFLECTANCE: f32 = 0.45;
-/// The room average (`room`): passes of a screened diffusion, each keeping this share of the
-/// neighbours' value, so a sample's average reaches about a room's half width and no further.
-const ROOM_PASSES: usize = 40;
-const ROOM_SPREAD: f32 = 0.9;
+/// The thinnest gap a sample stands for air in (`validity`), metres.
+const MIN_GAP_M: f32 = 0.3;
+/// Bounces gathered for the light passed round a room (`gather`); R^4 of it is left out.
+const BOUNCES: usize = 3;
+/// A ray that meets no face (`SkyVolume::hits`).
+const OPEN: u32 = u32::MAX;
+
+/// What a ray meets: the voxel, the axis of the face it enters by and the sign of its travel
+/// along that axis (`d_k`), so the face looks along minus that sign.
+fn face_code(voxel: usize, k: usize, d_k: f32) -> u32 {
+    ((voxel as u32) << 3) | (2 * k as u32) | u32::from(d_k > 0.0)
+}
+
+/// Per sample of the grid `lo`, `cell`, `dims`: false inside a solid voxel (a wall or floor),
+/// where a sample sees out of both sides, and in a gap thinner than `MIN_GAP_M` along an axis
+/// (the hollow between the shells of a slab or a thick wall, under a sofa), which sees only
+/// whatever its rays slip out to.
+fn validity(lo: [f32; 3], cell: f32, dims: [u32; 3], voxels: &Voxels) -> Vec<bool> {
+    let n = dims.iter().map(|&d| d as usize).product::<usize>();
+    (0..n)
+        .map(|i| {
+            let at = [
+                i % dims[0] as usize,
+                i / dims[0] as usize % dims[1] as usize,
+                i / (dims[0] * dims[1]) as usize,
+            ];
+            let p: [f32; 3] = std::array::from_fn(|k| lo[k] + cell * at[k] as f32);
+            let gap = |k: usize| {
+                let free = |sign: f32| {
+                    let mut d = [0.0; 3];
+                    d[k] = sign;
+                    voxels.hit(p, d, MIN_GAP_M).map_or(MIN_GAP_M, |h| h.0)
+                };
+                free(1.0) + free(-1.0)
+            };
+            !voxels.solid_at(p) && (0..3).all(|k| gap(k) >= MIN_GAP_M)
+        })
+        .collect()
+}
 /// Rays a lamp casts to find the surfaces its light meets.
 const LAMP_RAYS: usize = 192;
 /// How far round a lamp the samples that see it take its bounced light, metres, and the rays
@@ -55,12 +94,17 @@ pub struct SkyVolume {
     pub dims: [u32; 3],
     /// x fastest, then y, then z.
     pub samples: Vec<[f32; 4]>,
-    /// Per sample: the open fraction (`samples`' first) averaged over the room round it, never
-    /// through a wall; what a room lets in of the sky.
+    /// Per sample: the sky's light passed round the room (module docs), as the illuminance of
+    /// a surface that sees only room per unit of the sky's mean illuminance. -1 for a sample
+    /// inside a wall or floor, which the renderer leaves out of its interpolation.
     pub room: Vec<f32>,
     voxels: Voxels,
     /// Per sample: which face neighbours it sees, bit `2 k` along -axis k, `2 k + 1` along +.
     links: Vec<u8>,
+    /// Per sample, `RAYS` each: what the ray meets (`face_code`, or `OPEN`).
+    hits: Vec<u32>,
+    /// Per sample: not inside a wall or floor (`validity`; not stored in the bytes).
+    valid: Vec<bool>,
 }
 
 impl SkyVolume {
@@ -76,6 +120,7 @@ impl SkyVolume {
         self.voxels.dims.iter().for_each(|&v| u(&mut b, v as u32));
         self.samples.iter().flatten().for_each(|&v| f(&mut b, v));
         self.room.iter().for_each(|&v| f(&mut b, v));
+        self.hits.iter().for_each(|&v| u(&mut b, v));
         b.extend_from_slice(&self.links);
         b.extend(self.voxels.solid.iter().map(|&s| s as u8));
         b
@@ -107,23 +152,31 @@ impl SkyVolume {
         }
         let samples = floats(take(16 * n)?).as_chunks::<4>().0.to_vec();
         let room = floats(take(4 * n)?);
+        let hits = floats(take(4 * n * RAYS)?)
+            .iter()
+            .map(|v| v.to_bits())
+            .collect();
         let links = take(n)?.to_vec();
         let solid = take(nv)?.iter().map(|&v| v != 0).collect();
         if take(1).is_ok() {
             return Err("sky volume bytes too long".into());
         }
+        let (origin, cell) = ([head[0], head[1], head[2]], head[3]);
+        let voxels = Voxels {
+            origin: [head[7], head[8], head[9]],
+            dims: vdims,
+            solid,
+        };
         Ok(Self {
-            origin: [head[0], head[1], head[2]],
-            cell: head[3],
+            origin,
+            cell,
             dims,
             samples,
             room,
-            voxels: Voxels {
-                origin: [head[7], head[8], head[9]],
-                dims: vdims,
-                solid,
-            },
+            valid: validity(origin, cell, dims, &voxels),
+            voxels,
             links,
+            hits,
         })
     }
 }
@@ -140,6 +193,50 @@ pub struct Lamp {
 }
 
 impl SkyVolume {
+    /// `room` as the renderer takes it: a sample inside a wall or a thin gap gets -1 minus the
+    /// mean of the valid samples round it (3 x 3 x 3), for where nothing valid is near.
+    pub fn room_texels(&self) -> Vec<f32> {
+        let d = self.dims.map(|d| d as i64);
+        (0..self.room.len())
+            .map(|i| {
+                if self.valid[i] {
+                    return self.room[i];
+                }
+                let at = [
+                    i as i64 % d[0],
+                    i as i64 / d[0] % d[1],
+                    i as i64 / (d[0] * d[1]),
+                ];
+                let (mut sum, mut n) = (0.0, 0.0);
+                for k in 0..27i64 {
+                    let q = [at[0] + k % 3 - 1, at[1] + k / 3 % 3 - 1, at[2] + k / 9 - 1];
+                    if (0..3).all(|c| (0..d[c]).contains(&q[c])) {
+                        let j = (q[0] + d[0] * (q[1] + d[1] * q[2])) as usize;
+                        if self.valid[j] {
+                            sum += self.room[j];
+                            n += 1.0;
+                        }
+                    }
+                }
+                -1.0 - if n > 0.0 { sum / n } else { 0.0 }
+            })
+            .collect()
+    }
+
+    /// The occluders' voxels for the renderer (0 or 255, x fastest, from `origin`, `VOXEL_M`
+    /// each) and their count per axis: what lets it interpolate only between samples that see
+    /// the point.
+    pub fn occupancy(&self) -> (Vec<u8>, [u32; 3]) {
+        let d = self.voxels.dims;
+        let bytes = self
+            .voxels
+            .solid
+            .iter()
+            .map(|&s| if s { 255 } else { 0 })
+            .collect();
+        (bytes, [d[0] as u32, d[1] as u32, d[2] as u32])
+    }
+
     /// The surface-facing visibility at sample `(x, y, z)` (tests and tools).
     pub fn facing(&self, at: [u32; 3], n: [f32; 3]) -> f32 {
         let [d0, d1, _] = self.dims;
@@ -200,7 +297,7 @@ impl SkyVolume {
             let p = lamp.position;
             let (mut hits, mut area) = (0usize, 0.0f32);
             for d in &dirs {
-                if let Some((t, k)) = self.voxels.hit(p, *d, REACH_M) {
+                if let Some((t, k, _)) = self.voxels.hit(p, *d, REACH_M) {
                     hits += 1;
                     area += t * t / d[k].abs().max(0.25);
                 }
@@ -250,6 +347,107 @@ impl SkyVolume {
             out = average_linked(&out, &self.links, self.dims);
         }
         out
+    }
+
+    /// The sunlight let into the rooms passed round them, per sample: illuminance per unit of
+    /// the sun's (normal to it) of a surface that sees only room. Parallel sun rays, one per
+    /// voxel square of the box's sides that face the sun, mark the faces they reach (the sun's
+    /// shadow, voxel by voxel); what those faces reflect is gathered round the rooms like the
+    /// sky's light (`gather`): the sun patch on a floor lights the room round it. A coarse
+    /// stand-in for the virtual lights of a reflective shadow map (Dachsbacher and Stamminger,
+    /// "Reflective Shadow Maps", I3D 2005), made on the CPU when the sun moves.
+    pub fn sun_bounce(&self, to_sun: [f32; 3]) -> Vec<f32> {
+        let len = to_sun.iter().map(|c| c * c).sum::<f32>().sqrt();
+        if len < 1e-6 || to_sun[1] <= 0.0 {
+            return vec![0.0; self.samples.len()];
+        }
+        let l = to_sun.map(|c| c / len);
+        let d = l.map(|c| -c);
+        let vx = &self.voxels;
+        // Per voxel, which of its six faces (`face_code`'s low bits) the sun reaches.
+        let mut lit = vec![0u8; vx.solid.len()];
+        for k in (0..3).filter(|&k| l[k].abs() > 1e-4) {
+            let (u, w) = ((k + 1) % 3, (k + 2) % 3);
+            let edge = if l[k] > 0.0 {
+                vx.dims[k] as f32 * VOXEL_M - 1e-3
+            } else {
+                1e-3
+            };
+            for a in 0..vx.dims[u] {
+                for b in 0..vx.dims[w] {
+                    let mut p = vx.origin;
+                    p[k] += edge;
+                    p[u] += (a as f32 + 0.5) * VOXEL_M;
+                    p[w] += (b as f32 + 0.5) * VOXEL_M;
+                    if let Some((_, f, v)) = vx.hit(p, d, f32::MAX) {
+                        let code = face_code(vx.index(v).expect("a hit is in the grid"), f, d[f]);
+                        lit[(code >> 3) as usize] |= 1 << (code & 7);
+                    }
+                }
+            }
+        }
+        self.gather(|code, _| {
+            let k = ((code & 7) >> 1) as usize;
+            if lit[(code >> 3) as usize] & (1 << (code & 7)) != 0 {
+                l[k].abs()
+            } else {
+                0.0
+            }
+        })
+    }
+
+    /// The light passed round the rooms, per sample (module docs): `direct(face, seen)` is the
+    /// light a face a ray meets receives from outside (`seen`: the sky its front sees); each
+    /// bounce, the mean over a sample's rays that meet a face of that plus the bounced light the
+    /// face gets from the room, reflected (`ROOM_REFLECTANCE`). Samples inside walls get none.
+    fn gather(&self, direct: impl Fn(u32, f32) -> f32) -> Vec<f32> {
+        let n = self.samples.len();
+        let mut g = vec![0.0f32; n];
+        for _ in 0..BOUNCES {
+            g = (0..n)
+                .map(|i| {
+                    if !self.valid[i] {
+                        return 0.0;
+                    }
+                    let (mut sum, mut met) = (0.0f32, 0.0f32);
+                    for &code in &self.hits[i * RAYS..(i + 1) * RAYS] {
+                        let Some((h, normal)) = self.face(code) else {
+                            continue;
+                        };
+                        let seen = self.seen(h, normal);
+                        sum += direct(code, seen) + g[h] * (1.0 - seen);
+                        met += 1.0;
+                    }
+                    if met > 0.0 {
+                        ROOM_REFLECTANCE * sum / met
+                    } else {
+                        0.0
+                    }
+                })
+                .collect();
+        }
+        g
+    }
+
+    /// The face a ray met (`face_code`): the sample in front of it and its normal; `None` for
+    /// an open ray or a face with no sample in the air before it.
+    fn face(&self, code: u32) -> Option<(usize, [f32; 3])> {
+        if code == OPEN {
+            return None;
+        }
+        let d = self.voxels.dims;
+        let v = (code >> 3) as i32;
+        let v = [v % d[0], v / d[0] % d[1], v / (d[0] * d[1])];
+        let k = ((code & 7) >> 1) as usize;
+        let mut normal = [0.0f32; 3];
+        normal[k] = if code & 1 == 1 { -1.0 } else { 1.0 };
+        let reach = 0.5 * (VOXEL_M + self.cell);
+        let p: [f32; 3] = std::array::from_fn(|c| {
+            self.voxels.origin[c] + (v[c] as f32 + 0.5) * VOXEL_M + normal[c] * reach
+        });
+        let at = self.nearest(p)?;
+        let i = (at[0] + self.dims[0] * (at[1] + self.dims[1] * at[2])) as usize;
+        self.valid[i].then_some((i, normal))
     }
 }
 
@@ -305,20 +503,21 @@ impl Voxels {
             .then(|| (v[0] + self.dims[0] * (v[1] + self.dims[1] * v[2])) as usize)
     }
 
-    /// Whether a ray from `p` along unit `d` leaves without a hit (Amanatides and Woo, "A Fast
-    /// Voxel Traversal Algorithm for Ray Tracing", Eurographics 1987).
-    fn escapes(&self, p: [f32; 3], d: [f32; 3]) -> bool {
-        self.free(p, d, REACH_M)
-    }
-
     /// Whether `metres` along unit `d` from `p` hit nothing (leaving the grid counts as free).
     fn free(&self, p: [f32; 3], d: [f32; 3], metres: f32) -> bool {
         self.hit(p, d, metres).is_none()
     }
 
-    /// The first solid voxel within `metres` along unit `d` from `p`: its distance (metres) and
-    /// the axis of the face the ray enters it by.
-    fn hit(&self, p: [f32; 3], d: [f32; 3], metres: f32) -> Option<(f32, usize)> {
+    /// Whether the voxel holding `p` is solid.
+    fn solid_at(&self, p: [f32; 3]) -> bool {
+        let v = std::array::from_fn(|k| ((p[k] - self.origin[k]) / VOXEL_M).floor() as i32);
+        self.index(v).is_some_and(|i| self.solid[i])
+    }
+
+    /// The first solid voxel within `metres` along unit `d` from `p`: its distance (metres), the
+    /// axis of the face the ray enters it by and the voxel (Amanatides and Woo, "A Fast Voxel
+    /// Traversal Algorithm for Ray Tracing", Eurographics 1987).
+    fn hit(&self, p: [f32; 3], d: [f32; 3], metres: f32) -> Option<(f32, usize, [i32; 3])> {
         let local: [f32; 3] = std::array::from_fn(|k| (p[k] - self.origin[k]) / VOXEL_M);
         let mut v: [i32; 3] = std::array::from_fn(|k| local[k].floor() as i32);
         let step: [i32; 3] = std::array::from_fn(|k| if d[k] >= 0.0 { 1 } else { -1 });
@@ -348,7 +547,7 @@ impl Voxels {
             next[k] += delta[k];
             match self.index(v) {
                 None => return None,
-                Some(i) if self.solid[i] => return Some((t * VOXEL_M, k)),
+                Some(i) if self.solid[i] => return Some((t * VOXEL_M, k, v)),
                 Some(_) => {}
             }
         }
@@ -403,9 +602,27 @@ pub fn sky_volume(triangles: &[[[f32; 3]; 3]]) -> Option<SkyVolume> {
             }
         }
     }
+    // The highest solid voxel of each column: a ray that comes down onto it meets ground, deck or
+    // roof under the open sky, lit by the sun and the sky like the ground the ambient light's
+    // lower half stands for (the sunlit deck seen through a glass wall), so it counts as open.
+    let mut top = vec![-1i32; (vdims[0] * vdims[2]) as usize];
+    for (i, _) in voxels.solid.iter().enumerate().filter(|s| *s.1) {
+        let (x, y, z) = (
+            i as i32 % vdims[0],
+            i as i32 / vdims[0] % vdims[1],
+            i as i32 / (vdims[0] * vdims[1]),
+        );
+        let t = &mut top[(x + vdims[0] * z) as usize];
+        *t = (*t).max(y);
+    }
+    let meets = |p: [f32; 3], d: [f32; 3]| match voxels.hit(p, d, REACH_M) {
+        None => OPEN,
+        Some((_, 1, v)) if d[1] < 0.0 && top[(v[0] + vdims[0] * v[2]) as usize] == v[1] => OPEN,
+        Some((_, k, v)) => face_code(voxels.index(v).expect("a hit is in the grid"), k, d[k]),
+    };
     let dirs = directions(RAYS);
-    // One z slab of samples (x fastest, then y).
-    let slab = |z: u32| -> Vec<[f32; 4]> {
+    // One z slab of samples (x fastest, then y), and what each one's rays meet.
+    let slab = |z: u32| -> Vec<([f32; 4], [u32; RAYS])> {
         let mut out = Vec::with_capacity((dims[0] * dims[1]) as usize);
         for y in 0..dims[1] {
             for x in 0..dims[0] {
@@ -421,16 +638,18 @@ pub fn sky_volume(triangles: &[[[f32; 3]; 3]]) -> Option<SkyVolume> {
                     % 1024;
                 let (s, c) = (h as f32 * std::f32::consts::TAU / 1024.0).sin_cos();
                 let mut sum = [0.0f32; 4];
-                for d in &dirs {
+                let mut met = [OPEN; RAYS];
+                for (r, d) in dirs.iter().enumerate() {
                     let d = [c * d[0] - s * d[2], d[1], s * d[0] + c * d[2]];
-                    if voxels.escapes(p, d) {
+                    met[r] = meets(p, d);
+                    if met[r] == OPEN {
                         sum[0] += 1.0;
                         sum[1] += d[0];
                         sum[2] += d[1];
                         sum[3] += d[2];
                     }
                 }
-                out.push(sum.map(|v| v / RAYS as f32));
+                out.push((sum.map(|v| v / RAYS as f32), met));
             }
         }
         out
@@ -438,7 +657,7 @@ pub fn sky_volume(triangles: &[[[f32; 3]; 3]]) -> Option<SkyVolume> {
     // Natively the slabs are shared out over the cores; the browser has one thread (the app
     // runs this in a worker there).
     #[cfg(not(target_arch = "wasm32"))]
-    let samples: Vec<[f32; 4]> = {
+    let traced: Vec<([f32; 4], [u32; RAYS])> = {
         let threads = std::thread::available_parallelism().map_or(1, |n| n.get()) as u32;
         let per = dims[2].div_ceil(threads.max(1));
         std::thread::scope(|scope| {
@@ -459,7 +678,10 @@ pub fn sky_volume(triangles: &[[[f32; 3]; 3]]) -> Option<SkyVolume> {
         })
     };
     #[cfg(target_arch = "wasm32")]
-    let samples: Vec<[f32; 4]> = (0..dims[2]).flat_map(slab).collect();
+    let traced: Vec<([f32; 4], [u32; RAYS])> = (0..dims[2]).flat_map(slab).collect();
+    let samples: Vec<[f32; 4]> = traced.iter().map(|t| t.0).collect();
+    let hits: Vec<u32> = traced.iter().flat_map(|t| t.1).collect();
+    drop(traced);
     // Each sample averaged with the neighbours it sees (3 x 3 x 3, never through a wall): the
     // ray count's noise goes, the rooms stay apart.
     let at = |x: i64, y: i64, z: i64| -> Option<usize> {
@@ -471,15 +693,19 @@ pub fn sky_volume(triangles: &[[[f32; 3]; 3]]) -> Option<SkyVolume> {
             && z < dims[2] as i64;
         ok.then(|| (x + dims[0] as i64 * (y + dims[1] as i64 * z)) as usize)
     };
+    let point = |x: i64, y: i64, z: i64| -> [f32; 3] {
+        [
+            lo[0] + cell * x as f32,
+            lo[1] + cell * y as f32,
+            lo[2] + cell * z as f32,
+        ]
+    };
+    let valid = validity(lo, cell, dims, &voxels);
     let mut smooth = samples.clone();
     for z in 0..dims[2] as i64 {
         for y in 0..dims[1] as i64 {
             for x in 0..dims[0] as i64 {
-                let p = [
-                    lo[0] + cell * x as f32,
-                    lo[1] + cell * y as f32,
-                    lo[2] + cell * z as f32,
-                ];
+                let p = point(x, y, z);
                 let (mut sum, mut n) = ([0.0f32; 4], 0.0);
                 for (dx, dy, dz) in (0..27).map(|k| (k % 3 - 1, k / 3 % 3 - 1, k / 9 - 1)) {
                     let Some(i) = at(x + dx, y + dy, z + dz) else {
@@ -487,7 +713,7 @@ pub fn sky_volume(triangles: &[[[f32; 3]; 3]]) -> Option<SkyVolume> {
                     };
                     let d = [dx as f32, dy as f32, dz as f32];
                     let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-                    if len > 0.0 && !voxels.free(p, d.map(|c| c / len), len * cell) {
+                    if len > 0.0 && (!valid[i] || !voxels.free(p, d.map(|c| c / len), len * cell)) {
                         continue;
                     }
                     for c in 0..4 {
@@ -499,19 +725,18 @@ pub fn sky_volume(triangles: &[[[f32; 3]; 3]]) -> Option<SkyVolume> {
             }
         }
     }
-    // Which face neighbours each sample sees, then the room average of the open fraction: a
-    // screened diffusion over those links, normalised by the same sums over ones.
+    // Which face neighbours each sample sees (both outside walls).
     let mut links = vec![0u8; smooth.len()];
     for z in 0..dims[2] as i64 {
         for y in 0..dims[1] as i64 {
             for x in 0..dims[0] as i64 {
-                let p = [x, y, z].map(|v| v as f32);
-                let p: [f32; 3] = std::array::from_fn(|k| lo[k] + cell * p[k]);
+                let p = point(x, y, z);
                 let i = at(x, y, z).expect("in the grid");
                 for b in 0..6 {
                     let mut o = [0i64; 3];
                     o[b / 2] = if b % 2 == 0 { -1 } else { 1 };
-                    if at(x + o[0], y + o[1], z + o[2]).is_some()
+                    if valid[i]
+                        && at(x + o[0], y + o[1], z + o[2]).is_some_and(|j| valid[j])
                         && voxels.free(p, o.map(|c| c as f32), cell)
                     {
                         links[i] |= 1 << b;
@@ -520,43 +745,23 @@ pub fn sky_volume(triangles: &[[[f32; 3]; 3]]) -> Option<SkyVolume> {
             }
         }
     }
-    let open: Vec<f32> = smooth.iter().map(|s| s[0]).collect();
-    let strides = [1, dims[0] as usize, (dims[0] * dims[1]) as usize];
-    let mut sums: Vec<[f32; 2]> = open.iter().map(|&a| [a, 1.0]).collect();
-    for _ in 0..ROOM_PASSES {
-        sums = (0..sums.len())
-            .map(|i| {
-                let (mut s, mut n) = ([0.0f32; 2], 0.0f32);
-                for b in 0..6 {
-                    if links[i] & (1 << b) != 0 {
-                        let j = if b % 2 == 0 {
-                            i - strides[b / 2]
-                        } else {
-                            i + strides[b / 2]
-                        };
-                        s[0] += sums[j][0];
-                        s[1] += sums[j][1];
-                        n += 1.0;
-                    }
-                }
-                let n = n.max(1.0);
-                [
-                    open[i] + ROOM_SPREAD * s[0] / n,
-                    1.0 + ROOM_SPREAD * s[1] / n,
-                ]
-            })
-            .collect();
-    }
-    let room = sums.iter().map(|s| (s[0] / s[1]).clamp(0.0, 1.0)).collect();
-    Some(SkyVolume {
+    let mut v = SkyVolume {
         origin: lo,
         cell,
         dims,
         samples: smooth,
-        room,
+        room: Vec::new(),
         voxels,
         links,
-    })
+        hits,
+        valid,
+    };
+    // The sky's light passed round the rooms: what the faces a sample's rays meet get of the sky.
+    let room = v.gather(|_, seen| seen);
+    v.room = (0..room.len())
+        .map(|i| if v.valid[i] { room[i] } else { -1.0 })
+        .collect();
+    Some(v)
 }
 
 #[cfg(test)]
@@ -655,6 +860,97 @@ mod tests {
         let near = v.room[v.index([5.2, 1.5, 3.0], [0.0; 3]).unwrap()];
         let deep = v.room[v.index([0.8, 1.5, 3.0], [0.0; 3]).unwrap()];
         assert!(near > deep && deep > 0.0, "{near} {deep}");
+    }
+
+    #[test]
+    fn sun_through_an_opening_lights_the_room_as_an_integrating_sphere_says() {
+        let v = sky_volume(&room(2.0)).unwrap();
+        let centre = v.index([3.0, 1.5, 3.0], [0.0; 3]).unwrap();
+        // From the east, 30 degrees up, through the 2 x 3 m opening in the east wall.
+        let (c, s) = (30f32.to_radians().cos(), 30f32.to_radians().sin());
+        let e = v.sun_bounce([c, s, 0.0]);
+        // The flux in, reflected once, over the 138 m2 of the room's surfaces (R / (1 - R) of it),
+        // against the mean over the room's air (more over the sun patch, less away from it).
+        let expected = ROOM_REFLECTANCE * c * 6.0 / (138.0 * (1.0 - ROOM_REFLECTANCE));
+        let inside: Vec<f32> = (0..e.len())
+            .filter(|&i| {
+                let at = [
+                    i as u32 % v.dims[0],
+                    i as u32 / v.dims[0] % v.dims[1],
+                    i as u32 / (v.dims[0] * v.dims[1]),
+                ];
+                let p: [f32; 3] = std::array::from_fn(|k| v.origin[k] + v.cell * at[k] as f32);
+                p[0] > 0.3 && p[0] < 5.7 && p[1] > 0.3 && p[1] < 2.7 && p[2] > 0.3 && p[2] < 5.7
+            })
+            .map(|i| e[i])
+            .collect();
+        let mean = inside.iter().sum::<f32>() / inside.len() as f32;
+        assert!(
+            mean > 0.6 * expected && mean < 1.4 * expected,
+            "{mean} {expected}"
+        );
+        // From the west the closed wall keeps it out, and the sun under the horizon gives none.
+        assert!(v.sun_bounce([-c, s, 0.0])[centre] < 0.05 * expected);
+        assert!(v.sun_bounce([c, -s, 0.0]).iter().all(|&e| e == 0.0));
+    }
+
+    /// Two 4 x 3 x 4 m rooms side by side along x with a 120 mm wall between them and a 1 m
+    /// door in it; the east room has a 3 m opening in its east wall, the west room none.
+    fn two_rooms() -> Vec<[[f32; 3]; 3]> {
+        let mut t = Vec::new();
+        t.extend(quad([0.0, 0.0, 0.0], [8.12, 0.0, 4.0]));
+        t.extend(quad([0.0, 3.0, 0.0], [8.12, 3.0, 4.0]));
+        t.extend(quad([0.0, 0.0, 0.0], [8.12, 3.0, 0.0]));
+        t.extend(quad([0.0, 0.0, 4.0], [8.12, 3.0, 4.0]));
+        t.extend(quad([0.0, 0.0, 0.0], [0.0, 3.0, 4.0]));
+        for x in [4.0, 4.12] {
+            t.extend(quad([x, 0.0, 0.0], [x, 3.0, 1.5]));
+            t.extend(quad([x, 0.0, 2.5], [x, 3.0, 4.0]));
+            t.extend(quad([x, 2.1, 1.5], [x, 3.0, 2.5]));
+        }
+        t.extend(quad([8.12, 0.0, 0.0], [8.12, 3.0, 0.5]));
+        t.extend(quad([8.12, 0.0, 3.5], [8.12, 3.0, 4.0]));
+        t
+    }
+
+    #[test]
+    fn a_room_off_a_daylit_one_gets_less_light_the_further_from_the_door() {
+        let v = sky_volume(&two_rooms()).unwrap();
+        let room = |x: f32| v.room[v.index([x, 1.4, 2.0], [0.0; 3]).unwrap()];
+        let (lit, door, mid, far) = (room(6.0), room(3.4), room(2.0), room(0.6));
+        // Past the doorway the light spreads round the dark room, no longer falling much.
+        assert!(
+            lit > 3.0 * door && door > mid && door > far && far > 0.0,
+            "{lit} {door} {mid} {far}"
+        );
+        // Either side of the wall beside the door: the dark room sees no sky, the lit one does.
+        let by_wall = |x: f32| v.index([x, 1.4, 0.6], [0.0; 3]).unwrap();
+        let (dark, lit_side) = (by_wall(3.7), by_wall(4.5));
+        assert!(v.seen(dark, [-1.0, 0.0, 0.0]) < 0.02);
+        assert!(v.seen(lit_side, [1.0, 0.0, 0.0]) > 0.05);
+        // Samples inside the wall are marked, the air on either side is not.
+        assert!(v.room.iter().any(|&r| r < 0.0));
+        assert!(v.room[dark] >= 0.0 && v.room[lit_side] >= 0.0);
+        let texels = v.room_texels();
+        assert!(
+            texels
+                .iter()
+                .zip(&v.room)
+                .all(|(t, r)| (*r >= 0.0) == (*t >= 0.0))
+        );
+        assert!(texels.iter().all(|t| *t >= -1.0 - 0.99));
+        // The renderer's voxels: the wall between the rooms is solid, the air either side not.
+        let (solid, d) = v.occupancy();
+        let voxel = |p: [f32; 3]| {
+            let c: [usize; 3] = std::array::from_fn(|k| ((p[k] - v.origin[k]) / VOXEL_M) as usize);
+            solid[c[0] + d[0] as usize * (c[1] + d[1] as usize * c[2])]
+        };
+        assert_eq!(voxel([4.05, 1.4, 0.6]), 255);
+        assert_eq!(voxel([3.7, 1.4, 0.6]) + voxel([4.5, 1.4, 0.6]), 0);
+        // Low sun from the east into the lit room passes round it and, less, through the door.
+        let sun = v.sun_bounce([0.9, 0.44, 0.0]);
+        let at = |x: f32| sun[v.index([x, 1.4, 2.0], [0.0; 3]).unwrap()];
+        assert!(at(6.0) > at(3.0) && at(3.0) > at(0.6) && at(0.6) >= 0.0);
     }
 
     #[test]

@@ -108,7 +108,9 @@ const CLUSTER_CELL: f32 = 8.0;
 /// `set_time` wraps here (seconds) to keep f32 precision in the shaders.
 const TIME_WRAP: f64 = 4096.0;
 /// Byte offset of the SH in the globals (written by the GPU, see env.rs).
-const SH_OFFSET: u64 = 9 * 64 + 31 * 16;
+const SH_OFFSET: u64 = 9 * 64 + 32 * 16;
+/// The roughness up to which a metal is a mirror (`Material::mirror`, scene.wgsl `light`).
+const MIRROR_ROUGHNESS: f32 = 0.1;
 
 const COMMON: &str = include_str!("common.wgsl");
 const SKY: &str = include_str!("sky.wgsl");
@@ -279,6 +281,16 @@ impl Material {
         self.surface != Surface::Standard || self.alpha_mode == AlphaMode::Blend
     }
 
+    /// A metal polished to a mirror, which screen-space reflections show the scene in (drawn
+    /// after the opaque scene, `Pass::Mirrors`).
+    fn mirror(&self) -> bool {
+        !self.transparent()
+            && !self.cutout()
+            && self.metallic >= 0.5
+            && self.roughness <= MIRROR_ROUGHNESS
+            && self.roughness_map.is_none()
+    }
+
     fn cutout(&self) -> bool {
         matches!(self.alpha_mode, AlphaMode::Cutout { .. }) && !self.transparent()
     }
@@ -372,6 +384,9 @@ pub struct Quality {
     /// Side of one view in impostor atlases baked from now on (texels,
     /// 64..=1024); impostors baked earlier keep theirs.
     pub impostor_resolution: u32,
+    /// Screen-space reflections in glass and mirrors: 0 off (they mirror the sky and the room
+    /// estimate), else the ray's step in pixels (2: half resolution).
+    pub screen_reflections: u32,
 }
 
 // `render_scale` is clamped to 0.5..=1 everywhere it is used, never NaN, so
@@ -399,6 +414,7 @@ impl Quality {
         soft_shadows: false,
         ao_full_resolution: false,
         impostor_resolution: 256,
+        screen_reflections: 0,
     };
     pub const MEDIUM: Quality = Quality {
         shadow_resolution: 1024,
@@ -416,6 +432,7 @@ impl Quality {
         soft_shadows: false,
         ao_full_resolution: false,
         impostor_resolution: 256,
+        screen_reflections: 2,
     };
     pub const HIGH: Quality = Quality {
         shadow_resolution: 2048,
@@ -431,6 +448,7 @@ impl Quality {
         soft_shadows: true,
         ao_full_resolution: false,
         impostor_resolution: 256,
+        screen_reflections: 1,
     };
     /// For GPUs with headroom (a desktop card at 100+ fps on HIGH): 4096
     /// shadow maps, full-resolution AO with more taps and a full-resolution
@@ -452,6 +470,7 @@ impl Quality {
         soft_shadows: true,
         ao_full_resolution: true,
         impostor_resolution: 512,
+        screen_reflections: 1,
     };
     pub const PRESETS: [(&'static str, Quality); 4] = [
         ("low", Quality::LOW),
@@ -683,7 +702,8 @@ struct Targets {
     hdr: wgpu::TextureView,
     hdr_texture: wgpu::Texture,
     /// A photo's previous sample (`photo`: full size, else 1x1): what the one-bounce diffuse
-    /// light of the next sample gathers.
+    /// light of the next sample gathers; with screen-space reflections (full size) also the
+    /// opaque scene of this frame, copied before the glass and mirrors, which they reflect.
     prev_hdr: wgpu::Texture,
     linear_depth: wgpu::TextureView,
     occlusion: [wgpu::TextureView; 2],
@@ -730,6 +750,9 @@ enum Pass {
     },
     Depth,
     Forward,
+    /// The mirrors (`Material::mirror`) after the opaque scene is copied for screen-space
+    /// reflections; with those off they go with `Forward`.
+    Mirrors,
     Reflection,
 }
 
@@ -845,9 +868,11 @@ pub struct Renderer {
     indoors: bool,
     /// The sky visibility volume (`set_sky_volume`) and its view; 1 texel of open sky when unset.
     sky_volume: (wgpu::Texture, wgpu::TextureView),
-    /// Its room light (`set_sky_volume`): per sample the lamps' light passed round the room
-    /// (lux) and the room's average open fraction.
+    /// Its room light (`set_sky_volume`): per sample the lamps' and the sun's light passed
+    /// round the rooms (lux) and the sky's (per unit of its mean light; < 0 inside a wall).
     room_volume: (wgpu::Texture, wgpu::TextureView),
+    /// Its occluders' voxels (`set_sky_volume`): 1 where solid; one empty voxel when unset.
+    occupancy: (wgpu::Texture, wgpu::TextureView),
     /// Globals `sky_vol` and `sky_vol_size`: origin (m) and 1 / cell, 1 / texture size in
     /// cells and on (0/1).
     sky_volume_box: [f32; 8],
@@ -1006,6 +1031,7 @@ impl Renderer {
         let white = white_texture.create_view(&Default::default());
         let sky_volume = sky_volume_texture(device, queue, [1, 1, 1], &[[1.0, 0.0, 0.0, 0.0]]);
         let room_volume = room_volume_texture(device, queue, [1, 1, 1], &[[0.0, 0.0, 0.0, 1.0]]);
+        let occupancy = occupancy_texture(device, queue, [1, 1, 1], &[0]);
         // Material samplers: trilinear with 16x anisotropy (WebGPU core
         // allows up to 16 when all filters are linear).
         let material_sampler = |label, mode| {
@@ -1065,7 +1091,7 @@ impl Renderer {
             &light_buffer,
             &grid_buffer,
             &physical.sky_view,
-            [&sky_volume.1, &room_volume.1],
+            [&sky_volume.1, &room_volume.1, &occupancy.1],
         );
         let reflect_globals_bind = globals_bind_group(
             device,
@@ -1076,7 +1102,7 @@ impl Renderer {
             &light_buffer,
             &grid_buffer,
             &physical.sky_view,
-            [&sky_volume.1, &room_volume.1],
+            [&sky_volume.1, &room_volume.1, &occupancy.1],
         );
         let sky_bind = sky_bind_group(
             device,
@@ -1186,6 +1212,7 @@ impl Renderer {
             indoors: false,
             sky_volume,
             room_volume,
+            occupancy,
             sky_volume_box: [0.0; 8],
             clouds: Clouds::default(),
             snow: 0.0,
@@ -1293,6 +1320,11 @@ impl Renderer {
         self.view = view;
         self.proj = proj;
         self.eye = position;
+    }
+
+    /// The sun's illuminance on a surface facing it (lux, linear RGB), after the clouds' share.
+    pub fn sun_lux(&self) -> Vec3 {
+        self.sun.color * self.sun.illuminance * self.clouds.sun_share()
     }
 
     pub fn set_sun(&mut self, sun: &Sun) {
@@ -1507,12 +1539,13 @@ impl Renderer {
     /// The sky's visibility round the buildings (`visioncraft_core::sky_volume`): sample
     /// `(x, y, z)` at `origin + cell * (x, y, z)` holds the visible fraction of directions and
     /// the mean visible direction, x fastest; `room` per sample the lamps' light passed round
-    /// the room (lux, linear RGB) and the open fraction averaged over the room. It dims the
+    /// the room (lux, linear RGB) and the sky's (scene.wgsl `room_bounce`); the occluders'
+    /// voxels, which keep the interpolation from reaching through walls. It dims the
     /// sky's ambient light and reflections where little sky is seen and adds the light bounced
     /// round a room. `None`: open sky everywhere.
     pub fn set_sky_volume(&mut self, volume: Option<SkyVolume<'_>>) {
         let (dims, samples, room, open) = match volume {
-            Some((_, _, dims, samples, room))
+            Some((_, _, dims, samples, room, _))
                 if dims.iter().all(|&d| d > 0)
                     && samples.len() == dims.iter().map(|&d| d as usize).product::<usize>()
                     && room.len() == samples.len() =>
@@ -1528,6 +1561,12 @@ impl Renderer {
         };
         self.sky_volume = sky_volume_texture(&self.device, &self.queue, dims, samples);
         self.room_volume = room_volume_texture(&self.device, &self.queue, dims, room);
+        self.occupancy = match volume.filter(|_| !open) {
+            Some((.., (solid, d))) if solid.len() == d.iter().map(|&d| d as usize).product() => {
+                occupancy_texture(&self.device, &self.queue, d, solid)
+            }
+            _ => occupancy_texture(&self.device, &self.queue, [1, 1, 1], &[0]),
+        };
         self.sky_volume_box = match volume.filter(|_| !open) {
             Some((origin, cell, ..)) => [
                 origin[0],
@@ -1596,7 +1635,7 @@ impl Renderer {
                 &self.light_buffer,
                 &self.grid_buffer,
                 sky_view,
-                [&self.sky_volume.1, &self.room_volume.1],
+                [&self.sky_volume.1, &self.room_volume.1, &self.occupancy.1],
             );
         }
         self.sky_bind = sky_bind_group(
@@ -2713,33 +2752,13 @@ impl Renderer {
                 Some(msaa) => (msaa, Some(&t.hdr)),
                 None => (&t.hdr, None),
             };
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("forward"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view,
-                    depth_slice: None,
-                    resolve_target: resolve,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: if resolve.is_some() {
-                            wgpu::StoreOp::Discard
-                        } else {
-                            wgpu::StoreOp::Store
-                        },
-                    },
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &t.depth,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Discard,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: self.ts("forward"),
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
+            // With screen-space reflections the glass and the mirrors are drawn in a second pass,
+            // after the opaque scene is copied for them to reflect (into `prev_hdr`): the first then
+            // keeps its multisampled colour and depth for the second.
+            let ssr = self.quality.screen_reflections > 0;
+            let targets = (view, resolve, &t.depth);
+            let mut pass =
+                forward_pass(encoder, "forward", targets, (true, ssr), self.ts("forward"));
             pass.set_bind_group(0, &self.globals_bind, &[]);
             pass.set_bind_group(3, &t.forward_bind, &[]);
             self.draw_items(&mut pass, view_proj, true, Pass::Forward);
@@ -2749,6 +2768,19 @@ impl Renderer {
             pass.set_pipeline(&self.sampled.sky);
             pass.draw(0..3, 0..1);
             self.draw_sea(&mut pass);
+            if ssr {
+                drop(pass);
+                encoder.copy_texture_to_texture(
+                    t.hdr_texture.as_image_copy(),
+                    t.prev_hdr.as_image_copy(),
+                    t.prev_hdr.size(),
+                );
+                let label = "glass and mirrors";
+                pass = forward_pass(encoder, label, targets, (false, ssr), self.ts(label));
+                pass.set_bind_group(0, &self.globals_bind, &[]);
+                pass.set_bind_group(3, &t.forward_bind, &[]);
+                self.draw_items(&mut pass, view_proj, true, Pass::Mirrors);
+            }
             self.draw_transparent(&mut pass, view_proj);
         }
         self.counters.split("forward");
@@ -2997,7 +3029,7 @@ impl Renderer {
             return Some(levels - 1);
         }
         Some(match pass {
-            Pass::Depth | Pass::Forward => cluster.lod,
+            Pass::Depth | Pass::Forward | Pass::Mirrors => cluster.lod,
             Pass::Reflection
             | Pass::Shadow {
                 far: false,
@@ -3045,14 +3077,19 @@ impl Renderer {
     fn draw_items(&self, pass: &mut wgpu::RenderPass, cull: Mat4, near_far: bool, kind: Pass) {
         let mut current: Option<usize> = None;
         let shadow = matches!(kind, Pass::Shadow { .. });
-        let shaded = matches!(kind, Pass::Forward | Pass::Reflection);
+        let shaded = matches!(kind, Pass::Forward | Pass::Mirrors | Pass::Reflection);
         let fades = matches!(kind, Pass::Depth | Pass::Forward);
         let order = shadow as usize;
+        let late = self.quality.screen_reflections > 0;
         // 0 opaque, 1 cutout, 2 glass: into shadow maps, and into the water's reflection as
         // an opaque pane (without it the reflection looked through every window into the dark
         // room behind it: the dark blobs in a pond).
         let glass = shadow || matches!(kind, Pass::Reflection);
-        for category in 0..2 + glass as usize {
+        let categories = match kind {
+            Pass::Mirrors => 3..4,
+            _ => 0..2 + glass as usize,
+        };
+        for category in categories {
             for item in self.items.iter().flatten() {
                 let Some(bounds) = item.bounds else { continue };
                 if outside(cull, bounds, near_far) {
@@ -3073,6 +3110,8 @@ impl Renderer {
                     let m = &material.cpu;
                     let this = if m.surface == Surface::Glass {
                         2
+                    } else if late && m.mirror() && matches!(kind, Pass::Forward | Pass::Mirrors) {
+                        3
                     } else if m.transparent() {
                         continue;
                     } else {
@@ -3105,7 +3144,9 @@ impl Renderer {
                             Pass::Reflection if weights.is_some() => {
                                 (100, &self.pipelines.reflect_terrain)
                             }
-                            Pass::Forward => (m.variant(), &self.sampled.forward[m.variant()]),
+                            Pass::Forward | Pass::Mirrors => {
+                                (m.variant(), &self.sampled.forward[m.variant()])
+                            }
                             Pass::Reflection => (m.variant(), &self.pipelines.reflect[m.variant()]),
                         };
                         let keep = |c: &Cluster| {
@@ -3154,7 +3195,7 @@ impl Renderer {
                             self.counters.add(
                                 mesh.index_count as u64 / 3,
                                 r.len() as u32,
-                                kind == Pass::Forward,
+                                matches!(kind, Pass::Forward | Pass::Mirrors),
                             );
                             pass.draw_indexed(0..mesh.index_count, 0, r);
                         }
@@ -3210,7 +3251,7 @@ impl Renderer {
         }
         let (key, pipeline) = match kind {
             Pass::Depth => (400, &self.sampled.impostor[0]),
-            Pass::Forward => (401, &self.sampled.impostor[1]),
+            Pass::Forward | Pass::Mirrors => (401, &self.sampled.impostor[1]),
             Pass::Reflection => (402, &self.pipelines.reflect_impostor),
             Pass::Shadow { .. } => (403, &self.pipelines.impostor_shadow),
         };
@@ -3671,6 +3712,15 @@ impl Renderer {
             0.0,
         ]);
         b.floats(&self.sky_volume_box);
+        // Screen-space reflections: on, the step (pixels), the most steps, the thickness (m).
+        let step = self.quality.screen_reflections as f32;
+        b.floats(&[
+            // Not in the water's mirrored view, which has no depth or scene of its own to read.
+            (step > 0.0 && clip.is_none()) as u32 as f32,
+            step.max(1.0),
+            if step > 1.0 { 40.0 } else { 80.0 },
+            0.25,
+        ]);
         debug_assert_eq!(b.0.len() as u64, SH_OFFSET);
         self.queue.write_buffer(buffer, 0, &b.0);
     }
@@ -4013,7 +4063,7 @@ fn globals_bind_group(
     lights: &wgpu::Buffer,
     grid: &wgpu::Buffer,
     sky: &wgpu::TextureView,
-    [sky_volume, room_volume]: [&wgpu::TextureView; 2],
+    [sky_volume, room_volume, occupancy]: [&wgpu::TextureView; 3],
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("globals"),
@@ -4051,16 +4101,64 @@ fn globals_bind_group(
                 binding: 7,
                 resource: wgpu::BindingResource::TextureView(room_volume),
             },
+            wgpu::BindGroupEntry {
+                binding: 8,
+                resource: wgpu::BindingResource::TextureView(occupancy),
+            },
         ],
     })
 }
 
 /// A sky visibility volume for `Renderer::set_sky_volume`: origin (m), cell (m), cells per
-/// axis, samples, room light.
-pub type SkyVolume<'a> = ([f32; 3], f32, [u32; 3], &'a [[f32; 4]], &'a [[f32; 4]]);
+/// axis, samples, room light, and its occluders' voxels (0.2 m from the same origin, nonzero
+/// solid) with their count per axis.
+pub type SkyVolume<'a> = (
+    [f32; 3],
+    f32,
+    [u32; 3],
+    &'a [[f32; 4]],
+    &'a [[f32; 4]],
+    (&'a [u8], [u32; 3]),
+);
+
+/// The occluders' voxels of a sky volume as an `R8Unorm` 3D texture.
+fn occupancy_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    dims: [u32; 3],
+    solid: &[u8],
+) -> (wgpu::Texture, wgpu::TextureView) {
+    let size = wgpu::Extent3d {
+        width: dims[0],
+        height: dims[1],
+        depth_or_array_layers: dims[2],
+    };
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("sky volume voxels"),
+        size,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D3,
+        format: wgpu::TextureFormat::R8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        texture.as_image_copy(),
+        solid,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(dims[0]),
+            rows_per_image: Some(dims[1]),
+        },
+        size,
+    );
+    let view = texture.create_view(&Default::default());
+    (texture, view)
+}
 
 /// The room light of a sky visibility volume as an `Rgba16Float` 3D texture, one level: rgb the
-/// lamps' light passed round the room (lux), a the room's average open fraction.
+/// lamps' and the sun's light passed round the rooms (lux), a the sky's (common.wgsl `room_vis`).
 fn room_volume_texture(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -4084,7 +4182,7 @@ fn room_volume_texture(
     });
     let bytes: Vec<u8> = samples
         .iter()
-        .flat_map(|s| s.map(|v| hdri::f16_bits(v.clamp(0.0, 60000.0))))
+        .flat_map(|s| s.map(|v| hdri::f16_bits(v.clamp(-1.0, 60000.0))))
         .flat_map(u16::to_le_bytes)
         .collect();
     queue.write_texture(
@@ -4361,6 +4459,7 @@ impl Layouts {
                     texture_entry(5, filterable, D::D2, false),
                     texture_entry(6, filterable, D::D3, false),
                     texture_entry(7, filterable, D::D3, false),
+                    texture_entry(8, filterable, D::D3, false),
                 ],
             ),
             globals_only: layout("globals only", &[uniform_entry(0, vfs, None)]),
@@ -4527,6 +4626,57 @@ fn module<'a>(modules: &'a [wgpu::ShaderModule], name: &str) -> &'a wgpu::Shader
 
 fn cull(double_sided: bool) -> Option<wgpu::Face> {
     (!double_sided).then_some(wgpu::Face::Back)
+}
+
+/// The forward pass over the colour target (multisampled `view` resolving into `resolve`) and
+/// the depth of the pre-pass; `(first, split)`: with screen-space reflections the opaque scene
+/// (`first`) and the glass and mirrors are two passes, so the first keeps its multisampled
+/// colour and depth for the second.
+fn forward_pass<'a>(
+    encoder: &'a mut wgpu::CommandEncoder,
+    label: &'static str,
+    (view, resolve, depth): (
+        &wgpu::TextureView,
+        Option<&wgpu::TextureView>,
+        &wgpu::TextureView,
+    ),
+    (first, split): (bool, bool),
+    timestamps: Option<wgpu::RenderPassTimestampWrites<'_>>,
+) -> wgpu::RenderPass<'a> {
+    let keep = |kept: bool| {
+        if kept {
+            wgpu::StoreOp::Store
+        } else {
+            wgpu::StoreOp::Discard
+        }
+    };
+    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some(label),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view,
+            depth_slice: None,
+            resolve_target: resolve,
+            ops: wgpu::Operations {
+                load: if first {
+                    wgpu::LoadOp::Clear(wgpu::Color::BLACK)
+                } else {
+                    wgpu::LoadOp::Load
+                },
+                store: keep(resolve.is_none() || (first && split)),
+            },
+        })],
+        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+            view: depth,
+            depth_ops: Some(wgpu::Operations {
+                load: wgpu::LoadOp::Load,
+                store: keep(first && split),
+            }),
+            stencil_ops: None,
+        }),
+        timestamp_writes: timestamps,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    })
 }
 
 /// A pipeline drawing scene meshes with the forward layout (groups 0-3).
@@ -5168,7 +5318,12 @@ impl Targets {
             HDR,
             1,
             wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            if photo { (width, height) } else { (1, 1) },
+            // Screen-space reflections read the opaque scene from it too (`Pass::Mirrors`).
+            if photo || quality.screen_reflections > 0 {
+                (width, height)
+            } else {
+                (1, 1)
+            },
         );
         let prev_view = view(prev_hdr.clone());
         let linear_depth = view(texture("linear depth", LINEAR_DEPTH, 1, sampled));
@@ -5565,7 +5720,7 @@ mod tests {
     #[test]
     fn globals_match_the_shader_layout() {
         // common.wgsl: 8 mat4, 28 vec4, the snow cover's mat4 and the snow vec4, then the 9 SH vec4.
-        assert_eq!(SH_OFFSET, 9 * 64 + 31 * 16);
+        assert_eq!(SH_OFFSET, 9 * 64 + 32 * 16);
         assert_eq!(SH_OFFSET % 16, 0, "SH copy needs 16-byte texel alignment");
         assert_eq!(globals_size(), SH_OFFSET + 144);
     }
