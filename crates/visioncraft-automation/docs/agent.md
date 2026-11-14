@@ -233,12 +233,16 @@ Pond tool in the Landscape panel does all this in one step.
 {"steps": [
   {"id": "shape.add_area", "params": {"name": "Lawn", "outline": [[-10, -10], [10, -10], [10, 10], [-10, 10]], "material": "lawn"}},
   {"id": "view.set", "params": {"look": "vivid", "haze": 1.5}},
-  {"id": "view.set", "params": {"look": "natural"}},
+  {"id": "view.set", "params": {"clouds": {"kind": "overcast", "cover": 1.0}}},
+  {"id": "view.set", "params": {"look": "natural", "clouds": {"kind": "cumulus", "cover": 0.5}}},
   {"id": "document.inspect", "params": {"faces": false}}
 ]}
 ```
 
-`look` is `neutral` (plain tone map), `natural` (default) or `vivid`. The rendering quality and
+`look` is `neutral` (plain tone map), `natural` (default) or `vivid`. `clouds` is a layer over
+the analytic sky (an HDRI brings its own): `clear`, `cumulus` (light fair-weather clouds, the
+default at cover 0.35) or `overcast` (soft shadows, little direct sun); they drift with the wind
+and show in reflections and in the ambient light. The rendering quality and
 the texture resolution belong to the window, not the project: set them over the control channel
 with `ui.set {"quality": "auto" | "low" | "medium" | "high" | "ultra", "textures": "auto" | "1k"
 | "2k" | "4k"}`; `view.render` takes its own `quality`.
