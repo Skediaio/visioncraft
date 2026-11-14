@@ -3,10 +3,11 @@
 
 use crate::host::{HostState, missing_json};
 use serde_json::{Map, Value, json};
+use std::collections::HashMap;
 use std::sync::Arc;
 use visioncraft_core::{
-    Generator, ImportedModel, Project, Session, Shape, Transform, evaluate, evaluate_surface_fill,
-    measure, raycast, shape_mesh_on,
+    Generator, ImportedModel, Project, Session, Shape, Transform, area_lifts, evaluate_in_scene,
+    evaluate_surface_fill, measure, placed_shape_mesh, plant_size, raycast, water_areas,
 };
 
 /// A model's placement: scale, then rotation about +Y, then translation.
@@ -46,10 +47,11 @@ struct Owner {
     ground: bool,
 }
 
-/// The visible owners of `project` with their meshes.
+/// The visible owners of `project` with their meshes, shapes placed as the window places them
+/// (`visioncraft_core::placed_shape_mesh`).
 fn owners(project: &Project, state: &HostState) -> Vec<Owner> {
-    let terrain = project.terrain.clone();
-    let on_terrain = move |x: f32, z: f32| terrain.as_ref().and_then(|t| t.height_at(x, z));
+    let lifts: HashMap<String, f32> = area_lifts(&project.shapes).into_iter().collect();
+    let water = water_areas(project);
     let mut out = Vec::new();
     for m in &project.models {
         if let (true, Some(l)) = (project.layer_visible(&m.layer), state.models.get(&m.id)) {
@@ -66,12 +68,15 @@ fn owners(project: &Project, state: &HostState) -> Vec<Owner> {
         if !project.layer_visible(s.layer()) {
             continue;
         }
-        if let Ok(mesh) = shape_mesh_on(s, &on_terrain) {
+        if let Ok((mesh, lift)) = placed_shape_mesh(project, s, &lifts, &water) {
             out.push(Owner {
                 id: s.id().to_string(),
                 kind: "shape",
                 mesh: Arc::new(mesh),
-                xf: None,
+                xf: (lift != 0.0).then(|| Transform {
+                    translation: [0.0, lift, 0.0],
+                    ..Transform::default()
+                }),
                 ground: matches!(s, Shape::Area(_)),
             });
         }
@@ -119,12 +124,13 @@ fn cast(project: &Project, owners: &[Owner], origin: [f32; 3], dir: [f32; 3]) ->
     best.map(|(_, v)| v)
 }
 
-/// Height of the ground plants stand on at `(x, z)`: terrain, areas and models.
-fn ground_at(project: &Project, owners: &[Owner], x: f32, z: f32) -> Option<f32> {
+/// Height of the ground plants stand on at `(x, z)`: terrain, areas and models (`models`
+/// false: terrain and areas only, the open ground of the building rule).
+fn ground_at(project: &Project, owners: &[Owner], x: f32, z: f32, models: bool) -> Option<f32> {
     let terrain = project.terrain.as_ref().and_then(|t| t.height_at(x, z));
     owners
         .iter()
-        .filter(|o| o.ground)
+        .filter(|o| o.ground && (models || o.kind == "shape"))
         .filter_map(|o| {
             let top = o
                 .mesh
@@ -151,6 +157,7 @@ fn ground_at(project: &Project, owners: &[Owner], x: f32, z: f32) -> Option<f32>
 fn placements(
     project: &Project,
     owners: &[Owner],
+    assets: &[visioncraft_core::Asset],
     g: &Generator,
 ) -> (Vec<visioncraft_core::Placement>, bool) {
     match g {
@@ -168,7 +175,33 @@ fn placements(
             None => (Vec::new(), false),
         },
         _ => {
-            let e = evaluate(g, &|x, z| ground_at(project, owners, x, z));
+            // The window's rule (`Scene::evaluate_generator`): no plants in or under buildings.
+            let up = |p: [f32; 3]| {
+                owners
+                    .iter()
+                    .filter(|o| !(o.ground && o.kind == "shape"))
+                    .filter_map(|o| {
+                        // The mesh alone: `cast` would also find the terrain under the plant.
+                        let (lo, ld) = match &o.xf {
+                            Some(t) => (to_local(t, p, true), to_local(t, [0.0, 1.0, 0.0], false)),
+                            None => (p, [0.0, 1.0, 0.0]),
+                        };
+                        // The local direction is the world's over the scale: distances agree.
+                        raycast(&o.mesh, lo, ld).map(|h| h.distance)
+                    })
+                    .reduce(f32::min)
+            };
+            let species = |id: &str| {
+                visioncraft_flora::Species::by_id(id)
+                    .map(|s| (s.mature_height_m, s.mature_width_m / 2.0))
+            };
+            let e = evaluate_in_scene(
+                g,
+                &|x, z| ground_at(project, owners, x, z, true),
+                &|x, z| ground_at(project, owners, x, z, false),
+                &up,
+                &|a| plant_size(project, assets, a, &species),
+            );
             (e.placements, e.truncated)
         }
     }
@@ -310,7 +343,7 @@ pub(crate) fn inspect(session: &Session, state: &HostState, v: &Verbosity) -> Va
                 json!({"id": g.id(), "type": t["type"], "name": g.name(), "layer": g.layer(), "assets": generator_assets(g)})
             };
             if v.measures || v.placements {
-                let (list, truncated) = placements(p, &owners, g);
+                let (list, truncated) = placements(p, &owners, &state.catalog.assets, g);
                 o["count"] = list.len().into();
                 o["truncated"] = truncated.into();
                 if v.placements {
@@ -419,14 +452,14 @@ pub(crate) fn raycast_json(
 
 pub(crate) fn ground_json(session: &Session, state: &HostState, x: f32, z: f32) -> Value {
     let p = session.project();
-    json!({"x": x, "z": z, "height": ground_at(p, &owners(p, state), x, z)})
+    json!({"x": x, "z": z, "height": ground_at(p, &owners(p, state), x, z, true)})
 }
 
 /// `query.ground_length`: a walk over the ground.
 pub(crate) fn ground_length_json(session: &Session, state: &HostState, path: &[[f32; 2]]) -> Value {
     let p = session.project();
     let owners = owners(p, state);
-    json!({"ground_length_m": measure::polyline_length_on_ground(path, &|x, z| ground_at(p, &owners, x, z))})
+    json!({"ground_length_m": measure::polyline_length_on_ground(path, &|x, z| ground_at(p, &owners, x, z, true))})
 }
 
 #[cfg(test)]

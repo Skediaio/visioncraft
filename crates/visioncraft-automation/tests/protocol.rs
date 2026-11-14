@@ -477,7 +477,12 @@ fn the_garden_example_builds_and_is_inspected() {
     assert_eq!(hit["point"][1], json!(6.0));
     let ground =
         execute(&mut h, 4, "query.ground_height", json!({"x": 0, "z": 5}))["result"].clone();
-    assert_eq!(ground["height"], json!(0.0));
+    // The lawn lies a hair above 0, lifted as the window lifts areas (`AREA_LIFT_M`).
+    let lift = f64::from(visioncraft_core::AREA_LIFT_M);
+    assert!(
+        (ground["height"].as_f64().unwrap() - lift).abs() < 1e-4,
+        "{ground}"
+    );
     let sun = execute(&mut h, 5, "query.sun", json!({"time": {"hour": 21.5}}))["result"].clone();
     assert!(
         sun["elevation_deg"].as_f64().unwrap() < 5.0 && sun["sunset_hour"].as_f64().unwrap() > 21.0,
