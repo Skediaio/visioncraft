@@ -54,8 +54,18 @@ pub const MODELS: &str = "Models";
 pub const RELOAD_MODEL: &str = "Reload model";
 pub const RELINK: &str = "Relink model";
 pub const MODEL_UPDATED: &str = "Model updated";
-pub const DROP_HINT: &str =
-    "Open or drop a .3dcraft or .obj model, a .glb object, or draw with the Draw tool";
+pub const DROP_HINT: &str = "Or drop a .3dcraft, .obj, .glb or project file here";
+pub const START_TITLE: &str = "Start a garden";
+pub const START_DRAW: &str = "Draw a garden";
+pub const START_DRAW_TIP: &str = "Draw the plot, the house and the beds yourself";
+pub const START_DRAW_HINT: &str =
+    "Click a corner, then type 20, Tab, 30 and Enter for a 20 by 30 m plot";
+pub const START_MODEL: &str = "Open a 3dcraft model";
+pub const START_MODEL_TIP: &str = "A house or garden designed in 3dcraft (.3dcraft or .obj)";
+pub const START_EXAMPLE: &str = "Open the example garden";
+pub const START_EXAMPLE_TIP: &str =
+    "A small garden with a house, terrace, lawn, hedge, border, trees, a pond and lamps";
+pub const EXAMPLE_NAME: &str = "Example garden";
 pub const VIEW_DISTANCE: &str = "View distance";
 pub const VIEW_DISTANCE_TIP: &str =
     "How far plants keep their detail, shadows reach and the air stays clear (1 is the default)";

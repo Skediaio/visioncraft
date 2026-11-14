@@ -343,6 +343,21 @@ impl App {
         self.modelui = Default::default();
     }
 
+    /// The bundled example garden (`example.rs`), as a new unsaved project.
+    fn open_example(&mut self) {
+        match example::example_garden() {
+            Ok(p) => {
+                self.new_project();
+                self.studio.replace_project(p);
+                self.project_name = Some(strings::EXAMPLE_NAME.into());
+                self.studio.sync();
+                self.studio.frame_all();
+                self.saved_revision = self.studio.session.revision();
+            }
+            Err(e) => self.toasts.error(e),
+        }
+    }
+
     /// Renders the current view at preset `idx` (a still at HIGH quality); falls back to the next smaller preset on failure.
     fn start_export(&mut self, idx: usize) {
         let presets = visioncraft_core::export_presets();
@@ -1419,18 +1434,50 @@ impl eframe::App for App {
             && cx.s.project().terrain.is_none()
             && self.hud.mode.is_none()
         {
+            // A new user's three starting points instead of an empty field.
+            let mut start = None;
             egui::Area::new(egui::Id::new("empty"))
                 .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
                 .order(egui::Order::Foreground)
-                .interactable(false)
                 .show(&ctx, |ui| {
-                    ui.label(
-                        egui::RichText::new(strings::DROP_HINT)
-                            .size(15.0)
-                            .color(egui::Color32::WHITE)
-                            .background_color(egui::Color32::from_black_alpha(140)),
-                    );
+                    ui::panel_frame().show(ui, |ui| {
+                        ui.set_max_width(360.0);
+                        ui.vertical_centered_justified(|ui| {
+                            ui.label(
+                                egui::RichText::new(strings::START_TITLE)
+                                    .size(18.0)
+                                    .strong(),
+                            );
+                            ui.add_space(6.0);
+                            for (i, (label, tip)) in [
+                                (strings::START_DRAW, strings::START_DRAW_TIP),
+                                (strings::START_MODEL, strings::START_MODEL_TIP),
+                                (strings::START_EXAMPLE, strings::START_EXAMPLE_TIP),
+                            ]
+                            .into_iter()
+                            .enumerate()
+                            {
+                                let b = egui::Button::new(egui::RichText::new(label).size(15.0))
+                                    .min_size(Vec2::new(0.0, 34.0));
+                                if ui.add(b).on_hover_text(tip).clicked() {
+                                    start = Some(i);
+                                }
+                            }
+                            ui.add_space(4.0);
+                            ui.weak(strings::DROP_HINT);
+                        });
+                    });
                 });
+            match start {
+                Some(0) => {
+                    self.set_mode(&ctx, Some(Mode::Draw));
+                    self.draw.tool = draw::Tool::Area;
+                    self.toasts.info(strings::START_DRAW_HINT);
+                }
+                Some(1) => files::pick(&self.inbox, &ctx, None, &["3dcraft", "obj"]),
+                Some(2) => self.open_example(),
+                _ => {}
+            }
         }
         if let Some(job) = &mut self.loading {
             egui::Area::new(egui::Id::new("loading"))
