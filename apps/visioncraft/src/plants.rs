@@ -740,13 +740,14 @@ impl Flora {
             if !self.textures.contains_key(&id) && !self.tex_jobs.contains_key(&id) {
                 let scale = self.leaf_scale.max(1);
                 let (scans, key) = self.scans.scans(&id, month, &params);
-                // Natively the scans come off the disk in a moment: wait for them (a few seconds
-                // at most) instead of making the textures twice. On the web the drawn ones show
-                // first.
+                // Natively the scans come off the disk in a moment: wait for them (ten seconds
+                // at most, for a machine busy with other work) instead of making the textures
+                // twice, and of caching textures from a set that was only half there. On the web
+                // the drawn ones show first.
                 let since = *self.scan_wait.get_or_insert_with(crate::assets::now_ms);
                 let waiting = cfg!(not(target_arch = "wasm32"))
                     && self.scans.arriving(&id, month, &params)
-                    && crate::assets::now_ms() - since < 3000.0;
+                    && crate::assets::now_ms() - since < 10_000.0;
                 if !waiting && r.supports_bc() && (cfg!(target_arch = "wasm32") || room(1, 0)) {
                     let job = start_tex(&params, scale, &scans, &key, urgency);
                     self.tex_jobs.insert(id.clone(), job);

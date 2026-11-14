@@ -777,8 +777,10 @@ impl Studio {
         project_dir: Option<&Path>,
         relink_dir: Option<&Path>,
     ) -> SourcesLoaded {
-        self.replace_project(project);
-        self.load_sources(project_dir, relink_dir)
+        crate::load_stats::time("~open: replace project", || self.replace_project(project));
+        crate::load_stats::time("~open: import models", || {
+            self.load_sources(project_dir, relink_dir)
+        })
     }
 
     /// Loads every model that is not loaded yet: an example's file from inside the program,
