@@ -19,13 +19,14 @@ pub(super) fn register(s: &mut Session) {
         spec(
             "viewpoint.add",
             "Save Viewpoint",
-            "Saves a camera position and target, optionally with a time of day and years after planting.",
+            "Saves a camera position and target, optionally with a time of day, a season and years after planting.",
             vec![
                 param("name", T::String, "Display name.").required(),
                 param("position", T::Point3, "Camera position [x, y, z].").unit("m").required(),
                 param("target", T::Point3, "Point it looks at; must differ from the position.").unit("m").required(),
                 fov().default(json!(60)),
                 time(),
+                param("season", T::String, "spring, summer, autumn or winter: the season shown from here (its day at the site, as view.set season; the hour from `time` or the project's)."),
                 param("years", T::Number, "Years after planting to show from here (0..60); unset keeps the project's."),
             ],
             "{id} (v1, v2...)",
@@ -45,6 +46,11 @@ pub(super) fn register(s: &mut Session) {
                 param("target", T::Point3, "Look-at point.").unit("m"),
                 fov(),
                 time(),
+                param(
+                    "season",
+                    T::String,
+                    "spring, summer, autumn or winter: the season shown from here.",
+                ),
                 param(
                     "years",
                     T::Number,
@@ -102,11 +108,13 @@ fn viewpoint_add(project: &mut Project, params: &Value) -> Result<Value, Command
         fov_y_deg: f32,
         time: Option<SunTime>,
         years: Option<f32>,
+        season: Option<String>,
     }
     fn fov() -> f32 {
         60.0
     }
     let p: P = parse(params)?;
+    let time = with_season(project, p.time, p.season.as_deref())?;
     let id = next_id("v", |id| project.viewpoints.iter().any(|v| v.id == id));
     let v = Viewpoint {
         id: id.clone(),
@@ -114,7 +122,7 @@ fn viewpoint_add(project: &mut Project, params: &Value) -> Result<Value, Command
         position: p.position,
         target: p.target,
         fov_y_deg: p.fov_y_deg,
-        time: p.time,
+        time,
         years: p.years,
     };
     v.validate().map_err(|e| bad(&e))?;
@@ -127,10 +135,34 @@ fn viewpoint_update(project: &mut Project, params: &Value) -> Result<Value, Comm
         project,
         params["id"].as_str().ok_or_else(|| bad("missing id"))?,
     )?;
-    let v = merge_update(&project.viewpoints[i], params, &["years"])?;
+    let mut params = params.clone();
+    let season = params
+        .as_object_mut()
+        .and_then(|o| o.remove("season"))
+        .map(|s| s.as_str().map(str::to_string).unwrap_or_default());
+    let mut v = merge_update(&project.viewpoints[i], &params, &["years"])?;
+    if season.is_some() {
+        v.time = with_season(project, v.time, season.as_deref())?;
+    }
     v.validate().map_err(|e| bad(&e))?;
     project.viewpoints[i] = v;
     Ok(Value::Null)
+}
+
+/// A viewpoint's time with `season`'s day at the site (its hour, else the project's).
+fn with_season(
+    project: &Project,
+    time: Option<SunTime>,
+    season: Option<&str>,
+) -> Result<Option<SunTime>, CommandError> {
+    let Some(name) = season else {
+        return Ok(time);
+    };
+    let s = crate::Season::parse(name)
+        .ok_or_else(|| bad("`season` must be spring, summer, autumn or winter"))?;
+    Ok(Some(
+        s.time(time.unwrap_or(project.time), project.site.latitude),
+    ))
 }
 
 fn viewpoint_remove(project: &mut Project, params: &Value) -> Result<Value, CommandError> {

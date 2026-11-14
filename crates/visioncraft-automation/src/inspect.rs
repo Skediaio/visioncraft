@@ -403,6 +403,7 @@ pub(crate) fn inspect(session: &Session, state: &HostState, v: &Verbosity) -> Va
     out.insert("revision".into(), session.revision().into());
     out.insert("site".into(), json!(p.site));
     out.insert("time".into(), json!(p.time));
+    out.insert("season".into(), json!(p.season()));
     out.insert("sun".into(), sun_json(p));
     out.insert("view".into(), json!(p.view));
     out.insert("style".into(), json!(p.style));

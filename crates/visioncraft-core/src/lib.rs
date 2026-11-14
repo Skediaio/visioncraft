@@ -20,6 +20,7 @@ pub mod planting;
 pub mod presets;
 pub mod project;
 pub mod raycast;
+pub mod season;
 pub mod session;
 pub mod shape;
 pub mod spec;
@@ -54,6 +55,7 @@ pub use project::{
     ProjectError, RenderStyle, Site, SkyChoice, SunTime, Transform, ViewState, YEARS_MAX,
 };
 pub use raycast::{Hit, ground_height, raycast};
+pub use season::Season;
 pub use session::{Command, CommandError, Session};
 pub use shape::{
     AREA_LIFT_M, STACK_STEP_M, Shape, ShapeError, area_lifts, areas_over, footing, inside_outline,

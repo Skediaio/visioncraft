@@ -321,8 +321,8 @@ fn listing_and_describing_commands() {
         list["result"]["commands"][0],
         json!({
             "id": "viewpoint.add",
-            "params": "{\"name\": string, \"position\": [x, y, z] (m), \"target\": [x, y, z] (m), \"fov_y_deg\": number (deg) = 60, \"time\": object = not set, \"years\": number = not set}",
-            "summary": "Saves a camera position and target, optionally with a time of day and years after planting.",
+            "params": "{\"name\": string, \"position\": [x, y, z] (m), \"target\": [x, y, z] (m), \"fov_y_deg\": number (deg) = 60, \"time\": object = not set, \"season\": string = not set, \"years\": number = not set}",
+            "summary": "Saves a camera position and target, optionally with a time of day, a season and years after planting.",
             "enabled": true
         })
     );

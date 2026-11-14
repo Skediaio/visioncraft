@@ -90,8 +90,10 @@ pub(super) fn register(s: &mut Session) {
         spec(
             "view.set",
             "Set View",
-            "Sets exposure, look, sky, clouds, years after planting, haze, wind, the ground plane, ground clutter and the view distance stored with the project; only the fields given change.",
+            "Sets the season, snow, exposure, look, sky, clouds, years after planting, haze, wind, the ground plane, ground clutter and the view distance stored with the project; only the fields given change.",
             vec![
+                param("season", T::String, "spring, summer, autumn or winter: the plants as they are then, and the project's date set to the season's day at the site (20 April, 21 June, 20 October, 15 January in the north; six months on in the south), the hour kept. An exact date (time.set) maps back to its season."),
+                param("snow", T::Number, "Snow cover 0..1 on the ground, lawns, roofs, terraces, hedge tops, evergreen crowns, branches, wall tops and sills, not under roofs or dense evergreens; about 0.7 for a snowy winter. 0: none.").default(json!(0)),
                 param("exposure_ev", T::Number, "Exposure offset in stops; null for automatic exposure."),
                 param("sky", T::Object, "{type: \"physical\"} or {type: \"hdri\", id: string, rotation_deg: number, intensity: number >= 0}.")
                     .default(json!({"type": "physical"})),
@@ -206,10 +208,18 @@ fn style_set(project: &mut Project, params: &Value) -> Result<Value, CommandErro
 }
 
 fn view_set(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
+    // The season is the date's, not a view field: it moves the project's date.
+    let mut params = params.clone();
+    let season = match params.as_object_mut().and_then(|o| o.remove("season")) {
+        None => None,
+        Some(v) => Some(v.as_str().and_then(crate::Season::parse).ok_or_else(|| {
+            crate::session::bad("`season` must be spring, summer, autumn or winter")
+        })?),
+    };
     // `view_distance` is not written while it is 1, `look` while natural, `clouds` while default.
     let view = super::merge_update(
         &project.view,
-        params,
+        &params,
         &[
             "view_distance",
             "look",
@@ -217,9 +227,13 @@ fn view_set(project: &mut Project, params: &Value) -> Result<Value, CommandError
             "years",
             "lights",
             "clutter",
+            "snow",
         ],
     )?;
     view.validate().map_err(|e| crate::session::bad(&e))?;
     project.view = view;
+    if let Some(s) = season {
+        project.time = s.time(project.time, project.site.latitude);
+    }
     Ok(Value::Null)
 }

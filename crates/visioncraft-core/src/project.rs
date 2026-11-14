@@ -163,6 +163,14 @@ pub struct ViewState {
     /// leaves it out at LOW quality.
     #[serde(skip_serializing_if = "is_true")]
     pub clutter: bool,
+    /// Snow over the ground, roofs, hedge tops and branches, 0 (none, the default; not
+    /// written) to 1. The season stays the date's (`Project::season`).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub snow: f32,
+}
+
+fn is_zero(v: &f32) -> bool {
+    *v == 0.0
 }
 
 fn is_true(v: &bool) -> bool {
@@ -253,6 +261,7 @@ impl Default for ViewState {
             years: None,
             lights: None,
             clutter: true,
+            snow: 0.0,
         }
     }
 }
@@ -269,6 +278,7 @@ impl ViewState {
             && VIEW_DISTANCE_RANGE.contains(&self.view_distance)
             && (0.0..=1.0).contains(&self.clouds.cover)
             && self.years.is_none_or(|y| (0.0..=YEARS_MAX).contains(&y))
+            && (0.0..=1.0).contains(&self.snow)
             && self.ground.is_none_or(|g| {
                 finite(g.height) && g.color.iter().all(|c| c.is_finite() && *c >= 0.0)
             })
