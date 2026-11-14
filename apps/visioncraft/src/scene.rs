@@ -1060,6 +1060,12 @@ impl Scene {
     ) -> Vec<ItemId> {
         if let Some(parts) = src {
             let item = r.add_lod_item(parts, matrices);
+            // A hedge's shadow is a band, not one blob per segment.
+            let clipped = asset
+                .strip_prefix("flora:")
+                .and_then(flora::Species::by_id)
+                .is_some_and(|s| matches!(s.params.form, flora::Form::Clipped(_)));
+            r.set_item_shadow_exact(item, clipped);
             let impostor = self.impostor_for(project, asset, variant, month);
             let last = parts.iter().map(|p| p.2).fold(0.0, f32::max);
             match impostor {

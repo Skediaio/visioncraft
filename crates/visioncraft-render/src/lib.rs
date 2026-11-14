@@ -545,6 +545,8 @@ struct Item {
     cull_fade: f32,
     /// The impostor's end follows `set_impostor_reach` (small plants).
     follows_reach: bool,
+    /// Casts shadows with the level it is drawn with (`set_item_shadow_exact`).
+    shadow_exact: bool,
 }
 
 /// Instances in one ground cell: culled as a unit, drawn as one range, one
@@ -1590,6 +1592,14 @@ impl Renderer {
     /// (`f32::INFINITY`: never culled). Around the hand-over distance the
     /// mesh and the quads are dithered per instance over a band of 10 %
     /// (at least 2 m), so nothing pops.
+    /// Shadows of this item use the level of detail it is drawn with, not a coarser one or its
+    /// impostor (for hedges and other clipped plants, whose shadow is a continuous band).
+    pub fn set_item_shadow_exact(&mut self, item: ItemId, exact: bool) {
+        if let Some(Some(it)) = self.items.get_mut(item.0 as usize) {
+            it.shadow_exact = exact;
+        }
+    }
+
     pub fn set_item_impostor(
         &mut self,
         item: ItemId,
@@ -1917,6 +1927,7 @@ impl Renderer {
             bounds: None,
             clusters: Vec::new(),
             impostor: None,
+            shadow_exact: false,
             cull_fade: 0.0,
             follows_reach: false,
         }));
@@ -2598,6 +2609,10 @@ impl Renderer {
         let levels = item.lods.len() as u8;
         if cluster.lod >= levels {
             return None;
+        }
+        // A hedge's coarser levels are a few cards: its shadow would break into a row of dots.
+        if item.shadow_exact && matches!(pass, Pass::Shadow { .. }) {
+            return Some(cluster.lod.min(levels - 1));
         }
         // Plants with an impostor shadow with it beyond their finest level.
         if item.impostor.is_some() && matches!(pass, Pass::Shadow { .. }) && cluster.lod >= 1 {
