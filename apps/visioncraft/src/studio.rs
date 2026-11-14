@@ -157,7 +157,17 @@ pub struct Studio {
     sky_volume_key: u64,
     sky_volume: Option<visioncraft_core::SkyVolume>,
     sky_task: Option<crate::sky_task::SkyTask>,
+    /// Empty when to be made again (`upload_sky_volume`).
     lamp_bounce: Vec<[f32; 3]>,
+    /// The sun's light passed round the rooms per unit of its illuminance (empty: to be made
+    /// again), the direction it was made for, and the sun's illuminance (lux) it was sent with.
+    sun_bounce: Vec<f32>,
+    sun_bounce_dir: Vec3,
+    sun_lux: Vec3,
+    /// The exposure the eye has adapted to (EV) and when (`clock`); `None`: take the metered
+    /// exposure at once (the first frame, a picture).
+    adapted_ev: Option<f32>,
+    adapted_at: f64,
     /// Impostor atlases have been made ahead for the current quality.
     impostors_reserved: bool,
     /// The revision (and whether the catalogue was there) the lamp lights were last made for.
@@ -367,6 +377,11 @@ impl Studio {
             sky_volume: None,
             sky_task: None,
             lamp_bounce: Vec::new(),
+            sun_bounce: Vec::new(),
+            sun_bounce_dir: Vec3::ZERO,
+            sun_lux: Vec3::ZERO,
+            adapted_ev: None,
+            adapted_at: 0.0,
             impostors_reserved: false,
             lamps_reconciled: (u64::MAX, false),
             lamps_skipped: 0,
@@ -679,6 +694,8 @@ impl Studio {
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
         self.scene.library.store.stream_bytes = stream;
+        // A picture is taken with the eye adapted to it.
+        self.adapted_ev = None;
         self.prepare();
         let mut problems = picture_problems(self.plants_pending(), self.scene.library.idle());
         problems.append(&mut lamp_problems);
@@ -934,6 +951,8 @@ impl Studio {
         if let Some(v) = self.sky_task.as_ref().and_then(|t| t.take()) {
             self.sky_task = None;
             self.sky_volume = v;
+            self.lamp_bounce.clear();
+            self.sun_bounce.clear();
             self.upload_sky_volume();
         }
     }
@@ -943,14 +962,22 @@ impl Studio {
         self.sky_task.is_some()
     }
 
-    /// Sends the sky volume to the renderer with the light of the lamps now on passed round its
-    /// rooms (`SkyVolume::lamp_bounce`).
+    /// Sends the sky volume to the renderer with the light of the lamps now on and of the sun
+    /// passed round its rooms (`SkyVolume::lamp_bounce`, `SkyVolume::sun_bounce`), each made
+    /// again when emptied.
     fn upload_sky_volume(&mut self) {
         let Some(v) = &self.sky_volume else {
             self.lamp_bounce.clear();
+            self.sun_bounce.clear();
             self.renderer.set_sky_volume(None);
             return;
         };
+        if self.sun_bounce.len() != v.samples.len() {
+            self.sun_bounce = v.sun_bounce(self.sun_bounce_dir.to_array());
+        }
+        if self.lamp_bounce.len() == v.samples.len() {
+            return self.send_sky_volume();
+        }
         let lamps: Vec<visioncraft_core::Lamp> = self
             .last_lights
             .iter()
@@ -967,14 +994,35 @@ impl Studio {
             })
             .collect();
         self.lamp_bounce = v.lamp_bounce(&lamps);
-        let room: Vec<[f32; 4]> = self
-            .lamp_bounce
-            .iter()
-            .zip(&v.room)
-            .map(|(l, &open)| [l[0], l[1], l[2], open])
+        self.send_sky_volume();
+    }
+
+    /// The volume to the renderer, the room light being the lamps' and the sun's (lux) and the
+    /// sky's share (`upload_sky_volume`).
+    fn send_sky_volume(&mut self) {
+        let Some(v) = &self.sky_volume else { return };
+        let sun = self.sun_lux.to_array();
+        let (occupancy, voxels) = v.occupancy();
+        let texels = v.room_texels();
+        let room: Vec<[f32; 4]> = (0..v.samples.len())
+            .map(|i| {
+                let (l, s) = (self.lamp_bounce[i], self.sun_bounce[i]);
+                [
+                    l[0] + s * sun[0],
+                    l[1] + s * sun[1],
+                    l[2] + s * sun[2],
+                    texels[i],
+                ]
+            })
             .collect();
-        self.renderer
-            .set_sky_volume(Some((v.origin, v.cell, v.dims, &v.samples, &room)));
+        self.renderer.set_sky_volume(Some((
+            v.origin,
+            v.cell,
+            v.dims,
+            &v.samples,
+            &room,
+            (&occupancy, voxels),
+        )));
     }
 
     /// The illuminance (lux) the lamps now on throw straight onto a surface at `q` facing `n`,
@@ -1020,9 +1068,8 @@ impl Studio {
         let v = self.sky_volume.as_ref()?;
         let (view, proj, _) = self.camera.matrices(self.aspect());
         let size = glam::Vec2::new(self.size[0] as f32, self.size[1] as f32).max(glam::Vec2::ONE);
-        let keep = visioncraft_core::sky_volume::ROOM_REFLECTANCE
-            / (1.0 - visioncraft_core::sky_volume::ROOM_REFLECTANCE);
         let (mut sum, mut room, mut n) = (0.0f32, 0.0f32, 0.0f32);
+        let sun = luminance(self.sun_lux.to_array());
         for j in 0..METER_ROWS {
             for i in 0..METER_COLUMNS {
                 let at = glam::Vec2::new(
@@ -1040,12 +1087,10 @@ impl Studio {
                     continue;
                 };
                 let seen = v.seen(k, (-d).to_array());
-                let lamp = self.lamp_bounce.get(k).copied().unwrap_or_default();
-                let lamp = luminance(lamp);
-                let mut e =
-                    open_lux * (seen + (1.0 - seen) * keep * v.room[k]) + lamp * (1.0 - seen);
-                e += self.lamp_direct(v, q, -d);
-                sum += e;
+                let lamp = luminance(self.lamp_bounce.get(k).copied().unwrap_or_default());
+                let bounced = lamp + sun * self.sun_bounce.get(k).copied().unwrap_or_default();
+                let direct = self.lamp_direct(v, q, -d);
+                sum += meter_point(open_lux, seen, v.room[k], bounced, direct);
                 room += 1.0 - seen;
             }
         }
@@ -1217,21 +1262,19 @@ impl Studio {
         // In a room a photographer meters what the camera sees (`meter_view`) and opens up or
         // stops down towards it: by day a room gets only the sky its windows show, at night
         // the lamps light it. Only part of the way (`METER_SHARE`), so a dim corridor still
-        // reads dimmer than a daylit room, and only as far as the view is enclosed.
-        // shortcut: the exposure follows the meter at once, no adaptation over time; ease it
-        // in if walking through a doorway reads as a jump.
+        // reads dimmer than a daylit room, and only as far as the view is enclosed. The eye
+        // takes a moment to adapt (`adapt_ev`), a picture none.
         let auto = self.sky.auto_ev(elevation, self.moon_lux(), lamps);
         let room = match self.meter_view(METER_LUX * auto.exp2()) {
-            Some((lux, enclosed)) => {
-                let metered = (lux.max(1e-3) / METER_LUX).log2();
-                enclosed * (METER_SHARE * (auto - metered)).clamp(-METER_DOWN_EV, METER_UP_EV)
-            }
+            Some((lux, enclosed)) => meter_shift(auto, lux, enclosed),
             None => 0.0,
         };
-        let ev = v
-            .exposure_ev
-            .unwrap_or(auto - brighter - snow * SNOW_EV - room)
-            - self.exposure;
+        let target = auto - brighter - snow * SNOW_EV - room;
+        let dt = (self.clock - self.adapted_at).clamp(0.0, 10.0) as f32;
+        let adapted = self.adapted_ev.map_or(target, |a| adapt_ev(a, target, dt));
+        self.adapted_ev = Some(adapted);
+        self.adapted_at = self.clock;
+        let ev = v.exposure_ev.unwrap_or(adapted) - self.exposure;
         self.ev_used = (ev, elevation);
         self.renderer.set_exposure(ev);
         self.renderer.set_clay(self.project().style.clay);
@@ -1281,6 +1324,22 @@ impl Studio {
         if lights != self.last_lights {
             self.dropped_lights = self.renderer.set_lights(&lights);
             self.last_lights = lights;
+            self.lamp_bounce.clear();
+            self.upload_sky_volume();
+        }
+        // The sun's light let into the rooms: made again when the sun has moved a degree, sent
+        // again when its illuminance changed by a twentieth.
+        let to_sun = self.sun().0.direction.normalize_or_zero();
+        let lux = self.renderer.sun_lux();
+        let turned = to_sun.dot(self.sun_bounce_dir) < SUN_BOUNCE_COS;
+        if turned
+            || (lux - self.sun_lux).abs().max_element() > 0.05 * self.sun_lux.max_element() + 1.0
+        {
+            if turned {
+                self.sun_bounce_dir = to_sun;
+                self.sun_bounce.clear();
+            }
+            self.sun_lux = lux;
             self.upload_sky_volume();
         }
         let people: Vec<glam::Mat4> = if self.show_people {
@@ -1851,6 +1910,39 @@ mod tests {
     use super::auto_ev;
 
     #[test]
+    fn the_meter_opens_up_for_a_dim_room_and_not_out_of_doors() {
+        use super::{METER_LUX, METER_SHARE, meter_point, meter_shift};
+        let open = METER_LUX * 15f32.exp2();
+        // Under the open sky the meter reads the open light and moves nothing.
+        assert_eq!(meter_point(open, 1.0, 0.3, 50.0, 0.0), open);
+        assert_eq!(meter_shift(15.0, open, 1.0), 0.0);
+        // A room four stops under it: `METER_SHARE` of them.
+        let room = meter_point(open, 0.0, 0.0, open / 16.0, 0.0);
+        assert!((meter_shift(15.0, room, 1.0) - 4.0 * METER_SHARE).abs() < 1e-4);
+        // Half enclosed: half of that; a black room no more than the limit.
+        assert!((meter_shift(15.0, room, 0.5) - 2.0 * METER_SHARE).abs() < 1e-4);
+        assert_eq!(meter_shift(15.0, 0.0, 1.0), super::METER_UP_EV);
+        // A lamp shining straight on the surface counts in full; the inside of a wall (-1) not.
+        assert_eq!(meter_point(open, 0.0, -1.0, 0.0, 300.0), 300.0);
+    }
+
+    #[test]
+    fn the_eye_adapts_in_about_a_second_whatever_the_frame_rate() {
+        use super::adapt_ev;
+        // 95 % of the way in a second.
+        let a = adapt_ev(15.0, 10.0, 1.0);
+        assert!((15.0 - a) / 5.0 > 0.94 && (15.0 - a) / 5.0 < 0.97, "{a}");
+        // Sixty frames of a sixtieth come out where ten frames of a tenth do.
+        let (mut fast, mut slow) = (15.0f32, 15.0f32);
+        (0..60).for_each(|_| fast = adapt_ev(fast, 10.0, 1.0 / 60.0));
+        (0..10).for_each(|_| slow = adapt_ev(slow, 10.0, 0.1));
+        assert!((fast - slow).abs() < 1e-3 && (fast - a).abs() < 1e-3);
+        // No time, no change; a long pause, there.
+        assert_eq!(adapt_ev(15.0, 10.0, 0.0), 15.0);
+        assert!((adapt_ev(15.0, 10.0, 30.0) - 10.0).abs() < 1e-4);
+    }
+
+    #[test]
     fn looks_lift_the_day_and_leave_the_night() {
         use visioncraft_core::Look;
         assert_eq!(super::look_grade(Look::Neutral, 60.0), (0.0, 1.0, 1.0));
@@ -2046,16 +2138,48 @@ mod reach_tests {
 /// How long a picture waits for plants and library files before it is taken anyway.
 pub const PICTURE_WAIT_S: f64 = 120.0;
 
+/// What the light meter (`meter_view`) reads where one of its rays meets a surface (lux): the
+/// open sky's light (`open_lux` under it) as far as the surface sees the sky, and for the rest
+/// the room's: the sky's light passed round it (`room`, per unit of the sky's mean light, which
+/// is taken as `METER_SKY_SHARE` of the open light) and the lamps' and the sun's (`bounced`,
+/// lux); plus the lamps that light it directly (`direct`).
+pub fn meter_point(open_lux: f32, seen: f32, room: f32, bounced: f32, direct: f32) -> f32 {
+    let room = open_lux * METER_SKY_SHARE * room.max(0.0) + bounced;
+    open_lux * seen + (1.0 - seen) * room + direct
+}
+
+/// How many stops the exposure opens up (positive) or stops down from the automatic `auto_ev`
+/// for a view that meters `metered_lux`: `METER_SHARE` of the way to it, within the limits, as
+/// far as the view is enclosed (`enclosed`, 0 out of doors).
+pub fn meter_shift(auto_ev: f32, metered_lux: f32, enclosed: f32) -> f32 {
+    let metered = (metered_lux.max(1e-3) / METER_LUX).log2();
+    enclosed * (METER_SHARE * (auto_ev - metered)).clamp(-METER_DOWN_EV, METER_UP_EV)
+}
+
+/// Eye adaptation: the exposure `dt` seconds on from `adapted` towards `target`, an exponential
+/// approach with the time constant `ADAPT_S`, the same whatever the frame rate.
+pub fn adapt_ev(adapted: f32, target: f32, dt: f32) -> f32 {
+    target + (adapted - target) * (-dt.max(0.0) / ADAPT_S).exp()
+}
+
+/// The time constant of eye adaptation (s): 95 % of a change in a second.
+const ADAPT_S: f32 = 0.33;
+
 /// The light meter (`meter_view`): its grid of rays over the picture; the illuminance (lux) the
 /// automatic exposure is made for at EV 0, doubling per stop (a white wall under it reads
 /// about a third of white); the share of the metered difference the exposure follows; how far
-/// it opens up and stops down.
+/// it opens up and stops down; the sky's mean light (half its up- and down-facing illuminance,
+/// as scene.wgsl's `room_bounce`) against the light the automatic exposure is made for.
+/// The cosine of the angle the sun moves before its light in the rooms is made again (1 deg).
+const SUN_BOUNCE_COS: f32 = 0.999_85;
+
 const METER_COLUMNS: usize = 6;
 const METER_ROWS: usize = 4;
 const METER_LUX: f32 = 1.5;
-const METER_SHARE: f32 = 0.75;
+const METER_SHARE: f32 = 0.85;
 const METER_UP_EV: f32 = 5.0;
 const METER_DOWN_EV: f32 = 9.0;
+const METER_SKY_SHARE: f32 = 0.4;
 
 /// Stops the exposure opens up per unit of snow.
 const SNOW_EV: f32 = 1.2;
