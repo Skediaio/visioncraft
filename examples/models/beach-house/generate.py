@@ -519,6 +519,184 @@ for n in FINISHED:
 steps.append(["document.inspect", {}])
 
 here = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.normpath(os.path.join(here, "..", "..", ".."))
+
+# ---- The VisionCraft example: materials per body, furniture, lights, viewpoints ----------------
+# World: metres, Y up, x = X / 1000, y = Z / 1000, z = -Y / 1000 (the house's SW corner at the
+# origin, the sea side along z = 0, the deck towards +z, the street towards -z).
+def w(x, y, z=FFL):
+    return [round(x / 1000, 3), round(z / 1000, 3), round(-y / 1000, 3)]
+
+
+LIB = {m["id"]: m for m in json.load(open(os.path.join(ROOT, "assets", "materials.json")))["materials"]}
+vc = []
+mat_ids = {}
+
+
+def lib_material(lib_id, gloss=0.0):
+    """A project material showing a library material, made as the app's Library tab makes one
+    (metallic 0: the maps scale the factors)."""
+    e = LIB[lib_id]
+    scale = max(e["size_m"]) if e.get("size_m") else 1.0
+    vc.append(["material.add", {
+        "name": e["name"],
+        "kind": {"type": "standard_triplanar_pbr", "map_scale_m": scale, "relief": 1.0, "gloss": gloss,
+                 "weathering": 0.0},
+        "base_color": [1.0, 1.0, 1.0, 1.0], "metallic": 0.0, "roughness": 1.0,
+        "maps": {"base_color": e["maps"]["basecolor"], "normal": e["maps"]["normal"], "orm": e["maps"]["orm"],
+                 "height": e["maps"].get("height")},
+        "variation": 0.4 if e["kind"] == "paving" else 0.25}])
+    mat_ids[lib_id] = f"mat{len(mat_ids) + 1}"
+    return mat_ids[lib_id]
+
+
+def plain_material(key, name, rgb, metallic, roughness, gloss=0.0):
+    vc.append(["material.add", {"name": name, "base_color": rgb + [1.0], "metallic": metallic,
+                                "roughness": roughness,
+                                "kind": {"type": "standard_triplanar_pbr", "map_scale_m": 1, "relief": 0,
+                                         "gloss": gloss, "weathering": 0}}])
+    mat_ids[key] = f"mat{len(mat_ids) + 1}"
+    return mat_ids[key]
+
+
+SAND = lib_material("ground052")
+OAK = lib_material("woodfloor032", gloss=0.3)
+CEDAR = lib_material("planks007")
+DECKING = lib_material("planks029s")
+TILE = lib_material("tiles038", gloss=0.4)
+HEX = lib_material("tiles071", gloss=0.4)
+LIMESTONE = lib_material("rock004")
+STONE = lib_material("rocks025")
+BOARD_CONCRETE = lib_material("concrete045")
+PAVER = lib_material("concrete034")
+BRONZE = plain_material("bronze", "Dark bronze metal", [0.035, 0.032, 0.03], 1.0, 0.4)
+MEMBRANE = plain_material("membrane", "Roof membrane", [0.1, 0.1, 0.105], 0.0, 0.85)
+WHITE = plain_material("white", "White paint", [0.78, 0.77, 0.74], 0.0, 0.7)
+LACQUER = plain_material("lacquer", "White lacquer", [0.74, 0.73, 0.7], 0.0, 0.3, gloss=0.3)
+SAGE = plain_material("sage", "Sage lacquer", [0.16, 0.2, 0.15], 0.0, 0.4, gloss=0.2)
+QUARTZ = plain_material("quartz", "White quartz", [0.8, 0.79, 0.76], 0.0, 0.2, gloss=0.5)
+BLACK = plain_material("black", "Black glass", [0.01, 0.01, 0.01], 0.0, 0.08, gloss=0.8)
+CERAMIC = plain_material("ceramic", "White ceramic", [0.85, 0.85, 0.84], 0.0, 0.08, gloss=0.8)
+MIRROR = plain_material("mirror", "Mirror", [0.92, 0.92, 0.92], 1.0, 0.02)
+DARK_WOOD = plain_material("darkwood", "Dark stained timber", [0.045, 0.032, 0.024], 0.0, 0.8)
+MATERIALS = {   # body -> material id (built-in ones by name)
+    "walls-ext": "plaster", "walls-int": "plaster", "cladding+": CEDAR, "plinth": BOARD_CONCRETE,
+    "slab": BOARD_CONCRETE, "roof": CEDAR, "roof-membrane": MEMBRANE, "fascia": BRONZE,
+    "columns": BRONZE, "ceiling": WHITE, "ceiling-living": CEDAR, "glass": "glass", "frames": BRONZE,
+    "sills": BRONZE, "doors": OAK, "door-frames": WHITE, "hardware": BRONZE,
+    "floor-living": OAK, "floor-hall": LIMESTONE, "floor-den": OAK, "floor-utility": TILE,
+    "floor-wc": HEX, "floor-corridor": OAK, "floor-master": OAK, "floor-ensuite": TILE,
+    "floor-bed2": OAK, "floor-bath": HEX, "floor-bed3": OAK,
+    "fireplace": STONE, "firebox": BLACK, "kitchen-units": SAGE, "worktops": QUARTZ,
+    "appliances": BLACK, "joinery": LACQUER, "sanitary": CERAMIC, "baths": CERAMIC,
+    "sanitary-ledge": TILE, "mirrors": MIRROR, "deck": DECKING, "deck-base": DARK_WOOD,
+    "steps": DECKING, "railing": "metal", "firepit": "concrete", "carport-pad": "concrete",
+    "entrance": "concrete", "path": PAVER,
+}
+assert set(MATERIALS) == set(FINISHED), set(MATERIALS) ^ set(FINISHED)
+vc.append(["terrain.create", {"origin": [-30, -30], "width_m": 80, "depth_m": 60, "cell_m": 1.0,
+                              "base_material": SAND}])
+vc.append(["model.add", {"name": "Beach house", "kind": "3dcraft", "source": "example:beach-house.3dcraft",
+                         "transform": {"translation": [0, 0, 0], "rotation_y_deg": 0, "scale": 1}}])
+for body in FINISHED:
+    vc.append(["material.assign", {"target": {"type": "body", "owner": "m1", "body": ids[body]},
+                                   "material": MATERIALS[body]}])
+
+# Furniture from the catalogue: (name, asset, X, Y in mm, rotation in degrees, floor Z).
+# rotation_y_deg turns counter-clockwise seen from above.
+DECK_Z = SLAB_Z1
+LIV_Y = (I0 + YC) / 2
+FURNITURE = [
+    ("Sofa", "sofa_03", 4300, LIV_Y, -90, FFL),
+    ("Lounge chair north", "mid_century_lounge_chair", 2300, YC - 1100, 160, FFL),
+    ("Lounge chair south", "mid_century_lounge_chair", 2300, I0 + 1300, 20, FFL),
+    ("Coffee table", "modern_coffee_table_02", 2900, LIV_Y, 0, FFL),
+    ("Plant by the fire", "potted_plant_01", I0 + 600, YC - 500, 0, FFL),
+    ("Plant by the glass", "potted_plant_02", 5600, I0 + 700, 0, FFL),
+    ("Dining table", "dining_table", 12100, LIV_Y - 300, 0, FFL),
+]
+for k, x in enumerate((11400, 12100, 12800)):
+    FURNITURE.append((f"Dining chair south {k + 1}", "dining_chair_02", x, LIV_Y - 1100, 180, FFL))
+    FURNITURE.append((f"Dining chair north {k + 1}", "dining_chair_02", x, LIV_Y + 500, 0, FFL))
+for k, x in enumerate((7600, 8400, 9200)):
+    FURNITURE.append((f"Bar stool {k + 1}", "bar_chair_round_01", x, IY0 - 600, 0, FFL))
+FURNITURE += [
+    ("Den sofa", "sofa_02", 1900, IY - 700, 180, FFL),
+    ("Den table", "coffee_table_round_01", 1900, YC + 1600, 0, FFL),
+    ("Master daybed", "vintage_day_bed", (XB + XG) / 2, YD - 2000, 180, FFL),
+    ("Master nightstand", "classicnightstand_01", (XB + XG) / 2 - 1400, YD - 1300, 180, FFL),
+    ("Master armchair", "armchair_01", XG - 900, I0 + 1100, -30, FFL),
+    ("Bedroom 2 daybed", "vintage_day_bed", XB + 2100, IY - 700, 180, FFL),
+    ("Bedroom 2 nightstand", "painted_wooden_nightstand", XB + 3400, IY - 400, 180, FFL),
+    ("Bedroom 3 desk", "woodentable_03", X_BATH + 1500, IY - 450, 180, FFL),
+    ("Bedroom 3 chair", "greenchair_01", X_BATH + 1500, IY - 1100, 0, FFL),
+    ("Bedroom 3 lamp", "desk_lamp_arm_01", X_BATH + 2000, IY - 350, 180, FFL + 830),
+    ("Hall plant", "potted_plant_01", XB - 500, IY - 600, 0, FFL),
+    ("Terrace table", "round_wooden_table_01", 2600, -1700, 0, DECK_Z),
+]
+for k, (dx, dy, r) in enumerate(((-1000, 0, 90), (1000, 0, -90), (0, -1000, 0), (0, 1000, 180))):
+    FURNITURE.append((f"Terrace chair {k + 1}", "gallinera_chair", 2600 + dx, -1700 + dy, r, DECK_Z))
+for k, (dx, dy, r) in enumerate(((-1300, 0, 90), (1300, 0, -90), (0, -1300, 0))):
+    FURNITURE.append((f"Fire pit chair {k + 1}", "rockingchair_01", FX + 600 + dx, FY + 600 + dy, r, DECK_Z))
+FURNITURE += [
+    ("Deck lounge chair 1", "mid_century_lounge_chair", XB + 1500, -1700, 0, DECK_Z),
+    ("Deck lounge chair 2", "mid_century_lounge_chair", XB + 3000, -1700, 0, DECK_Z),
+    ("Deck side table", "side_table_01", XB + 2250, -1500, 0, DECK_Z),
+    ("Planter west", "planter_box_02", 3000, DY0 + 500, 0, DECK_Z),
+    ("Planter east", "planter_box_02", W - 2000, DY0 + 500, 0, DECK_Z),
+    ("Pot by the steps", "potted_plant_02", ST0 - 600, DY0 + 600, 0, DECK_Z),
+    ("Pot at the door", "potted_plant_01", LX1 - 300, D + 600, 0, SLAB_Z1),
+    ("Car", "covered_car", (CX0 + CX1) / 2, (CY0 + CY1) / 2, 180, 20),
+]
+for name, asset, x, y, r, z in FURNITURE:
+    vc.append(["planting.add_single", {"name": name, "asset": asset, "position": w(x, y, z),
+                                       "rotation_y_deg": r}])
+# Pendants over the island and the table (fittings that light themselves), hung from the ceiling.
+for name, x, y in (("Island pendant", (IX0 + IX1) / 2, (IY0 + IY1) / 2), ("Dining pendant", 12100, LIV_Y - 300)):
+    vc.append(["planting.add_single", {"name": name, "asset": "modern_ceiling_lamp_01",
+                                       "position": w(x, y, CEIL_Z - 952), "rotation_y_deg": 0}])
+
+# Recessed downlights, 600 lm warm white, 300 mm under the ceiling.
+DOWN = [("Living", x, LIV_Y) for x in (2000, 4800)] + [("Kitchen", x, YC - 1200) for x in (7000, 9800)]
+DOWN += [("Hall", (XA + XB) / 2, YC + 1800), ("Corridor", XB + 2500, YD + 680), ("Corridor", XB + 6500, YD + 680)]
+DOWN += [("Master", XB + 1800, YD / 2), ("Master", XG - 1800, YD / 2), ("Ensuite", (XG + IX) / 2, YD / 2)]
+DOWN += [("Den", 2300, YC + 1800), ("Utility", (X_DEN + X_UTIL) / 2, YC + 1800),
+         ("Guest WC", (X_UTIL + XA) / 2, YC + 1800)]
+DOWN += [("Bedroom 2", (XB + X_BED2) / 2, YC + 2000), ("Bathroom", (X_BED2 + X_BATH) / 2, YC + 1800),
+         ("Bedroom 3", (X_BATH + IX) / 2, YC + 2000)]
+SPOT = {"type": "spot", "direction": [0, -1, 0], "inner_cone_deg": 35, "outer_cone_deg": 70}
+for name, x, y in DOWN:
+    vc.append(["light.add", {"name": f"{name} downlight", "position": w(x, y, CEIL_Z - 300), "lumens": 600,
+                             "color_temperature_k": 2700, "range_m": 8, "kind": SPOT}])
+for k, x in enumerate(range(2000, W, 4000)):   # soffit lights along the covered terrace
+    vc.append(["light.add", {"name": f"Soffit light {k + 1}", "position": w(x, -1500, WALL_TOP - 50),
+                             "lumens": 400, "color_temperature_k": 2700, "range_m": 8, "kind": SPOT}])
+vc.append(["light.add", {"name": "Front door light", "position": w((FD_A + FD_B) / 2, D + 900, WALL_TOP - 50),
+                         "lumens": 400, "color_temperature_k": 2700, "range_m": 8}])
+
+# Malibu, midsummer afternoon; the dusk view keeps its own hour.
+vc.append(["site.set", {"latitude": 34.03, "longitude": -118.78, "utc_offset_hours": -7}])
+vc.append(["time.set", {"month": 6, "day": 21, "hour": 16.0}])
+VIEWS = [  # name, eye (X, Y, Z mm), target, vertical field of view, hour or None
+    ("Sea side", (11000, -21000, 2600), (11000, 3000, 2200), 50, None),
+    ("From the beach", (2000, -17000, 1200), (10000, 3000, 2200), 55, None),
+    ("Entrance", (17000, 26000, 2200), (12000, 10000, 1800), 50, None),
+    ("East", (44000, 2000, 3500), (12000, 5000, 1800), 45, None),
+    ("West", (-24000, 7000, 4000), (8000, 4000, 1800), 45, None),
+    ("Through the glass", (7500, -4200, FFL + 1500), (4000, 4500, FFL + 1100), 60, None),
+    ("Living room", (13600, 1200, FFL + 1550), (1000, 4000, FFL + 1100), 65, None),
+    ("Kitchen", (4600, 1300, FFL + 1550), (9500, 6000, FFL + 900), 65, None),
+    ("Master bedroom", (XB + 600, YD - 1200, FFL + 1550), (XG, -1500, FFL + 900), 65, None),
+    ("Dusk", (16000, -24000, 2500), (11000, 4000, 2000), 50, 20.3),
+]
+for name, eye, target, fov, hour in VIEWS:
+    v = {"name": name, "position": w(*eye), "target": w(*target), "fov_y_deg": fov}
+    if hour is not None:
+        v["time"] = {"hour": hour}
+    vc.append(["viewpoint.add", v])
+with open(os.path.join(ROOT, "crates", "visioncraft-core", "src", "examples", "beach-house.json"), "w") as f:
+    f.write("[\n" + ",\n".join("  " + json.dumps(s) for s in vc) + "\n]\n")
+
 with open(os.path.join(here, "beach-house.steps.json"), "w") as f:
     f.write("[\n" + ",\n".join(json.dumps(s) for s in steps) + "\n]\n")
 with open(os.path.join(here, "bodies.json"), "w") as f:
