@@ -6,9 +6,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use visioncraft_core::{
     Asset, Evaluation, Generator, ImportedModel, Material, ModelRef, Project, Shape, SurfaceKind,
-    Terrain, area_lifts, areas_over, blocked_by_buildings, evaluate_avoiding,
-    evaluate_surface_fill, footing, ground_height, inside_outline, lawn_scatter, raycast,
-    resolve_materials, shape_mesh, shape_mesh_on_terrain,
+    Terrain, area_lifts, areas_over, blocked_by_buildings, evaluate_in_scene,
+    evaluate_surface_fill, ground_height, inside_outline, lawn_scatter, placed_shape, raycast,
+    resolve_materials, shape_mesh, shape_mesh_on_terrain, water_areas,
 };
 use visioncraft_flora as flora;
 use visioncraft_render::{ImpostorId, ItemId, LineVertex, Renderer};
@@ -598,50 +598,16 @@ impl Scene {
         // How shapes sit on the ground: `visioncraft_core::shape`'s module docs.
         let lifts: HashMap<String, f32> = area_lifts(&project.shapes).into_iter().collect();
         let terrain = project.terrain.clone();
-        let ground = |x: f32, z: f32| terrain.as_ref().and_then(|t| t.height_at(x, z));
         // Water areas: the areas under them are cut out there (the pond's bed is the terrain's).
-        let water: Vec<String> = project
-            .shapes
-            .iter()
-            .filter(|s| {
-                matches!(s, Shape::Area(_))
-                    && shape_mesh(s).is_ok_and(|m| {
-                        resolve_materials(project, s.id(), &m).into_iter().any(|i| {
-                            i.and_then(|i| project.materials.get(i)).is_some_and(|m| {
-                                matches!(m.kind, SurfaceKind::AnimatedWater { .. })
-                            })
-                        })
-                    })
-            })
-            .map(|s| s.id().to_string())
-            .collect();
+        let water = water_areas(project);
         // shortcut: the terrain's address tells versions apart; an edit makes a new Arc
         let terrain_key = terrain.as_ref().map_or(0, |t| Arc::as_ptr(t) as usize);
         for s in &project.shapes {
             let id = s.id().to_string();
-            let mut placed = s.clone();
-            let mut xf = Mat4::IDENTITY;
-            let mut draped = false;
-            match &mut placed {
-                Shape::Area(a) => {
-                    a.elevation += lifts.get(&id).copied().unwrap_or(0.0);
-                    draped = a.drape && terrain.is_some();
-                }
-                Shape::Extrusion(e) if terrain.is_some() => {
-                    xf = Mat4::from_translation(Vec3::new(0.0, footing(&e.outline, &ground), 0.0));
-                }
-                Shape::Extrusion(_) => {}
-            }
-            let holes: Vec<&[[f32; 2]]> = if draped {
-                areas_over(&project.shapes, &id)
-                    .into_iter()
-                    .zip(over_ids(&project.shapes, &id))
-                    .filter(|(_, o)| water.contains(o))
-                    .map(|(h, _)| h)
-                    .collect()
-            } else {
-                Vec::new()
-            };
+            let (placed, lift, holes) = placed_shape(project, s, &lifts, &water);
+            let xf = Mat4::from_translation(Vec3::new(0.0, lift, 0.0));
+            let draped = matches!(&placed, Shape::Area(a) if a.drape && terrain.is_some());
+            let holes: Vec<&[[f32; 2]]> = holes.iter().map(Vec::as_slice).collect();
             // What the mesh depends on besides the shape: the terrain and the water on top.
             let depends = if draped {
                 holes
@@ -1291,10 +1257,13 @@ impl Scene {
                     truncated: false,
                 },
             },
-            _ => evaluate_avoiding(g, &self.ground_fn(), &|p| {
-                let (h, r) = self.plant_dims(&p.asset);
-                self.in_building(Vec3::from(p.position), h * p.scale, r * p.scale)
-            }),
+            _ => evaluate_in_scene(
+                g,
+                &self.ground_fn(),
+                &|x, z| self.open_ground(x, z),
+                &|p| self.up_to_building(p),
+                &|a| self.plant_dims(a),
+            ),
         }
     }
 
@@ -1310,7 +1279,7 @@ impl Scene {
             .catalog
             .as_ref()
             .and_then(|c| c.asset(asset))
-            .map_or((1.0, 0.3), |a| {
+            .map_or((1.0, 0.4), |a| {
                 (a.size_m[1], a.size_m[0].max(a.size_m[2]) / 2.0)
             })
     }
@@ -1584,27 +1553,6 @@ pub fn light_markers(project: &Project) -> Vec<LineVertex> {
         out.extend(line(p, p, c, 7.0));
     }
     out
-}
-
-/// Ids of the areas `areas_over` returns for `id`, in the same order.
-fn over_ids(shapes: &[Shape], id: &str) -> Vec<String> {
-    let Some(i) = shapes.iter().position(|s| s.id() == id) else {
-        return Vec::new();
-    };
-    let Shape::Area(a) = &shapes[i] else {
-        return Vec::new();
-    };
-    shapes[i + 1..]
-        .iter()
-        .filter_map(|s| match s {
-            Shape::Area(b)
-                if areas_over(&[Shape::Area(a.clone()), s.clone()], &a.id).len() == 1 =>
-            {
-                Some(b.id.clone())
-            }
-            _ => None,
-        })
-        .collect()
 }
 
 #[cfg(test)]

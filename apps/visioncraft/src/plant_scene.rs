@@ -142,18 +142,12 @@ pub struct Inst {
 
 /// Mature (height, crown radius) in metres of a palette asset.
 pub fn plant_size(project: &Project, assets: &[Asset], id: &str) -> (f32, f32) {
-    if let Some(s) = id.strip_prefix("flora:").and_then(flora::Species::by_id) {
-        return (s.mature_height_m, s.mature_width_m / 2.0);
-    }
-    if let Some(c) = project.species.iter().find(|c| c.id == id) {
-        if let Some(s) = c.base.as_deref().and_then(flora::Species::by_id) {
-            return (s.mature_height_m, s.mature_width_m / 2.0);
-        }
-        return (2.0, 0.6);
-    }
-    assets.iter().find(|a| a.id == id).map_or((1.0, 0.4), |a| {
-        (a.size_m[1], a.size_m[0].max(a.size_m[2]) / 2.0)
-    })
+    visioncraft_core::plant_size(project, assets, id, &species_size)
+}
+
+/// A built-in species' mature height and crown radius.
+pub fn species_size(id: &str) -> Option<(f32, f32)> {
+    flora::Species::by_id(id).map(|s| (s.mature_height_m, s.mature_width_m / 2.0))
 }
 
 pub fn instances(project: &Project, assets: &[Asset], placements: &[Placement]) -> Vec<Inst> {
