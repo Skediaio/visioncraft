@@ -159,7 +159,11 @@ mod tests {
         let p = super::example("beach-house").unwrap();
         assert_eq!(p.models.len(), 1);
         let file = super::example_file(&p.models[0].source).unwrap();
-        assert!(file.len() > 100_000 && file.len() < 400_000, "{}", file.len());
+        assert!(
+            file.len() > 100_000 && file.len() < 400_000,
+            "{}",
+            file.len()
+        );
         assert_eq!(p.assignments.len(), 46);
         assert_eq!(p.generators.len(), 45);
         assert_eq!(p.lights.len(), 23);
