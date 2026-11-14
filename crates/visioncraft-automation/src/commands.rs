@@ -465,7 +465,7 @@ pub fn host_docs() -> Vec<CommandDoc> {
                     None,
                     false,
                     Some("\"high\""),
-                    &["low", "medium", "high", "photo"],
+                    &["low", "medium", "high", "ultra", "photo"],
                     "The renderer's quality preset; photo averages `samples` frames at ULTRA (soft shadows, smooth edges and occlusion, optional depth of field)",
                 ),
                 p(
@@ -933,9 +933,9 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
     let width = a.integer("width", 16, 4096)?.unwrap_or(800) as u32;
     let height = a.integer("height", 16, 4096)?.unwrap_or(600) as u32;
     let quality = a.str("quality")?.unwrap_or("high");
-    if !["low", "medium", "high", "photo"].contains(&quality) {
+    if !["low", "medium", "high", "ultra", "photo"].contains(&quality) {
         return Err(format!(
-            "{id}: `quality` must be low, medium, high or photo, got `{}`",
+            "{id}: `quality` must be low, medium, high, ultra or photo, got `{}`",
             shorten(quality)
         ));
     }

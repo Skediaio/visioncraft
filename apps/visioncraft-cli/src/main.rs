@@ -118,7 +118,7 @@ const HELP_RENDER: &str = "\
 Usage: visioncraft-cli render FILE --out PNG [--size WxH] [--viewpoint V]
                               [--camera X,Y,Z,TX,TY,TZ] [--fov DEG]
                               [--date YYYY-MM-DD] [--time HH:MM]
-                              [--quality low|medium|high|photo] [--samples N]
+                              [--quality low|medium|high|ultra|photo] [--samples N]
                               [--aperture M] [--focus M]
 
 Renders the project to a PNG with VisionCraft's renderer on the GPU, without a
@@ -132,7 +132,7 @@ Options:
   --camera ...    Eye and target in metres, instead of a viewpoint
   --fov DEG       Vertical field of view with --camera. Default 50
   --date, --time  Local date and time of the sun, for this picture only
-  --quality Q     low, medium, high (default) or photo (many frames averaged
+  --quality Q     low, medium, high (default), ultra or photo (many frames averaged
                   at ULTRA: soft shadows, smooth edges; slower)
   --samples N     Photo: frames averaged, 1 to 1024. Default 64
   --aperture M    Photo: lens radius in metres for depth of field (0 to 0.5)

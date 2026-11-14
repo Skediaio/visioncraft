@@ -393,7 +393,7 @@ fn tools() -> Vec<Value> {
                 "viewpoint": {"type": "string", "description": "A viewpoint's id or name."},
                 "camera": {"type": "object", "description": "{position: [x, y, z], target: [x, y, z], fov_y_deg?: 50}"},
                 "time": {"type": "object", "description": "{year?, month?, day?, hour?}: local time for this picture only."},
-                "quality": {"type": "string", "enum": ["low", "medium", "high", "photo"], "description": "Default high. photo averages many frames at ULTRA: soft shadows, smooth edges; slower (seconds)."},
+                "quality": {"type": "string", "enum": ["low", "medium", "high", "ultra", "photo"], "description": "Default high. photo averages many frames at ULTRA: soft shadows, smooth edges; slower (seconds)."},
                 "samples": {"type": "integer", "minimum": 1, "maximum": 1024, "description": "Photo only: frames averaged. Default 64."},
                 "max_side": {"type": "integer", "minimum": PREVIEW_MIN_SIDE, "maximum": PREVIEW_MAX_SIDE, "description": "Longest side in pixels. Default 1024."}
             }, "additionalProperties": false}
