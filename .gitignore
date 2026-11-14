@@ -1,3 +1,6 @@
 /target
 dist/
 .claude/
+research/
+opencode.json
+.opencode/
