@@ -118,9 +118,11 @@ impl ViewsState {
         !self.jobs.is_empty() || !self.pending.is_empty()
     }
 
+    /// The camera. A view keeps no time of its own unless asked (`VIEW_KEEP_TIME`): it shows
+    /// the project's season and time, so choosing a season changes every view.
     fn pose(cx: &Cx) -> serde_json::Value {
         let (p, tg) = cx.s.camera.pose();
-        json!({"position": p.to_array(), "target": tg.to_array(), "fov_y_deg": cx.s.camera.fov_y.to_degrees(), "time": cx.s.project().time})
+        json!({"position": p.to_array(), "target": tg.to_array(), "fov_y_deg": cx.s.camera.fov_y.to_degrees()})
     }
 
     pub fn panel(&mut self, ui: &mut egui::Ui, cx: &mut Cx) {
@@ -312,9 +314,28 @@ impl ViewsState {
                         cx.run("viewpoint.update", json!({"id": id, "years": y}));
                     }
                 });
+                // Its own date and time (a dusk view, a sun study), or the project's.
+                let kept =
+                    cx.s.project()
+                        .viewpoints
+                        .iter()
+                        .find(|v| v.id == id)
+                        .is_some_and(|v| v.time.is_some());
+                let mut keep = kept;
+                if ui
+                    .checkbox(&mut keep, t::VIEW_KEEP_TIME)
+                    .on_hover_text(t::VIEW_KEEP_TIME_TIP)
+                    .changed()
+                {
+                    let time = keep.then(|| cx.s.project().time);
+                    cx.run("viewpoint.update", json!({"id": id, "time": time}));
+                }
                 if ui.button(t::UPDATE_VIEW).clicked() {
                     let mut p = Self::pose(cx);
                     p["id"] = json!(id);
+                    if kept {
+                        p["time"] = json!(cx.s.project().time);
+                    }
                     if cx.run("viewpoint.update", p).is_some() {
                         self.queue(&id);
                     }

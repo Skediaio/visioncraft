@@ -231,9 +231,17 @@ fn view_set(project: &mut Project, params: &Value) -> Result<Value, CommandError
         ],
     )?;
     view.validate().map_err(|e| crate::session::bad(&e))?;
-    project.view = view;
-    if let Some(s) = season {
-        project.time = s.time(project.time, project.site.latitude);
+    let time = season.map_or(project.time, |s| {
+        s.time(project.time, project.site.latitude)
+    });
+    if view.snow > 0.0
+        && crate::Season::of(time.month, project.site.latitude) != crate::Season::Winter
+    {
+        return Err(crate::session::bad(
+            "snow lies only in winter: give `season: \"winter\"` with it, or `snow: 0` first",
+        ));
     }
+    project.view = view;
+    project.time = time;
     Ok(Value::Null)
 }

@@ -504,6 +504,24 @@ pub fn host_docs() -> Vec<CommandDoc> {
                     &[],
                     "Years after planting to show the plants at (0..60), for this picture only",
                 ),
+                p(
+                    "season",
+                    "string",
+                    None,
+                    false,
+                    Some("the project's (or the viewpoint's)"),
+                    &["spring", "summer", "autumn", "winter"],
+                    "The season for this picture only: its day at the site, the hour kept",
+                ),
+                p(
+                    "snow",
+                    "number",
+                    None,
+                    false,
+                    Some("the project's"),
+                    &[],
+                    "Snow 0..1 for this picture only; on its own it brings winter, with another season it is refused",
+                ),
             ],
             "{path? | mime, base64; width, height, camera, time, years, ...the renderer's info}",
             json!({"width": 960, "height": 540, "viewpoint": "From the gate"}),
@@ -923,6 +941,8 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
             "viewpoint",
             "camera",
             "time",
+            "season",
+            "snow",
             "quality",
             "years",
             "samples",
@@ -1010,6 +1030,34 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
     }
     if let Some(t) = a.get("time") {
         project = with_time(&project, t).map_err(|e| format!("{id}: {e}"))?;
+    }
+    let season =
+        match a.str("season")? {
+            Some(s) => Some(visioncraft_core::Season::parse(s).ok_or_else(|| {
+                format!("{id}: `season` must be spring, summer, autumn or winter")
+            })?),
+            None => None,
+        };
+    if let Some(s) = season {
+        project.time = s.time(project.time, project.site.latitude);
+    }
+    if let Some(snow) = a.number("snow")? {
+        if !(0.0..=1.0).contains(&snow) {
+            return Err(format!("{id}: `snow` must be from 0 to 1"));
+        }
+        project.view.snow = snow as f32;
+        // Snow asked for on its own brings winter; with a season or date of another time of
+        // year it is refused rather than drawn under summer trees.
+        if snow > 0.0 && season.is_none() && a.get("time").is_none() {
+            project.time =
+                visioncraft_core::Season::Winter.time(project.time, project.site.latitude);
+        }
+    }
+    if project.view.snow > 0.0 && project.season() != visioncraft_core::Season::Winter {
+        return Err(format!(
+            "{id}: snow lies only in winter, and this picture is in {}; give `season: \"winter\"` or `snow: 0`",
+            project.season().name()
+        ));
     }
     let path = match a.str("path")? {
         Some(p) => Some(

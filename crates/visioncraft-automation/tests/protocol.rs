@@ -527,4 +527,8 @@ fn photo_parameters_are_checked_before_rendering() {
         )
         .contains("no renderer")
     );
+    // Snow lies only in winter: on its own it brings winter, with summer it is refused.
+    assert!(error(&mut h, json!({"season": "summer", "snow": 0.5})).contains("only in winter"));
+    assert!(error(&mut h, json!({"snow": 0.5})).contains("no renderer"));
+    assert!(error(&mut h, json!({"season": "monsoon"})).contains("`season`"));
 }

@@ -118,6 +118,7 @@ const HELP_RENDER: &str = "\
 Usage: visioncraft-cli render FILE --out PNG [--size WxH] [--viewpoint V]
                               [--camera X,Y,Z,TX,TY,TZ] [--fov DEG]
                               [--date YYYY-MM-DD] [--time HH:MM]
+                              [--season S] [--snow N]
                               [--quality low|medium|high|ultra|photo] [--samples N]
                               [--aperture M] [--focus M]
 
@@ -132,6 +133,8 @@ Options:
   --camera ...    Eye and target in metres, instead of a viewpoint
   --fov DEG       Vertical field of view with --camera. Default 50
   --date, --time  Local date and time of the sun, for this picture only
+  --season S      spring, summer, autumn or winter, for this picture only
+  --snow N        Snow 0..1 for this picture (on its own it brings winter)
   --quality Q     low, medium, high (default), ultra or photo (many frames averaged
                   at ULTRA: soft shadows, smooth edges; slower)
   --samples N     Photo: frames averaged, 1 to 1024. Default 64
@@ -652,6 +655,8 @@ fn cmd_render(raw: &[String]) -> Res {
             "--samples",
             "--aperture",
             "--focus",
+            "--season",
+            "--snow",
         ],
         &[],
     )?;
@@ -697,6 +702,15 @@ fn cmd_render(raw: &[String]) -> Res {
     }
     if let Some(q) = a.value("--quality")? {
         params["quality"] = q.into();
+    }
+    if let Some(s) = a.value("--season")? {
+        params["season"] = s.into();
+    }
+    if let Some(s) = a.value("--snow")? {
+        params["snow"] = s
+            .parse::<f64>()
+            .map_err(|_| CliError::Usage(format!("`--snow` must be a number 0..1, got `{s}`")))?
+            .into();
     }
     for (flag, key) in [
         ("--samples", "samples"),
