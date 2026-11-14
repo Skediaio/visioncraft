@@ -47,6 +47,7 @@ use glam::{Mat4, Vec2, Vec3, Vec4};
 
 mod atmosphere;
 pub mod bc;
+pub use bc::UploadJob;
 pub mod demo;
 mod env;
 pub mod hardware;
@@ -1639,67 +1640,111 @@ impl Renderer {
             .contains(wgpu::Features::TEXTURE_COMPRESSION_BC)
     }
 
-    /// Uploads a block-compressed image with its mip chain (`bc::compress`). Fails when the
-    /// device has no BC formats: the caller keeps RGBA8.
+    /// Uploads a block-compressed image with its mip chain (`bc::compress`) at once. Fails
+    /// when the device has no BC formats: the caller keeps RGBA8.
     pub fn add_compressed(
         &mut self,
-        c: &bc::Compressed,
+        c: std::sync::Arc<bc::Compressed>,
         repeat: bool,
     ) -> Result<TextureId, String> {
-        if !self.supports_bc() {
-            return Err("no BC texture formats on this device".into());
+        let mut job = UploadJob::new(c, repeat);
+        loop {
+            if let Some(r) = self.upload_step(&mut job, usize::MAX) {
+                return r;
+            }
         }
-        let max = self.device.limits().max_texture_dimension_2d;
-        if c.width == 0 || c.height == 0 || c.width > max || c.height > max {
-            return Err(format!(
-                "texture size {}x{} outside 1..={max}",
-                c.width, c.height
-            ));
+    }
+
+    /// Uploads part of a block-compressed image: at most `max_bytes` (whole block rows, at
+    /// least one), so a large map spreads over frames. `Some` once the texture is complete
+    /// (only then is it usable), or failed.
+    pub fn upload_step(
+        &mut self,
+        job: &mut UploadJob,
+        max_bytes: usize,
+    ) -> Option<Result<TextureId, String>> {
+        let c = job.c.clone();
+        if job.texture.is_none() {
+            if !self.supports_bc() {
+                return Some(Err("no BC texture formats on this device".into()));
+            }
+            let max = self.device.limits().max_texture_dimension_2d;
+            if c.width == 0 || c.height == 0 || c.width > max || c.height > max {
+                return Some(Err(format!(
+                    "texture size {}x{} outside 1..={max}",
+                    c.width, c.height
+                )));
+            }
+            job.texture = Some(self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("compressed material texture"),
+                size: wgpu::Extent3d {
+                    width: c.width,
+                    height: c.height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: c.levels.len() as u32,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: c.format(),
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            }));
         }
-        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("compressed material texture"),
-            size: wgpu::Extent3d {
-                width: c.width,
-                height: c.height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: c.levels.len() as u32,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: c.format(),
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
+        let texture = job.texture.as_ref()?;
         let block = bc::Compressed::block_bytes(c.kind) as u32;
-        for (i, data) in c.levels.iter().enumerate() {
+        let mut budget = max_bytes;
+        while job.level < c.levels.len() {
+            let i = job.level;
             let (w, h) = ((c.width >> i).max(1), (c.height >> i).max(1));
             let (bw, bh) = (w.div_ceil(4), h.div_ceil(4));
+            let row_bytes = (bw * block) as usize;
+            let rows = ((budget / row_bytes.max(1)) as u32)
+                .max(1)
+                .min(bh - job.row);
+            let start = job.row as usize * row_bytes;
             self.queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
-                    texture: &texture,
+                    texture,
                     mip_level: i as u32,
-                    origin: wgpu::Origin3d::ZERO,
+                    origin: wgpu::Origin3d {
+                        x: 0,
+                        y: job.row * 4,
+                        z: 0,
+                    },
                     aspect: wgpu::TextureAspect::All,
                 },
-                data,
+                &c.levels[i][start..start + rows as usize * row_bytes],
                 wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(bw * block),
-                    rows_per_image: Some(bh),
+                    rows_per_image: Some(rows),
                 },
                 wgpu::Extent3d {
                     width: bw * 4,
-                    height: bh * 4,
+                    height: rows * 4,
                     depth_or_array_layers: 1,
                 },
             );
+            budget = budget.saturating_sub(rows as usize * row_bytes);
+            job.row += rows;
+            if job.row == bh {
+                job.level += 1;
+                job.row = 0;
+            }
+            if budget == 0 {
+                break;
+            }
         }
+        if job.level < c.levels.len() {
+            return None;
+        }
+        let texture = job.texture.take()?;
         self.textures.push(Some(texture::GpuTexture {
             view: texture.create_view(&Default::default()),
-            repeat,
+            repeat: job.repeat,
             bytes: c.bytes(),
         }));
-        Ok(TextureId(self.textures.len() as u32 - 1))
+        Some(Ok(TextureId(self.textures.len() as u32 - 1)))
     }
 
     /// GPU memory of a texture with its mips (0 for a freed or unknown one).

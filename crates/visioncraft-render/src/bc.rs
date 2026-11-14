@@ -23,6 +23,27 @@ pub enum BcKind {
     Gray,
 }
 
+/// A compressed image on its way to the GPU over several frames (`Renderer::upload_step`).
+pub struct UploadJob {
+    pub(crate) c: std::sync::Arc<Compressed>,
+    pub(crate) repeat: bool,
+    pub(crate) texture: Option<wgpu::Texture>,
+    pub(crate) level: usize,
+    pub(crate) row: u32,
+}
+
+impl UploadJob {
+    pub fn new(c: std::sync::Arc<Compressed>, repeat: bool) -> Self {
+        Self {
+            c,
+            repeat,
+            texture: None,
+            level: 0,
+            row: 0,
+        }
+    }
+}
+
 /// A compressed image with its mip chain, level 0 first.
 pub struct Compressed {
     pub width: u32,
