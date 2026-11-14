@@ -412,6 +412,15 @@ fn view_fields(ui: &mut egui::Ui, cx: &mut Cx) {
             cx.run("view.set", json!({"exposure_ev": ev}));
         }
     });
+    ui.horizontal(|ui| {
+        ui.label(t::LOOK);
+        let now = serde_json::to_value(v.look).unwrap_or_default();
+        for (key, label) in t::LOOKS {
+            if ui.selectable_label(now == key, label).clicked() && now != key {
+                cx.run("view.set", json!({"look": key}));
+            }
+        }
+    });
     // Haze, wind and the ground plane: folded, they are rarely changed.
     egui::CollapsingHeader::new(egui::RichText::new(t::AIR_AND_GROUND).small())
         .id_salt("sun-air")

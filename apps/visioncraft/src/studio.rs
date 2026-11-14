@@ -98,6 +98,8 @@ pub struct Studio {
     pub suggest_lights: bool,
     suggested: bool,
     pub dropped_lights: usize,
+    /// The half-metre cell the ground bounce and indoors were last sampled in (`apply_view`).
+    bounce_cell: Option<glam::IVec3>,
     /// The revision (and whether the catalogue was there) the lamp lights were last made for.
     lamps_reconciled: (u64, bool),
     /// Lamps over `lamps::MAX_FIXTURE_LIGHTS` at the last reconcile, and problems to show.
@@ -175,6 +177,26 @@ pub fn demo_assets() -> Vec<Asset> {
             [0.4, 0.5, 0.4],
         ),
     ]
+}
+
+/// How much of the ground's colour its bounced light keeps (0 grey, 1 all): enough that a
+/// lawn reads faintly in a wall's shade, little enough that a soffit stays neutral.
+const BOUNCE_CHROMA: f32 = 0.35;
+
+/// A look's daylight exposure lift (stops, on automatic exposure only), contrast power and
+/// saturation (`Renderer::set_grade`). The sky's exposure is saturation-based (luminance
+/// 1.2 * 2^EV maps to 1.0); a camera meters an average scene to mid grey instead, about 0.8 stop
+/// brighter, and AgX's soft shoulder takes a little more before sunlit paving reads light and
+/// a sunlit lawn mid grey. The lift fades out below 20 degrees of sun so dusk and night keep
+/// their tuning.
+pub fn look_grade(look: visioncraft_core::Look, sun_elevation_deg: f32) -> (f32, f32, f32) {
+    use visioncraft_core::Look;
+    let day = ((sun_elevation_deg - 0.0) / 20.0).clamp(0.0, 1.0);
+    match look {
+        Look::Neutral => (0.0, 1.0, 1.0),
+        Look::Natural => (1.2 * day, 1.1, 1.2),
+        Look::Vivid => (1.4 * day, 1.3, 1.35),
+    }
 }
 
 /// Automatic exposure (EV100, lower is brighter) from the sun: noon 15, sun at 10 degrees 13.5,
@@ -269,6 +291,7 @@ impl Studio {
             suggest_lights: false,
             suggested: false,
             dropped_lights: 0,
+            bounce_cell: None,
             lamps_reconciled: (u64::MAX, false),
             lamps_skipped: 0,
             lamp_problems: Vec::new(),
@@ -648,12 +671,46 @@ impl Studio {
     fn apply_view(&mut self, elevation: f32) {
         let v = self.project().view.clone();
         let lamps = self.lights_on && self.project().lights.iter().any(|l| l.enabled);
+        let (brighter, power, saturation) = look_grade(v.look, elevation);
         let ev = v
             .exposure_ev
-            .unwrap_or_else(|| self.sky.auto_ev(elevation, lamps))
+            .unwrap_or_else(|| self.sky.auto_ev(elevation, lamps) - brighter)
             - self.exposure;
         self.ev_used = (ev, elevation);
         self.renderer.set_exposure(ev);
+        self.renderer.set_grade(power, saturation);
+        // Light bounced up from what lies under the camera (paving under a canopy, lawn in the
+        // garden), with most of its colour taken out: a green lawn tints a wall only a little.
+        let eye = self.camera.eye();
+        let cell = (eye * 2.0).round().as_ivec3();
+        if self.bounce_cell != Some(cell) {
+            self.bounce_cell = Some(cell);
+            let albedo = self
+                .scene
+                .albedo_below(self.project(), eye)
+                .or(v.ground.map(|g| g.color))
+                .map(|c| {
+                    let lum = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+                    c.map(|k| ((lum + BOUNCE_CHROMA * (k - lum)) * 100.0).round() / 100.0)
+                });
+            self.renderer.set_bounce_albedo(albedo);
+            // Indoors: something over the head and walls (glass counts) nearly all round within a
+            // large house's reach. Under a canopy the garden side stays open.
+            let hit = |dir: Vec3| {
+                self.scene
+                    .raycast(eye, dir, false)
+                    .is_some_and(|p| p.distance < 60.0)
+            };
+            let walls = (0..8)
+                .filter(|k| {
+                    let a = *k as f32 * std::f32::consts::FRAC_PI_4;
+                    hit(Vec3::new(a.cos(), 0.0, a.sin()))
+                })
+                .count();
+            // Six of eight: a room open at its ends (a glazed gallery) still counts.
+            let indoors = hit(Vec3::Y) && walls >= 6;
+            self.renderer.set_indoors(indoors);
+        }
         self.renderer.set_clay(self.project().style.clay);
         // Below the horizon the haze only scatters the dim, pink twilight sky back at the camera
         // and washes the garden out: thin it as the sun sinks, and no sun glow.
@@ -1226,6 +1283,15 @@ fn lit_rooms(p: &Project) -> impl Iterator<Item = visioncraft_render::Light> + '
 #[cfg(test)]
 mod tests {
     use super::auto_ev;
+
+    #[test]
+    fn looks_lift_the_day_and_leave_the_night() {
+        use visioncraft_core::Look;
+        assert_eq!(super::look_grade(Look::Neutral, 60.0), (0.0, 1.0, 1.0));
+        let (lift, power, sat) = super::look_grade(Look::Natural, 60.0);
+        assert!(lift > 0.5 && power > 1.0 && sat > 1.0);
+        assert_eq!(super::look_grade(Look::Vivid, -5.0).0, 0.0);
+    }
 
     #[test]
     fn exposure_falls_with_the_sun_and_lamps_keep_the_night_darker() {

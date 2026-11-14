@@ -205,6 +205,12 @@ pub const PERSON: &str = "Person (1.8 m)";
 pub const PLACE_PERSON: &str = "Place person";
 pub const SUMMER_TIME: &str = "Summer time follows the date";
 pub const EXPOSURE_AUTO: &str = "Auto exposure";
+pub const LOOK: &str = "Look";
+pub const LOOKS: [(&str, &str); 3] = [
+    ("neutral", "Neutral"),
+    ("natural", "Natural"),
+    ("vivid", "Vivid"),
+];
 pub const HAZE: &str = "Haze";
 pub const WIND: &str = "Wind";
 pub const WIND_DIRECTION: &str = "Wind direction";

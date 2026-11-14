@@ -131,7 +131,7 @@ fn look_of(m: &Material, lib: &mut Library) -> Look {
     }
     match &m.kind {
         SurfaceKind::ArchitecturalGlass { tint, roughness } => Look {
-            color: [tint[0], tint[1], tint[2], 0.06],
+            color: [tint[0], tint[1], tint[2], 0.02],
             roughness: *roughness,
             surface: 1,
             ..plain
@@ -1543,6 +1543,35 @@ impl Scene {
             });
         }
         best
+    }
+
+    /// The colour (linear albedo) of what lies under `at`: the material of the first surface
+    /// below, else the terrain's base layer; `None` over nothing. For the light the ground
+    /// bounces up.
+    pub fn albedo_below(&self, project: &Project, at: Vec3) -> Option<[f32; 3]> {
+        let colour = |id: &str| {
+            project
+                .materials
+                .iter()
+                .find(|m| m.id == id)
+                .map(|m| [m.base_color[0], m.base_color[1], m.base_color[2]])
+        };
+        if let Some(p) = self.raycast(at, Vec3::NEG_Y, false)
+            && let Some(o) = self.owners.get(&p.owner)
+        {
+            let index = resolve_materials(project, &p.owner, &o.geom)
+                .get(p.face)
+                .copied()
+                .flatten();
+            if let Some(m) = index.and_then(|i| project.materials.get(i)) {
+                return Some([m.base_color[0], m.base_color[1], m.base_color[2]]);
+            }
+        }
+        project
+            .terrain
+            .as_ref()
+            .and_then(|t| t.layers.first())
+            .and_then(|l| colour(&l.material))
     }
 
     /// Height of the floor under `(x, z)`, looking down from `from_y`.
