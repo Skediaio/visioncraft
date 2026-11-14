@@ -2008,23 +2008,6 @@ pub fn box_lines(min: Vec3, max: Vec3, color: [u8; 4], width: f32) -> Vec<LineVe
     out
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn plant_lods_hit_their_triangle_budgets() {
-        let lods = plant_lods(&PlantShape::shrub(), 1);
-        let tris = lods.each_ref().map(PlantLod::triangles);
-        assert_eq!(tris[0], 500, "{tris:?}");
-        assert!(tris[1] < tris[0] / 2 && tris[2] < tris[1] / 2, "{tris:?}");
-        for lod in &lods {
-            assert_eq!(lod.foliage.uvs.len(), lod.foliage.positions.len());
-            assert!(lod.foliage.wind.iter().all(|w| w[0] > 0.0));
-        }
-    }
-}
-
 /// A sandy beach running down into a sea with a moderate swell: the shore 1:15, the waterline
 /// along z = 0, the bed deepening seaward (+z); land behind it (-z) at 2 m.
 pub fn beach_height(_x: f32, z: f32) -> f32 {
@@ -2059,4 +2042,21 @@ pub fn beach_camera(aspect: f32) -> Camera {
         Vec3::new(-6.0, 0.0, 12.0),
         aspect,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plant_lods_hit_their_triangle_budgets() {
+        let lods = plant_lods(&PlantShape::shrub(), 1);
+        let tris = lods.each_ref().map(PlantLod::triangles);
+        assert_eq!(tris[0], 500, "{tris:?}");
+        assert!(tris[1] < tris[0] / 2 && tris[2] < tris[1] / 2, "{tris:?}");
+        for lod in &lods {
+            assert_eq!(lod.foliage.uvs.len(), lod.foliage.positions.len());
+            assert!(lod.foliage.wind.iter().all(|w| w[0] > 0.0));
+        }
+    }
 }
