@@ -352,22 +352,22 @@ impl App {
         self.modelui = Default::default();
     }
 
-    /// The bundled example garden (`example.rs`), as a new unsaved project.
+    /// The bundled example garden (`project.load_example`), as a new unsaved project.
     fn open_example(&mut self) {
-        match example::example_garden() {
-            Ok(p) => {
-                self.new_project();
-                self.studio.replace_project(p);
+        self.new_project();
+        match self.studio.run(
+            "project.load_example",
+            serde_json::json!({"name": "garden"}),
+        ) {
+            Ok(_) => {
                 self.project_name = Some(strings::EXAMPLE_NAME.into());
                 self.studio.sync();
                 self.studio.frame_all();
-                self.saved_revision = self.studio.session.revision();
             }
-            Err(e) => self.toasts.error(e),
+            Err(e) => self.toasts.error(e.to_string()),
         }
     }
 
-    /// Renders the current view at preset `idx` (a still at HIGH quality); falls back to the next smaller preset on failure.
     /// Stills use the highest texture tier of what is in frame, at their own resolution, whatever
     /// the live tier: ask for it, and capture once it has arrived (`poll_still_textures`).
     fn wait_for_textures(&mut self, still: Option<usize>) {
@@ -405,6 +405,7 @@ impl App {
         false
     }
 
+    /// Renders the current view at preset `idx` (a still at HIGH quality); falls back to the next smaller preset on failure.
     fn start_export(&mut self, idx: usize) {
         let presets = visioncraft_core::export_presets();
         let (name, w, h) = presets[idx];

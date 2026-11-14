@@ -1,53 +1,25 @@
-//! The example garden a new user can open: a 20 by 30 m plot built from commands
-//! (`example_garden.json`), so it stays small and shows what the commands make. It doubles as a
-//! regression scene (the tests below count its placements).
+//! The example garden a new user can open (`project.load_example`, built from commands in the
+//! core). It doubles as a regression scene: the test below compares the window's placements
+//! with what agents count.
 
-use serde_json::Value;
-use visioncraft_core::{Project, Session};
-
-const COMMANDS: &str = include_str!("example_garden.json");
-
-/// The example project, built by running its commands on an empty one.
-pub fn example_garden() -> Result<Project, String> {
-    let steps: Vec<(String, Value)> =
-        serde_json::from_str(COMMANDS).map_err(|e| format!("example garden: {e}"))?;
-    let mut s = Session::new(Project::default());
-    for (name, params) in steps {
-        s.run(&name, params)
-            .map_err(|e| format!("example garden, {name}: {e}"))?;
-    }
-    Ok(s.project().clone())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_example_garden_builds_and_stays_small() {
-        let p = example_garden().unwrap();
-        assert!(COMMANDS.len() < 50_000);
-        let names: Vec<&str> = p.shapes.iter().map(|s| s.name()).collect();
-        for n in ["House", "Terrace", "Lawn", "Border", "Pond"] {
-            assert!(names.contains(&n), "{names:?}");
-        }
-        assert_eq!(p.generators.len(), 7);
-        assert!(p.terrain.is_some());
-    }
-}
-
-/// The same placements in the window's scene and for agents (`document.inspect`), on the
-/// example garden: rule 9, what an agent counts is what the window shows.
+/// The window and agents (`document.inspect`) count the same placements on the example garden:
+/// rule 9, what an agent counts is what the window shows.
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod parity_tests {
-    use super::*;
     use crate::studio::Studio;
+    use serde_json::Value;
     use visioncraft_automation::{Access, Headless};
+    use visioncraft_core::Session;
 
     #[test]
     fn the_window_and_agents_count_the_same_placements() {
         // The garden plus trees scattered over the house and terrace: the building rule at work.
-        let mut s = Session::new(example_garden().unwrap());
+        let mut s = Session::new(Default::default());
+        s.run(
+            "project.load_example",
+            serde_json::json!({"name": "garden"}),
+        )
+        .unwrap();
         s.run(
             "planting.add_area",
             serde_json::json!({"name": "Over the house", "asset_palette": [{"asset": "flora:betula-pendula", "weight": 1}], "outline": [[2, 0], [18, 0], [18, 14], [2, 14]], "density_per_m2": 0.1}),
@@ -99,8 +71,8 @@ mod parity_tests {
         assert!(count("Hornbeam hedge") > 100, "{window:?}");
         assert_eq!(count("Path lights"), 5);
         assert_eq!(count("Field maple"), 1);
+        assert!(count("Border plants") > 40, "{window:?}");
         // 224 m2 at 0.1 per m2, less the 90 m2 house and the trees too tall for its eaves.
         assert!((1..15).contains(&count("Over the house")), "{window:?}");
-        assert!(count("Border plants") > 40, "{window:?}");
     }
 }
