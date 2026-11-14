@@ -1017,31 +1017,32 @@ impl App {
         }
     }
 
-    fn toggle_walk(&mut self) {
-        if self.hud.mode == Some(Mode::Draw) {
+    /// Walk on or off (the Walk button, Space). From a plan (Draw, or the plan of Objects and
+    /// Landscape & Sun) it walks where the plan was centred: Draw first keeps a shape with
+    /// enough corners, as Enter would (losing what was drawn would surprise more than keeping
+    /// it), drops a shorter one, and is left; leaving Walk then comes back to the 3D view.
+    fn toggle_walk(&mut self, ctx: &egui::Context) {
+        if self.studio.camera.view == camera::View::Walk {
+            self.studio.camera.leave_walk();
             return;
         }
-        let cam = &mut self.studio.camera;
-        if cam.view == camera::View::Walk {
-            cam.leave_walk();
-        } else {
-            // A free spot near what the view looks at, on the side the camera is, facing it.
-            let target = cam.pivot;
-            let eye = cam.eye();
-            let s = &self.studio;
-            let at = walk_spot(target, eye, &|x, z| {
-                s.scene.free_to_stand(s.project(), x, z)
-            });
-            let ground = self.studio.scene.floor_below(at.x, 500.0, at.z);
-            let cam = &mut self.studio.camera;
-            cam.enter_walk(ground);
-            cam.walk.eye.x = at.x;
-            cam.walk.eye.z = at.z;
-            let to = target - cam.walk.eye;
-            if to.x.hypot(to.z) > 1e-3 {
-                cam.walk.yaw = to.x.atan2(-to.z);
-            }
+        let plan = plan_centre(&self.studio.camera);
+        if self.hud.mode == Some(Mode::Draw) {
+            let mut cx = Cx {
+                s: &mut self.studio,
+                toasts: &mut self.toasts,
+                input: &Input::default(),
+                ctx,
+            };
+            self.draw.finish_for_walk(&mut cx);
+            self.set_mode(ctx, None);
         }
+        let cam = &mut self.studio.camera;
+        if cam.view == camera::View::Top {
+            cam.view = camera::View::Orbit;
+        }
+        let target = plan.unwrap_or(cam.pivot);
+        enter_walk_facing(&mut self.studio, target);
     }
 
     fn act(&mut self, ctx: &egui::Context, a: Action) {
@@ -1111,7 +1112,7 @@ impl App {
             }
             Action::Undo => self.studio.undo(),
             Action::Redo => self.studio.redo(),
-            Action::ToggleWalk => self.toggle_walk(),
+            Action::ToggleWalk => self.toggle_walk(ctx),
             Action::Mode(m) => self.set_mode(ctx, m),
             Action::SelectModel(id) => self.modelui.selected = Some(id),
             Action::ReloadModel(id) | Action::Relink(id) => {
@@ -1292,7 +1293,7 @@ impl eframe::App for App {
             } else if cmd && key(Key::Y) {
                 self.act(&ctx, Action::Redo);
             } else if !cmd && key(Key::Space) {
-                self.toggle_walk();
+                self.toggle_walk(&ctx);
             } else if !cmd && key(Key::F) {
                 self.studio.frame_all();
                 // In the plan, F fits the whole scene into the part no panel covers.
@@ -1891,6 +1892,29 @@ mod walk_tests {
         let hedge = |_: f32, z: f32| z > 12.0;
         let p = walk_spot(target, eye, &hedge);
         assert!(p.z > 12.0 && p.distance(target) < 20.0, "{p}");
+    }
+}
+
+/// The ground point the plan is centred on, when the camera shows a plan.
+fn plan_centre(cam: &camera::Camera) -> Option<glam::Vec3> {
+    (cam.view == camera::View::Top)
+        .then(|| glam::Vec3::new(cam.top_center.x, cam.pivot.y, cam.top_center.y))
+}
+
+/// Walks from a free spot near `target`, on the side the camera is, facing it.
+fn enter_walk_facing(s: &mut studio::Studio, target: glam::Vec3) {
+    let eye = s.camera.eye();
+    let at = walk_spot(target, eye, &|x, z| {
+        s.scene.free_to_stand(s.project(), x, z)
+    });
+    let ground = s.scene.floor_below(at.x, 500.0, at.z);
+    let cam = &mut s.camera;
+    cam.enter_walk(ground);
+    cam.walk.eye.x = at.x;
+    cam.walk.eye.z = at.z;
+    let to = target - cam.walk.eye;
+    if to.x.hypot(to.z) > 1e-3 {
+        cam.walk.yaw = to.x.atan2(-to.z);
     }
 }
 

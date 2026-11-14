@@ -378,6 +378,17 @@ impl DrawState {
         self.tool = Tool::Select;
     }
 
+    /// Before leaving for Walk: a shape being drawn with enough corners is kept (as Enter would),
+    /// a shorter one is dropped.
+    pub fn finish_for_walk(&mut self, cx: &mut Cx) {
+        let needed = if self.tool == Tool::Wall { 2 } else { 3 };
+        if matches!(self.tool, Tool::Area | Tool::Block | Tool::Wall) && self.points.len() >= needed
+        {
+            self.finish(cx);
+        }
+        self.points.clear();
+    }
+
     fn shape(&self, cx: &Cx) -> Option<Shape> {
         let id = self.selected.as_ref()?;
         if let Some(crate::studio::Draft::Shape(s)) = &cx.s.draft
@@ -1185,6 +1196,42 @@ fn house_panel(ui: &mut egui::Ui, cx: &mut Cx, x: &visioncraft_core::shape::Extr
 
 #[cfg(test)]
 mod tests {
+
+    /// Walk from Draw (`App::toggle_walk`): the area being drawn is kept as Enter would keep it,
+    /// a two-point start is dropped, and leaving Draw leaves the plan for the 3D view.
+    #[test]
+    fn walking_from_draw_keeps_the_drawn_area_and_leaves_the_plan() {
+        let Ok((device, queue)) = pollster::block_on(visioncraft_render::headless_device()) else {
+            eprintln!("no GPU adapter: skipped");
+            return;
+        };
+        let renderer =
+            visioncraft_render::Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+        let mut s = crate::studio::Studio::new(renderer, visioncraft_core::Project::default());
+        let (mut toasts, input, ctx) = (
+            crate::ui::Toasts::default(),
+            crate::ui::Input::default(),
+            eframe::egui::Context::default(),
+        );
+        let mut cx = crate::ui::Cx {
+            s: &mut s,
+            toasts: &mut toasts,
+            input: &input,
+            ctx: &ctx,
+        };
+        let mut d = super::DrawState::default();
+        d.enter(&mut cx);
+        assert!(cx.s.camera.view == crate::camera::View::Top);
+        d.tool = super::Tool::Area;
+        d.points = vec![[0.0, 0.0], [4.0, 0.0]];
+        d.finish_for_walk(&mut cx);
+        assert!(cx.s.project().shapes.is_empty() && d.points.is_empty());
+        d.points = vec![[0.0, 0.0], [4.0, 0.0], [4.0, 3.0]];
+        d.finish_for_walk(&mut cx);
+        assert_eq!(cx.s.project().shapes.len(), 1);
+        d.leave(&mut cx);
+        assert!(cx.s.camera.view != crate::camera::View::Top);
+    }
 
     #[test]
     fn typed_sizes_come_out_exact() {
