@@ -19,13 +19,14 @@ pub(super) fn register(s: &mut Session) {
         spec(
             "viewpoint.add",
             "Save Viewpoint",
-            "Saves a camera position and target, optionally with a time of day.",
+            "Saves a camera position and target, optionally with a time of day and years after planting.",
             vec![
                 param("name", T::String, "Display name.").required(),
                 param("position", T::Point3, "Camera position [x, y, z].").unit("m").required(),
                 param("target", T::Point3, "Point it looks at; must differ from the position.").unit("m").required(),
                 fov().default(json!(60)),
                 time(),
+                param("years", T::Number, "Years after planting to show from here (0..60); unset keeps the project's."),
             ],
             "{id} (v1, v2...)",
             json!({"name": "From the terrace", "position": [0, 1.6, 8], "target": [0, 1.6, 0], "time": {"hour": 19.5}}),
@@ -44,6 +45,11 @@ pub(super) fn register(s: &mut Session) {
                 param("target", T::Point3, "Look-at point.").unit("m"),
                 fov(),
                 time(),
+                param(
+                    "years",
+                    T::Number,
+                    "Years after planting to show from here; null: the project's.",
+                ),
             ],
             "null",
             json!({"id": "v1", "fov_y_deg": 75}),
@@ -95,6 +101,7 @@ fn viewpoint_add(project: &mut Project, params: &Value) -> Result<Value, Command
         #[serde(default = "fov")]
         fov_y_deg: f32,
         time: Option<SunTime>,
+        years: Option<f32>,
     }
     fn fov() -> f32 {
         60.0
@@ -108,6 +115,7 @@ fn viewpoint_add(project: &mut Project, params: &Value) -> Result<Value, Command
         target: p.target,
         fov_y_deg: p.fov_y_deg,
         time: p.time,
+        years: p.years,
     };
     v.validate().map_err(|e| bad(&e))?;
     project.viewpoints.push(v);
@@ -119,7 +127,7 @@ fn viewpoint_update(project: &mut Project, params: &Value) -> Result<Value, Comm
         project,
         params["id"].as_str().ok_or_else(|| bad("missing id"))?,
     )?;
-    let v = merge_update(&project.viewpoints[i], params, &[])?;
+    let v = merge_update(&project.viewpoints[i], params, &["years"])?;
     v.validate().map_err(|e| bad(&e))?;
     project.viewpoints[i] = v;
     Ok(Value::Null)

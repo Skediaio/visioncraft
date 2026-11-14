@@ -7,6 +7,7 @@
 pub mod catalog;
 mod commands;
 pub mod export;
+pub mod growth;
 pub mod house;
 mod import;
 pub mod light;
@@ -50,7 +51,7 @@ pub use planting::{
 pub use presets::{PlantingPreset, planting_presets};
 pub use project::{
     CloudKind, Clouds, CustomSpecies, GroundPlane, Layer, Look, ModelKind, ModelRef, Project,
-    ProjectError, RenderStyle, Site, SkyChoice, SunTime, Transform, ViewState,
+    ProjectError, RenderStyle, Site, SkyChoice, SunTime, Transform, ViewState, YEARS_MAX,
 };
 pub use raycast::{Hit, ground_height, raycast};
 pub use session::{Command, CommandError, Session};

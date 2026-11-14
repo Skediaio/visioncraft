@@ -67,6 +67,9 @@ pub struct Single {
     pub id: String,
     pub name: String,
     pub layer: String,
+    /// How old the plants are when planted, in years (`growth`); none: the species' usual age.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub planted_age_years: Option<f32>,
     pub asset: String,
     pub position: [f32; 3],
     pub rotation_y_deg: f32,
@@ -79,6 +82,9 @@ pub struct SplineMass {
     pub id: String,
     pub name: String,
     pub layer: String,
+    /// How old the plants are when planted, in years (`growth`); none: the species' usual age.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub planted_age_years: Option<f32>,
     pub asset_palette: Vec<Weighted>,
     pub points: Vec<[f32; 2]>,
     pub closed: bool,
@@ -109,6 +115,9 @@ pub struct AreaScatter {
     pub id: String,
     pub name: String,
     pub layer: String,
+    /// How old the plants are when planted, in years (`growth`); none: the species' usual age.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub planted_age_years: Option<f32>,
     #[serde(default)]
     pub asset_palette: Vec<Weighted>,
     pub outline: Vec<[f32; 2]>,
@@ -144,6 +153,9 @@ pub struct MixedBrush {
     pub id: String,
     pub name: String,
     pub layer: String,
+    /// How old the plants are when planted, in years (`growth`); none: the species' usual age.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub planted_age_years: Option<f32>,
     #[serde(default)]
     pub asset_palette: Vec<Weighted>,
     pub strokes: Vec<Stroke>,
@@ -178,6 +190,9 @@ pub struct SurfaceFill {
     pub id: String,
     pub name: String,
     pub layer: String,
+    /// How old the plants are when planted, in years (`growth`); none: the species' usual age.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub planted_age_years: Option<f32>,
     #[serde(default)]
     pub asset_palette: Vec<Weighted>,
     /// A model or shape id.
@@ -210,6 +225,9 @@ pub struct Cluster {
     pub id: String,
     pub name: String,
     pub layer: String,
+    /// How old the plants are when planted, in years (`growth`); none: the species' usual age.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub planted_age_years: Option<f32>,
     pub asset_palette: Vec<Weighted>,
     pub center: [f32; 2],
     pub radius_m: f32,
@@ -257,8 +275,36 @@ impl Generator {
         each!(self, g => &g.layer)
     }
 
+    /// The age its plants have when planted, if set (else each species' usual age).
+    pub fn planted_age_years(&self) -> Option<f32> {
+        each!(self, g => g.planted_age_years)
+    }
+
     pub(crate) fn layer_mut(&mut self) -> &mut String {
         each!(self, g => &mut g.layer)
+    }
+
+    /// Every asset it places, in palette order, each once.
+    pub fn assets(&self) -> Vec<&str> {
+        fn add<'a>(out: &mut Vec<&'a str>, p: &'a [Weighted]) {
+            for w in p {
+                if !out.contains(&w.asset.as_str()) {
+                    out.push(&w.asset);
+                }
+            }
+        }
+        let mut out: Vec<&str> = Vec::new();
+        let (palette, layers): (&[Weighted], &[PlantLayer]) = match self {
+            Self::Single(g) => return vec![g.asset.as_str()],
+            Self::SplineMass(g) => (&g.asset_palette, &[]),
+            Self::AreaScatter(g) => (&g.asset_palette, &g.layers),
+            Self::MixedBrush(g) => (&g.asset_palette, &g.layers),
+            Self::SurfaceFill(g) => (&g.asset_palette, &g.layers),
+            Self::Cluster(g) => (&g.asset_palette, &[]),
+        };
+        add(&mut out, palette);
+        layers.iter().for_each(|l| add(&mut out, &l.asset_palette));
+        out
     }
 
     /// Whether the generator places `asset` (a catalogue, `flora:` or custom species id).
@@ -280,6 +326,12 @@ impl Generator {
     /// Rejects what cannot be evaluated: empty palettes, non-positive densities and so on. Asset
     /// ids are not checked here (the catalogue is not part of the project).
     pub fn validate(&self) -> Result<(), String> {
+        if self
+            .planted_age_years()
+            .is_some_and(|a| !(a.is_finite() && (0.0..=200.0).contains(&a)))
+        {
+            return Err("planted_age_years: 0..200".into());
+        }
         let ok = |c: bool, why: &str| if c { Ok(()) } else { Err(why.to_string()) };
         let finite = |v: &[f32]| v.iter().all(|c| c.is_finite());
         let palette = |p: &[Weighted]| {
@@ -1159,6 +1211,7 @@ mod tests {
         AreaScatter {
             id: "g1".into(),
             name: "Scatter".into(),
+            planted_age_years: None,
             layer: "planting".into(),
             asset_palette: palette(),
             outline,
@@ -1256,6 +1309,7 @@ mod tests {
         let line = Generator::SplineMass(SplineMass {
             id: "g".into(),
             name: "Hedge".into(),
+            planted_age_years: None,
             layer: "planting".into(),
             asset_palette: palette(),
             points: vec![[0.0, 0.0], [100.0, 0.0]],
@@ -1278,6 +1332,7 @@ mod tests {
         SplineMass {
             id: "g2".into(),
             name: "Hedge".into(),
+            planted_age_years: None,
             layer: "planting".into(),
             asset_palette: palette(),
             points: vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]],
@@ -1398,6 +1453,7 @@ mod tests {
         let mut g = MixedBrush {
             id: "g3".into(),
             name: "Brush".into(),
+            planted_age_years: None,
             layer: "planting".into(),
             asset_palette: palette(),
             strokes: vec![stroke(vec![[0.0, 0.0], [10.0, 0.0]], 2.0, false)],
@@ -1458,6 +1514,7 @@ mod tests {
         let g = Generator::Cluster(Cluster {
             id: "g4".into(),
             name: "Clump".into(),
+            planted_age_years: None,
             layer: "planting".into(),
             asset_palette: palette(),
             center: [5.0, -3.0],
@@ -1496,6 +1553,7 @@ mod tests {
         SurfaceFill {
             id: "g5".into(),
             name: "Fill".into(),
+            planted_age_years: None,
             layer: "planting".into(),
             asset_palette: palette(),
             owner: "S1".into(),
@@ -1622,6 +1680,7 @@ mod layer_tests {
         Generator::MixedBrush(MixedBrush {
             id: "g1".into(),
             name: "Forest".into(),
+            planted_age_years: None,
             layer: "planting".into(),
             asset_palette: Vec::new(),
             strokes: vec![Stroke {
@@ -1718,6 +1777,7 @@ mod layer_tests {
         let area = Generator::AreaScatter(AreaScatter {
             id: "g2".into(),
             name: "A".into(),
+            planted_age_years: None,
             layer: "planting".into(),
             asset_palette: Vec::new(),
             outline: vec![[0.0, 0.0], [20.0, 0.0], [20.0, 20.0], [0.0, 20.0]],
@@ -1760,6 +1820,7 @@ mod layer_tests {
         let fill = SurfaceFill {
             id: "g3".into(),
             name: "F".into(),
+            planted_age_years: None,
             layer: "planting".into(),
             asset_palette: Vec::new(),
             owner: "S1".into(),

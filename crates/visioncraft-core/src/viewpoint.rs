@@ -1,6 +1,6 @@
 //! Saved camera positions.
 
-use crate::project::SunTime;
+use crate::project::{SunTime, YEARS_MAX};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -12,6 +12,10 @@ pub struct Viewpoint {
     pub fov_y_deg: f32,
     /// The sun to show from here; `None` keeps the project's time.
     pub time: Option<SunTime>,
+    /// The years after planting to show from here (`ViewState::years`); `None` keeps the
+    /// project's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub years: Option<f32>,
 }
 
 impl Viewpoint {
@@ -21,9 +25,13 @@ impl Viewpoint {
             .iter()
             .chain(&self.target)
             .all(|c| c.is_finite());
-        if !finite || self.position == self.target || !(1.0..=179.0).contains(&self.fov_y_deg) {
+        if !finite
+            || self.position == self.target
+            || !(1.0..=179.0).contains(&self.fov_y_deg)
+            || self.years.is_some_and(|y| !(0.0..=YEARS_MAX).contains(&y))
+        {
             return Err(
-                "position and target must be finite and differ, field of view 1..179 degrees"
+                "position and target must be finite and differ, field of view 1..179 degrees, years 0..60"
                     .into(),
             );
         }
@@ -56,6 +64,7 @@ mod tests {
             target: [x, 1.6, -5.0],
             fov_y_deg: 60.0,
             time: None,
+            years: None,
         }
     }
 

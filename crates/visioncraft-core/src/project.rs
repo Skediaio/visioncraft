@@ -150,7 +150,14 @@ pub struct ViewState {
     /// The cloud layer over the analytic sky. Not written while the default.
     #[serde(skip_serializing_if = "Clouds::is_default")]
     pub clouds: Clouds,
+    /// Years after planting to show the plants at (`growth`), 0..=60; `None` shows every plant
+    /// at its full size, as projects did before growth existed (the default).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub years: Option<f32>,
 }
+
+/// The longest look ahead the years setting allows.
+pub const YEARS_MAX: f32 = 60.0;
 
 /// A procedural cloud layer: what kind, and how much of the sky it covers.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -230,6 +237,7 @@ impl Default for ViewState {
             view_distance: 1.0,
             look: Look::Natural,
             clouds: Clouds::default(),
+            years: None,
         }
     }
 }
@@ -245,6 +253,7 @@ impl ViewState {
             && finite(self.wind_direction_deg)
             && VIEW_DISTANCE_RANGE.contains(&self.view_distance)
             && (0.0..=1.0).contains(&self.clouds.cover)
+            && self.years.is_none_or(|y| (0.0..=YEARS_MAX).contains(&y))
             && self.ground.is_none_or(|g| {
                 finite(g.height) && g.color.iter().all(|c| c.is_finite() && *c >= 0.0)
             })

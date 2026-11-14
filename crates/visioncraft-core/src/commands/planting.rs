@@ -271,7 +271,7 @@ pub(super) fn register(s: &mut Session) {
         spec(
             "planting.update",
             "Update Planting",
-            "Changes any fields of a generator (every field of its add command except `type`); fields given replace the old ones whole, the result is validated.",
+            "Changes any fields of a generator (every field of its add command except `type`, and `planted_age_years`: how old its plants are when planted, null for each species' usual age, see `planting.growth`); fields given replace the old ones whole, the result is validated.",
             vec![param("id", T::String, "Generator id.").required()],
             "null",
             json!({"id": "g1", "density_per_m2": 0.05}),
@@ -389,6 +389,7 @@ fn add_single(project: &mut Project, params: &Value) -> Result<Value, CommandErr
             id,
             name: p.name,
             layer,
+            planted_age_years: None,
             asset: p.asset,
             position: p.position,
             rotation_y_deg: p.rotation_y_deg,
@@ -430,6 +431,7 @@ fn add_spline(project: &mut Project, params: &Value) -> Result<Value, CommandErr
             id,
             name: p.name,
             layer,
+            planted_age_years: None,
             asset_palette: p.asset_palette,
             points: p.points,
             closed: p.closed,
@@ -479,6 +481,7 @@ fn add_area(project: &mut Project, params: &Value) -> Result<Value, CommandError
             id,
             name: p.name,
             layer,
+            planted_age_years: None,
             asset_palette: p.asset_palette,
             outline: p.outline,
             density_per_m2: p.density_per_m2,
@@ -528,6 +531,7 @@ fn add_brush(project: &mut Project, params: &Value) -> Result<Value, CommandErro
             id,
             name: p.name,
             layer,
+            planted_age_years: None,
             asset_palette: p.asset_palette,
             strokes: p.strokes,
             density_per_m2: p.density_per_m2,
@@ -585,6 +589,7 @@ fn add_surface_fill(project: &mut Project, params: &Value) -> Result<Value, Comm
             id,
             name: p.name,
             layer,
+            planted_age_years: None,
             asset_palette: p.asset_palette,
             owner: p.owner,
             faces: p.faces,
@@ -625,6 +630,7 @@ fn add_cluster(project: &mut Project, params: &Value) -> Result<Value, CommandEr
             id,
             name: p.name,
             layer,
+            planted_age_years: None,
             asset_palette: p.asset_palette,
             center: p.center,
             radius_m: p.radius_m,
@@ -677,7 +683,13 @@ fn update(project: &mut Project, params: &Value) -> Result<Value, CommandError> 
     let updated: Generator = merge_update(
         g,
         params,
-        &["clip_outline", "clip_holes", "straight", "avoid_buildings"],
+        &[
+            "clip_outline",
+            "clip_holes",
+            "straight",
+            "avoid_buildings",
+            "planted_age_years",
+        ],
     )?;
     updated.validate().map_err(|e| bad(&e))?;
     let layer = updated.layer().to_string();

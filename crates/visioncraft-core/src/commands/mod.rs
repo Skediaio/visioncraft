@@ -8,6 +8,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 pub(crate) mod examples;
+mod growth;
 mod house;
 mod layers;
 mod lights;
@@ -31,6 +32,7 @@ pub(crate) fn register(s: &mut Session) {
     terrain::register(s);
     materials::register(s);
     planting::register(s);
+    growth::register(s);
     lights::register(s);
     viewpoints::register(s);
 }
