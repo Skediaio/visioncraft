@@ -228,7 +228,8 @@ fn fs_sea(in: Varying) -> @location(0) vec4<f32> {
     let t = g.time.x;
     let noise = value_noise(vec3<f32>(in.uv.x * 0.9, t * 0.15, in.uv.y * 0.9)) * 0.6
         + value_noise(vec3<f32>(in.uv.x * 3.7, t * 0.4, in.uv.y * 3.7)) * 0.4;
-    let state = smoothstep(0.3, 2.5, sea.extra.z);
+    // Whitecaps start around sea state 3 (half-metre waves) and are everywhere by state 5.
+    let state = smoothstep(0.6, 3.0, sea.extra.z);
     let crest_foam = smoothstep(0.55, 0.15, s.jacobian) * state * smoothstep(0.35, 0.7, noise + 0.15 * state);
     let run = 0.25 + 0.5 * sea.extra.z;
     let surge = 0.5 + 0.5 * sin(t * 0.9 + dot(in.uv, vec2<f32>(0.21, 0.17)));
@@ -289,5 +290,5 @@ fn fs_sea_wet(in: Varying) -> @location(0) vec4<f32> {
     if wet <= 0.0 || !sea_covers(world.xz) {
         return vec4<f32>(1.0);
     }
-    return vec4<f32>(vec3<f32>(mix(1.0, 0.6, wet)), 1.0);
+    return vec4<f32>(vec3<f32>(mix(1.0, 0.5, wet)), 1.0);
 }

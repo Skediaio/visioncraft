@@ -76,7 +76,7 @@ pub fn waves(sea: &Sea) -> Vec<Wave> {
             let spread = if river {
                 1.4
             } else {
-                0.3 + 0.6 * i as f32 / WAVES as f32
+                0.45 + 0.9 * i as f32 / WAVES as f32
             };
             let a = base + u * spread;
             Wave {
