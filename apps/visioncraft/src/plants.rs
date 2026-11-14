@@ -759,6 +759,12 @@ impl Flora {
             return false;
         };
         job.pending = None;
+        // Crowns get their depth occlusion: trees and shrubs, not clipped hedges (their outside
+        // is all surface) or low plants (darkened, their impostors read as grey blobs far off).
+        let crowned = !matches!(
+            self.tex_params.get(&id).map(|p| &p.form),
+            Some(flora::Form::Clipped(_)) | None
+        );
         let tex = &self.textures[&id];
         let mut parts = Vec::new();
         let mut kinds = Vec::new();
@@ -769,7 +775,8 @@ impl Flora {
             for (kind, part) in split {
                 // Crowns of plants, not lawn tufts or fallen leaves lying flat.
                 let crown = kind == flora::Material::Foliage
-                    && height >= 0.5
+                    && crowned
+                    && height >= 1.5
                     && !id.starts_with(CLUTTER_PREFIX);
                 let Some(m) = scene::upload_plant_mesh(r, &part, crown) else {
                     continue;

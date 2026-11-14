@@ -959,7 +959,8 @@ fn build() -> Vec<Species> {
             2.2,
         ),
         None,
-        bark(BarkPattern::Flaky, [0.7, 0.42, 0.25], [0.4, 0.3, 0.25]),
+        // Scots pine's upper bark is orange-brown, not salmon: muted, as it reads in a stand.
+        bark(BarkPattern::Flaky, [0.48, 0.33, 0.24], [0.3, 0.24, 0.2]),
     ));
     v.push(sp(
         "picea-abies",

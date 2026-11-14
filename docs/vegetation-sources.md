@@ -114,7 +114,7 @@ first is the faster way to more silhouettes.
 
 1. Leaves: drawn leaf textures read as plastic. Scanned leaf cut-outs on the generated skeleton
    are being wired in; more atlases unlock more species.
-2. Bark: 19 sets, 8 matched by genus.
+2. Bark: 19 sets, 7 used by genus (Scots pine keeps its drawn bark: the scan read salmon in a stand).
 3. Tree form: generated; a better branch solver would give more believable silhouettes.
 4. Variety: one form per species reads as a catalogue, several variants per species read as a
    garden. The generator has variants by seed; planting tools should use more of them.
