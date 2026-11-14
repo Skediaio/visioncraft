@@ -997,7 +997,8 @@ fn build() -> Vec<Species> {
             2.8,
         ),
         None,
-        bark(BarkPattern::Scaly, [0.45, 0.3, 0.22], [0.3, 0.22, 0.17]),
+        // Spruce bark is grey-brown with a red cast, not red.
+        bark(BarkPattern::Scaly, [0.42, 0.33, 0.27], [0.28, 0.23, 0.19]),
     ));
     v.push(sp(
         "abies-nordmanniana",
@@ -1076,7 +1077,8 @@ fn build() -> Vec<Species> {
             3.0,
         ),
         None,
-        bark(BarkPattern::Flaky, [0.5, 0.28, 0.2], [0.35, 0.22, 0.2]),
+        // Yew bark is red-brown, but read bright orange-red in a woodland: muted.
+        bark(BarkPattern::Flaky, [0.4, 0.27, 0.21], [0.27, 0.2, 0.17]),
     ));
     v.push(sp(
         "thuja-smaragd",
