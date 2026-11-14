@@ -174,6 +174,30 @@ impl Lru {
         self.entries.contains_key(key)
     }
 
+    fn bytes(&self, key: &Key) -> Option<u64> {
+        self.entries.get(key).map(|e| e.0)
+    }
+
+    /// Least recently used entries whose path passes `which`, oldest first, until `to_free`
+    /// bytes are covered, recent use or not.
+    pub fn victims_where(&self, to_free: u64, which: impl Fn(&str) -> bool) -> Vec<Key> {
+        let mut old: Vec<(&Key, &(u64, u64))> = self
+            .entries
+            .iter()
+            .filter(|(k, _)| which(k.path()))
+            .collect();
+        old.sort_by_key(|(k, (_, t))| (*t, k.path().to_string()));
+        let (mut freed, mut out) = (0, Vec::new());
+        for (k, (bytes, _)) in old {
+            if freed >= to_free {
+                break;
+            }
+            freed += bytes;
+            out.push(k.clone());
+        }
+        out
+    }
+
     /// Least recently used entries, oldest first, until `to_free` bytes are covered. Entries used
     /// at `protect_from` or later are never chosen, so what is on screen stays.
     pub fn victims(&self, to_free: u64, protect_from: u64) -> Vec<Key> {
@@ -207,8 +231,20 @@ pub fn is_tier_file(path: &str) -> bool {
 /// Whether `bytes` more fit under the cap with some room to spare (a higher tier is only asked
 /// for then: eviction takes it back to the base tier, never below).
 impl AssetStore {
+    /// Bytes the store holds of files whose path passes `which`.
+    pub fn held_bytes(&self, which: impl Fn(&str) -> bool) -> u64 {
+        self.lru
+            .entries
+            .iter()
+            .filter(|(k, _)| which(k.path()))
+            .map(|(_, v)| v.0)
+            .sum()
+    }
+
     pub fn fits(&self, bytes: u64) -> bool {
-        self.lru.total + bytes <= self.cap_bytes / 100 * 85
+        // The renderer's own count includes what the store does not hold (plant atlases,
+        // impostors), so a tier never pushes the GPU over the cap.
+        self.lru.total.max(self.texture_bytes) + bytes <= self.cap_bytes / 100 * 85
     }
 }
 
@@ -446,6 +482,8 @@ pub struct AssetStore {
     pub stats: StoreStats,
     /// The GPU holds more texture memory than `cap_bytes` (as of the last frame).
     pub over_cap: bool,
+    /// The renderer's texture memory as of the last frame.
+    pub texture_bytes: u64,
 }
 
 /// Entries used within this many ticks (frames) are never evicted.
@@ -482,6 +520,7 @@ impl AssetStore {
             max_inflight: if cfg!(target_arch = "wasm32") { 6 } else { 4 },
             stats: StoreStats::default(),
             over_cap: false,
+            texture_bytes: 0,
         }
     }
 
@@ -668,14 +707,25 @@ impl AssetStore {
         }
         let mut changed = false;
         let texture_bytes = r.stats().texture_bytes;
+        self.texture_bytes = texture_bytes;
         self.stats.peak_texture_bytes = self.stats.peak_texture_bytes.max(texture_bytes);
         let over = texture_bytes.saturating_sub(self.cap_bytes);
         self.over_cap = over > 0;
         if over > 0 {
-            for key in self
-                .lru
-                .victims(over, self.tick.saturating_sub(PROTECT_TICKS))
-            {
+            // Higher tiers go first, even in view: the base files under them stay, so the
+            // picture only gets coarser, never blank.
+            let mut victims = self.lru.victims_where(over, is_tier_file);
+            let freed: u64 = victims.iter().filter_map(|k| self.lru.bytes(k)).sum();
+            if freed < over {
+                let more: Vec<Key> = self
+                    .lru
+                    .victims(over - freed, self.tick.saturating_sub(PROTECT_TICKS))
+                    .into_iter()
+                    .filter(|k| !victims.contains(k))
+                    .collect();
+                victims.extend(more);
+            }
+            for key in victims {
                 self.lru.remove(&key);
                 self.stats.evictions += 1;
                 if let Some(id) = self.textures.remove(&key) {
@@ -693,10 +743,16 @@ impl AssetStore {
             let Key::Image { srgb, repeat, .. } = key else {
                 continue;
             };
+            // A higher tier that no longer fits (the base files filled the budget meanwhile)
+            // is dropped, not uploaded: the base stays, it may be asked for again later.
+            if is_tier_file(key.path()) && !self.fits(texture_cost(img.w, img.h)) {
+                continue;
+            }
             match self.upload(r, &img, srgb, repeat) {
                 Some(id) => {
-                    self.lru
-                        .insert(key.clone(), texture_cost(img.w, img.h), self.tick);
+                    let cost = texture_cost(img.w, img.h);
+                    self.lru.insert(key.clone(), cost, self.tick);
+                    self.texture_bytes += cost;
                     self.textures.insert(key, id);
                     changed = true;
                 }

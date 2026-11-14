@@ -615,6 +615,15 @@ mod native {
                         "sun elevation {:.1} deg, exposure EV {:.1}",
                         s.ev_used.1, s.ev_used.0
                     );
+                    let lib = &s.scene.library;
+                    println!(
+                        "textures: tier {}, cap {} MB, library {} MB of which tiers {} MB, renderer {} MB",
+                        lib.texture_tier,
+                        lib.store.cap_bytes >> 20,
+                        lib.store.held_bytes(|_| true) >> 20,
+                        lib.store.held_bytes(crate::assets::is_tier_file) >> 20,
+                        lib.store.texture_bytes >> 20
+                    );
                     let st = &s.scene.library.store.stats;
                     println!(
                         "assets: {} uploads, worst {:.1} ms, total {:.0} ms, {} evictions, peak texture bytes {} MB, {} models resident, worst pump {:.1} ms",

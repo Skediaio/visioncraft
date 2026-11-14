@@ -219,6 +219,10 @@ pub struct Library {
     /// The texture tier materials use when the files are there: "1k" (the base files), "2k" or
     /// "4k" (`Studio::prepare` sets it from the quality or the Textures choice).
     pub texture_tier: &'static str,
+    /// Tier files asked for and not yet resident, with their expected bytes.
+    tier_asked: std::cell::RefCell<HashMap<String, u64>>,
+    /// Tier models that did not fit when they arrived; asked again after a tier change.
+    tier_refused: HashSet<String>,
     /// Set when the catalogue has just arrived (the studio adds its assets for placeholders).
     pub catalog_arrived: bool,
     /// The project's imported objects as catalogue assets (`user_objects`).
@@ -274,6 +278,8 @@ impl Library {
             skies: Vec::new(),
             tiers: None,
             texture_tier: "1k",
+            tier_asked: Default::default(),
+            tier_refused: HashSet::new(),
             catalog_arrived: false,
             user_assets: Vec::new(),
             ground_offsets: HashMap::new(),
@@ -485,13 +491,22 @@ impl Library {
             .tiers
             .get("2k")?
             .file;
-        (self.store.state(&Key::Glb(f.clone())) != State::Failed).then(|| f.clone())
+        (self.store.state(&Key::Glb(f.clone())) != State::Failed && !self.tier_refused.contains(f))
+            .then(|| f.clone())
+    }
+
+    fn model_tier_bytes(&self, asset: &str) -> u64 {
+        self.tiers
+            .as_ref()
+            .and_then(|t| t.models.get(asset)?.tiers.get("2k"))
+            .map_or(0, |t| t.bytes)
     }
 
     /// Sets the texture tier; materials pick their maps again.
     pub fn set_texture_tier(&mut self, tier: &'static str) {
         if self.texture_tier != tier {
             self.texture_tier = tier;
+            self.tier_refused.clear();
             self.dirty = true;
         }
     }
@@ -503,14 +518,43 @@ impl Library {
             return None;
         }
         let (path, px) = self.tiers.as_ref()?.material_map(p, self.texture_tier)?;
-        let resident = [true, false].into_iter().any(|srgb| {
+        let state = |srgb| {
             self.store.state(&Key::Image {
                 path: path.to_string(),
                 srgb,
                 repeat: true,
-            }) == State::Ready
-        });
-        (resident || self.store.fits(crate::assets::texture_cost(px, px))).then(|| path.to_string())
+            })
+        };
+        let (a, b) = (state(true), state(false));
+        let ok = if a == State::Ready || b == State::Ready {
+            self.tier_asked.borrow_mut().remove(path);
+            true
+        } else if a == State::Failed || b == State::Failed {
+            self.tier_asked.borrow_mut().remove(path);
+            false
+        } else {
+            if a == State::Absent && b == State::Absent {
+                // Dropped at upload for want of room (or evicted): ask the budget again.
+                self.tier_asked.borrow_mut().remove(path);
+            }
+            self.budget_for(path, crate::assets::texture_cost(px, px))
+        };
+        ok.then(|| path.to_string())
+    }
+
+    /// Whether a tier file of `bytes` may be asked for: already asked, or it fits the budget
+    /// with everything asked and not yet resident counted (they all land in the same frames).
+    fn budget_for(&self, path: &str, bytes: u64) -> bool {
+        let mut asked = self.tier_asked.borrow_mut();
+        if asked.contains_key(path) {
+            return true;
+        }
+        let pending: u64 = asked.values().sum();
+        let ok = self.store.fits(pending + bytes);
+        if ok {
+            asked.insert(path.to_string(), bytes);
+        }
+        ok
     }
 
     // ---- the frame ----
@@ -595,8 +639,10 @@ impl Library {
                 // that are resident then stop being used and are the first to go.
                 if i == n - 1 || (i == need && !self.store.over_cap) {
                     self.request(&l.file, priority(d, i, n - 1));
+                    // Decoded, a model takes several times its file (its JPEG pictures unpacked, with mips).
                     if i == 0
                         && let Some(f) = self.model_tier(&asset)
+                        && self.budget_for(&f, self.model_tier_bytes(&asset) * 8)
                     {
                         self.request(&f, priority(d, i, n - 1) + 1.0);
                     }
@@ -746,6 +792,18 @@ impl Library {
             match self.store.take(&key) {
                 Some(Loaded::Glb(data)) => {
                     self.awaiting.remove(&path);
+                    self.tier_asked.get_mut().remove(&path);
+                    let cost: u64 = data
+                        .images
+                        .iter()
+                        .map(|i| crate::assets::texture_cost(i.w, i.h))
+                        .sum();
+                    if crate::assets::is_tier_file(&path) && !self.store.fits(cost) {
+                        // No room for the 2k model now: the base level stays, not asked again
+                        // at this tier.
+                        self.tier_refused.insert(path);
+                        continue;
+                    }
                     let slots = glb_slots(&data.glb);
                     let lumens = self.lumens_of(&path);
                     self.uploading.push(Upload {
@@ -758,6 +816,7 @@ impl Library {
                 }
                 _ if self.store.state(&key) == State::Failed => {
                     self.awaiting.remove(&path);
+                    self.tier_asked.get_mut().remove(&path);
                 }
                 _ => {}
             }
