@@ -5,7 +5,8 @@
 //!
 //! Levels are those of `generate_levels` with the leaf-level detail: 0 every shoot's leaves,
 //! 1 sprays at the larger budget, 2 to 4 the three card levels. `ms` is the time for all levels
-//! of one tree (skeleton once), and `winter` the near level's triangles out of leaf.
+//! of one tree (skeleton once), `winter` the near level's triangles out of leaf, `verts` its
+//! vertices.
 //!
 //! `cargo run --release -p visioncraft-flora --example crown_stats -- [species ids...]`
 
@@ -144,7 +145,7 @@ fn cell_fill(atlas: &Image) -> Vec<f32> {
 fn main() {
     let ids: Vec<String> = std::env::args().skip(1).collect();
     println!(
-        "species age_y age lod tris wood cards card_m cell leaf_x leaves/card cov_side layers cov_top px@6 px@15 px@40 ms winter"
+        "species age_y age lod tris wood cards card_m cell leaf_x leaves/card cov_side layers cov_top px@6 px@15 px@40 ms winter verts"
     );
     for &(id, maturity) in TREES {
         if !ids.is_empty() && !ids.iter().any(|i| i == id) {
@@ -191,7 +192,7 @@ fn main() {
                 // On a 1080 px tall view with a 50 degree field of view.
                 let px = |d: f32| lf.leaf_m * leaf_x / (2.0 * d * 0.4663) * 1080.0;
                 println!(
-                    "{id} {years} {:.1} {} {} {} {cards} {size:.2} {} {leaf_x:.2} {leaves:.0} {cs:.2} {depth:.1} {ct:.2} {:.1} {:.1} {:.1} {ms:.0} {winter}",
+                    "{id} {years} {:.1} {} {} {} {cards} {size:.2} {} {leaf_x:.2} {leaves:.0} {cs:.2} {depth:.1} {ct:.2} {:.1} {:.1} {:.1} {ms:.0} {winter} {}",
                     p.age,
                     li,
                     m.triangle_count(),
@@ -200,6 +201,7 @@ fn main() {
                     px(6.0),
                     px(15.0),
                     px(40.0),
+                    m.positions.len(),
                 );
             }
         }

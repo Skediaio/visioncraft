@@ -118,10 +118,14 @@ impl Sc {
 }
 
 /// The spacing of the branch network for a species: the kill distance `d_k`; the step is
-/// about a third of it and the radius of influence four times it. Set by the
-/// mature crown so every age of a species shares it.
+/// about a third of it and the radius of influence four times it. Set by the mature crown
+/// and the leaf size, so every age of a species shares it.
 fn kill_distance(p: &PlantParams) -> f32 {
-    (0.03 * p.width_m.max(p.height_m * 0.8)).clamp(0.15, 0.8)
+    // Never finer than a few shoots: the twigs and shoots fill the space between the branches,
+    // and a small tree's network at a thirtieth of its crown made hundreds of thousands of them.
+    (0.03 * p.width_m.max(p.height_m * 0.8))
+        .max(3.5 * shoot_m(p))
+        .clamp(0.15, 0.8)
 }
 
 /// Rotate `g` away from `axis` until it makes at least `min` radians with it.
@@ -416,7 +420,9 @@ fn finish(
         // Pendulous shoots (birch) hang from their twig.
         d = (d + UP * (0.25 * l3.gravity)).norm();
         let len = ls * rng.range(0.8, 1.2);
-        if at.y + d.y * len < floor {
+        // shortcut: a hard cap keeps odd parameter sets (huge crowns of tiny leaves) fast; the
+        // leaf level's budget takes at most 75 000 anyway.
+        if at.y + d.y * len < floor || shoots.len() >= 120_000 {
             return;
         }
         shoots.push((
