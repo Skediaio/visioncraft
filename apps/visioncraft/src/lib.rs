@@ -26,6 +26,8 @@ pub mod materials;
 pub mod modelui;
 pub mod objects;
 pub mod placeholder;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod plant_cache;
 pub mod plant_scene;
 pub mod planting_panel;
 pub mod planting_smoke;

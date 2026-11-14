@@ -488,6 +488,23 @@ async fn load(
     Ok(match key {
         Key::Bytes(_) => Loaded::Bytes(bytes),
         Key::Image { path, srgb, .. } => {
+            // Natively, a map compressed before comes off the disk (`plant_cache`).
+            #[cfg(not(target_arch = "wasm32"))]
+            let cache_key = crate::plant_cache::key(&[
+                path.as_bytes(),
+                &[u8::from(*srgb)],
+                &(bytes.len() as u64).to_le_bytes(),
+                &bytes[..bytes.len().min(4096)],
+            ]);
+            #[cfg(not(target_arch = "wasm32"))]
+            if compress
+                && bc_kind_of(path).is_some()
+                && let Some(c) = crate::plant_cache::compressed(cache_key)
+            {
+                let mut img = Rgba::new(c.width, c.height, Vec::new());
+                img.bc = Some(c);
+                return Ok(Loaded::Image(img));
+            }
             let mut img = io::decode(bytes).await?;
             if compress && let Some(kind) = bc_kind_of(path) {
                 let space = if *srgb {
@@ -496,6 +513,8 @@ async fn load(
                     ColorSpace::Linear
                 };
                 if let Some(c) = compress_any(&img.px, img.w, img.h, kind, space).await {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    crate::plant_cache::store_compressed(cache_key, &c);
                     img.bc = Some(c);
                     img.px = Vec::new();
                 }
@@ -610,6 +629,9 @@ pub struct AssetStore {
     pub compress: bool,
     /// The renderer's texture memory as of the last frame.
     pub texture_bytes: u64,
+    /// Bytes of a compressed picture written per frame (`STREAM_BYTES_PER_FRAME`; a picture
+    /// being taken, with no frame to keep smooth, writes whole maps).
+    pub stream_bytes: usize,
 }
 
 /// Bytes of a compressed picture written per frame (a 4k BC1 map with mips is about 11 MB, 44
@@ -654,6 +676,7 @@ impl AssetStore {
             streaming: None,
             cancelled: Default::default(),
             texture_bytes: 0,
+            stream_bytes: STREAM_BYTES_PER_FRAME,
         }
     }
 
@@ -898,7 +921,7 @@ impl AssetStore {
         // the frame up to 100 ms); only once complete does anything use it.
         if let Some((key, job, cost)) = &mut self.streaming {
             let t = now_ms();
-            let done = r.upload_step(job, STREAM_BYTES_PER_FRAME);
+            let done = r.upload_step(job, self.stream_bytes);
             let ms = now_ms() - t;
             self.stats.worst_upload_ms = self.stats.worst_upload_ms.max(ms);
             match done {

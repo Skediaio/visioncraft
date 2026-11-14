@@ -239,6 +239,8 @@ pub struct Flora {
     month: u8,
     /// Species whose textures wait to be made again (other scans, another atlas scale).
     stale: usize,
+    /// When the first species began waiting for its scans.
+    scan_wait: Option<f64>,
 }
 
 type Answer =
@@ -643,6 +645,8 @@ impl Flora {
         }
         let slot = Answer::default();
         let (answer, params, scans) = (slot.clone(), params.clone(), scans.clone());
+        #[cfg(not(target_arch = "wasm32"))]
+        let key_scans = scan_key.to_string();
         #[cfg(target_arch = "wasm32")]
         wasm_bindgen_futures::spawn_local(async move {
             let got = crate::texture_worker::plant(&params, scale, &scans).await;
@@ -654,7 +658,15 @@ impl Flora {
         std::thread::Builder::new()
             .name("plant textures".into())
             .spawn(move || {
-                let got = crate::texture_worker::plant_compressed(&params, scale, &scans);
+                let json = serde_json::to_vec(&params).unwrap_or_default();
+                let key = crate::plant_cache::key(&[
+                    &json,
+                    &(scale as u32).to_le_bytes(),
+                    key_scans.as_bytes(),
+                ]);
+                let got = crate::plant_cache::textures(key, || {
+                    crate::texture_worker::plant_compressed(&params, scale, &scans)
+                });
                 if let Ok(mut a) = answer.lock() {
                     *a = Some(got);
                 }
@@ -686,6 +698,15 @@ impl Flora {
             let scale = self.leaf_scale.max(1);
             let params = w.params.clone();
             let (scans, key) = self.scans.scans(&id, month, &params);
+            // Natively the scans come off the disk in a moment: wait for them (a few seconds at
+            // most) instead of making the textures twice. On the web the drawn ones show first.
+            let since = *self.scan_wait.get_or_insert_with(crate::assets::now_ms);
+            if cfg!(not(target_arch = "wasm32"))
+                && self.scans.arriving(&id, month, &params)
+                && crate::assets::now_ms() - since < 3000.0
+            {
+                return false;
+            }
             // A thread (on the web the worker) makes and compresses them; frames go on.
             if r.supports_bc() {
                 match self.worker_tex(r, &id, &params, scale, (&scans, &key)) {
@@ -796,7 +817,23 @@ struct Generated {
     levels: Vec<(usize, Parts, [f32; 3])>,
 }
 
+/// `generate_variant_now`, natively through the disk cache (`plant_cache`).
 fn generate_variant(params: &flora::PlantParams, v: u32, month: u8) -> Generated {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let json = serde_json::to_vec(params).unwrap_or_default();
+        let key = crate::plant_cache::key(&[&json, &v.to_le_bytes(), &[month]]);
+        let (height, levels) = crate::plant_cache::meshes(key, || {
+            let g = generate_variant_now(params, v, month);
+            (g.height, g.levels)
+        });
+        Generated { height, levels }
+    }
+    #[cfg(target_arch = "wasm32")]
+    generate_variant_now(params, v, month)
+}
+
+fn generate_variant_now(params: &flora::PlantParams, v: u32, month: u8) -> Generated {
     let mut height = 1.0;
     let mut levels = Vec::new();
     for (li, lod) in flora::Lod::ALL.into_iter().enumerate() {

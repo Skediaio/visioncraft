@@ -129,6 +129,8 @@ pub struct ScanLib {
     pub rev: u64,
     /// Plant ids to the built-in species whose sets they use.
     aliases: HashMap<String, String>,
+    /// The index is missing or unreadable: everything is drawn.
+    given_up: bool,
 }
 
 impl ScanLib {
@@ -148,7 +150,10 @@ impl ScanLib {
             }
             if let Some(Loaded::Bytes(b)) = store.take(&key) {
                 self.index = serde_json::from_slice(&b).ok();
+                self.given_up = self.index.is_none();
                 self.rev += 1;
+            } else if store.state(&key) == State::Failed {
+                self.given_up = true;
             }
             return;
         }
@@ -304,6 +309,20 @@ impl ScanLib {
             }
         }
         (out, key)
+    }
+
+    /// Whether species `id`'s sets are still on their way (the index, or a set it uses): its
+    /// first textures wait for them rather than being made twice.
+    pub fn arriving(&self, id: &str, month: u8, params: &PlantParams) -> bool {
+        if self.given_up || params.drawn {
+            return false;
+        }
+        if self.index.is_none() {
+            return true;
+        }
+        let m = self.sets(id, month, params);
+        m.leaf.is_some_and(|l| !self.leaves.contains_key(&l.0))
+            || m.bark.is_some_and(|b| !self.barks.contains_key(&b.0))
     }
 
     /// Sets still on their way.

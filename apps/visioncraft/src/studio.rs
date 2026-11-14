@@ -587,6 +587,8 @@ impl Studio {
     pub fn settle_for_picture(&mut self) -> (u32, Vec<String>) {
         let start = crate::assets::now_ms();
         let mut steps = 0;
+        let stream = self.scene.library.store.stream_bytes;
+        self.scene.library.store.stream_bytes = 64 << 20;
         loop {
             self.prepare();
             steps += 1;
@@ -599,6 +601,7 @@ impl Studio {
             #[cfg(not(target_arch = "wasm32"))]
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
+        self.scene.library.store.stream_bytes = stream;
         self.prepare();
         let mut problems = picture_problems(self.plants_pending(), self.scene.library.idle());
         problems.append(&mut self.scene.library.messages);
