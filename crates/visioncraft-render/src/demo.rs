@@ -2024,3 +2024,39 @@ mod tests {
         }
     }
 }
+
+/// A sandy beach running down into a sea with a moderate swell: the shore 1:15, the waterline
+/// along z = 0, the bed deepening seaward (+z); land behind it (-z) at 2 m.
+pub fn beach_height(_x: f32, z: f32) -> f32 {
+    (-z / 15.0).clamp(-6.0, 2.0)
+}
+
+pub fn beach(r: &mut Renderer) {
+    let mut ground = MeshData::default();
+    ground.add_terrain(60.0, 120, beach_height);
+    let ground = add(r, &ground);
+    let sand = material(r, [0.50, 0.42, 0.30], 0.0, 0.95);
+    r.add_item(ground, sand, &[Mat4::IDENTITY]);
+    r.set_sea(Some(crate::Sea {
+        level: 0.0,
+        wave_height_m: 0.9,
+        peak_wavelength_m: 34.0,
+        direction: [0.0, -1.0],
+        color: [0.01, 0.05, 0.08],
+        turbidity: 0.2,
+        flow: [0.0; 2],
+        foam: 0.55,
+        freezes: false,
+        outline: Vec::new(),
+        coast: Vec::new(),
+    }));
+}
+
+/// From the dry sand above the swash, along the waterline and out to sea.
+pub fn beach_camera(aspect: f32) -> Camera {
+    camera(
+        Vec3::new(4.0, 1.9, -10.0),
+        Vec3::new(-6.0, 0.0, 12.0),
+        aspect,
+    )
+}

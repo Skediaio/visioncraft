@@ -106,6 +106,107 @@ fn sea_phase(w: SeaWave, p: vec2<f32>, t: f32) -> f32 {
     return w.a.z * dot(w.a.xy, q) - w.b.x * t + w.b.y;
 }
 
+// The top of whatever lies under (x, z): the sea bed, the beach, a plant on it. From the cover
+// map (lib.rs draws it while there is a sea); -1e9 outside it.
+fn sea_bed(p: vec2<f32>) -> f32 {
+    return snow_top(vec3<f32>(p.x, 0.0, p.y));
+}
+
+// Distance along the shore (m), across the swell's direction.
+fn surf_alongshore(p: vec2<f32>) -> f32 {
+    return dot(p, vec2<f32>(-sea.surf.w, sea.surf.z));
+}
+
+// Shift of the crest lines along the shore (rad), so they are not ruler-straight: bends of
+// about 70 m and 17 m, and a small wobble of 6 m.
+fn surf_along(p: vec2<f32>) -> f32 {
+    let a = surf_alongshore(p);
+    return value_noise(vec3<f32>(a * 0.015, 0.0, 0.37)) * 7.0 + value_noise(vec3<f32>(a * 0.06, 1.3, 0.0)) * 2.0
+        + value_noise(vec3<f32>(a * 0.17, 2.9, 0.5)) * 0.6;
+}
+
+// The local height of a crest relative to the swell's: the wave groups (every seventh wave or
+// so is the highest; the envelope travels with the crests in shallow water, where the group
+// and phase speeds meet) with their envelope drifting along the shore, and each crest higher
+// and lower along its length, so one wave breaks here and still rolls in there.
+fn surf_group(p: vec2<f32>, theta: f32) -> f32 {
+    let a = surf_alongshore(p);
+    let group = 0.65 + 0.35 * sin(theta / 7.0 + 1.3 + a * 0.012);
+    let crest = floor(theta / (2.0 * PI));
+    return group * (0.75 + 0.5 * value_noise(vec3<f32>(a * 0.035, crest * 0.37, 2.7)));
+}
+
+// Vertical run-up of the swash above the mean level (m): Stockdon et al., "Empirical
+// parameterization of setup, swash, and runup", Coastal Engineering 53 (2006), eq. 18 for
+// dissipative beaches, R2 = 0.043 sqrt(H0 L0).
+fn surf_runup() -> f32 {
+    let omega = max(sea.surf.x, 0.05);
+    let l0 = 2.0 * PI * GRAVITY / (omega * omega);
+    return 0.043 * sqrt(max(sea.extra.z, 0.0) * l0) + 0.02;
+}
+
+// Surf over a shallow bed, from linear wave theory in its shallow-water limit (Dean &
+// Dalrymple, "Water Wave Mechanics for Engineers and Scientists", 1991, chs. 3-4): the swell's
+// celerity falls to sqrt(g d), so its wavelength shrinks with the depth d; conservation of the
+// energy flux raises its height by the shoaling coefficient K_s = sqrt(c_g0 / c_g), with
+// c_g0 = g / (2 omega) and c_g = sqrt(g d) (Green's law, H ~ d^-1/4); it breaks once the height
+// passes 0.78 of the depth (McCowan 1894, as in the USACE Coastal Engineering Manual
+// EM 1110-2-1100, part II-4) and runs on as a bore that keeps that ratio. The phase is the
+// integral of the local wavenumber towards the shore over a bed of slope m:
+// theta = omega t + 2 omega sqrt(d) / (m sqrt(g)), so crests bunch up as they slow.
+// Shoaling waves are not sines: their crests grow peaked and high over long flat troughs
+// (cnoidal waves; at breaking the crest stands about 0.7-0.8 H above the mean level, CEM II-1),
+// here a profile cos^2n(pi s) with n rising from 2 to 7 towards breaking.
+struct Surf {
+    slope: vec2<f32>, // d eta / d(x, z) of the surf
+    eta: f32,         // its elevation over the mean level (m)
+    foam: f32,
+    weight: f32,      // 0 offshore, 1 in shallow water
+    zone: f32,        // 0..1 the broken water (whitewater behind, stirred-up sand)
+    k: f32,           // local wavenumber (rad/m)
+}
+
+fn sea_surf(p: vec2<f32>, d: f32) -> Surf {
+    var out: Surf;
+    let omega = max(sea.surf.x, 0.05);
+    let h0 = sea.extra.z;
+    let l0 = 2.0 * PI * GRAVITY / (omega * omega);
+    // The shallow-water limit holds below about L0 / 20.
+    out.weight = (1.0 - smoothstep(l0 / 20.0, l0 / 8.0, d)) * smoothstep(0.02, 0.6, h0);
+    if out.weight <= 0.0 || d <= 0.0 {
+        return out;
+    }
+    let dd = max(d, 0.02);
+    let theta = omega * g.time.x + 2.0 * omega * sqrt(dd) / (sea.surf.y * sqrt(GRAVITY)) + surf_along(p);
+    let ks = max(sqrt(GRAVITY / (2.0 * omega) / sqrt(GRAVITY * dd)), 1.0);
+    let local = h0 * surf_group(p, theta);
+    let ratio = local * ks / (0.78 * dd);
+    let height = min(local * ks, 0.78 * dd);
+    let breaking = smoothstep(0.85, 1.1, ratio);
+    let s = fract(theta / (2.0 * PI));
+    // Unbroken: cos^2n(pi s), peaking as it nears breaking; broken: a bore, steep onshore face
+    // (s 0.9..1), long back.
+    let n = mix(2.0, 7.0, smoothstep(0.35, 0.95, ratio));
+    let c = max(0.5 + 0.5 * cos(2.0 * PI * s), 1e-6);
+    let f_swell = pow(c, n) - inverseSqrt(PI * n); // minus its mean, about 1 / sqrt(pi n)
+    let df_swell = -n * pow(c, n - 1.0) * PI * sin(2.0 * PI * s);
+    let f_bore = select(s / 0.9, (1.0 - s) / 0.1, s > 0.9) - 0.5;
+    let df_bore = select(1.0 / 0.9, -1.0 / 0.1, s > 0.9);
+    let f = mix(f_swell, f_bore, breaking);
+    let df = mix(df_swell, df_bore, breaking);
+    out.eta = height * f * out.weight;
+    // d eta / d theta, times d theta / d(onshore distance) = -k = -omega / sqrt(g d).
+    out.k = omega / sqrt(GRAVITY * dd);
+    out.slope = -(height * df / (2.0 * PI)) * out.k * sea.surf.zw * out.weight;
+    // Whitewater on the face and a fading tail behind the bore, torn along the crest.
+    let a = surf_alongshore(p);
+    let torn = smoothstep(0.25, 0.6, value_noise(vec3<f32>(a * 0.12, floor(theta / (2.0 * PI)) * 0.53, 0.8)));
+    let tail = max(exp(-8.0 * s), select(0.0, 0.9, s > 0.93));
+    out.foam = breaking * out.weight * tail * mix(0.35, 1.0, torn);
+    out.zone = breaking * out.weight;
+    return out;
+}
+
 @vertex
 fn vs_sea(@builtin(vertex_index) vi: u32) -> Varying {
     let tri = vi / 3u;
@@ -133,6 +234,16 @@ fn vs_sea(@builtin(vertex_index) vi: u32) -> Varying {
         let ph = sea_phase(w, p, t);
         let c = cos(ph);
         offset += keep * vec3<f32>(w.b.z * w.a.w * w.a.x * c, w.a.w * sin(ph), w.b.z * w.a.w * w.a.y * c);
+    }
+    // Over a known shallow bed the open sea's waves give way to the surf (which lifts its crests
+    // as they shoal), and nothing rises through the bed.
+    let bed = sea_bed(p);
+    if bed > -1e8 {
+        let d = sea.surface.x - bed;
+        let surf = sea_surf(p, d);
+        offset *= (1.0 - 0.85 * surf.weight) * smoothstep(0.0, 1.5, d);
+        let keep = smoothstep(3.0, 6.0, 2.0 * PI / max(surf.k, 1e-3) / cell);
+        offset.y += surf.eta * keep;
     }
     let world = vec3<f32>(p.x + offset.x, sea.surface.x + offset.y, p.y + offset.z);
     var out: Varying;
@@ -195,73 +306,6 @@ fn sea_surface(p: vec2<f32>, footprint: f32) -> SeaSurface {
     return out;
 }
 
-// Surf over a shallow bed, from linear wave theory in its shallow-water limit (Dean &
-// Dalrymple, "Water Wave Mechanics for Engineers and Scientists", 1991, chs. 3-4): the swell's
-// celerity falls to sqrt(g d), so its wavelength shrinks with the depth d; conservation of the
-// energy flux raises its height by the shoaling coefficient K_s = sqrt(c_g0 / c_g), with
-// c_g0 = g / (2 omega) and c_g = sqrt(g d) (Green's law, H ~ d^-1/4); it breaks once the height
-// passes 0.78 of the depth (McCowan 1894, as in the USACE Coastal Engineering Manual
-// EM 1110-2-1100, part II-4) and runs on as a bore that keeps that ratio. The phase is the
-// integral of the local wavenumber towards the shore over a bed of slope m:
-// theta = omega t + 2 omega sqrt(d) / (m sqrt(g)), so crests bunch up as they slow.
-struct Surf {
-    slope: vec2<f32>, // d eta / d(x, z) of the surf
-    foam: f32,
-    weight: f32,      // 0 offshore, 1 in shallow water
-}
-
-// Shift of the crest lines along the shore (rad), so they are not ruler-straight.
-fn surf_along(p: vec2<f32>) -> f32 {
-    let a = dot(p, vec2<f32>(-sea.surf.w, sea.surf.z));
-    return value_noise(vec3<f32>(a * 0.015, 0.0, 0.37)) * 7.0 + value_noise(vec3<f32>(a * 0.06, 1.3, 0.0)) * 2.0;
-}
-
-// The wave groups: every seventh wave or so is the highest (the envelope travels with the
-// crests in shallow water, where the group and phase speeds meet).
-fn surf_group(theta: f32) -> f32 {
-    return 0.65 + 0.35 * sin(theta / 7.0 + 1.3);
-}
-
-// Vertical run-up of the swash above the mean level (m): Stockdon et al., "Empirical
-// parameterization of setup, swash, and runup", Coastal Engineering 53 (2006), eq. 18 for
-// dissipative beaches, R2 = 0.043 sqrt(H0 L0).
-fn surf_runup() -> f32 {
-    let omega = max(sea.surf.x, 0.05);
-    let l0 = 2.0 * PI * GRAVITY / (omega * omega);
-    return 0.043 * sqrt(max(sea.extra.z, 0.0) * l0) + 0.02;
-}
-
-fn sea_surf(p: vec2<f32>, d: f32) -> Surf {
-    var out: Surf;
-    let omega = max(sea.surf.x, 0.05);
-    let h0 = sea.extra.z;
-    let l0 = 2.0 * PI * GRAVITY / (omega * omega);
-    // The shallow-water limit holds below about L0 / 20.
-    out.weight = (1.0 - smoothstep(l0 / 20.0, l0 / 8.0, d)) * smoothstep(0.02, 0.6, h0);
-    if out.weight <= 0.0 || d <= 0.0 {
-        return out;
-    }
-    let dd = max(d, 0.02);
-    let theta = omega * g.time.x + 2.0 * omega * sqrt(dd) / (sea.surf.y * sqrt(GRAVITY)) + surf_along(p);
-    let ks = max(sqrt(GRAVITY / (2.0 * omega) / sqrt(GRAVITY * dd)), 1.0);
-    let ratio = h0 * ks / (0.78 * dd);
-    let height = min(h0 * ks, 0.78 * dd) * surf_group(theta);
-    let breaking = smoothstep(0.8, 1.1, ratio);
-    let s = fract(theta / (2.0 * PI));
-    // Unbroken: a peaked crest; broken: a bore, steep onshore face (s 0.9..1), long back.
-    let c = 0.5 + 0.5 * cos(2.0 * PI * s);
-    let df_swell = -2.0 * c * PI * sin(2.0 * PI * s);
-    let df_bore = select(-1.0 / 0.9, 1.0 / 0.1, s > 0.9);
-    let df = mix(df_swell, df_bore, breaking);
-    // d eta / d theta, times d theta / d(onshore distance) = -k = -omega / sqrt(g d).
-    let k = omega / sqrt(GRAVITY * dd);
-    out.slope = -(height * df / (2.0 * PI)) * k * sea.surf.zw * out.weight;
-    // Whitewater on the face and a fading tail behind the bore, a thin residue over the zone.
-    let tail = max(exp(-10.0 * s), select(0.0, 0.9, s > 0.94));
-    out.foam = breaking * out.weight * (0.8 * tail + 0.04);
-    return out;
-}
-
 @fragment
 fn fs_sea(in: Varying) -> @location(0) vec4<f32> {
     // Derivatives first, in uniform control flow.
@@ -298,15 +342,30 @@ fn fs_sea(in: Varying) -> @location(0) vec4<f32> {
     let dist = length(eye_vec);
     let v = eye_vec / dist;
     let depth = -(g.view * vec4<f32>(in.world, 1.0)).z;
-    // Water depth under this point, straight down (perspective: along the ray to the bed).
-    let path = max(below - depth, 0.0) * dist / max(depth, 1e-3);
+    // The ground straight under this point, where the cover map knows it: the sea never lies
+    // over land above its mean level (the swash there is the wet pass's sheet), and a crest
+    // never stands over sand it has not reached.
+    let top = sea_bed(in.world.xz);
+    let known = top > -1e8;
+    if known && (top > sea.surface.x + 0.01 || top > in.world.y) {
+        discard;
+    }
+    // Otherwise the water depth along the ray to whatever lies behind (perspective: to the bed).
+    var path = max(below - depth, 0.0) * dist / max(depth, 1e-3);
+    var water_depth = select(1e4, max(sea.surface.x - (in.world - v * path).y, 0.0), below < SKY_DEPTH * 0.5);
+    if known {
+        // Through the column and out: no further than the bed below this point.
+        path = min(path, (in.world.y - top) / max(v.y, 0.03));
+        water_depth = sea.surface.x - top;
+    }
     let bed = in.world - v * path;
-    let water_depth = select(1e4, max(sea.surface.x - bed.y, 0.0), below < SKY_DEPTH * 0.5);
     // Over a shallow bed the swell shoals and breaks: its slope replaces most of the deep
-    // waves' (their crests do not follow the bed).
+    // waves' (their crests do not follow the bed); the broken water is choppy.
     let surf = sea_surf(in.uv, water_depth);
+    let t = g.time.x;
+    let chop = wave_slope(in.uv * 0.9 + vec2<f32>(0.31, -0.17) * t) * 0.18 * surf.zone * (1.0 - smoothstep(0.3, 1.5, footprint));
     var n = s.n;
-    n = normalize(vec3<f32>(n.x * (1.0 - 0.6 * surf.weight) - surf.slope.x, n.y, n.z * (1.0 - 0.6 * surf.weight) - surf.slope.y));
+    n = normalize(vec3<f32>(n.x * (1.0 - 0.6 * surf.weight) - surf.slope.x - chop.x, n.y, n.z * (1.0 - 0.6 * surf.weight) - surf.slope.y - chop.y));
     if dot(n, v) < 0.02 {
         // A back-facing slope seen at a grazing angle: bend it just towards the eye.
         n = normalize(n + v * (0.02 - dot(n, v)));
@@ -349,20 +408,28 @@ fn fs_sea(in: Varying) -> @location(0) vec4<f32> {
     // absorbs about 0.35 /m at 650 nm against 0.06 at 550 and 0.01 at 450 nm: Pope & Fry,
     // Applied Optics 36(33), 1997): the water turns turquoise there and deepens to its colour.
     let shallow = exp(-water_depth * vec3<f32>(0.7, 0.12, 0.03)) * (1.0 - smoothstep(0.0, 8.0, water_depth));
-    let tint = sea.color.rgb + vec3<f32>(0.0, 0.12, 0.1) * shallow * (1.0 - sea.surface.w);
+    var tint = sea.color.rgb + vec3<f32>(0.0, 0.12, 0.1) * shallow * (1.0 - sea.surface.w);
+    // Breakers stir up the sand: the broken water clouds over in drifting patches.
+    let cloud = value_noise(vec3<f32>(in.uv.x * 0.15, t * 0.05, in.uv.y * 0.15));
+    tint = mix(tint, vec3<f32>(0.10, 0.11, 0.07), surf.zone * smoothstep(0.3, 0.8, cloud) * 0.6);
     let deep = tint * crest * (sh_irradiance(up) + g.sun_light.rgb * max(l.y, 0.0) * sun_on) / PI;
     var color = f * reflected + glint + (1.0 - f) * (1.0 - transmit) * deep;
     var alpha_out = f + (1.0 - f) * (1.0 - transmit);
     // Foam: crests that fold (more and lower thresholds at higher sea states), and a band over
     // shallow beds that the swell runs up and back, broken up by noise.
-    let t = g.time.x;
     let noise = value_noise(vec3<f32>(in.uv.x * 0.9, t * 0.15, in.uv.y * 0.9)) * 0.6
         + value_noise(vec3<f32>(in.uv.x * 3.7, t * 0.4, in.uv.y * 3.7)) * 0.4;
     // Whitecaps start around sea state 3 (half-metre waves) and are everywhere by state 5.
     let state = smoothstep(0.4, 2.5, sea.extra.z);
     let crest_foam = smoothstep(0.6, 0.2, s.jacobian) * state * smoothstep(0.35, 0.7, noise + 0.15 * state);
-    // The breakers' whitewater, torn up by the noise into streaks and patches.
-    let shore_foam = surf.foam * smoothstep(0.3, 0.7, noise + 0.25 * surf.foam);
+    // The breakers' whitewater, torn up by the noise into streaks and patches; behind them a
+    // lace of foam lines on the broken water (the contours of a drifting noise).
+    let lace_n = value_noise(vec3<f32>(in.uv.x * 0.8 + t * 0.05, t * 0.03, in.uv.y * 0.8));
+    let lace_m = value_noise(vec3<f32>(in.uv.x * 2.6 - t * 0.04, t * 0.05, in.uv.y * 2.6));
+    let lace = (1.0 - smoothstep(0.0, 0.025 + 0.05 * smoothstep(0.05, 0.5, footprint), abs(lace_n - 0.5)))
+        * smoothstep(0.45, 0.75, lace_m) * smoothstep(0.4, 0.7, value_noise(vec3<f32>(in.uv.x * 0.25, 4.0, in.uv.y * 0.25)))
+        * surf.zone * 0.45;
+    let shore_foam = surf.foam * smoothstep(0.3, 0.7, noise + 0.25 * surf.foam) + lace;
     let foam = clamp((crest_foam + shore_foam) * sea.surface.z * 2.0, 0.0, 1.0);
     if foam > 0.0 {
         let white = vec3<f32>(0.8) * (sh_irradiance(n) + g.sun_light.rgb * nol * sun_on) / PI;
@@ -374,7 +441,10 @@ fn fs_sea(in: Varying) -> @location(0) vec4<f32> {
     // would stand as flat floods; the water runs up only a little way above the mean level
     // (a tenth of the wave height) and thins out there.
     let runup = 0.1 + 0.1 * sea.extra.z;
-    let swash = select(1.0, 1.0 - smoothstep(sea.surface.x, sea.surface.x + runup, bed.y), below < SKY_DEPTH * 0.5);
+    var swash = select(1.0, 1.0 - smoothstep(sea.surface.x, sea.surface.x + runup, bed.y), below < SKY_DEPTH * 0.5);
+    if known {
+        swash = smoothstep(0.0, 0.04, in.world.y - top);
+    }
     let edge = smoothstep(0.0, 0.05, path) * swash;
     color *= edge;
     alpha_out *= edge;
@@ -473,7 +543,7 @@ fn fs_sea_wet(in: Varying) -> @location(0) vec4<f32> {
     let z = world.y - sea.surface.x;
     let theta = sea.surf.x * g.time.x + surf_along(world.xz);
     let s = fract(theta / (2.0 * PI));
-    let reach = runup * surf_group(theta) * select(pow(1.0 - (s - 0.3) / 0.7, 1.5), sin(s / 0.3 * 0.5 * PI), s < 0.3);
+    let reach = runup * surf_group(world.xz, theta) * select(pow(1.0 - (s - 0.3) / 0.7, 1.5), sin(s / 0.3 * 0.5 * PI), s < 0.3);
     var sheet = (1.0 - smoothstep(reach - 0.02, reach, z)) * step(0.0, z) * wet * smoothstep(0.02, 0.6, sea.extra.z);
     let noise = value_noise(vec3<f32>(world.x * 2.3, g.time.x * 0.3, world.z * 2.3));
     let front = (1.0 - smoothstep(0.0, 0.04, abs(reach - 0.015 - z))) * select(0.35, 1.0, s < 0.3);

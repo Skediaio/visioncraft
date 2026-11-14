@@ -2489,8 +2489,9 @@ impl Renderer {
                 self.cascade_rendered[c] = Some(cascades.view_proj[c]);
             }
         }
-        // The snow cover map: straight down over a square round the eye, in whole texels.
-        self.snow_cover = (self.snow > 0.0)
+        // The snow cover map: straight down over a square round the eye, in whole texels. The
+        // sea reads it too, as the height of the bed and the beach under the water.
+        self.snow_cover = (self.snow > 0.0 || self.sea().is_some())
             .then_some(self.scene_bounds)
             .flatten()
             .map(|(lo, hi)| snow_cover_matrix(self.eye, lo, hi, self.quality.shadow_resolution));
@@ -4408,7 +4409,11 @@ impl Layouts {
             forward: layout(
                 "forward",
                 &[
-                    texture_entry(0, S::Depth, D::D2Array, false),
+                    // The sea's vertices read the cover map's heights.
+                    wgpu::BindGroupLayoutEntry {
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                        ..texture_entry(0, S::Depth, D::D2Array, false)
+                    },
                     sampler_entry(1, B::Comparison),
                     texture_entry(2, unfilterable, D::D2, false),
                     texture_entry(3, unfilterable, D::D2, false),
@@ -5582,7 +5587,9 @@ mod tests {
             .types
             .iter()
             .find_map(|(_, t)| match &t.inner {
-                naga::TypeInner::Struct { members, span } if t.name.as_deref() == Some("Globals") => {
+                naga::TypeInner::Struct { members, span }
+                    if t.name.as_deref() == Some("Globals") =>
+                {
                     Some((*span, members.clone()))
                 }
                 _ => None,
