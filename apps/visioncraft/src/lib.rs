@@ -31,6 +31,7 @@ pub mod planting_panel;
 pub mod planting_smoke;
 pub mod planting_tools;
 pub mod plants;
+pub mod scans;
 pub mod scene;
 pub mod shell;
 pub mod sky_panel;

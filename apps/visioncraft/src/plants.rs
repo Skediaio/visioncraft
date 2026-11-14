@@ -12,6 +12,8 @@ pub const VARIANTS: u32 = 3;
 pub struct Resolved {
     pub params: flora::PlantParams,
     pub category: flora::Category,
+    /// The built-in species whose scanned leaves and bark it uses.
+    pub scan_id: Option<String>,
 }
 
 /// The generator parameters of a palette asset id: `flora:<id>` or a custom species of the project.
@@ -21,6 +23,7 @@ pub fn resolve(project: &Project, asset: &str) -> Option<Resolved> {
         return Some(Resolved {
             params: s.params.clone(),
             category: s.category,
+            scan_id: Some(id.to_string()),
         });
     }
     let c = project.species.iter().find(|c| c.id == asset)?;
@@ -30,7 +33,11 @@ pub fn resolve(project: &Project, asset: &str) -> Option<Resolved> {
         .as_deref()
         .and_then(flora::Species::by_id)
         .map_or(flora::Category::Shrub, |s| s.category);
-    Some(Resolved { params, category })
+    Some(Resolved {
+        params,
+        category,
+        scan_id: c.base.clone(),
+    })
 }
 
 /// What the season does to a plant, as a cache key: all months that look the same share a class.
@@ -116,12 +123,19 @@ struct Tex {
     bark_normal: TextureId,
     /// Mean linear colour of the atlas' opaque texels: what a tint of 1 looks like.
     leaf_mean: [f32; 3],
+    /// The scanned sets they were made from (`ScanLib::scans`).
+    scan_key: String,
 }
 
 /// A species' textures at `scale` texels per drawing unit, uploaded (block-compressed where the
 /// device can).
-fn make_tex(r: &mut Renderer, params: &flora::PlantParams, scale: usize) -> Option<Tex> {
-    let t = flora::textures_at(params, scale);
+fn make_tex(
+    r: &mut Renderer,
+    params: &flora::PlantParams,
+    scale: usize,
+    scans: &flora::scan::Scans,
+) -> Option<Tex> {
+    let t = flora::textures_scanned(params, scale, scans);
     // Block-compressed where the device can (a quarter to an eighth of the memory; the
     // leaf atlas keeps its cutout coverage in every mip), else RGBA8.
     let up = |r: &mut Renderer, i: &flora::Image, srgb: bool, repeat: bool| {
@@ -156,6 +170,7 @@ fn make_tex(r: &mut Renderer, params: &flora::PlantParams, scale: usize) -> Opti
             bark: up(r, &t.bark, true, true)?,
             bark_normal: up(r, &t.bark_normal, false, true)?,
             leaf_mean: opaque_mean(&t.atlas.rgba),
+            scan_key: String::new(),
         })
     })()
 }
@@ -212,11 +227,18 @@ pub struct Flora {
     plant_mats: Vec<(String, MaterialId, flora::Material, [f32; 3])>,
     /// The species whose textures are being made off the frame (a thread, the web worker),
     /// and where the answer lands: `None` inside when they could not be made there.
-    from_worker: Option<(String, Answer)>,
+    /// With the scan key they are made from.
+    from_worker: Option<(String, String, Answer)>,
     /// The species whose meshes are being generated.
     meshing: Option<MeshJob>,
     /// The impostor being baked: (species, class, variant) and the bake.
     baking: Option<((String, u32, u32), visioncraft_render::ImpostorBake)>,
+    /// The scanned leaf and bark sets.
+    pub scans: crate::scans::ScanLib,
+    /// The month plants were last asked for: which leaf set (summer, autumn) textures use.
+    month: u8,
+    /// Species whose textures wait to be made again (other scans, another atlas scale).
+    stale: usize,
 }
 
 type Answer =
@@ -382,7 +404,20 @@ impl Flora {
         }
     }
 
-    pub fn want(&mut self, id: &str, class: u32, month: u8, params: &flora::PlantParams) {
+    /// Asks for species `id` in season `class`; `scan_id` names the built-in species whose
+    /// scans it takes (a custom species: its base).
+    pub fn want(
+        &mut self,
+        id: &str,
+        scan_id: Option<&str>,
+        class: u32,
+        month: u8,
+        params: &flora::PlantParams,
+    ) {
+        self.month = month;
+        if let Some(s) = scan_id {
+            self.scans.alias(id, s);
+        }
         if !self.ready(id, class) && !self.queue.iter().any(|w| w.id == id && w.class == class) {
             self.queue.push(Want {
                 id: id.into(),
@@ -395,7 +430,11 @@ impl Flora {
 
     /// Generations and impostor bakes still to do.
     pub fn pending(&self) -> usize {
-        self.queue.len() + self.bakes.len() + usize::from(self.baking.is_some())
+        self.queue.len()
+            + self.bakes.len()
+            + usize::from(self.baking.is_some())
+            + self.stale
+            + self.scans.loading()
     }
 
     /// Frees species `id` (a species editor preview that changed) once nothing draws it.
@@ -478,12 +517,19 @@ impl Flora {
     /// and the impostors baked again. True when one was done.
     fn regenerate_one(&mut self, r: &mut Renderer) -> bool {
         let scale = self.leaf_scale.max(1);
-        let Some(id) = self
-            .textures
-            .iter()
-            .find(|(_, t)| t.scale != scale)
-            .map(|(id, _)| id.clone())
-        else {
+        let month = self.month;
+        let mut stale = Vec::new();
+        for (id, t) in &self.textures {
+            let key = match self.tex_params.get(id) {
+                Some(p) => self.scans.scans(id, month, p).1,
+                None => t.scan_key.clone(),
+            };
+            if t.scale != scale || t.scan_key != key {
+                stale.push(id.clone());
+            }
+        }
+        self.stale = stale.len();
+        let Some(id) = stale.into_iter().next() else {
             return false;
         };
         let Some(params) = self.tex_params.get(&id).cloned() else {
@@ -492,20 +538,28 @@ impl Flora {
             }
             return false;
         };
+        let (scans, key) = self.scans.scans(&id, month, &params);
         // Off the frame like the first time (the worker, a thread), else here.
         let new = if r.supports_bc() {
-            match self.worker_tex(r, &id, &params, scale) {
+            match self.worker_tex(r, &id, &params, scale, (&scans, &key)) {
                 Some(None) => return false,
                 Some(Some(t)) => Some(t),
-                None => make_tex(r, &params, scale),
+                None => make_tex(r, &params, scale, &scans).map(|t| Tex {
+                    scan_key: key.clone(),
+                    ..t
+                }),
             }
         } else {
-            make_tex(r, &params, scale)
+            make_tex(r, &params, scale, &scans).map(|t| Tex {
+                scan_key: key.clone(),
+                ..t
+            })
         };
-        let Some(new) = new else {
+        let Some(mut new) = new else {
             // Cannot make them (no parameters, or the GPU refused): keep the old ones.
             if let Some(t) = self.textures.get_mut(&id) {
                 t.scale = scale;
+                t.scan_key = key;
             }
             return false;
         };
@@ -540,14 +594,20 @@ impl Flora {
         id: &str,
         params: &flora::PlantParams,
         scale: usize,
+        (scans, scan_key): (&flora::scan::Scans, &str),
     ) -> Option<Option<Tex>> {
         // One species at a time: another's answer is still on its way.
-        if self.from_worker.as_ref().is_some_and(|(key, _)| key != id) {
+        if self
+            .from_worker
+            .as_ref()
+            .is_some_and(|(key, _, _)| key != id)
+        {
             return Some(None);
         }
-        if let Some((key, slot)) = &self.from_worker
+        if let Some((key, scan_key, slot)) = &self.from_worker
             && key == id
         {
+            let scan_key = scan_key.clone();
             let Some(answer) = slot.lock().ok()?.take() else {
                 return Some(None);
             };
@@ -578,13 +638,14 @@ impl Flora {
                 bark,
                 bark_normal,
                 leaf_mean,
+                scan_key,
             }));
         }
         let slot = Answer::default();
-        let (answer, params) = (slot.clone(), params.clone());
+        let (answer, params, scans) = (slot.clone(), params.clone(), scans.clone());
         #[cfg(target_arch = "wasm32")]
         wasm_bindgen_futures::spawn_local(async move {
-            let got = crate::texture_worker::plant(&params, scale).await;
+            let got = crate::texture_worker::plant(&params, scale, &scans).await;
             if let Ok(mut a) = answer.lock() {
                 *a = Some(got);
             }
@@ -593,13 +654,13 @@ impl Flora {
         std::thread::Builder::new()
             .name("plant textures".into())
             .spawn(move || {
-                let got = crate::texture_worker::plant_compressed(&params, scale);
+                let got = crate::texture_worker::plant_compressed(&params, scale, &scans);
                 if let Ok(mut a) = answer.lock() {
                     *a = Some(got);
                 }
             })
             .ok()?;
-        self.from_worker = Some((id.to_string(), slot));
+        self.from_worker = Some((id.to_string(), scan_key.to_string(), slot));
         Some(None)
     }
 
@@ -624,9 +685,10 @@ impl Flora {
         if !self.textures.contains_key(&id) {
             let scale = self.leaf_scale.max(1);
             let params = w.params.clone();
+            let (scans, key) = self.scans.scans(&id, month, &params);
             // A thread (on the web the worker) makes and compresses them; frames go on.
             if r.supports_bc() {
-                match self.worker_tex(r, &id, &params, scale) {
+                match self.worker_tex(r, &id, &params, scale, (&scans, &key)) {
                     Some(None) => return false,
                     Some(Some(tex)) => {
                         self.tex_params.insert(id.clone(), params);
@@ -636,7 +698,7 @@ impl Flora {
                     None => {}
                 }
             }
-            let tex = make_tex(r, &params, scale);
+            let tex = make_tex(r, &params, scale, &scans).map(|t| Tex { scan_key: key, ..t });
             self.tex_params.insert(id.clone(), params);
             match tex {
                 Some(tex) => {

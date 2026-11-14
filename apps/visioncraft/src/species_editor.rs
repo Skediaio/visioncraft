@@ -121,6 +121,9 @@ impl SpeciesEditor {
         };
         let (mut save, mut close) = (false, false);
         let max_h = (ctx.content_rect().height() - 140.0).max(200.0);
+        let base = e.base.as_deref().unwrap_or_default();
+        let m = cx.s.scene.flora.scans.sets(base, 6, &e.params);
+        let look = scan_note(&m, e.params.drawn);
         crate::ui::floating(
             ctx,
             "species-editor",
@@ -139,6 +142,7 @@ impl SpeciesEditor {
                     ui.text_edit_singleline(&mut e.name);
                 });
                 ui.small(t::SP_HINT);
+                ui.small(&look);
                 egui::ScrollArea::vertical()
                     .max_height(max_h - 120.0)
                     .id_salt("species-params")
@@ -185,6 +189,23 @@ impl SpeciesEditor {
             self.close(cx.s);
         }
     }
+}
+
+/// Where the species' leaves and bark come from, and whether a scan is a look-alike's.
+fn scan_note(m: &crate::scans::Match, drawn: bool) -> String {
+    if drawn {
+        return t::SP_LOOK_DRAWN.into();
+    }
+    let part = |what: &str, s: &Option<(String, String)>| match s {
+        Some((set, how)) if how == "genus" => format!("{what}: {} {set}", t::SP_SCAN_OWN),
+        Some((set, _)) => format!("{what}: {} {set}", t::SP_SCAN_ALIKE),
+        None => format!("{what}: {}", t::SP_SCAN_NONE),
+    };
+    format!(
+        "{}. {}.",
+        part(t::SP_LEAVES, &m.leaf),
+        part(t::SP_BARK, &m.bark)
+    )
 }
 
 /// The schema's fields, grouped by the first part of their path; true when one changed (on

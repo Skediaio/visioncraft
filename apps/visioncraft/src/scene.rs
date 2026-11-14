@@ -1003,7 +1003,8 @@ impl Scene {
                 continue;
             }
             if self.flora.parts(LAWN_SPECIES, class, 0).is_none() {
-                self.flora.want(LAWN_SPECIES, class, month, &res.params);
+                self.flora
+                    .want(LAWN_SPECIES, None, class, month, &res.params);
                 continue;
             }
             // The tufts are scattered off the frame (a thread; on the web at once) and drawn
@@ -1266,7 +1267,8 @@ impl Scene {
             // Ask for the wanted stage, draw the nearest ready one meanwhile.
             if let Some(res) = plants::resolve(project, asset) {
                 let (class, params) = When { month, age: want }.class(&res.params);
-                self.flora.want(asset, class, month, &params);
+                self.flora
+                    .want(asset, res.scan_id.as_deref(), class, month, &params);
             }
             let mut stages: Vec<Option<u8>> = (1..10).map(Some).chain([None]).collect();
             stages.sort_by(|a, b| {
@@ -1374,7 +1376,8 @@ impl Scene {
         let protos = match plant {
             Some(res) => {
                 let (class, params) = when.class(&res.params);
-                self.flora.want(asset, class, when.month, &params);
+                self.flora
+                    .want(asset, res.scan_id.as_deref(), class, when.month, &params);
                 let stand_in = placeholder::flora_asset(asset, &res);
                 self.proto(r, asset, Some(&stand_in))
             }
@@ -1578,6 +1581,7 @@ impl Scene {
             self.library.set_need(self.texel_need(eye, px_per_m));
         }
         let library = self.library.pump(r, eye);
+        self.flora.scans.pump(&mut self.library.store);
         self.finish_lawns(r);
         self.flora.pump(r) | library
     }

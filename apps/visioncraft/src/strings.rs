@@ -416,3 +416,11 @@ pub const OBJECTS_MISSING: &str =
     "Imported objects without their file (open the .visioncraft.zip, or import the .glb again):";
 pub const OBJECT_UNREADABLE: &str = "the object file in the bundle cannot be read";
 pub const OBJECT_MENU_HINT: &str = "Right-click to rename or remove this imported object.";
+
+pub const SP_LOOK_DRAWN: &str = "Leaves and bark are drawn (set Leaves and bark to scanned for photographed ones where the library has them).";
+pub const SP_SCAN_OWN: &str = "scanned, its own genus,";
+pub const SP_SCAN_ALIKE: &str =
+    "scanned look-alike (same leaf shape or bark pattern, another genus),";
+pub const SP_SCAN_NONE: &str = "drawn";
+pub const SP_LEAVES: &str = "Leaves";
+pub const SP_BARK: &str = "Bark";

@@ -70,9 +70,10 @@ pub type PlantCompressed = (
 pub fn plant_compressed(
     params: &visioncraft_flora::PlantParams,
     scale: usize,
+    scans: &visioncraft_flora::scan::Scans,
 ) -> Option<PlantCompressed> {
     use visioncraft_render::ColorSpace;
-    let t = visioncraft_flora::textures_at(params, scale);
+    let t = visioncraft_flora::textures_scanned(params, scale, scans);
     let mut images = Vec::new();
     for (img, kind, srgb, repeat) in plant_images(&t) {
         let space = if srgb {
@@ -87,9 +88,14 @@ pub fn plant_compressed(
 }
 
 /// A plant job in the worker: the meta data and every image's levels in turn.
-pub fn plant_job(params: &str, scale: usize) -> Option<(PlantMeta, Vec<Vec<u8>>)> {
+pub fn plant_job(params: &str, scale: usize, scans: &[u8]) -> Option<(PlantMeta, Vec<Vec<u8>>)> {
     let params: visioncraft_flora::PlantParams = serde_json::from_str(params).ok()?;
-    let (leaf_mean, images) = plant_compressed(&params, scale)?;
+    let scans = if scans.is_empty() {
+        visioncraft_flora::scan::Scans::default()
+    } else {
+        visioncraft_flora::scan::Scans::unpack(scans)?
+    };
+    let (leaf_mean, images) = plant_compressed(&params, scale, &scans)?;
     let mut meta = PlantMeta {
         leaf_mean,
         images: Vec::new(),
@@ -118,7 +124,8 @@ pub fn answer(msg: &js_sys::Array) -> wasm_bindgen::JsValue {
     if msg.get(1).as_string().as_deref() == Some("plant") {
         let params = msg.get(2).as_string().unwrap_or_default();
         let scale = msg.get(3).as_f64().unwrap_or(1.0) as usize;
-        match plant_job(&params, scale) {
+        let scans = js_sys::Uint8Array::new(&msg.get(4)).to_vec();
+        match plant_job(&params, scale, &scans) {
             Some((meta, levels)) => {
                 out.push(&serde_json::to_string(&meta).unwrap_or_default().into());
                 for l in &levels {
@@ -336,9 +343,20 @@ mod page {
     pub async fn plant(
         params: &visioncraft_flora::PlantParams,
         scale: usize,
+        scans: &visioncraft_flora::scan::Scans,
     ) -> Option<super::PlantCompressed> {
         let json = serde_json::to_string(params).ok()?;
-        let rx = post(&["plant".into(), json.into(), (scale as u32).into()])?;
+        let packed = if scans.is_empty() {
+            Vec::new()
+        } else {
+            scans.pack()
+        };
+        let rx = post(&[
+            "plant".into(),
+            json.into(),
+            (scale as u32).into(),
+            js_sys::Uint8Array::from(&packed[..]).into(),
+        ])?;
         let (meta, levels) = rx.await?;
         let meta: super::PlantMeta = serde_json::from_str(&meta?).ok()?;
         let mut levels = levels.into_iter();
@@ -379,7 +397,7 @@ mod tests {
     #[test]
     fn a_plant_job_answers_every_image_with_its_levels() {
         let p = &visioncraft_flora::species()[0].params;
-        let (meta, levels) = super::plant_job(&serde_json::to_string(p).unwrap(), 2).unwrap();
+        let (meta, levels) = super::plant_job(&serde_json::to_string(p).unwrap(), 2, &[]).unwrap();
         // atlas, its normal map, bark, bark normal map
         assert_eq!(meta.images.len(), 4);
         assert_eq!(meta.images.iter().map(|i| i.5).sum::<usize>(), levels.len());
