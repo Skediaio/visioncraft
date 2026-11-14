@@ -45,3 +45,6 @@ written here unless the licence column says otherwise.
 | `crates/visioncraft-render/src/blur.wgsl` | Bilateral filtering (ICCV 1998), as used for SSAO |
 | `crates/visioncraft-render/src/post.wgsl` | Jimenez 2014 (bloom); Lottes, "FXAA", NVIDIA whitepaper 2009 |
 | `crates/visioncraft-render/src/terrain.wgsl` | Mishkinis, "Advanced Terrain Texture Splatting" (Gamasutra, 2013) |
+| `crates/visioncraft-render/src/sea.wgsl`, `sea.rs` | Tessendorf, "Simulating Ocean Water", SIGGRAPH course notes 2001 (Gerstner waves, dispersion, Jacobian foam); Finch, "Effective Water Simulation from Physical Models", GPU Gems ch. 1 (2004); Pierson & Moskowitz, "A proposed spectral form for fully developed wind seas", JGR 69(24), 1964; Bruneton, Neyret & Holzschuch, "Real-time Realistic Ocean Lighting using Seamless Transitions from Geometry to BRDF", Computer Graphics Forum 29(2), 2010 (unresolved waves as roughness); Lekner & Dorf, "Why some things are darker when wet", Applied Optics 27(7), 1988 |
+| `crates/visioncraft-core/src/water.rs` | WMO sea state code (WMO-No. 306, code table 3700); Pierson & Moskowitz 1964 (peak wavelength from wave height) |
+| `crates/visioncraft-core/src/terrain.rs` (`shore`) | Dean, "Equilibrium beach profiles: characteristics and applications", Journal of Coastal Research 7(1), 1991 |
