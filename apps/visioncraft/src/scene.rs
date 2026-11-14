@@ -451,6 +451,8 @@ const LAWN_MAX_TUFTS: usize = 60_000;
 /// A lawn over its tuft budget is scattered around the eye's cell of this size, out to
 /// `LAWN_FADE_M` plus this from the cell's centre, and again when the eye moves to another cell.
 const LAWN_EYE_CELL_M: f32 = 8.0;
+/// Tufts farther than this from the window's centre are drawn in the far colour.
+const LAWN_FAR_M: f32 = 16.0;
 /// Snow deeper than this (`view.snow`) covers the lawn's blades.
 const LAWN_SNOW_BURIES: f32 = 0.55;
 /// Linear mean of the grass picture a plain lawn shows from the library (grass001), so the
@@ -960,8 +962,17 @@ impl Scene {
                 let item = if list.is_empty() {
                     None
                 } else {
+                    let variants = plants::VARIANTS as usize;
+                    // Far tufts: seen against the lawn's texture at a distance they read as pale
+                    // straw specks in the near tufts' colour; deeper and greener, they melt in.
+                    let c = job.color;
+                    let color = if v >= variants {
+                        [c[0] * 0.72, c[1] * 0.85, c[2] * 0.78]
+                    } else {
+                        c
+                    };
                     self.flora
-                        .tinted(r, LAWN_SPECIES, job.class, v as u32, job.color)
+                        .tinted(r, LAWN_SPECIES, job.class, (v % variants) as u32, color)
                         .map(|parts| {
                             // Levels switch by 8 m cluster: the coarsest level (a few cards)
                             // read as paler blocks across a large lawn, so lawns stop at the
@@ -1180,8 +1191,11 @@ impl Scene {
             let over: Vec<Vec<[f32; 2]>> = over.iter().map(|a| a.to_vec()).collect();
             let crowns = crowns.clone();
             let slot = plants::spawn(move || {
-                // One matrix list per variant, so the lawn does not repeat one tuft.
-                let mut by_variant: Vec<Vec<Mat4>> = vec![Vec::new(); plants::VARIANTS as usize];
+                // One matrix list per variant, so the lawn does not repeat one tuft; a lawn
+                // scattered round the eye has a second set for its thinned, distant tufts
+                // (`LAWN_FAR_M`), drawn in a deeper green.
+                let mut by_variant: Vec<Vec<Mat4>> =
+                    vec![Vec::new(); 2 * plants::VARIANTS as usize];
                 let mut n = 0usize;
                 for ((face, lawn, _), area) in faces.iter().zip(&areas) {
                     let lawn = visioncraft_core::material::Lawn3d {
@@ -1215,7 +1229,13 @@ impl Scene {
                         } else {
                             Mat4::IDENTITY
                         };
-                        by_variant[n % plants::VARIANTS as usize].push(
+                        let far = window.is_some_and(|w| {
+                            let local = xf.inverse().transform_point3(p);
+                            (local.x - w.center[0]).hypot(local.z - w.center[1]) > LAWN_FAR_M
+                        });
+                        let k = n % plants::VARIANTS as usize
+                            + if far { plants::VARIANTS as usize } else { 0 };
+                        by_variant[k].push(
                             Mat4::from_translation(p)
                                 * lean
                                 * Mat4::from_rotation_y(t.rotation_y_deg.to_radians())
