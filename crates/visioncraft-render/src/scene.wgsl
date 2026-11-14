@@ -778,8 +778,16 @@ fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, screen_effe
     let ao = screen.r * s.ao;
     if !clay {
         base = weather(base, in.world, s.geometric, ao, weathering);
+        if foliage {
+            // Leaves differ in hue across a crown: a slow, seamless drift between a yellower
+            // and a bluer, darker green over half a metre or so.
+            let w = in.world;
+            let k = sin(w.x * 3.1 + 1.7 * sin(w.z * 2.3)) * sin(w.z * 2.7 + w.y * 1.9);
+            base *= vec3<f32>(1.0 + 0.16 * k, 1.0 + 0.05 * k, 1.0 - 0.14 * k);
+        }
     }
-    let f0 = mix(vec3<f32>(0.04), base, s.metallic);
+    // Leaves have a waxy but thin cuticle: half the specular of other dielectrics.
+    let f0 = mix(vec3<f32>(select(0.04, 0.02, foliage)), base, s.metallic);
     let diffuse_color = base * (1.0 - s.metallic);
 
     var sun = vec3<f32>(0.0);
