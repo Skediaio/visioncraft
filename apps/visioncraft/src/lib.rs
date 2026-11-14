@@ -50,8 +50,8 @@ pub mod texture_worker;
 pub mod ui;
 pub mod user_objects;
 pub mod views;
-pub mod work_pool;
 pub mod water_panel;
+pub mod work_pool;
 
 pub use eframe::egui;
 pub use extension::{Extension, ExtensionCx, Overlay};

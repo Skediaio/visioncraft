@@ -608,16 +608,14 @@ impl Flora {
             let (scans, key) = self.scans.scans(&id, month, &params);
             let new = match self.regen_jobs.get(&id) {
                 // Made from what is wanted now: take it once there.
-                Some(j) if j.scale == scale && j.scan_key == key => {
-                    match take(&j.answer) {
-                        None => continue,
-                        Some(got) => {
-                            self.regen_jobs.remove(&id);
-                            upload_tex(r, got, scale, key.clone())
-                                .or_else(|| make_tex(r, &params, scale, &scans))
-                        }
+                Some(j) if j.scale == scale && j.scan_key == key => match take(&j.answer) {
+                    None => continue,
+                    Some(got) => {
+                        self.regen_jobs.remove(&id);
+                        upload_tex(r, got, scale, key.clone())
+                            .or_else(|| make_tex(r, &params, scale, &scans))
                     }
-                }
+                },
                 _ if r.supports_bc() => {
                     if work_pool::backlog() < 2 * work_pool::size() {
                         let job = start_tex(&params, scale, &scans, &key, 0.0);
@@ -692,7 +690,11 @@ impl Flora {
             let Some(job) = self.tex_jobs.remove(&id) else {
                 continue;
             };
-            let Some(params) = self.queue.iter().find(|w| w.id == id).map(|w| w.params.clone())
+            let Some(params) = self
+                .queue
+                .iter()
+                .find(|w| w.id == id)
+                .map(|w| w.params.clone())
             else {
                 continue; // nobody wants it any more
             };
@@ -750,7 +752,8 @@ impl Flora {
                     self.tex_jobs.insert(id.clone(), job);
                 } else if !waiting && !r.supports_bc() && !budget.spent() {
                     // Without block compression they are plain pictures: made here.
-                    let tex = make_tex(r, &params, scale, &scans).map(|t| Tex { scan_key: key, ..t });
+                    let tex =
+                        make_tex(r, &params, scale, &scans).map(|t| Tex { scan_key: key, ..t });
                     self.tex_params.insert(id.clone(), params.clone());
                     match tex {
                         Some(t) => {
@@ -1004,10 +1007,7 @@ fn generate_variant_now(name: &str, params: &flora::PlantParams, v: u32, month: 
         }
         levels.push((li, mesh.split_parts(), mesh.foliage_tint));
     }
-    crate::load_stats::add(
-        &format!("~plant mesh {name}"),
-        crate::assets::now_ms() - t,
-    );
+    crate::load_stats::add(&format!("~plant mesh {name}"), crate::assets::now_ms() - t);
     Generated { height, levels }
 }
 
@@ -1072,7 +1072,10 @@ mod tests {
             }
         }
         let parallel: Vec<Vec<u8>> = slots.iter().map(|s| bytes(&wait(s))).collect();
-        assert!(serial == parallel, "parallel meshes differ from serial ones");
+        assert!(
+            serial == parallel,
+            "parallel meshes differ from serial ones"
+        );
 
         let p = species[0].params.clone();
         let scans = flora::scan::Scans::default();
@@ -1111,7 +1114,10 @@ mod tests {
         assert!(far_tree.urgency(eye) < far.urgency(eye));
         // nearest of several placements counts
         let both = want(
-            vec![glam::Vec3::new(50.0, 0.0, 0.0), glam::Vec3::new(5.0, 0.0, 0.0)],
+            vec![
+                glam::Vec3::new(50.0, 0.0, 0.0),
+                glam::Vec3::new(5.0, 0.0, 0.0),
+            ],
             2.0,
         );
         assert_eq!(both.urgency(eye), near.urgency(eye));

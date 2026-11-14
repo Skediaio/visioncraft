@@ -163,7 +163,10 @@ pub fn map<I: Sync, T: Send>(items: &[I], f: impl Fn(&I) -> T + Sync) -> Vec<T> 
         for chunk in items.chunks(size().max(1)) {
             std::thread::scope(|s| {
                 let hs: Vec<_> = chunk.iter().map(|i| s.spawn(move || f(i))).collect();
-                out.extend(hs.into_iter().map(|h| h.join().expect("a scoped job panicked")));
+                out.extend(
+                    hs.into_iter()
+                        .map(|h| h.join().expect("a scoped job panicked")),
+                );
             });
         }
         return out;
