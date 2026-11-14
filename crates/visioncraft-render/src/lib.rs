@@ -5131,9 +5131,13 @@ pub async fn headless_device() -> Result<(wgpu::Device, wgpu::Queue), String> {
     // One instance at a time: the Vulkan loader crashes (null call in
     // `vkEnumerateInstanceExtensionProperties`) when threads create instances at once.
     static CREATING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    // No debug names: naming an object makes the loader walk its list of devices
+    // unlocked, which crashes while another thread creates or drops one.
+    let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+    descriptor.flags.remove(wgpu::InstanceFlags::DEBUG);
     let instance = {
         let _one_at_a_time = CREATING.lock().unwrap_or_else(|e| e.into_inner());
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle())
+        wgpu::Instance::new(descriptor)
     };
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions::default())
