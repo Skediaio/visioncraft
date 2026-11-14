@@ -161,10 +161,13 @@ fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
     let edge = smoothstep(g.sun_light.w - 2e-5, g.sun_light.w + 2e-5, cos_sun);
     let tint = g.sun_light.rgb / max(dot(g.sun_light.rgb, vec3<f32>(0.2126, 0.7152, 0.0722)), 1e-9);
     color += tint * g.sun_dir.w * edge * mix(0.6, 1.0, smoothstep(g.sun_light.w, 1.0, cos_sun));
-    // Haze to infinity: the horizon (and any sky below it) dissolves.
+    // Haze to infinity, near the horizon only: the horizon (and any sky below it) dissolves
+    // into the haze the ground fades to, while the sky higher up keeps its own colour. The sky
+    // models already carry the air's scattering; hazing all of it greyed the zenith.
     if g.fog.x > 0.0 {
         let transmit = fog_transmittance(g.camera.y, dir.y, 1e9);
-        color = color * transmit + fog_inscatter(dir, 1.0) * (1.0 - transmit);
+        let hazed = color * transmit + fog_inscatter(dir, 1.0) * (1.0 - transmit);
+        color = mix(hazed, color, smoothstep(0.0, 0.25, dir.y));
     }
     return vec4<f32>(color, 1.0);
 }
