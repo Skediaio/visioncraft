@@ -88,7 +88,9 @@ fn lod_distances(h: f32) -> [f32; 3] {
 
 /// A tree with its impostor: its three mesh levels' ends, the last where the impostor takes over.
 fn impostor_distances(h: f32) -> [f32; 3] {
-    [4.0 + 1.0 * h, 8.0 + 1.5 * h, 15.0 + 2.0 * h]
+    // The far mesh draws to 25 + 3 h: at MEDIUM's half distances a 10 m tree is still a mesh at
+    // 27 m, where its impostor no longer shows as large flat cards.
+    [4.0 + 1.0 * h, 10.0 + 2.0 * h, 25.0 + 3.0 * h]
 }
 
 /// One variant of a species in one season class.
