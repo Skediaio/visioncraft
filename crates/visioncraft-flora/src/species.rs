@@ -284,6 +284,7 @@ fn sp(
             leaves,
             flowers,
             bark,
+            drawn: false,
         },
     }
 }

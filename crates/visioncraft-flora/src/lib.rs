@@ -25,6 +25,7 @@
 pub mod math;
 mod mesh;
 mod params;
+pub mod scan;
 mod species;
 mod texture;
 
@@ -261,6 +262,11 @@ pub fn textures(params: &PlantParams) -> PlantTextures {
 /// cells) and, above 1, its normal map.
 pub fn textures_at(params: &PlantParams, scale: usize) -> PlantTextures {
     texture::generate_at(params, scale)
+}
+
+/// `textures_at` with scanned leaves and bark where `scans` has them.
+pub fn textures_scanned(params: &PlantParams, scale: usize, scans: &scan::Scans) -> PlantTextures {
+    texture::generate_scanned(params, scale, scans)
 }
 
 /// What the season does to a plant.

@@ -106,6 +106,7 @@ pub const FLOWER_SHAPES: &[&str] = &[
 ];
 pub const CLIP_SHAPES: &[&str] = &["ball", "cone", "column", "flame", "hedge segment"];
 const LEAF_HABIT: &[&str] = &["evergreen", "deciduous"];
+const LOOKS: &[&str] = &["scanned", "drawn"];
 
 const COMMON: &[ParamInfo] = &[
     num(
@@ -137,6 +138,12 @@ const COMMON: &[ParamInfo] = &[
         "Leaf habit",
         LEAF_HABIT,
         "Deciduous plants are bare in winter.",
+    ),
+    choice(
+        "drawn",
+        "Leaves and bark",
+        LOOKS,
+        "Scanned: photographed leaves and bark where the library has them (some species borrow a look-alike's); drawn: always the drawn ones.",
     ),
     choice(
         "leaves.shape",
@@ -868,6 +875,7 @@ fn index_of<T: PartialEq>(list: &[T], v: &T) -> Option<usize> {
 pub fn get_param(p: &PlantParams, path: &str) -> Option<f32> {
     match path {
         "deciduous" => return Some(p.deciduous as u8 as f32),
+        "drawn" => return Some(p.drawn as u8 as f32),
         "leaves.shape" => return Some(leaf_shape_index(p.leaves.shape) as f32),
         "bark.pattern" => return index_of(&BARKS, &p.bark.pattern).map(|i| i as f32),
         "flowers.shape" => {
@@ -931,6 +939,10 @@ pub fn set_param(p: &mut PlantParams, path: &str, value: f32) -> bool {
     match path {
         "deciduous" => {
             p.deciduous = value >= 0.5;
+            return true;
+        }
+        "drawn" => {
+            p.drawn = value >= 0.5;
             return true;
         }
         "leaves.shape" => {

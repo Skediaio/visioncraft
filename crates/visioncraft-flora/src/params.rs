@@ -30,6 +30,8 @@ pub struct PlantParams {
     /// `None` for plants whose flowers are not ornamentally visible.
     pub flowers: Option<FlowerParams>,
     pub bark: BarkParams,
+    /// Draw the leaves and bark even where the library has scans of them (or of look-alikes).
+    pub drawn: bool,
 }
 
 /// Hard triangle limits per level of detail.
@@ -527,6 +529,7 @@ impl Default for PlantParams {
             leaves: LeafParams::default(),
             flowers: None,
             bark: BarkParams::default(),
+            drawn: false,
         }
     }
 }

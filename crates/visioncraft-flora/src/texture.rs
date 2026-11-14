@@ -17,7 +17,9 @@
 //! and mipmaps do not pull in black fringes.
 
 use crate::math::{PI, Rng, TAU, atan2, cos, lerp, sin, smoothstep, tile_fbm, tile_noise};
+use crate::scan::{LeafScan, Scans, bark_repeats, tile};
 use crate::{BarkPattern, FlowerShape, Form, Image, LeafShape, PlantParams, PlantTextures};
+use std::sync::Arc;
 
 pub const ATLAS_SIZE: u32 = 1024;
 pub const ATLAS_CELLS: u32 = 4;
@@ -38,6 +40,13 @@ struct Canvas {
     clip: (i32, i32, i32, i32),
     /// Origin of the current cell, in texels.
     origin: (f32, f32),
+    /// Leaves are stamped from this scan instead of drawn.
+    scan: Option<Arc<LeafScan>>,
+    /// Stamps keep the sheet's hue (`Scans::leaf_hue`).
+    leaf_hue: bool,
+    /// With a scan that has a normal map: per texel the stamped tangent normal x, y
+    /// (premultiplied) and its coverage.
+    nrm: Option<Vec<[f32; 3]>>,
 }
 
 impl Canvas {
@@ -54,6 +63,9 @@ impl Canvas {
             px: vec![[0.0; 4]; size * size],
             clip: (0, 0, size as i32, size as i32),
             origin: (0.0, 0.0),
+            scan: None,
+            leaf_hue: false,
+            nrm: None,
         }
     }
 
@@ -79,12 +91,37 @@ impl Canvas {
         {
             return;
         }
-        let p = &mut self.px[gy as usize * self.size + gx as usize];
+        let i = gy as usize * self.size + gx as usize;
+        let p = &mut self.px[i];
         let a = a.min(1.0);
         for k in 0..3 {
             p[k] = p[k] * (1.0 - a) + col[k] * a;
         }
         p[3] = p[3] + a * (1.0 - p[3]);
+        // A drawn shape over a stamped leaf hides the stamp's normal too.
+        if let Some(n) = &mut self.nrm {
+            n[i] = n[i].map(|v| v * (1.0 - a));
+        }
+    }
+
+    /// `blend` with a stamped leaf's tangent normal (x, y) under it.
+    fn blend_normal(&mut self, x: i32, y: i32, col: Rgb, a: f32, nxy: [f32; 2]) {
+        self.blend(x, y, col, a);
+        let (gx, gy) = (x + self.origin.0 as i32, y + self.origin.1 as i32);
+        if a <= 0.0
+            || gx < self.clip.0
+            || gy < self.clip.1
+            || gx >= self.clip.2
+            || gy >= self.clip.3
+        {
+            return;
+        }
+        let size = self.size;
+        if let Some(n) = &mut self.nrm {
+            let p = &mut n[gy as usize * size + gx as usize];
+            let a = a.min(1.0);
+            *p = [p[0] + nxy[0] * a, p[1] + nxy[1] * a, p[2] + a];
+        }
     }
 
     /// Fill pixels in the box with `f(x, y) -> Option<(colour, coverage)>` (pixel centres).
@@ -311,6 +348,10 @@ fn draw_leaf(cv: &mut Canvas, base: (f32, f32), ang: f32, len: f32, st: LeafStyl
     if len < 1.5 {
         return;
     }
+    if let Some(scan) = cv.scan.clone() {
+        stamp_leaf(cv, &scan, base, ang, len, col);
+        return;
+    }
     let (dx, dy) = (sin(ang), -cos(ang));
     let half_w = match st.shape {
         LeafShape::Palmate { .. }
@@ -364,6 +405,77 @@ fn draw_leaf(cv: &mut Canvas, base: (f32, f32), ang: f32, len: f32, st: LeafStyl
         }
         Some((c, cov))
     });
+}
+
+/// One scanned leaf where `draw_leaf` would draw one: its petiole base at `base`, its tip `len`
+/// cell pixels away at angle `ang`. Which leaf of the sheet follows from where it goes.
+fn stamp_leaf(cv: &mut Canvas, scan: &LeafScan, base: (f32, f32), ang: f32, len: f32, col: Rgb) {
+    // The drawn leaf's brightness and the sheet's hue (an autumn sheet stays autumn-coloured);
+    // foliage drawn other than green (copper beech, purple maples) takes the drawn colour.
+    let luma = |c: [f32; 3]| 0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2];
+    let m = scan.mean;
+    let gain: Rgb = if cv.leaf_hue && col[1] >= col[0].max(col[2]) {
+        [(luma(col) / luma(m).max(0.02)).clamp(0.4, 2.5); 3]
+    } else {
+        [0, 1, 2].map(|k| (col[k] / m[k].max(0.02)).clamp(0.2, 4.0))
+    };
+    let pick = (base.0.to_bits() ^ base.1.to_bits().rotate_left(13) ^ ang.to_bits().rotate_left(7))
+        .wrapping_mul(0x9e37_79b9);
+    let c = scan.leaves[(pick >> 8) as usize % scan.leaves.len()];
+    let (dx, dy) = (sin(ang), -cos(ang));
+    let (pdx, pdy) = (-dy, dx);
+    let (ax, ay) = (c.axis[0], c.axis[1]);
+    let (pax, pay) = (-ay, ax);
+    // Canvas pixels per sheet width. A drawn leaf's length is its blade; a scanned one's runs
+    // from the petiole's base, about a fifth longer.
+    let k = len * 1.2 / c.length.max(1e-4);
+    // The cut-out's corners on the canvas bound the stamp.
+    let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+    let [rx, ry, rw, rh] = c.rect;
+    for (sx, sy) in [(rx, ry), (rx + rw, ry), (rx, ry + rh), (rx + rw, ry + rh)] {
+        let (ox, oy) = (sx - c.pivot[0], sy - c.pivot[1]);
+        let (al, be) = ((ox * ax + oy * ay) * k, (ox * pax + oy * pay) * k);
+        let (x, y) = (base.0 + dx * al + pdx * be, base.1 + dy * al + pdy * be);
+        x0 = x0.min(x);
+        y0 = y0.min(y);
+        x1 = x1.max(x);
+        y1 = y1.max(y);
+    }
+    // Sheet texels per canvas texel, for the mip level.
+    let texels = scan.width() / (k * cv.scale as f32);
+    let scale = cv.scale as f32;
+    let (lo_x, lo_y) = ((x0 * scale).floor() as i32, (y0 * scale).floor() as i32);
+    let (hi_x, hi_y) = ((x1 * scale).ceil() as i32, (y1 * scale).ceil() as i32);
+    for y in lo_y..hi_y {
+        for x in lo_x..hi_x {
+            let (px, py) = (
+                (x as f32 + 0.5) / scale - base.0,
+                (y as f32 + 0.5) / scale - base.1,
+            );
+            let (al, be) = ((px * dx + py * dy) / k, (px * pdx + py * pdy) / k);
+            let (u, v) = (
+                c.pivot[0] + ax * al + pax * be,
+                c.pivot[1] + ay * al + pay * be,
+            );
+            if u < c.rect[0]
+                || v < c.rect[1]
+                || u > c.rect[0] + c.rect[2]
+                || v > c.rect[1] + c.rect[3]
+            {
+                continue;
+            }
+            let (col, n) = scan.sample(u, v, texels);
+            if col[3] < 1e-3 {
+                continue;
+            }
+            let rgb = [0, 1, 2].map(|k| (col[k] / col[3] * gain[k]).min(1.0));
+            // The sheet's normal (GL: y up, the image's y down) turned with the leaf.
+            let (sx, sy) = (n[0] / col[3], -n[1] / col[3]);
+            let (al, be) = (sx * ax + sy * ay, sx * pax + sy * pay);
+            let (cx, cy) = (al * dx + be * pdx, al * dy + be * pdy);
+            cv.blend_normal(x, y, rgb, col[3], [cx, -cy]);
+        }
+    }
 }
 
 /// Draw one botanical "leaf unit" (simple leaf with petiole, compound leaf, frond).
@@ -1338,6 +1450,12 @@ pub fn generate(p: &PlantParams) -> PlantTextures {
 /// The textures with the leaf atlas at `scale` texels per drawing unit: 1 gives
 /// [`ATLAS_SIZE`] (256 px cells), 2 twice that (512 px cells), with a leaf normal map.
 pub fn generate_at(p: &PlantParams, scale: usize) -> PlantTextures {
+    generate_scanned(p, scale, &Scans::default())
+}
+
+/// `generate_at` with the leaves stamped from `scans.leaf` and the bark from `scans.bark` where
+/// they are given.
+pub fn generate_scanned(p: &PlantParams, scale: usize, scans: &Scans) -> PlantTextures {
     let scale = scale.clamp(1, 4);
     // Seeded from the leaf parameters so each species gets its own, repeatable variation.
     let mut rng = Rng::new(
@@ -1345,6 +1463,11 @@ pub fn generate_at(p: &PlantParams, scale: usize) -> PlantTextures {
         3,
     );
     let mut cv = Canvas::scaled(ATLAS_SIZE as usize, scale);
+    cv.scan = scans.leaf.clone();
+    cv.leaf_hue = scans.leaf_hue;
+    if cv.scan.is_some() && scale > 1 {
+        cv.nrm = Some(vec![[0.0; 3]; cv.size * cv.size]);
+    }
     let cpx = CELL_PX as f32;
     let inner = cpx - 2.0 * CELL_MARGIN as f32;
     let lf = &p.leaves;
@@ -1448,7 +1571,8 @@ pub fn generate_at(p: &PlantParams, scale: usize) -> PlantTextures {
             }
         }
     }
-    // Row 2: flowers.
+    // Row 2: flowers, row 3 twigs and fronds: drawn, never stamped with leaves.
+    cv.scan = None;
     for cell in 8..12u32 {
         cv.select_cell(cell);
         draw_flower(&mut cv, p, cell, &mut rng);
@@ -1496,7 +1620,15 @@ pub fn generate_at(p: &PlantParams, scale: usize) -> PlantTextures {
     let atlas_normal = (scale > 1).then(|| leaf_normals(&cv));
     let atlas = finish_atlas(cv);
     // Bark gains detail with the atlas: 512 px from scale 2 (HIGH and ULTRA).
-    let (bark, bark_normal) = bark(p, BARK_SIZE as usize * scale.min(2));
+    let n = BARK_SIZE as usize * scale.min(2);
+    let (mut bark, mut bark_normal) = bark(p, n);
+    if let Some(b) = &scans.bark {
+        let reps = bark_repeats(b.size_m, trunk_radius(p));
+        bark = tile(&b.color, n, reps);
+        if let Some(nm) = &b.normal {
+            bark_normal = tile(nm, n, reps);
+        }
+    }
     PlantTextures {
         atlas,
         atlas_normal,
@@ -1648,7 +1780,13 @@ fn leaf_normals(cv: &Canvas) -> Image {
                 + lum(at(x, y.saturating_sub(2)))
                 + lum(at(x, y + 2)))
                 / 4.0;
-            let vein = (lum(i) - around).max(0.0) * 6.0 * k;
+            // A stamped leaf brings its own veins (its normal map, below).
+            let stamped = cv.nrm.as_ref().is_some_and(|m| m[i][2] > 0.5);
+            let vein = if stamped {
+                0.0
+            } else {
+                (lum(i) - around).max(0.0) * 6.0 * k
+            };
             h[i] = dome + vein;
         }
     }
@@ -1665,7 +1803,13 @@ fn leaf_normals(cv: &Canvas) -> Image {
                 (0.0, 0.0)
             };
             // Image rows run down while V runs up the card: +y in the image is -V.
-            let (nx, ny) = (-gx, gy);
+            let (mut nx, mut ny) = (-gx, gy);
+            if let Some(m) = &cv.nrm
+                && m[i][2] > 0.5
+            {
+                nx += m[i][0] / m[i][2];
+                ny += m[i][1] / m[i][2];
+            }
             let l = (nx * nx + ny * ny + 1.0).sqrt();
             rgba.extend([to8(nx / l), to8(ny / l), to8(1.0 / l), 255]);
         }
@@ -1699,6 +1843,16 @@ fn worley(u: f32, v: f32, gx: i32, gy: i32, salt: u32) -> (f32, f32, u32) {
         }
     }
     (f1, f2, id)
+}
+
+/// The trunk's base radius, metres: what a bark photo's size is measured against.
+fn trunk_radius(p: &PlantParams) -> f32 {
+    match &p.form {
+        Form::Branching(b) => p.height_m * b.trunk_radius_ratio,
+        Form::Conifer(c) => p.height_m * c.trunk_radius_ratio,
+        Form::Palm(m) => m.trunk_radius_m,
+        _ => 0.03,
+    }
 }
 
 fn bark(p: &PlantParams, n: usize) -> (Image, Image) {
