@@ -208,6 +208,8 @@ pub struct Flora {
     /// The species whose textures are being made off the frame (a thread, the web worker),
     /// and where the answer lands: `None` inside when they could not be made there.
     from_worker: Option<(String, Answer)>,
+    /// The species whose meshes are being generated.
+    meshing: Option<MeshJob>,
 }
 
 type Answer =
@@ -368,6 +370,11 @@ impl Flora {
     /// Frees species `id` (a species editor preview that changed) once nothing draws it.
     pub fn retire(&mut self, id: &str) {
         self.queue.retain(|w| w.id != id);
+        // shortcut: the meshes of variants already uploaded for a retired job stay on the GPU
+        // until the app closes; free them here if species previews get edited a lot
+        if self.meshing.as_ref().is_some_and(|j| j.id == id) {
+            self.meshing = None;
+        }
         self.bakes.retain(|b| b.0 != id);
         self.retired.push((id.to_string(), 3));
     }
@@ -445,7 +452,23 @@ impl Flora {
         else {
             return false;
         };
-        let Some(new) = self.tex_params.get(&id).and_then(|p| make_tex(r, p, scale)) else {
+        let Some(params) = self.tex_params.get(&id).cloned() else {
+            if let Some(t) = self.textures.get_mut(&id) {
+                t.scale = scale;
+            }
+            return false;
+        };
+        // Off the frame like the first time (the worker, a thread), else here.
+        let new = if r.supports_bc() {
+            match self.worker_tex(r, &id, &params, scale) {
+                Some(None) => return false,
+                Some(Some(t)) => Some(t),
+                None => make_tex(r, &params, scale),
+            }
+        } else {
+            make_tex(r, &params, scale)
+        };
+        let Some(new) = new else {
             // Cannot make them (no parameters, or the GPU refused): keep the old ones.
             if let Some(t) = self.textures.get_mut(&id) {
                 t.scale = scale;
@@ -484,6 +507,10 @@ impl Flora {
         params: &flora::PlantParams,
         scale: usize,
     ) -> Option<Option<Tex>> {
+        // One species at a time: another's answer is still on its way.
+        if self.from_worker.as_ref().is_some_and(|(key, _)| key != id) {
+            return Some(None);
+        }
         if let Some((key, slot)) = &self.from_worker
             && key == id
         {
@@ -587,62 +614,131 @@ impl Flora {
             }
             return false;
         }
-        let w = self.queue.remove(0);
-        let tex = &self.textures[&id];
-        let mut made = Vec::new();
-        let mut variants = Vec::new();
-        for v in 0..VARIANTS {
-            let mut parts = Vec::new();
-            let mut kinds = Vec::new();
-            let mut mats: HashMap<usize, MaterialId> = HashMap::new();
-            let mut height = 1.0;
-            for (li, lod) in flora::Lod::ALL.into_iter().enumerate() {
-                let mesh = flora::generate_in_season(
-                    &w.params,
-                    u64::from(v) + 1,
-                    lod,
-                    flora::Season { month },
-                );
-                if li == 0 {
-                    height = mesh.bounds().1[1].max(0.2);
-                }
-                let dist = lod_distances(height)[li];
-                for (kind, part) in mesh.split_parts() {
-                    let Some(m) = scene::upload_plant_mesh(r, &part) else {
-                        continue;
-                    };
-                    let key = kind as usize;
-                    let mat = *mats.entry(key).or_insert_with(|| {
-                        let m = scene::plant_material(
-                            r,
-                            kind,
-                            (tex.atlas, tex.atlas_normal, tex.bark, tex.bark_normal),
-                            mesh.foliage_tint,
-                        );
-                        made.push((m, kind, mesh.foliage_tint));
-                        m
-                    });
-                    parts.push((m, mat, dist));
-                    kinds.push(kind);
-                }
-            }
-            if id != LAWN_SPECIES && (height >= TREE_M || v == 0) {
-                self.bakes.push((id.clone(), class, v));
-            }
-            variants.push(Variant {
-                parts,
-                kinds,
-                baked: None,
-                height,
+        // The meshes, a variant at a time, generated off the frame (a thread; on the web in
+        // turn, one variant a frame).
+        if self
+            .meshing
+            .as_ref()
+            .is_none_or(|j| j.id != id || j.class != class)
+        {
+            self.meshing = Some(MeshJob {
+                id: id.clone(),
+                class,
+                variants: Vec::new(),
+                made: Vec::new(),
+                pending: None,
             });
         }
-        for (m, kind, tint) in made {
+        let job = self.meshing.as_mut().expect("set above");
+        let v = job.variants.len() as u32;
+        let Some(slot) = &job.pending else {
+            let params = w.params.clone();
+            job.pending = Some(spawn(move || generate_variant(&params, v, month)));
+            return false;
+        };
+        let Some(generated) = slot.lock().ok().and_then(|mut g| g.take()) else {
+            return false;
+        };
+        job.pending = None;
+        let tex = &self.textures[&id];
+        let mut parts = Vec::new();
+        let mut kinds = Vec::new();
+        let mut mats: HashMap<usize, MaterialId> = HashMap::new();
+        let height = generated.height;
+        for (li, split, tint) in generated.levels {
+            let dist = lod_distances(height)[li];
+            for (kind, part) in split {
+                let Some(m) = scene::upload_plant_mesh(r, &part) else {
+                    continue;
+                };
+                let mat = *mats.entry(kind as usize).or_insert_with(|| {
+                    let m = scene::plant_material(
+                        r,
+                        kind,
+                        (tex.atlas, tex.atlas_normal, tex.bark, tex.bark_normal),
+                        tint,
+                    );
+                    job.made.push((m, kind, tint));
+                    m
+                });
+                parts.push((m, mat, dist));
+                kinds.push(kind);
+            }
+        }
+        job.variants.push(Variant {
+            parts,
+            kinds,
+            baked: None,
+            height,
+        });
+        if job.variants.len() < VARIANTS as usize {
+            return false;
+        }
+        let job = self.meshing.take().expect("set above");
+        self.queue.remove(0);
+        for (v, variant) in job.variants.iter().enumerate() {
+            if id != LAWN_SPECIES && (variant.height >= TREE_M || v == 0) {
+                self.bakes.push((id.clone(), class, v as u32));
+            }
+        }
+        for (m, kind, tint) in job.made {
             self.plant_mats.push((id.clone(), m, kind, tint));
         }
-        self.classes.insert((id, class), variants);
+        self.classes.insert((id, class), job.variants);
         self.rev += 1;
         true
     }
+}
+
+/// One variant's meshes at every level, generated away from the renderer.
+struct Generated {
+    height: f32,
+    /// (level, parts by material, foliage tint)
+    levels: Vec<(usize, Vec<(flora::Material, flora::MeshPart)>, [f32; 3])>,
+}
+
+fn generate_variant(params: &flora::PlantParams, v: u32, month: u8) -> Generated {
+    let mut height = 1.0;
+    let mut levels = Vec::new();
+    for (li, lod) in flora::Lod::ALL.into_iter().enumerate() {
+        let mesh =
+            flora::generate_in_season(params, u64::from(v) + 1, lod, flora::Season { month });
+        if li == 0 {
+            height = mesh.bounds().1[1].max(0.2);
+        }
+        levels.push((li, mesh.split_parts(), mesh.foliage_tint));
+    }
+    Generated { height, levels }
+}
+
+/// A species' meshes being made: the variants done, the materials made for them, and the
+/// variant on its way.
+struct MeshJob {
+    id: String,
+    class: u32,
+    variants: Vec<Variant>,
+    made: Vec<(MaterialId, flora::Material, [f32; 3])>,
+    pending: Option<Slot<Generated>>,
+}
+
+type Slot<T> = std::sync::Arc<std::sync::Mutex<Option<T>>>;
+
+/// Runs `f` on a thread of its own (on the web, where there are none, at once); its result
+/// lands in the slot.
+fn spawn<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Slot<T> {
+    let slot = Slot::default();
+    let out = slot.clone();
+    let run = move || {
+        let v = f();
+        if let Ok(mut s) = out.lock() {
+            *s = Some(v);
+        }
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    std::thread::spawn(run);
+    #[cfg(target_arch = "wasm32")]
+    run();
+    slot
 }
 
 #[cfg(test)]
