@@ -144,15 +144,23 @@ fn beach_across_view(cx: &mut Cx) {
             json!({"origin": [o.x, o.y], "width_m": 160, "depth_m": 160, "cell_m": 1.0, "base_material": "lawn"}),
         );
     }
+    // The shore only lowers ground: the water goes 1.5 m under the land at the line.
+    let land = cx
+        .s
+        .project()
+        .terrain
+        .as_ref()
+        .and_then(|t| t.height_at(c.x, c.y))
+        .unwrap_or(0.0);
     if cx.s.project().sea.is_none() {
-        cx.run("water.set_sea", json!({"level": 0}));
+        cx.run("water.set_sea", json!({"level": land - 1.5}));
     }
+    let level = cx.s.project().sea.as_ref().map_or(0.0, |s| s.level);
     cx.run(
         "terrain.shore",
-        json!({"points": [[a.x, a.y], [b.x, b.y]], "top_m": 1.5, "beach_m": 15, "material": "sand"}),
+        json!({"points": [[a.x, a.y], [b.x, b.y]], "top_m": (land - level).max(0.3), "beach_m": 15, "material": "sand"}),
     );
     // The endless ground under the water, so the sea runs on to the horizon past the terrain.
-    let level = cx.s.project().sea.as_ref().map_or(0.0, |s| s.level);
     if let Some(g) = cx.s.project().view.ground
         && g.height > level - 4.0
     {
