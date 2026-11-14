@@ -8,6 +8,14 @@
 //! spherical harmonics (Sloan, "Stupid Spherical Harmonics (SH) Tricks", GDC 2008), found by
 //! marching rays through a voxelisation of the occluders. It is computed on the CPU once per
 //! change of geometry, cheap enough for the browser.
+//!
+//! Two room-scale fields ride along. `room`: the open fraction averaged over the room round a
+//! sample, never through a wall (a screened diffusion over the samples that see each other), for
+//! the daylight a room's surfaces pass round. `lamp_bounce`: the light of the lamps passed round
+//! the room they hang in, by the integrating-sphere relation for an enclosure's interreflected
+//! illuminance, E = F R / (A (1 - R)) (Sumpner, "The diffusion of light", Proceedings of the
+//! Physical Society of London 12, 1892; the lumen method's indirect part), with the lamp's flux
+//! `F` that meets a surface, the area `A` its rays meet and the share of them a room keeps.
 
 /// The occluders' voxel size, metres. Thinner than a wall, so a wall is at least one voxel.
 const VOXEL_M: f32 = 0.2;
@@ -21,6 +29,19 @@ const RAYS: usize = 48;
 const REACH_M: f32 = 14.0;
 /// Room round the occluders, metres.
 const PAD_M: f32 = 1.0;
+/// The mean reflectance of a room's surfaces (pale walls and ceiling, a wooden floor): the
+/// renderer's `ROOM_REFLECTANCE` (scene.wgsl).
+pub const ROOM_REFLECTANCE: f32 = 0.45;
+/// The room average (`room`): passes of a screened diffusion, each keeping this share of the
+/// neighbours' value, so a sample's average reaches about a room's half width and no further.
+const ROOM_PASSES: usize = 40;
+const ROOM_SPREAD: f32 = 0.9;
+/// Rays a lamp casts to find the surfaces its light meets.
+const LAMP_RAYS: usize = 192;
+/// How far round a lamp the samples that see it take its bounced light, metres, and the rays
+/// that find them (about one per sample at that reach).
+const LAMP_REACH_M: f32 = 9.0;
+const LAMP_SIGHT_RAYS: usize = 4096;
 
 /// The grid: sample `(x, y, z)` sits at `origin + cell * (x, y, z)` and holds
 /// `(a0, ax, ay, az)`: the visible fraction of all directions and the mean visible direction
@@ -34,6 +55,88 @@ pub struct SkyVolume {
     pub dims: [u32; 3],
     /// x fastest, then y, then z.
     pub samples: Vec<[f32; 4]>,
+    /// Per sample: the open fraction (`samples`' first) averaged over the room round it, never
+    /// through a wall; what a room lets in of the sky.
+    pub room: Vec<f32>,
+    voxels: Voxels,
+    /// Per sample: which face neighbours it sees, bit `2 k` along -axis k, `2 k + 1` along +.
+    links: Vec<u8>,
+}
+
+impl SkyVolume {
+    /// The volume as bytes, for the trip back from a worker (`from_bytes`).
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut b = Vec::new();
+        let f = |b: &mut Vec<u8>, v: f32| b.extend_from_slice(&v.to_le_bytes());
+        let u = |b: &mut Vec<u8>, v: u32| b.extend_from_slice(&v.to_le_bytes());
+        self.origin.iter().for_each(|&v| f(&mut b, v));
+        f(&mut b, self.cell);
+        self.dims.iter().for_each(|&v| u(&mut b, v));
+        self.voxels.origin.iter().for_each(|&v| f(&mut b, v));
+        self.voxels.dims.iter().for_each(|&v| u(&mut b, v as u32));
+        self.samples.iter().flatten().for_each(|&v| f(&mut b, v));
+        self.room.iter().for_each(|&v| f(&mut b, v));
+        b.extend_from_slice(&self.links);
+        b.extend(self.voxels.solid.iter().map(|&s| s as u8));
+        b
+    }
+
+    /// The volume back from `to_bytes`; an error for bytes of the wrong length.
+    pub fn from_bytes(b: &[u8]) -> Result<Self, String> {
+        let mut at = 0usize;
+        let mut take = |n: usize| -> Result<&[u8], String> {
+            let s = b.get(at..at + n).ok_or("sky volume bytes cut short")?;
+            at += n;
+            Ok(s)
+        };
+        let floats = |s: &[u8]| -> Vec<f32> {
+            s.as_chunks::<4>()
+                .0
+                .iter()
+                .map(|c| f32::from_le_bytes(*c))
+                .collect()
+        };
+        let head = floats(take(4 * 13)?);
+        let u = |i: usize| head[i].to_bits();
+        let dims = [u(4), u(5), u(6)];
+        let vdims = [u(10) as i32, u(11) as i32, u(12) as i32];
+        let n = dims.iter().map(|&d| d as usize).product::<usize>();
+        let nv = vdims.iter().map(|&d| d.max(0) as usize).product::<usize>();
+        if n == 0 || n > 4 * MAX_CELLS || nv > 1 << 28 {
+            return Err("sky volume bytes with impossible sizes".into());
+        }
+        let samples = floats(take(16 * n)?).as_chunks::<4>().0.to_vec();
+        let room = floats(take(4 * n)?);
+        let links = take(n)?.to_vec();
+        let solid = take(nv)?.iter().map(|&v| v != 0).collect();
+        if take(1).is_ok() {
+            return Err("sky volume bytes too long".into());
+        }
+        Ok(Self {
+            origin: [head[0], head[1], head[2]],
+            cell: head[3],
+            dims,
+            samples,
+            room,
+            voxels: Voxels {
+                origin: [head[7], head[8], head[9]],
+                dims: vdims,
+                solid,
+            },
+            links,
+        })
+    }
+}
+
+/// A lamp for `SkyVolume::lamp_bounce`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Lamp {
+    pub position: [f32; 3],
+    /// Linear RGB of luminance about 1.
+    pub color: [f32; 3],
+    pub lumens: f32,
+    /// A spot's axis; `None` for a lamp that shines all round.
+    pub direction: Option<[f32; 3]>,
 }
 
 impl SkyVolume {
@@ -56,14 +159,131 @@ impl SkyVolume {
         }
         Some(at)
     }
+
+    /// The sample index for world point `p` seen from the side `n` faces (lifted off the
+    /// surface by most of a cell, as the renderer reads it), if inside.
+    pub fn index(&self, p: [f32; 3], n: [f32; 3]) -> Option<usize> {
+        let at = self.nearest(std::array::from_fn(|k| p[k] + n[k] * 0.7 * self.cell))?;
+        Some((at[0] + self.dims[0] * (at[1] + self.dims[1] * at[2])) as usize)
+    }
+
+    /// The surface-facing visibility (`facing`) of sample `i` (from `index`).
+    pub fn seen(&self, i: usize, n: [f32; 3]) -> f32 {
+        let s = self.samples[i];
+        (s[0] + 2.0 * (s[1] * n[0] + s[2] * n[1] + s[3] * n[2])).clamp(0.0, 1.0)
+    }
+
+    /// How far along unit `d` from `p` the first occluder lies, within `metres` and the grid.
+    pub fn trace(&self, p: [f32; 3], d: [f32; 3], metres: f32) -> Option<f32> {
+        self.voxels.hit(p, d, metres).map(|h| h.0)
+    }
+
+    /// Whether nothing lies between `a` and `b`.
+    pub fn sees(&self, a: [f32; 3], b: [f32; 3]) -> bool {
+        let d: [f32; 3] = std::array::from_fn(|k| b[k] - a[k]);
+        let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+        len < 1e-4 || self.voxels.free(a, d.map(|c| c / len), len)
+    }
+
+    /// The lamps' light passed round the rooms, per sample (illuminance, lux, linear RGB): each
+    /// lamp's interreflected illuminance `F R / (A (1 - k R))` (module docs) goes to every
+    /// sample within `LAMP_REACH_M` that sees it (found by rays from the lamp). `F` is its flux when its light meets something
+    /// (a spot: along its axis), `A` the area its rays meet (each ray's hit distance squared over
+    /// the cosine at the face it meets), `k` the share of its rays that meet something (the rest
+    /// leaves through the openings and does not come back).
+    pub fn lamp_bounce(&self, lamps: &[Lamp]) -> Vec<[f32; 3]> {
+        let mut out = vec![[0.0f32; 3]; self.samples.len()];
+        let dirs = directions(LAMP_RAYS);
+        let seeing = directions(LAMP_SIGHT_RAYS);
+        let mut stamp = vec![0u32; self.samples.len()];
+        for (n, lamp) in lamps.iter().enumerate() {
+            let p = lamp.position;
+            let (mut hits, mut area) = (0usize, 0.0f32);
+            for d in &dirs {
+                if let Some((t, k)) = self.voxels.hit(p, *d, REACH_M) {
+                    hits += 1;
+                    area += t * t / d[k].abs().max(0.25);
+                }
+            }
+            if hits == 0 || lamp.lumens <= 0.0 {
+                continue;
+            }
+            let area = area * 4.0 * std::f32::consts::PI / LAMP_RAYS as f32;
+            let kept = hits as f32 / LAMP_RAYS as f32;
+            let meets = match lamp.direction {
+                Some(d) => {
+                    let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-6);
+                    let hit = self.voxels.hit(p, d.map(|c| c / len), REACH_M);
+                    if hit.is_some() { 1.0 } else { 0.0 }
+                }
+                None => kept,
+            };
+            let e = lamp.lumens * meets * ROOM_REFLECTANCE
+                / ((1.0 - kept * ROOM_REFLECTANCE) * area.max(1.0));
+            if e < 1e-3 {
+                continue;
+            }
+            // The samples it sees: along rays from it to what they meet (spaced finer than a
+            // sample at the reach), each sample once.
+            for d in &seeing {
+                let end = self
+                    .voxels
+                    .hit(p, *d, LAMP_REACH_M)
+                    .map_or(LAMP_REACH_M, |h| h.0);
+                let mut t = 0.0;
+                while t <= end {
+                    let q: [f32; 3] = std::array::from_fn(|k| p[k] + d[k] * t);
+                    let Some(at) = self.nearest(q) else { break };
+                    let i = (at[0] + self.dims[0] * (at[1] + self.dims[1] * at[2])) as usize;
+                    if stamp[i] != n as u32 + 1 {
+                        stamp[i] = n as u32 + 1;
+                        for k in 0..3 {
+                            out[i][k] += e * lamp.color[k];
+                        }
+                    }
+                    t += 0.5 * self.cell;
+                }
+            }
+        }
+        // Soften the edge of what each lamp sees.
+        for _ in 0..2 {
+            out = average_linked(&out, &self.links, self.dims);
+        }
+        out
+    }
+}
+
+/// Each sample's value averaged half and half with the mean of the face neighbours it sees.
+fn average_linked(values: &[[f32; 3]], links: &[u8], dims: [u32; 3]) -> Vec<[f32; 3]> {
+    let strides = [1, dims[0] as usize, (dims[0] * dims[1]) as usize];
+    (0..values.len())
+        .map(|i| {
+            let (mut sum, mut n) = ([0.0f32; 3], 0.0f32);
+            for b in 0..6 {
+                if links[i] & (1 << b) != 0 {
+                    let j = if b % 2 == 0 {
+                        i - strides[b / 2]
+                    } else {
+                        i + strides[b / 2]
+                    };
+                    (0..3).for_each(|k| sum[k] += values[j][k]);
+                    n += 1.0;
+                }
+            }
+            if n == 0.0 {
+                return values[i];
+            }
+            std::array::from_fn(|k| 0.5 * values[i][k] + 0.5 * sum[k] / n)
+        })
+        .collect()
 }
 
 /// Evenly spread unit directions (a Fibonacci sphere).
-fn directions() -> Vec<[f32; 3]> {
+fn directions(count: usize) -> Vec<[f32; 3]> {
     let golden = std::f32::consts::PI * (3.0 - 5f32.sqrt());
-    (0..RAYS)
+    (0..count)
         .map(|i| {
-            let y = 1.0 - 2.0 * (i as f32 + 0.5) / RAYS as f32;
+            let y = 1.0 - 2.0 * (i as f32 + 0.5) / count as f32;
             let r = (1.0 - y * y).sqrt();
             let a = golden * i as f32;
             [r * a.cos(), y, r * a.sin()]
@@ -71,6 +291,7 @@ fn directions() -> Vec<[f32; 3]> {
         .collect()
 }
 
+#[derive(Clone, Debug, PartialEq)]
 struct Voxels {
     origin: [f32; 3],
     dims: [i32; 3],
@@ -92,6 +313,12 @@ impl Voxels {
 
     /// Whether `metres` along unit `d` from `p` hit nothing (leaving the grid counts as free).
     fn free(&self, p: [f32; 3], d: [f32; 3], metres: f32) -> bool {
+        self.hit(p, d, metres).is_none()
+    }
+
+    /// The first solid voxel within `metres` along unit `d` from `p`: its distance (metres) and
+    /// the axis of the face the ray enters it by.
+    fn hit(&self, p: [f32; 3], d: [f32; 3], metres: f32) -> Option<(f32, usize)> {
         let local: [f32; 3] = std::array::from_fn(|k| (p[k] - self.origin[k]) / VOXEL_M);
         let mut v: [i32; 3] = std::array::from_fn(|k| local[k].floor() as i32);
         let step: [i32; 3] = std::array::from_fn(|k| if d[k] >= 0.0 { 1 } else { -1 });
@@ -113,14 +340,15 @@ impl Voxels {
             } else {
                 2
             };
-            if next[k] > reach {
-                return true;
+            let t = next[k];
+            if t > reach {
+                return None;
             }
             v[k] += step[k];
             next[k] += delta[k];
             match self.index(v) {
-                None => return true,
-                Some(i) if self.solid[i] => return false,
+                None => return None,
+                Some(i) if self.solid[i] => return Some((t * VOXEL_M, k)),
                 Some(_) => {}
             }
         }
@@ -175,9 +403,10 @@ pub fn sky_volume(triangles: &[[[f32; 3]; 3]]) -> Option<SkyVolume> {
             }
         }
     }
-    let dirs = directions();
-    let mut samples = Vec::with_capacity(dims.iter().map(|&n| n as usize).product());
-    for z in 0..dims[2] {
+    let dirs = directions(RAYS);
+    // One z slab of samples (x fastest, then y).
+    let slab = |z: u32| -> Vec<[f32; 4]> {
+        let mut out = Vec::with_capacity((dims[0] * dims[1]) as usize);
         for y in 0..dims[1] {
             for x in 0..dims[0] {
                 let p = [
@@ -201,10 +430,36 @@ pub fn sky_volume(triangles: &[[[f32; 3]; 3]]) -> Option<SkyVolume> {
                         sum[3] += d[2];
                     }
                 }
-                samples.push(sum.map(|v| v / RAYS as f32));
+                out.push(sum.map(|v| v / RAYS as f32));
             }
         }
-    }
+        out
+    };
+    // Natively the slabs are shared out over the cores; the browser has one thread (the app
+    // runs this in a worker there).
+    #[cfg(not(target_arch = "wasm32"))]
+    let samples: Vec<[f32; 4]> = {
+        let threads = std::thread::available_parallelism().map_or(1, |n| n.get()) as u32;
+        let per = dims[2].div_ceil(threads.max(1));
+        std::thread::scope(|scope| {
+            let jobs: Vec<_> = (0..dims[2])
+                .step_by(per as usize)
+                .map(|z0| {
+                    let slab = &slab;
+                    scope.spawn(move || {
+                        (z0..(z0 + per).min(dims[2]))
+                            .flat_map(slab)
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            jobs.into_iter()
+                .flat_map(|j| j.join().expect("a sky volume thread panicked"))
+                .collect()
+        })
+    };
+    #[cfg(target_arch = "wasm32")]
+    let samples: Vec<[f32; 4]> = (0..dims[2]).flat_map(slab).collect();
     // Each sample averaged with the neighbours it sees (3 x 3 x 3, never through a wall): the
     // ray count's noise goes, the rooms stay apart.
     let at = |x: i64, y: i64, z: i64| -> Option<usize> {
@@ -244,11 +499,63 @@ pub fn sky_volume(triangles: &[[[f32; 3]; 3]]) -> Option<SkyVolume> {
             }
         }
     }
+    // Which face neighbours each sample sees, then the room average of the open fraction: a
+    // screened diffusion over those links, normalised by the same sums over ones.
+    let mut links = vec![0u8; smooth.len()];
+    for z in 0..dims[2] as i64 {
+        for y in 0..dims[1] as i64 {
+            for x in 0..dims[0] as i64 {
+                let p = [x, y, z].map(|v| v as f32);
+                let p: [f32; 3] = std::array::from_fn(|k| lo[k] + cell * p[k]);
+                let i = at(x, y, z).expect("in the grid");
+                for b in 0..6 {
+                    let mut o = [0i64; 3];
+                    o[b / 2] = if b % 2 == 0 { -1 } else { 1 };
+                    if at(x + o[0], y + o[1], z + o[2]).is_some()
+                        && voxels.free(p, o.map(|c| c as f32), cell)
+                    {
+                        links[i] |= 1 << b;
+                    }
+                }
+            }
+        }
+    }
+    let open: Vec<f32> = smooth.iter().map(|s| s[0]).collect();
+    let strides = [1, dims[0] as usize, (dims[0] * dims[1]) as usize];
+    let mut sums: Vec<[f32; 2]> = open.iter().map(|&a| [a, 1.0]).collect();
+    for _ in 0..ROOM_PASSES {
+        sums = (0..sums.len())
+            .map(|i| {
+                let (mut s, mut n) = ([0.0f32; 2], 0.0f32);
+                for b in 0..6 {
+                    if links[i] & (1 << b) != 0 {
+                        let j = if b % 2 == 0 {
+                            i - strides[b / 2]
+                        } else {
+                            i + strides[b / 2]
+                        };
+                        s[0] += sums[j][0];
+                        s[1] += sums[j][1];
+                        n += 1.0;
+                    }
+                }
+                let n = n.max(1.0);
+                [
+                    open[i] + ROOM_SPREAD * s[0] / n,
+                    1.0 + ROOM_SPREAD * s[1] / n,
+                ]
+            })
+            .collect();
+    }
+    let room = sums.iter().map(|s| (s[0] / s[1]).clamp(0.0, 1.0)).collect();
     Some(SkyVolume {
         origin: lo,
         cell,
         dims,
         samples: smooth,
+        room,
+        voxels,
+        links,
     })
 }
 
@@ -319,6 +626,43 @@ mod tests {
         let deep = v.nearest([0.8, 1.5, 3.0]).unwrap();
         let far = v.facing(deep, [1.0, 0.0, 0.0]);
         assert!(far > 0.0 && far < away, "{far} {away}");
+    }
+
+    #[test]
+    fn a_lamp_in_a_closed_room_lights_it_as_an_integrating_sphere_says() {
+        let v = sky_volume(&room(0.0)).unwrap();
+        let lamp = Lamp {
+            position: [3.0, 2.0, 3.0],
+            color: [1.0, 0.5, 0.25],
+            lumens: 1000.0,
+            direction: None,
+        };
+        let e = v.lamp_bounce(&[lamp]);
+        // 6 x 3 x 6 m: 144 m2 of surfaces, all of the light kept.
+        let expected = 1000.0 * ROOM_REFLECTANCE / ((1.0 - ROOM_REFLECTANCE) * 144.0);
+        let inside = e[v.index([1.5, 1.0, 4.5], [0.0; 3]).unwrap()];
+        assert!(
+            (inside[0] / expected - 1.0).abs() < 0.25,
+            "{inside:?} {expected}"
+        );
+        assert!((inside[1] / inside[0] - 0.5).abs() < 1e-4);
+        // Next to none over the roof (only the softened edge of the samples in the roof).
+        let above = e[v.index([3.0, 3.6, 3.0], [0.0; 3]).unwrap()];
+        assert!(above[0] < 0.05 * inside[0], "{above:?}");
+        // The room's own daylight: none in a closed room, some by an opening, less deeper in.
+        assert!(v.room[v.index([3.0, 1.5, 3.0], [0.0; 3]).unwrap()] < 0.01);
+        let v = sky_volume(&room(2.0)).unwrap();
+        let near = v.room[v.index([5.2, 1.5, 3.0], [0.0; 3]).unwrap()];
+        let deep = v.room[v.index([0.8, 1.5, 3.0], [0.0; 3]).unwrap()];
+        assert!(near > deep && deep > 0.0, "{near} {deep}");
+    }
+
+    #[test]
+    fn a_volume_survives_the_trip_through_bytes() {
+        let v = sky_volume(&room(2.0)).unwrap();
+        let bytes = v.to_bytes();
+        assert_eq!(SkyVolume::from_bytes(&bytes).unwrap(), v);
+        assert!(SkyVolume::from_bytes(&bytes[..bytes.len() - 1]).is_err());
     }
 
     #[test]

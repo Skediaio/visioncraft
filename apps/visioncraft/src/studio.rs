@@ -110,8 +110,12 @@ pub struct Studio {
     pub dropped_lights: usize,
     /// The half-metre cell the ground bounce and indoors were last sampled in (`apply_view`).
     bounce_cell: Option<glam::IVec4>,
-    /// A hash of the triangles the sky visibility volume was last made from.
+    /// A hash of the triangles the sky visibility volume was last made from, the volume, and
+    /// the lamps' light passed round its rooms (per sample, lux).
     sky_volume_key: u64,
+    sky_volume: Option<visioncraft_core::SkyVolume>,
+    sky_task: Option<crate::sky_task::SkyTask>,
+    lamp_bounce: Vec<[f32; 3]>,
     /// Impostor atlases have been made ahead for the current quality.
     impostors_reserved: bool,
     /// The revision (and whether the catalogue was there) the lamp lights were last made for.
@@ -311,6 +315,9 @@ impl Studio {
             dropped_lights: 0,
             bounce_cell: None,
             sky_volume_key: 0,
+            sky_volume: None,
+            sky_task: None,
+            lamp_bounce: Vec::new(),
             impostors_reserved: false,
             lamps_reconciled: (u64::MAX, false),
             lamps_skipped: 0,
@@ -612,7 +619,8 @@ impl Studio {
             // project made without a window has none yet).
             lamp_problems.extend(self.reconcile_lamps());
             steps += 1;
-            if self.plants_pending() == 0 && self.scene.library.idle() {
+            if self.plants_pending() == 0 && self.scene.library.idle() && !self.sky_volume_pending()
+            {
                 break;
             }
             if crate::assets::now_ms() - start > PICTURE_WAIT_S * 1000.0 {
@@ -809,11 +817,131 @@ impl Studio {
             return;
         }
         self.sky_volume_key = key;
-        let v = visioncraft_core::sky_volume(&triangles);
-        self.renderer.set_sky_volume(
-            v.as_ref()
-                .map(|v| (v.origin, v.cell, v.dims, v.samples.as_slice())),
-        );
+        // The old volume stays until the new one is made (`poll_sky_volume`).
+        self.sky_task = Some(crate::sky_task::SkyTask::start(triangles, key));
+    }
+
+    /// Takes the sky volume once it is made (`update_sky_volume`).
+    fn poll_sky_volume(&mut self) {
+        if let Some(v) = self.sky_task.as_ref().and_then(|t| t.take()) {
+            self.sky_task = None;
+            self.sky_volume = v;
+            self.upload_sky_volume();
+        }
+    }
+
+    /// A sky volume is being made.
+    pub fn sky_volume_pending(&self) -> bool {
+        self.sky_task.is_some()
+    }
+
+    /// Sends the sky volume to the renderer with the light of the lamps now on passed round its
+    /// rooms (`SkyVolume::lamp_bounce`).
+    fn upload_sky_volume(&mut self) {
+        let Some(v) = &self.sky_volume else {
+            self.lamp_bounce.clear();
+            self.renderer.set_sky_volume(None);
+            return;
+        };
+        let lamps: Vec<visioncraft_core::Lamp> = self
+            .last_lights
+            .iter()
+            .map(|l| visioncraft_core::Lamp {
+                position: l.position.to_array(),
+                color: l.color.to_array(),
+                lumens: l.intensity,
+                direction: match l.kind {
+                    visioncraft_render::LightKind::Spot { direction, .. } => {
+                        Some(direction.to_array())
+                    }
+                    visioncraft_render::LightKind::Point => None,
+                },
+            })
+            .collect();
+        self.lamp_bounce = v.lamp_bounce(&lamps);
+        let room: Vec<[f32; 4]> = self
+            .lamp_bounce
+            .iter()
+            .zip(&v.room)
+            .map(|(l, &open)| [l[0], l[1], l[2], open])
+            .collect();
+        self.renderer
+            .set_sky_volume(Some((v.origin, v.cell, v.dims, &v.samples, &room)));
+    }
+
+    /// The illuminance (lux) the lamps now on throw straight onto a surface at `q` facing `n`,
+    /// those the sky volume says see it, as the renderer lights it (`local_lights`).
+    fn lamp_direct(&self, v: &visioncraft_core::SkyVolume, q: Vec3, n: Vec3) -> f32 {
+        let mut e = 0.0;
+        for l in &self.last_lights {
+            let to = l.position - q;
+            let dist2 = to.length_squared().max(1e-4);
+            let range = l.range_m.max(0.01);
+            let cos = n.dot(to) / dist2.sqrt();
+            if cos <= 0.0 || dist2 > range * range || !v.sees(q.to_array(), l.position.to_array()) {
+                continue;
+            }
+            let cone = match l.kind {
+                visioncraft_render::LightKind::Spot {
+                    direction,
+                    inner,
+                    outer,
+                } => {
+                    let (ci, co) = (inner.min(outer).cos(), outer.cos());
+                    let c = ((-to.normalize()).dot(direction) - co) / (ci - co).max(1e-4);
+                    c.clamp(0.0, 1.0).powi(2)
+                }
+                visioncraft_render::LightKind::Point => 1.0,
+            };
+            let window = (1.0 - (dist2 / (range * range)).powi(2))
+                .clamp(0.0, 1.0)
+                .powi(2);
+            e += l.candela() * luminance(l.color.to_array()) * cos * cone * window / dist2;
+        }
+        e
+    }
+
+    /// A light meter over what the camera sees: rays through a grid over the picture, each
+    /// to the first occluder of the sky volume, where the light falling on a surface facing
+    /// the camera is estimated: the sky's (`open_lux` under the open sky) as far as it sees
+    /// the sky, the room's bounced daylight and lamplight for the rest, and the lamps that see
+    /// the point. A ray that leaves the volume meets the open air. Returns the mean
+    /// illuminance and the mean share of the surfaces' view that is room, not sky (0 out of
+    /// doors, near 1 in a room); `None` without a volume.
+    fn meter_view(&self, open_lux: f32) -> Option<(f32, f32)> {
+        let v = self.sky_volume.as_ref()?;
+        let (view, proj, _) = self.camera.matrices(self.aspect());
+        let size = glam::Vec2::new(self.size[0] as f32, self.size[1] as f32).max(glam::Vec2::ONE);
+        let keep = visioncraft_core::sky_volume::ROOM_REFLECTANCE
+            / (1.0 - visioncraft_core::sky_volume::ROOM_REFLECTANCE);
+        let (mut sum, mut room, mut n) = (0.0f32, 0.0f32, 0.0f32);
+        for j in 0..METER_ROWS {
+            for i in 0..METER_COLUMNS {
+                let at = glam::Vec2::new(
+                    (i as f32 + 0.5) / METER_COLUMNS as f32,
+                    (j as f32 + 0.5) / METER_ROWS as f32,
+                );
+                let (o, d) = ray_through(view, proj, at * size, size);
+                n += 1.0;
+                let hit = v.trace(o.to_array(), d.to_array(), 60.0);
+                let Some((q, k)) = hit.and_then(|t| {
+                    let q = o + d * (t - 0.05);
+                    Some((q, v.index(q.to_array(), (-d).to_array())?))
+                }) else {
+                    sum += open_lux;
+                    continue;
+                };
+                let seen = v.seen(k, (-d).to_array());
+                let lamp = self.lamp_bounce.get(k).copied().unwrap_or_default();
+                let lamp = luminance(lamp);
+                let mut e =
+                    open_lux * (seen + (1.0 - seen) * keep * v.room[k]) + lamp * (1.0 - seen);
+                e += self.lamp_direct(v, q, -d);
+                sum += e;
+                room += 1.0 - seen;
+            }
+        }
+        Some((sum / n, room / n))
     }
 
     pub fn frame_all(&mut self) {
@@ -910,16 +1038,24 @@ impl Studio {
             let indoors = hit(Vec3::Y) && walls >= 6;
             self.renderer.set_indoors(indoors);
         }
-        // In a room by day a photographer opens up: the room gets only the sky its windows show
-        // (the sky visibility volume), some stops under the open air.
-        let room = if self.renderer.indoors() {
-            INDOOR_EV * (elevation / 10.0).clamp(0.0, 1.0)
-        } else {
-            0.0
+        // In a room a photographer meters what the camera sees (`meter_view`) and opens up or
+        // stops down towards it: by day a room gets only the sky its windows show, at night
+        // the lamps light it. Only part of the way (`METER_SHARE`), so a dim corridor still
+        // reads dimmer than a daylit room, and only as far as the view is enclosed.
+        // shortcut: the exposure follows the meter at once, no adaptation over time; ease it
+        // in if walking through a doorway reads as a jump.
+        let auto = self.sky.auto_ev(elevation, lamps);
+        let room = match self.meter_view(METER_LUX * auto.exp2()) {
+            Some((lux, enclosed)) => {
+                let metered = (lux.max(1e-3) / METER_LUX).log2();
+                enclosed * (METER_SHARE * (auto - metered)).clamp(-METER_DOWN_EV, METER_UP_EV)
+            }
+            None => 0.0,
         };
-        let ev = v.exposure_ev.unwrap_or_else(|| {
-            self.sky.auto_ev(elevation, lamps) - brighter - snow * SNOW_EV - room
-        }) - self.exposure;
+        let ev = v
+            .exposure_ev
+            .unwrap_or(auto - brighter - snow * SNOW_EV - room)
+            - self.exposure;
         self.ev_used = (ev, elevation);
         self.renderer.set_exposure(ev);
         self.renderer.set_clay(self.project().style.clay);
@@ -973,6 +1109,7 @@ impl Studio {
         if lights != self.last_lights {
             self.dropped_lights = self.renderer.set_lights(&lights);
             self.last_lights = lights;
+            self.upload_sky_volume();
         }
         let people: Vec<glam::Mat4> = if self.show_people {
             self.people
@@ -1114,6 +1251,7 @@ impl Studio {
             .set_user_objects(&self.session.project().objects);
         self.take_catalog();
         self.sync();
+        self.poll_sky_volume();
         self.scene
             .sync_terrain_layers(&mut self.renderer, self.session.project());
         let (view, proj, eye) = self.camera.matrices(self.aspect());
@@ -1477,7 +1615,9 @@ pub fn render_lights(p: &Project) -> Vec<visioncraft_render::Light> {
         .filter(|l| l.enabled && p.layer_visible(&l.layer))
         .map(|l| {
             let c = kelvin_to_linear_rgb(l.color_temperature_k);
-            let m = c[0].max(c[1]).max(c[2]).max(1e-3);
+            // Luminance 1, so a lamp's lumens are its lumens whatever its colour (a warm lamp
+            // scaled to its red channel lost a third of its light).
+            let m = luminance(c).max(1e-3);
             visioncraft_render::Light {
                 position: Vec3::from(l.position),
                 kind: match l.kind {
@@ -1501,10 +1641,15 @@ pub fn render_lights(p: &Project) -> Vec<visioncraft_render::Light> {
         .collect()
 }
 
+/// Rec. 709 luminance of a linear colour.
+fn luminance(c: [f32; 3]) -> f32 {
+    0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+}
+
 /// A warm room lamp behind each lit window of the visible houses (`shape.set_lit_rooms`).
 fn lit_rooms(p: &Project) -> impl Iterator<Item = visioncraft_render::Light> + '_ {
     let c = visioncraft_core::kelvin_to_linear_rgb(2700.0);
-    let m = c[0].max(c[1]).max(c[2]).max(1e-3);
+    let m = luminance(c).max(1e-3);
     p.shapes
         .iter()
         .filter_map(|s| match s {
@@ -1691,8 +1836,16 @@ mod reach_tests {
 /// How long a picture waits for plants and library files before it is taken anyway.
 pub const PICTURE_WAIT_S: f64 = 120.0;
 
-/// Stops the automatic exposure opens up with the camera in a room by day.
-const INDOOR_EV: f32 = 2.5;
+/// The light meter (`meter_view`): its grid of rays over the picture; the illuminance (lux) the
+/// automatic exposure is made for at EV 0, doubling per stop (a white wall under it reads
+/// about a third of white); the share of the metered difference the exposure follows; how far
+/// it opens up and stops down.
+const METER_COLUMNS: usize = 6;
+const METER_ROWS: usize = 4;
+const METER_LUX: f32 = 1.5;
+const METER_SHARE: f32 = 0.75;
+const METER_UP_EV: f32 = 5.0;
+const METER_DOWN_EV: f32 = 9.0;
 
 /// Stops the exposure opens up per unit of snow.
 const SNOW_EV: f32 = 1.2;

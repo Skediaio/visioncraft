@@ -51,6 +51,9 @@ struct Globals {
 // The sky's visibility round the buildings (lib.rs `set_sky_volume`): r the visible fraction of
 // directions, gba the mean visible direction as 0.5 + 2 a; mipmapped.
 @group(0) @binding(6) var sky_vis: texture_3d<f32>;
+// Its room light: rgb the lamps' light passed round the room (lux), a the room's average open
+// fraction (never through a wall); one level.
+@group(0) @binding(7) var room_vis: texture_3d<f32>;
 
 // The sky visibility volume at `world`, lifted off the surface along `n` by most of a cell so a
 // surface reads the air in front of it, at mip `level` (0 the cells, higher a room's average):
@@ -66,6 +69,18 @@ fn sky_volume(world: vec3<f32>, n: vec3<f32>, level: f32) -> vec4<f32> {
     }
     let t = textureSampleLevel(sky_vis, env_sampler, uvw, level);
     return vec4<f32>(t.r, (t.gba - 0.5) * 0.5);
+}
+
+// The room light at `world` (see `room_vis`), read like `sky_volume`; none and open outside.
+fn room_light(world: vec3<f32>, n: vec3<f32>) -> vec4<f32> {
+    if g.sky_vol_size.w < 0.5 {
+        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    }
+    let uvw = ((world - g.sky_vol.xyz) * g.sky_vol.w + n * 0.7 + 0.5) * g.sky_vol_size.xyz;
+    if any(uvw < vec3<f32>(0.0)) || any(uvw > vec3<f32>(1.0)) {
+        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    }
+    return textureSampleLevel(room_vis, env_sampler, uvw, 0.0);
 }
 
 // The cosine-weighted visibility of the sky for a surface facing `n` from an L1 sample: 1 under
