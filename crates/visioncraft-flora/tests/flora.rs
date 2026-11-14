@@ -616,3 +616,15 @@ fn a_young_tree_is_slender_and_simpler_than_a_mature_one() {
         old.triangles_of(Material::Bark)
     );
 }
+
+#[test]
+fn a_young_hedge_is_see_through() {
+    let s = visioncraft_flora::Species::by_id("carpinus-hedge").unwrap();
+    let at = |age: f32| {
+        let mut p = s.params.clone();
+        p.age = age;
+        generate(&p, 3, Lod::Lod0)
+    };
+    // No solid core, fewer leaves.
+    assert!(at(0.4).triangles_of(Material::Foliage) < at(1.0).triangles_of(Material::Foliage) / 2);
+}

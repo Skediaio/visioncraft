@@ -107,9 +107,12 @@ pub fn generate(
         if n.dot(q - centre) < 0.0 { -n } else { n }
     };
 
-    // Core: each grid quad maps the whole tileable mass cell.
+    // Core: each grid quad maps the whole tileable mass cell. A young planting (whips, a
+    // first-year topiary) has none: it is twigs and leaves you see through, closing up as it
+    // grows.
+    let young = p.age < 0.6;
     let uv = |s: f32, t: f32| crate::mesh::cell_uv(MASS, s, t);
-    for i in 0..rows {
+    for i in 0..if young { 0 } else { rows } {
         for j in 0..cols {
             let (a0, a1) = (j as f32 / cols as f32, (j + 1) as f32 / cols as f32);
             let (b0, b1) = (i as f32 / rows as f32, (i + 1) as f32 / rows as f32);
@@ -146,7 +149,7 @@ pub fn generate(
             }
         }
     }
-    if let ClipShape::HedgeSegment { .. } = c.shape {
+    if let (ClipShape::HedgeSegment { .. }, false) = (c.shape, young) {
         // End caps: fans over the exact same profile at x = -L/2 and x = +L/2.
         for (a, sgn) in [(0.0f32, -1.0f32), (1.0, 1.0)] {
             let centre_pt = v3((a - 0.5) * length, y0 + (h - y0) * 0.4, 0.0);
@@ -225,7 +228,9 @@ pub fn generate(
     let core_tris = out.tris();
     let area_est = surface_area(&surf);
     // Twice the nominal coverage: the shingled cards should hide the core's texture repeat.
-    let desired = ((2.0 * p.leaves.density * area_est / (c0 * c0)).ceil() as usize).max(4);
+    // Fewer cards while young: the planting still lets the light through.
+    let fill = if young { 0.25 + p.age } else { 1.0 };
+    let desired = ((2.0 * fill * p.leaves.density * area_est / (c0 * c0)).ceil() as usize).max(4);
     let cap = |l: usize| {
         p.budget
             .triangles(Lod::ALL[l])
