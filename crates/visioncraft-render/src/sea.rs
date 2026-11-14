@@ -262,7 +262,7 @@ impl Renderer {
             s.color[0],
             s.color[1],
             s.color[2],
-            0.15 + 0.6 * s.wave_height_m,
+            0.15 + 0.4 * s.wave_height_m,
         ]);
         b.floats(&[
             s.flow[0],

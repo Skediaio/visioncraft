@@ -242,7 +242,12 @@ fn fs_sea(in: Varying) -> @location(0) vec4<f32> {
         alpha_out = mix(alpha_out, 1.0, foam);
     }
     // Where the water thins to nothing at the waterline, fade it out.
-    let edge = smoothstep(0.0, 0.05, path);
+    // Swash: the grid's crests do not shoal or break, so over a beach above the mean level they
+    // would stand as flat floods; the water runs up only so far (about a quarter of the wave
+    // height above the mean level) and thins out there.
+    let runup = 0.1 + 0.25 * sea.extra.z;
+    let swash = select(1.0, 1.0 - smoothstep(sea.surface.x + 0.05, sea.surface.x + runup, bed.y), below < SKY_DEPTH * 0.5);
+    let edge = smoothstep(0.0, 0.05, path) * swash;
     color *= edge;
     alpha_out *= edge;
     // Still lake water freezes in a snowy winter; the sea and rivers do not.
