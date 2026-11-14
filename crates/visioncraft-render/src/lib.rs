@@ -105,7 +105,7 @@ const CLUSTER_CELL: f32 = 8.0;
 /// `set_time` wraps here (seconds) to keep f32 precision in the shaders.
 const TIME_WRAP: f64 = 4096.0;
 /// Byte offset of the SH in the globals (written by the GPU, see env.rs).
-const SH_OFFSET: u64 = 8 * 64 + 26 * 16;
+const SH_OFFSET: u64 = 8 * 64 + 27 * 16;
 
 const COMMON: &str = include_str!("common.wgsl");
 const SKY: &str = include_str!("sky.wgsl");
@@ -820,6 +820,10 @@ pub struct Renderer {
     baker: impostor::Baker,
     impostors: Vec<Option<impostor::GpuImpostor>>,
     bloom_strength: f32,
+    /// The display look (`set_grade`): contrast power and saturation.
+    grade: (f32, f32),
+    /// The camera is in a room (`set_indoors`): glass mirrors the room, not the sky.
+    indoors: bool,
     light_buffer: wgpu::Buffer,
     grid_buffer: wgpu::Buffer,
     grid: lights::Grid,
@@ -1128,6 +1132,8 @@ impl Renderer {
             baker,
             impostors: Vec::new(),
             bloom_strength: 0.025,
+            grade: (1.0, 1.0),
+            indoors: false,
             light_buffer,
             grid_buffer,
             grid,
@@ -1414,6 +1420,33 @@ impl Renderer {
         self.rebind_globals();
         self.update_ambient(true);
         Ok(())
+    }
+
+    /// The albedo of what lies below, for the light it bounces up (the sky's lower half in the
+    /// ambient light and reflections); `None` uses the ground plane's colour. Rebuilds the
+    /// environment, so callers change it only when it changes noticeably.
+    pub fn set_bounce_albedo(&mut self, albedo: Option<[f32; 3]>) {
+        let a = albedo.map(Vec3::from);
+        if a != self.bounce_albedo {
+            self.bounce_albedo = a;
+            self.update_ambient(false);
+        }
+    }
+
+    /// Whether the camera stands in a room: windows then mirror the dim room around it instead
+    /// of the sky.
+    pub fn set_indoors(&mut self, indoors: bool) {
+        self.indoors = indoors;
+    }
+
+    pub fn indoors(&self) -> bool {
+        self.indoors
+    }
+
+    /// The display look on top of AgX, as in Filament's AgX looks: `power` above 1 deepens
+    /// contrast (1.35 is their "punchy"), `saturation` above 1 lifts colour; (1, 1) is plain AgX.
+    pub fn set_grade(&mut self, power: f32, saturation: f32) {
+        self.grade = (power.clamp(0.5, 2.0), saturation.clamp(0.0, 2.0));
     }
 
     /// Bloom strength: the fraction of the image replaced by its blurred
@@ -3318,6 +3351,12 @@ impl Renderer {
             if clip.is_some() { 1.0 } else { 0.0 },
             clip.unwrap_or(0.0),
         ]);
+        b.floats(&[
+            self.grade.0,
+            self.grade.1,
+            if self.indoors { 1.0 } else { 0.0 },
+            0.0,
+        ]);
         debug_assert_eq!(b.0.len() as u64, SH_OFFSET);
         self.queue.write_buffer(buffer, 0, &b.0);
     }
@@ -3535,7 +3574,7 @@ fn u32_bytes(u: &[u32]) -> Vec<u8> {
 }
 
 fn globals_size() -> u64 {
-    // 8 matrices, 26 vec4s, the 9 SH vec4s last; see common.wgsl.
+    // 8 matrices, 27 vec4s, the 9 SH vec4s last; see common.wgsl.
     SH_OFFSET + 9 * 16
 }
 
@@ -4986,8 +5025,8 @@ mod tests {
 
     #[test]
     fn globals_match_the_shader_layout() {
-        // common.wgsl: 8 mat4, then 26 vec4 before the 9 SH vec4.
-        assert_eq!(SH_OFFSET, 8 * 64 + 26 * 16);
+        // common.wgsl: 8 mat4, then 27 vec4 before the 9 SH vec4.
+        assert_eq!(SH_OFFSET, 8 * 64 + 27 * 16);
         assert_eq!(SH_OFFSET % 16, 0, "SH copy needs 16-byte texel alignment");
         assert_eq!(globals_size(), SH_OFFSET + 144);
     }

@@ -41,7 +41,12 @@ fn agx_contrast(x: vec3<f32>) -> vec3<f32> {
 fn agx(color: vec3<f32>) -> vec3<f32> {
     var c = AGX_INSET * (SRGB_TO_REC2020 * color);
     c = clamp((log2(max(c, vec3<f32>(1e-10))) - AGX_MIN_EV) / (AGX_MAX_EV - AGX_MIN_EV), vec3<f32>(0.0), vec3<f32>(1.0));
-    c = AGX_OUTSET * agx_contrast(c);
+    c = agx_contrast(c);
+    // The look (Filament's AgX looks): power for contrast, then saturation around Rec.709
+    // luma; plain AgX at (1, 1).
+    c = pow(max(c, vec3<f32>(0.0)), vec3<f32>(g.grade.x));
+    let luma = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
+    c = AGX_OUTSET * (luma + g.grade.y * (c - luma));
     c = pow(max(c, vec3<f32>(0.0)), vec3<f32>(2.2));
     return clamp(REC2020_TO_SRGB * c, vec3<f32>(0.0), vec3<f32>(1.0));
 }
