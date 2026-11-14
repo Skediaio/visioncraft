@@ -429,7 +429,7 @@ fn view_fields(ui: &mut egui::Ui, cx: &mut Cx) {
             let mut ground = v.ground.is_some();
             if ui.checkbox(&mut ground, t::GROUND).changed() {
                 let g = if ground {
-                    json!({"height": 0.0, "color": [0.10, 0.17, 0.08]})
+                    json!({"height": 0.0, "color": [0.065, 0.12, 0.035]})
                 } else {
                     serde_json::Value::Null
                 };
