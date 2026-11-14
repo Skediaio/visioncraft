@@ -367,18 +367,24 @@ const ROOM_REFLECTANCE: f32 = 0.45;
 // for the computation of the indirect component of daylight factor", Transactions of the
 // Illuminating Engineering Society 19(7), 1954): the light let in, times R / (1 - R) for the
 // reflections that follow. The light let in is read from the sky volume a room's width round
-// the point (mips 2 and 3, about 1.6 and 3.2 m): its open fraction lets in the sky, the share of it that sees
-// the sun lets in sunlight on the floor (a third of a room's surfaces). Nothing outside a volume.
+// the point: its open fraction lets in the sky, the share of it that sees the sun lets in
+// sunlight on the floor (a third of a room's surfaces). The open fraction is the room's own
+// average (never through a wall, `room_light`'s a); the direction the light comes from is read
+// from the coarse mips 2 and 3 (about 1.6 and 3.2 m), which do reach through walls, so they are
+// scaled down to that average. Plus the lamps' light passed round the room (`room_light`'s rgb,
+// sky_volume.rs). Nothing outside a volume.
 fn room_bounce(world: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
     if g.sky_vol_size.w < 0.5 {
         return vec3<f32>(0.0);
     }
-    // A room's width and the next size up: a hall or corridor off a lit room gets some of it.
     let room = 0.5 * (sky_volume(world, n, 2.0) + sky_volume(world, n, 3.0));
+    let lit = room_light(world, n);
+    let open = lit.a;
     let l = g.sun_dir.xyz;
-    let sun_in = clamp(room.x + 3.0 * dot(room.yzw, l), 0.0, 1.0) * max(l.y, 0.0) / 3.0;
-    let let_in = sh_irradiance(vec3<f32>(0.0, 1.0, 0.0)) * room.x + g.sun_light.rgb * sun_in;
-    return let_in * ROOM_REFLECTANCE / (1.0 - ROOM_REFLECTANCE);
+    let towards = 3.0 * dot(room.yzw, l) * min(open / max(room.x, 1e-3), 1.0);
+    let sun_in = clamp(open + towards, 0.0, 1.0) * max(l.y, 0.0) / 3.0;
+    let let_in = sh_irradiance(vec3<f32>(0.0, 1.0, 0.0)) * open + g.sun_light.rgb * sun_in;
+    return let_in * ROOM_REFLECTANCE / (1.0 - ROOM_REFLECTANCE) + lit.rgb * g.time.y;
 }
 
 // Split-sum environment BRDF, analytic fit: Karis, "Physically Based Shading

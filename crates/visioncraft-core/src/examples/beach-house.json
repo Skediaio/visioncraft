@@ -11,5 +11,5 @@
   ["viewpoint.add", {"name": "Living room", "position": [13.6, 2.15, -1.2], "target": [1.0, 1.7, -4.0], "fov_y_deg": 65}],
   ["viewpoint.add", {"name": "Kitchen", "position": [4.6, 2.15, -1.3], "target": [9.5, 1.5, -6.0], "fov_y_deg": 65}],
   ["viewpoint.add", {"name": "Master bedroom", "position": [15.1, 2.15, -4.08], "target": [20.4, 1.5, 1.5], "fov_y_deg": 65}],
-  ["viewpoint.add", {"name": "Dusk", "position": [16.0, 2.5, 24.0], "target": [11.0, 2.0, -4.0], "fov_y_deg": 50, "time": {"hour": 20.3}}]
+  ["viewpoint.add", {"name": "Dusk", "position": [16.0, 2.5, 24.0], "target": [11.0, 2.0, -4.0], "fov_y_deg": 50, "time": {"hour": 20.75}}]
 ]

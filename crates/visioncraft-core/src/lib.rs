@@ -64,7 +64,7 @@ pub use shape::{
     ground_faces, ground_model_lift, inside_outline, offset_outline, shape_mesh, shape_mesh_on,
     shape_mesh_on_terrain,
 };
-pub use sky_volume::{SkyVolume, sky_volume};
+pub use sky_volume::{Lamp, SkyVolume, sky_volume};
 pub use spec::{CommandSpec, ParamSpec, ParamType, example_project};
 pub use terrain::{
     BrushStroke, DirtyRect, Terrain, TerrainChunk, Tool, apply_stroke, ground_height_over,

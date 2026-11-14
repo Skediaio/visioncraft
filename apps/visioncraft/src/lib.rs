@@ -37,6 +37,7 @@ pub mod scans;
 pub mod scene;
 pub mod shell;
 pub mod sky_panel;
+pub mod sky_task;
 pub mod smoke;
 pub mod species_editor;
 pub mod strings;
@@ -1546,6 +1547,7 @@ impl eframe::App for App {
         self.studio.clock = now;
         busy |= self.studio.animating()
             || self.studio.plants_pending() > 0
+            || self.studio.sky_volume_pending()
             || !self.studio.scene.library.idle();
         #[cfg(not(target_arch = "wasm32"))]
         if std::mem::take(&mut self.studio.compare_requested) {

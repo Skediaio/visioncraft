@@ -845,6 +845,9 @@ pub struct Renderer {
     indoors: bool,
     /// The sky visibility volume (`set_sky_volume`) and its view; 1 texel of open sky when unset.
     sky_volume: (wgpu::Texture, wgpu::TextureView),
+    /// Its room light (`set_sky_volume`): per sample the lamps' light passed round the room
+    /// (lux) and the room's average open fraction.
+    room_volume: (wgpu::Texture, wgpu::TextureView),
     /// Globals `sky_vol` and `sky_vol_size`: origin (m) and 1 / cell, 1 / texture size in
     /// cells and on (0/1).
     sky_volume_box: [f32; 8],
@@ -1002,6 +1005,7 @@ impl Renderer {
         );
         let white = white_texture.create_view(&Default::default());
         let sky_volume = sky_volume_texture(device, queue, [1, 1, 1], &[[1.0, 0.0, 0.0, 0.0]]);
+        let room_volume = room_volume_texture(device, queue, [1, 1, 1], &[[0.0, 0.0, 0.0, 1.0]]);
         // Material samplers: trilinear with 16x anisotropy (WebGPU core
         // allows up to 16 when all filters are linear).
         let material_sampler = |label, mode| {
@@ -1061,7 +1065,7 @@ impl Renderer {
             &light_buffer,
             &grid_buffer,
             &physical.sky_view,
-            &sky_volume.1,
+            [&sky_volume.1, &room_volume.1],
         );
         let reflect_globals_bind = globals_bind_group(
             device,
@@ -1072,7 +1076,7 @@ impl Renderer {
             &light_buffer,
             &grid_buffer,
             &physical.sky_view,
-            &sky_volume.1,
+            [&sky_volume.1, &room_volume.1],
         );
         let sky_bind = sky_bind_group(
             device,
@@ -1181,6 +1185,7 @@ impl Renderer {
             grade: (1.0, 1.0),
             indoors: false,
             sky_volume,
+            room_volume,
             sky_volume_box: [0.0; 8],
             clouds: Clouds::default(),
             snow: 0.0,
@@ -1501,20 +1506,28 @@ impl Renderer {
 
     /// The sky's visibility round the buildings (`visioncraft_core::sky_volume`): sample
     /// `(x, y, z)` at `origin + cell * (x, y, z)` holds the visible fraction of directions and
-    /// the mean visible direction, x fastest. It dims the sky's ambient light and reflections
-    /// where little sky is seen and adds the light bounced round a room. `None`: open sky
-    /// everywhere.
+    /// the mean visible direction, x fastest; `room` per sample the lamps' light passed round
+    /// the room (lux, linear RGB) and the open fraction averaged over the room. It dims the
+    /// sky's ambient light and reflections where little sky is seen and adds the light bounced
+    /// round a room. `None`: open sky everywhere.
     pub fn set_sky_volume(&mut self, volume: Option<SkyVolume<'_>>) {
-        let (dims, samples, open) = match volume {
-            Some((_, _, dims, samples))
+        let (dims, samples, room, open) = match volume {
+            Some((_, _, dims, samples, room))
                 if dims.iter().all(|&d| d > 0)
-                    && samples.len() == dims.iter().map(|&d| d as usize).product::<usize>() =>
+                    && samples.len() == dims.iter().map(|&d| d as usize).product::<usize>()
+                    && room.len() == samples.len() =>
             {
-                (dims, samples, false)
+                (dims, samples, room, false)
             }
-            _ => ([1, 1, 1], &[[1.0, 0.0, 0.0, 0.0]][..], true),
+            _ => (
+                [1, 1, 1],
+                &[[1.0, 0.0, 0.0, 0.0]][..],
+                &[[0.0, 0.0, 0.0, 1.0]][..],
+                true,
+            ),
         };
         self.sky_volume = sky_volume_texture(&self.device, &self.queue, dims, samples);
+        self.room_volume = room_volume_texture(&self.device, &self.queue, dims, room);
         self.sky_volume_box = match volume.filter(|_| !open) {
             Some((origin, cell, ..)) => [
                 origin[0],
@@ -1583,7 +1596,7 @@ impl Renderer {
                 &self.light_buffer,
                 &self.grid_buffer,
                 sky_view,
-                &self.sky_volume.1,
+                [&self.sky_volume.1, &self.room_volume.1],
             );
         }
         self.sky_bind = sky_bind_group(
@@ -4000,7 +4013,7 @@ fn globals_bind_group(
     lights: &wgpu::Buffer,
     grid: &wgpu::Buffer,
     sky: &wgpu::TextureView,
-    sky_volume: &wgpu::TextureView,
+    [sky_volume, room_volume]: [&wgpu::TextureView; 2],
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("globals"),
@@ -4034,13 +4047,64 @@ fn globals_bind_group(
                 binding: 6,
                 resource: wgpu::BindingResource::TextureView(sky_volume),
             },
+            wgpu::BindGroupEntry {
+                binding: 7,
+                resource: wgpu::BindingResource::TextureView(room_volume),
+            },
         ],
     })
 }
 
 /// A sky visibility volume for `Renderer::set_sky_volume`: origin (m), cell (m), cells per
-/// axis, samples.
-pub type SkyVolume<'a> = ([f32; 3], f32, [u32; 3], &'a [[f32; 4]]);
+/// axis, samples, room light.
+pub type SkyVolume<'a> = ([f32; 3], f32, [u32; 3], &'a [[f32; 4]], &'a [[f32; 4]]);
+
+/// The room light of a sky visibility volume as an `Rgba16Float` 3D texture, one level: rgb the
+/// lamps' light passed round the room (lux), a the room's average open fraction.
+fn room_volume_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    dims: [u32; 3],
+    samples: &[[f32; 4]],
+) -> (wgpu::Texture, wgpu::TextureView) {
+    let size = wgpu::Extent3d {
+        width: dims[0],
+        height: dims[1],
+        depth_or_array_layers: dims[2],
+    };
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("room volume"),
+        size,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D3,
+        format: wgpu::TextureFormat::Rgba16Float,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let bytes: Vec<u8> = samples
+        .iter()
+        .flat_map(|s| s.map(|v| hdri::f16_bits(v.clamp(0.0, 60000.0))))
+        .flat_map(u16::to_le_bytes)
+        .collect();
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &bytes,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(8 * dims[0]),
+            rows_per_image: Some(dims[1]),
+        },
+        size,
+    );
+    let view = texture.create_view(&Default::default());
+    (texture, view)
+}
 
 /// The sky visibility volume as an RGBA8 3D texture with its mips (averages of 2 x 2 x 2): r the
 /// visible fraction, gba the mean visible direction (at most 0.25 long) as `0.5 + 2 * a`.
@@ -4296,6 +4360,7 @@ impl Layouts {
                     storage_entry(4),
                     texture_entry(5, filterable, D::D2, false),
                     texture_entry(6, filterable, D::D3, false),
+                    texture_entry(7, filterable, D::D3, false),
                 ],
             ),
             globals_only: layout("globals only", &[uniform_entry(0, vfs, None)]),
