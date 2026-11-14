@@ -114,6 +114,32 @@ mod tests {
         assert!(p.terrain.is_some() && p.generators.len() >= 7);
     }
 
+    /// Every example's pond is a level water surface over its carved bed, not a sheet draped
+    /// under it (the estate's pond was a dry pit).
+    #[test]
+    fn every_example_pond_holds_water() {
+        for (name, _) in super::EXAMPLES {
+            let p = super::example(name).unwrap();
+            let t = p.terrain.as_deref().unwrap();
+            let pond = p
+                .shapes
+                .iter()
+                .find_map(|s| match s {
+                    crate::Shape::Area(a) if a.name == "Pond" => Some(a),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("{name}: no pond"));
+            assert!(!pond.drape, "{name}: the water is draped");
+            let n = pond.outline.len() as f32;
+            let c = pond
+                .outline
+                .iter()
+                .fold([0.0, 0.0], |a, q| [a[0] + q[0] / n, a[1] + q[1] / n]);
+            let bed = t.height_at(c[0], c[1]).unwrap();
+            assert!(pond.elevation > bed + 0.2 && pond.elevation < 0.0, "{name}: bed {bed}, water {}", pond.elevation);
+        }
+    }
+
     #[test]
     fn the_pond_is_square_and_its_coping_stands_on_the_lawn() {
         let p = super::example("garden").unwrap();

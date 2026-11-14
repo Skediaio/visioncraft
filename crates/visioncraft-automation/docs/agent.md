@@ -135,12 +135,14 @@ gives the plant `count`.
 {"intent": "a pond in the lawn", "steps": [
   {"id": "terrain.create", "params": {"origin": [-20, -20], "width_m": 40, "depth_m": 40, "base_material": "lawn"}},
   {"id": "terrain.carve", "params": {"outline": [[-4, -3], [4, -3], [5, 2], [-3, 4]], "depth_m": 0.8, "bank_m": 1.5}},
-  {"id": "shape.add_area", "params": {"name": "Pond water", "outline": [[-4, -3], [4, -3], [5, 2], [-3, 4]], "elevation": -0.3, "material": "water"}},
+  {"id": "shape.add_area", "params": {"name": "Pond water", "outline": [[-4, -3], [4, -3], [5, 2], [-3, 4]], "elevation": -0.3, "drape": false, "material": "water"}},
   {"id": "query.ground_height", "params": {"x": 0, "z": 0}}
 ]}
 ```
 
-The water surface sits 0.3 m below the lawn, 0.5 m above the pond bed.
+The water surface sits 0.3 m below the lawn, 0.5 m above the pond bed. It is level
+(`drape: false`): an area lies on the terrain by default, and a draped water surface 0.3 m under
+the carved bed is no water at all.
 
 ### 8. Lamps, and the garden at dusk
 
