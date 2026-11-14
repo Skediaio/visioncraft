@@ -790,6 +790,11 @@ impl Studio {
             self.suggest_lights = true;
         }
         let q = self.current_quality();
+        self.scene.flora.leaf_scale = if matches!(preset_name(&q), "high" | "ultra") {
+            2
+        } else {
+            1
+        };
         let rebake = q.impostor_resolution != self.renderer.quality().impostor_resolution;
         self.renderer.set_quality(q);
         if rebake {

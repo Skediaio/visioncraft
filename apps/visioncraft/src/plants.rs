@@ -103,6 +103,8 @@ struct Variant {
 
 struct Tex {
     atlas: TextureId,
+    /// The leaf normal map of a fine atlas (`leaf_scale` above 1).
+    atlas_normal: Option<TextureId>,
     bark: TextureId,
     bark_normal: TextureId,
     /// Mean linear colour of the atlas' opaque texels: what a tint of 1 looks like.
@@ -150,6 +152,11 @@ pub struct Flora {
     retired: Vec<(String, u8)>,
     /// Counts finished generations, so generators know to rebuild.
     pub rev: u64,
+    /// Leaf atlas texels per drawing unit for species generated from now on: 2 (512 px cells and
+    /// a leaf normal map) at HIGH and ULTRA, else 1.
+    /// shortcut: species already generated keep their atlas when the quality changes; regenerate
+    /// on a change if Auto's steps make the difference visible
+    pub leaf_scale: usize,
 }
 
 impl Flora {
@@ -191,7 +198,12 @@ impl Flora {
         for (&(m, mat, d), &kind) in v.parts.iter().zip(&v.kinds) {
             let mat = if kind == flora::Material::Foliage {
                 *foliage.get_or_insert_with(|| {
-                    scene::plant_material(r, kind, (tex.atlas, tex.bark, tex.bark_normal), tint)
+                    scene::plant_material(
+                        r,
+                        kind,
+                        (tex.atlas, tex.atlas_normal, tex.bark, tex.bark_normal),
+                        tint,
+                    )
                 })
             } else {
                 mat
@@ -333,7 +345,10 @@ impl Flora {
             }
             self.tinted.retain(|k, _| k.0 != id);
             if let Some(t) = self.textures.remove(&id) {
-                for tex in [t.atlas, t.bark, t.bark_normal] {
+                for tex in [t.atlas, t.bark, t.bark_normal]
+                    .into_iter()
+                    .chain(t.atlas_normal)
+                {
                     r.remove_texture(tex);
                 }
             }
@@ -356,13 +371,17 @@ impl Flora {
         };
         let (id, class, month) = (w.id.clone(), w.class, w.month);
         if !self.textures.contains_key(&id) {
-            let t = flora::textures(&w.params);
+            let t = flora::textures_at(&w.params, self.leaf_scale.max(1));
             let up = |r: &mut Renderer, i: &flora::Image, srgb: bool, repeat: bool| {
                 scene::upload_texture(r, i.width, i.height, &i.rgba, srgb, repeat)
             };
             let tex = (|| {
                 Some(Tex {
                     atlas: up(r, &t.atlas, true, false)?,
+                    atlas_normal: match &t.atlas_normal {
+                        Some(n) => Some(up(r, n, false, false)?),
+                        None => None,
+                    },
                     bark: up(r, &t.bark, true, true)?,
                     bark_normal: up(r, &t.bark_normal, false, true)?,
                     leaf_mean: opaque_mean(&t.atlas.rgba),
@@ -406,7 +425,7 @@ impl Flora {
                         scene::plant_material(
                             r,
                             kind,
-                            (tex.atlas, tex.bark, tex.bark_normal),
+                            (tex.atlas, tex.atlas_normal, tex.bark, tex.bark_normal),
                             mesh.foliage_tint,
                         )
                     });

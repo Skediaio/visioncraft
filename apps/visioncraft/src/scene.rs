@@ -228,16 +228,18 @@ pub fn plant_material(
     kind: flora::Material,
     tex: (
         visioncraft_render::TextureId,
+        Option<visioncraft_render::TextureId>,
         visioncraft_render::TextureId,
         visioncraft_render::TextureId,
     ),
     tint: [f32; 3],
 ) -> MaterialId {
     use visioncraft_render::{AlphaMode, Material as M};
-    let (atlas, bark, bark_normal) = tex;
+    let (atlas, atlas_normal, bark, bark_normal) = tex;
     let leaf = |color: [f32; 4], foliage: bool| M {
         base_color: color,
         base_color_map: Some(atlas),
+        normal_map: atlas_normal,
         roughness: 0.6,
         alpha_mode: AlphaMode::Cutout { threshold: 0.5 },
         double_sided: true,
