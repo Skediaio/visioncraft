@@ -33,6 +33,9 @@ pub struct Candidate {
     /// The file holds separate objects as root nodes: each becomes an asset (`<id>`, `_b`, ...).
     #[serde(default)]
     pub split_roots: bool,
+    /// Materials: the highest tier to build (`2k` or `4k`; default `2k`).
+    #[serde(default)]
+    pub max_tier: Option<String>,
     /// Materials: brick, plaster, concrete, wood, paving, gravel, roof, stone, tile, metal,
     /// ground, fabric, other.
     #[serde(default)]
@@ -228,12 +231,12 @@ fn mismatch(id: &str, field: &str, cand: &str, api: &str) {
     println!("MISMATCH {id} {field}: candidate list `{cand}`, API `{api}`");
 }
 
-pub fn fetch(cands: &[Candidate], cache: &Path, http: &Http) -> Result<()> {
+pub fn fetch(cands: &[Candidate], cache: &Path, http: &Http, tier: Option<&str>) -> Result<()> {
     fs::create_dir_all(cache)?;
     let mut failed = Vec::new();
     let mut done: Vec<Candidate> = Vec::new();
     for c in cands {
-        match fetch_one(c, cache, http) {
+        match fetch_tier(c, cache, http, tier) {
             Ok(n) => {
                 println!("ok {} ({n} downloaded)", c.source_id());
                 done.push(c.clone());
@@ -254,7 +257,7 @@ pub fn fetch(cands: &[Candidate], cache: &Path, http: &Http) -> Result<()> {
         all.retain(|v| v["page_url"] != c.page_url);
         all.push(json!({"category": c.category, "name": c.name, "source": c.source, "page_url": c.page_url,
             "author": c.author, "triangles": c.triangles, "species": c.species,
-            "kind": c.kind, "tags": c.tags, "exclude": c.exclude, "split_roots": c.split_roots}));
+            "kind": c.kind, "tags": c.tags, "exclude": c.exclude, "split_roots": c.split_roots, "max_tier": c.max_tier}));
     }
     fs::write(path, serde_json::to_vec_pretty(&all)?)?;
     if failed.is_empty() {
@@ -262,6 +265,92 @@ pub fn fetch(cands: &[Candidate], cache: &Path, http: &Http) -> Result<()> {
     } else {
         bail!("failed: {}", failed.join(", "))
     }
+}
+
+/// Whether a candidate has a `tier` file set: materials 2k (and 4k when `max_tier` says so),
+/// skies 4k, models 2k.
+pub fn has_tier(c: &Candidate, tier: &str) -> bool {
+    if c.is_material() {
+        tier == "2k" || (tier == "4k" && c.max_tier.as_deref() == Some("4k"))
+    } else if c.is_sky() {
+        tier == "4k"
+    } else {
+        tier == "2k"
+    }
+}
+
+fn fetch_tier(c: &Candidate, cache: &Path, http: &Http, tier: Option<&str>) -> Result<usize> {
+    let Some(tier) = tier else {
+        return fetch_one(c, cache, http);
+    };
+    if !has_tier(c, tier) {
+        return Ok(0);
+    }
+    let (dir, sid) = (c.dir(cache), c.source_id());
+    let mut n = 0;
+    if c.is_material() {
+        let attr = format!("{}-JPG", tier.to_uppercase());
+        let info: Value = serde_json::from_slice(&fs::read(dir.join("info.json"))?)?;
+        let dl = info["assets"][0]["downloads"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|d| d["attributes"] == attr.as_str() && d["extension"] == "zip")
+            .with_context(|| format!("the source has no {attr} zip"))?;
+        let zip = dir.join(format!("{sid}_{attr}.zip"));
+        n += usize::from(http.download(
+            dl["url"].as_str().context("no url")?,
+            &zip,
+            None,
+            dl["size"].as_u64(),
+        )?);
+        zip::ZipArchive::new(fs::File::open(&zip)?).context("downloaded zip is not readable")?;
+        return Ok(n);
+    }
+    let files: Value = serde_json::from_slice(&fs::read(dir.join("files.json"))?)?;
+    let mut get = |e: &Value, rel: &str| -> Result<()> {
+        let url = e["url"].as_str().context("no url")?;
+        n += usize::from(http.download(
+            url,
+            &dir.join(rel),
+            e["md5"].as_str(),
+            e["size"].as_u64(),
+        )?);
+        Ok(())
+    };
+    if c.is_sky() {
+        let e = &files["hdri"][tier]["hdr"];
+        let name = e["url"]
+            .as_str()
+            .and_then(|u| u.rsplit('/').next())
+            .context("the source has no such HDRI size")?;
+        get(e, name)?;
+    } else {
+        let g = &files["gltf"][tier]["gltf"];
+        let name = g["url"]
+            .as_str()
+            .and_then(|u| u.rsplit('/').next())
+            .with_context(|| format!("the source has no {tier} glTF"))?;
+        get(g, &format!("{tier}/{name}"))?;
+        for (rel, e) in g["include"].as_object().context("gltf has no include")? {
+            get(e, &format!("{tier}/{rel}"))?;
+        }
+        for (key, v) in files.as_object().context("files is not an object")? {
+            let k = key.to_lowercase();
+            if k.ends_with("alpha") || k.ends_with("opacity") {
+                let e = if v[tier]["jpg"].is_object() {
+                    &v[tier]["jpg"]
+                } else {
+                    &v[tier]["png"]
+                };
+                if let Some(url) = e["url"].as_str() {
+                    let name = url.rsplit('/').next().unwrap_or_default();
+                    get(e, &format!("{tier}/textures/{name}"))?;
+                }
+            }
+        }
+    }
+    Ok(n)
 }
 
 fn fetch_one(c: &Candidate, cache: &Path, http: &Http) -> Result<usize> {

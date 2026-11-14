@@ -39,6 +39,10 @@ enum Cmd {
         only: Vec<String>,
         #[arg(long, default_value = "assets/.cache")]
         cache: PathBuf,
+        /// Fetch a higher tier instead of the base set: `2k` (materials, models) or `4k`
+        /// (skies, and materials whose candidate says `max_tier: 4k`).
+        #[arg(long)]
+        tier: Option<String>,
     },
     /// Normalise the cached sources into the library folder.
     Ingest {
@@ -51,6 +55,9 @@ enum Cmd {
         /// Parallel workers.
         #[arg(short, long, default_value_t = 3)]
         jobs: usize,
+        /// Build a higher tier next to the base set (see `fetch --tier`).
+        #[arg(long)]
+        tier: Option<String>,
     },
     /// Write catalog.json, materials.json, skies.json and ATTRIBUTION.md.
     Catalog {
@@ -113,17 +120,26 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let http = net::Http::new(&cli.user_agent, cli.delay_ms);
     match cli.cmd {
-        Cmd::Fetch { list, only, cache } => {
-            net::fetch(&net::load_candidates(&list, &only)?, &cache, &http)
-        }
+        Cmd::Fetch {
+            list,
+            only,
+            cache,
+            tier,
+        } => net::fetch(
+            &net::load_candidates(&list, &only)?,
+            &cache,
+            &http,
+            tier.as_deref(),
+        ),
         Cmd::Ingest {
             cache,
             out,
             only,
             jobs,
+            tier,
         } => {
             let cands = net::load_candidates(&[cache.join("candidates.json")], &only)?;
-            ingest::ingest_all(&cands, &cache, &out, jobs)
+            ingest::ingest_all(&cands, &cache, &out, jobs, tier.as_deref())
         }
         Cmd::Catalog { out } => library::catalog(&out),
         Cmd::Check { out } => {

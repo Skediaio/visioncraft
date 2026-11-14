@@ -447,6 +447,10 @@
 - Rustig Koppie (Pure Sky) by Greg Zaal, Jarod Guest (https://polyhaven.com/a/rustig_koppie_puresky)
 - Syferfontein 6d Clear (Pure Sky) by Greg Zaal, Jarod Guest (https://polyhaven.com/a/syferfontein_6d_clear_puresky)
 
+## Higher-resolution tiers
+
+The 2k and 4k files listed in `tiers.json` are the same assets from the same sources, with the same licence and author as their entries above.
+
 ## Sources
 
 Models and skies: [Poly Haven](https://polyhaven.com), CC0. Materials: [ambientCG](https://ambientcg.com), CC0.

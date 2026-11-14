@@ -9,7 +9,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "brick wall, varied colours and bonds; tags: 104, bond, bricks, clean, masonry, modern, mortar, orange, red, simple, smooth, urban, wall; no stated size"
+  "why": "brick wall, varied colours and bonds; tags: 104, bond, bricks, clean, masonry, modern, mortar, orange, red, simple, smooth, urban, wall; no stated size",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -21,7 +22,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "brick wall, varied colours and bonds; tags: 2, brick, bricks, modern, wall, yellow; stated size 95x75 cm"
+  "why": "brick wall, varied colours and bonds; tags: 2, brick, bricks, modern, wall, yellow; stated size 95x75 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -33,7 +35,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "brick wall, varied colours and bonds; tags: 3, bricks, dark, medieval, old, red, vintage, wall; stated size 125x80 cm"
+  "why": "brick wall, varied colours and bonds; tags: 3, bricks, dark, medieval, old, red, vintage, wall; stated size 125x80 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -45,7 +48,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "brick wall, varied colours and bonds; tags: 8, bricks, church, clean, flat, medieval, old, sandstone, stone, wall; stated size 165x165 cm"
+  "why": "brick wall, varied colours and bonds; tags: 8, bricks, church, clean, flat, medieval, old, sandstone, stone, wall; stated size 165x165 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -57,7 +61,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "brick wall, varied colours and bonds; tags: 11, bricks, clean, modern, red, rough; stated size 155x155 cm"
+  "why": "brick wall, varied colours and bonds; tags: 11, bricks, clean, modern, red, rough; stated size 155x155 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -69,7 +74,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "brick wall, varied colours and bonds; tags: 16, bricks, clean, flat, modern, yellow; stated size 150x150 cm"
+  "why": "brick wall, varied colours and bonds; tags: 16, bricks, clean, flat, modern, yellow; stated size 150x150 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -81,7 +87,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "brick wall, varied colours and bonds; tags: 28, bricks, modern, orange, red, wall; stated size 175x175 cm"
+  "why": "brick wall, varied colours and bonds; tags: 28, bricks, modern, orange, red, wall; stated size 175x175 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -93,7 +100,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "brick wall, varied colours and bonds; tags: 38, bricks, old, wall, white; stated size 110x110 cm"
+  "why": "brick wall, varied colours and bonds; tags: 38, bricks, old, wall, white; stated size 110x110 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -105,7 +113,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "plaster/render; tags: 001, 1, clean, matte, modern, outdoor, plaster, rough, solid, stucco, surface, wall, white; no stated size"
+  "why": "plaster/render; tags: 001, 1, clean, matte, modern, outdoor, plaster, rough, solid, stucco, surface, wall, white; no stated size",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -117,7 +126,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "plaster/render; tags: 1, paint, painted, plaster, red, wall; no stated size"
+  "why": "plaster/render; tags: 1, paint, painted, plaster, red, wall; no stated size",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -129,7 +139,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "plaster/render; tags: 2, blue, paint, painted, plaster, scratched, scuffs, wall; no stated size"
+  "why": "plaster/render; tags: 2, blue, paint, painted, plaster, scratched, scuffs, wall; no stated size",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -141,7 +152,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "plaster/render; tags: 3, green, paint, painted, plaster, scratched, scratches, wall; no stated size"
+  "why": "plaster/render; tags: 3, green, paint, painted, plaster, scratched, scratches, wall; no stated size",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -153,7 +165,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "plaster/render; tags: 4, clean, paint, painted, plaster, yellow; no stated size"
+  "why": "plaster/render; tags: 4, clean, paint, painted, plaster, yellow; no stated size",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -165,7 +178,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "plaster/render; tags: 5, bumps, clean, cracks, orange, paint, painted, plaster, scratched, scuffs, yellow; no stated size"
+  "why": "plaster/render; tags: 5, bumps, clean, cracks, orange, paint, painted, plaster, scratched, scuffs, yellow; no stated size",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -177,7 +191,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "concrete; tags: 34, concrete, grey, light, plaster, smooth; stated size 110x55 cm"
+  "why": "concrete; tags: 34, concrete, grey, light, plaster, smooth; stated size 110x55 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -189,7 +204,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "concrete; tags: 38, concrete, gray, green, mossy; stated size 60x60 cm"
+  "why": "concrete; tags: 38, concrete, gray, green, mossy; stated size 60x60 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -201,7 +217,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "concrete; tags: 39, broken, brown, concrete, rough; stated size 190x190 cm"
+  "why": "concrete; tags: 39, broken, brown, concrete, rough; stated size 190x190 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -213,7 +230,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "concrete; tags: 40, brown, concrete, rough; stated size 140x140 cm"
+  "why": "concrete; tags: 40, brown, concrete, rough; stated size 140x140 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -225,7 +243,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "concrete; tags: 45, concrete, industrial, modern, pattern; stated size 200x200 cm"
+  "why": "concrete; tags: 45, concrete, industrial, modern, pattern; stated size 200x200 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -237,7 +256,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "concrete; tags: 46, concrete, gray, grey, plain, smooth, wall, white; stated size 240x240 cm"
+  "why": "concrete; tags: 46, concrete, gray, grey, plain, smooth, wall, white; stated size 240x240 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -249,7 +269,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "timber planks / decking; tags: 29, planks, terrace; stated size 240x240 cm"
+  "why": "timber planks / decking; tags: 29, planks, terrace; stated size 240x240 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -261,7 +282,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "timber planks / decking; tags: 7, planks, smooth, wood; stated size 150x150 cm"
+  "why": "timber planks / decking; tags: 7, planks, smooth, wood; stated size 150x150 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -273,7 +295,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "timber planks / decking; tags: 21, brown, floor, planks, raw, rough, wall, wood, yellow; stated size 140x140 cm"
+  "why": "timber planks / decking; tags: 21, brown, floor, planks, raw, rough, wall, wood, yellow; stated size 140x140 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -285,7 +308,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "timber planks / decking; tags: 22, dirt, dust, green, planks; stated size 110x110 cm"
+  "why": "timber planks / decking; tags: 22, dirt, dust, green, planks; stated size 110x110 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -297,7 +321,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "timber planks / decking; tags: 28, painted, planks, red; stated size 80x80 cm"
+  "why": "timber planks / decking; tags: 28, painted, planks, red; stated size 80x80 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -309,7 +334,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "timber planks / decking; tags: 38, brown, dirt, green, mold, moss, planks; stated size 110x55 cm"
+  "why": "timber planks / decking; tags: 38, brown, dirt, green, mold, moss, planks; stated size 110x55 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -321,7 +347,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "timber floor boards; tags: 32, brown, clean, floor, parquet, shiny, smooth, wood; stated size 255x255 cm"
+  "why": "timber floor boards; tags: 32, brown, clean, floor, parquet, shiny, smooth, wood; stated size 255x255 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -333,7 +360,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "timber floor boards; tags: 33, clean, floor, parquet, smooth, wood; stated size 255x255 cm"
+  "why": "timber floor boards; tags: 33, clean, floor, parquet, smooth, wood; stated size 255x255 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -345,7 +373,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "timber floor boards; tags: 34, floor, herringbone, parquet, wood; stated size 190x190 cm"
+  "why": "timber floor boards; tags: 34, floor, herringbone, parquet, wood; stated size 190x190 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -357,7 +386,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "timber floor boards; tags: 35, floor, herringbone, parquet, wood; stated size 190x190 cm"
+  "why": "timber floor boards; tags: 35, floor, herringbone, parquet, wood; stated size 190x190 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -369,7 +399,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "wood siding / cladding; tags: 13, shingles, siding, weathered, wood; stated size 140x140 cm"
+  "why": "wood siding / cladding; tags: 13, shingles, siding, weathered, wood; stated size 140x140 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -381,7 +412,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "wood siding / cladding; tags: 1, blue, old, painted, rough, wood; no stated size"
+  "why": "wood siding / cladding; tags: 1, blue, old, painted, rough, wood; no stated size",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -393,7 +425,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "wood siding / cladding; tags: 3, old, painted, red, rough, wood; no stated size"
+  "why": "wood siding / cladding; tags: 3, old, painted, red, rough, wood; no stated size",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -405,7 +438,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "wood siding / cladding; tags: 5, old, painted, rough, wood; no stated size"
+  "why": "wood siding / cladding; tags: 5, old, painted, rough, wood; no stated size",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -417,7 +451,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "cobble / clinker pavers; tags: 150, arches, beige, cobble, cobblestone, floor, gray, historic, natural, old, outdoor, patterned, pavement, paving, rough, rustic, stone, stones, urban; stated size 90x90 cm"
+  "why": "cobble / clinker pavers; tags: 150, arches, beige, cobble, cobblestone, floor, gray, historic, natural, old, outdoor, patterned, pavement, paving, rough, rustic, stone, stones, urban; stated size 90x90 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -429,7 +464,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "cobble / clinker pavers; tags: 5, cobblestone, pavement, paving, stones; stated size 125x125 cm"
+  "why": "cobble / clinker pavers; tags: 5, cobblestone, pavement, paving, stones; stated size 125x125 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -441,7 +477,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "cobble / clinker pavers; tags: 119, cobble, cobblestone, gray, paving, stones; stated size 115x115 cm"
+  "why": "cobble / clinker pavers; tags: 119, cobble, cobblestone, gray, paving, stones; stated size 115x115 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -453,7 +490,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "cobble / clinker pavers; tags: 151, arch, arches, beige, cobblestone, european, gray, grid, mosaic, old, paving, pavingstones151, pedestrian, rough, stone, stones, street, urban; stated size 540x540 cm"
+  "why": "cobble / clinker pavers; tags: 151, arch, arches, beige, cobblestone, european, gray, grid, mosaic, old, paving, pavingstones151, pedestrian, rough, stone, stones, street, urban; stated size 540x540 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -465,7 +503,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "cobble / clinker pavers; tags: 6, cobblestone, pavement, paving, stones; no stated size"
+  "why": "cobble / clinker pavers; tags: 6, cobblestone, pavement, paving, stones; no stated size",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -477,7 +516,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "cobble / clinker pavers; tags: 7, cobblestone, pavement, paving, stones; no stated size"
+  "why": "cobble / clinker pavers; tags: 7, cobblestone, pavement, paving, stones; no stated size",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -489,7 +529,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "cobble / clinker pavers; tags: 8, cobblestone, pavement, paving, stones; no stated size"
+  "why": "cobble / clinker pavers; tags: 8, cobblestone, pavement, paving, stones; no stated size",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -501,7 +542,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "cobble / clinker pavers; tags: 9, cobblestone, pavement, paving, stones; no stated size"
+  "why": "cobble / clinker pavers; tags: 9, cobblestone, pavement, paving, stones; no stated size",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -513,7 +555,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "paving stones and flagstones; tags: 137, garden, herringbone, pavement, paving, red, stones; stated size 180x180 cm"
+  "why": "paving stones and flagstones; tags: 137, garden, herringbone, pavement, paving, red, stones; stated size 180x180 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -525,7 +568,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "paving stones and flagstones; tags: 55, medieval, old, paved, pavement, paving, pebbles, road, rocks, roman, stones; stated size 300x300 cm"
+  "why": "paving stones and flagstones; tags: 55, medieval, old, paved, pavement, paving, pebbles, road, rocks, roman, stones; stated size 300x300 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -537,7 +581,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "paving stones and flagstones; tags: 92, floor, pavement, paving, red, stone, stones; stated size 155x155 cm"
+  "why": "paving stones and flagstones; tags: 92, floor, pavement, paving, red, stone, stones; stated size 155x155 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -549,7 +594,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "paving stones and flagstones; tags: 105, grey, paving, stones, tiles, waves; stated size 200x200 cm"
+  "why": "paving stones and flagstones; tags: 105, grey, paving, stones, tiles, waves; stated size 200x200 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -561,7 +607,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "paving stones and flagstones; tags: 106, grey, paving, stones, tiles, waves; stated size 200x200 cm"
+  "why": "paving stones and flagstones; tags: 106, grey, paving, stones, tiles, waves; stated size 200x200 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -573,7 +620,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "gravel and pebbles; tags: 23, bright, dirt, gravel, ground, light, pebbles, stone, white; stated size 150x150 cm"
+  "why": "gravel and pebbles; tags: 23, bright, dirt, gravel, ground, light, pebbles, stone, white; stated size 150x150 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -585,7 +633,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "gravel and pebbles; tags: 16, gravel, ground, pebbles, river, rocks; stated size 100x100 cm"
+  "why": "gravel and pebbles; tags: 16, gravel, ground, pebbles, river, rocks; stated size 100x100 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -597,7 +646,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "gravel and pebbles; tags: 17, gravel, ground, pebbles, river, rocks; stated size 115x115 cm"
+  "why": "gravel and pebbles; tags: 17, gravel, ground, pebbles, river, rocks; stated size 115x115 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -609,7 +659,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "gravel and pebbles; tags: 18, gravel, ground, pebbles, river, rocks; stated size 165x165 cm"
+  "why": "gravel and pebbles; tags: 18, gravel, ground, pebbles, river, rocks; stated size 165x165 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -621,7 +672,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "gravel and pebbles; tags: 19, gravel, ground, pebbles, river, rocks; stated size 140x140 cm"
+  "why": "gravel and pebbles; tags: 19, gravel, ground, pebbles, river, rocks; stated size 140x140 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -633,7 +685,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "gravel and pebbles; tags: 20, gravel, ground, pebbles, river, rocks; stated size 80x80 cm"
+  "why": "gravel and pebbles; tags: 20, gravel, ground, pebbles, river, rocks; stated size 80x80 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -645,7 +698,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "asphalt; tags: 20, asphalt, clean, dark, grey, smooth; stated size 460x460 cm"
+  "why": "asphalt; tags: 20, asphalt, clean, dark, grey, smooth; stated size 460x460 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -657,7 +711,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "asphalt; tags: 21, asphalt, broken, cracks, dark, gray, grey; stated size 185x185 cm"
+  "why": "asphalt; tags: 21, asphalt, broken, cracks, dark, gray, grey; stated size 185x185 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -669,7 +724,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "asphalt; tags: 22, asphalt, broken, cracks, dark, gray, grey; stated size 185x185 cm"
+  "why": "asphalt; tags: 22, asphalt, broken, cracks, dark, gray, grey; stated size 185x185 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -681,7 +737,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "slate roofing; tags: 3, clean, roofing, slate, square, tiles; no stated size"
+  "why": "slate roofing; tags: 3, clean, roofing, slate, square, tiles; no stated size",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -693,7 +750,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "slate roofing; tags: 1, city, house, old, roof, roofing, slate, stone, tiles; no stated size"
+  "why": "slate roofing; tags: 1, city, house, old, roof, roofing, slate, stone, tiles; no stated size",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -705,7 +763,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "slate roofing; tags: 2, clean, roofing, round, slate, tiles; no stated size"
+  "why": "slate roofing; tags: 2, clean, roofing, round, slate, tiles; no stated size",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -717,7 +776,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "slate roofing; tags: 4, clean, roofing, round, slate, tiles; no stated size"
+  "why": "slate roofing; tags: 4, clean, roofing, round, slate, tiles; no stated size",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -729,7 +789,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "roof tiles; tags: 13, clay, roof, roofing, tiles, tiling; stated size 290x290 cm"
+  "why": "roof tiles; tags: 13, clay, roof, roofing, tiles, tiling; stated size 290x290 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -741,7 +802,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "roof tiles; tags: 6, brown, clean, modern, roofing, tiles; stated size 320x320 cm"
+  "why": "roof tiles; tags: 6, brown, clean, modern, roofing, tiles; stated size 320x320 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -753,7 +815,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "roof tiles; tags: 7, brown, dirty, modern, roofing, tiles; stated size 320x320 cm"
+  "why": "roof tiles; tags: 7, brown, dirty, modern, roofing, tiles; stated size 320x320 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -765,7 +828,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "roof tiles; tags: 8, brown, dirty, modern, moss, roofing, tiles; stated size 320x320 cm"
+  "why": "roof tiles; tags: 8, brown, dirty, modern, moss, roofing, tiles; stated size 320x320 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -777,7 +841,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "roof tiles; tags: 9, black, modern, roofing, tiles; stated size 320x320 cm"
+  "why": "roof tiles; tags: 9, black, modern, roofing, tiles; stated size 320x320 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -789,7 +854,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "roof tiles; tags: 10, grey, modern, roofing, tiles, white; stated size 320x320 cm"
+  "why": "roof tiles; tags: 10, grey, modern, roofing, tiles, white; stated size 320x320 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -801,7 +867,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "natural stone wall; tags: 22, gravel, pebble, pebbles, rocks, small, stone; stated size 50x50 cm"
+  "why": "natural stone wall; tags: 22, gravel, pebble, pebbles, rocks, small, stone; stated size 50x50 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -813,7 +880,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "natural stone wall; tags: 25, floor, medieval, rocks, stone, wall; stated size 190x190 cm"
+  "why": "natural stone wall; tags: 25, floor, medieval, rocks, stone, wall; stated size 190x190 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -825,7 +893,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "natural stone wall; tags: 4, beige, flat, rock, smooth, stone; no stated size"
+  "why": "natural stone wall; tags: 4, beige, flat, rock, smooth, stone; no stated size",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -837,7 +906,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "natural stone wall; tags: 062, 62, cracked, eroded, grey, natural, outdoor, rock, rough, rugged, sand, stone, uneven; no stated size"
+  "why": "natural stone wall; tags: 062, 62, cracked, eroded, grey, natural, outdoor, rock, rough, rugged, sand, stone, uneven; no stated size",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -849,7 +919,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "natural stone wall; tags: 064, 64, forest, gray, green, irregular, moss, mossy, natural, old, rock, rock064, rough, stacked, stone; no stated size"
+  "why": "natural stone wall; tags: 064, 64, forest, gray, green, irregular, moss, mossy, natural, old, rock, rock064, rough, stacked, stone; no stated size",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -861,7 +932,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "natural stone wall; tags: 6, edges, gravel, grey, light, pebbles, rocks, sharp, stone, stones; no stated size"
+  "why": "natural stone wall; tags: 6, edges, gravel, grey, light, pebbles, rocks, sharp, stone, stones; no stated size",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -873,7 +945,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "rock / cliff face; tags: 42, beige, rock, smooth; stated size 240x240 cm"
+  "why": "rock / cliff face; tags: 42, beige, rock, smooth; stated size 240x240 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -885,7 +958,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "rock / cliff face; tags: 43, grey, rock, rough; stated size 180x180 cm"
+  "why": "rock / cliff face; tags: 43, grey, rock, rough; stated size 180x180 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -897,7 +971,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "rock / cliff face; tags: 44, cliff, large, rock, rough; stated size 115x115 cm"
+  "why": "rock / cliff face; tags: 44, cliff, large, rock, rough; stated size 115x115 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -909,7 +984,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "rock / cliff face; tags: 45, cliff, jagged, rock; stated size 240x240 cm"
+  "why": "rock / cliff face; tags: 45, cliff, jagged, rock; stated size 240x240 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -921,7 +997,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "ceramic tiles for terraces, pools and interiors; tags: 38, bright, dirty, grey, light, pavement, paving, square, tiles; stated size 110x55 cm"
+  "why": "ceramic tiles for terraces, pools and interiors; tags: 38, bright, dirty, grey, light, pavement, paving, square, tiles; stated size 110x55 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -933,7 +1010,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "ceramic tiles for terraces, pools and interiors; tags: 65, hexagon, mosaic, orange, tiled, tiles, yellow; stated size 45x45 cm"
+  "why": "ceramic tiles for terraces, pools and interiors; tags: 65, hexagon, mosaic, orange, tiled, tiles, yellow; stated size 45x45 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -945,7 +1023,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "ceramic tiles for terraces, pools and interiors; tags: 66, brown, hexagon, mosaic, orange, tiled, tiles; stated size 45x45 cm"
+  "why": "ceramic tiles for terraces, pools and interiors; tags: 66, brown, hexagon, mosaic, orange, tiled, tiles; stated size 45x45 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -957,7 +1036,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "ceramic tiles for terraces, pools and interiors; tags: 69, blue, hexagon, mosaic, pool, tiled, tiles, white; stated size 60x60 cm"
+  "why": "ceramic tiles for terraces, pools and interiors; tags: 69, blue, hexagon, mosaic, pool, tiled, tiles, white; stated size 60x60 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -969,7 +1049,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "ceramic tiles for terraces, pools and interiors; tags: 70, black, blue, dark, hexagon, mosaic, pool, tiled, tiles, white; stated size 60x60 cm"
+  "why": "ceramic tiles for terraces, pools and interiors; tags: 70, black, blue, dark, hexagon, mosaic, pool, tiled, tiles, white; stated size 60x60 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -981,7 +1062,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "ceramic tiles for terraces, pools and interiors; tags: 71, bathroom, hexagon, mosaic, tiled, tiles, white; stated size 45x45 cm"
+  "why": "ceramic tiles for terraces, pools and interiors; tags: 71, bathroom, hexagon, mosaic, tiled, tiles, white; stated size 45x45 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -993,7 +1075,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "ceramic tiles for terraces, pools and interiors; tags: 72, black, hexagon, mosaic, tiled, tiles; stated size 45x45 cm"
+  "why": "ceramic tiles for terraces, pools and interiors; tags: 72, black, hexagon, mosaic, tiled, tiles; stated size 45x45 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -1005,7 +1088,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "ceramic tiles for terraces, pools and interiors; tags: 73, bathroom, black, clean, shower, square, tiles; stated size 75x75 cm"
+  "why": "ceramic tiles for terraces, pools and interiors; tags: 73, bathroom, black, clean, shower, square, tiles; stated size 75x75 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -1017,7 +1101,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "rust / corten; tags: 2, brown, industrial, old, rust, rusted, rusty; no stated size"
+  "why": "rust / corten; tags: 2, brown, industrial, old, rust, rusted, rusty; no stated size",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -1029,7 +1114,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "rust / corten; tags: 3, brown, industrial, old, rust, rusted, rusty; no stated size"
+  "why": "rust / corten; tags: 3, brown, industrial, old, rust, rusted, rusty; no stated size",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -1041,7 +1127,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "corrugated steel / zinc; tags: 1, blue, corrugated, cyan, painted, screws, steel; no stated size"
+  "why": "corrugated steel / zinc; tags: 1, blue, corrugated, cyan, painted, screws, steel; no stated size",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -1053,7 +1140,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "corrugated steel / zinc; tags: 2, corrugated, painted, red, screws, steel; no stated size"
+  "why": "corrugated steel / zinc; tags: 2, corrugated, painted, red, screws, steel; no stated size",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -1065,7 +1153,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "painted metal; tags: 1, metal, painted, scratched, scratches, yellow; no stated size"
+  "why": "painted metal; tags: 1, metal, painted, scratched, scratches, yellow; no stated size",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -1077,7 +1166,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "painted metal; tags: 2, blue, metal, painted, scratched, scratches; no stated size"
+  "why": "painted metal; tags: 2, blue, metal, painted, scratched, scratches; no stated size",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -1089,7 +1179,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "painted metal; tags: 3, blue, metal, painted; no stated size"
+  "why": "painted metal; tags: 3, blue, metal, painted; no stated size",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -1101,7 +1192,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "metal; tags: 1, bumpy, metal, scratches, silver, steel; no stated size"
+  "why": "metal; tags: 1, bumpy, metal, scratches, silver, steel; no stated size",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -1113,7 +1205,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "bark mulch / wood chips; tags: 3, brown, chips, ground, wood; stated size 160x160 cm"
+  "why": "bark mulch / wood chips; tags: 3, brown, chips, ground, wood; stated size 160x160 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -1125,7 +1218,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "bark mulch / wood chips; tags: 14, bark, brown, fir, forest, tree, wood; stated size 120x120 cm"
+  "why": "bark mulch / wood chips; tags: 14, bark, brown, fir, forest, tree, wood; stated size 120x120 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -1137,7 +1231,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "bark mulch / wood chips; tags: 016, 16, bark, bark016, mossy; stated size 80x80 cm"
+  "why": "bark mulch / wood chips; tags: 016, 16, bark, bark016, mossy; stated size 80x80 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -1149,7 +1244,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "soil, ground, mud; tags: 103, brown, dirt, earth, ground, natural, old, outdoor, rough, soil, uneven; no stated size"
+  "why": "soil, ground, mud; tags: 103, brown, dirt, earth, ground, natural, old, outdoor, rough, soil, uneven; no stated size",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -1161,7 +1257,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "soil, ground, mud; tags: 43, dirt, ground, sand; stated size 300x300 cm"
+  "why": "soil, ground, mud; tags: 43, dirt, ground, sand; stated size 300x300 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -1173,7 +1270,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "soil, ground, mud; tags: 44, dirt, ground, sand; stated size 300x300 cm"
+  "why": "soil, ground, mud; tags: 44, dirt, ground, sand; stated size 300x300 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -1185,7 +1283,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "soil, ground, mud; tags: 45, dirt, ground, sand; stated size 300x300 cm"
+  "why": "soil, ground, mud; tags: 45, dirt, ground, sand; stated size 300x300 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -1197,7 +1296,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "soil, ground, mud; tags: 46, dirt, ground, sand; stated size 300x300 cm"
+  "why": "soil, ground, mud; tags: 46, dirt, ground, sand; stated size 300x300 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -1209,7 +1309,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "soil, ground, mud; tags: 47, dirt, ground, sand; stated size 300x300 cm"
+  "why": "soil, ground, mud; tags: 47, dirt, ground, sand; stated size 300x300 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -1221,7 +1322,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "grass and moss; tags: 004, 4, dense, garden, grass, grass004, green, ground, lawn, lush, natural, park, short, soft, suburban; stated size 140x140 cm"
+  "why": "grass and moss; tags: 004, 4, dense, garden, grass, grass004, green, ground, lawn, lush, natural, park, short, soft, suburban; stated size 140x140 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -1233,7 +1335,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "grass and moss; tags: 001, 1, cover, dark, dense, fresh, garden, grass, grass001, green, ground, lawn, natural, park, short, soft; stated size 140x140 cm"
+  "why": "grass and moss; tags: 001, 1, cover, dark, dense, fresh, garden, grass, grass001, green, ground, lawn, natural, park, short, soft; stated size 140x140 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -1245,7 +1348,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "grass and moss; tags: 2, grass, green, ground; stated size 140x140 cm"
+  "why": "grass and moss; tags: 2, grass, green, ground; stated size 140x140 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -1257,7 +1361,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "grass and moss; tags: 3, grass, green, ground; stated size 140x140 cm"
+  "why": "grass and moss; tags: 3, grass, green, ground; stated size 140x140 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -1269,7 +1374,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "grass and moss; tags: 1, ground, moss, mossy; stated size 45x45 cm"
+  "why": "grass and moss; tags: 1, ground, moss, mossy; stated size 45x45 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -1281,7 +1387,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "grass and moss; tags: 5, clean, grass, green, lawn, short; no stated size"
+  "why": "grass and moss; tags: 5, clean, grass, green, lawn, short; no stated size",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -1293,7 +1400,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "sand; tags: 52, beach, dirt, ground, sand, white; stated size 200x200 cm"
+  "why": "sand; tags: 52, beach, dirt, ground, sand, white; stated size 200x200 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -1305,7 +1413,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "sand; tags: 54, beach, dirt, ground, mud, sand; stated size 350x350 cm"
+  "why": "sand; tags: 54, beach, dirt, ground, mud, sand; stated size 350x350 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -1317,7 +1426,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "sand; tags: 55, beach, ground, sand; stated size 300x300 cm"
+  "why": "sand; tags: 55, beach, ground, sand; stated size 300x300 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -1329,7 +1439,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "fabric for parasols and cushions; tags: 46, blue, fabric, polyester, substance, vest; stated size 40x40 cm"
+  "why": "fabric for parasols and cushions; tags: 46, blue, fabric, polyester, substance, vest; stated size 40x40 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -1341,7 +1452,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "fabric for parasols and cushions; tags: 47, fabric, green, polyester, substance, vest; stated size 40x40 cm"
+  "why": "fabric for parasols and cushions; tags: 47, fabric, green, polyester, substance, vest; stated size 40x40 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -1353,7 +1465,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "fabric for parasols and cushions; tags: 48, fabric, polyester, substance, vest, white; stated size 40x40 cm"
+  "why": "fabric for parasols and cushions; tags: 48, fabric, polyester, substance, vest, white; stated size 40x40 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -1365,7 +1478,8 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "fabric for parasols and cushions; tags: 49, black, fabric, polyester, substance, vest; stated size 40x40 cm"
+  "why": "fabric for parasols and cushions; tags: 49, black, fabric, polyester, substance, vest; stated size 40x40 cm",
+  "max_tier": "4k"
  },
  {
   "category": "material",
@@ -1377,6 +1491,7 @@
   "author": "ambientCG (Lennart Demes)",
   "triangles": null,
   "species": null,
-  "why": "fabric for parasols and cushions; tags: 61, fabric, rough; stated size 40x40 cm"
+  "why": "fabric for parasols and cushions; tags: 61, fabric, rough; stated size 40x40 cm",
+  "max_tier": "4k"
  }
 ]

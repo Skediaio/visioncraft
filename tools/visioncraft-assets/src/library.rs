@@ -70,6 +70,7 @@ pub fn catalog(out: &Path) -> Result<()> {
     for s in &skies.skies {
         md += &format!("- {} by {} ({})\n", s.name, s.author, s.source_url);
     }
+    md += "\n## Higher-resolution tiers\n\nThe 2k and 4k files listed in `tiers.json` are the same assets from the same sources, with the same licence and author as their entries above.\n";
     md += "\n## Sources\n\nModels and skies: [Poly Haven](https://polyhaven.com), CC0. Materials: [ambientCG](https://ambientcg.com), CC0.\n";
     fs::write(out.join("catalog.json"), bytes)?;
     fs::write(
@@ -78,6 +79,14 @@ pub fn catalog(out: &Path) -> Result<()> {
     )?;
     fs::write(out.join("skies.json"), serde_json::to_vec_pretty(&skies)?)?;
     fs::write(out.join("ATTRIBUTION.md"), md)?;
+    let tiers = build_tiers(out, &catalog, &materials, &skies);
+    fs::write(out.join("tiers.json"), serde_json::to_vec_pretty(&tiers)?)?;
+    println!(
+        "tiers: {} materials, {} skies, {} models with higher tiers",
+        tiers.materials.len(),
+        tiers.skies.len(),
+        tiers.models.len()
+    );
     println!(
         "catalogue: {} models, {} materials, {} skies",
         catalog.assets.len(),
@@ -85,6 +94,131 @@ pub fn catalog(out: &Path) -> Result<()> {
         skies.skies.len()
     );
     Ok(())
+}
+
+/// One higher-resolution set of a material; paths relative to the library root.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct MaterialTier {
+    pub basecolor: String,
+    pub normal: String,
+    pub orm: String,
+    pub height: Option<String>,
+    /// Longest side of the maps in pixels.
+    pub px: u32,
+    /// Total size of the files of this tier.
+    pub bytes: u64,
+}
+
+/// One higher-resolution file of a sky or a model.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct FileTier {
+    pub file: String,
+    pub bytes: u64,
+}
+
+/// An asset's higher tiers with its licence, author and source, keyed by tier name.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct TierEntry<T> {
+    pub license: String,
+    pub author: String,
+    pub source_url: String,
+    pub tiers: std::collections::BTreeMap<String, T>,
+}
+
+/// `tiers.json`: what exists above the base set, written by `catalog` from the files on disk.
+/// Base files (1k materials and skies, lod0..2 models) are never replaced by these.
+#[derive(Serialize, Deserialize, Default, Debug)]
+pub struct Tiers {
+    pub version: u32,
+    pub materials: std::collections::BTreeMap<String, TierEntry<MaterialTier>>,
+    pub skies: std::collections::BTreeMap<String, TierEntry<FileTier>>,
+    pub models: std::collections::BTreeMap<String, TierEntry<FileTier>>,
+}
+
+fn size_of(out: &Path, rel: &str) -> Option<u64> {
+    fs::metadata(out.join(rel)).ok().map(|m| m.len())
+}
+
+pub fn build_tiers(out: &Path, cat: &Catalog, mats: &Materials, skies: &Skies) -> Tiers {
+    let mut t = Tiers {
+        version: 1,
+        ..Tiers::default()
+    };
+    for m in &mats.materials {
+        let mut tiers = std::collections::BTreeMap::new();
+        for tier in ["2k", "4k"] {
+            let rel = |f: &str| format!("materials/{}/{tier}/{f}", m.id);
+            let Some(mut bytes) = size_of(out, &rel("basecolor.jpg")) else {
+                continue;
+            };
+            let height = size_of(out, &rel("height.jpg")).inspect(|b| bytes += b);
+            bytes += ["normal.jpg", "orm.jpg"]
+                .iter()
+                .filter_map(|f| size_of(out, &rel(f)))
+                .sum::<u64>();
+            let px =
+                image::image_dimensions(out.join(rel("basecolor.jpg"))).map_or(0, |d| d.0.max(d.1));
+            tiers.insert(
+                tier.to_string(),
+                MaterialTier {
+                    basecolor: rel("basecolor.jpg"),
+                    normal: rel("normal.jpg"),
+                    orm: rel("orm.jpg"),
+                    height: height.map(|_| rel("height.jpg")),
+                    px,
+                    bytes,
+                },
+            );
+        }
+        if !tiers.is_empty() {
+            t.materials.insert(
+                m.id.clone(),
+                TierEntry {
+                    license: m.license.clone(),
+                    author: m.author.clone(),
+                    source_url: m.source_url.clone(),
+                    tiers,
+                },
+            );
+        }
+    }
+    for s in &skies.skies {
+        let tiers: std::collections::BTreeMap<_, _> = ["4k", "8k"]
+            .iter()
+            .filter_map(|tier| {
+                let file = format!("skies/{}/sky_{tier}.hdr", s.id);
+                size_of(out, &file).map(|bytes| (tier.to_string(), FileTier { file, bytes }))
+            })
+            .collect();
+        if !tiers.is_empty() {
+            t.skies.insert(
+                s.id.clone(),
+                TierEntry {
+                    license: s.license.clone(),
+                    author: s.author.clone(),
+                    source_url: s.source_url.clone(),
+                    tiers,
+                },
+            );
+        }
+    }
+    for a in &cat.assets {
+        let file = format!("models/{}/lod0_2k.glb", a.id);
+        if let Some(bytes) = size_of(out, &file) {
+            let tiers =
+                std::collections::BTreeMap::from([("2k".to_string(), FileTier { file, bytes })]);
+            t.models.insert(
+                a.id.clone(),
+                TierEntry {
+                    license: a.license.clone(),
+                    author: a.author.clone(),
+                    source_url: a.source_url.clone(),
+                    tiers,
+                },
+            );
+        }
+    }
+    t
 }
 
 fn walk(dir: &Path, f: &mut impl FnMut(&Path)) {
@@ -202,9 +336,81 @@ pub fn check(out: &Path) -> Vec<String> {
         }
     }
     need("ATTRIBUTION.md", &mut errors);
+    // tiers.json: every file exists and the recorded sizes are the real ones
+    match fs::read(out.join("tiers.json"))
+        .map_err(|e| e.to_string())
+        .and_then(|b| serde_json::from_slice::<Tiers>(&b).map_err(|e| e.to_string()))
+    {
+        Err(e) => errors.push(format!("tiers.json: {e}")),
+        Ok(t) => {
+            let mut files: Vec<(String, u64)> = Vec::new();
+            for e in t.materials.values().flat_map(|e| e.tiers.values()) {
+                for f in [
+                    Some(&e.basecolor),
+                    Some(&e.normal),
+                    Some(&e.orm),
+                    e.height.as_ref(),
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    files.push((f.clone(), 0));
+                }
+            }
+            for e in t
+                .skies
+                .values()
+                .chain(t.models.values())
+                .flat_map(|e| e.tiers.values())
+            {
+                files.push((e.file.clone(), e.bytes));
+            }
+            for (f, bytes) in files {
+                match fs::metadata(out.join(&f)) {
+                    Err(_) => errors.push(format!("tiers.json: missing file {f}")),
+                    Ok(m) if bytes != 0 && m.len() != bytes => {
+                        errors.push(format!("tiers.json: {f} is {} bytes, not {bytes}", m.len()))
+                    }
+                    Ok(_) => {}
+                }
+            }
+        }
+    }
+    // the tracked text files must not carry anything private
+    for f in [
+        "catalog.json",
+        "materials.json",
+        "skies.json",
+        "tiers.json",
+        "ATTRIBUTION.md",
+    ] {
+        let text = fs::read_to_string(out.join(f)).unwrap_or_default();
+        if ["/home/", "/Users/", "192.168.", "10.0.0."]
+            .iter()
+            .any(|p| text.contains(p))
+        {
+            errors.push(format!("{f} contains a path or address that looks private"));
+        }
+    }
     walk(out, &mut |p| {
-        if fs::metadata(p).is_ok_and(|m| m.len() > MAX_FILE_BYTES) {
-            errors.push(format!("{} is over 8 MB", p.display()));
+        let name = p.to_string_lossy();
+        let tier = name.contains("/2k/")
+            || name.contains("/4k/")
+            || name.contains("_2k.")
+            || name.contains("_4k.")
+            || name.contains("_8k.");
+        let limit = if tier {
+            crate::ingest::MAX_TIER_BYTES as u64
+        } else {
+            MAX_FILE_BYTES
+        };
+        if fs::metadata(p).is_ok_and(|m| m.len() > limit) {
+            let rel = p.strip_prefix(out).unwrap_or(p);
+            errors.push(format!(
+                "{} is over {} MB",
+                rel.display(),
+                limit / 1_000_000
+            ));
         }
     });
     errors

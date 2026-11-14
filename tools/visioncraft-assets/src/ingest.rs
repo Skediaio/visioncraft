@@ -127,12 +127,14 @@ fn write(path: &Path, bytes: &[u8]) -> Result<()> {
 const MAX_SOURCE_TRIS: usize = 2_000_000;
 const MAX_VARIANTS: usize = 4;
 const MAX_GLB_BYTES: usize = 7_500_000;
+/// Tier files are fetched on demand and may be bigger than the base set.
+pub const MAX_TIER_BYTES: usize = 32_000_000;
 
 /// A GLB under the file budget: textures are halved until it fits.
-fn glb_fitting(m: &Model, name: &str, mut px: u32) -> Result<Vec<u8>> {
+fn glb_fitting(m: &Model, name: &str, mut px: u32, max_bytes: usize) -> Result<Vec<u8>> {
     loop {
         let bytes = write_glb(m, name, px)?;
-        if bytes.len() <= MAX_GLB_BYTES || px <= 128 {
+        if bytes.len() <= max_bytes || px <= 128 {
             return Ok(bytes);
         }
         px /= 2;
@@ -140,9 +142,15 @@ fn glb_fitting(m: &Model, name: &str, mut px: u32) -> Result<Vec<u8>> {
 }
 
 /// The model of a candidate, plus up to three further variants as `<id>_b`, `_c`, `_d`.
-pub fn ingest_model(c: &Candidate, cache: &Path, out: &Path) -> Result<Vec<Asset>> {
+pub fn ingest_model(
+    c: &Candidate,
+    cache: &Path,
+    out: &Path,
+    tier: Option<(&str, u32)>,
+) -> Result<Vec<Asset>> {
     let src = c.dir(cache);
-    let gltf = fs::read_dir(&src)?
+    let gltf_dir = tier.map_or(src.clone(), |(t, _)| src.join(t));
+    let gltf = fs::read_dir(&gltf_dir)?
         .filter_map(Result::ok)
         .map(|e| e.path())
         .find(|p| p.extension().is_some_and(|e| e == "gltf"))
@@ -179,7 +187,7 @@ pub fn ingest_model(c: &Candidate, cache: &Path, out: &Path) -> Result<Vec<Asset
         if c.exclude.contains(&id) {
             continue;
         }
-        assets.push(ingest_variant(c, out, &info, id, name, model, v > 0)?);
+        assets.extend(ingest_variant(c, out, &info, id, name, model, v > 0, tier)?);
     }
     Ok(assets)
 }
@@ -237,6 +245,7 @@ fn growth_form(id: &str) -> Option<&'static str> {
     .map(|(_, t)| *t)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn ingest_variant(
     c: &Candidate,
     out: &Path,
@@ -245,7 +254,8 @@ fn ingest_variant(
     name: String,
     model: Model,
     variant: bool,
-) -> Result<Asset> {
+    tier: Option<(&str, u32)>,
+) -> Result<Option<Asset>> {
     let cat = category(&c.category)?;
     let source_tris = model.tris();
     let mut tags = vec![c.category.clone()];
@@ -292,6 +302,13 @@ fn ingest_variant(
         light = Some(spec);
         emitter_note = format!("{} -> {:?}", e.how, e.offset);
     }
+    if let Some((t, px)) = tier {
+        // same geometry as lod0, higher texture size, next to it
+        let file = out.join("models").join(&id).join(format!("lod0_{t}.glb"));
+        write(&file, &glb_fitting(&lod0, &id, px, MAX_TIER_BYTES)?)?;
+        println!("model tier {id} {t}");
+        return Ok(None);
+    }
     let t0 = lod0.tris();
     let reuse = t0 < REUSE_BELOW;
     let target = |f: f64| (((t0 as f64 * f).round() as usize).max(MIN_TRIS)).min(t0);
@@ -313,7 +330,10 @@ fn ingest_variant(
             format!("lod{k}.glb")
         };
         if !reuse || k == 0 {
-            write(&dir.join(&file), &glb_fitting(m, &id, MAX_PX[k])?)?;
+            write(
+                &dir.join(&file),
+                &glb_fitting(m, &id, MAX_PX[k], MAX_GLB_BYTES)?,
+            )?;
         }
         let max_distance_m = [largest * 12.0, largest * 40.0, f32::MAX][k];
         lods.push(Lod {
@@ -357,7 +377,7 @@ fn ingest_variant(
     if !emitter_note.is_empty() {
         println!("emitter {id}: {emitter_note}");
     }
-    Ok(asset)
+    Ok(Some(asset))
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -418,24 +438,92 @@ fn other() -> String {
     "other".into()
 }
 
-pub fn ingest_material(c: &Candidate, cache: &Path, out: &Path) -> Result<MaterialEntry> {
-    let (id, sid) = (c.id(), c.source_id());
-    let src = c.dir(cache);
-    let maps = zip_images(&src.join(format!("{sid}_1K-JPG.zip")))?;
+/// The maps of an ambientCG zip, fitted to `px`: colour, GL normal, packed ORM, optional height.
+struct MaterialMaps3 {
+    color: DynamicImage,
+    normal: DynamicImage,
+    orm: image::RgbImage,
+    height: Option<GrayImage>,
+}
+
+fn material_maps(zip: &Path, px: u32) -> Result<MaterialMaps3> {
+    let maps = zip_images(zip)?;
     let find = |suffix: &str| {
         maps.iter()
             .find(|(n, _)| n.ends_with(suffix))
             .map(|(_, i)| i)
     };
-    let gray = |s: &str| find(s).map(|i| fit(i, 1024).to_luma8());
-    let color = fit(find("_Color.jpg").context("no colour map")?, 1024);
-    let normal = fit(find("_NormalGL.jpg").context("no GL normal map")?, 1024);
-    let orm = pack_orm(
-        gray("_AmbientOcclusion.jpg").as_ref(),
-        gray("_Roughness.jpg").as_ref(),
-        gray("_Metalness.jpg").as_ref(),
-    );
-    let height: Option<GrayImage> = gray("_Displacement.jpg");
+    let gray = |s: &str| find(s).map(|i| fit(i, px).to_luma8());
+    Ok(MaterialMaps3 {
+        color: fit(find("_Color.jpg").context("no colour map")?, px),
+        normal: fit(find("_NormalGL.jpg").context("no GL normal map")?, px),
+        orm: pack_orm(
+            gray("_AmbientOcclusion.jpg").as_ref(),
+            gray("_Roughness.jpg").as_ref(),
+            gray("_Metalness.jpg").as_ref(),
+        ),
+        height: gray("_Displacement.jpg"),
+    })
+}
+
+/// A higher material tier (`2k`, `4k`): the same four maps in `materials/<id>/<tier>/`. JPEG
+/// quality as in the base set (colour 90, normal 95, ORM 90, height 90), all 4:4:4, so the
+/// normal map has no chroma subsampling.
+pub fn ingest_material_tier(c: &Candidate, cache: &Path, out: &Path, tier: &str) -> Result<()> {
+    let (id, sid) = (c.id(), c.source_id());
+    let px: u32 = if tier == "4k" { 4096 } else { 2048 };
+    let zip = c
+        .dir(cache)
+        .join(format!("{sid}_{}-JPG.zip", tier.to_uppercase()));
+    let MaterialMaps3 {
+        color,
+        normal,
+        orm,
+        height,
+    } = material_maps(&zip, px)?;
+    let dir = out.join("materials").join(&id).join(tier);
+    write(&dir.join("basecolor.jpg"), &jpeg(&color, 90)?)?;
+    write(&dir.join("normal.jpg"), &jpeg(&normal, 95)?)?;
+    write(
+        &dir.join("orm.jpg"),
+        &jpeg(&DynamicImage::ImageRgb8(orm), 90)?,
+    )?;
+    if let Some(h) = height {
+        write(
+            &dir.join("height.jpg"),
+            &jpeg(&DynamicImage::ImageLuma8(h), 90)?,
+        )?;
+    }
+    println!("material tier {id} {tier}");
+    Ok(())
+}
+
+/// The 4k sky: the source's Radiance file as it is, next to `sky_1k.hdr`.
+pub fn ingest_sky_tier(c: &Candidate, cache: &Path, out: &Path, tier: &str) -> Result<()> {
+    let id = c.id();
+    let suffix = format!("_{tier}.hdr");
+    let hdr = fs::read_dir(c.dir(cache))?
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .find(|p| p.to_string_lossy().ends_with(&suffix))
+        .context("no such HDRI in the cache (run fetch --tier)")?;
+    write(
+        &out.join("skies").join(&id).join(format!("sky_{tier}.hdr")),
+        &fs::read(hdr)?,
+    )?;
+    println!("sky tier {id} {tier}");
+    Ok(())
+}
+
+pub fn ingest_material(c: &Candidate, cache: &Path, out: &Path) -> Result<MaterialEntry> {
+    let (id, sid) = (c.id(), c.source_id());
+    let src = c.dir(cache);
+    let MaterialMaps3 {
+        color,
+        normal,
+        orm,
+        height,
+    } = material_maps(&src.join(format!("{sid}_1K-JPG.zip")), 1024)?;
     let dir = out.join("materials").join(&id);
     let rel = |f: &str| format!("materials/{id}/{f}");
     write(&dir.join("basecolor.jpg"), &jpeg(&color, 90)?)?;
@@ -543,7 +631,13 @@ pub fn ingest_sky(c: &Candidate, cache: &Path, out: &Path) -> Result<SkyEntry> {
 }
 
 /// Ingest every candidate, `jobs` at a time; a failure is reported and makes the result an error.
-pub fn ingest_all(cands: &[Candidate], cache: &Path, out: &Path, jobs: usize) -> Result<()> {
+pub fn ingest_all(
+    cands: &[Candidate],
+    cache: &Path,
+    out: &Path,
+    jobs: usize,
+    tier: Option<&str>,
+) -> Result<()> {
     let queue = Mutex::new(cands.iter());
     let failed = Mutex::new(Vec::new());
     std::thread::scope(|s| {
@@ -552,12 +646,22 @@ pub fn ingest_all(cands: &[Candidate], cache: &Path, out: &Path, jobs: usize) ->
                 loop {
                     let next = queue.lock().unwrap().next();
                     let Some(c) = next else { break };
-                    let r = if c.is_sky() {
+                    let r = if let Some(t) = tier {
+                        if !crate::net::has_tier(c, t) {
+                            Ok(())
+                        } else if c.is_sky() {
+                            ingest_sky_tier(c, cache, out, t)
+                        } else if c.is_material() {
+                            ingest_material_tier(c, cache, out, t)
+                        } else {
+                            ingest_model(c, cache, out, Some((t, 2048))).map(drop)
+                        }
+                    } else if c.is_sky() {
                         ingest_sky(c, cache, out).map(drop)
                     } else if c.is_material() {
                         ingest_material(c, cache, out).map(drop)
                     } else {
-                        ingest_model(c, cache, out).map(drop)
+                        ingest_model(c, cache, out, None).map(drop)
                     };
                     if let Err(e) = r {
                         println!("FAILED {}: {e:#}", c.source_id());

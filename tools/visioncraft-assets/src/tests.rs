@@ -208,3 +208,43 @@ fn a_simplification_that_loses_a_material_does_not_resemble_the_original() {
     assert!(m.resembles(&m).is_ok());
     assert!(flat.resembles(&m).is_err());
 }
+
+#[test]
+fn tiers_are_found_on_disk_and_carry_licence_and_size() {
+    use crate::ingest::{MaterialEntry, MaterialMaps};
+    let out = std::env::temp_dir().join(format!("vca-tiers-{}", std::process::id()));
+    let dir = out.join("materials/m/2k");
+    std::fs::create_dir_all(&dir).unwrap();
+    for f in ["basecolor", "normal", "orm"] {
+        image::RgbImage::new(64, 32)
+            .save(dir.join(format!("{f}.jpg")))
+            .unwrap();
+    }
+    let mat = MaterialEntry {
+        id: "m".into(),
+        name: "M".into(),
+        tags: vec![],
+        license: "CC0-1.0".into(),
+        author: "A".into(),
+        source_url: "https://example.org/m".into(),
+        kind: "brick".into(),
+        size_m: None,
+        maps: MaterialMaps {
+            basecolor: String::new(),
+            normal: String::new(),
+            orm: String::new(),
+            height: None,
+        },
+        thumbnail: String::new(),
+    };
+    let mats = library::Materials {
+        materials: vec![mat],
+    };
+    let t = library::build_tiers(&out, &Catalog::default(), &mats, &library::Skies::default());
+    let e = &t.materials["m"];
+    assert_eq!(e.license, "CC0-1.0");
+    assert_eq!(e.tiers["2k"].px, 64);
+    assert!(e.tiers["2k"].height.is_none() && e.tiers["2k"].bytes > 0);
+    assert!(!e.tiers.contains_key("4k"));
+    std::fs::remove_dir_all(&out).unwrap();
+}

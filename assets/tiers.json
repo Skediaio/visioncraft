@@ -1,0 +1,6207 @@
+{
+  "version": 1,
+  "materials": {
+    "asphalt020l": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Asphalt020L",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/asphalt020l/2k/basecolor.jpg",
+          "normal": "materials/asphalt020l/2k/normal.jpg",
+          "orm": "materials/asphalt020l/2k/orm.jpg",
+          "height": "materials/asphalt020l/2k/height.jpg",
+          "px": 2048,
+          "bytes": 13411485
+        },
+        "4k": {
+          "basecolor": "materials/asphalt020l/4k/basecolor.jpg",
+          "normal": "materials/asphalt020l/4k/normal.jpg",
+          "orm": "materials/asphalt020l/4k/orm.jpg",
+          "height": "materials/asphalt020l/4k/height.jpg",
+          "px": 4096,
+          "bytes": 50992775
+        }
+      }
+    },
+    "asphalt021": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Asphalt021",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/asphalt021/2k/basecolor.jpg",
+          "normal": "materials/asphalt021/2k/normal.jpg",
+          "orm": "materials/asphalt021/2k/orm.jpg",
+          "height": "materials/asphalt021/2k/height.jpg",
+          "px": 2048,
+          "bytes": 10590694
+        },
+        "4k": {
+          "basecolor": "materials/asphalt021/4k/basecolor.jpg",
+          "normal": "materials/asphalt021/4k/normal.jpg",
+          "orm": "materials/asphalt021/4k/orm.jpg",
+          "height": "materials/asphalt021/4k/height.jpg",
+          "px": 4096,
+          "bytes": 40157092
+        }
+      }
+    },
+    "asphalt022": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Asphalt022",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/asphalt022/2k/basecolor.jpg",
+          "normal": "materials/asphalt022/2k/normal.jpg",
+          "orm": "materials/asphalt022/2k/orm.jpg",
+          "height": "materials/asphalt022/2k/height.jpg",
+          "px": 2048,
+          "bytes": 10895056
+        },
+        "4k": {
+          "basecolor": "materials/asphalt022/4k/basecolor.jpg",
+          "normal": "materials/asphalt022/4k/normal.jpg",
+          "orm": "materials/asphalt022/4k/orm.jpg",
+          "height": "materials/asphalt022/4k/height.jpg",
+          "px": 4096,
+          "bytes": 41413579
+        }
+      }
+    },
+    "bark014": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Bark014",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/bark014/2k/basecolor.jpg",
+          "normal": "materials/bark014/2k/normal.jpg",
+          "orm": "materials/bark014/2k/orm.jpg",
+          "height": "materials/bark014/2k/height.jpg",
+          "px": 2048,
+          "bytes": 8271303
+        },
+        "4k": {
+          "basecolor": "materials/bark014/4k/basecolor.jpg",
+          "normal": "materials/bark014/4k/normal.jpg",
+          "orm": "materials/bark014/4k/orm.jpg",
+          "height": "materials/bark014/4k/height.jpg",
+          "px": 4096,
+          "bytes": 31179899
+        }
+      }
+    },
+    "bark016": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Bark016",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/bark016/2k/basecolor.jpg",
+          "normal": "materials/bark016/2k/normal.jpg",
+          "orm": "materials/bark016/2k/orm.jpg",
+          "height": "materials/bark016/2k/height.jpg",
+          "px": 2048,
+          "bytes": 8100832
+        },
+        "4k": {
+          "basecolor": "materials/bark016/4k/basecolor.jpg",
+          "normal": "materials/bark016/4k/normal.jpg",
+          "orm": "materials/bark016/4k/orm.jpg",
+          "height": "materials/bark016/4k/height.jpg",
+          "px": 4096,
+          "bytes": 26832879
+        }
+      }
+    },
+    "bricks002": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Bricks002",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/bricks002/2k/basecolor.jpg",
+          "normal": "materials/bricks002/2k/normal.jpg",
+          "orm": "materials/bricks002/2k/orm.jpg",
+          "height": "materials/bricks002/2k/height.jpg",
+          "px": 2048,
+          "bytes": 6670548
+        },
+        "4k": {
+          "basecolor": "materials/bricks002/4k/basecolor.jpg",
+          "normal": "materials/bricks002/4k/normal.jpg",
+          "orm": "materials/bricks002/4k/orm.jpg",
+          "height": "materials/bricks002/4k/height.jpg",
+          "px": 4096,
+          "bytes": 21130101
+        }
+      }
+    },
+    "bricks003": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Bricks003",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/bricks003/2k/basecolor.jpg",
+          "normal": "materials/bricks003/2k/normal.jpg",
+          "orm": "materials/bricks003/2k/orm.jpg",
+          "height": "materials/bricks003/2k/height.jpg",
+          "px": 2048,
+          "bytes": 4878671
+        },
+        "4k": {
+          "basecolor": "materials/bricks003/4k/basecolor.jpg",
+          "normal": "materials/bricks003/4k/normal.jpg",
+          "orm": "materials/bricks003/4k/orm.jpg",
+          "height": "materials/bricks003/4k/height.jpg",
+          "px": 4096,
+          "bytes": 17373865
+        }
+      }
+    },
+    "bricks008": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Bricks008",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/bricks008/2k/basecolor.jpg",
+          "normal": "materials/bricks008/2k/normal.jpg",
+          "orm": "materials/bricks008/2k/orm.jpg",
+          "height": "materials/bricks008/2k/height.jpg",
+          "px": 2048,
+          "bytes": 5204973
+        },
+        "4k": {
+          "basecolor": "materials/bricks008/4k/basecolor.jpg",
+          "normal": "materials/bricks008/4k/normal.jpg",
+          "orm": "materials/bricks008/4k/orm.jpg",
+          "height": "materials/bricks008/4k/height.jpg",
+          "px": 4096,
+          "bytes": 17974566
+        }
+      }
+    },
+    "bricks011": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Bricks011",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/bricks011/2k/basecolor.jpg",
+          "normal": "materials/bricks011/2k/normal.jpg",
+          "orm": "materials/bricks011/2k/orm.jpg",
+          "height": "materials/bricks011/2k/height.jpg",
+          "px": 2048,
+          "bytes": 7617948
+        },
+        "4k": {
+          "basecolor": "materials/bricks011/4k/basecolor.jpg",
+          "normal": "materials/bricks011/4k/normal.jpg",
+          "orm": "materials/bricks011/4k/orm.jpg",
+          "height": "materials/bricks011/4k/height.jpg",
+          "px": 4096,
+          "bytes": 25036603
+        }
+      }
+    },
+    "bricks016": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Bricks016",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/bricks016/2k/basecolor.jpg",
+          "normal": "materials/bricks016/2k/normal.jpg",
+          "orm": "materials/bricks016/2k/orm.jpg",
+          "height": "materials/bricks016/2k/height.jpg",
+          "px": 2048,
+          "bytes": 6015623
+        },
+        "4k": {
+          "basecolor": "materials/bricks016/4k/basecolor.jpg",
+          "normal": "materials/bricks016/4k/normal.jpg",
+          "orm": "materials/bricks016/4k/orm.jpg",
+          "height": "materials/bricks016/4k/height.jpg",
+          "px": 4096,
+          "bytes": 21156891
+        }
+      }
+    },
+    "bricks028": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Bricks028",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/bricks028/2k/basecolor.jpg",
+          "normal": "materials/bricks028/2k/normal.jpg",
+          "orm": "materials/bricks028/2k/orm.jpg",
+          "height": "materials/bricks028/2k/height.jpg",
+          "px": 2048,
+          "bytes": 8237503
+        },
+        "4k": {
+          "basecolor": "materials/bricks028/4k/basecolor.jpg",
+          "normal": "materials/bricks028/4k/normal.jpg",
+          "orm": "materials/bricks028/4k/orm.jpg",
+          "height": "materials/bricks028/4k/height.jpg",
+          "px": 4096,
+          "bytes": 31725976
+        }
+      }
+    },
+    "bricks038": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Bricks038",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/bricks038/2k/basecolor.jpg",
+          "normal": "materials/bricks038/2k/normal.jpg",
+          "orm": "materials/bricks038/2k/orm.jpg",
+          "height": "materials/bricks038/2k/height.jpg",
+          "px": 2048,
+          "bytes": 7585490
+        },
+        "4k": {
+          "basecolor": "materials/bricks038/4k/basecolor.jpg",
+          "normal": "materials/bricks038/4k/normal.jpg",
+          "orm": "materials/bricks038/4k/orm.jpg",
+          "height": "materials/bricks038/4k/height.jpg",
+          "px": 4096,
+          "bytes": 28929223
+        }
+      }
+    },
+    "bricks104": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Bricks104",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/bricks104/2k/basecolor.jpg",
+          "normal": "materials/bricks104/2k/normal.jpg",
+          "orm": "materials/bricks104/2k/orm.jpg",
+          "height": "materials/bricks104/2k/height.jpg",
+          "px": 2048,
+          "bytes": 2622573
+        },
+        "4k": {
+          "basecolor": "materials/bricks104/4k/basecolor.jpg",
+          "normal": "materials/bricks104/4k/normal.jpg",
+          "orm": "materials/bricks104/4k/orm.jpg",
+          "height": "materials/bricks104/4k/height.jpg",
+          "px": 4096,
+          "bytes": 11111194
+        }
+      }
+    },
+    "concrete034": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Concrete034",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/concrete034/2k/basecolor.jpg",
+          "normal": "materials/concrete034/2k/normal.jpg",
+          "orm": "materials/concrete034/2k/orm.jpg",
+          "height": "materials/concrete034/2k/height.jpg",
+          "px": 2048,
+          "bytes": 2262529
+        },
+        "4k": {
+          "basecolor": "materials/concrete034/4k/basecolor.jpg",
+          "normal": "materials/concrete034/4k/normal.jpg",
+          "orm": "materials/concrete034/4k/orm.jpg",
+          "height": "materials/concrete034/4k/height.jpg",
+          "px": 4096,
+          "bytes": 9606112
+        }
+      }
+    },
+    "concrete038": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Concrete038",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/concrete038/2k/basecolor.jpg",
+          "normal": "materials/concrete038/2k/normal.jpg",
+          "orm": "materials/concrete038/2k/orm.jpg",
+          "height": "materials/concrete038/2k/height.jpg",
+          "px": 2048,
+          "bytes": 9199336
+        },
+        "4k": {
+          "basecolor": "materials/concrete038/4k/basecolor.jpg",
+          "normal": "materials/concrete038/4k/normal.jpg",
+          "orm": "materials/concrete038/4k/orm.jpg",
+          "height": "materials/concrete038/4k/height.jpg",
+          "px": 4096,
+          "bytes": 31720593
+        }
+      }
+    },
+    "concrete039": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Concrete039",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/concrete039/2k/basecolor.jpg",
+          "normal": "materials/concrete039/2k/normal.jpg",
+          "orm": "materials/concrete039/2k/orm.jpg",
+          "height": "materials/concrete039/2k/height.jpg",
+          "px": 2048,
+          "bytes": 7500271
+        },
+        "4k": {
+          "basecolor": "materials/concrete039/4k/basecolor.jpg",
+          "normal": "materials/concrete039/4k/normal.jpg",
+          "orm": "materials/concrete039/4k/orm.jpg",
+          "height": "materials/concrete039/4k/height.jpg",
+          "px": 4096,
+          "bytes": 31621553
+        }
+      }
+    },
+    "concrete040": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Concrete040",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/concrete040/2k/basecolor.jpg",
+          "normal": "materials/concrete040/2k/normal.jpg",
+          "orm": "materials/concrete040/2k/orm.jpg",
+          "height": "materials/concrete040/2k/height.jpg",
+          "px": 2048,
+          "bytes": 10256493
+        },
+        "4k": {
+          "basecolor": "materials/concrete040/4k/basecolor.jpg",
+          "normal": "materials/concrete040/4k/normal.jpg",
+          "orm": "materials/concrete040/4k/orm.jpg",
+          "height": "materials/concrete040/4k/height.jpg",
+          "px": 4096,
+          "bytes": 43031006
+        }
+      }
+    },
+    "concrete045": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Concrete045",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/concrete045/2k/basecolor.jpg",
+          "normal": "materials/concrete045/2k/normal.jpg",
+          "orm": "materials/concrete045/2k/orm.jpg",
+          "height": "materials/concrete045/2k/height.jpg",
+          "px": 2048,
+          "bytes": 3623309
+        },
+        "4k": {
+          "basecolor": "materials/concrete045/4k/basecolor.jpg",
+          "normal": "materials/concrete045/4k/normal.jpg",
+          "orm": "materials/concrete045/4k/orm.jpg",
+          "height": "materials/concrete045/4k/height.jpg",
+          "px": 4096,
+          "bytes": 17897677
+        }
+      }
+    },
+    "concrete046": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Concrete046",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/concrete046/2k/basecolor.jpg",
+          "normal": "materials/concrete046/2k/normal.jpg",
+          "orm": "materials/concrete046/2k/orm.jpg",
+          "height": "materials/concrete046/2k/height.jpg",
+          "px": 2048,
+          "bytes": 5999235
+        },
+        "4k": {
+          "basecolor": "materials/concrete046/4k/basecolor.jpg",
+          "normal": "materials/concrete046/4k/normal.jpg",
+          "orm": "materials/concrete046/4k/orm.jpg",
+          "height": "materials/concrete046/4k/height.jpg",
+          "px": 4096,
+          "bytes": 30030871
+        }
+      }
+    },
+    "corrugatedsteel001": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/CorrugatedSteel001",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/corrugatedsteel001/2k/basecolor.jpg",
+          "normal": "materials/corrugatedsteel001/2k/normal.jpg",
+          "orm": "materials/corrugatedsteel001/2k/orm.jpg",
+          "height": "materials/corrugatedsteel001/2k/height.jpg",
+          "px": 2048,
+          "bytes": 3315858
+        },
+        "4k": {
+          "basecolor": "materials/corrugatedsteel001/4k/basecolor.jpg",
+          "normal": "materials/corrugatedsteel001/4k/normal.jpg",
+          "orm": "materials/corrugatedsteel001/4k/orm.jpg",
+          "height": "materials/corrugatedsteel001/4k/height.jpg",
+          "px": 4096,
+          "bytes": 13326539
+        }
+      }
+    },
+    "corrugatedsteel002": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/CorrugatedSteel002",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/corrugatedsteel002/2k/basecolor.jpg",
+          "normal": "materials/corrugatedsteel002/2k/normal.jpg",
+          "orm": "materials/corrugatedsteel002/2k/orm.jpg",
+          "height": "materials/corrugatedsteel002/2k/height.jpg",
+          "px": 2048,
+          "bytes": 3865289
+        },
+        "4k": {
+          "basecolor": "materials/corrugatedsteel002/4k/basecolor.jpg",
+          "normal": "materials/corrugatedsteel002/4k/normal.jpg",
+          "orm": "materials/corrugatedsteel002/4k/orm.jpg",
+          "height": "materials/corrugatedsteel002/4k/height.jpg",
+          "px": 4096,
+          "bytes": 14759663
+        }
+      }
+    },
+    "fabric046": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Fabric046",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/fabric046/2k/basecolor.jpg",
+          "normal": "materials/fabric046/2k/normal.jpg",
+          "orm": "materials/fabric046/2k/orm.jpg",
+          "height": "materials/fabric046/2k/height.jpg",
+          "px": 2048,
+          "bytes": 5853284
+        },
+        "4k": {
+          "basecolor": "materials/fabric046/4k/basecolor.jpg",
+          "normal": "materials/fabric046/4k/normal.jpg",
+          "orm": "materials/fabric046/4k/orm.jpg",
+          "height": "materials/fabric046/4k/height.jpg",
+          "px": 4096,
+          "bytes": 25667852
+        }
+      }
+    },
+    "fabric047": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Fabric047",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/fabric047/2k/basecolor.jpg",
+          "normal": "materials/fabric047/2k/normal.jpg",
+          "orm": "materials/fabric047/2k/orm.jpg",
+          "height": "materials/fabric047/2k/height.jpg",
+          "px": 2048,
+          "bytes": 5261699
+        },
+        "4k": {
+          "basecolor": "materials/fabric047/4k/basecolor.jpg",
+          "normal": "materials/fabric047/4k/normal.jpg",
+          "orm": "materials/fabric047/4k/orm.jpg",
+          "height": "materials/fabric047/4k/height.jpg",
+          "px": 4096,
+          "bytes": 23584243
+        }
+      }
+    },
+    "fabric048": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Fabric048",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/fabric048/2k/basecolor.jpg",
+          "normal": "materials/fabric048/2k/normal.jpg",
+          "orm": "materials/fabric048/2k/orm.jpg",
+          "height": "materials/fabric048/2k/height.jpg",
+          "px": 2048,
+          "bytes": 5161785
+        },
+        "4k": {
+          "basecolor": "materials/fabric048/4k/basecolor.jpg",
+          "normal": "materials/fabric048/4k/normal.jpg",
+          "orm": "materials/fabric048/4k/orm.jpg",
+          "height": "materials/fabric048/4k/height.jpg",
+          "px": 4096,
+          "bytes": 23098833
+        }
+      }
+    },
+    "fabric049": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Fabric049",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/fabric049/2k/basecolor.jpg",
+          "normal": "materials/fabric049/2k/normal.jpg",
+          "orm": "materials/fabric049/2k/orm.jpg",
+          "height": "materials/fabric049/2k/height.jpg",
+          "px": 2048,
+          "bytes": 5474274
+        },
+        "4k": {
+          "basecolor": "materials/fabric049/4k/basecolor.jpg",
+          "normal": "materials/fabric049/4k/normal.jpg",
+          "orm": "materials/fabric049/4k/orm.jpg",
+          "height": "materials/fabric049/4k/height.jpg",
+          "px": 4096,
+          "bytes": 24447773
+        }
+      }
+    },
+    "fabric061": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Fabric061",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/fabric061/2k/basecolor.jpg",
+          "normal": "materials/fabric061/2k/normal.jpg",
+          "orm": "materials/fabric061/2k/orm.jpg",
+          "height": "materials/fabric061/2k/height.jpg",
+          "px": 2048,
+          "bytes": 10228195
+        },
+        "4k": {
+          "basecolor": "materials/fabric061/4k/basecolor.jpg",
+          "normal": "materials/fabric061/4k/normal.jpg",
+          "orm": "materials/fabric061/4k/orm.jpg",
+          "height": "materials/fabric061/4k/height.jpg",
+          "px": 4096,
+          "bytes": 42143054
+        }
+      }
+    },
+    "grass001": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Grass001",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/grass001/2k/basecolor.jpg",
+          "normal": "materials/grass001/2k/normal.jpg",
+          "orm": "materials/grass001/2k/orm.jpg",
+          "height": "materials/grass001/2k/height.jpg",
+          "px": 2048,
+          "bytes": 14195244
+        },
+        "4k": {
+          "basecolor": "materials/grass001/4k/basecolor.jpg",
+          "normal": "materials/grass001/4k/normal.jpg",
+          "orm": "materials/grass001/4k/orm.jpg",
+          "height": "materials/grass001/4k/height.jpg",
+          "px": 4096,
+          "bytes": 53569399
+        }
+      }
+    },
+    "grass002": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Grass002",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/grass002/2k/basecolor.jpg",
+          "normal": "materials/grass002/2k/normal.jpg",
+          "orm": "materials/grass002/2k/orm.jpg",
+          "height": "materials/grass002/2k/height.jpg",
+          "px": 2048,
+          "bytes": 14063394
+        },
+        "4k": {
+          "basecolor": "materials/grass002/4k/basecolor.jpg",
+          "normal": "materials/grass002/4k/normal.jpg",
+          "orm": "materials/grass002/4k/orm.jpg",
+          "height": "materials/grass002/4k/height.jpg",
+          "px": 4096,
+          "bytes": 52876416
+        }
+      }
+    },
+    "grass003": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Grass003",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/grass003/2k/basecolor.jpg",
+          "normal": "materials/grass003/2k/normal.jpg",
+          "orm": "materials/grass003/2k/orm.jpg",
+          "height": "materials/grass003/2k/height.jpg",
+          "px": 2048,
+          "bytes": 14393718
+        },
+        "4k": {
+          "basecolor": "materials/grass003/4k/basecolor.jpg",
+          "normal": "materials/grass003/4k/normal.jpg",
+          "orm": "materials/grass003/4k/orm.jpg",
+          "height": "materials/grass003/4k/height.jpg",
+          "px": 4096,
+          "bytes": 54000827
+        }
+      }
+    },
+    "grass004": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Grass004",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/grass004/2k/basecolor.jpg",
+          "normal": "materials/grass004/2k/normal.jpg",
+          "orm": "materials/grass004/2k/orm.jpg",
+          "height": "materials/grass004/2k/height.jpg",
+          "px": 2048,
+          "bytes": 14912532
+        },
+        "4k": {
+          "basecolor": "materials/grass004/4k/basecolor.jpg",
+          "normal": "materials/grass004/4k/normal.jpg",
+          "orm": "materials/grass004/4k/orm.jpg",
+          "height": "materials/grass004/4k/height.jpg",
+          "px": 4096,
+          "bytes": 55649001
+        }
+      }
+    },
+    "grass005": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Grass005",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/grass005/2k/basecolor.jpg",
+          "normal": "materials/grass005/2k/normal.jpg",
+          "orm": "materials/grass005/2k/orm.jpg",
+          "height": "materials/grass005/2k/height.jpg",
+          "px": 2048,
+          "bytes": 15692213
+        },
+        "4k": {
+          "basecolor": "materials/grass005/4k/basecolor.jpg",
+          "normal": "materials/grass005/4k/normal.jpg",
+          "orm": "materials/grass005/4k/orm.jpg",
+          "height": "materials/grass005/4k/height.jpg",
+          "px": 4096,
+          "bytes": 63526214
+        }
+      }
+    },
+    "gravel016": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Gravel016",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/gravel016/2k/basecolor.jpg",
+          "normal": "materials/gravel016/2k/normal.jpg",
+          "orm": "materials/gravel016/2k/orm.jpg",
+          "height": "materials/gravel016/2k/height.jpg",
+          "px": 2048,
+          "bytes": 11212811
+        },
+        "4k": {
+          "basecolor": "materials/gravel016/4k/basecolor.jpg",
+          "normal": "materials/gravel016/4k/normal.jpg",
+          "orm": "materials/gravel016/4k/orm.jpg",
+          "height": "materials/gravel016/4k/height.jpg",
+          "px": 4096,
+          "bytes": 38888677
+        }
+      }
+    },
+    "gravel017": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Gravel017",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/gravel017/2k/basecolor.jpg",
+          "normal": "materials/gravel017/2k/normal.jpg",
+          "orm": "materials/gravel017/2k/orm.jpg",
+          "height": "materials/gravel017/2k/height.jpg",
+          "px": 2048,
+          "bytes": 10650862
+        },
+        "4k": {
+          "basecolor": "materials/gravel017/4k/basecolor.jpg",
+          "normal": "materials/gravel017/4k/normal.jpg",
+          "orm": "materials/gravel017/4k/orm.jpg",
+          "height": "materials/gravel017/4k/height.jpg",
+          "px": 4096,
+          "bytes": 37159270
+        }
+      }
+    },
+    "gravel018": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Gravel018",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/gravel018/2k/basecolor.jpg",
+          "normal": "materials/gravel018/2k/normal.jpg",
+          "orm": "materials/gravel018/2k/orm.jpg",
+          "height": "materials/gravel018/2k/height.jpg",
+          "px": 2048,
+          "bytes": 11082903
+        },
+        "4k": {
+          "basecolor": "materials/gravel018/4k/basecolor.jpg",
+          "normal": "materials/gravel018/4k/normal.jpg",
+          "orm": "materials/gravel018/4k/orm.jpg",
+          "height": "materials/gravel018/4k/height.jpg",
+          "px": 4096,
+          "bytes": 38453204
+        }
+      }
+    },
+    "gravel019": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Gravel019",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/gravel019/2k/basecolor.jpg",
+          "normal": "materials/gravel019/2k/normal.jpg",
+          "orm": "materials/gravel019/2k/orm.jpg",
+          "height": "materials/gravel019/2k/height.jpg",
+          "px": 2048,
+          "bytes": 11756493
+        },
+        "4k": {
+          "basecolor": "materials/gravel019/4k/basecolor.jpg",
+          "normal": "materials/gravel019/4k/normal.jpg",
+          "orm": "materials/gravel019/4k/orm.jpg",
+          "height": "materials/gravel019/4k/height.jpg",
+          "px": 4096,
+          "bytes": 40573899
+        }
+      }
+    },
+    "gravel020": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Gravel020",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/gravel020/2k/basecolor.jpg",
+          "normal": "materials/gravel020/2k/normal.jpg",
+          "orm": "materials/gravel020/2k/orm.jpg",
+          "height": "materials/gravel020/2k/height.jpg",
+          "px": 2048,
+          "bytes": 8933968
+        },
+        "4k": {
+          "basecolor": "materials/gravel020/4k/basecolor.jpg",
+          "normal": "materials/gravel020/4k/normal.jpg",
+          "orm": "materials/gravel020/4k/orm.jpg",
+          "height": "materials/gravel020/4k/height.jpg",
+          "px": 4096,
+          "bytes": 33781511
+        }
+      }
+    },
+    "gravel023": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Gravel023",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/gravel023/2k/basecolor.jpg",
+          "normal": "materials/gravel023/2k/normal.jpg",
+          "orm": "materials/gravel023/2k/orm.jpg",
+          "height": "materials/gravel023/2k/height.jpg",
+          "px": 2048,
+          "bytes": 9585329
+        },
+        "4k": {
+          "basecolor": "materials/gravel023/4k/basecolor.jpg",
+          "normal": "materials/gravel023/4k/normal.jpg",
+          "orm": "materials/gravel023/4k/orm.jpg",
+          "height": "materials/gravel023/4k/height.jpg",
+          "px": 4096,
+          "bytes": 32018677
+        }
+      }
+    },
+    "ground043": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Ground043",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/ground043/2k/basecolor.jpg",
+          "normal": "materials/ground043/2k/normal.jpg",
+          "orm": "materials/ground043/2k/orm.jpg",
+          "height": "materials/ground043/2k/height.jpg",
+          "px": 2048,
+          "bytes": 12005651
+        },
+        "4k": {
+          "basecolor": "materials/ground043/4k/basecolor.jpg",
+          "normal": "materials/ground043/4k/normal.jpg",
+          "orm": "materials/ground043/4k/orm.jpg",
+          "height": "materials/ground043/4k/height.jpg",
+          "px": 4096,
+          "bytes": 47451993
+        }
+      }
+    },
+    "ground044": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Ground044",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/ground044/2k/basecolor.jpg",
+          "normal": "materials/ground044/2k/normal.jpg",
+          "orm": "materials/ground044/2k/orm.jpg",
+          "height": "materials/ground044/2k/height.jpg",
+          "px": 2048,
+          "bytes": 11639352
+        },
+        "4k": {
+          "basecolor": "materials/ground044/4k/basecolor.jpg",
+          "normal": "materials/ground044/4k/normal.jpg",
+          "orm": "materials/ground044/4k/orm.jpg",
+          "height": "materials/ground044/4k/height.jpg",
+          "px": 4096,
+          "bytes": 46296803
+        }
+      }
+    },
+    "ground045": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Ground045",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/ground045/2k/basecolor.jpg",
+          "normal": "materials/ground045/2k/normal.jpg",
+          "orm": "materials/ground045/2k/orm.jpg",
+          "height": "materials/ground045/2k/height.jpg",
+          "px": 2048,
+          "bytes": 12560271
+        },
+        "4k": {
+          "basecolor": "materials/ground045/4k/basecolor.jpg",
+          "normal": "materials/ground045/4k/normal.jpg",
+          "orm": "materials/ground045/4k/orm.jpg",
+          "height": "materials/ground045/4k/height.jpg",
+          "px": 4096,
+          "bytes": 48715572
+        }
+      }
+    },
+    "ground046": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Ground046",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/ground046/2k/basecolor.jpg",
+          "normal": "materials/ground046/2k/normal.jpg",
+          "orm": "materials/ground046/2k/orm.jpg",
+          "height": "materials/ground046/2k/height.jpg",
+          "px": 2048,
+          "bytes": 11554681
+        },
+        "4k": {
+          "basecolor": "materials/ground046/4k/basecolor.jpg",
+          "normal": "materials/ground046/4k/normal.jpg",
+          "orm": "materials/ground046/4k/orm.jpg",
+          "height": "materials/ground046/4k/height.jpg",
+          "px": 4096,
+          "bytes": 47280426
+        }
+      }
+    },
+    "ground047": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Ground047",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/ground047/2k/basecolor.jpg",
+          "normal": "materials/ground047/2k/normal.jpg",
+          "orm": "materials/ground047/2k/orm.jpg",
+          "height": "materials/ground047/2k/height.jpg",
+          "px": 2048,
+          "bytes": 12009848
+        },
+        "4k": {
+          "basecolor": "materials/ground047/4k/basecolor.jpg",
+          "normal": "materials/ground047/4k/normal.jpg",
+          "orm": "materials/ground047/4k/orm.jpg",
+          "height": "materials/ground047/4k/height.jpg",
+          "px": 4096,
+          "bytes": 50254111
+        }
+      }
+    },
+    "ground052": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Ground052",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/ground052/2k/basecolor.jpg",
+          "normal": "materials/ground052/2k/normal.jpg",
+          "orm": "materials/ground052/2k/orm.jpg",
+          "height": "materials/ground052/2k/height.jpg",
+          "px": 2048,
+          "bytes": 6165305
+        },
+        "4k": {
+          "basecolor": "materials/ground052/4k/basecolor.jpg",
+          "normal": "materials/ground052/4k/normal.jpg",
+          "orm": "materials/ground052/4k/orm.jpg",
+          "height": "materials/ground052/4k/height.jpg",
+          "px": 4096,
+          "bytes": 27747254
+        }
+      }
+    },
+    "ground054": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Ground054",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/ground054/2k/basecolor.jpg",
+          "normal": "materials/ground054/2k/normal.jpg",
+          "orm": "materials/ground054/2k/orm.jpg",
+          "height": "materials/ground054/2k/height.jpg",
+          "px": 2048,
+          "bytes": 9825371
+        },
+        "4k": {
+          "basecolor": "materials/ground054/4k/basecolor.jpg",
+          "normal": "materials/ground054/4k/normal.jpg",
+          "orm": "materials/ground054/4k/orm.jpg",
+          "height": "materials/ground054/4k/height.jpg",
+          "px": 4096,
+          "bytes": 44698897
+        }
+      }
+    },
+    "ground055l": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Ground055L",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/ground055l/2k/basecolor.jpg",
+          "normal": "materials/ground055l/2k/normal.jpg",
+          "orm": "materials/ground055l/2k/orm.jpg",
+          "height": "materials/ground055l/2k/height.jpg",
+          "px": 2048,
+          "bytes": 6448368
+        },
+        "4k": {
+          "basecolor": "materials/ground055l/4k/basecolor.jpg",
+          "normal": "materials/ground055l/4k/normal.jpg",
+          "orm": "materials/ground055l/4k/orm.jpg",
+          "height": "materials/ground055l/4k/height.jpg",
+          "px": 4096,
+          "bytes": 29873556
+        }
+      }
+    },
+    "ground103": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Ground103",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/ground103/2k/basecolor.jpg",
+          "normal": "materials/ground103/2k/normal.jpg",
+          "orm": "materials/ground103/2k/orm.jpg",
+          "height": "materials/ground103/2k/height.jpg",
+          "px": 2048,
+          "bytes": 10939928
+        },
+        "4k": {
+          "basecolor": "materials/ground103/4k/basecolor.jpg",
+          "normal": "materials/ground103/4k/normal.jpg",
+          "orm": "materials/ground103/4k/orm.jpg",
+          "height": "materials/ground103/4k/height.jpg",
+          "px": 4096,
+          "bytes": 40971212
+        }
+      }
+    },
+    "metal001": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Metal001",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/metal001/2k/basecolor.jpg",
+          "normal": "materials/metal001/2k/normal.jpg",
+          "orm": "materials/metal001/2k/orm.jpg",
+          "height": "materials/metal001/2k/height.jpg",
+          "px": 2048,
+          "bytes": 2608681
+        },
+        "4k": {
+          "basecolor": "materials/metal001/4k/basecolor.jpg",
+          "normal": "materials/metal001/4k/normal.jpg",
+          "orm": "materials/metal001/4k/orm.jpg",
+          "height": "materials/metal001/4k/height.jpg",
+          "px": 4096,
+          "bytes": 10866165
+        }
+      }
+    },
+    "moss001": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Moss001",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/moss001/2k/basecolor.jpg",
+          "normal": "materials/moss001/2k/normal.jpg",
+          "orm": "materials/moss001/2k/orm.jpg",
+          "height": "materials/moss001/2k/height.jpg",
+          "px": 2048,
+          "bytes": 13409579
+        },
+        "4k": {
+          "basecolor": "materials/moss001/4k/basecolor.jpg",
+          "normal": "materials/moss001/4k/normal.jpg",
+          "orm": "materials/moss001/4k/orm.jpg",
+          "height": "materials/moss001/4k/height.jpg",
+          "px": 4096,
+          "bytes": 48213138
+        }
+      }
+    },
+    "paintedmetal001": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PaintedMetal001",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/paintedmetal001/2k/basecolor.jpg",
+          "normal": "materials/paintedmetal001/2k/normal.jpg",
+          "orm": "materials/paintedmetal001/2k/orm.jpg",
+          "height": "materials/paintedmetal001/2k/height.jpg",
+          "px": 2048,
+          "bytes": 6901148
+        },
+        "4k": {
+          "basecolor": "materials/paintedmetal001/4k/basecolor.jpg",
+          "normal": "materials/paintedmetal001/4k/normal.jpg",
+          "orm": "materials/paintedmetal001/4k/orm.jpg",
+          "height": "materials/paintedmetal001/4k/height.jpg",
+          "px": 4096,
+          "bytes": 24379712
+        }
+      }
+    },
+    "paintedmetal002": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PaintedMetal002",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/paintedmetal002/2k/basecolor.jpg",
+          "normal": "materials/paintedmetal002/2k/normal.jpg",
+          "orm": "materials/paintedmetal002/2k/orm.jpg",
+          "height": "materials/paintedmetal002/2k/height.jpg",
+          "px": 2048,
+          "bytes": 6868785
+        },
+        "4k": {
+          "basecolor": "materials/paintedmetal002/4k/basecolor.jpg",
+          "normal": "materials/paintedmetal002/4k/normal.jpg",
+          "orm": "materials/paintedmetal002/4k/orm.jpg",
+          "height": "materials/paintedmetal002/4k/height.jpg",
+          "px": 4096,
+          "bytes": 23992092
+        }
+      }
+    },
+    "paintedmetal003": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PaintedMetal003",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/paintedmetal003/2k/basecolor.jpg",
+          "normal": "materials/paintedmetal003/2k/normal.jpg",
+          "orm": "materials/paintedmetal003/2k/orm.jpg",
+          "height": "materials/paintedmetal003/2k/height.jpg",
+          "px": 2048,
+          "bytes": 7605500
+        },
+        "4k": {
+          "basecolor": "materials/paintedmetal003/4k/basecolor.jpg",
+          "normal": "materials/paintedmetal003/4k/normal.jpg",
+          "orm": "materials/paintedmetal003/4k/orm.jpg",
+          "height": "materials/paintedmetal003/4k/height.jpg",
+          "px": 4096,
+          "bytes": 27808735
+        }
+      }
+    },
+    "paintedplaster001": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PaintedPlaster001",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/paintedplaster001/2k/basecolor.jpg",
+          "normal": "materials/paintedplaster001/2k/normal.jpg",
+          "orm": "materials/paintedplaster001/2k/orm.jpg",
+          "height": "materials/paintedplaster001/2k/height.jpg",
+          "px": 2048,
+          "bytes": 5788373
+        },
+        "4k": {
+          "basecolor": "materials/paintedplaster001/4k/basecolor.jpg",
+          "normal": "materials/paintedplaster001/4k/normal.jpg",
+          "orm": "materials/paintedplaster001/4k/orm.jpg",
+          "height": "materials/paintedplaster001/4k/height.jpg",
+          "px": 4096,
+          "bytes": 27866615
+        }
+      }
+    },
+    "paintedplaster002": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PaintedPlaster002",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/paintedplaster002/2k/basecolor.jpg",
+          "normal": "materials/paintedplaster002/2k/normal.jpg",
+          "orm": "materials/paintedplaster002/2k/orm.jpg",
+          "height": "materials/paintedplaster002/2k/height.jpg",
+          "px": 2048,
+          "bytes": 5266947
+        },
+        "4k": {
+          "basecolor": "materials/paintedplaster002/4k/basecolor.jpg",
+          "normal": "materials/paintedplaster002/4k/normal.jpg",
+          "orm": "materials/paintedplaster002/4k/orm.jpg",
+          "height": "materials/paintedplaster002/4k/height.jpg",
+          "px": 4096,
+          "bytes": 25732798
+        }
+      }
+    },
+    "paintedplaster003": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PaintedPlaster003",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/paintedplaster003/2k/basecolor.jpg",
+          "normal": "materials/paintedplaster003/2k/normal.jpg",
+          "orm": "materials/paintedplaster003/2k/orm.jpg",
+          "height": "materials/paintedplaster003/2k/height.jpg",
+          "px": 2048,
+          "bytes": 5195294
+        },
+        "4k": {
+          "basecolor": "materials/paintedplaster003/4k/basecolor.jpg",
+          "normal": "materials/paintedplaster003/4k/normal.jpg",
+          "orm": "materials/paintedplaster003/4k/orm.jpg",
+          "height": "materials/paintedplaster003/4k/height.jpg",
+          "px": 4096,
+          "bytes": 25459368
+        }
+      }
+    },
+    "paintedplaster004": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PaintedPlaster004",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/paintedplaster004/2k/basecolor.jpg",
+          "normal": "materials/paintedplaster004/2k/normal.jpg",
+          "orm": "materials/paintedplaster004/2k/orm.jpg",
+          "height": "materials/paintedplaster004/2k/height.jpg",
+          "px": 2048,
+          "bytes": 5707316
+        },
+        "4k": {
+          "basecolor": "materials/paintedplaster004/4k/basecolor.jpg",
+          "normal": "materials/paintedplaster004/4k/normal.jpg",
+          "orm": "materials/paintedplaster004/4k/orm.jpg",
+          "height": "materials/paintedplaster004/4k/height.jpg",
+          "px": 4096,
+          "bytes": 28128271
+        }
+      }
+    },
+    "paintedplaster005": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PaintedPlaster005",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/paintedplaster005/2k/basecolor.jpg",
+          "normal": "materials/paintedplaster005/2k/normal.jpg",
+          "orm": "materials/paintedplaster005/2k/orm.jpg",
+          "height": "materials/paintedplaster005/2k/height.jpg",
+          "px": 2048,
+          "bytes": 5784291
+        },
+        "4k": {
+          "basecolor": "materials/paintedplaster005/4k/basecolor.jpg",
+          "normal": "materials/paintedplaster005/4k/normal.jpg",
+          "orm": "materials/paintedplaster005/4k/orm.jpg",
+          "height": "materials/paintedplaster005/4k/height.jpg",
+          "px": 4096,
+          "bytes": 28205629
+        }
+      }
+    },
+    "paintedwood001": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PaintedWood001",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/paintedwood001/2k/basecolor.jpg",
+          "normal": "materials/paintedwood001/2k/normal.jpg",
+          "orm": "materials/paintedwood001/2k/orm.jpg",
+          "height": "materials/paintedwood001/2k/height.jpg",
+          "px": 2048,
+          "bytes": 8873150
+        },
+        "4k": {
+          "basecolor": "materials/paintedwood001/4k/basecolor.jpg",
+          "normal": "materials/paintedwood001/4k/normal.jpg",
+          "orm": "materials/paintedwood001/4k/orm.jpg",
+          "height": "materials/paintedwood001/4k/height.jpg",
+          "px": 4096,
+          "bytes": 36548033
+        }
+      }
+    },
+    "paintedwood003": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PaintedWood003",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/paintedwood003/2k/basecolor.jpg",
+          "normal": "materials/paintedwood003/2k/normal.jpg",
+          "orm": "materials/paintedwood003/2k/orm.jpg",
+          "height": "materials/paintedwood003/2k/height.jpg",
+          "px": 2048,
+          "bytes": 8499530
+        },
+        "4k": {
+          "basecolor": "materials/paintedwood003/4k/basecolor.jpg",
+          "normal": "materials/paintedwood003/4k/normal.jpg",
+          "orm": "materials/paintedwood003/4k/orm.jpg",
+          "height": "materials/paintedwood003/4k/height.jpg",
+          "px": 4096,
+          "bytes": 35561604
+        }
+      }
+    },
+    "paintedwood005": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PaintedWood005",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/paintedwood005/2k/basecolor.jpg",
+          "normal": "materials/paintedwood005/2k/normal.jpg",
+          "orm": "materials/paintedwood005/2k/orm.jpg",
+          "height": "materials/paintedwood005/2k/height.jpg",
+          "px": 2048,
+          "bytes": 7551957
+        },
+        "4k": {
+          "basecolor": "materials/paintedwood005/4k/basecolor.jpg",
+          "normal": "materials/paintedwood005/4k/normal.jpg",
+          "orm": "materials/paintedwood005/4k/orm.jpg",
+          "height": "materials/paintedwood005/4k/height.jpg",
+          "px": 4096,
+          "bytes": 32423683
+        }
+      }
+    },
+    "pavingstones005": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PavingStones005",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/pavingstones005/2k/basecolor.jpg",
+          "normal": "materials/pavingstones005/2k/normal.jpg",
+          "orm": "materials/pavingstones005/2k/orm.jpg",
+          "height": "materials/pavingstones005/2k/height.jpg",
+          "px": 2048,
+          "bytes": 10537025
+        },
+        "4k": {
+          "basecolor": "materials/pavingstones005/4k/basecolor.jpg",
+          "normal": "materials/pavingstones005/4k/normal.jpg",
+          "orm": "materials/pavingstones005/4k/orm.jpg",
+          "height": "materials/pavingstones005/4k/height.jpg",
+          "px": 4096,
+          "bytes": 34643769
+        }
+      }
+    },
+    "pavingstones006": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PavingStones006",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/pavingstones006/2k/basecolor.jpg",
+          "normal": "materials/pavingstones006/2k/normal.jpg",
+          "orm": "materials/pavingstones006/2k/orm.jpg",
+          "height": "materials/pavingstones006/2k/height.jpg",
+          "px": 2048,
+          "bytes": 7588283
+        },
+        "4k": {
+          "basecolor": "materials/pavingstones006/4k/basecolor.jpg",
+          "normal": "materials/pavingstones006/4k/normal.jpg",
+          "orm": "materials/pavingstones006/4k/orm.jpg",
+          "height": "materials/pavingstones006/4k/height.jpg",
+          "px": 4096,
+          "bytes": 25877752
+        }
+      }
+    },
+    "pavingstones007": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PavingStones007",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/pavingstones007/2k/basecolor.jpg",
+          "normal": "materials/pavingstones007/2k/normal.jpg",
+          "orm": "materials/pavingstones007/2k/orm.jpg",
+          "height": "materials/pavingstones007/2k/height.jpg",
+          "px": 2048,
+          "bytes": 7442895
+        },
+        "4k": {
+          "basecolor": "materials/pavingstones007/4k/basecolor.jpg",
+          "normal": "materials/pavingstones007/4k/normal.jpg",
+          "orm": "materials/pavingstones007/4k/orm.jpg",
+          "height": "materials/pavingstones007/4k/height.jpg",
+          "px": 4096,
+          "bytes": 26069611
+        }
+      }
+    },
+    "pavingstones008": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PavingStones008",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/pavingstones008/2k/basecolor.jpg",
+          "normal": "materials/pavingstones008/2k/normal.jpg",
+          "orm": "materials/pavingstones008/2k/orm.jpg",
+          "height": "materials/pavingstones008/2k/height.jpg",
+          "px": 2048,
+          "bytes": 10349482
+        },
+        "4k": {
+          "basecolor": "materials/pavingstones008/4k/basecolor.jpg",
+          "normal": "materials/pavingstones008/4k/normal.jpg",
+          "orm": "materials/pavingstones008/4k/orm.jpg",
+          "height": "materials/pavingstones008/4k/height.jpg",
+          "px": 4096,
+          "bytes": 40429696
+        }
+      }
+    },
+    "pavingstones009": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PavingStones009",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/pavingstones009/2k/basecolor.jpg",
+          "normal": "materials/pavingstones009/2k/normal.jpg",
+          "orm": "materials/pavingstones009/2k/orm.jpg",
+          "height": "materials/pavingstones009/2k/height.jpg",
+          "px": 2048,
+          "bytes": 7308657
+        },
+        "4k": {
+          "basecolor": "materials/pavingstones009/4k/basecolor.jpg",
+          "normal": "materials/pavingstones009/4k/normal.jpg",
+          "orm": "materials/pavingstones009/4k/orm.jpg",
+          "height": "materials/pavingstones009/4k/height.jpg",
+          "px": 4096,
+          "bytes": 24405857
+        }
+      }
+    },
+    "pavingstones055": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PavingStones055",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/pavingstones055/2k/basecolor.jpg",
+          "normal": "materials/pavingstones055/2k/normal.jpg",
+          "orm": "materials/pavingstones055/2k/orm.jpg",
+          "height": "materials/pavingstones055/2k/height.jpg",
+          "px": 2048,
+          "bytes": 8891408
+        },
+        "4k": {
+          "basecolor": "materials/pavingstones055/4k/basecolor.jpg",
+          "normal": "materials/pavingstones055/4k/normal.jpg",
+          "orm": "materials/pavingstones055/4k/orm.jpg",
+          "height": "materials/pavingstones055/4k/height.jpg",
+          "px": 4096,
+          "bytes": 33705818
+        }
+      }
+    },
+    "pavingstones092": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PavingStones092",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/pavingstones092/2k/basecolor.jpg",
+          "normal": "materials/pavingstones092/2k/normal.jpg",
+          "orm": "materials/pavingstones092/2k/orm.jpg",
+          "height": "materials/pavingstones092/2k/height.jpg",
+          "px": 2048,
+          "bytes": 9707581
+        },
+        "4k": {
+          "basecolor": "materials/pavingstones092/4k/basecolor.jpg",
+          "normal": "materials/pavingstones092/4k/normal.jpg",
+          "orm": "materials/pavingstones092/4k/orm.jpg",
+          "height": "materials/pavingstones092/4k/height.jpg",
+          "px": 4096,
+          "bytes": 41424162
+        }
+      }
+    },
+    "pavingstones105": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PavingStones105",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/pavingstones105/2k/basecolor.jpg",
+          "normal": "materials/pavingstones105/2k/normal.jpg",
+          "orm": "materials/pavingstones105/2k/orm.jpg",
+          "height": "materials/pavingstones105/2k/height.jpg",
+          "px": 2048,
+          "bytes": 7762312
+        },
+        "4k": {
+          "basecolor": "materials/pavingstones105/4k/basecolor.jpg",
+          "normal": "materials/pavingstones105/4k/normal.jpg",
+          "orm": "materials/pavingstones105/4k/orm.jpg",
+          "height": "materials/pavingstones105/4k/height.jpg",
+          "px": 4096,
+          "bytes": 37461732
+        }
+      }
+    },
+    "pavingstones106": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PavingStones106",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/pavingstones106/2k/basecolor.jpg",
+          "normal": "materials/pavingstones106/2k/normal.jpg",
+          "orm": "materials/pavingstones106/2k/orm.jpg",
+          "height": "materials/pavingstones106/2k/height.jpg",
+          "px": 2048,
+          "bytes": 7900886
+        },
+        "4k": {
+          "basecolor": "materials/pavingstones106/4k/basecolor.jpg",
+          "normal": "materials/pavingstones106/4k/normal.jpg",
+          "orm": "materials/pavingstones106/4k/orm.jpg",
+          "height": "materials/pavingstones106/4k/height.jpg",
+          "px": 4096,
+          "bytes": 36462922
+        }
+      }
+    },
+    "pavingstones119": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PavingStones119",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/pavingstones119/2k/basecolor.jpg",
+          "normal": "materials/pavingstones119/2k/normal.jpg",
+          "orm": "materials/pavingstones119/2k/orm.jpg",
+          "height": "materials/pavingstones119/2k/height.jpg",
+          "px": 2048,
+          "bytes": 9880614
+        },
+        "4k": {
+          "basecolor": "materials/pavingstones119/4k/basecolor.jpg",
+          "normal": "materials/pavingstones119/4k/normal.jpg",
+          "orm": "materials/pavingstones119/4k/orm.jpg",
+          "height": "materials/pavingstones119/4k/height.jpg",
+          "px": 4096,
+          "bytes": 40589670
+        }
+      }
+    },
+    "pavingstones137": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PavingStones137",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/pavingstones137/2k/basecolor.jpg",
+          "normal": "materials/pavingstones137/2k/normal.jpg",
+          "orm": "materials/pavingstones137/2k/orm.jpg",
+          "height": "materials/pavingstones137/2k/height.jpg",
+          "px": 2048,
+          "bytes": 6178018
+        },
+        "4k": {
+          "basecolor": "materials/pavingstones137/4k/basecolor.jpg",
+          "normal": "materials/pavingstones137/4k/normal.jpg",
+          "orm": "materials/pavingstones137/4k/orm.jpg",
+          "height": "materials/pavingstones137/4k/height.jpg",
+          "px": 4096,
+          "bytes": 25105664
+        }
+      }
+    },
+    "pavingstones150": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PavingStones150",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/pavingstones150/2k/basecolor.jpg",
+          "normal": "materials/pavingstones150/2k/normal.jpg",
+          "orm": "materials/pavingstones150/2k/orm.jpg",
+          "height": "materials/pavingstones150/2k/height.jpg",
+          "px": 2048,
+          "bytes": 3999508
+        },
+        "4k": {
+          "basecolor": "materials/pavingstones150/4k/basecolor.jpg",
+          "normal": "materials/pavingstones150/4k/normal.jpg",
+          "orm": "materials/pavingstones150/4k/orm.jpg",
+          "height": "materials/pavingstones150/4k/height.jpg",
+          "px": 4096,
+          "bytes": 15341286
+        }
+      }
+    },
+    "pavingstones151": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/PavingStones151",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/pavingstones151/2k/basecolor.jpg",
+          "normal": "materials/pavingstones151/2k/normal.jpg",
+          "orm": "materials/pavingstones151/2k/orm.jpg",
+          "height": "materials/pavingstones151/2k/height.jpg",
+          "px": 2048,
+          "bytes": 7466331
+        },
+        "4k": {
+          "basecolor": "materials/pavingstones151/4k/basecolor.jpg",
+          "normal": "materials/pavingstones151/4k/normal.jpg",
+          "orm": "materials/pavingstones151/4k/orm.jpg",
+          "height": "materials/pavingstones151/4k/height.jpg",
+          "px": 4096,
+          "bytes": 30399920
+        }
+      }
+    },
+    "planks007": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Planks007",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/planks007/2k/basecolor.jpg",
+          "normal": "materials/planks007/2k/normal.jpg",
+          "orm": "materials/planks007/2k/orm.jpg",
+          "height": "materials/planks007/2k/height.jpg",
+          "px": 2048,
+          "bytes": 6888956
+        },
+        "4k": {
+          "basecolor": "materials/planks007/4k/basecolor.jpg",
+          "normal": "materials/planks007/4k/normal.jpg",
+          "orm": "materials/planks007/4k/orm.jpg",
+          "height": "materials/planks007/4k/height.jpg",
+          "px": 4096,
+          "bytes": 25650919
+        }
+      }
+    },
+    "planks021": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Planks021",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/planks021/2k/basecolor.jpg",
+          "normal": "materials/planks021/2k/normal.jpg",
+          "orm": "materials/planks021/2k/orm.jpg",
+          "height": "materials/planks021/2k/height.jpg",
+          "px": 2048,
+          "bytes": 5156012
+        },
+        "4k": {
+          "basecolor": "materials/planks021/4k/basecolor.jpg",
+          "normal": "materials/planks021/4k/normal.jpg",
+          "orm": "materials/planks021/4k/orm.jpg",
+          "height": "materials/planks021/4k/height.jpg",
+          "px": 4096,
+          "bytes": 20435575
+        }
+      }
+    },
+    "planks022": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Planks022",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/planks022/2k/basecolor.jpg",
+          "normal": "materials/planks022/2k/normal.jpg",
+          "orm": "materials/planks022/2k/orm.jpg",
+          "height": "materials/planks022/2k/height.jpg",
+          "px": 2048,
+          "bytes": 8465855
+        },
+        "4k": {
+          "basecolor": "materials/planks022/4k/basecolor.jpg",
+          "normal": "materials/planks022/4k/normal.jpg",
+          "orm": "materials/planks022/4k/orm.jpg",
+          "height": "materials/planks022/4k/height.jpg",
+          "px": 4096,
+          "bytes": 40027145
+        }
+      }
+    },
+    "planks028": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Planks028",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/planks028/2k/basecolor.jpg",
+          "normal": "materials/planks028/2k/normal.jpg",
+          "orm": "materials/planks028/2k/orm.jpg",
+          "height": "materials/planks028/2k/height.jpg",
+          "px": 2048,
+          "bytes": 4390840
+        },
+        "4k": {
+          "basecolor": "materials/planks028/4k/basecolor.jpg",
+          "normal": "materials/planks028/4k/normal.jpg",
+          "orm": "materials/planks028/4k/orm.jpg",
+          "height": "materials/planks028/4k/height.jpg",
+          "px": 4096,
+          "bytes": 16337283
+        }
+      }
+    },
+    "planks029s": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Planks029S",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/planks029s/2k/basecolor.jpg",
+          "normal": "materials/planks029s/2k/normal.jpg",
+          "orm": "materials/planks029s/2k/orm.jpg",
+          "height": "materials/planks029s/2k/height.jpg",
+          "px": 2048,
+          "bytes": 7784695
+        },
+        "4k": {
+          "basecolor": "materials/planks029s/4k/basecolor.jpg",
+          "normal": "materials/planks029s/4k/normal.jpg",
+          "orm": "materials/planks029s/4k/orm.jpg",
+          "height": "materials/planks029s/4k/height.jpg",
+          "px": 4096,
+          "bytes": 29439801
+        }
+      }
+    },
+    "planks038": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Planks038",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/planks038/2k/basecolor.jpg",
+          "normal": "materials/planks038/2k/normal.jpg",
+          "orm": "materials/planks038/2k/orm.jpg",
+          "height": "materials/planks038/2k/height.jpg",
+          "px": 2048,
+          "bytes": 3081673
+        },
+        "4k": {
+          "basecolor": "materials/planks038/4k/basecolor.jpg",
+          "normal": "materials/planks038/4k/normal.jpg",
+          "orm": "materials/planks038/4k/orm.jpg",
+          "height": "materials/planks038/4k/height.jpg",
+          "px": 4096,
+          "bytes": 12813045
+        }
+      }
+    },
+    "plaster001": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Plaster001",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/plaster001/2k/basecolor.jpg",
+          "normal": "materials/plaster001/2k/normal.jpg",
+          "orm": "materials/plaster001/2k/orm.jpg",
+          "height": "materials/plaster001/2k/height.jpg",
+          "px": 2048,
+          "bytes": 7641072
+        },
+        "4k": {
+          "basecolor": "materials/plaster001/4k/basecolor.jpg",
+          "normal": "materials/plaster001/4k/normal.jpg",
+          "orm": "materials/plaster001/4k/orm.jpg",
+          "height": "materials/plaster001/4k/height.jpg",
+          "px": 4096,
+          "bytes": 31733404
+        }
+      }
+    },
+    "rock004": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Rock004",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/rock004/2k/basecolor.jpg",
+          "normal": "materials/rock004/2k/normal.jpg",
+          "orm": "materials/rock004/2k/orm.jpg",
+          "height": "materials/rock004/2k/height.jpg",
+          "px": 2048,
+          "bytes": 7745812
+        },
+        "4k": {
+          "basecolor": "materials/rock004/4k/basecolor.jpg",
+          "normal": "materials/rock004/4k/normal.jpg",
+          "orm": "materials/rock004/4k/orm.jpg",
+          "height": "materials/rock004/4k/height.jpg",
+          "px": 4096,
+          "bytes": 23765173
+        }
+      }
+    },
+    "rock042l": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Rock042L",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/rock042l/2k/basecolor.jpg",
+          "normal": "materials/rock042l/2k/normal.jpg",
+          "orm": "materials/rock042l/2k/orm.jpg",
+          "height": "materials/rock042l/2k/height.jpg",
+          "px": 2048,
+          "bytes": 7331695
+        },
+        "4k": {
+          "basecolor": "materials/rock042l/4k/basecolor.jpg",
+          "normal": "materials/rock042l/4k/normal.jpg",
+          "orm": "materials/rock042l/4k/orm.jpg",
+          "height": "materials/rock042l/4k/height.jpg",
+          "px": 4096,
+          "bytes": 24147744
+        }
+      }
+    },
+    "rock043l": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Rock043L",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/rock043l/2k/basecolor.jpg",
+          "normal": "materials/rock043l/2k/normal.jpg",
+          "orm": "materials/rock043l/2k/orm.jpg",
+          "height": "materials/rock043l/2k/height.jpg",
+          "px": 2048,
+          "bytes": 8668555
+        },
+        "4k": {
+          "basecolor": "materials/rock043l/4k/basecolor.jpg",
+          "normal": "materials/rock043l/4k/normal.jpg",
+          "orm": "materials/rock043l/4k/orm.jpg",
+          "height": "materials/rock043l/4k/height.jpg",
+          "px": 4096,
+          "bytes": 30930669
+        }
+      }
+    },
+    "rock044": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Rock044",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/rock044/2k/basecolor.jpg",
+          "normal": "materials/rock044/2k/normal.jpg",
+          "orm": "materials/rock044/2k/orm.jpg",
+          "height": "materials/rock044/2k/height.jpg",
+          "px": 2048,
+          "bytes": 7962010
+        },
+        "4k": {
+          "basecolor": "materials/rock044/4k/basecolor.jpg",
+          "normal": "materials/rock044/4k/normal.jpg",
+          "orm": "materials/rock044/4k/orm.jpg",
+          "height": "materials/rock044/4k/height.jpg",
+          "px": 4096,
+          "bytes": 28517159
+        }
+      }
+    },
+    "rock045": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Rock045",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/rock045/2k/basecolor.jpg",
+          "normal": "materials/rock045/2k/normal.jpg",
+          "orm": "materials/rock045/2k/orm.jpg",
+          "height": "materials/rock045/2k/height.jpg",
+          "px": 2048,
+          "bytes": 9066893
+        },
+        "4k": {
+          "basecolor": "materials/rock045/4k/basecolor.jpg",
+          "normal": "materials/rock045/4k/normal.jpg",
+          "orm": "materials/rock045/4k/orm.jpg",
+          "height": "materials/rock045/4k/height.jpg",
+          "px": 4096,
+          "bytes": 33767681
+        }
+      }
+    },
+    "rock062": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Rock062",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/rock062/2k/basecolor.jpg",
+          "normal": "materials/rock062/2k/normal.jpg",
+          "orm": "materials/rock062/2k/orm.jpg",
+          "height": "materials/rock062/2k/height.jpg",
+          "px": 2048,
+          "bytes": 6877182
+        },
+        "4k": {
+          "basecolor": "materials/rock062/4k/basecolor.jpg",
+          "normal": "materials/rock062/4k/normal.jpg",
+          "orm": "materials/rock062/4k/orm.jpg",
+          "height": "materials/rock062/4k/height.jpg",
+          "px": 4096,
+          "bytes": 24628449
+        }
+      }
+    },
+    "rock064": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Rock064",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/rock064/2k/basecolor.jpg",
+          "normal": "materials/rock064/2k/normal.jpg",
+          "orm": "materials/rock064/2k/orm.jpg",
+          "height": "materials/rock064/2k/height.jpg",
+          "px": 2048,
+          "bytes": 7244795
+        },
+        "4k": {
+          "basecolor": "materials/rock064/4k/basecolor.jpg",
+          "normal": "materials/rock064/4k/normal.jpg",
+          "orm": "materials/rock064/4k/orm.jpg",
+          "height": "materials/rock064/4k/height.jpg",
+          "px": 4096,
+          "bytes": 29004748
+        }
+      }
+    },
+    "rocks006": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Rocks006",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/rocks006/2k/basecolor.jpg",
+          "normal": "materials/rocks006/2k/normal.jpg",
+          "orm": "materials/rocks006/2k/orm.jpg",
+          "height": "materials/rocks006/2k/height.jpg",
+          "px": 2048,
+          "bytes": 10783267
+        },
+        "4k": {
+          "basecolor": "materials/rocks006/4k/basecolor.jpg",
+          "normal": "materials/rocks006/4k/normal.jpg",
+          "orm": "materials/rocks006/4k/orm.jpg",
+          "height": "materials/rocks006/4k/height.jpg",
+          "px": 4096,
+          "bytes": 37742107
+        }
+      }
+    },
+    "rocks022": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Rocks022",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/rocks022/2k/basecolor.jpg",
+          "normal": "materials/rocks022/2k/normal.jpg",
+          "orm": "materials/rocks022/2k/orm.jpg",
+          "height": "materials/rocks022/2k/height.jpg",
+          "px": 2048,
+          "bytes": 8580666
+        },
+        "4k": {
+          "basecolor": "materials/rocks022/4k/basecolor.jpg",
+          "normal": "materials/rocks022/4k/normal.jpg",
+          "orm": "materials/rocks022/4k/orm.jpg",
+          "height": "materials/rocks022/4k/height.jpg",
+          "px": 4096,
+          "bytes": 30703205
+        }
+      }
+    },
+    "rocks025": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Rocks025",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/rocks025/2k/basecolor.jpg",
+          "normal": "materials/rocks025/2k/normal.jpg",
+          "orm": "materials/rocks025/2k/orm.jpg",
+          "height": "materials/rocks025/2k/height.jpg",
+          "px": 2048,
+          "bytes": 8097985
+        },
+        "4k": {
+          "basecolor": "materials/rocks025/4k/basecolor.jpg",
+          "normal": "materials/rocks025/4k/normal.jpg",
+          "orm": "materials/rocks025/4k/orm.jpg",
+          "height": "materials/rocks025/4k/height.jpg",
+          "px": 4096,
+          "bytes": 30691633
+        }
+      }
+    },
+    "roofingtiles001": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/RoofingTiles001",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/roofingtiles001/2k/basecolor.jpg",
+          "normal": "materials/roofingtiles001/2k/normal.jpg",
+          "orm": "materials/roofingtiles001/2k/orm.jpg",
+          "height": "materials/roofingtiles001/2k/height.jpg",
+          "px": 2048,
+          "bytes": 7201504
+        },
+        "4k": {
+          "basecolor": "materials/roofingtiles001/4k/basecolor.jpg",
+          "normal": "materials/roofingtiles001/4k/normal.jpg",
+          "orm": "materials/roofingtiles001/4k/orm.jpg",
+          "height": "materials/roofingtiles001/4k/height.jpg",
+          "px": 4096,
+          "bytes": 25112424
+        }
+      }
+    },
+    "roofingtiles002": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/RoofingTiles002",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/roofingtiles002/2k/basecolor.jpg",
+          "normal": "materials/roofingtiles002/2k/normal.jpg",
+          "orm": "materials/roofingtiles002/2k/orm.jpg",
+          "height": "materials/roofingtiles002/2k/height.jpg",
+          "px": 2048,
+          "bytes": 7208526
+        },
+        "4k": {
+          "basecolor": "materials/roofingtiles002/4k/basecolor.jpg",
+          "normal": "materials/roofingtiles002/4k/normal.jpg",
+          "orm": "materials/roofingtiles002/4k/orm.jpg",
+          "height": "materials/roofingtiles002/4k/height.jpg",
+          "px": 4096,
+          "bytes": 25158437
+        }
+      }
+    },
+    "roofingtiles003": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/RoofingTiles003",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/roofingtiles003/2k/basecolor.jpg",
+          "normal": "materials/roofingtiles003/2k/normal.jpg",
+          "orm": "materials/roofingtiles003/2k/orm.jpg",
+          "height": "materials/roofingtiles003/2k/height.jpg",
+          "px": 2048,
+          "bytes": 7644204
+        },
+        "4k": {
+          "basecolor": "materials/roofingtiles003/4k/basecolor.jpg",
+          "normal": "materials/roofingtiles003/4k/normal.jpg",
+          "orm": "materials/roofingtiles003/4k/orm.jpg",
+          "height": "materials/roofingtiles003/4k/height.jpg",
+          "px": 4096,
+          "bytes": 26118636
+        }
+      }
+    },
+    "roofingtiles004": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/RoofingTiles004",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/roofingtiles004/2k/basecolor.jpg",
+          "normal": "materials/roofingtiles004/2k/normal.jpg",
+          "orm": "materials/roofingtiles004/2k/orm.jpg",
+          "height": "materials/roofingtiles004/2k/height.jpg",
+          "px": 2048,
+          "bytes": 6495891
+        },
+        "4k": {
+          "basecolor": "materials/roofingtiles004/4k/basecolor.jpg",
+          "normal": "materials/roofingtiles004/4k/normal.jpg",
+          "orm": "materials/roofingtiles004/4k/orm.jpg",
+          "height": "materials/roofingtiles004/4k/height.jpg",
+          "px": 4096,
+          "bytes": 21973557
+        }
+      }
+    },
+    "roofingtiles006": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/RoofingTiles006",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/roofingtiles006/2k/basecolor.jpg",
+          "normal": "materials/roofingtiles006/2k/normal.jpg",
+          "orm": "materials/roofingtiles006/2k/orm.jpg",
+          "height": "materials/roofingtiles006/2k/height.jpg",
+          "px": 2048,
+          "bytes": 6164600
+        },
+        "4k": {
+          "basecolor": "materials/roofingtiles006/4k/basecolor.jpg",
+          "normal": "materials/roofingtiles006/4k/normal.jpg",
+          "orm": "materials/roofingtiles006/4k/orm.jpg",
+          "height": "materials/roofingtiles006/4k/height.jpg",
+          "px": 4096,
+          "bytes": 28392272
+        }
+      }
+    },
+    "roofingtiles007": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/RoofingTiles007",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/roofingtiles007/2k/basecolor.jpg",
+          "normal": "materials/roofingtiles007/2k/normal.jpg",
+          "orm": "materials/roofingtiles007/2k/orm.jpg",
+          "height": "materials/roofingtiles007/2k/height.jpg",
+          "px": 2048,
+          "bytes": 6215678
+        },
+        "4k": {
+          "basecolor": "materials/roofingtiles007/4k/basecolor.jpg",
+          "normal": "materials/roofingtiles007/4k/normal.jpg",
+          "orm": "materials/roofingtiles007/4k/orm.jpg",
+          "height": "materials/roofingtiles007/4k/height.jpg",
+          "px": 4096,
+          "bytes": 28051433
+        }
+      }
+    },
+    "roofingtiles008": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/RoofingTiles008",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/roofingtiles008/2k/basecolor.jpg",
+          "normal": "materials/roofingtiles008/2k/normal.jpg",
+          "orm": "materials/roofingtiles008/2k/orm.jpg",
+          "height": "materials/roofingtiles008/2k/height.jpg",
+          "px": 2048,
+          "bytes": 7813193
+        },
+        "4k": {
+          "basecolor": "materials/roofingtiles008/4k/basecolor.jpg",
+          "normal": "materials/roofingtiles008/4k/normal.jpg",
+          "orm": "materials/roofingtiles008/4k/orm.jpg",
+          "height": "materials/roofingtiles008/4k/height.jpg",
+          "px": 4096,
+          "bytes": 35756853
+        }
+      }
+    },
+    "roofingtiles009": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/RoofingTiles009",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/roofingtiles009/2k/basecolor.jpg",
+          "normal": "materials/roofingtiles009/2k/normal.jpg",
+          "orm": "materials/roofingtiles009/2k/orm.jpg",
+          "height": "materials/roofingtiles009/2k/height.jpg",
+          "px": 2048,
+          "bytes": 6554230
+        },
+        "4k": {
+          "basecolor": "materials/roofingtiles009/4k/basecolor.jpg",
+          "normal": "materials/roofingtiles009/4k/normal.jpg",
+          "orm": "materials/roofingtiles009/4k/orm.jpg",
+          "height": "materials/roofingtiles009/4k/height.jpg",
+          "px": 4096,
+          "bytes": 30198431
+        }
+      }
+    },
+    "roofingtiles010": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/RoofingTiles010",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/roofingtiles010/2k/basecolor.jpg",
+          "normal": "materials/roofingtiles010/2k/normal.jpg",
+          "orm": "materials/roofingtiles010/2k/orm.jpg",
+          "height": "materials/roofingtiles010/2k/height.jpg",
+          "px": 2048,
+          "bytes": 6784614
+        },
+        "4k": {
+          "basecolor": "materials/roofingtiles010/4k/basecolor.jpg",
+          "normal": "materials/roofingtiles010/4k/normal.jpg",
+          "orm": "materials/roofingtiles010/4k/orm.jpg",
+          "height": "materials/roofingtiles010/4k/height.jpg",
+          "px": 4096,
+          "bytes": 31352034
+        }
+      }
+    },
+    "roofingtiles013a": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/RoofingTiles013A",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/roofingtiles013a/2k/basecolor.jpg",
+          "normal": "materials/roofingtiles013a/2k/normal.jpg",
+          "orm": "materials/roofingtiles013a/2k/orm.jpg",
+          "height": "materials/roofingtiles013a/2k/height.jpg",
+          "px": 2048,
+          "bytes": 2736363
+        },
+        "4k": {
+          "basecolor": "materials/roofingtiles013a/4k/basecolor.jpg",
+          "normal": "materials/roofingtiles013a/4k/normal.jpg",
+          "orm": "materials/roofingtiles013a/4k/orm.jpg",
+          "height": "materials/roofingtiles013a/4k/height.jpg",
+          "px": 4096,
+          "bytes": 9113646
+        }
+      }
+    },
+    "rust002": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Rust002",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/rust002/2k/basecolor.jpg",
+          "normal": "materials/rust002/2k/normal.jpg",
+          "orm": "materials/rust002/2k/orm.jpg",
+          "height": "materials/rust002/2k/height.jpg",
+          "px": 2048,
+          "bytes": 8359658
+        },
+        "4k": {
+          "basecolor": "materials/rust002/4k/basecolor.jpg",
+          "normal": "materials/rust002/4k/normal.jpg",
+          "orm": "materials/rust002/4k/orm.jpg",
+          "height": "materials/rust002/4k/height.jpg",
+          "px": 4096,
+          "bytes": 36638867
+        }
+      }
+    },
+    "rust003": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Rust003",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/rust003/2k/basecolor.jpg",
+          "normal": "materials/rust003/2k/normal.jpg",
+          "orm": "materials/rust003/2k/orm.jpg",
+          "height": "materials/rust003/2k/height.jpg",
+          "px": 2048,
+          "bytes": 7350902
+        },
+        "4k": {
+          "basecolor": "materials/rust003/4k/basecolor.jpg",
+          "normal": "materials/rust003/4k/normal.jpg",
+          "orm": "materials/rust003/4k/orm.jpg",
+          "height": "materials/rust003/4k/height.jpg",
+          "px": 4096,
+          "bytes": 33642650
+        }
+      }
+    },
+    "tiles038": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Tiles038",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/tiles038/2k/basecolor.jpg",
+          "normal": "materials/tiles038/2k/normal.jpg",
+          "orm": "materials/tiles038/2k/orm.jpg",
+          "height": "materials/tiles038/2k/height.jpg",
+          "px": 2048,
+          "bytes": 4013874
+        },
+        "4k": {
+          "basecolor": "materials/tiles038/4k/basecolor.jpg",
+          "normal": "materials/tiles038/4k/normal.jpg",
+          "orm": "materials/tiles038/4k/orm.jpg",
+          "height": "materials/tiles038/4k/height.jpg",
+          "px": 4096,
+          "bytes": 14584544
+        }
+      }
+    },
+    "tiles065": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Tiles065",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/tiles065/2k/basecolor.jpg",
+          "normal": "materials/tiles065/2k/normal.jpg",
+          "orm": "materials/tiles065/2k/orm.jpg",
+          "height": "materials/tiles065/2k/height.jpg",
+          "px": 2048,
+          "bytes": 8244203
+        },
+        "4k": {
+          "basecolor": "materials/tiles065/4k/basecolor.jpg",
+          "normal": "materials/tiles065/4k/normal.jpg",
+          "orm": "materials/tiles065/4k/orm.jpg",
+          "height": "materials/tiles065/4k/height.jpg",
+          "px": 4096,
+          "bytes": 31054744
+        }
+      }
+    },
+    "tiles066": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Tiles066",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/tiles066/2k/basecolor.jpg",
+          "normal": "materials/tiles066/2k/normal.jpg",
+          "orm": "materials/tiles066/2k/orm.jpg",
+          "height": "materials/tiles066/2k/height.jpg",
+          "px": 2048,
+          "bytes": 8296678
+        },
+        "4k": {
+          "basecolor": "materials/tiles066/4k/basecolor.jpg",
+          "normal": "materials/tiles066/4k/normal.jpg",
+          "orm": "materials/tiles066/4k/orm.jpg",
+          "height": "materials/tiles066/4k/height.jpg",
+          "px": 4096,
+          "bytes": 31317228
+        }
+      }
+    },
+    "tiles069": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Tiles069",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/tiles069/2k/basecolor.jpg",
+          "normal": "materials/tiles069/2k/normal.jpg",
+          "orm": "materials/tiles069/2k/orm.jpg",
+          "height": "materials/tiles069/2k/height.jpg",
+          "px": 2048,
+          "bytes": 8281513
+        },
+        "4k": {
+          "basecolor": "materials/tiles069/4k/basecolor.jpg",
+          "normal": "materials/tiles069/4k/normal.jpg",
+          "orm": "materials/tiles069/4k/orm.jpg",
+          "height": "materials/tiles069/4k/height.jpg",
+          "px": 4096,
+          "bytes": 28429350
+        }
+      }
+    },
+    "tiles070": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Tiles070",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/tiles070/2k/basecolor.jpg",
+          "normal": "materials/tiles070/2k/normal.jpg",
+          "orm": "materials/tiles070/2k/orm.jpg",
+          "height": "materials/tiles070/2k/height.jpg",
+          "px": 2048,
+          "bytes": 10460422
+        },
+        "4k": {
+          "basecolor": "materials/tiles070/4k/basecolor.jpg",
+          "normal": "materials/tiles070/4k/normal.jpg",
+          "orm": "materials/tiles070/4k/orm.jpg",
+          "height": "materials/tiles070/4k/height.jpg",
+          "px": 4096,
+          "bytes": 37643019
+        }
+      }
+    },
+    "tiles071": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Tiles071",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/tiles071/2k/basecolor.jpg",
+          "normal": "materials/tiles071/2k/normal.jpg",
+          "orm": "materials/tiles071/2k/orm.jpg",
+          "height": "materials/tiles071/2k/height.jpg",
+          "px": 2048,
+          "bytes": 6291920
+        },
+        "4k": {
+          "basecolor": "materials/tiles071/4k/basecolor.jpg",
+          "normal": "materials/tiles071/4k/normal.jpg",
+          "orm": "materials/tiles071/4k/orm.jpg",
+          "height": "materials/tiles071/4k/height.jpg",
+          "px": 4096,
+          "bytes": 24952155
+        }
+      }
+    },
+    "tiles072": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Tiles072",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/tiles072/2k/basecolor.jpg",
+          "normal": "materials/tiles072/2k/normal.jpg",
+          "orm": "materials/tiles072/2k/orm.jpg",
+          "height": "materials/tiles072/2k/height.jpg",
+          "px": 2048,
+          "bytes": 6616909
+        },
+        "4k": {
+          "basecolor": "materials/tiles072/4k/basecolor.jpg",
+          "normal": "materials/tiles072/4k/normal.jpg",
+          "orm": "materials/tiles072/4k/orm.jpg",
+          "height": "materials/tiles072/4k/height.jpg",
+          "px": 4096,
+          "bytes": 25776199
+        }
+      }
+    },
+    "tiles073": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/Tiles073",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/tiles073/2k/basecolor.jpg",
+          "normal": "materials/tiles073/2k/normal.jpg",
+          "orm": "materials/tiles073/2k/orm.jpg",
+          "height": "materials/tiles073/2k/height.jpg",
+          "px": 2048,
+          "bytes": 4715241
+        },
+        "4k": {
+          "basecolor": "materials/tiles073/4k/basecolor.jpg",
+          "normal": "materials/tiles073/4k/normal.jpg",
+          "orm": "materials/tiles073/4k/orm.jpg",
+          "height": "materials/tiles073/4k/height.jpg",
+          "px": 4096,
+          "bytes": 22127150
+        }
+      }
+    },
+    "woodchips003": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/WoodChips003",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/woodchips003/2k/basecolor.jpg",
+          "normal": "materials/woodchips003/2k/normal.jpg",
+          "orm": "materials/woodchips003/2k/orm.jpg",
+          "height": "materials/woodchips003/2k/height.jpg",
+          "px": 2048,
+          "bytes": 11018156
+        },
+        "4k": {
+          "basecolor": "materials/woodchips003/4k/basecolor.jpg",
+          "normal": "materials/woodchips003/4k/normal.jpg",
+          "orm": "materials/woodchips003/4k/orm.jpg",
+          "height": "materials/woodchips003/4k/height.jpg",
+          "px": 4096,
+          "bytes": 37997401
+        }
+      }
+    },
+    "woodfloor032": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/WoodFloor032",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/woodfloor032/2k/basecolor.jpg",
+          "normal": "materials/woodfloor032/2k/normal.jpg",
+          "orm": "materials/woodfloor032/2k/orm.jpg",
+          "height": "materials/woodfloor032/2k/height.jpg",
+          "px": 2048,
+          "bytes": 3406758
+        },
+        "4k": {
+          "basecolor": "materials/woodfloor032/4k/basecolor.jpg",
+          "normal": "materials/woodfloor032/4k/normal.jpg",
+          "orm": "materials/woodfloor032/4k/orm.jpg",
+          "height": "materials/woodfloor032/4k/height.jpg",
+          "px": 4096,
+          "bytes": 19751250
+        }
+      }
+    },
+    "woodfloor033": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/WoodFloor033",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/woodfloor033/2k/basecolor.jpg",
+          "normal": "materials/woodfloor033/2k/normal.jpg",
+          "orm": "materials/woodfloor033/2k/orm.jpg",
+          "height": "materials/woodfloor033/2k/height.jpg",
+          "px": 2048,
+          "bytes": 3089910
+        },
+        "4k": {
+          "basecolor": "materials/woodfloor033/4k/basecolor.jpg",
+          "normal": "materials/woodfloor033/4k/normal.jpg",
+          "orm": "materials/woodfloor033/4k/orm.jpg",
+          "height": "materials/woodfloor033/4k/height.jpg",
+          "px": 4096,
+          "bytes": 18074492
+        }
+      }
+    },
+    "woodfloor034": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/WoodFloor034",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/woodfloor034/2k/basecolor.jpg",
+          "normal": "materials/woodfloor034/2k/normal.jpg",
+          "orm": "materials/woodfloor034/2k/orm.jpg",
+          "height": "materials/woodfloor034/2k/height.jpg",
+          "px": 2048,
+          "bytes": 4625270
+        },
+        "4k": {
+          "basecolor": "materials/woodfloor034/4k/basecolor.jpg",
+          "normal": "materials/woodfloor034/4k/normal.jpg",
+          "orm": "materials/woodfloor034/4k/orm.jpg",
+          "height": "materials/woodfloor034/4k/height.jpg",
+          "px": 4096,
+          "bytes": 17486046
+        }
+      }
+    },
+    "woodfloor035": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/WoodFloor035",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/woodfloor035/2k/basecolor.jpg",
+          "normal": "materials/woodfloor035/2k/normal.jpg",
+          "orm": "materials/woodfloor035/2k/orm.jpg",
+          "height": "materials/woodfloor035/2k/height.jpg",
+          "px": 2048,
+          "bytes": 5200795
+        },
+        "4k": {
+          "basecolor": "materials/woodfloor035/4k/basecolor.jpg",
+          "normal": "materials/woodfloor035/4k/normal.jpg",
+          "orm": "materials/woodfloor035/4k/orm.jpg",
+          "height": "materials/woodfloor035/4k/height.jpg",
+          "px": 4096,
+          "bytes": 19391020
+        }
+      }
+    },
+    "woodsiding013": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/WoodSiding013",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/woodsiding013/2k/basecolor.jpg",
+          "normal": "materials/woodsiding013/2k/normal.jpg",
+          "orm": "materials/woodsiding013/2k/orm.jpg",
+          "height": "materials/woodsiding013/2k/height.jpg",
+          "px": 2048,
+          "bytes": 6699112
+        },
+        "4k": {
+          "basecolor": "materials/woodsiding013/4k/basecolor.jpg",
+          "normal": "materials/woodsiding013/4k/normal.jpg",
+          "orm": "materials/woodsiding013/4k/orm.jpg",
+          "height": "materials/woodsiding013/4k/height.jpg",
+          "px": 4096,
+          "bytes": 31469033
+        }
+      }
+    }
+  },
+  "skies": {
+    "belfast_sunset_puresky": {
+      "license": "CC0-1.0",
+      "author": "Dimitrios Savva, Greg Zaal, Jarod Guest",
+      "source_url": "https://polyhaven.com/a/belfast_sunset_puresky",
+      "tiers": {
+        "4k": {
+          "file": "skies/belfast_sunset_puresky/sky_4k.hdr",
+          "bytes": 17420114
+        }
+      }
+    },
+    "kloofendal_48d_partly_cloudy_puresky": {
+      "license": "CC0-1.0",
+      "author": "Greg Zaal, Jarod Guest",
+      "source_url": "https://polyhaven.com/a/kloofendal_48d_partly_cloudy_puresky",
+      "tiers": {
+        "4k": {
+          "file": "skies/kloofendal_48d_partly_cloudy_puresky/sky_4k.hdr",
+          "bytes": 20674857
+        }
+      }
+    },
+    "kloofendal_overcast_puresky": {
+      "license": "CC0-1.0",
+      "author": "Greg Zaal",
+      "source_url": "https://polyhaven.com/a/kloofendal_overcast_puresky",
+      "tiers": {
+        "4k": {
+          "file": "skies/kloofendal_overcast_puresky/sky_4k.hdr",
+          "bytes": 16953534
+        }
+      }
+    },
+    "kloppenheim_02_puresky": {
+      "license": "CC0-1.0",
+      "author": "Greg Zaal, Jarod Guest",
+      "source_url": "https://polyhaven.com/a/kloppenheim_02_puresky",
+      "tiers": {
+        "4k": {
+          "file": "skies/kloppenheim_02_puresky/sky_4k.hdr",
+          "bytes": 21972975
+        }
+      }
+    },
+    "overcast_soil_puresky": {
+      "license": "CC0-1.0",
+      "author": "Jarod Guest, Sergej Majboroda",
+      "source_url": "https://polyhaven.com/a/overcast_soil_puresky",
+      "tiers": {
+        "4k": {
+          "file": "skies/overcast_soil_puresky/sky_4k.hdr",
+          "bytes": 16949123
+        }
+      }
+    },
+    "qwantani_dusk_1_puresky": {
+      "license": "CC0-1.0",
+      "author": "Greg Zaal, Jarod Guest",
+      "source_url": "https://polyhaven.com/a/qwantani_dusk_1_puresky",
+      "tiers": {
+        "4k": {
+          "file": "skies/qwantani_dusk_1_puresky/sky_4k.hdr",
+          "bytes": 15803347
+        }
+      }
+    },
+    "qwantani_late_afternoon_puresky": {
+      "license": "CC0-1.0",
+      "author": "Greg Zaal, Jarod Guest",
+      "source_url": "https://polyhaven.com/a/qwantani_late_afternoon_puresky",
+      "tiers": {
+        "4k": {
+          "file": "skies/qwantani_late_afternoon_puresky/sky_4k.hdr",
+          "bytes": 17745266
+        }
+      }
+    },
+    "qwantani_morning_puresky": {
+      "license": "CC0-1.0",
+      "author": "Jarod Guest",
+      "source_url": "https://polyhaven.com/a/qwantani_morning_puresky",
+      "tiers": {
+        "4k": {
+          "file": "skies/qwantani_morning_puresky/sky_4k.hdr",
+          "bytes": 17738688
+        }
+      }
+    },
+    "qwantani_noon_puresky": {
+      "license": "CC0-1.0",
+      "author": "Greg Zaal, Jarod Guest",
+      "source_url": "https://polyhaven.com/a/qwantani_noon_puresky",
+      "tiers": {
+        "4k": {
+          "file": "skies/qwantani_noon_puresky/sky_4k.hdr",
+          "bytes": 17857544
+        }
+      }
+    },
+    "qwantani_sunset_puresky": {
+      "license": "CC0-1.0",
+      "author": "Greg Zaal, Jarod Guest",
+      "source_url": "https://polyhaven.com/a/qwantani_sunset_puresky",
+      "tiers": {
+        "4k": {
+          "file": "skies/qwantani_sunset_puresky/sky_4k.hdr",
+          "bytes": 16890545
+        }
+      }
+    },
+    "rustig_koppie_puresky": {
+      "license": "CC0-1.0",
+      "author": "Greg Zaal, Jarod Guest",
+      "source_url": "https://polyhaven.com/a/rustig_koppie_puresky",
+      "tiers": {
+        "4k": {
+          "file": "skies/rustig_koppie_puresky/sky_4k.hdr",
+          "bytes": 15257521
+        }
+      }
+    },
+    "syferfontein_6d_clear_puresky": {
+      "license": "CC0-1.0",
+      "author": "Greg Zaal, Jarod Guest",
+      "source_url": "https://polyhaven.com/a/syferfontein_6d_clear_puresky",
+      "tiers": {
+        "4k": {
+          "file": "skies/syferfontein_6d_clear_puresky/sky_4k.hdr",
+          "bytes": 18832562
+        }
+      }
+    }
+  },
+  "models": {
+    "american_football": {
+      "license": "CC0-1.0",
+      "author": "Riley Queen",
+      "source_url": "https://polyhaven.com/a/american_football",
+      "tiers": {
+        "2k": {
+          "file": "models/american_football/lod0_2k.glb",
+          "bytes": 5704792
+        }
+      }
+    },
+    "anthurium_botany_01": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/anthurium_botany_01",
+      "tiers": {
+        "2k": {
+          "file": "models/anthurium_botany_01/lod0_2k.glb",
+          "bytes": 3682776
+        }
+      }
+    },
+    "anthurium_botany_01_b": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/anthurium_botany_01",
+      "tiers": {
+        "2k": {
+          "file": "models/anthurium_botany_01_b/lod0_2k.glb",
+          "bytes": 3676872
+        }
+      }
+    },
+    "anthurium_botany_01_c": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/anthurium_botany_01",
+      "tiers": {
+        "2k": {
+          "file": "models/anthurium_botany_01_c/lod0_2k.glb",
+          "bytes": 3512856
+        }
+      }
+    },
+    "anthurium_botany_01_d": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/anthurium_botany_01",
+      "tiers": {
+        "2k": {
+          "file": "models/anthurium_botany_01_d/lod0_2k.glb",
+          "bytes": 3549420
+        }
+      }
+    },
+    "antique_ceramic_vase_01": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock",
+      "source_url": "https://polyhaven.com/a/antique_ceramic_vase_01",
+      "tiers": {
+        "2k": {
+          "file": "models/antique_ceramic_vase_01/lod0_2k.glb",
+          "bytes": 1500388
+        }
+      }
+    },
+    "armchair_01": {
+      "license": "CC0-1.0",
+      "author": "Kirill Sannikov",
+      "source_url": "https://polyhaven.com/a/ArmChair_01",
+      "tiers": {
+        "2k": {
+          "file": "models/armchair_01/lod0_2k.glb",
+          "bytes": 4478068
+        }
+      }
+    },
+    "bar_chair_round_01": {
+      "license": "CC0-1.0",
+      "author": "Dairon Sanchez",
+      "source_url": "https://polyhaven.com/a/bar_chair_round_01",
+      "tiers": {
+        "2k": {
+          "file": "models/bar_chair_round_01/lod0_2k.glb",
+          "bytes": 3062720
+        }
+      }
+    },
+    "barbershopchair_01": {
+      "license": "CC0-1.0",
+      "author": "Fernando Quinn",
+      "source_url": "https://polyhaven.com/a/BarberShopChair_01",
+      "tiers": {
+        "2k": {
+          "file": "models/barbershopchair_01/lod0_2k.glb",
+          "bytes": 3309724
+        }
+      }
+    },
+    "barrel_01": {
+      "license": "CC0-1.0",
+      "author": "Jorge Camacho",
+      "source_url": "https://polyhaven.com/a/Barrel_01",
+      "tiers": {
+        "2k": {
+          "file": "models/barrel_01/lod0_2k.glb",
+          "bytes": 3686688
+        }
+      }
+    },
+    "barrel_02": {
+      "license": "CC0-1.0",
+      "author": "Jorge Camacho",
+      "source_url": "https://polyhaven.com/a/Barrel_02",
+      "tiers": {
+        "2k": {
+          "file": "models/barrel_02/lod0_2k.glb",
+          "bytes": 1850472
+        }
+      }
+    },
+    "barrel_03": {
+      "license": "CC0-1.0",
+      "author": "Serhii Khromov",
+      "source_url": "https://polyhaven.com/a/barrel_03",
+      "tiers": {
+        "2k": {
+          "file": "models/barrel_03/lod0_2k.glb",
+          "bytes": 2982600
+        }
+      }
+    },
+    "barrel_stove": {
+      "license": "CC0-1.0",
+      "author": "MP",
+      "source_url": "https://polyhaven.com/a/barrel_stove",
+      "tiers": {
+        "2k": {
+          "file": "models/barrel_stove/lod0_2k.glb",
+          "bytes": 3998256
+        }
+      }
+    },
+    "baseball_01": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/baseball_01",
+      "tiers": {
+        "2k": {
+          "file": "models/baseball_01/lod0_2k.glb",
+          "bytes": 4431352
+        }
+      }
+    },
+    "baseball_bat": {
+      "license": "CC0-1.0",
+      "author": "Enrique Martín",
+      "source_url": "https://polyhaven.com/a/baseball_bat",
+      "tiers": {
+        "2k": {
+          "file": "models/baseball_bat/lod0_2k.glb",
+          "bytes": 2550120
+        }
+      }
+    },
+    "boulder_01": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/boulder_01",
+      "tiers": {
+        "2k": {
+          "file": "models/boulder_01/lod0_2k.glb",
+          "bytes": 5746216
+        }
+      }
+    },
+    "brass_candleholders": {
+      "license": "CC0-1.0",
+      "author": "Tina",
+      "source_url": "https://polyhaven.com/a/brass_candleholders",
+      "tiers": {
+        "2k": {
+          "file": "models/brass_candleholders/lod0_2k.glb",
+          "bytes": 5092284
+        }
+      }
+    },
+    "brass_candleholders_b": {
+      "license": "CC0-1.0",
+      "author": "Tina",
+      "source_url": "https://polyhaven.com/a/brass_candleholders",
+      "tiers": {
+        "2k": {
+          "file": "models/brass_candleholders_b/lod0_2k.glb",
+          "bytes": 5418380
+        }
+      }
+    },
+    "brass_candleholders_c": {
+      "license": "CC0-1.0",
+      "author": "Tina",
+      "source_url": "https://polyhaven.com/a/brass_candleholders",
+      "tiers": {
+        "2k": {
+          "file": "models/brass_candleholders_c/lod0_2k.glb",
+          "bytes": 5110776
+        }
+      }
+    },
+    "brass_diya_lantern": {
+      "license": "CC0-1.0",
+      "author": "Bhargav Kubal",
+      "source_url": "https://polyhaven.com/a/brass_diya_lantern",
+      "tiers": {
+        "2k": {
+          "file": "models/brass_diya_lantern/lod0_2k.glb",
+          "bytes": 3223276
+        }
+      }
+    },
+    "brass_pot_01": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/brass_pot_01",
+      "tiers": {
+        "2k": {
+          "file": "models/brass_pot_01/lod0_2k.glb",
+          "bytes": 1946668
+        }
+      }
+    },
+    "brass_vase_01": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/brass_vase_01",
+      "tiers": {
+        "2k": {
+          "file": "models/brass_vase_01/lod0_2k.glb",
+          "bytes": 2069792
+        }
+      }
+    },
+    "brass_vase_02": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/brass_vase_02",
+      "tiers": {
+        "2k": {
+          "file": "models/brass_vase_02/lod0_2k.glb",
+          "bytes": 2601740
+        }
+      }
+    },
+    "brass_vase_03": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/brass_vase_03",
+      "tiers": {
+        "2k": {
+          "file": "models/brass_vase_03/lod0_2k.glb",
+          "bytes": 2249024
+        }
+      }
+    },
+    "bronze_ray_statue": {
+      "license": "CC0-1.0",
+      "author": "Tina",
+      "source_url": "https://polyhaven.com/a/bronze_ray_statue",
+      "tiers": {
+        "2k": {
+          "file": "models/bronze_ray_statue/lod0_2k.glb",
+          "bytes": 3200136
+        }
+      }
+    },
+    "bronze_shark_statue": {
+      "license": "CC0-1.0",
+      "author": "Tina",
+      "source_url": "https://polyhaven.com/a/bronze_shark_statue",
+      "tiers": {
+        "2k": {
+          "file": "models/bronze_shark_statue/lod0_2k.glb",
+          "bytes": 3220560
+        }
+      }
+    },
+    "bronze_whale_statue": {
+      "license": "CC0-1.0",
+      "author": "Tina",
+      "source_url": "https://polyhaven.com/a/bronze_whale_statue",
+      "tiers": {
+        "2k": {
+          "file": "models/bronze_whale_statue/lod0_2k.glb",
+          "bytes": 3740864
+        }
+      }
+    },
+    "caged_hanging_light": {
+      "license": "CC0-1.0",
+      "author": "Ulan Cabanilla",
+      "source_url": "https://polyhaven.com/a/caged_hanging_light",
+      "tiers": {
+        "2k": {
+          "file": "models/caged_hanging_light/lod0_2k.glb",
+          "bytes": 4105580
+        }
+      }
+    },
+    "calathea_orbifolia_01": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/calathea_orbifolia_01",
+      "tiers": {
+        "2k": {
+          "file": "models/calathea_orbifolia_01/lod0_2k.glb",
+          "bytes": 3592724
+        }
+      }
+    },
+    "calathea_orbifolia_01_b": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/calathea_orbifolia_01",
+      "tiers": {
+        "2k": {
+          "file": "models/calathea_orbifolia_01_b/lod0_2k.glb",
+          "bytes": 3533240
+        }
+      }
+    },
+    "calathea_orbifolia_01_c": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/calathea_orbifolia_01",
+      "tiers": {
+        "2k": {
+          "file": "models/calathea_orbifolia_01_c/lod0_2k.glb",
+          "bytes": 3535488
+        }
+      }
+    },
+    "calathea_orbifolia_01_d": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/calathea_orbifolia_01",
+      "tiers": {
+        "2k": {
+          "file": "models/calathea_orbifolia_01_d/lod0_2k.glb",
+          "bytes": 3493236
+        }
+      }
+    },
+    "carved_wooden_elephant": {
+      "license": "CC0-1.0",
+      "author": "Greg Zaal",
+      "source_url": "https://polyhaven.com/a/carved_wooden_elephant",
+      "tiers": {
+        "2k": {
+          "file": "models/carved_wooden_elephant/lod0_2k.glb",
+          "bytes": 2733884
+        }
+      }
+    },
+    "celandine_01": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/celandine_01",
+      "tiers": {
+        "2k": {
+          "file": "models/celandine_01/lod0_2k.glb",
+          "bytes": 2897472
+        }
+      }
+    },
+    "celandine_01_b": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/celandine_01",
+      "tiers": {
+        "2k": {
+          "file": "models/celandine_01_b/lod0_2k.glb",
+          "bytes": 2896764
+        }
+      }
+    },
+    "celandine_01_c": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/celandine_01",
+      "tiers": {
+        "2k": {
+          "file": "models/celandine_01_c/lod0_2k.glb",
+          "bytes": 3039276
+        }
+      }
+    },
+    "celandine_01_d": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/celandine_01",
+      "tiers": {
+        "2k": {
+          "file": "models/celandine_01_d/lod0_2k.glb",
+          "bytes": 2989844
+        }
+      }
+    },
+    "ceramic_vase_01": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock",
+      "source_url": "https://polyhaven.com/a/ceramic_vase_01",
+      "tiers": {
+        "2k": {
+          "file": "models/ceramic_vase_01/lod0_2k.glb",
+          "bytes": 1009964
+        }
+      }
+    },
+    "ceramic_vase_02": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock",
+      "source_url": "https://polyhaven.com/a/ceramic_vase_02",
+      "tiers": {
+        "2k": {
+          "file": "models/ceramic_vase_02/lod0_2k.glb",
+          "bytes": 3091520
+        }
+      }
+    },
+    "ceramic_vase_03": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock",
+      "source_url": "https://polyhaven.com/a/ceramic_vase_03",
+      "tiers": {
+        "2k": {
+          "file": "models/ceramic_vase_03/lod0_2k.glb",
+          "bytes": 3317552
+        }
+      }
+    },
+    "ceramic_vase_04": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock",
+      "source_url": "https://polyhaven.com/a/ceramic_vase_04",
+      "tiers": {
+        "2k": {
+          "file": "models/ceramic_vase_04/lod0_2k.glb",
+          "bytes": 2362584
+        }
+      }
+    },
+    "chandelier_01": {
+      "license": "CC0-1.0",
+      "author": "Kirill Sannikov",
+      "source_url": "https://polyhaven.com/a/Chandelier_01",
+      "tiers": {
+        "2k": {
+          "file": "models/chandelier_01/lod0_2k.glb",
+          "bytes": 2533368
+        }
+      }
+    },
+    "chandelier_02": {
+      "license": "CC0-1.0",
+      "author": "Kirill Sannikov",
+      "source_url": "https://polyhaven.com/a/Chandelier_02",
+      "tiers": {
+        "2k": {
+          "file": "models/chandelier_02/lod0_2k.glb",
+          "bytes": 3333180
+        }
+      }
+    },
+    "chandelier_03": {
+      "license": "CC0-1.0",
+      "author": "Kirill Sannikov",
+      "source_url": "https://polyhaven.com/a/Chandelier_03",
+      "tiers": {
+        "2k": {
+          "file": "models/chandelier_03/lod0_2k.glb",
+          "bytes": 3934788
+        }
+      }
+    },
+    "cheiridopsis_succulent": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock, Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/cheiridopsis_succulent",
+      "tiers": {
+        "2k": {
+          "file": "models/cheiridopsis_succulent/lod0_2k.glb",
+          "bytes": 3972800
+        }
+      }
+    },
+    "cheiridopsis_succulent_b": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock, Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/cheiridopsis_succulent",
+      "tiers": {
+        "2k": {
+          "file": "models/cheiridopsis_succulent_b/lod0_2k.glb",
+          "bytes": 4004364
+        }
+      }
+    },
+    "cheiridopsis_succulent_c": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock, Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/cheiridopsis_succulent",
+      "tiers": {
+        "2k": {
+          "file": "models/cheiridopsis_succulent_c/lod0_2k.glb",
+          "bytes": 4046952
+        }
+      }
+    },
+    "cheiridopsis_succulent_d": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock, Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/cheiridopsis_succulent",
+      "tiers": {
+        "2k": {
+          "file": "models/cheiridopsis_succulent_d/lod0_2k.glb",
+          "bytes": 4184680
+        }
+      }
+    },
+    "chinese_armchair": {
+      "license": "CC0-1.0",
+      "author": "Kirill Sannikov",
+      "source_url": "https://polyhaven.com/a/chinese_armchair",
+      "tiers": {
+        "2k": {
+          "file": "models/chinese_armchair/lod0_2k.glb",
+          "bytes": 2613184
+        }
+      }
+    },
+    "chinese_cabinet": {
+      "license": "CC0-1.0",
+      "author": "Kirill Sannikov",
+      "source_url": "https://polyhaven.com/a/chinese_cabinet",
+      "tiers": {
+        "2k": {
+          "file": "models/chinese_cabinet/lod0_2k.glb",
+          "bytes": 3135440
+        }
+      }
+    },
+    "chinese_chandelier": {
+      "license": "CC0-1.0",
+      "author": "Kirill Sannikov",
+      "source_url": "https://polyhaven.com/a/chinese_chandelier",
+      "tiers": {
+        "2k": {
+          "file": "models/chinese_chandelier/lod0_2k.glb",
+          "bytes": 3552120
+        }
+      }
+    },
+    "chinese_commode": {
+      "license": "CC0-1.0",
+      "author": "Kirill Sannikov",
+      "source_url": "https://polyhaven.com/a/chinese_commode",
+      "tiers": {
+        "2k": {
+          "file": "models/chinese_commode/lod0_2k.glb",
+          "bytes": 2816136
+        }
+      }
+    },
+    "chinese_console_table": {
+      "license": "CC0-1.0",
+      "author": "Kirill Sannikov",
+      "source_url": "https://polyhaven.com/a/chinese_console_table",
+      "tiers": {
+        "2k": {
+          "file": "models/chinese_console_table/lod0_2k.glb",
+          "bytes": 3978680
+        }
+      }
+    },
+    "chinese_screen_panels": {
+      "license": "CC0-1.0",
+      "author": "Kirill Sannikov",
+      "source_url": "https://polyhaven.com/a/chinese_screen_panels",
+      "tiers": {
+        "2k": {
+          "file": "models/chinese_screen_panels/lod0_2k.glb",
+          "bytes": 2675592
+        }
+      }
+    },
+    "chinese_screen_panels_b": {
+      "license": "CC0-1.0",
+      "author": "Kirill Sannikov",
+      "source_url": "https://polyhaven.com/a/chinese_screen_panels",
+      "tiers": {
+        "2k": {
+          "file": "models/chinese_screen_panels_b/lod0_2k.glb",
+          "bytes": 2672568
+        }
+      }
+    },
+    "chinese_sofa": {
+      "license": "CC0-1.0",
+      "author": "Kirill Sannikov",
+      "source_url": "https://polyhaven.com/a/chinese_sofa",
+      "tiers": {
+        "2k": {
+          "file": "models/chinese_sofa/lod0_2k.glb",
+          "bytes": 2662708
+        }
+      }
+    },
+    "chinese_stool": {
+      "license": "CC0-1.0",
+      "author": "Kirill Sannikov",
+      "source_url": "https://polyhaven.com/a/chinese_stool",
+      "tiers": {
+        "2k": {
+          "file": "models/chinese_stool/lod0_2k.glb",
+          "bytes": 2944804
+        }
+      }
+    },
+    "chinese_tea_table": {
+      "license": "CC0-1.0",
+      "author": "Kirill Sannikov",
+      "source_url": "https://polyhaven.com/a/chinese_tea_table",
+      "tiers": {
+        "2k": {
+          "file": "models/chinese_tea_table/lod0_2k.glb",
+          "bytes": 2572556
+        }
+      }
+    },
+    "classicconsole_01": {
+      "license": "CC0-1.0",
+      "author": "Kirill Sannikov",
+      "source_url": "https://polyhaven.com/a/ClassicConsole_01",
+      "tiers": {
+        "2k": {
+          "file": "models/classicconsole_01/lod0_2k.glb",
+          "bytes": 3108112
+        }
+      }
+    },
+    "classicnightstand_01": {
+      "license": "CC0-1.0",
+      "author": "Kirill Sannikov",
+      "source_url": "https://polyhaven.com/a/ClassicNightstand_01",
+      "tiers": {
+        "2k": {
+          "file": "models/classicnightstand_01/lod0_2k.glb",
+          "bytes": 2204548
+        }
+      }
+    },
+    "coast_rocks_05": {
+      "license": "CC0-1.0",
+      "author": "Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/coast_rocks_05",
+      "tiers": {
+        "2k": {
+          "file": "models/coast_rocks_05/lod0_2k.glb",
+          "bytes": 6455636
+        }
+      }
+    },
+    "coffee_table_round_01": {
+      "license": "CC0-1.0",
+      "author": "Ulan Cabanilla",
+      "source_url": "https://polyhaven.com/a/coffee_table_round_01",
+      "tiers": {
+        "2k": {
+          "file": "models/coffee_table_round_01/lod0_2k.glb",
+          "bytes": 2158748
+        }
+      }
+    },
+    "coffeetable_01": {
+      "license": "CC0-1.0",
+      "author": "Fernando Quinn",
+      "source_url": "https://polyhaven.com/a/CoffeeTable_01",
+      "tiers": {
+        "2k": {
+          "file": "models/coffeetable_01/lod0_2k.glb",
+          "bytes": 3047232
+        }
+      }
+    },
+    "concrete_cat_statue": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Riley Queen",
+      "source_url": "https://polyhaven.com/a/concrete_cat_statue",
+      "tiers": {
+        "2k": {
+          "file": "models/concrete_cat_statue/lod0_2k.glb",
+          "bytes": 5929860
+        }
+      }
+    },
+    "concrete_road_barrier": {
+      "license": "CC0-1.0",
+      "author": "Amal Kumar",
+      "source_url": "https://polyhaven.com/a/concrete_road_barrier",
+      "tiers": {
+        "2k": {
+          "file": "models/concrete_road_barrier/lod0_2k.glb",
+          "bytes": 4638616
+        }
+      }
+    },
+    "concrete_road_barrier_02": {
+      "license": "CC0-1.0",
+      "author": "Amal Kumar",
+      "source_url": "https://polyhaven.com/a/concrete_road_barrier_02",
+      "tiers": {
+        "2k": {
+          "file": "models/concrete_road_barrier_02/lod0_2k.glb",
+          "bytes": 4596680
+        }
+      }
+    },
+    "covered_car": {
+      "license": "CC0-1.0",
+      "author": "MP",
+      "source_url": "https://polyhaven.com/a/covered_car",
+      "tiers": {
+        "2k": {
+          "file": "models/covered_car/lod0_2k.glb",
+          "bytes": 3718788
+        }
+      }
+    },
+    "crystalline_iceplant": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock, Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/crystalline_iceplant",
+      "tiers": {
+        "2k": {
+          "file": "models/crystalline_iceplant/lod0_2k.glb",
+          "bytes": 5254976
+        }
+      }
+    },
+    "crystalline_iceplant_b": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock, Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/crystalline_iceplant",
+      "tiers": {
+        "2k": {
+          "file": "models/crystalline_iceplant_b/lod0_2k.glb",
+          "bytes": 5242192
+        }
+      }
+    },
+    "crystalline_iceplant_c": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock, Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/crystalline_iceplant",
+      "tiers": {
+        "2k": {
+          "file": "models/crystalline_iceplant_c/lod0_2k.glb",
+          "bytes": 5235180
+        }
+      }
+    },
+    "crystalline_iceplant_d": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock, Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/crystalline_iceplant",
+      "tiers": {
+        "2k": {
+          "file": "models/crystalline_iceplant_d/lod0_2k.glb",
+          "bytes": 5225104
+        }
+      }
+    },
+    "dandelion_01": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/dandelion_01",
+      "tiers": {
+        "2k": {
+          "file": "models/dandelion_01/lod0_2k.glb",
+          "bytes": 3934928
+        }
+      }
+    },
+    "dandelion_01_b": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/dandelion_01",
+      "tiers": {
+        "2k": {
+          "file": "models/dandelion_01_b/lod0_2k.glb",
+          "bytes": 3937012
+        }
+      }
+    },
+    "dandelion_01_c": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/dandelion_01",
+      "tiers": {
+        "2k": {
+          "file": "models/dandelion_01_c/lod0_2k.glb",
+          "bytes": 3428332
+        }
+      }
+    },
+    "dandelion_01_d": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/dandelion_01",
+      "tiers": {
+        "2k": {
+          "file": "models/dandelion_01_d/lod0_2k.glb",
+          "bytes": 3411436
+        }
+      }
+    },
+    "dead_quiver_trunk": {
+      "license": "CC0-1.0",
+      "author": "Dario Barresi, James Ray Cock, Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/dead_quiver_trunk",
+      "tiers": {
+        "2k": {
+          "file": "models/dead_quiver_trunk/lod0_2k.glb",
+          "bytes": 3062180
+        }
+      }
+    },
+    "dead_tree_trunk": {
+      "license": "CC0-1.0",
+      "author": "Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/dead_tree_trunk",
+      "tiers": {
+        "2k": {
+          "file": "models/dead_tree_trunk/lod0_2k.glb",
+          "bytes": 4668608
+        }
+      }
+    },
+    "dead_tree_trunk_02": {
+      "license": "CC0-1.0",
+      "author": "Jenelle van Heerden, Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/dead_tree_trunk_02",
+      "tiers": {
+        "2k": {
+          "file": "models/dead_tree_trunk_02/lod0_2k.glb",
+          "bytes": 6141780
+        }
+      }
+    },
+    "desk_lamp_arm_01": {
+      "license": "CC0-1.0",
+      "author": "Kuutti Siitonen, Yann Kervran",
+      "source_url": "https://polyhaven.com/a/desk_lamp_arm_01",
+      "tiers": {
+        "2k": {
+          "file": "models/desk_lamp_arm_01/lod0_2k.glb",
+          "bytes": 3984388
+        }
+      }
+    },
+    "didelta_spinosa": {
+      "license": "CC0-1.0",
+      "author": "Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/didelta_spinosa",
+      "tiers": {
+        "2k": {
+          "file": "models/didelta_spinosa/lod0_2k.glb",
+          "bytes": 3439500
+        }
+      }
+    },
+    "dining_chair_02": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock",
+      "source_url": "https://polyhaven.com/a/dining_chair_02",
+      "tiers": {
+        "2k": {
+          "file": "models/dining_chair_02/lod0_2k.glb",
+          "bytes": 2340008
+        }
+      }
+    },
+    "dining_table": {
+      "license": "CC0-1.0",
+      "author": "Aron Łyczek",
+      "source_url": "https://polyhaven.com/a/dining_table",
+      "tiers": {
+        "2k": {
+          "file": "models/dining_table/lod0_2k.glb",
+          "bytes": 4271396
+        }
+      }
+    },
+    "dirty_football": {
+      "license": "CC0-1.0",
+      "author": "Rohit Seervi",
+      "source_url": "https://polyhaven.com/a/dirty_football",
+      "tiers": {
+        "2k": {
+          "file": "models/dirty_football/lod0_2k.glb",
+          "bytes": 2364644
+        }
+      }
+    },
+    "drawer_cabinet": {
+      "license": "CC0-1.0",
+      "author": "Ulan Cabanilla",
+      "source_url": "https://polyhaven.com/a/drawer_cabinet",
+      "tiers": {
+        "2k": {
+          "file": "models/drawer_cabinet/lod0_2k.glb",
+          "bytes": 2212424
+        }
+      }
+    },
+    "dustpan": {
+      "license": "CC0-1.0",
+      "author": "Balen",
+      "source_url": "https://polyhaven.com/a/dustpan",
+      "tiers": {
+        "2k": {
+          "file": "models/dustpan/lod0_2k.glb",
+          "bytes": 4253300
+        }
+      }
+    },
+    "fancy_picture_frame_01": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/fancy_picture_frame_01",
+      "tiers": {
+        "2k": {
+          "file": "models/fancy_picture_frame_01/lod0_2k.glb",
+          "bytes": 4192832
+        }
+      }
+    },
+    "fancy_picture_frame_02": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/fancy_picture_frame_02",
+      "tiers": {
+        "2k": {
+          "file": "models/fancy_picture_frame_02/lod0_2k.glb",
+          "bytes": 5236028
+        }
+      }
+    },
+    "fern_02": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/fern_02",
+      "tiers": {
+        "2k": {
+          "file": "models/fern_02/lod0_2k.glb",
+          "bytes": 2350580
+        }
+      }
+    },
+    "fern_02_b": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/fern_02",
+      "tiers": {
+        "2k": {
+          "file": "models/fern_02_b/lod0_2k.glb",
+          "bytes": 2395900
+        }
+      }
+    },
+    "fern_02_c": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/fern_02",
+      "tiers": {
+        "2k": {
+          "file": "models/fern_02_c/lod0_2k.glb",
+          "bytes": 2392140
+        }
+      }
+    },
+    "fern_02_d": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/fern_02",
+      "tiers": {
+        "2k": {
+          "file": "models/fern_02_d/lod0_2k.glb",
+          "bytes": 2351444
+        }
+      }
+    },
+    "fir_sapling": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/fir_sapling",
+      "tiers": {
+        "2k": {
+          "file": "models/fir_sapling/lod0_2k.glb",
+          "bytes": 8529980
+        }
+      }
+    },
+    "fir_sapling_b": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/fir_sapling",
+      "tiers": {
+        "2k": {
+          "file": "models/fir_sapling_b/lod0_2k.glb",
+          "bytes": 8352644
+        }
+      }
+    },
+    "fir_sapling_c": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/fir_sapling",
+      "tiers": {
+        "2k": {
+          "file": "models/fir_sapling_c/lod0_2k.glb",
+          "bytes": 8376312
+        }
+      }
+    },
+    "fire_hydrant": {
+      "license": "CC0-1.0",
+      "author": "Gonçalo Felício",
+      "source_url": "https://polyhaven.com/a/fire_hydrant",
+      "tiers": {
+        "2k": {
+          "file": "models/fire_hydrant/lod0_2k.glb",
+          "bytes": 5591384
+        }
+      }
+    },
+    "flower_empodium": {
+      "license": "CC0-1.0",
+      "author": "Jenelle van Heerden, Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/flower_empodium",
+      "tiers": {
+        "2k": {
+          "file": "models/flower_empodium/lod0_2k.glb",
+          "bytes": 1877260
+        }
+      }
+    },
+    "flower_empodium_c": {
+      "license": "CC0-1.0",
+      "author": "Jenelle van Heerden, Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/flower_empodium",
+      "tiers": {
+        "2k": {
+          "file": "models/flower_empodium_c/lod0_2k.glb",
+          "bytes": 1883212
+        }
+      }
+    },
+    "flower_empodium_d": {
+      "license": "CC0-1.0",
+      "author": "Jenelle van Heerden, Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/flower_empodium",
+      "tiers": {
+        "2k": {
+          "file": "models/flower_empodium_d/lod0_2k.glb",
+          "bytes": 1863456
+        }
+      }
+    },
+    "flower_gazania": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock, Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/flower_gazania",
+      "tiers": {
+        "2k": {
+          "file": "models/flower_gazania/lod0_2k.glb",
+          "bytes": 4729332
+        }
+      }
+    },
+    "flower_gazania_b": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock, Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/flower_gazania",
+      "tiers": {
+        "2k": {
+          "file": "models/flower_gazania_b/lod0_2k.glb",
+          "bytes": 4731324
+        }
+      }
+    },
+    "flower_gazania_c": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock, Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/flower_gazania",
+      "tiers": {
+        "2k": {
+          "file": "models/flower_gazania_c/lod0_2k.glb",
+          "bytes": 4740572
+        }
+      }
+    },
+    "flower_gazania_d": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock, Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/flower_gazania",
+      "tiers": {
+        "2k": {
+          "file": "models/flower_gazania_d/lod0_2k.glb",
+          "bytes": 4772344
+        }
+      }
+    },
+    "flower_stinkkruid": {
+      "license": "CC0-1.0",
+      "author": "Jenelle van Heerden, Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/flower_stinkkruid",
+      "tiers": {
+        "2k": {
+          "file": "models/flower_stinkkruid/lod0_2k.glb",
+          "bytes": 4285504
+        }
+      }
+    },
+    "flower_stinkkruid_b": {
+      "license": "CC0-1.0",
+      "author": "Jenelle van Heerden, Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/flower_stinkkruid",
+      "tiers": {
+        "2k": {
+          "file": "models/flower_stinkkruid_b/lod0_2k.glb",
+          "bytes": 4229704
+        }
+      }
+    },
+    "flower_stinkkruid_c": {
+      "license": "CC0-1.0",
+      "author": "Jenelle van Heerden, Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/flower_stinkkruid",
+      "tiers": {
+        "2k": {
+          "file": "models/flower_stinkkruid_c/lod0_2k.glb",
+          "bytes": 3481764
+        }
+      }
+    },
+    "flower_stinkkruid_d": {
+      "license": "CC0-1.0",
+      "author": "Jenelle van Heerden, Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/flower_stinkkruid",
+      "tiers": {
+        "2k": {
+          "file": "models/flower_stinkkruid_d/lod0_2k.glb",
+          "bytes": 3507544
+        }
+      }
+    },
+    "flower_ursinia": {
+      "license": "CC0-1.0",
+      "author": "Jenelle van Heerden, Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/flower_ursinia",
+      "tiers": {
+        "2k": {
+          "file": "models/flower_ursinia/lod0_2k.glb",
+          "bytes": 3555684
+        }
+      }
+    },
+    "flower_ursinia_b": {
+      "license": "CC0-1.0",
+      "author": "Jenelle van Heerden, Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/flower_ursinia",
+      "tiers": {
+        "2k": {
+          "file": "models/flower_ursinia_b/lod0_2k.glb",
+          "bytes": 3403296
+        }
+      }
+    },
+    "flower_ursinia_c": {
+      "license": "CC0-1.0",
+      "author": "Jenelle van Heerden, Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/flower_ursinia",
+      "tiers": {
+        "2k": {
+          "file": "models/flower_ursinia_c/lod0_2k.glb",
+          "bytes": 3358228
+        }
+      }
+    },
+    "flower_ursinia_d": {
+      "license": "CC0-1.0",
+      "author": "Jenelle van Heerden, Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/flower_ursinia",
+      "tiers": {
+        "2k": {
+          "file": "models/flower_ursinia_d/lod0_2k.glb",
+          "bytes": 3290116
+        }
+      }
+    },
+    "folding_wooden_stool": {
+      "license": "CC0-1.0",
+      "author": "Ulan Cabanilla",
+      "source_url": "https://polyhaven.com/a/folding_wooden_stool",
+      "tiers": {
+        "2k": {
+          "file": "models/folding_wooden_stool/lod0_2k.glb",
+          "bytes": 4096688
+        }
+      }
+    },
+    "football": {
+      "license": "CC0-1.0",
+      "author": "Amal Kumar",
+      "source_url": "https://polyhaven.com/a/football",
+      "tiers": {
+        "2k": {
+          "file": "models/football/lod0_2k.glb",
+          "bytes": 5276356
+        }
+      }
+    },
+    "gallinera_chair": {
+      "license": "CC0-1.0",
+      "author": "Ulan Cabanilla",
+      "source_url": "https://polyhaven.com/a/gallinera_chair",
+      "tiers": {
+        "2k": {
+          "file": "models/gallinera_chair/lod0_2k.glb",
+          "bytes": 3894464
+        }
+      }
+    },
+    "gallinera_table": {
+      "license": "CC0-1.0",
+      "author": "Ulan Cabanilla",
+      "source_url": "https://polyhaven.com/a/gallinera_table",
+      "tiers": {
+        "2k": {
+          "file": "models/gallinera_table/lod0_2k.glb",
+          "bytes": 3043056
+        }
+      }
+    },
+    "garden_gloves_01": {
+      "license": "CC0-1.0",
+      "author": "Satyaki Mandal",
+      "source_url": "https://polyhaven.com/a/garden_gloves_01",
+      "tiers": {
+        "2k": {
+          "file": "models/garden_gloves_01/lod0_2k.glb",
+          "bytes": 5920008
+        }
+      }
+    },
+    "garden_gnome": {
+      "license": "CC0-1.0",
+      "author": "Bhargav Kubal",
+      "source_url": "https://polyhaven.com/a/garden_gnome",
+      "tiers": {
+        "2k": {
+          "file": "models/garden_gnome/lod0_2k.glb",
+          "bytes": 2707312
+        }
+      }
+    },
+    "garden_hose_wall_mounted_01": {
+      "license": "CC0-1.0",
+      "author": "Kuutti Siitonen",
+      "source_url": "https://polyhaven.com/a/garden_hose_wall_mounted_01",
+      "tiers": {
+        "2k": {
+          "file": "models/garden_hose_wall_mounted_01/lod0_2k.glb",
+          "bytes": 4658256
+        }
+      }
+    },
+    "gothic_coffee_table": {
+      "license": "CC0-1.0",
+      "author": "Ulan Cabanilla",
+      "source_url": "https://polyhaven.com/a/gothic_coffee_table",
+      "tiers": {
+        "2k": {
+          "file": "models/gothic_coffee_table/lod0_2k.glb",
+          "bytes": 4254412
+        }
+      }
+    },
+    "gothic_statue": {
+      "license": "CC0-1.0",
+      "author": "Benny Weimer",
+      "source_url": "https://polyhaven.com/a/gothic_statue",
+      "tiers": {
+        "2k": {
+          "file": "models/gothic_statue/lod0_2k.glb",
+          "bytes": 5519420
+        }
+      }
+    },
+    "gothiccabinet_01": {
+      "license": "CC0-1.0",
+      "author": "Kirill Sannikov",
+      "source_url": "https://polyhaven.com/a/GothicCabinet_01",
+      "tiers": {
+        "2k": {
+          "file": "models/gothiccabinet_01/lod0_2k.glb",
+          "bytes": 2927648
+        }
+      }
+    },
+    "gothiccommode_01": {
+      "license": "CC0-1.0",
+      "author": "Kirill Sannikov",
+      "source_url": "https://polyhaven.com/a/GothicCommode_01",
+      "tiers": {
+        "2k": {
+          "file": "models/gothiccommode_01/lod0_2k.glb",
+          "bytes": 2529188
+        }
+      }
+    },
+    "grass_bermuda_01": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/grass_bermuda_01",
+      "tiers": {
+        "2k": {
+          "file": "models/grass_bermuda_01/lod0_2k.glb",
+          "bytes": 3304668
+        }
+      }
+    },
+    "grass_bermuda_01_b": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/grass_bermuda_01",
+      "tiers": {
+        "2k": {
+          "file": "models/grass_bermuda_01_b/lod0_2k.glb",
+          "bytes": 3304908
+        }
+      }
+    },
+    "grass_bermuda_01_c": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/grass_bermuda_01",
+      "tiers": {
+        "2k": {
+          "file": "models/grass_bermuda_01_c/lod0_2k.glb",
+          "bytes": 3304836
+        }
+      }
+    },
+    "grass_bermuda_01_d": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/grass_bermuda_01",
+      "tiers": {
+        "2k": {
+          "file": "models/grass_bermuda_01_d/lod0_2k.glb",
+          "bytes": 3309108
+        }
+      }
+    },
+    "grass_medium_01": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/grass_medium_01",
+      "tiers": {
+        "2k": {
+          "file": "models/grass_medium_01/lod0_2k.glb",
+          "bytes": 4722168
+        }
+      }
+    },
+    "grass_medium_01_b": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/grass_medium_01",
+      "tiers": {
+        "2k": {
+          "file": "models/grass_medium_01_b/lod0_2k.glb",
+          "bytes": 4701056
+        }
+      }
+    },
+    "grass_medium_01_c": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/grass_medium_01",
+      "tiers": {
+        "2k": {
+          "file": "models/grass_medium_01_c/lod0_2k.glb",
+          "bytes": 4785460
+        }
+      }
+    },
+    "grass_medium_01_d": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/grass_medium_01",
+      "tiers": {
+        "2k": {
+          "file": "models/grass_medium_01_d/lod0_2k.glb",
+          "bytes": 4952704
+        }
+      }
+    },
+    "grass_medium_02": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/grass_medium_02",
+      "tiers": {
+        "2k": {
+          "file": "models/grass_medium_02/lod0_2k.glb",
+          "bytes": 1347460
+        }
+      }
+    },
+    "grass_medium_02_b": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/grass_medium_02",
+      "tiers": {
+        "2k": {
+          "file": "models/grass_medium_02_b/lod0_2k.glb",
+          "bytes": 1383508
+        }
+      }
+    },
+    "grass_medium_02_c": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/grass_medium_02",
+      "tiers": {
+        "2k": {
+          "file": "models/grass_medium_02_c/lod0_2k.glb",
+          "bytes": 1364140
+        }
+      }
+    },
+    "grass_medium_02_d": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/grass_medium_02",
+      "tiers": {
+        "2k": {
+          "file": "models/grass_medium_02_d/lod0_2k.glb",
+          "bytes": 1407788
+        }
+      }
+    },
+    "greenchair_01": {
+      "license": "CC0-1.0",
+      "author": "Kirill Sannikov",
+      "source_url": "https://polyhaven.com/a/GreenChair_01",
+      "tiers": {
+        "2k": {
+          "file": "models/greenchair_01/lod0_2k.glb",
+          "bytes": 3104516
+        }
+      }
+    },
+    "hand_truck": {
+      "license": "CC0-1.0",
+      "author": "Mutanzom3D",
+      "source_url": "https://polyhaven.com/a/hand_truck",
+      "tiers": {
+        "2k": {
+          "file": "models/hand_truck/lod0_2k.glb",
+          "bytes": 5538176
+        }
+      }
+    },
+    "handsaw_wood": {
+      "license": "CC0-1.0",
+      "author": "Konrad Szałankiewicz",
+      "source_url": "https://polyhaven.com/a/handsaw_wood",
+      "tiers": {
+        "2k": {
+          "file": "models/handsaw_wood/lod0_2k.glb",
+          "bytes": 5368860
+        }
+      }
+    },
+    "hanging_industrial_lamp": {
+      "license": "CC0-1.0",
+      "author": "Kuutti Siitonen",
+      "source_url": "https://polyhaven.com/a/hanging_industrial_lamp",
+      "tiers": {
+        "2k": {
+          "file": "models/hanging_industrial_lamp/lod0_2k.glb",
+          "bytes": 5809760
+        }
+      }
+    },
+    "hanging_picture_frame_02": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock",
+      "source_url": "https://polyhaven.com/a/hanging_picture_frame_02",
+      "tiers": {
+        "2k": {
+          "file": "models/hanging_picture_frame_02/lod0_2k.glb",
+          "bytes": 3914344
+        }
+      }
+    },
+    "hanging_picture_frame_03": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock",
+      "source_url": "https://polyhaven.com/a/hanging_picture_frame_03",
+      "tiers": {
+        "2k": {
+          "file": "models/hanging_picture_frame_03/lod0_2k.glb",
+          "bytes": 4032228
+        }
+      }
+    },
+    "hatchet": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock, Ulan Cabanilla",
+      "source_url": "https://polyhaven.com/a/hatchet",
+      "tiers": {
+        "2k": {
+          "file": "models/hatchet/lod0_2k.glb",
+          "bytes": 2995412
+        }
+      }
+    },
+    "horse_statue_01": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/horse_statue_01",
+      "tiers": {
+        "2k": {
+          "file": "models/horse_statue_01/lod0_2k.glb",
+          "bytes": 2530508
+        }
+      }
+    },
+    "industrial_coffee_table": {
+      "license": "CC0-1.0",
+      "author": "Ulan Cabanilla",
+      "source_url": "https://polyhaven.com/a/industrial_coffee_table",
+      "tiers": {
+        "2k": {
+          "file": "models/industrial_coffee_table/lod0_2k.glb",
+          "bytes": 3364372
+        }
+      }
+    },
+    "industrial_pipe_lamp": {
+      "license": "CC0-1.0",
+      "author": "Mateusz Sadek",
+      "source_url": "https://polyhaven.com/a/industrial_pipe_lamp",
+      "tiers": {
+        "2k": {
+          "file": "models/industrial_pipe_lamp/lod0_2k.glb",
+          "bytes": 3654492
+        }
+      }
+    },
+    "industrial_wall_lamp": {
+      "license": "CC0-1.0",
+      "author": "Kuutti Siitonen",
+      "source_url": "https://polyhaven.com/a/industrial_wall_lamp",
+      "tiers": {
+        "2k": {
+          "file": "models/industrial_wall_lamp/lod0_2k.glb",
+          "bytes": 7015116
+        }
+      }
+    },
+    "industrial_wall_sconce": {
+      "license": "CC0-1.0",
+      "author": "Ulan Cabanilla",
+      "source_url": "https://polyhaven.com/a/industrial_wall_sconce",
+      "tiers": {
+        "2k": {
+          "file": "models/industrial_wall_sconce/lod0_2k.glb",
+          "bytes": 2312824
+        }
+      }
+    },
+    "ladder_sectioned_01": {
+      "license": "CC0-1.0",
+      "author": "MP",
+      "source_url": "https://polyhaven.com/a/ladder_sectioned_01",
+      "tiers": {
+        "2k": {
+          "file": "models/ladder_sectioned_01/lod0_2k.glb",
+          "bytes": 2967204
+        }
+      }
+    },
+    "lantern_01": {
+      "license": "CC0-1.0",
+      "author": "Rajil Jose Macatangay",
+      "source_url": "https://polyhaven.com/a/Lantern_01",
+      "tiers": {
+        "2k": {
+          "file": "models/lantern_01/lod0_2k.glb",
+          "bytes": 4633776
+        }
+      }
+    },
+    "lantern_chandelier_01": {
+      "license": "CC0-1.0",
+      "author": "Kirill Sannikov",
+      "source_url": "https://polyhaven.com/a/lantern_chandelier_01",
+      "tiers": {
+        "2k": {
+          "file": "models/lantern_chandelier_01/lod0_2k.glb",
+          "bytes": 7216328
+        }
+      }
+    },
+    "marble_bust_01": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/marble_bust_01",
+      "tiers": {
+        "2k": {
+          "file": "models/marble_bust_01/lod0_2k.glb",
+          "bytes": 2489440
+        }
+      }
+    },
+    "metal_jug": {
+      "license": "CC0-1.0",
+      "author": "Anzor Lezhava",
+      "source_url": "https://polyhaven.com/a/metal_jug",
+      "tiers": {
+        "2k": {
+          "file": "models/metal_jug/lod0_2k.glb",
+          "bytes": 2689972
+        }
+      }
+    },
+    "metal_stool_01": {
+      "license": "CC0-1.0",
+      "author": "Ulan Cabanilla",
+      "source_url": "https://polyhaven.com/a/metal_stool_01",
+      "tiers": {
+        "2k": {
+          "file": "models/metal_stool_01/lod0_2k.glb",
+          "bytes": 3876472
+        }
+      }
+    },
+    "metal_stool_02": {
+      "license": "CC0-1.0",
+      "author": "Ulan Cabanilla",
+      "source_url": "https://polyhaven.com/a/metal_stool_02",
+      "tiers": {
+        "2k": {
+          "file": "models/metal_stool_02/lod0_2k.glb",
+          "bytes": 4513780
+        }
+      }
+    },
+    "metal_stool_03": {
+      "license": "CC0-1.0",
+      "author": "Flo Tasser",
+      "source_url": "https://polyhaven.com/a/metal_stool_03",
+      "tiers": {
+        "2k": {
+          "file": "models/metal_stool_03/lod0_2k.glb",
+          "bytes": 3663536
+        }
+      }
+    },
+    "metal_trash_can": {
+      "license": "CC0-1.0",
+      "author": "GurJas Studios",
+      "source_url": "https://polyhaven.com/a/metal_trash_can",
+      "tiers": {
+        "2k": {
+          "file": "models/metal_trash_can/lod0_2k.glb",
+          "bytes": 8592688
+        }
+      }
+    },
+    "mid_century_lounge_chair": {
+      "license": "CC0-1.0",
+      "author": "Kuutti Siitonen",
+      "source_url": "https://polyhaven.com/a/mid_century_lounge_chair",
+      "tiers": {
+        "2k": {
+          "file": "models/mid_century_lounge_chair/lod0_2k.glb",
+          "bytes": 3388488
+        }
+      }
+    },
+    "modern_ceiling_lamp_01": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock",
+      "source_url": "https://polyhaven.com/a/modern_ceiling_lamp_01",
+      "tiers": {
+        "2k": {
+          "file": "models/modern_ceiling_lamp_01/lod0_2k.glb",
+          "bytes": 1539932
+        }
+      }
+    },
+    "modern_coffee_table_01": {
+      "license": "CC0-1.0",
+      "author": "Amin",
+      "source_url": "https://polyhaven.com/a/modern_coffee_table_01",
+      "tiers": {
+        "2k": {
+          "file": "models/modern_coffee_table_01/lod0_2k.glb",
+          "bytes": 2106120
+        }
+      }
+    },
+    "modern_coffee_table_02": {
+      "license": "CC0-1.0",
+      "author": "Amin",
+      "source_url": "https://polyhaven.com/a/modern_coffee_table_02",
+      "tiers": {
+        "2k": {
+          "file": "models/modern_coffee_table_02/lod0_2k.glb",
+          "bytes": 3859776
+        }
+      }
+    },
+    "modern_wooden_cabinet": {
+      "license": "CC0-1.0",
+      "author": "Patrik Pangerl",
+      "source_url": "https://polyhaven.com/a/modern_wooden_cabinet",
+      "tiers": {
+        "2k": {
+          "file": "models/modern_wooden_cabinet/lod0_2k.glb",
+          "bytes": 3173996
+        }
+      }
+    },
+    "namaqualand_boulder_02": {
+      "license": "CC0-1.0",
+      "author": "Greg Zaal, Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/namaqualand_boulder_02",
+      "tiers": {
+        "2k": {
+          "file": "models/namaqualand_boulder_02/lod0_2k.glb",
+          "bytes": 5472012
+        }
+      }
+    },
+    "namaqualand_boulder_03": {
+      "license": "CC0-1.0",
+      "author": "Dario Barresi, Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/namaqualand_boulder_03",
+      "tiers": {
+        "2k": {
+          "file": "models/namaqualand_boulder_03/lod0_2k.glb",
+          "bytes": 4207844
+        }
+      }
+    },
+    "namaqualand_boulder_04": {
+      "license": "CC0-1.0",
+      "author": "Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/namaqualand_boulder_04",
+      "tiers": {
+        "2k": {
+          "file": "models/namaqualand_boulder_04/lod0_2k.glb",
+          "bytes": 4464452
+        }
+      }
+    },
+    "namaqualand_boulder_05": {
+      "license": "CC0-1.0",
+      "author": "Dario Barresi, Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/namaqualand_boulder_05",
+      "tiers": {
+        "2k": {
+          "file": "models/namaqualand_boulder_05/lod0_2k.glb",
+          "bytes": 5290960
+        }
+      }
+    },
+    "namaqualand_boulder_06": {
+      "license": "CC0-1.0",
+      "author": "Greg Zaal, Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/namaqualand_boulder_06",
+      "tiers": {
+        "2k": {
+          "file": "models/namaqualand_boulder_06/lod0_2k.glb",
+          "bytes": 5675320
+        }
+      }
+    },
+    "namaqualand_boulders_01": {
+      "license": "CC0-1.0",
+      "author": "Greg Zaal, Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/namaqualand_boulders_01",
+      "tiers": {
+        "2k": {
+          "file": "models/namaqualand_boulders_01/lod0_2k.glb",
+          "bytes": 5205840
+        }
+      }
+    },
+    "namaqualand_boulders_01_b": {
+      "license": "CC0-1.0",
+      "author": "Greg Zaal, Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/namaqualand_boulders_01",
+      "tiers": {
+        "2k": {
+          "file": "models/namaqualand_boulders_01_b/lod0_2k.glb",
+          "bytes": 5205144
+        }
+      }
+    },
+    "namaqualand_rocks_01": {
+      "license": "CC0-1.0",
+      "author": "Greg Zaal, Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/namaqualand_rocks_01",
+      "tiers": {
+        "2k": {
+          "file": "models/namaqualand_rocks_01/lod0_2k.glb",
+          "bytes": 5525164
+        }
+      }
+    },
+    "namaqualand_rocks_01_b": {
+      "license": "CC0-1.0",
+      "author": "Greg Zaal, Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/namaqualand_rocks_01",
+      "tiers": {
+        "2k": {
+          "file": "models/namaqualand_rocks_01_b/lod0_2k.glb",
+          "bytes": 5523952
+        }
+      }
+    },
+    "namaqualand_rocks_01_c": {
+      "license": "CC0-1.0",
+      "author": "Greg Zaal, Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/namaqualand_rocks_01",
+      "tiers": {
+        "2k": {
+          "file": "models/namaqualand_rocks_01_c/lod0_2k.glb",
+          "bytes": 5524080
+        }
+      }
+    },
+    "namaqualand_rocks_01_d": {
+      "license": "CC0-1.0",
+      "author": "Greg Zaal, Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/namaqualand_rocks_01",
+      "tiers": {
+        "2k": {
+          "file": "models/namaqualand_rocks_01_d/lod0_2k.glb",
+          "bytes": 5521168
+        }
+      }
+    },
+    "namaqualand_stones_01": {
+      "license": "CC0-1.0",
+      "author": "Greg Zaal, Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/namaqualand_stones_01",
+      "tiers": {
+        "2k": {
+          "file": "models/namaqualand_stones_01/lod0_2k.glb",
+          "bytes": 4814772
+        }
+      }
+    },
+    "namaqualand_stones_01_b": {
+      "license": "CC0-1.0",
+      "author": "Greg Zaal, Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/namaqualand_stones_01",
+      "tiers": {
+        "2k": {
+          "file": "models/namaqualand_stones_01_b/lod0_2k.glb",
+          "bytes": 4808420
+        }
+      }
+    },
+    "namaqualand_stones_01_c": {
+      "license": "CC0-1.0",
+      "author": "Greg Zaal, Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/namaqualand_stones_01",
+      "tiers": {
+        "2k": {
+          "file": "models/namaqualand_stones_01_c/lod0_2k.glb",
+          "bytes": 4815800
+        }
+      }
+    },
+    "namaqualand_stones_01_d": {
+      "license": "CC0-1.0",
+      "author": "Greg Zaal, Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/namaqualand_stones_01",
+      "tiers": {
+        "2k": {
+          "file": "models/namaqualand_stones_01_d/lod0_2k.glb",
+          "bytes": 4738404
+        }
+      }
+    },
+    "nettle_plant": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/nettle_plant",
+      "tiers": {
+        "2k": {
+          "file": "models/nettle_plant/lod0_2k.glb",
+          "bytes": 3920088
+        }
+      }
+    },
+    "nettle_plant_b": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/nettle_plant",
+      "tiers": {
+        "2k": {
+          "file": "models/nettle_plant_b/lod0_2k.glb",
+          "bytes": 3847100
+        }
+      }
+    },
+    "nettle_plant_c": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/nettle_plant",
+      "tiers": {
+        "2k": {
+          "file": "models/nettle_plant_c/lod0_2k.glb",
+          "bytes": 3948188
+        }
+      }
+    },
+    "nettle_plant_d": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/nettle_plant",
+      "tiers": {
+        "2k": {
+          "file": "models/nettle_plant_d/lod0_2k.glb",
+          "bytes": 3910732
+        }
+      }
+    },
+    "ornate_mirror_01": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock",
+      "source_url": "https://polyhaven.com/a/ornate_mirror_01",
+      "tiers": {
+        "2k": {
+          "file": "models/ornate_mirror_01/lod0_2k.glb",
+          "bytes": 1650672
+        }
+      }
+    },
+    "othonna_cerarioides": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock, Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/othonna_cerarioides",
+      "tiers": {
+        "2k": {
+          "file": "models/othonna_cerarioides/lod0_2k.glb",
+          "bytes": 6774036
+        }
+      }
+    },
+    "othonna_cerarioides_b": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock, Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/othonna_cerarioides",
+      "tiers": {
+        "2k": {
+          "file": "models/othonna_cerarioides_b/lod0_2k.glb",
+          "bytes": 6463168
+        }
+      }
+    },
+    "othonna_cerarioides_c": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock, Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/othonna_cerarioides",
+      "tiers": {
+        "2k": {
+          "file": "models/othonna_cerarioides_c/lod0_2k.glb",
+          "bytes": 6033360
+        }
+      }
+    },
+    "othonna_cerarioides_d": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock, Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/othonna_cerarioides",
+      "tiers": {
+        "2k": {
+          "file": "models/othonna_cerarioides_d/lod0_2k.glb",
+          "bytes": 5894072
+        }
+      }
+    },
+    "ottoman_01": {
+      "license": "CC0-1.0",
+      "author": "Caspian Fortune",
+      "source_url": "https://polyhaven.com/a/Ottoman_01",
+      "tiers": {
+        "2k": {
+          "file": "models/ottoman_01/lod0_2k.glb",
+          "bytes": 4066404
+        }
+      }
+    },
+    "outdoor_table_chair_set_01": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock",
+      "source_url": "https://polyhaven.com/a/outdoor_table_chair_set_01",
+      "tiers": {
+        "2k": {
+          "file": "models/outdoor_table_chair_set_01/lod0_2k.glb",
+          "bytes": 4318232
+        }
+      }
+    },
+    "pachira_aquatica_01": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/pachira_aquatica_01",
+      "tiers": {
+        "2k": {
+          "file": "models/pachira_aquatica_01/lod0_2k.glb",
+          "bytes": 3463576
+        }
+      }
+    },
+    "pachira_aquatica_01_b": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/pachira_aquatica_01",
+      "tiers": {
+        "2k": {
+          "file": "models/pachira_aquatica_01_b/lod0_2k.glb",
+          "bytes": 2908104
+        }
+      }
+    },
+    "pachira_aquatica_01_d": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/pachira_aquatica_01",
+      "tiers": {
+        "2k": {
+          "file": "models/pachira_aquatica_01_d/lod0_2k.glb",
+          "bytes": 2767296
+        }
+      }
+    },
+    "painted_wooden_bench": {
+      "license": "CC0-1.0",
+      "author": "Kirill Sannikov",
+      "source_url": "https://polyhaven.com/a/painted_wooden_bench",
+      "tiers": {
+        "2k": {
+          "file": "models/painted_wooden_bench/lod0_2k.glb",
+          "bytes": 3811128
+        }
+      }
+    },
+    "painted_wooden_cabinet": {
+      "license": "CC0-1.0",
+      "author": "Kirill Sannikov",
+      "source_url": "https://polyhaven.com/a/painted_wooden_cabinet",
+      "tiers": {
+        "2k": {
+          "file": "models/painted_wooden_cabinet/lod0_2k.glb",
+          "bytes": 2744272
+        }
+      }
+    },
+    "painted_wooden_cabinet_02": {
+      "license": "CC0-1.0",
+      "author": "Kirill Sannikov",
+      "source_url": "https://polyhaven.com/a/painted_wooden_cabinet_02",
+      "tiers": {
+        "2k": {
+          "file": "models/painted_wooden_cabinet_02/lod0_2k.glb",
+          "bytes": 2555208
+        }
+      }
+    },
+    "painted_wooden_chair_01": {
+      "license": "CC0-1.0",
+      "author": "Kuutti Siitonen",
+      "source_url": "https://polyhaven.com/a/painted_wooden_chair_01",
+      "tiers": {
+        "2k": {
+          "file": "models/painted_wooden_chair_01/lod0_2k.glb",
+          "bytes": 2305972
+        }
+      }
+    },
+    "painted_wooden_chair_02": {
+      "license": "CC0-1.0",
+      "author": "Kirill Sannikov",
+      "source_url": "https://polyhaven.com/a/painted_wooden_chair_02",
+      "tiers": {
+        "2k": {
+          "file": "models/painted_wooden_chair_02/lod0_2k.glb",
+          "bytes": 4771532
+        }
+      }
+    },
+    "painted_wooden_nightstand": {
+      "license": "CC0-1.0",
+      "author": "Kirill Sannikov",
+      "source_url": "https://polyhaven.com/a/painted_wooden_nightstand",
+      "tiers": {
+        "2k": {
+          "file": "models/painted_wooden_nightstand/lod0_2k.glb",
+          "bytes": 3732024
+        }
+      }
+    },
+    "painted_wooden_shelves": {
+      "license": "CC0-1.0",
+      "author": "Kirill Sannikov",
+      "source_url": "https://polyhaven.com/a/painted_wooden_shelves",
+      "tiers": {
+        "2k": {
+          "file": "models/painted_wooden_shelves/lod0_2k.glb",
+          "bytes": 4112784
+        }
+      }
+    },
+    "painted_wooden_sofa": {
+      "license": "CC0-1.0",
+      "author": "Kirill Sannikov",
+      "source_url": "https://polyhaven.com/a/painted_wooden_sofa",
+      "tiers": {
+        "2k": {
+          "file": "models/painted_wooden_sofa/lod0_2k.glb",
+          "bytes": 3249524
+        }
+      }
+    },
+    "painted_wooden_stool": {
+      "license": "CC0-1.0",
+      "author": "Kirill Sannikov",
+      "source_url": "https://polyhaven.com/a/painted_wooden_stool",
+      "tiers": {
+        "2k": {
+          "file": "models/painted_wooden_stool/lod0_2k.glb",
+          "bytes": 2627536
+        }
+      }
+    },
+    "painted_wooden_table": {
+      "license": "CC0-1.0",
+      "author": "Kirill Sannikov",
+      "source_url": "https://polyhaven.com/a/painted_wooden_table",
+      "tiers": {
+        "2k": {
+          "file": "models/painted_wooden_table/lod0_2k.glb",
+          "bytes": 2917696
+        }
+      }
+    },
+    "picke_dirty_01": {
+      "license": "CC0-1.0",
+      "author": "Dennis Halbeck",
+      "source_url": "https://polyhaven.com/a/picke_dirty_01",
+      "tiers": {
+        "2k": {
+          "file": "models/picke_dirty_01/lod0_2k.glb",
+          "bytes": 3494752
+        }
+      }
+    },
+    "pine_sapling_small": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/pine_sapling_small",
+      "tiers": {
+        "2k": {
+          "file": "models/pine_sapling_small/lod0_2k.glb",
+          "bytes": 8978612
+        }
+      }
+    },
+    "pine_sapling_small_b": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/pine_sapling_small",
+      "tiers": {
+        "2k": {
+          "file": "models/pine_sapling_small_b/lod0_2k.glb",
+          "bytes": 8956984
+        }
+      }
+    },
+    "pine_sapling_small_c": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/pine_sapling_small",
+      "tiers": {
+        "2k": {
+          "file": "models/pine_sapling_small_c/lod0_2k.glb",
+          "bytes": 8966392
+        }
+      }
+    },
+    "planter_box_01": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock",
+      "source_url": "https://polyhaven.com/a/planter_box_01",
+      "tiers": {
+        "2k": {
+          "file": "models/planter_box_01/lod0_2k.glb",
+          "bytes": 3768412
+        }
+      }
+    },
+    "planter_box_02": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock",
+      "source_url": "https://polyhaven.com/a/planter_box_02",
+      "tiers": {
+        "2k": {
+          "file": "models/planter_box_02/lod0_2k.glb",
+          "bytes": 3869972
+        }
+      }
+    },
+    "planter_box_03": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock",
+      "source_url": "https://polyhaven.com/a/planter_box_03",
+      "tiers": {
+        "2k": {
+          "file": "models/planter_box_03/lod0_2k.glb",
+          "bytes": 3957760
+        }
+      }
+    },
+    "planter_pot_clay": {
+      "license": "CC0-1.0",
+      "author": "Amal Kumar",
+      "source_url": "https://polyhaven.com/a/planter_pot_clay",
+      "tiers": {
+        "2k": {
+          "file": "models/planter_pot_clay/lod0_2k.glb",
+          "bytes": 2444984
+        }
+      }
+    },
+    "plastic_broom": {
+      "license": "CC0-1.0",
+      "author": "L",
+      "source_url": "https://polyhaven.com/a/plastic_broom",
+      "tiers": {
+        "2k": {
+          "file": "models/plastic_broom/lod0_2k.glb",
+          "bytes": 2068560
+        }
+      }
+    },
+    "plastic_container": {
+      "license": "CC0-1.0",
+      "author": "PierreB3D",
+      "source_url": "https://polyhaven.com/a/plastic_container",
+      "tiers": {
+        "2k": {
+          "file": "models/plastic_container/lod0_2k.glb",
+          "bytes": 1951984
+        }
+      }
+    },
+    "plastic_crate_01": {
+      "license": "CC0-1.0",
+      "author": "PierreB3D",
+      "source_url": "https://polyhaven.com/a/plastic_crate_01",
+      "tiers": {
+        "2k": {
+          "file": "models/plastic_crate_01/lod0_2k.glb",
+          "bytes": 4271100
+        }
+      }
+    },
+    "plastic_crate_02": {
+      "license": "CC0-1.0",
+      "author": "Fabi_G",
+      "source_url": "https://polyhaven.com/a/plastic_crate_02",
+      "tiers": {
+        "2k": {
+          "file": "models/plastic_crate_02/lod0_2k.glb",
+          "bytes": 3816552
+        }
+      }
+    },
+    "plastic_crate_03": {
+      "license": "CC0-1.0",
+      "author": "Pacific Penguin",
+      "source_url": "https://polyhaven.com/a/plastic_crate_03",
+      "tiers": {
+        "2k": {
+          "file": "models/plastic_crate_03/lod0_2k.glb",
+          "bytes": 3931568
+        }
+      }
+    },
+    "plastic_monobloc_chair_01": {
+      "license": "CC0-1.0",
+      "author": "Kuutti Siitonen",
+      "source_url": "https://polyhaven.com/a/plastic_monobloc_chair_01",
+      "tiers": {
+        "2k": {
+          "file": "models/plastic_monobloc_chair_01/lod0_2k.glb",
+          "bytes": 2855132
+        }
+      }
+    },
+    "potted_plant_01": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/potted_plant_01",
+      "tiers": {
+        "2k": {
+          "file": "models/potted_plant_01/lod0_2k.glb",
+          "bytes": 7143760
+        }
+      }
+    },
+    "potted_plant_02": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/potted_plant_02",
+      "tiers": {
+        "2k": {
+          "file": "models/potted_plant_02/lod0_2k.glb",
+          "bytes": 5868872
+        }
+      }
+    },
+    "potted_plant_04": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock",
+      "source_url": "https://polyhaven.com/a/potted_plant_04",
+      "tiers": {
+        "2k": {
+          "file": "models/potted_plant_04/lod0_2k.glb",
+          "bytes": 3453288
+        }
+      }
+    },
+    "quiver_tree_01": {
+      "license": "CC0-1.0",
+      "author": "Dario Barresi, James Ray Cock, Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/quiver_tree_01",
+      "tiers": {
+        "2k": {
+          "file": "models/quiver_tree_01/lod0_2k.glb",
+          "bytes": 8858164
+        }
+      }
+    },
+    "quiver_tree_02": {
+      "license": "CC0-1.0",
+      "author": "Dario Barresi, Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/quiver_tree_02",
+      "tiers": {
+        "2k": {
+          "file": "models/quiver_tree_02/lod0_2k.glb",
+          "bytes": 4909484
+        }
+      }
+    },
+    "rock_07": {
+      "license": "CC0-1.0",
+      "author": "Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/rock_07",
+      "tiers": {
+        "2k": {
+          "file": "models/rock_07/lod0_2k.glb",
+          "bytes": 3255316
+        }
+      }
+    },
+    "rock_09": {
+      "license": "CC0-1.0",
+      "author": "Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/rock_09",
+      "tiers": {
+        "2k": {
+          "file": "models/rock_09/lod0_2k.glb",
+          "bytes": 3070652
+        }
+      }
+    },
+    "rock_moss_set_01": {
+      "license": "CC0-1.0",
+      "author": "Kless Gyzen",
+      "source_url": "https://polyhaven.com/a/rock_moss_set_01",
+      "tiers": {
+        "2k": {
+          "file": "models/rock_moss_set_01/lod0_2k.glb",
+          "bytes": 3099120
+        }
+      }
+    },
+    "rock_moss_set_02": {
+      "license": "CC0-1.0",
+      "author": "Kless Gyzen",
+      "source_url": "https://polyhaven.com/a/rock_moss_set_02",
+      "tiers": {
+        "2k": {
+          "file": "models/rock_moss_set_02/lod0_2k.glb",
+          "bytes": 3734028
+        }
+      }
+    },
+    "rockingchair_01": {
+      "license": "CC0-1.0",
+      "author": "Jorge Camacho",
+      "source_url": "https://polyhaven.com/a/Rockingchair_01",
+      "tiers": {
+        "2k": {
+          "file": "models/rockingchair_01/lod0_2k.glb",
+          "bytes": 2597148
+        }
+      }
+    },
+    "round_wooden_table_01": {
+      "license": "CC0-1.0",
+      "author": "Ulan Cabanilla",
+      "source_url": "https://polyhaven.com/a/round_wooden_table_01",
+      "tiers": {
+        "2k": {
+          "file": "models/round_wooden_table_01/lod0_2k.glb",
+          "bytes": 1741012
+        }
+      }
+    },
+    "round_wooden_table_02": {
+      "license": "CC0-1.0",
+      "author": "Ulan Cabanilla",
+      "source_url": "https://polyhaven.com/a/round_wooden_table_02",
+      "tiers": {
+        "2k": {
+          "file": "models/round_wooden_table_02/lod0_2k.glb",
+          "bytes": 3293468
+        }
+      }
+    },
+    "rusted_spade_01": {
+      "license": "CC0-1.0",
+      "author": "Blemonade",
+      "source_url": "https://polyhaven.com/a/rusted_spade_01",
+      "tiers": {
+        "2k": {
+          "file": "models/rusted_spade_01/lod0_2k.glb",
+          "bytes": 4143648
+        }
+      }
+    },
+    "sand_rocks_small_01": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/sand_rocks_small_01",
+      "tiers": {
+        "2k": {
+          "file": "models/sand_rocks_small_01/lod0_2k.glb",
+          "bytes": 5053056
+        }
+      }
+    },
+    "schoolchair_01": {
+      "license": "CC0-1.0",
+      "author": "Ethan Place",
+      "source_url": "https://polyhaven.com/a/SchoolChair_01",
+      "tiers": {
+        "2k": {
+          "file": "models/schoolchair_01/lod0_2k.glb",
+          "bytes": 2668112
+        }
+      }
+    },
+    "schooldesk_01": {
+      "license": "CC0-1.0",
+      "author": "Ethan Place",
+      "source_url": "https://polyhaven.com/a/SchoolDesk_01",
+      "tiers": {
+        "2k": {
+          "file": "models/schooldesk_01/lod0_2k.glb",
+          "bytes": 1662256
+        }
+      }
+    },
+    "searsia_burchellii": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock, Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/searsia_burchellii",
+      "tiers": {
+        "2k": {
+          "file": "models/searsia_burchellii/lod0_2k.glb",
+          "bytes": 4504980
+        }
+      }
+    },
+    "searsia_lucida": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock, Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/searsia_lucida",
+      "tiers": {
+        "2k": {
+          "file": "models/searsia_lucida/lod0_2k.glb",
+          "bytes": 5414868
+        }
+      }
+    },
+    "searsia_lucida_b": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock, Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/searsia_lucida",
+      "tiers": {
+        "2k": {
+          "file": "models/searsia_lucida_b/lod0_2k.glb",
+          "bytes": 5942748
+        }
+      }
+    },
+    "searsia_lucida_c": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock, Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/searsia_lucida",
+      "tiers": {
+        "2k": {
+          "file": "models/searsia_lucida_c/lod0_2k.glb",
+          "bytes": 5887728
+        }
+      }
+    },
+    "searsia_lucida_d": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock, Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/searsia_lucida",
+      "tiers": {
+        "2k": {
+          "file": "models/searsia_lucida_d/lod0_2k.glb",
+          "bytes": 5726852
+        }
+      }
+    },
+    "security_light": {
+      "license": "CC0-1.0",
+      "author": "Maximilian Schuster",
+      "source_url": "https://polyhaven.com/a/security_light",
+      "tiers": {
+        "2k": {
+          "file": "models/security_light/lod0_2k.glb",
+          "bytes": 5496064
+        }
+      }
+    },
+    "seeding_tray_01": {
+      "license": "CC0-1.0",
+      "author": "Satyaki Mandal",
+      "source_url": "https://polyhaven.com/a/seeding_tray_01",
+      "tiers": {
+        "2k": {
+          "file": "models/seeding_tray_01/lod0_2k.glb",
+          "bytes": 2841864
+        }
+      }
+    },
+    "shelf_01": {
+      "license": "CC0-1.0",
+      "author": "Gabriel Radić",
+      "source_url": "https://polyhaven.com/a/Shelf_01",
+      "tiers": {
+        "2k": {
+          "file": "models/shelf_01/lod0_2k.glb",
+          "bytes": 3987000
+        }
+      }
+    },
+    "shrub_02": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/shrub_02",
+      "tiers": {
+        "2k": {
+          "file": "models/shrub_02/lod0_2k.glb",
+          "bytes": 2870048
+        }
+      }
+    },
+    "shrub_02_b": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/shrub_02",
+      "tiers": {
+        "2k": {
+          "file": "models/shrub_02_b/lod0_2k.glb",
+          "bytes": 2807160
+        }
+      }
+    },
+    "shrub_02_c": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/shrub_02",
+      "tiers": {
+        "2k": {
+          "file": "models/shrub_02_c/lod0_2k.glb",
+          "bytes": 2918984
+        }
+      }
+    },
+    "shrub_02_d": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/shrub_02",
+      "tiers": {
+        "2k": {
+          "file": "models/shrub_02_d/lod0_2k.glb",
+          "bytes": 2804536
+        }
+      }
+    },
+    "shrub_03": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/shrub_03",
+      "tiers": {
+        "2k": {
+          "file": "models/shrub_03/lod0_2k.glb",
+          "bytes": 2991004
+        }
+      }
+    },
+    "shrub_03_b": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/shrub_03",
+      "tiers": {
+        "2k": {
+          "file": "models/shrub_03_b/lod0_2k.glb",
+          "bytes": 2984156
+        }
+      }
+    },
+    "shrub_03_c": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/shrub_03",
+      "tiers": {
+        "2k": {
+          "file": "models/shrub_03_c/lod0_2k.glb",
+          "bytes": 2974124
+        }
+      }
+    },
+    "shrub_03_d": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/shrub_03",
+      "tiers": {
+        "2k": {
+          "file": "models/shrub_03_d/lod0_2k.glb",
+          "bytes": 2978964
+        }
+      }
+    },
+    "shrub_sorrel_01": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/shrub_sorrel_01",
+      "tiers": {
+        "2k": {
+          "file": "models/shrub_sorrel_01/lod0_2k.glb",
+          "bytes": 2654640
+        }
+      }
+    },
+    "shrub_sorrel_01_b": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/shrub_sorrel_01",
+      "tiers": {
+        "2k": {
+          "file": "models/shrub_sorrel_01_b/lod0_2k.glb",
+          "bytes": 2656448
+        }
+      }
+    },
+    "shrub_sorrel_01_c": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/shrub_sorrel_01",
+      "tiers": {
+        "2k": {
+          "file": "models/shrub_sorrel_01_c/lod0_2k.glb",
+          "bytes": 2652116
+        }
+      }
+    },
+    "shrub_sorrel_01_d": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/shrub_sorrel_01",
+      "tiers": {
+        "2k": {
+          "file": "models/shrub_sorrel_01_d/lod0_2k.glb",
+          "bytes": 2675940
+        }
+      }
+    },
+    "side_table_01": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock",
+      "source_url": "https://polyhaven.com/a/side_table_01",
+      "tiers": {
+        "2k": {
+          "file": "models/side_table_01/lod0_2k.glb",
+          "bytes": 2011312
+        }
+      }
+    },
+    "side_table_tall_01": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock",
+      "source_url": "https://polyhaven.com/a/side_table_tall_01",
+      "tiers": {
+        "2k": {
+          "file": "models/side_table_tall_01/lod0_2k.glb",
+          "bytes": 2142740
+        }
+      }
+    },
+    "sledgehammer_01": {
+      "license": "CC0-1.0",
+      "author": "Dylan Guzman",
+      "source_url": "https://polyhaven.com/a/sledgehammer_01",
+      "tiers": {
+        "2k": {
+          "file": "models/sledgehammer_01/lod0_2k.glb",
+          "bytes": 2705464
+        }
+      }
+    },
+    "small_wooden_table_01": {
+      "license": "CC0-1.0",
+      "author": "Ulan Cabanilla",
+      "source_url": "https://polyhaven.com/a/small_wooden_table_01",
+      "tiers": {
+        "2k": {
+          "file": "models/small_wooden_table_01/lod0_2k.glb",
+          "bytes": 1740220
+        }
+      }
+    },
+    "sofa_01": {
+      "license": "CC0-1.0",
+      "author": "Kirill Sannikov",
+      "source_url": "https://polyhaven.com/a/Sofa_01",
+      "tiers": {
+        "2k": {
+          "file": "models/sofa_01/lod0_2k.glb",
+          "bytes": 3245744
+        }
+      }
+    },
+    "sofa_02": {
+      "license": "CC0-1.0",
+      "author": "Kirill Sannikov",
+      "source_url": "https://polyhaven.com/a/sofa_02",
+      "tiers": {
+        "2k": {
+          "file": "models/sofa_02/lod0_2k.glb",
+          "bytes": 2012840
+        }
+      }
+    },
+    "sofa_03": {
+      "license": "CC0-1.0",
+      "author": "Fran Calvente",
+      "source_url": "https://polyhaven.com/a/sofa_03",
+      "tiers": {
+        "2k": {
+          "file": "models/sofa_03/lod0_2k.glb",
+          "bytes": 3309736
+        }
+      }
+    },
+    "standing_chalkboard_01": {
+      "license": "CC0-1.0",
+      "author": "ParzivalCG",
+      "source_url": "https://polyhaven.com/a/standing_chalkboard_01",
+      "tiers": {
+        "2k": {
+          "file": "models/standing_chalkboard_01/lod0_2k.glb",
+          "bytes": 4067100
+        }
+      }
+    },
+    "standing_picture_frame_01": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock",
+      "source_url": "https://polyhaven.com/a/standing_picture_frame_01",
+      "tiers": {
+        "2k": {
+          "file": "models/standing_picture_frame_01/lod0_2k.glb",
+          "bytes": 2670308
+        }
+      }
+    },
+    "standing_picture_frame_02": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock",
+      "source_url": "https://polyhaven.com/a/standing_picture_frame_02",
+      "tiers": {
+        "2k": {
+          "file": "models/standing_picture_frame_02/lod0_2k.glb",
+          "bytes": 3390176
+        }
+      }
+    },
+    "stone_01": {
+      "license": "CC0-1.0",
+      "author": "Dario Barresi, Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/stone_01",
+      "tiers": {
+        "2k": {
+          "file": "models/stone_01/lod0_2k.glb",
+          "bytes": 4779712
+        }
+      }
+    },
+    "stone_fire_pit": {
+      "license": "CC0-1.0",
+      "author": "Sebastian Platen",
+      "source_url": "https://polyhaven.com/a/stone_fire_pit",
+      "tiers": {
+        "2k": {
+          "file": "models/stone_fire_pit/lod0_2k.glb",
+          "bytes": 4774940
+        }
+      }
+    },
+    "street_lamp_01": {
+      "license": "CC0-1.0",
+      "author": "Josh Dean",
+      "source_url": "https://polyhaven.com/a/street_lamp_01",
+      "tiers": {
+        "2k": {
+          "file": "models/street_lamp_01/lod0_2k.glb",
+          "bytes": 3245540
+        }
+      }
+    },
+    "street_lamp_02": {
+      "license": "CC0-1.0",
+      "author": "Josh Dean",
+      "source_url": "https://polyhaven.com/a/street_lamp_02",
+      "tiers": {
+        "2k": {
+          "file": "models/street_lamp_02/lod0_2k.glb",
+          "bytes": 2995092
+        }
+      }
+    },
+    "throw_pillows_01": {
+      "license": "CC0-1.0",
+      "author": "Serhii Khromov",
+      "source_url": "https://polyhaven.com/a/throw_pillows_01",
+      "tiers": {
+        "2k": {
+          "file": "models/throw_pillows_01/lod0_2k.glb",
+          "bytes": 7006056
+        }
+      }
+    },
+    "treasure_chest": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/treasure_chest",
+      "tiers": {
+        "2k": {
+          "file": "models/treasure_chest/lod0_2k.glb",
+          "bytes": 5230556
+        }
+      }
+    },
+    "tree_stump_01": {
+      "license": "CC0-1.0",
+      "author": "Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/tree_stump_01",
+      "tiers": {
+        "2k": {
+          "file": "models/tree_stump_01/lod0_2k.glb",
+          "bytes": 5726756
+        }
+      }
+    },
+    "tree_stump_02": {
+      "license": "CC0-1.0",
+      "author": "Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/tree_stump_02",
+      "tiers": {
+        "2k": {
+          "file": "models/tree_stump_02/lod0_2k.glb",
+          "bytes": 6505372
+        }
+      }
+    },
+    "trowel_01": {
+      "license": "CC0-1.0",
+      "author": "Satyaki Mandal",
+      "source_url": "https://polyhaven.com/a/trowel_01",
+      "tiers": {
+        "2k": {
+          "file": "models/trowel_01/lod0_2k.glb",
+          "bytes": 3443096
+        }
+      }
+    },
+    "utility_box_01": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock",
+      "source_url": "https://polyhaven.com/a/utility_box_01",
+      "tiers": {
+        "2k": {
+          "file": "models/utility_box_01/lod0_2k.glb",
+          "bytes": 2992836
+        }
+      }
+    },
+    "utility_box_02": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock",
+      "source_url": "https://polyhaven.com/a/utility_box_02",
+      "tiers": {
+        "2k": {
+          "file": "models/utility_box_02/lod0_2k.glb",
+          "bytes": 3094752
+        }
+      }
+    },
+    "vintage_cabinet_01": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/vintage_cabinet_01",
+      "tiers": {
+        "2k": {
+          "file": "models/vintage_cabinet_01/lod0_2k.glb",
+          "bytes": 5308348
+        }
+      }
+    },
+    "vintage_day_bed": {
+      "license": "CC0-1.0",
+      "author": "Aron Łyczek",
+      "source_url": "https://polyhaven.com/a/vintage_day_bed",
+      "tiers": {
+        "2k": {
+          "file": "models/vintage_day_bed/lod0_2k.glb",
+          "bytes": 4445136
+        }
+      }
+    },
+    "vintage_oil_lamp": {
+      "license": "CC0-1.0",
+      "author": "Monsta3D",
+      "source_url": "https://polyhaven.com/a/vintage_oil_lamp",
+      "tiers": {
+        "2k": {
+          "file": "models/vintage_oil_lamp/lod0_2k.glb",
+          "bytes": 3096664
+        }
+      }
+    },
+    "vintage_suitcase": {
+      "license": "CC0-1.0",
+      "author": "Maximilian Schuster",
+      "source_url": "https://polyhaven.com/a/vintage_suitcase",
+      "tiers": {
+        "2k": {
+          "file": "models/vintage_suitcase/lod0_2k.glb",
+          "bytes": 7482980
+        }
+      }
+    },
+    "vintage_wooden_drawer_01": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock",
+      "source_url": "https://polyhaven.com/a/vintage_wooden_drawer_01",
+      "tiers": {
+        "2k": {
+          "file": "models/vintage_wooden_drawer_01/lod0_2k.glb",
+          "bytes": 3184468
+        }
+      }
+    },
+    "water_manhole_cover": {
+      "license": "CC0-1.0",
+      "author": "Raunox",
+      "source_url": "https://polyhaven.com/a/water_manhole_cover",
+      "tiers": {
+        "2k": {
+          "file": "models/water_manhole_cover/lod0_2k.glb",
+          "bytes": 4418324
+        }
+      }
+    },
+    "watering_can_metal_01": {
+      "license": "CC0-1.0",
+      "author": "Charles Nderitu",
+      "source_url": "https://polyhaven.com/a/watering_can_metal_01",
+      "tiers": {
+        "2k": {
+          "file": "models/watering_can_metal_01/lod0_2k.glb",
+          "bytes": 4426224
+        }
+      }
+    },
+    "weed_plant_02": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/weed_plant_02",
+      "tiers": {
+        "2k": {
+          "file": "models/weed_plant_02/lod0_2k.glb",
+          "bytes": 4013736
+        }
+      }
+    },
+    "weed_plant_02_b": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/weed_plant_02",
+      "tiers": {
+        "2k": {
+          "file": "models/weed_plant_02_b/lod0_2k.glb",
+          "bytes": 3996676
+        }
+      }
+    },
+    "weed_plant_02_c": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/weed_plant_02",
+      "tiers": {
+        "2k": {
+          "file": "models/weed_plant_02_c/lod0_2k.glb",
+          "bytes": 3979008
+        }
+      }
+    },
+    "weed_plant_02_d": {
+      "license": "CC0-1.0",
+      "author": "Rico Cilliers, Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/weed_plant_02",
+      "tiers": {
+        "2k": {
+          "file": "models/weed_plant_02_d/lod0_2k.glb",
+          "bytes": 3987312
+        }
+      }
+    },
+    "wicker_basket_01": {
+      "license": "CC0-1.0",
+      "author": "Kuutti Siitonen",
+      "source_url": "https://polyhaven.com/a/wicker_basket_01",
+      "tiers": {
+        "2k": {
+          "file": "models/wicker_basket_01/lod0_2k.glb",
+          "bytes": 3579156
+        }
+      }
+    },
+    "wicker_basket_02": {
+      "license": "CC0-1.0",
+      "author": "Kuutti Siitonen",
+      "source_url": "https://polyhaven.com/a/wicker_basket_02",
+      "tiers": {
+        "2k": {
+          "file": "models/wicker_basket_02/lod0_2k.glb",
+          "bytes": 5049664
+        }
+      }
+    },
+    "wild_rooibos_bush": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock, Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/wild_rooibos_bush",
+      "tiers": {
+        "2k": {
+          "file": "models/wild_rooibos_bush/lod0_2k.glb",
+          "bytes": 3822488
+        }
+      }
+    },
+    "wild_rooibos_bush_b": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock, Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/wild_rooibos_bush",
+      "tiers": {
+        "2k": {
+          "file": "models/wild_rooibos_bush_b/lod0_2k.glb",
+          "bytes": 3499480
+        }
+      }
+    },
+    "wild_rooibos_bush_c": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock, Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/wild_rooibos_bush",
+      "tiers": {
+        "2k": {
+          "file": "models/wild_rooibos_bush_c/lod0_2k.glb",
+          "bytes": 3414240
+        }
+      }
+    },
+    "wild_rooibos_bush_d": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock, Jenelle van Heerden",
+      "source_url": "https://polyhaven.com/a/wild_rooibos_bush",
+      "tiers": {
+        "2k": {
+          "file": "models/wild_rooibos_bush_d/lod0_2k.glb",
+          "bytes": 3345528
+        }
+      }
+    },
+    "wine_barrel_01": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock",
+      "source_url": "https://polyhaven.com/a/wine_barrel_01",
+      "tiers": {
+        "2k": {
+          "file": "models/wine_barrel_01/lod0_2k.glb",
+          "bytes": 3092052
+        }
+      }
+    },
+    "wooden_axe": {
+      "license": "CC0-1.0",
+      "author": "Ulan Cabanilla",
+      "source_url": "https://polyhaven.com/a/wooden_axe",
+      "tiers": {
+        "2k": {
+          "file": "models/wooden_axe/lod0_2k.glb",
+          "bytes": 3240536
+        }
+      }
+    },
+    "wooden_axe_02": {
+      "license": "CC0-1.0",
+      "author": "Ulan Cabanilla",
+      "source_url": "https://polyhaven.com/a/wooden_axe_02",
+      "tiers": {
+        "2k": {
+          "file": "models/wooden_axe_02/lod0_2k.glb",
+          "bytes": 3858100
+        }
+      }
+    },
+    "wooden_axe_03": {
+      "license": "CC0-1.0",
+      "author": "Ulan Cabanilla",
+      "source_url": "https://polyhaven.com/a/wooden_axe_03",
+      "tiers": {
+        "2k": {
+          "file": "models/wooden_axe_03/lod0_2k.glb",
+          "bytes": 4106420
+        }
+      }
+    },
+    "wooden_bookshelf_worn": {
+      "license": "CC0-1.0",
+      "author": "Ulan Cabanilla",
+      "source_url": "https://polyhaven.com/a/wooden_bookshelf_worn",
+      "tiers": {
+        "2k": {
+          "file": "models/wooden_bookshelf_worn/lod0_2k.glb",
+          "bytes": 5633644
+        }
+      }
+    },
+    "wooden_broom": {
+      "license": "CC0-1.0",
+      "author": "Balen",
+      "source_url": "https://polyhaven.com/a/wooden_broom",
+      "tiers": {
+        "2k": {
+          "file": "models/wooden_broom/lod0_2k.glb",
+          "bytes": 6068132
+        }
+      }
+    },
+    "wooden_bucket_01": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock",
+      "source_url": "https://polyhaven.com/a/wooden_bucket_01",
+      "tiers": {
+        "2k": {
+          "file": "models/wooden_bucket_01/lod0_2k.glb",
+          "bytes": 3776180
+        }
+      }
+    },
+    "wooden_bucket_02": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock",
+      "source_url": "https://polyhaven.com/a/wooden_bucket_02",
+      "tiers": {
+        "2k": {
+          "file": "models/wooden_bucket_02/lod0_2k.glb",
+          "bytes": 4036048
+        }
+      }
+    },
+    "wooden_candlestick": {
+      "license": "CC0-1.0",
+      "author": "Josh Dean",
+      "source_url": "https://polyhaven.com/a/wooden_candlestick",
+      "tiers": {
+        "2k": {
+          "file": "models/wooden_candlestick/lod0_2k.glb",
+          "bytes": 3915756
+        }
+      }
+    },
+    "wooden_crate_01": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock",
+      "source_url": "https://polyhaven.com/a/wooden_crate_01",
+      "tiers": {
+        "2k": {
+          "file": "models/wooden_crate_01/lod0_2k.glb",
+          "bytes": 3566000
+        }
+      }
+    },
+    "wooden_crate_02": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock, Jurita Burger",
+      "source_url": "https://polyhaven.com/a/wooden_crate_02",
+      "tiers": {
+        "2k": {
+          "file": "models/wooden_crate_02/lod0_2k.glb",
+          "bytes": 3479884
+        }
+      }
+    },
+    "wooden_display_shelves_01": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock",
+      "source_url": "https://polyhaven.com/a/wooden_display_shelves_01",
+      "tiers": {
+        "2k": {
+          "file": "models/wooden_display_shelves_01/lod0_2k.glb",
+          "bytes": 1941520
+        }
+      }
+    },
+    "wooden_hammer_01": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock",
+      "source_url": "https://polyhaven.com/a/wooden_hammer_01",
+      "tiers": {
+        "2k": {
+          "file": "models/wooden_hammer_01/lod0_2k.glb",
+          "bytes": 3003880
+        }
+      }
+    },
+    "wooden_ladder": {
+      "license": "CC0-1.0",
+      "author": "Miroslav Turura",
+      "source_url": "https://polyhaven.com/a/wooden_ladder",
+      "tiers": {
+        "2k": {
+          "file": "models/wooden_ladder/lod0_2k.glb",
+          "bytes": 4232620
+        }
+      }
+    },
+    "wooden_ladder_02": {
+      "license": "CC0-1.0",
+      "author": "JN_3DPRINTINGNERD",
+      "source_url": "https://polyhaven.com/a/wooden_ladder_02",
+      "tiers": {
+        "2k": {
+          "file": "models/wooden_ladder_02/lod0_2k.glb",
+          "bytes": 4019332
+        }
+      }
+    },
+    "wooden_lantern_01": {
+      "license": "CC0-1.0",
+      "author": "James Ray Cock",
+      "source_url": "https://polyhaven.com/a/wooden_lantern_01",
+      "tiers": {
+        "2k": {
+          "file": "models/wooden_lantern_01/lod0_2k.glb",
+          "bytes": 7121740
+        }
+      }
+    },
+    "wooden_military_crate": {
+      "license": "CC0-1.0",
+      "author": "Prabhjinder Singh",
+      "source_url": "https://polyhaven.com/a/wooden_military_crate",
+      "tiers": {
+        "2k": {
+          "file": "models/wooden_military_crate/lod0_2k.glb",
+          "bytes": 4704460
+        }
+      }
+    },
+    "wooden_picnic_table": {
+      "license": "CC0-1.0",
+      "author": "Ulan Cabanilla",
+      "source_url": "https://polyhaven.com/a/wooden_picnic_table",
+      "tiers": {
+        "2k": {
+          "file": "models/wooden_picnic_table/lod0_2k.glb",
+          "bytes": 7501676
+        }
+      }
+    },
+    "wooden_stool_01": {
+      "license": "CC0-1.0",
+      "author": "Kuutti Siitonen",
+      "source_url": "https://polyhaven.com/a/wooden_stool_01",
+      "tiers": {
+        "2k": {
+          "file": "models/wooden_stool_01/lod0_2k.glb",
+          "bytes": 4433568
+        }
+      }
+    },
+    "wooden_stool_02": {
+      "license": "CC0-1.0",
+      "author": "Kuutti Siitonen",
+      "source_url": "https://polyhaven.com/a/wooden_stool_02",
+      "tiers": {
+        "2k": {
+          "file": "models/wooden_stool_02/lod0_2k.glb",
+          "bytes": 4675260
+        }
+      }
+    },
+    "wooden_table_02": {
+      "license": "CC0-1.0",
+      "author": "Serhii Khromov",
+      "source_url": "https://polyhaven.com/a/wooden_table_02",
+      "tiers": {
+        "2k": {
+          "file": "models/wooden_table_02/lod0_2k.glb",
+          "bytes": 2797412
+        }
+      }
+    },
+    "woodenchair_01": {
+      "license": "CC0-1.0",
+      "author": "Jake Mobley",
+      "source_url": "https://polyhaven.com/a/WoodenChair_01",
+      "tiers": {
+        "2k": {
+          "file": "models/woodenchair_01/lod0_2k.glb",
+          "bytes": 3080272
+        }
+      }
+    },
+    "woodentable_01": {
+      "license": "CC0-1.0",
+      "author": "Ethan Place",
+      "source_url": "https://polyhaven.com/a/WoodenTable_01",
+      "tiers": {
+        "2k": {
+          "file": "models/woodentable_01/lod0_2k.glb",
+          "bytes": 2636128
+        }
+      }
+    },
+    "woodentable_02": {
+      "license": "CC0-1.0",
+      "author": "Fran Calvente",
+      "source_url": "https://polyhaven.com/a/WoodenTable_02",
+      "tiers": {
+        "2k": {
+          "file": "models/woodentable_02/lod0_2k.glb",
+          "bytes": 2369244
+        }
+      }
+    },
+    "woodentable_03": {
+      "license": "CC0-1.0",
+      "author": "Gabriel Radić",
+      "source_url": "https://polyhaven.com/a/WoodenTable_03",
+      "tiers": {
+        "2k": {
+          "file": "models/woodentable_03/lod0_2k.glb",
+          "bytes": 2709760
+        }
+      }
+    }
+  }
+}
