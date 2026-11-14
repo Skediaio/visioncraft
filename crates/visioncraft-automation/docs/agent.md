@@ -19,7 +19,7 @@ same over MCP (`visioncraft-cli mcp`), JSON lines (`visioncraft-cli serve`) and 
   model keeps its persistent names, `F2:side(e7)`, `F2:endCap(e5,e6,e7,e8)`.
   `document.inspect` lists them under `faces`.
 - **Materials**: built in `plaster`, `brick`, `concrete`, `timber`, `roof`, `glass`, `water`,
-  `lawn`, `gravel`, `paving`, `metal`, `soil`. A face assignment beats a body one, which beats
+  `lawn`, `gravel`, `paving`, `metal`, `soil`, `sand`. A face assignment beats a body one, which beats
   the owner's.
 - **Asset ids** in a palette: `flora:<species>` for a built-in procedural plant
   (`species.list {category}`), a custom species of the project (`sp1`), or a catalogue asset id
@@ -342,6 +342,42 @@ A viewpoint shows the project's season and time unless it keeps its own (`time` 
 other view. `view.render` takes `season` and `snow` for one picture (snow alone brings winter),
 and so does the CLI: `visioncraft-cli render garden.visioncraft --viewpoint Pond --season winter
 --snow 0.7 --out snowy.png`.
+
+### 18. The sea, a beach, and the coast example
+
+```json recipe
+{"intent": "a house above a beach, the sea to the horizon", "steps": [
+  {"id": "terrain.create", "params": {"origin": [-60, -40], "width_m": 120, "depth_m": 120, "cell_m": 1, "base_material": "lawn"}},
+  {"id": "water.set_sea", "params": {"level": -2, "sea_state": 3}},
+  {"id": "terrain.shore", "params": {"points": [[-70, 10], [70, 10]], "top_m": 2, "bank_m": 5, "berm_m": 0.8, "beach_m": 20, "shelf_m": 40, "depth_m": 5, "material": "sand"}},
+  {"id": "view.set", "params": {"ground": {"height": -10, "color": [0.2, 0.18, 0.14]}}},
+  {"id": "shape.add_extrusion", "params": {"name": "House", "outline": [[-6, -8], [6, -8], [6, 0], [-6, 0]], "height": 3.2, "roof": {"kind": "flat", "parapet_m": 0}}},
+  {"id": "planting.add_area", "params": {"name": "Grass to the water", "asset_palette": [{"asset": "flora:festuca-glauca", "weight": 1}], "outline": [[-20, 5], [20, 5], [20, 60], [-20, 60]], "density_per_m2": 0.3}},
+  {"id": "query.ground_height", "params": {"x": 0, "z": 30}},
+  {"id": "document.inspect", "params": {"faces": false}},
+  {"id": "view.render", "params": {"camera": {"position": [0, -0.2, 30], "target": [0, -1.5, 100]}, "width": 960, "height": 540, "path": "beach.png"}},
+  {"id": "project.load_example", "params": {"name": "coast"}},
+  {"id": "view.render", "params": {"viewpoint": "Deck over the sea", "width": 1280, "height": 720, "path": "coast.png"}}
+]}
+```
+
+`water.set_sea` gives the project a sea level: water at `level` out to the horizon, cut by the
+terrain and by the endless ground where they rise above it (here the ground is set under the
+water, so the sea runs on past the terrain's edge; with the ground above it, the sea shows only
+over the terrain). Only the fields given change; `water.remove_sea` takes it away.
+`sea_state` is the WMO code, 0 (glassy) to 6 (very rough); `document.inspect` reports `sea`
+with the `wave_height_m` and `peak_wavelength_m` it means. `kind` is `sea`, `lake` (shorter,
+steeper waves; still water freezes in a snowy winter, the sea never does) or `river` (with
+`flow_deg` and `flow_speed`); `outline` limits the water to a polygon. Waves travel along
+`direction_deg`, or with the wind (`view.set wind_direction_deg`) when it is null.
+
+`terrain.shore` shapes a coast along a line, the sea to its right (here travelling east, so the
+sea lies south): a bank or bluff over `bank_m`, the beach down to the waterline over `beach_m`,
+the bed falling to `depth_m` over `shelf_m`, heights measured from the water level; the land
+behind the line keeps its ground. Plantings and objects are not placed where the water covers
+the ground (the grass stops at the waterline: `document.inspect` counts what stands), and in
+the window walking stops where the water is deeper than 0.6 m. `project.load_example {"name":
+"coast"}` is a beach house on a bluff built the same way.
 
 ## Known traps
 
