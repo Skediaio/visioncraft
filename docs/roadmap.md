@@ -87,3 +87,6 @@ nothing here is a promise of a date.
 - Loading still hitches on weak integrated GPUs.
 - Tree crowns still read paler from above than from the side: leaves at the top of a crown face
   the noon sun squarely.
+- Large crowns seen from above at a distance (the far mesh level and the impostor baked from it)
+  still show their grown cards as large leaf patches; near levels now carry several cards of the
+  leaves' own size per leaf point instead.

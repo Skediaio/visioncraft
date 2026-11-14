@@ -216,7 +216,7 @@ fn golden_hashes() {
     let lib = species();
     let mut got = Vec::new();
     for (id, lod, want) in [
-        ("quercus-robur", Lod::Lod0, 0x9750_e973_aae9_5481_u64),
+        ("quercus-robur", Lod::Lod0, 0x6a0b_a466_ba3b_b9b3_u64),
         ("hosta", Lod::Lod1, 0xa334_e697_a230_f815),
         ("carpinus-hedge", Lod::Lod2, 0xc567_f698_a41b_6c32),
         ("picea-abies", Lod::Lod1, 0xdd72_8a9a_25eb_1bc2),

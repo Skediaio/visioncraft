@@ -287,6 +287,8 @@ fn calibrate(sk: &mut Skeleton, h: f32, w: f32, margin: f32) {
 
 const SIDES: [[u32; 4]; 3] = [[10, 6, 4, 3], [7, 4, 3, 3], [5, 3, 3, 3]];
 const STRIDE: [usize; 3] = [1, 2, 3];
+/// Most foliage cards one leaf point carries (`generate`).
+const CARDS_PER_POINT: usize = 4;
 const MIN_R_REL: [f32; 3] = [0.0, 0.05, 0.16];
 
 fn decimate(nodes: &[Node], stride: usize) -> Vec<Node> {
@@ -400,11 +402,27 @@ pub fn generate(
     let desired = (1.5 * p.leaves.density * area / (card0 * card0)).ceil() as usize;
     let cap = |l: usize, wood: usize| (full_budget(l).saturating_sub(wood)) / 2;
     let npts = sk.leaves.len();
-    let n0 = desired.min(cap(0, wood0)).min(npts).max(1);
-    // Fewer points than coverage wants: enlarge LOD0 cards to keep the crown closed.
-    let c0 = card0 * ((desired as f32 / n0 as f32).sqrt()).clamp(1.0, 2.0);
+    // One card per point, enlarged up to twice when there are fewer points than coverage wants.
+    let n_pts = desired.min(cap(0, wood0)).min(npts).max(1);
+    // Most large crowns have fewer: cards enlarged to twice the species' size drew their sprays
+    // twice as large, from above large flat pale leaves. A level whose budget allows more cards
+    // than points gives each point up to `CARDS_PER_POINT` cards of the leaves' own size.
+    let n0 = desired
+        .min(cap(0, wood0))
+        .min(npts * CARDS_PER_POINT)
+        .max(1);
     let nk = n0.min(cap(li, wood)).max(1);
-    let grow_k = (n0 as f32 / nk as f32).sqrt();
+    let (c0, grow_k) = if nk <= n_pts {
+        // The coarser levels as they were, one card per point: grown cards of fewer points
+        // (their clump cells, less flat, pulled inwards) keep the crown's side view.
+        let c0 = card0 * ((desired as f32 / n_pts as f32).sqrt()).clamp(1.0, 2.0);
+        (c0, (n_pts as f32 / nk as f32).sqrt())
+    } else {
+        (
+            card0 * ((desired as f32 / nk as f32).sqrt()).clamp(1.0, 2.0),
+            1.0,
+        )
+    };
     let ck = c0 * grow_k;
     let flowers = p.flowers.as_ref().filter(|_| st.flowers);
     let n_flower = flowers.map_or(0, |f| ((nk as f32 * f.density).round() as usize).min(nk));
@@ -452,14 +470,15 @@ pub fn generate(
     let leaf_cells: [u8; 3] = if grow_k < 1.5 { [0, 1, 2] } else { [4, 5, 6] };
     // Per-point random draws come from a per-point stream so every LOD sees the same card.
     let emit = |out: &mut Builder,
-                idx: usize,
+                k: usize,
                 size: f32,
                 cell: u8,
                 material: Material,
                 push_out: f32,
                 upness: f32| {
+        let (idx, rep) = (order[k % npts], k / npts);
         let lp = &sk.leaves[idx];
-        let mut r = Rng::new(seed ^ 0x5eed, 1000 + idx as u64);
+        let mut r = Rng::new(seed ^ 0x5eed, 1000 + (idx + rep * npts) as u64);
         let o = crown.at(lp.p);
         // Hanging shoots (weeping habits) keep their cards hanging; others are randomised.
         let hang = (-lp.d.y - 0.4).clamp(0.0, 0.6) * 4.0;
@@ -467,7 +486,11 @@ pub fn generate(
         let n = (rand_dir(&mut r) + UP * (upness * 1.2) + o * 0.5).norm();
         let side = along.cross(n).norm();
         let up = n.cross(side).norm();
-        let centre = lp.p + o * push_out;
+        let mut centre = lp.p + o * push_out;
+        if rep > 0 {
+            // A point's further cards spread around it, within the spray of its twig.
+            centre = centre + rand_dir(&mut r) * (card0 * 0.5);
+        }
         let card = Card {
             base: centre - up * (size * 0.5),
             up,
@@ -484,10 +507,13 @@ pub fn generate(
         };
         out.card(&card, &crown);
     };
-    for (k, &idx) in order.iter().take(n_leaf).enumerate() {
+    // Leaf and twig cards go through the points' order and, past its end, round it again
+    // (`emit` takes the place in that sequence).
+    let cards = npts * CARDS_PER_POINT;
+    for k in 0..n_leaf.min(cards) {
         emit(
             &mut out,
-            idx,
+            k,
             ck,
             leaf_cells[k % 3],
             Material::Foliage,
@@ -497,10 +523,10 @@ pub fn generate(
             b.leaf_up / grow_k,
         );
     }
-    for (k, &idx) in order.iter().skip(n_leaf).take(n_twig).enumerate() {
+    for k in 0..n_twig.min(cards.saturating_sub(n_leaf)) {
         emit(
             &mut out,
-            idx,
+            n_leaf + k,
             ck * 0.6,
             12 + (k % 2) as u8,
             Material::Twigs,
@@ -510,10 +536,11 @@ pub fn generate(
     }
     if let Some(f) = flowers {
         let fk = f.card_m * grow_k.min(2.5);
-        for (k, &idx) in order.iter().rev().take(n_flower).enumerate() {
+        // From the far end of the points' order, one card per point.
+        for k in 0..n_flower.min(npts) {
             emit(
                 &mut out,
-                idx,
+                npts - 1 - k,
                 fk,
                 8 + (k % 4) as u8,
                 Material::Flower,
