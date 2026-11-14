@@ -472,7 +472,9 @@ pub fn generate(
             leaf_cells[k % 3],
             Material::Foliage,
             -(ck - c0) * 0.5,
-            b.leaf_up,
+            // Grown cards (the far levels) lie less flat: a card several leaves wide facing the
+            // sky catches the full sun and reads from above as one pale patch on the crown.
+            b.leaf_up / grow_k,
         );
     }
     for (k, &idx) in order.iter().skip(n_leaf).take(n_twig).enumerate() {

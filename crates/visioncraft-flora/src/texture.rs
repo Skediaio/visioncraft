@@ -781,8 +781,9 @@ fn clump(cv: &mut Canvas, p: &PlantParams, rng: &mut Rng, tint: f32) {
         // Twigs start near the centre and point outwards, so the centre is covered too.
         let rad = r * 0.3 * (1.0 - f).sqrt();
         let q = (c.0 + sin(a) * rad, c.1 - cos(a) * rad);
-        // Later (inner, top) twigs are lighter, outer ones slightly darker: a lit dome.
-        let shade = 0.9 + 0.2 * f + 0.08 * (-cos(a));
+        // Later (inner, top) twigs a little lighter, outer ones slightly darker: a lit dome,
+        // gently, or a card facing the sky reads as one pale disc.
+        let shade = 0.88 + 0.1 * f + 0.06 * (-cos(a));
         let len = r * (0.45 + 0.25 * rng.f());
         let depth = if len / leaf_px > 5.0 { 1 } else { 0 };
         twig(
@@ -795,6 +796,36 @@ fn clump(cv: &mut Canvas, p: &PlantParams, rng: &mut Rng, tint: f32) {
             leaf_px,
             mul(col, shade),
             rng,
+        );
+    }
+    // The middle: the twigs above leave their bare stalks there, a star-shaped hole that shows
+    // on a card seen from above. Loose, slightly darker leaves fill it.
+    let st = LeafStyle {
+        shape: match p.leaves.shape {
+            LeafShape::Needles { .. } | LeafShape::Scale => LeafShape::Linear,
+            LeafShape::Pinnate { .. }
+            | LeafShape::Digitate { .. }
+            | LeafShape::FernFrond
+            | LeafShape::FanFrond
+            | LeafShape::FeatherFrond => LeafShape::Elliptic,
+            other => other,
+        },
+        aspect: p.leaves.aspect.max(0.3),
+        serration: p.leaves.serration,
+        veins: false,
+    };
+    for _ in 0..90 {
+        let a = rng.f() * TAU;
+        let rad = r * 0.4 * rng.f().sqrt();
+        let q = (c.0 + sin(a) * rad, c.1 - cos(a) * rad);
+        let len = leaf_px * (1.2 + 0.6 * rng.f());
+        draw_leaf(
+            cv,
+            q,
+            rng.f() * TAU,
+            len,
+            st,
+            mul(col, 0.8 + 0.12 * rng.f()),
         );
     }
 }
