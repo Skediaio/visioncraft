@@ -189,6 +189,31 @@ pub fn flora_asset(id: &str, r: &crate::plants::Resolved) -> Asset {
     crate::studio::make_asset(id, id, category, tags, [w, h, w])
 }
 
+/// The stand-in of a generated species while its plant is made: its soft form (crown on a
+/// trunk, cone, mound, tuft) in the species' own leaf colour rather than a generic green.
+pub fn flora_parts(id: &str, r: &crate::plants::Resolved) -> Vec<(MeshData, Look)> {
+    let lin = |c: f32| {
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    // A little darker: a solid form has none of the crown's gaps and inner shade.
+    let [cr, cg, cb] = r.params.leaves.colour.map(|c| 0.8 * lin(c.clamp(0.0, 1.0)));
+    parts(Some(&flora_asset(id, r)))
+        .into_iter()
+        .map(|(m, look)| {
+            let look = if look == BARK {
+                look
+            } else {
+                Look::plain(cr, cg, cb, 0.85)
+            };
+            (m, look)
+        })
+        .collect()
+}
+
 const BARK: Look = Look::plain(0.12, 0.07, 0.035, 0.9);
 const LEAF: Look = Look::plain(0.05, 0.19, 0.04, 0.8);
 const CONIFER: Look = Look::plain(0.02, 0.10, 0.05, 0.85);

@@ -61,7 +61,7 @@ pub struct PlantMeta {
 }
 
 /// A species' textures made and compressed: the leaf colour and each image with whether it
-/// repeats, in `plant_images` order. Natively on a thread of its own, on the web in the worker.
+/// repeats, in `plant_images` order. Natively on the work pool, on the web in the worker.
 pub type PlantCompressed = (
     [f32; 3],
     Vec<(std::sync::Arc<visioncraft_render::bc::Compressed>, bool)>,
@@ -73,17 +73,22 @@ pub fn plant_compressed(
     scans: &visioncraft_flora::scan::Scans,
 ) -> Option<PlantCompressed> {
     use visioncraft_render::ColorSpace;
-    let t = visioncraft_flora::textures_scanned(params, scale, scans);
-    let mut images = Vec::new();
-    for (img, kind, srgb, repeat) in plant_images(&t) {
+    let t = crate::load_stats::time("plant texture composition", || {
+        visioncraft_flora::textures_scanned(params, scale, scans)
+    });
+    // The images compress side by side (natively; each is the same however it is scheduled).
+    let compressed = crate::work_pool::map(&plant_images(&t), |&(img, kind, srgb, repeat)| {
         let space = if srgb {
             ColorSpace::Srgb
         } else {
             ColorSpace::Linear
         };
-        let c = visioncraft_render::bc::compress(&img.rgba, img.width, img.height, kind, space)?;
-        images.push((std::sync::Arc::new(c), repeat));
-    }
+        let c = crate::load_stats::time("BC compression (plant)", || {
+            visioncraft_render::bc::compress(&img.rgba, img.width, img.height, kind, space)
+        })?;
+        Some((std::sync::Arc::new(c), repeat))
+    });
+    let images = compressed.into_iter().collect::<Option<Vec<_>>>()?;
     Some((crate::plants::opaque_mean(&t.atlas.rgba), images))
 }
 

@@ -41,6 +41,7 @@ Subcommands:
   replay     Render a tour through the viewpoints as numbered PNG frames
   convert    Make a .visioncraft project of a .3dcraft or .obj model, or rewrite one
   new        Write an empty project
+  cache      Show or clear the cache of generated plants and compressed maps
   serve      JSON-lines server on stdin/stdout, for scripts
   mcp        Model Context Protocol server on stdin/stdout, for agents
 
@@ -979,6 +980,42 @@ fn cmd_new(raw: &[String]) -> Res {
     print_json(&r)
 }
 
+const HELP_CACHE: &str = "\
+Usage: visioncraft-cli cache [info | clear]
+
+The cache of generated plants (meshes, leaf and bark textures) and block-compressed library
+maps and model pictures, which makes opening a design again fast. `info` (the default) prints
+its folder, files, bytes and size limit; `clear` empties it (everything is made again when
+next needed). The folder: VISIONCRAFT_CACHE_DIR, else the platform's cache folder
+(~/.cache/visioncraft on Linux, ~/Library/Caches/visioncraft on macOS,
+%LOCALAPPDATA%\\visioncraft\\cache on Windows). VISIONCRAFT_CACHE_MB sets the limit (2048).";
+
+fn cmd_cache(raw: &[String]) -> Res {
+    let a = Args::parse(raw, &[], &[])?;
+    if a.help() {
+        return print(HELP_CACHE);
+    }
+    a.at_most(1)?;
+    let disk = visioncraft::plant_cache::disk()
+        .ok_or_else(|| CliError::Failed("there is no cache folder (no home folder)".into()))?;
+    let folder = disk.folder().display().to_string();
+    match a.positionals.first().map(String::as_str) {
+        None | Some("info") => {
+            let (files, bytes) = disk.usage();
+            print_json(
+                &json!({"folder": folder, "files": files, "bytes": bytes, "max_bytes": disk.max_bytes()}),
+            )
+        }
+        Some("clear") => {
+            let (files, bytes) = disk.clear();
+            print_json(&json!({"folder": folder, "removed_files": files, "removed_bytes": bytes}))
+        }
+        Some(other) => Err(CliError::Usage(format!(
+            "unknown action `{other}`; it is info or clear"
+        ))),
+    }
+}
+
 fn roots(a: &Args) -> Result<Access, CliError> {
     let dir = |flag: &str| -> Result<Option<PathBuf>, CliError> {
         match a.value(flag)? {
@@ -1099,6 +1136,7 @@ fn run(raw: &[String]) -> Res {
         "replay" => cmd_replay(rest),
         "convert" => cmd_convert(rest),
         "new" => cmd_new(rest),
+        "cache" => cmd_cache(rest),
         "serve" => cmd_serve(rest, false),
         "mcp" => cmd_serve(rest, true),
         other if other.starts_with('-') => {
@@ -1108,7 +1146,7 @@ fn run(raw: &[String]) -> Res {
         }
         other => {
             return Err(CliError::Usage(format!(
-                "unknown subcommand `{other}`; the subcommands are: commands, run, batch, info, render, export, replay, convert, new, serve, mcp"
+                "unknown subcommand `{other}`; the subcommands are: commands, run, batch, info, render, export, replay, convert, new, cache, serve, mcp"
             )));
         }
     };
