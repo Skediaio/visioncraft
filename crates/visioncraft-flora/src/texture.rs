@@ -1885,8 +1885,10 @@ fn bark(p: &PlantParams, n: usize) -> (Image, Image) {
                     let len = tile_noise(u, v, 3, 40, 21);
                     let dash = smoothstep(0.7, 0.78, len)
                         * smoothstep(0.35, 0.6, tile_noise(u, v, 10, 40, 22));
-                    let patch = smoothstep(0.6, 0.7, tile_fbm(u, v, 3, 4, 4, 23));
-                    let dark = dash.max(patch * (0.5 + 0.5 * fine));
+                    // Crisp, nearly black patches: a wide ramp at half strength read as a grey
+                    // smear on the trunk.
+                    let patch = smoothstep(0.64, 0.67, tile_fbm(u, v, 3, 4, 4, 23));
+                    let dark = dash.max(patch * (0.85 + 0.15 * fine));
                     let c = mix(mul(b.colour, 0.92 + 0.12 * fine), b.accent, dark);
                     (1.0 - 0.8 * dark, c)
                 }
