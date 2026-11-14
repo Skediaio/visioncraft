@@ -158,9 +158,11 @@ IN a .3dcraft or .obj model: OUT is a new .visioncraft project with that model
 same project written again in the current format, model paths following it.";
 
 const HELP_NEW: &str = "\
-Usage: visioncraft-cli new FILE [--force]
+Usage: visioncraft-cli new FILE [--example NAME] [--force]
 
-Writes an empty project (the built-in materials, the default site and time).
+Writes an empty project (the built-in materials, the default site and time), or
+with --example an example built from commands (garden: a 20 by 30 m plot with
+house, terrace, lawn, hedge, border, trees, pond, lamps and six viewpoints).
 --force replaces an existing FILE.";
 
 const HELP_SERVE: &str = "\
@@ -891,7 +893,7 @@ fn cmd_convert(raw: &[String]) -> Res {
 }
 
 fn cmd_new(raw: &[String]) -> Res {
-    let a = Args::parse(raw, &[], &["--force"])?;
+    let a = Args::parse(raw, &["--example"], &["--force"])?;
     if a.help() {
         return print(HELP_NEW);
     }
@@ -901,6 +903,9 @@ fn cmd_new(raw: &[String]) -> Res {
         .first()
         .ok_or_else(|| CliError::Usage("missing FILE".into()))?;
     let mut host = Headless::new(Access::any());
+    if let Some(name) = a.value("--example")? {
+        exec(&mut host, "project.load_example", json!({"name": name}))?;
+    }
     let r = exec(
         &mut host,
         "file.save",
