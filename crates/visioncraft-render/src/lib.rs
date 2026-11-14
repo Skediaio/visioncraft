@@ -1495,7 +1495,7 @@ impl Renderer {
     /// the mean visible direction, x fastest. It dims the sky's ambient light and reflections
     /// where little sky is seen and adds the light bounced round a room. `None`: open sky
     /// everywhere.
-    pub fn set_sky_volume(&mut self, volume: Option<([f32; 3], f32, [u32; 3], &[[f32; 4]])>) {
+    pub fn set_sky_volume(&mut self, volume: Option<SkyVolume<'_>>) {
         let (dims, samples, open) = match volume {
             Some((_, _, dims, samples))
                 if dims.iter().all(|&d| d > 0)
@@ -4019,6 +4019,10 @@ fn globals_bind_group(
         ],
     })
 }
+
+/// A sky visibility volume for `Renderer::set_sky_volume`: origin (m), cell (m), cells per
+/// axis, samples.
+pub type SkyVolume<'a> = ([f32; 3], f32, [u32; 3], &'a [[f32; 4]]);
 
 /// The sky visibility volume as an RGBA8 3D texture with its mips (averages of 2 x 2 x 2): r the
 /// visible fraction, gba the mean visible direction (at most 0.25 long) as `0.5 + 2 * a`.
