@@ -1600,6 +1600,80 @@ impl Renderer {
         bounds: Option<(Vec3, Vec3)>,
         views: u32,
     ) -> Result<ImpostorId, String> {
+        let mut bake = self.start_impostor_bake(parts, bounds, views)?;
+        loop {
+            if let Some(done) = self.impostor_bake_step(&mut bake, u32::MAX) {
+                return done;
+            }
+        }
+    }
+
+    /// `bake_impostor` spread over frames: start it here, then call `impostor_bake_step` once
+    /// a frame until it returns the impostor. Each step submits a few views (or the final
+    /// dilation and mips), so no frame carries a whole atlas.
+    pub fn start_impostor_bake(
+        &mut self,
+        parts: &[(MeshId, MaterialId)],
+        bounds: Option<(Vec3, Vec3)>,
+        views: u32,
+    ) -> Result<ImpostorBake, String> {
+        let (_, bounds) = self.bake_list(parts, bounds)?;
+        let state = self.baker.begin(
+            &self.device,
+            &self.queue,
+            &self.layouts,
+            bounds,
+            views.clamp(4, 16),
+            self.quality.impostor_resolution,
+        );
+        Ok(ImpostorBake {
+            parts: parts.to_vec(),
+            state: Some(state),
+        })
+    }
+
+    /// One step of a bake: `views` more views drawn (`u32::MAX`: all), or when all are, the
+    /// dilation and mips. `Some` once the impostor is made (or failed: a part went away).
+    pub fn impostor_bake_step(
+        &mut self,
+        bake: &mut ImpostorBake,
+        views: u32,
+    ) -> Option<Result<ImpostorId, String>> {
+        let mut state = bake.state.take()?;
+        if impostor::Baker::drawn(&state) {
+            let gpu = self.baker.finish(
+                &self.device,
+                &self.queue,
+                &self.layouts,
+                &self.mipmapper,
+                state,
+            );
+            self.impostors.push(Some(gpu));
+            return Some(Ok(ImpostorId(self.impostors.len() as u32 - 1)));
+        }
+        let list = match self.bake_list(&bake.parts, None) {
+            Ok((list, _)) => list,
+            Err(e) => return Some(Err(e)),
+        };
+        self.baker
+            .render(&self.device, &self.queue, &mut state, &list, views);
+        bake.state = Some(state);
+        None
+    }
+
+    /// The buffers and bind groups of `parts`, and the bounds to bake (given, else theirs).
+    #[allow(clippy::type_complexity)]
+    fn bake_list(
+        &self,
+        parts: &[(MeshId, MaterialId)],
+        bounds: Option<(Vec3, Vec3)>,
+    ) -> Result<
+        (
+            Vec<(&wgpu::Buffer, &wgpu::Buffer, u32, &wgpu::BindGroup)>,
+            (Vec3, Vec3),
+        ),
+        String,
+    > {
         let mut list = Vec::new();
         let mut union_bounds: Option<Bounds> = None;
         for &(mesh, material) in parts {
@@ -1619,18 +1693,7 @@ impl Renderer {
             list.push((&m.vertices, &m.indices, m.index_count, &mat.bind));
         }
         let bounds = bounds.or(union_bounds).ok_or("nothing to bake")?;
-        let gpu = self.baker.bake(
-            &self.device,
-            &self.queue,
-            &self.layouts,
-            &self.mipmapper,
-            &list,
-            bounds,
-            views.clamp(4, 16),
-            self.quality.impostor_resolution,
-        );
-        self.impostors.push(Some(gpu));
-        Ok(ImpostorId(self.impostors.len() as u32 - 1))
+        Ok((list, bounds))
     }
 
     /// Makes `impostor` the last level of detail of `item`: beyond its last
@@ -3582,6 +3645,12 @@ fn u32_bytes(u: &[u32]) -> Vec<u8> {
 fn globals_size() -> u64 {
     // 8 matrices, 27 vec4s, the 9 SH vec4s last; see common.wgsl.
     SH_OFFSET + 9 * 16
+}
+
+/// An impostor bake in progress (`Renderer::start_impostor_bake`).
+pub struct ImpostorBake {
+    parts: Vec<(MeshId, MaterialId)>,
+    state: Option<impostor::BakeState>,
 }
 
 /// The bloom levels: half the render size, halved again per level (the

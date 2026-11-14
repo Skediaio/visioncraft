@@ -213,23 +213,18 @@ impl Baker {
         }
     }
 
-    /// Bakes `parts` (vertex buffer, index buffer, index count, material
-    /// bind group) of a plant whose model-space bounds are `bounds`.
-    #[allow(clippy::too_many_arguments)]
-    pub fn bake(
+    /// The first part of a bake spread over frames: the atlas, its working targets and the
+    /// views' matrices; nothing is drawn yet.
+    pub fn begin(
         &self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         l: &crate::Layouts,
-        mipmapper: &crate::texture::Mipmapper,
-        parts: &[(&wgpu::Buffer, &wgpu::Buffer, u32, &wgpu::BindGroup)],
         bounds: (Vec3, Vec3),
         views: u32,
         tile: u32,
-    ) -> GpuImpostor {
+    ) -> BakeState {
         let (cols, size) = atlas_layout_with(views, tile);
-        let centre = (bounds.0 + bounds.1) * 0.5;
-        let (half_w, half_h, _) = extents(bounds);
         let target = |label, format, mips| {
             device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(label),
@@ -256,13 +251,6 @@ impl Baker {
             target("impostor normal", NORMAL, mips),
             target("impostor normal", NORMAL, 1),
         ];
-        let level0 = |t: &wgpu::Texture| {
-            t.create_view(&wgpu::TextureViewDescriptor {
-                base_mip_level: 0,
-                mip_level_count: Some(1),
-                ..Default::default()
-            })
-        };
         let depth = device
             .create_texture(&wgpu::TextureDescriptor {
                 label: Some("impostor depth"),
@@ -315,16 +303,51 @@ impl Baker {
             0,
             &crate::f32_bytes(&Mat4::IDENTITY.to_cols_array()),
         );
+        BakeState {
+            bounds,
+            views,
+            cols,
+            tile,
+            size,
+            albedo,
+            normal,
+            depth,
+            matrix_bind,
+            identity,
+            next: 0,
+        }
+    }
+
+    /// Draws the next `count` views (the ring, then the one from above) into the atlas, and
+    /// submits them. The first call clears the atlas.
+    pub fn render(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        state: &mut BakeState,
+        parts: &[(&wgpu::Buffer, &wgpu::Buffer, u32, &wgpu::BindGroup)],
+        count: u32,
+    ) {
+        let total = state.views + 1;
+        let (from, to) = (state.next, (state.next + count).min(total));
+        if from >= to {
+            return;
+        }
+        let load = if from == 0 {
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+        } else {
+            wgpu::LoadOp::Load
+        };
         let mut encoder = device.create_command_encoder(&Default::default());
         {
-            let (a, n) = (level0(&albedo[0]), level0(&normal[0]));
+            let (a, n) = (level0(&state.albedo[0]), level0(&state.normal[0]));
             let attach = |view| {
                 Some(wgpu::RenderPassColorAttachment {
                     view,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        load,
                         store: wgpu::StoreOp::Store,
                     },
                 })
@@ -333,7 +356,7 @@ impl Baker {
                 label: Some("impostor bake"),
                 color_attachments: &[attach(&a), attach(&n)],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &depth,
+                    view: &state.depth,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
                         store: wgpu::StoreOp::Discard,
@@ -345,11 +368,12 @@ impl Baker {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.bake);
-            pass.set_vertex_buffer(1, identity.slice(..));
-            for k in 0..count {
-                let (x, y) = ((k % cols) * tile, (k / cols) * tile);
+            pass.set_vertex_buffer(1, state.identity.slice(..));
+            let tile = state.tile;
+            for k in from..to {
+                let (x, y) = ((k % state.cols) * tile, (k / state.cols) * tile);
                 pass.set_viewport(x as f32, y as f32, tile as f32, tile as f32, 0.0, 1.0);
-                pass.set_bind_group(2, &matrix_bind, &[(k as u64 * SLOT) as u32]);
+                pass.set_bind_group(2, &state.matrix_bind, &[(k as u64 * SLOT) as u32]);
                 for (vertices, indices, index_count, material) in parts {
                     pass.set_bind_group(1, *material, &[]);
                     pass.set_vertex_buffer(0, vertices.slice(..));
@@ -358,6 +382,36 @@ impl Baker {
                 }
             }
         }
+        queue.submit([encoder.finish()]);
+        state.next = to;
+    }
+
+    /// Whether every view of `state` is drawn (then `finish`).
+    pub fn drawn(state: &BakeState) -> bool {
+        state.next > state.views
+    }
+
+    /// The last part: dilation, mips and the impostor's bindings.
+    pub fn finish(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        l: &crate::Layouts,
+        mipmapper: &crate::texture::Mipmapper,
+        state: BakeState,
+    ) -> GpuImpostor {
+        let BakeState {
+            bounds,
+            views,
+            cols,
+            size,
+            albedo,
+            normal,
+            ..
+        } = state;
+        let centre = (bounds.0 + bounds.1) * 0.5;
+        let (half_w, half_h, _) = extents(bounds);
+        let mut encoder = device.create_command_encoder(&Default::default());
         // Dilate, ping-pong, ending in the mipmapped pair.
         for i in 0..DILATE_PASSES {
             let (src, dst) = if i % 2 == 0 { (0, 1) } else { (1, 0) };
@@ -457,6 +511,30 @@ impl Baker {
             bytes: 2 * crate::texture::mip_bytes(size, size, 4),
         }
     }
+}
+
+/// A bake spread over frames (`Baker::begin`, `render`, `finish`).
+pub struct BakeState {
+    bounds: (Vec3, Vec3),
+    views: u32,
+    cols: u32,
+    tile: u32,
+    size: u32,
+    albedo: [wgpu::Texture; 2],
+    normal: [wgpu::Texture; 2],
+    depth: wgpu::TextureView,
+    matrix_bind: wgpu::BindGroup,
+    identity: wgpu::Buffer,
+    /// The next view to draw.
+    next: u32,
+}
+
+fn level0(t: &wgpu::Texture) -> wgpu::TextureView {
+    t.create_view(&wgpu::TextureViewDescriptor {
+        base_mip_level: 0,
+        mip_level_count: Some(1),
+        ..Default::default()
+    })
 }
 
 #[cfg(test)]
