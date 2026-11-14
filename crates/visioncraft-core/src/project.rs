@@ -218,12 +218,14 @@ pub struct Site {
 }
 
 impl Default for Site {
-    /// Brussels, CET.
+    /// Brussels, on summer time (CEST, UTC+2): the default date (`SunTime::default`, 21 June)
+    /// falls in it, so a new project's clock and the "summer time follows the date" rule agree
+    /// from the start instead of only once the sun is dragged.
     fn default() -> Self {
         Self {
             latitude: 50.85,
             longitude: 4.35,
-            utc_offset_hours: 1.0,
+            utc_offset_hours: 2.0,
         }
     }
 }
