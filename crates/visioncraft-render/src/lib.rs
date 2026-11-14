@@ -3595,12 +3595,7 @@ impl Renderer {
             .sea()
             .filter(|s| s.coast.len() >= 2)
             .map_or(ground_height, |s| ground_height.min(s.level));
-        b.floats(&[
-            haze / 1000.0,
-            1.0 / a.haze_height_m,
-            haze_base,
-            a.sun_glow,
-        ]);
+        b.floats(&[haze / 1000.0, 1.0 / a.haze_height_m, haze_base, a.sun_glow]);
         let (source, rotation, scale, mips) = match &self.sky_source {
             SkySource::Preetham => (0.0, 0.0, 1.0, 1.0),
             SkySource::Physical => (1.0, 0.0, SUN_TOP_KLX, 1.0),
@@ -3665,7 +3660,11 @@ impl Renderer {
         b.floats(&self.sky_volume_box);
         // The sea's coastline: the endless ground stays land on its left (sea.rs).
         let coast = self.sea().map_or(&[][..], |s| &s.coast[..]);
-        let n = if coast.len() >= 2 { coast.len().min(sea::COAST) } else { 0 };
+        let n = if coast.len() >= 2 {
+            coast.len().min(sea::COAST)
+        } else {
+            0
+        };
         let level = self.sea().map_or(0.0, |s| s.level);
         b.floats(&[n as f32, level, level - 20.0, 0.0]);
         for i in 0..sea::COAST {

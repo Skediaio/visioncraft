@@ -227,13 +227,20 @@ mod tests {
         assert!(dry(20.0) && h(8.0, 20.0) < sea.level + 1.2);
         let waterline = (66..=80).map(|z| z as f32 * 0.5).find(|z| !dry(*z));
         let waterline = waterline.expect("the waterline in front of the house");
-        assert!((26.6..=36.6).contains(&waterline), "waterline at z {waterline}");
+        assert!(
+            (26.6..=36.6).contains(&waterline),
+            "waterline at z {waterline}"
+        );
         assert!(h(8.0, 200.0) < sea.level - 3.0, "the bed deepens offshore");
         // Mainland: the land rises inland to the endless ground, which stays land behind the
         // coast to the horizon; beyond its far headland in the west, open sea again.
         let ground = p.view.ground.unwrap();
         assert!(ground.height > sea.level + 4.0);
-        assert!((h(0.0, -318.0) - ground.height).abs() < 0.5, "{}", h(0.0, -318.0));
+        assert!(
+            (h(0.0, -318.0) - ground.height).abs() < 0.5,
+            "{}",
+            h(0.0, -318.0)
+        );
         assert!(sea.coast.len() >= 2 && sea.validate().is_ok());
         assert!(!sea.covers(0.0, -2000.0) && sea.covers(0.0, 2000.0));
         assert!(!sea.covers(-2000.0, 1200.0) && sea.covers(-2000.0, 1500.0));
@@ -245,7 +252,14 @@ mod tests {
         let names: Vec<&str> = p.shapes.iter().map(|s| s.name()).collect();
         assert_eq!(
             names,
-            ["Drive", "Entrance court", "Garden room lawn", "Garden path", "Beach walk", "West gravel garden"]
+            [
+                "Drive",
+                "Entrance court",
+                "Garden room lawn",
+                "Garden path",
+                "Beach walk",
+                "West gravel garden"
+            ]
         );
         assert_eq!(p.assignments.len(), 46 + names.len());
         assert_eq!(p.viewpoints.len(), 15);
@@ -273,9 +287,21 @@ mod tests {
                     "{} at {x}, {z} stands in the view from the glass wall",
                     g.name()
                 );
-                let tree = ["cupressus", "olea", "phoenix", "trachycarpus", "pinus", "ficus", "laurus", "rosa-shrub", "hibiscus", "photinia-red", "cortaderia"]
-                    .iter()
-                    .any(|w| pl.asset.contains(w));
+                let tree = [
+                    "cupressus",
+                    "olea",
+                    "phoenix",
+                    "trachycarpus",
+                    "pinus",
+                    "ficus",
+                    "laurus",
+                    "rosa-shrub",
+                    "hibiscus",
+                    "photinia-red",
+                    "cortaderia",
+                ]
+                .iter()
+                .any(|w| pl.asset.contains(w));
                 if tree {
                     trees += 1;
                 } else if !pl.asset.contains("hedge") && !pl.asset.contains("light") {
