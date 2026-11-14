@@ -1030,6 +1030,26 @@ impl PlantingTools {
                 asset: id,
                 weight: 1.0,
             });
+            // Lamps along a line: spaced so their pools of light just meet (about 1.2 times
+            // the light's reach), not one a metre as a hedge.
+            if tool == Tool::Line && matches!(target, AddTarget::Palette) && !editing {
+                let reach: Option<f32> = form
+                    .palette
+                    .iter()
+                    .map(|w| {
+                        cx.s.assets
+                            .iter()
+                            .find(|a| a.id == w.asset)
+                            .and_then(|a| a.light.as_ref())
+                            .map(|l| l.range_m)
+                    })
+                    .collect::<Option<Vec<f32>>>()
+                    .and_then(|r| r.into_iter().reduce(f32::min));
+                if let Some(r) = reach {
+                    form.by_count = false;
+                    form.every = (r * 1.2).round().max(1.0);
+                }
+            }
             if self.editing() {
                 self.finish_edit(cx, Edit::Done);
             }

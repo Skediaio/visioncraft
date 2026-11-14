@@ -22,6 +22,9 @@ struct Fixture {
     cap: (f32, f32),
     lumens: f32,
     range_m: f32,
+    /// Light only below the cap (a path light): a downward spot of this half angle, so its
+    /// flux makes a pool on the ground instead of lighting the sky. `None`: all round.
+    down_deg: Option<f32>,
 }
 
 const FIXTURES: [Fixture; 2] = [
@@ -31,8 +34,10 @@ const FIXTURES: [Fixture; 2] = [
         post: (0.08, 0.6),
         glass: (0.45, 0.55),
         cap: (0.0, 0.0),
-        lumens: 250.0,
-        range_m: 5.0,
+        // A typical LED garden bollard: 300-400 lm all round from its glass band.
+        lumens: 350.0,
+        range_m: 6.0,
+        down_deg: None,
     },
     Fixture {
         id: "vc-path-light",
@@ -40,8 +45,11 @@ const FIXTURES: [Fixture; 2] = [
         post: (0.025, 0.24),
         glass: (0.2, 0.26),
         cap: (0.11, 0.03),
-        lumens: 120.0,
-        range_m: 3.0,
+        // 150 lm under a cap: I = flux / pi = 48 cd straight down, about 500 lux on the
+        // ground under it and 10 lux at 1.5 m out: a pool that reads at dusk.
+        lumens: 150.0,
+        range_m: 3.5,
+        down_deg: Some(70.0),
     },
 ];
 
@@ -73,7 +81,14 @@ pub fn assets() -> Vec<Asset> {
                 thumbnail: format!("{}.thumb", glb_path(f.id)),
                 plant: None,
                 light: Some(LightSpec {
-                    kind: LightKind::Point,
+                    kind: match f.down_deg {
+                        Some(outer) => LightKind::Spot {
+                            direction: [0.0, -1.0, 0.0],
+                            inner_cone_deg: outer * 0.6,
+                            outer_cone_deg: outer,
+                        },
+                        None => LightKind::Point,
+                    },
                     color_temperature_k: 2700.0,
                     lumens: f.lumens,
                     range_m: f.range_m,
