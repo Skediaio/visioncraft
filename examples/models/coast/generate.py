@@ -47,11 +47,14 @@ c("time.set", year=2026, month=7, day=15, hour=16.5)
 c("terrain.create", origin=[-500, -320], width_m=1000, depth_m=600, cell_m=3.0, base_material="sand")
 for pts, r in [([[-500, -300], [500, -300]], 150), ([[-500, -200], [-500, 40]], 130), ([[500, -200], [500, -60]], 130)]:
     c("terrain.stroke", tool="flatten", points=pts, radius_m=r, strength=1.0, falloff=0.9, target_height=6 + LEVEL)
-# Dune ridges and hollows behind the house, roughened into an uneven dune field.
+# Dune ridges behind the house and smaller dunes over them (raised only: a hollow below the
+# sea's level would fill with sea water).
 c("terrain.stroke", tool="raise", points=[[-320, -80], [-40, -70]], radius_m=40, strength=0.3, falloff=0.9)
 c("terrain.stroke", tool="raise", points=[[60, -72], [330, -95]], radius_m=40, strength=0.3, falloff=0.9)
 c("terrain.stroke", tool="raise", points=[[-200, -150], [220, -160]], radius_m=55, strength=0.35, falloff=0.9)
-c("terrain.stroke", tool="noise", points=[[-300, -110], [300, -110]], radius_m=70, strength=0.6, falloff=0.8)
+for pts, r, k in [([[-150, -105], [-60, -120]], 18, 0.5), ([[-20, -95], [40, -110]], 15, 0.6), ([[90, -120], [170, -105]], 20, 0.5),
+                  ([[-110, -60], [-70, -75]], 12, 0.4), ([[70, -60], [120, -70]], 12, 0.4), ([[-60, -185], [60, -195]], 25, 0.4)]:
+    c("terrain.stroke", tool="raise", points=pts, radius_m=r, strength=k, falloff=0.8)
 # The house plot level with the floor (1.8 m above the sea), sloping off into the dunes.
 c("terrain.stroke", tool="flatten", points=[[-40, -45], [55, -45], [55, 4], [-40, 4], [-40, -45]], radius_m=18, strength=1.0, falloff=0.6, target_height=0)
 # The coast: a gentle bay in front of the house, bluffs towards both ends and the headland's root
