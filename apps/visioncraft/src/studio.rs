@@ -49,6 +49,8 @@ pub struct Studio {
     pub frame_ms: Vec<f32>,
     /// Auto does not step up before this `clock` (seconds): it just stepped down.
     pub auto_hold_until: f64,
+    /// Since when (clock) plants or textures have been loading without a break.
+    pub auto_loading_since: Option<f64>,
     /// The wait after a step down (s) and when Auto last stepped up.
     pub auto_hold: f64,
     pub auto_rose_at: f64,
@@ -238,6 +240,7 @@ impl Studio {
             auto_quality: Quality::MEDIUM,
             frame_ms: Vec::new(),
             auto_hold_until: 0.0,
+            auto_loading_since: None,
             auto_hold: 10.0,
             auto_rose_at: f64::NEG_INFINITY,
             hardware_line: None,
@@ -727,9 +730,22 @@ impl Studio {
     /// about the scene) and not for 10 s after a step down (else it climbs back into the tier it
     /// just left and settles below 30 fps).
     pub fn record_frame(&mut self, ms: f32) {
-        if !self.quality_auto || self.plants_pending() > 0 || !self.scene.library.idle() {
+        if !self.quality_auto {
             self.frame_ms.clear();
             return;
+        }
+        // Frames while plants or textures load say little about the scene, but only for a few
+        // seconds: a tier too heavy for the GPU makes loading itself slow (a step to HIGH
+        // regenerates the leaf atlases and fetches 2k maps), and Auto must still step down.
+        let loading = self.plants_pending() > 0 || !self.scene.library.idle();
+        if loading {
+            let since = *self.auto_loading_since.get_or_insert(self.clock);
+            if self.clock - since < AUTO_LOAD_GRACE_S {
+                self.frame_ms.clear();
+                return;
+            }
+        } else {
+            self.auto_loading_since = None;
         }
         self.frame_ms.push(ms);
         let can_rise = self.clock >= self.auto_hold_until;
@@ -1064,6 +1080,9 @@ pub fn png_bytes(rgba: &[u8], w: u32, h: u32) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("cannot encode the PNG: {e}"))?;
     Ok(out)
 }
+
+/// Seconds of loading Auto waits out before it judges the frames anyway.
+const AUTO_LOAD_GRACE_S: f64 = 3.0;
 
 #[derive(Debug, PartialEq)]
 enum AutoStep {
