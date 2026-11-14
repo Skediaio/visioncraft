@@ -99,7 +99,7 @@ pub(super) fn register(s: &mut Session) {
                 param("wind_strength", T::Number, "Wind for plants, 0 or more.").default(json!(0.3)),
                 param("wind_direction_deg", T::Number, "Direction the wind blows towards, clockwise from north seen from above.").unit("deg").default(json!(0)),
                 param("ground", T::Object, "Ground plane {height: m, color: [r, g, b] linear}; null for none.")
-                    .default(json!({"height": 0, "color": [0.10, 0.17, 0.08]})),
+                    .default(json!({"height": 0, "color": [0.065, 0.12, 0.035]})),
                 param("look", T::String, "neutral, natural or vivid: the picture's exposure, contrast and colour on top of the tone map.").default(json!("natural")),
                 param("view_distance", T::Number, "How far plants, shadows and a clear view reach, as a multiple of the default; 0.25 to 4.")
                     .unit("x")

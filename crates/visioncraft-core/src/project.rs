@@ -183,9 +183,11 @@ impl Default for ViewState {
             haze: 2.5,
             wind_strength: 0.3,
             wind_direction_deg: 0.0,
+            // The library lawn's mean colour, a touch lighter: the endless ground then reads as
+            // more lawn into the distance instead of an olive field round a green garden.
             ground: Some(GroundPlane {
                 height: 0.0,
-                color: [0.10, 0.17, 0.08],
+                color: [0.065, 0.12, 0.035],
             }),
             view_distance: 1.0,
             look: Look::Natural,
