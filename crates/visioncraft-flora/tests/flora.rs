@@ -588,3 +588,26 @@ fn params_serde_round_trip() {
     assert_eq!(partial.leaves.leaf_m, 0.05);
     assert!(partial.validate().is_ok());
 }
+
+#[test]
+fn a_young_tree_is_slender_and_simpler_than_a_mature_one() {
+    let s = visioncraft_flora::Species::by_id("acer-campestre").unwrap();
+    let at = |age: f32| {
+        let mut p = s.params.clone();
+        p.age = age;
+        generate(&p, 3, Lod::Lod0)
+    };
+    let (young, old) = (at(0.3), at(1.0));
+    let ratio = |m: &visioncraft_flora::PlantMesh| {
+        let (lo, hi) = m.bounds();
+        (hi[0] - lo[0]).max(hi[2] - lo[2]) / hi[1].max(1e-3)
+    };
+    // Narrower for its height, and fewer triangles of wood (fewer branch orders).
+    assert!(ratio(&young) < ratio(&old), "{} vs {}", ratio(&young), ratio(&old));
+    assert!(
+        young.triangles_of(Material::Bark) < old.triangles_of(Material::Bark),
+        "{} vs {}",
+        young.triangles_of(Material::Bark),
+        old.triangles_of(Material::Bark)
+    );
+}

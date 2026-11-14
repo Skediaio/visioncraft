@@ -43,6 +43,8 @@ struct Ctx<'a> {
     b: &'a BranchingParams,
     p: &'a PlantParams,
     h: f32,
+    /// Branch orders a plant of this age has (`skeleton`).
+    max_level: usize,
 }
 
 /// Wind stiffness per level: how much of the remaining sway a branch of this level adds.
@@ -105,7 +107,8 @@ fn grow(
         let mut r = r0 * (1.0 - (1.0 - tip) * t);
         if level == 0 {
             let f = (1.0 - t / 0.1).max(0.0);
-            r *= 1.0 + b.trunk_flare * f * f;
+            // The flare at the foot comes with age.
+            r *= 1.0 + b.trunk_flare * c.p.age * c.p.age * f * f;
         }
         let w = if level == 0 && i == 0 {
             0.0
@@ -132,9 +135,13 @@ fn grow(
     }
     let total_len = len;
 
-    if level < 3 && b.levels[level].count > 0 {
+    if level < c.max_level && b.levels[level].count > 0 {
         let l = b.levels[level];
         let mut n = l.count as f32;
+        if level == 0 {
+            // A young tree has fewer limbs.
+            n *= 0.5 + 0.5 * c.p.age;
+        }
         if level > 0 {
             n *= rng.range(0.8, 1.2);
         }
@@ -199,9 +206,19 @@ fn grow(
 
 fn skeleton(p: &PlantParams, b: &BranchingParams, seed: u64) -> Skeleton {
     let mut rng = Rng::new(seed, 1);
+    // Age changes the form, not only the size: a young tree is slender (the crown widens later
+    // than the tree rises), has a thin trunk and fewer branch orders; its leaves keep their real
+    // size, so they are large for the tree. At age 1 nothing changes.
     let h = p.height_m * p.age;
-    let w = p.width_m * p.age;
-    let c = Ctx { b, p, h };
+    let w = p.width_m * p.age.powf(1.25);
+    let max_level = if p.age < 0.25 {
+        1
+    } else if p.age < 0.55 {
+        2
+    } else {
+        3
+    };
+    let c = Ctx { b, p, h, max_level };
     let mut sk = Skeleton::default();
     let stems = b.stems.max(1) as usize;
     for s in 0..stems {
@@ -223,7 +240,7 @@ fn skeleton(p: &PlantParams, b: &BranchingParams, seed: u64) -> Skeleton {
             )
         };
         let len = h * b.leader * if stems > 1 { rng.range(0.75, 1.0) } else { 1.0 };
-        let r0 = h * b.trunk_radius_ratio / (stems as f32).sqrt();
+        let r0 = h * b.trunk_radius_ratio * p.age.powf(0.4) / (stems as f32).sqrt();
         let ph = rng.f();
         grow(&mut sk, &c, 0, base, dir, len, r0, 0.0, ph, &mut rng);
     }
