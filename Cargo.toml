@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "apps/*", "tools/*", "examples/*"]
+# Model sources (scripts, briefs), not crates.
+exclude = ["examples/models"]
 
 [workspace.package]
 version = "0.0.0"

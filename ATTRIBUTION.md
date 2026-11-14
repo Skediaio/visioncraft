@@ -21,6 +21,7 @@ written here unless the licence column says otherwise.
 | `crates/visioncraft-automation/src/lib.rs`, `control.rs` | Modelled on `craft3d-automation` v0.1.1 and its `docs/control-protocol.md` | MIT |
 | `apps/visioncraft-cli/src/main.rs` | Shaped after `craft3d-cli` | MIT |
 | `crates/visioncraft-core/src/examples/villa.3dcraft` | The showcase villa, `docs/showcase/villa.3dcraft`, Johan Coppens; the estate example's house, unchanged | MIT |
+| `crates/visioncraft-core/src/examples/beach-house.3dcraft` | Made for this project: generated with `craft3d-cli` v0.1.1 from `examples/models/beach-house/generate.py`; no 3DCraft sample is reused | MIT |
 
 ## From other open-source code
 
