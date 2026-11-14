@@ -195,6 +195,7 @@ mod tests {
             seed: 3,
             layers: vec![],
             avoid_buildings: false,
+            edge_fade_m: 0.0,
         })
     }
 

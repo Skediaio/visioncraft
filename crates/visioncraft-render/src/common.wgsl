@@ -40,8 +40,9 @@ struct Globals {
     snow: vec4<f32>,            // x snow 0..1, y the cover map's shadow layer, z cover map on (0/1)
     sky_vol: vec4<f32>,         // sky visibility volume: xyz origin (m), w 1 / cell (m)
     sky_vol_size: vec4<f32>,    // xyz 1 / cells, w volume on (0/1)
-    coast_info: vec4<f32>,      // x coast points (0: none), y sea level (m), z endless ground on the sea side (m), w 0
+    coast_info: vec4<f32>,      // x coast points (0: none), y sea level (m), z endless ground on the sea side (m), w surroundings kind (scene.wgsl)
     coast: array<vec4<f32>, 8>, // the coastline, two [x, z] points per entry, the sea to its right
+    surround: vec4<f32>,        // the plot's rectangle (min x, min z, max x, max z) for the surroundings (kind in coast_info.w)
     sh: array<vec4<f32>, 9>,    // sky irradiance as L2 SH (kcd/m2 * sr), written on the GPU (env.wgsl)
 }
 @group(0) @binding(0) var<uniform> g: Globals;

@@ -528,15 +528,20 @@ fn fs_sea_wet(in: Varying) -> @location(0) vec4<f32> {
     }
     let world = sea_wet_world(in.clip.xy).xyz;
     let runup = surf_runup();
-    let top = sea.surface.x + max(sea.color.w, 1.3 * runup);
-    var wet = (1.0 - smoothstep(top - 0.5 * sea.color.w, top, world.y))
+    // The tide line wanders: the last swash reached higher here and lower there, by up to a
+    // third of the band over 10-40 m along the shore, so the line is not a contour.
+    let band = max(sea.color.w, 1.3 * runup);
+    let wander = (value_noise(vec3<f32>(world.xz * 0.025, 4.2)) * 0.7 + value_noise(vec3<f32>(world.xz * 0.1, 8.1)) * 0.3 - 0.5) * 0.66;
+    let top = sea.surface.x + band * (1.0 + wander);
+    var wet = (1.0 - smoothstep(top - 0.6 * band, top, world.y))
         * (1.0 - smoothstep(300.0, 500.0, below)) * (1.0 - g.snow.x);
     if wet <= 0.0 || !sea_covers(world.xz) {
         return vec4<f32>(0.0);
     }
     wet *= sea_wet_near(world, in.clip.xy);
-    // Darker wet ground (premultiplied: black at this coverage halves it).
-    let dark = 0.5 * wet;
+    // Darker wet ground (premultiplied): a water film takes a dry sand's albedo of about 0.35
+    // to 0.2 (Lekner & Dorf), 0.43 of it gone; damp sand higher up loses less (the ramp above).
+    let dark = 0.43 * wet;
     // The swash: each bore that reaches the waterline (phase 0 there, as `sea_surf`) rushes up
     // the beach to the run-up in about a third of the period and drains back in the rest, as a
     // thin sheet with a foam front on the way up and lacy foam on the way down.

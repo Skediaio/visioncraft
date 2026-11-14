@@ -65,7 +65,7 @@ c("water.set_sea", level=LEVEL, kind="sea", sea_state=3.2, direction_deg=355, cl
          [-340, 85], [-230, 35], [-110, 27], [110, 25], [230, 12], [360, -11], [500, -35], [1500, -160], [4000, -450]])
 c("terrain.shore", points=[[-500, 150], [-430, 120], [-340, 45], [-230, 10], [-110, 10], [0, 10], [110, 8], [230, -8], [360, -36], [500, -62]],
   top_m=6, bank_m=1.5, berm_m=1.0, beach_m=15.5, shelf_m=250, depth_m=6, material="sand")
-c("view.set", ground={"height": 6 + LEVEL, "color": [0.2, 0.18, 0.11]}, wind_direction_deg=0, wind_strength=0.5, haze=1.4)
+c("view.set", ground={"height": 6 + LEVEL, "color": [0.2, 0.18, 0.11]}, wind_direction_deg=0, wind_strength=0.5, haze=1.4, surroundings="dunes")
 
 # ---- Hard landscape --------------------------------------------------------------------------
 # House: x -0.6..24.6, z -10.5..0, deck to z 6.6; carport x -6.6..-0.6, z -10.5..-4.5; the
@@ -168,8 +168,8 @@ for side, x0, x1, seed in (("west", -60, 6.2, 120), ("east", 9.4, 80, 121)):
 # ---- The dunes inland: tussock grass and low scrub with sand between, pines and olives in groups --
 SCRUB = [("calamagrostis-acutiflora", 4), ("festuca-glauca", 4), ("pennisetum-alopecuroides", 1), ("lavandula-angustifolia", 1),
          ("pinus-mugo", 1), ("wild_rooibos_bush", 1), ("didelta_spinosa", 1), ("searsia_lucida", 1)]
-area("Coastal scrub near", [[-60, -50], [75, -50], [75, 7], [56, 7], [56, -44], [-41, -44], [-41, 7], [-60, 7]], SCRUB, 0.35, 131)
-area("Coastal scrub inland", rect(-200, -200, 200, -50), SCRUB, 0.1, 132, avoid_buildings=True)
+area("Coastal scrub near", [[-60, -50], [75, -50], [75, 7], [56, 7], [56, -44], [-41, -44], [-41, 7], [-60, 7]], SCRUB, 0.35, 131, edge_fade_m=6)
+area("Coastal scrub inland", rect(-200, -200, 200, -50), SCRUB, 0.1, 132, avoid_buildings=True, edge_fade_m=40)
 for k, (cx, cz, n, r) in enumerate([(-55, -60, 5, 10), (-90, -95, 7, 14), (-30, -120, 4, 9), (40, -70, 3, 7), (85, -85, 6, 12),
                                      (130, -130, 7, 15), (-140, -150, 5, 12), (10, -165, 4, 10), (64, -22, 3, 6), (-50, -20, 3, 6)]):
     pal_k = (("pinus-sylvestris", 3), ("olea-europaea", 1)) if k % 3 else (("olea-europaea", 2), ("pinus-sylvestris", 1))

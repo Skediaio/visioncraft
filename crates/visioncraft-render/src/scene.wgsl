@@ -686,6 +686,9 @@ fn surface(in: Varying, front: bool) -> Surface {
     }
     s.emissive = material.emissive.rgb;
     s = macro_variation(s, in.world, bitcast<f32>(material.flags.z));
+    if in.face == GROUND_FACE {
+        s = surroundings(s, in.world, length(dwx) + length(dwy));
+    }
     // Mowing stripes: the blades of each pass lean the way the mower went, so a band is lighter
     // seen along its lean and darker seen against it, alternating band by band.
     let stripes = material.flags.w;
@@ -1095,6 +1098,129 @@ fn fs_main(in: Varying, @builtin(front_facing) front: bool) -> @location(0) vec4
     return vec4<f32>(shade(in, front, true).color, 1.0);
 }
 
+// ---- surroundings -----------------------------------------------------------
+
+// The land round the design on the endless ground (lib.rs `Surroundings`): g.coast_info.w the
+// kind (0 none, 1 fields, 2 woodland, 3 dunes), g.surround the plot's rectangle (min x, min z,
+// max x, max z). Nothing changes inside the plot; past it the land fades in over 80 m (colour)
+// and rises over a few hundred metres (relief), and never on a coast's sea side. Procedural,
+// from world position only, so it costs a few noise lookups per pixel and vertex.
+
+// Metres from the plot's rectangle (0 inside).
+fn plot_distance(p: vec2<f32>) -> f32 {
+    let q = max(max(g.surround.xy - p, p - g.surround.zw), vec2<f32>(0.0));
+    return length(q);
+}
+
+fn surround_kind(p: vec2<f32>) -> u32 {
+    let kind = u32(g.coast_info.w + 0.5);
+    if kind == 0u || (g.coast_info.x > 1.5 && coast_distance(p) > 0.0) {
+        return 0u;
+    }
+    return kind;
+}
+
+fn noise2(p: vec2<f32>, salt: f32) -> f32 {
+    return value_noise(vec3<f32>(p.x, salt, p.y));
+}
+
+// Woods (0..1): blobs of a few hundred metres, sparse among fields, the rule in woodland.
+fn wood_mask(p: vec2<f32>, kind: u32) -> f32 {
+    let n = noise2(p / 700.0, 3.1) * 0.8 + noise2(p / 140.0, 5.7) * 0.2;
+    let cut = select(0.66, 0.4, kind == 2u);
+    return smoothstep(cut, cut + 0.03, n);
+}
+
+// Height of the surroundings over the ground plane (m).
+fn surround_height(p: vec2<f32>) -> f32 {
+    let kind = surround_kind(p);
+    let d = plot_distance(p) - 40.0;
+    if kind == 0u || d <= 0.0 {
+        return 0.0;
+    }
+    if kind == 3u {
+        // Dune ridges across the prevailing wind, 3-12 m, and a low swell.
+        let q = vec2<f32>(p.x * 0.8 + p.y * 0.6, -p.x * 0.6 + p.y * 0.8);
+        let ridge = 1.0 - abs(2.0 * noise2(q / vec2<f32>(260.0, 90.0), 1.3) - 1.0);
+        return smoothstep(0.0, 300.0, d) * (3.0 + 9.0 * noise2(p / 600.0, 2.2)) * ridge * ridge;
+    }
+    // Gently rolling within the first kilometre, hills on the horizon from a few km out, and
+    // the woods' canopy standing 14 m over the fields.
+    let roll = smoothstep(0.0, 900.0, d) * 14.0 * noise2(p / 1100.0, 0.7);
+    let hill = noise2(p / 5000.0, 9.4);
+    let hills = smoothstep(2000.0, 9000.0, d) * 160.0 * hill * hill;
+    return roll + hills + smoothstep(0.0, 120.0, d) * 14.0 * wood_mask(p, kind);
+}
+
+// Fraction of a pixel (`fw` m wide) covered by a line of half width `hw` at `dist` m from its
+// centre line, falling back to the line's mean share of a `cell` when the pixel grows wider
+// than the line (no shimmer far away).
+fn line_cover(dist: f32, hw: f32, fw: f32, cell: f32) -> f32 {
+    let sharp = clamp((hw - dist) / max(fw, 1e-3) + 0.5, 0.0, 1.0);
+    return mix(sharp, 2.0 * hw / cell, smoothstep(hw, 6.0 * hw, fw));
+}
+
+fn surroundings(surf: Surface, world: vec3<f32>, fw: f32) -> Surface {
+    var s = surf;
+    let p = world.xz;
+    let kind = surround_kind(p);
+    let fade = smoothstep(40.0, 120.0, plot_distance(p));
+    if kind == 0u || fade <= 0.0 {
+        return s;
+    }
+    let base = s.base.rgb;
+    var c = base;
+    var rough = s.roughness;
+    let wood = wood_mask(p, kind);
+    let canopy = vec3<f32>(0.03, 0.05, 0.02) * (0.75 + 0.5 * noise2(p / 9.0, 4.4));
+    if kind == 3u {
+        // Sand with marram grass, scrub and pines in patches.
+        let grass = smoothstep(0.42, 0.62, noise2(p / 55.0, 6.6) * 0.7 + noise2(p / 12.0, 7.7) * 0.3);
+        let scrub = smoothstep(0.68, 0.74, noise2(p / 380.0, 8.8));
+        c = mix(base * (0.9 + 0.2 * noise2(p / 30.0, 1.9)), vec3<f32>(0.11, 0.12, 0.06), grass * 0.8);
+        c = mix(c, vec3<f32>(0.035, 0.055, 0.025), scrub);
+    } else {
+        // Fields: a grid of parcels of 160-280 m turned a little region by region; each its own
+        // crop, worked in lines; hedgerows along most borders.
+        let a = (noise2(p / 3500.0, 2.8) - 0.5) * 1.4;
+        let q = vec2<f32>(cos(a) * p.x - sin(a) * p.y, sin(a) * p.x + cos(a) * p.y);
+        let size = vec2<f32>(260.0, 170.0);
+        let id = vec2<i32>(floor(q / size));
+        let f = fract(q / size) * size;
+        let crop = hash2(id + vec2<i32>(9, 17));
+        var field: vec3<f32>;
+        if crop < 0.38 {
+            field = vec3<f32>(0.065, 0.115, 0.035); // grass
+        } else if crop < 0.58 {
+            field = vec3<f32>(0.28, 0.24, 0.12); // ripe cereal
+        } else if crop < 0.72 {
+            field = vec3<f32>(0.12, 0.085, 0.055); // ploughed
+        } else if crop < 0.85 {
+            field = vec3<f32>(0.05, 0.09, 0.028); // maize, beet
+        } else {
+            field = vec3<f32>(0.11, 0.115, 0.05); // fallow, meadow
+        }
+        field *= 0.85 + 0.3 * noise2(p / 45.0, 3.3);
+        let drill = 1.0 + 0.1 * sin(f.x * 2.5) * (1.0 - smoothstep(0.4, 1.2, fw));
+        c = field * drill;
+        // Hedgerows: on the parcel's left and bottom borders when that border's hash says so.
+        let hedge_x = select(0.0, 1.0, hash2(id * 3 + vec2<i32>(1, 0)) < 0.65);
+        let hedge_z = select(0.0, 1.0, hash2(id * 3 + vec2<i32>(0, 1)) < 0.55);
+        let along = noise2(p / 7.0, 6.1); // gaps and crowns along it
+        let hw = 2.0 + 2.5 * along;
+        let cover = max(
+            hedge_x * line_cover(min(f.x, size.x - f.x), hw, fw, size.x),
+            hedge_z * line_cover(min(f.y, size.y - f.y), hw, fw, size.y),
+        );
+        c = mix(c, canopy, cover);
+        rough = mix(rough, 1.0, cover);
+    }
+    c = mix(c, canopy, wood);
+    s.base = vec4<f32>(mix(base, c, fade), s.base.a);
+    s.roughness = mix(s.roughness, mix(rough, 1.0, wood), fade);
+    return s;
+}
+
 // ---- infinite ground -------------------------------------------------------
 
 // A backdrop, not geometry: a polar grid of rings around the camera's
@@ -1104,9 +1230,10 @@ fn fs_main(in: Varying, @builtin(front_facing) front: bool) -> @location(0) vec4
 // z-fight with or hide the user's own lawn, pond basin or basement. It is
 // shaded like any surface (its material is made from `Ground`), so it gets
 // sun, shadows of the near cascades, sky light, lamps and the haze.
-const GROUND_RINGS: u32 = 48u;
-const GROUND_SEGMENTS: u32 = 64u;
-const GROUND_GROWTH: f32 = 1.2716; // 0.5 m * 1.2716^47 = 40 km
+const GROUND_RINGS: u32 = 96u;
+const GROUND_SEGMENTS: u32 = 256u;
+const GROUND_GROWTH: f32 = 1.12617; // 0.5 m * 1.12617^95 = 40 km
+const GROUND_FACE: u32 = 0xfffffffeu;
 const GROUND_DEPTH: f32 = 0.999999;
 const EYE_SLOPE_NEAR: f32 = 1.7 / 40.0; // where the horizon fade begins
 
@@ -1123,13 +1250,17 @@ fn vs_ground(@builtin(vertex_index) vi: u32) -> Varying {
     let radius = select(0.0, 0.5 * pow(GROUND_GROWTH, f32(r) - 1.0), r > 0u);
     let angle = f32(seg + ds[k]) * 2.0 * PI / f32(GROUND_SEGMENTS);
     let xz = g.camera.xz + radius * vec2<f32>(cos(angle), sin(angle));
-    let world = vec3<f32>(xz.x, ground_height_at(xz), xz.y);
+    let world = vec3<f32>(xz.x, ground_height_at(xz) + surround_height(xz), xz.y);
+    // The relief's normal from its slope over about a vertex spacing.
+    let e = max(1.0, 0.06 * radius);
+    let sx = surround_height(xz + vec2<f32>(e, 0.0)) - surround_height(xz - vec2<f32>(e, 0.0));
+    let sz = surround_height(xz + vec2<f32>(0.0, e)) - surround_height(xz - vec2<f32>(0.0, e));
     var out: Varying;
     out.clip = g.view_proj * vec4<f32>(world, 1.0);
     out.clip.z = out.clip.w * GROUND_DEPTH;
     out.world = world;
-    out.normal = vec3<f32>(0.0, 1.0, 0.0);
-    out.face = 0xfffffffeu;
+    out.normal = normalize(vec3<f32>(-sx, 2.0 * e, -sz));
+    out.face = GROUND_FACE;
     out.uv = world.xz;
     return out;
 }
@@ -1141,19 +1272,46 @@ fn vs_ground(@builtin(vertex_index) vi: u32) -> Varying {
 // 40 m to 2 km used to, from an overview 100-250 m up the ground stays
 // ground for kilometres. A plan or elevation view has no horizon: the ground
 // stays as it is.
+//
+// With haze the ground needs no fade: it ends where the Earth's curvature hides it, at the
+// geometric horizon sqrt(2 R h) for the eye h metres over it (4.6 km at eye level, 57 km from
+// 260 m up), and the haze over that finite distance leaves the far fields a shade darker than
+// the sky over them: a real horizon line. Ground the flat plane puts beyond the horizon is
+// shaded as at the horizon.
+const EARTH_RADIUS_M: f32 = 6.36e6;
+
 @fragment
-fn fs_ground(in: Varying) -> @location(0) vec4<f32> {
-    let c = shade(in, true, false).color;
-    if is_ortho() {
-        return vec4<f32>(c, 1.0);
-    }
-    let to = in.world - g.camera.xyz;
-    let dist = length(to);
+fn fs_ground(in_raw: Varying) -> @location(0) vec4<f32> {
+    var in = in_raw;
     // The horizon colour in this pixel's own view direction (from the
     // pixel, not the interpolated position: see below).
     let ndc = vec2<f32>(in.clip.x * g.viewport.z * 2.0 - 1.0, 1.0 - in.clip.y * g.viewport.w * 2.0);
     let p = g.inv_view_proj * vec4<f32>(ndc, 0.5, 1.0);
     let ray = p.xyz / p.w - g.camera.xyz;
+    let hazed = g.fog.x > 0.0 && !is_ortho();
+    if hazed {
+        // The eye's horizon plus a hill's own: its top shows over the curve from further.
+        let base = g.options.w;
+        let horizon_m = sqrt(2.0 * EARTH_RADIUS_M * max(g.camera.y - base, 1.0))
+            + sqrt(2.0 * EARTH_RADIUS_M * max(in.world.y - base, 0.0));
+        let d = length(in.world - g.camera.xyz);
+        if !(d < horizon_m) || ray.y >= 0.0 {
+            in.world = g.camera.xyz + normalize(ray) * horizon_m;
+        }
+    }
+    let c = shade(in, true, false).color;
+    if is_ortho() {
+        return vec4<f32>(c, 1.0);
+    }
+    if hazed {
+        // As below: no ceiling of land over the eye.
+        if ray.y > 0.0 && in_raw.world.y > g.camera.y {
+            discard;
+        }
+        return vec4<f32>(c, 1.0);
+    }
+    let to = in.world - g.camera.xyz;
+    let dist = length(to);
     // Land of a coast higher than the eye (the camera low on the beach, the terrain holding it
     // up) would show its underside overhead as a ceiling: open sky there instead.
     // shortcut: far land above eye height is lost with it (a band well under a pixel tall from

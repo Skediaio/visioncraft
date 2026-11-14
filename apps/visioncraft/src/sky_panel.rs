@@ -132,7 +132,7 @@ impl SkyState {
     }
 
     /// Exposure for the sun at `elevation`; an image without a sun is lit like an overcast day.
-    pub fn auto_ev(&self, elevation: f32, lamps: bool) -> f32 {
+    pub fn auto_ev(&self, elevation: f32, moon_lux: f32, lamps: bool) -> f32 {
         let overcast = matches!(self.applied, Some((SkyChoice::Hdri { .. }, _)))
             && self.hdr.as_ref().is_some_and(|h| h.sun.is_none());
         crate::studio::auto_ev(
@@ -141,6 +141,7 @@ impl SkyState {
             } else {
                 elevation
             },
+            moon_lux,
             lamps,
         )
     }
@@ -232,11 +233,8 @@ pub fn apply(s: &mut Studio) {
     }
     // The ground colour while the picker is dragged.
     if let (Some(c), Some(g)) = (s.sky.ground_draft, s.project().view.ground) {
-        s.renderer.set_ground(Some(visioncraft_render::Ground {
-            height: g.height,
-            color: c,
-            ..Default::default()
-        }));
+        let ground = s.render_ground(g.height, c);
+        s.renderer.set_ground(Some(ground));
     }
 }
 

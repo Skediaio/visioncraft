@@ -259,33 +259,22 @@ pub fn look_grade(look: visioncraft_core::Look, sun_elevation_deg: f32) -> (f32,
     }
 }
 
-/// Automatic exposure (EV100, lower is brighter) from the sun: noon 15, sun at 10 degrees 13.5,
-/// sunset 10.8, then down with
-/// the twilight sky's light (about 2.5 EV per 3 degrees in the renderer's sky) so the garden
-/// stays readable as a photographer's "blue hour" picture would; with `lamps` it stays a little
-/// darker (higher EV) after sunset so that the garden lights glow. Linear between rows.
-pub fn auto_ev(elevation_deg: f32, lamps: bool) -> f32 {
-    const DAY: [(f32, f32); 6] = [
-        (-18.0, -3.0),
-        (-12.0, -0.5),
-        (-8.0, 3.0),
-        (-4.0, 6.4),
-        (0.0, 10.8),
-        (10.0, 13.5),
-    ];
-    const LAMPS: [(f32, f32); 6] = [
-        (-18.0, -2.0),
-        (-12.0, 0.3),
-        (-8.0, 3.7),
-        (-4.0, 6.9),
-        (0.0, 10.8),
-        (10.0, 13.5),
-    ];
-    let table: &[(f32, f32)] = if lamps && elevation_deg < 0.0 {
-        &LAMPS
-    } else {
-        &DAY
-    };
+/// The night sky's light on open ground (lux) that the renderer always adds: its night floor
+/// (`visioncraft_render::sky::NIGHT`, about 0.018 cd/m2, times pi), plus starlight.
+const NIGHT_SKY_LUX: f64 = 0.0575 + visioncraft_core::sun::STARLIGHT_LUX;
+
+/// Automatic exposure (EV100, lower is brighter). By day as a photographer sets it: noon 15,
+/// 13.5 with the sun at 10 degrees. Lower, it follows the light on open ground, as an incident
+/// light meter reads it (ISO 2720, C = 250: EV = log2(E / 2.5)): the sun and clear sky
+/// (`daylight_lux`, USNO Circular 171), `moon_lux`, and the night sky. A picture of dusk or
+/// night is kept darker than the meter's mid grey, more so the less light there is, as the
+/// eye's adaptation key falls with the light (Krawczyk, Myszkowski & Seidel, "Lightness
+/// Perception in Tone Reproduction for High Dynamic Range Images", Eurographics 2005; here a
+/// fit by eye): 1 stop at sunset, 2 at the end of civil twilight, 2.3 under a full moon, about
+/// 3 on a moonless night. So dusk keeps the blue hour's soft light on everything and a moonlit
+/// night reads blue-grey. With `lamps` the night stays a little darker (up to 0.8 EV) so garden
+/// lights glow. Never brighter than EV -2.5.
+pub fn auto_ev(elevation_deg: f32, moon_lux: f32, lamps: bool) -> f32 {
     let e = elevation_deg;
     if e >= 45.0 {
         return 15.0;
@@ -293,15 +282,33 @@ pub fn auto_ev(elevation_deg: f32, lamps: bool) -> f32 {
     if e >= 10.0 {
         return 13.5 + 1.5 * (e - 10.0) / 35.0;
     }
-    if e <= table[0].0 {
-        return table[0].1;
-    }
-    for w in table.windows(2) {
-        if e <= w[1].0 {
-            return w[0].1 + (w[1].1 - w[0].1) * (e - w[0].0) / (w[1].0 - w[0].0);
-        }
-    }
-    table[table.len() - 1].1
+    let lux = visioncraft_core::sun::daylight_lux(f64::from(e))
+        + f64::from(moon_lux.max(0.0))
+        + NIGHT_SKY_LUX;
+    let metered = (lux / 2.5).log2() as f32;
+    // Stops darker than the meter, by log10(lux): sun at 10 degrees (11 klx, joining the day
+    // curve), sunset, sun at -4, at -6, full moon, moonless.
+    const DARKER: [(f32, f32); 6] = [
+        (-1.5, 3.0),
+        (-0.5, 2.3),
+        (0.48, 2.0),
+        (1.39, 1.5),
+        (2.88, 1.0),
+        (4.045, 1.39),
+    ];
+    let l = (lux.log10() as f32).clamp(DARKER[0].0, DARKER[5].0);
+    let darker = DARKER
+        .windows(2)
+        .find(|w| l <= w[1].0)
+        .map_or(DARKER[5].1, |w| {
+            w[0].1 + (w[1].1 - w[0].1) * (l - w[0].0) / (w[1].0 - w[0].0)
+        });
+    let lamp = if lamps {
+        0.8 * ((-e) / 8.0).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    (metered + darker + lamp).max(-2.5)
 }
 
 impl Studio {
@@ -1073,6 +1080,74 @@ impl Studio {
         )
     }
 
+    /// The moon, when it lights the scene more than the sun's twilight does: its light as a sun
+    /// (the renderer's one directional light, so it casts shadows) and the sky scale that turns
+    /// the daylight sky into the moonlit one (`Renderer::set_sky_scale`). `None` by day, with
+    /// the moon down, or under an image sky.
+    /// shortcut: the light switches from the twilight sky to the moon in one frame where the two
+    /// are equal (sun about 8 degrees down under a full moon): the sky loses half its light and
+    /// changes its pattern; blend the two skies if a time-lapse shows the step.
+    pub fn moonlight(&self) -> Option<(Sun, f32)> {
+        if self.sky.sun_override().is_some() {
+            return None;
+        }
+        let (site, time) = (self.site(), self.time());
+        let sun = sun_position(&site, &time);
+        let moon = visioncraft_core::sun::moon_position(&site, &time);
+        if sun.elevation_deg >= 0.0
+            || moon.elevation_deg <= 0.0
+            || moon.illuminance_lux <= visioncraft_core::sun::daylight_lux(sun.elevation_deg)
+        {
+            return None;
+        }
+        let mut light = Sun::from_angles(moon.azimuth_deg as f32, moon.elevation_deg as f32);
+        light.illuminance *= moon.sun_ratio as f32;
+        Some((light, moon.sun_ratio as f32))
+    }
+
+    /// The endless ground for the renderer: the project's plane with its surroundings, which keep
+    /// clear of the plot: everything drawn and the terrain.
+    /// shortcut: plantings count only through the terrain and the shapes they stand in; a wide
+    /// scatter on open ground beyond both can meet the fields.
+    pub fn render_ground(&self, height: f32, color: [f32; 3]) -> visioncraft_render::Ground {
+        use visioncraft_core::Surroundings as S;
+        use visioncraft_render::Surroundings as R;
+        let mut lo = glam::Vec2::splat(f32::INFINITY);
+        let mut hi = glam::Vec2::splat(f32::NEG_INFINITY);
+        if let Some((a, b)) = self.scene.bounds() {
+            lo = lo.min(glam::Vec2::new(a.x, a.z));
+            hi = hi.max(glam::Vec2::new(b.x, b.z));
+        }
+        if let Some(t) = &self.project().terrain {
+            let [a, b] = t.extent();
+            lo = lo.min(a.into());
+            hi = hi.max(b.into());
+        }
+        if lo.x > hi.x {
+            (lo, hi) = (glam::Vec2::ZERO, glam::Vec2::ZERO);
+        }
+        visioncraft_render::Ground {
+            height,
+            color,
+            surroundings: match self.project().view.surroundings {
+                S::None => R::None,
+                S::Fields => R::Fields,
+                S::Woodland => R::Woodland,
+                S::Dunes => R::Dunes,
+            },
+            plot: [lo.x, lo.y, hi.x, hi.y],
+            ..Default::default()
+        }
+    }
+
+    /// The moon's light on open ground (lux), 0 under an image sky.
+    fn moon_lux(&self) -> f32 {
+        if self.sky.sun_override().is_some() {
+            return 0.0;
+        }
+        visioncraft_core::sun::moon_position(&self.site(), &self.time()).illuminance_lux as f32
+    }
+
     pub fn aspect(&self) -> f32 {
         self.size[0] as f32 / self.size[1].max(1) as f32
     }
@@ -1145,7 +1220,7 @@ impl Studio {
         // reads dimmer than a daylit room, and only as far as the view is enclosed.
         // shortcut: the exposure follows the meter at once, no adaptation over time; ease it
         // in if walking through a doorway reads as a jump.
-        let auto = self.sky.auto_ev(elevation, lamps);
+        let auto = self.sky.auto_ev(elevation, self.moon_lux(), lamps);
         let room = match self.meter_view(METER_LUX * auto.exp2()) {
             Some((lux, enclosed)) => {
                 let metered = (lux.max(1e-3) / METER_LUX).log2();
@@ -1170,10 +1245,10 @@ impl Studio {
         );
         self.renderer
             .set_atmosphere(&visioncraft_render::Atmosphere {
-                haze: v.haze * (1.0 - 0.7 * night),
+                haze: haze_extinction(v.haze, v.view_distance) * (1.0 - 0.7 * night),
+                haze_height_m: AEROSOL_HEIGHT_M,
                 sun_glow: 0.5 * (1.0 - night),
-                clear_m: reach.clear_m,
-                ..Default::default()
+                clear_m: 0.0,
             });
         self.renderer.set_view_distance(v.view_distance);
         self.renderer.set_impostor_reach(reach.small_impostors);
@@ -1187,12 +1262,8 @@ impl Studio {
             self.renderer
                 .set_bloom(if lamps { 0.025 + 0.035 * night } else { 0.025 });
         }
-        self.renderer
-            .set_ground(v.ground.map(|g| visioncraft_render::Ground {
-                height: g.height,
-                color: g.color,
-                ..Default::default()
-            }));
+        let ground = v.ground.map(|g| self.render_ground(g.height, g.color));
+        self.renderer.set_ground(ground);
         self.renderer
             .set_sea(self.project().sea.as_ref().map(|s| render_sea(s, &v)));
         let d = v.wind_direction_deg.to_radians();
@@ -1359,7 +1430,9 @@ impl Studio {
         let (view, proj, eye) = self.camera.matrices(self.aspect());
         self.renderer.set_camera(view, proj, eye);
         let (sun, elevation) = self.sun();
-        self.renderer.set_sun(&sun);
+        let moon = self.moonlight();
+        self.renderer.set_sun(&moon.map_or(sun, |m| m.0));
+        self.renderer.set_sky_scale(moon.map_or(1.0, |m| m.1));
         self.apply_view(elevation);
         crate::sky_panel::apply(self);
         if elevation < 0.0
@@ -1790,32 +1863,62 @@ mod tests {
     fn exposure_falls_with_the_sun_and_lamps_keep_the_night_darker() {
         let mut last = f32::INFINITY;
         for e in (-15..=60).rev() {
-            let ev = auto_ev(e as f32, false);
+            let ev = auto_ev(e as f32, 0.0, false);
             assert!(ev <= last + 1e-6, "{e}");
             last = ev;
         }
         for e in [-10.0, -6.0, -2.0] {
-            assert!(auto_ev(e, true) > auto_ev(e, false));
+            assert!(auto_ev(e, 0.0, true) > auto_ev(e, 0.0, false));
         }
-        assert_eq!(auto_ev(20.0, true), auto_ev(20.0, false));
+        assert_eq!(auto_ev(20.0, 0.0, true), auto_ev(20.0, 0.0, false));
+        // The day is as before; sunset, blue hour and a moonlit night open up.
+        assert!((auto_ev(10.0, 0.0, false) - 13.5).abs() < 0.05);
+        assert!((8.8..9.8).contains(&auto_ev(0.0, 0.0, false)));
+        assert!((1.8..2.8).contains(&auto_ev(-6.0, 0.0, false)));
+        let moonlit = auto_ev(-20.0, 0.3, false);
+        assert!((-1.0..0.0).contains(&moonlit), "{moonlit}");
+        // A moonless night still shows darker than a moonlit one: six times less light, under
+        // 2.6 stops more exposure.
+        let moonless = auto_ev(-20.0, 0.0, false);
+        assert!(
+            moonless < moonlit && moonless > moonlit - (0.358f32 / 0.058).log2(),
+            "{moonless}"
+        );
     }
 }
 
-/// How far shadows reach and how far the air stays clear, for the camera and the project's view
-/// distance.
+/// The aerosol's scale height (m): the haze thins by a factor e every 1.2 km up (Hillaire 2020's
+/// Earth atmosphere, after Bruneton 2017), so an overview from a few hundred metres looks
+/// through nearly the same air as eye level.
+const AEROSOL_HEIGHT_M: f32 = 1200.0;
+
+/// The haze's extinction at the ground (per km) for the project's `haze`, a turbidity in the
+/// sense of Preetham et al. 1999 (`T = (tau_rayleigh + tau_aerosol) / tau_rayleigh`, vertical
+/// optical depths): 1 pure air, 2-3 a clear day, 6 hazy, 20 misty; 0 turns the haze off. The
+/// aerosol's vertical optical depth (T - 1) * 0.097 (Rayleigh's at 550 nm, Bucholtz 1995)
+/// spread over its scale height, plus Rayleigh's own 0.0116 / km at the ground. So the
+/// default 2.5 is 0.13 / km, a visibility (Koschmieder: 3.912 / extinction) of 30 km; 6 gives
+/// 9 km, 20 about 2.5 km. A longer `view_distance` clears the air in proportion.
+pub fn haze_extinction(turbidity: f32, view_distance: f32) -> f32 {
+    if turbidity <= 0.0 {
+        return 0.0;
+    }
+    let aerosol = (turbidity - 1.0).max(0.0) * 0.097 / (AEROSOL_HEIGHT_M / 1000.0);
+    (aerosol + 0.0116) / view_distance.max(0.05)
+}
+
+/// How far shadows reach and how far small impostors draw, for the camera and the project's
+/// view distance.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Reach {
     pub shadow_m: f32,
-    pub clear_m: f32,
     /// How far the impostors of shrubs and ground plants draw, as a share of their full reach.
     pub small_impostors: f32,
 }
 
 /// From an orbit the shadows reach the far side of what the camera looks at (twice its distance
 /// to the pivot, at least the 80 m of eye level), in 20 m steps so zooming does not re-render
-/// them every frame. The air is clear for 5 times the camera's height over the ground: an
-/// overview from 50-100 m up sees the ground crisp for several hundred metres and the haze only
-/// towards the horizon, eye level keeps its haze. Small plants' impostors draw
+/// them every frame. Small plants' impostors draw
 /// their full reach from 40 m up and a tenth of it at eye level, where the ground, trunks and
 /// hedges hide them (a 0.6 m perennial still reaches about 45 m at MEDIUM, four times its old cull).
 pub fn view_reach(camera: &crate::camera::Camera, ground_y: f32, view_distance: f32) -> Reach {
@@ -1827,7 +1930,6 @@ pub fn view_reach(camera: &crate::camera::Camera, ground_y: f32, view_distance: 
     let height = (camera.eye().y - ground_y).max(0.0);
     Reach {
         shadow_m: (shadow / 20.0).round() * 20.0,
-        clear_m: (5.0 * height).min(800.0) * view_distance,
         small_impostors: (height / 40.0).clamp(0.1, 1.0),
     }
 }
@@ -1838,19 +1940,25 @@ mod reach_tests {
     use crate::camera::{Camera, View};
 
     #[test]
-    fn an_overview_reaches_further_and_stays_clear_eye_level_keeps_its_haze() {
+    fn an_overview_reaches_further_than_eye_level() {
         let mut c = Camera::default();
         c.view = View::Orbit;
         c.dist = 120.0;
         let far = view_reach(&c, 0.0, 1.0);
         assert!(far.shadow_m >= 240.0, "{far:?}");
-        assert!(far.clear_m > 100.0, "{far:?}");
         assert_eq!(view_reach(&c, 0.0, 2.0).shadow_m, 2.0 * far.shadow_m);
         c.view = View::Walk;
         c.walk.eye.y = 1.7;
         let eye = view_reach(&c, 0.0, 1.0);
         assert_eq!(eye.shadow_m, 80.0);
-        assert!(eye.clear_m < 10.0, "{eye:?}");
+        // Haze: a clear day sees about 30 km, the default view distance; double it, twice as far.
+        let visibility = 3.912 / super::haze_extinction(2.5, 1.0);
+        assert!((25.0..35.0).contains(&visibility), "{visibility}");
+        assert_eq!(
+            super::haze_extinction(2.5, 2.0),
+            0.5 * super::haze_extinction(2.5, 1.0)
+        );
+        assert_eq!(super::haze_extinction(0.0, 1.0), 0.0);
         assert!(eye.small_impostors < far.small_impostors);
     }
 

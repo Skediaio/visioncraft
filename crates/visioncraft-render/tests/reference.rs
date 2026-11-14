@@ -1055,6 +1055,118 @@ fn u_twilight_white_wall_is_not_green() {
     }
 }
 
+/// Clear-day haze as the window sets it (turbidity 2.5: 0.13 / km at the ground thinning over
+/// 1.2 km, about 30 km visibility) with farmland round the plot.
+fn clear_day(r: &mut Renderer) {
+    r.set_atmosphere(&Atmosphere {
+        haze: 0.13,
+        haze_height_m: 1200.0,
+        sun_glow: 0.5,
+        clear_m: 0.0,
+    });
+    r.set_ground(Some(visioncraft_render::Ground {
+        color: [0.065, 0.12, 0.035],
+        surroundings: visioncraft_render::Surroundings::Fields,
+        plot: [-25.0, -25.0, 25.0, 25.0],
+        ..Default::default()
+    }));
+}
+
+/// The garden at dusk, the sun 4 degrees down, exposed as the window's auto exposure does
+/// (EV 4.8: the USNO light on open ground, 24 lux, less 1.5 stops for the blue hour): the
+/// lawn, house and hedges read in the twilight sky's soft light, not as a black mass.
+#[test]
+fn aa_dusk_garden() {
+    let mut r = renderer(W, H);
+    demo::garden(&mut r);
+    clear_day(&mut r);
+    let aspect = W as f32 / H as f32;
+    let cam = demo::camera(Vec3::new(14.0, 3.0, 16.0), Vec3::new(0.0, 0.5, 0.0), aspect);
+    setup(&mut r, cam, Sun::from_angles(300.0, -4.0), 4.8);
+    settle(&mut r);
+    let px = capture(&mut r, W, H);
+    let lawn = mean(&px, 0, H - 30, W, H);
+    assert!(lawn[1] > 30.0, "the lawn at dusk is black: {lawn:?}");
+    check("aa_dusk_garden", &px);
+}
+
+/// The garden from 500 m out and 150 m up on a clear day: the ground keeps its colour and
+/// contrast for kilometres, fields and woods round the plot, and the horizon is a line where
+/// the far, hazed land meets the brighter sky, not a fog wall.
+#[test]
+fn ab_aerial_500m() {
+    let mut r = renderer(W, H);
+    demo::garden(&mut r);
+    clear_day(&mut r);
+    let aspect = W as f32 / H as f32;
+    let eye = Vec3::new(-140.0, 146.0, 460.0);
+    let cam = demo::camera(eye, Vec3::ZERO, aspect);
+    setup(&mut r, cam, demo::afternoon_sun(), 14.7);
+    settle(&mut r);
+    let px = capture(&mut r, W, H);
+    let ahead = Vec3::new(140.0, 0.0, -460.0).normalize();
+    let horizon = r.project(eye + ahead * 1e6).expect("horizon in view").y as u32;
+    let sky = mean(&px, 0, horizon - 8, W, horizon - 4);
+    let land = mean(&px, 0, horizon + 4, W, horizon + 8);
+    let lum = |c: [f32; 3]| 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+    assert!(
+        lum(sky) > lum(land) + 8.0,
+        "no horizon: sky {sky:?}, land {land:?}"
+    );
+    check("ab_aerial_500m", &px);
+}
+
+/// The physical sky's light on open level ground (sun and sky) from daylight through sunset
+/// and twilight, against the clear-sky fit of the U.S. Naval Observatory (Janiczek & DeYoung,
+/// Circular 171, 1987; `visioncraft_core::sun::daylight_lux`, repeated here: the renderer does
+/// not depend on the core). The auto exposure meters with that fit, so the drawn sky must
+/// follow it. Measured (2026-11): 1.0-1.3 times USNO by day and to sunset, then brighter
+/// through twilight, 1.8 at -2 degrees, 2.2-2.8 at -4..-6, 3.3 at -8 (the night floor,
+/// `sky::NIGHT`, takes over below -10). So the twilight sky is not too dark; it errs bright.
+/// Within a factor of 3.5 down to -10 degrees. Prints the table.
+#[test]
+fn n_twilight_sky_light_follows_usno() {
+    fn usno(altitude_deg: f32) -> f32 {
+        let x = 753.66156f32;
+        let h = altitude_deg.to_radians();
+        let u = h.sin();
+        let s = (x * h.cos() / (x + 1.0)).asin();
+        let m = x * (s.cos() - u) + s.cos();
+        133_775.0
+            * ((-0.21 * m).exp() * u
+                + 0.0289 * (-0.042 * m).exp() * (1.0 + (altitude_deg + 90.0) * u / 57.29578))
+                .max(0.0)
+    }
+    let mut r = renderer(64, 36);
+    let cam = demo::camera(Vec3::new(0.0, 2.0, 10.0), Vec3::ZERO, 16.0 / 9.0);
+    let mut worst = 1.0f32;
+    for elevation in [
+        30.0, 10.0, 5.0, 2.0, 0.0, -2.0, -4.0, -6.0, -8.0, -10.0, -12.0,
+    ] {
+        let sun = Sun::from_angles(180.0, elevation);
+        setup(&mut r, cam, sun, 10.0);
+        settle(&mut r);
+        let sky = r.sky_illuminance();
+        let lux =
+            sky.dot(Vec3::new(0.2126, 0.7152, 0.0722)) + sun.illuminance * sun.direction.y.max(0.0);
+        let reference = usno(elevation);
+        eprintln!(
+            "sun {elevation:>5.1} deg: sky + sun {lux:>10.4} lux (sky rgb {:.4} {:.4} {:.4}), USNO {reference:>10.4}, ratio {:.2}",
+            sky.x,
+            sky.y,
+            sky.z,
+            lux / reference
+        );
+        if elevation >= -10.0 {
+            worst = worst.max((lux / reference).max(reference / lux));
+        }
+    }
+    assert!(
+        worst < 3.5,
+        "the sky's light is off USNO by a factor {worst}"
+    );
+}
+
 /// Smooth gradients stay smooth on every output format the app uses
 /// (`Rgba8Unorm` natively, `Bgra8Unorm` as a browser canvas prefers it,
 /// `Rgba8UnormSrgb`), with and without the upscale (MEDIUM renders at 0.75
