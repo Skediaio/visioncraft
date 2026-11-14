@@ -23,6 +23,7 @@ pub mod shape;
 pub mod spec;
 pub mod sun;
 pub mod terrain;
+pub mod tiers;
 pub mod viewpoint;
 
 pub use catalog::{Asset, Catalog, CatalogError, attribution_markdown, validate_open_licences};
@@ -60,4 +61,5 @@ pub use terrain::{
     BrushStroke, DirtyRect, Terrain, TerrainChunk, Tool, apply_stroke, ground_height_over,
     terrain_chunk_mesh, terrain_chunk_mesh_on, terrain_chunks,
 };
+pub use tiers::Tiers;
 pub use viewpoint::{Viewpoint, interpolate};
