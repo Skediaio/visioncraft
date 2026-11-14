@@ -654,7 +654,7 @@ impl Studio {
                 self.renderer
                     .photo_sample(&mut photo, view, proj, eye, k, aperture, focus)?;
             }
-            Ok(photo.pixels())
+            self.renderer.photo_finish(&photo).wait()
         })();
         self.photo_end(live);
         result

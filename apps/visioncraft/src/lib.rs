@@ -90,14 +90,19 @@ struct ExportAll {
 /// How long a still waits for higher-resolution textures before it is captured anyway.
 const STILL_WAIT_S: f64 = 20.0;
 
-/// A photo being taken: a few of its frames each app frame.
-#[cfg(not(target_arch = "wasm32"))]
+/// A photo being taken: a few of its frames each app frame, then read back as an export.
 struct PhotoJob {
     photo: visioncraft_render::Photo,
     matrices: (glam::Mat4, glam::Mat4, glam::Vec3),
     lens: (f32, f32),
     samples: u32,
+    /// The export preset.
+    idx: usize,
 }
+
+/// Photo samples per app frame: they queue on the GPU without waiting, so a few keep it busy
+/// natively, one keeps a browser tab responsive.
+const PHOTO_SAMPLES_PER_FRAME: u32 = if cfg!(target_arch = "wasm32") { 1 } else { 4 };
 
 struct ExportJob {
     still: visioncraft_render::Still,
@@ -152,9 +157,7 @@ pub struct App {
     still_wait: Option<(Option<usize>, f64)>,
     export_all: Option<ExportAll>,
     /// The frames of the photo asked for (the next export is a photo).
-    #[cfg(not(target_arch = "wasm32"))]
     photo_next: Option<u32>,
-    #[cfg(not(target_arch = "wasm32"))]
     photo: Option<PhotoJob>,
     pending_replace: Option<Replace>,
     /// Models whose file changed, with the time to re-import them (debounce).
@@ -233,9 +236,7 @@ impl App {
             export: None,
             still_wait: None,
             export_all: None,
-            #[cfg(not(target_arch = "wasm32"))]
             photo_next: None,
-            #[cfg(not(target_arch = "wasm32"))]
             photo: None,
             pending_replace: None,
             changed: HashMap::new(),
@@ -445,7 +446,6 @@ impl App {
         let (name, w, h) = presets[idx];
         self.studio.prepare();
         let (view, proj, eye) = self.studio.camera.matrices(w as f32 / h as f32);
-        #[cfg(not(target_arch = "wasm32"))]
         if let Some(samples) = self.photo_next.take() {
             match self.studio.renderer.photo_begin(w, h, Quality::ULTRA) {
                 Ok(photo) => {
@@ -454,6 +454,7 @@ impl App {
                         matrices: (view, proj, eye),
                         lens: self.studio.lens(None),
                         samples,
+                        idx,
                     });
                 }
                 Err(e) => self.toasts.error(format!("Photo failed: {e}")),
@@ -629,16 +630,15 @@ impl App {
         true
     }
 
-    /// Takes frames of the photo for up to 0.1 s, shows how far it is with a cancel button,
-    /// and saves it when done; true while it runs.
-    #[cfg(not(target_arch = "wasm32"))]
+    /// Takes a few frames of the photo, shows how far it is with a cancel button, and hands
+    /// the average to the export (`poll_export` saves it) when done; true while it runs.
     fn poll_photo(&mut self, ctx: &egui::Context) -> bool {
         let Some(job) = &mut self.photo else {
             return false;
         };
-        let start = std::time::Instant::now();
         let (view, proj, eye) = job.matrices;
-        while job.photo.done < job.samples && start.elapsed().as_secs_f32() < 0.1 {
+        let until = (job.photo.done + PHOTO_SAMPLES_PER_FRAME).min(job.samples);
+        while job.photo.done < until {
             let k = job.photo.done;
             if let Err(e) = self.studio.renderer.photo_sample(
                 &mut job.photo,
@@ -657,18 +657,12 @@ impl App {
         let (done, samples) = (job.photo.done, job.samples);
         if done >= samples {
             let job = self.photo.take().expect("checked");
-            let (w, h) = job.photo.size();
-            match studio::png_rgb(&job.photo.pixels(), w, h) {
-                Ok(png) => files::save_as(
-                    &self.inbox,
-                    ctx,
-                    format!("visioncraft-photo-{w}x{h}.png"),
-                    png,
-                    "png",
-                ),
-                Err(e) => self.toasts.error(e),
-            }
-            return false;
+            let still = self.studio.renderer.photo_finish(&job.photo);
+            self.export = Some(ExportJob {
+                still,
+                idx: Some(job.idx),
+            });
+            return true;
         }
         let mut cancel = false;
         egui::Area::new(egui::Id::new("photo"))
@@ -1082,7 +1076,6 @@ impl App {
             Action::New if self.dirty() => self.pending_replace = Some(Replace::New),
             Action::New => self.new_project(),
             Action::Export(i) => self.wait_for_textures(Some(i)),
-            #[cfg(not(target_arch = "wasm32"))]
             Action::ExportPhoto(i, samples) => {
                 self.photo_next = Some(samples);
                 self.wait_for_textures(Some(i));
@@ -1750,10 +1743,7 @@ impl eframe::App for App {
         self.agents_pill(&ctx, now);
         busy |= self.poll_still_textures(now);
         busy |= self.poll_export(&ctx);
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            busy |= self.poll_photo(&ctx);
-        }
+        busy |= self.poll_photo(&ctx);
         busy |= self.poll_export_all(&ctx);
         let mut confirm = None;
         if self.pending_replace.is_some() {

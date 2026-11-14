@@ -418,7 +418,6 @@ pub enum Action {
     /// Every viewpoint at export preset `usize`.
     ExportAll(usize),
     /// A photo (`u32` frames averaged) at export preset `usize`.
-    #[cfg(not(target_arch = "wasm32"))]
     ExportPhoto(usize, u32),
 }
 
@@ -689,8 +688,6 @@ impl Hud {
                     .on_hover_text(t::EXPORT_ALL_TIP);
                 });
                 let all = self.export_all && views > 0;
-                // A photo waits for each frame's pixels: the desktop app only.
-                #[cfg(not(target_arch = "wasm32"))]
                 ui.add_enabled_ui(!all, |ui| {
                     let mut on = self.export_photo.is_some();
                     ui.checkbox(&mut on, t::EXPORT_PHOTO)
@@ -711,7 +708,6 @@ impl Hud {
                     if ui.button(format!("{name}  {w} × {h}")).clicked() {
                         actions.push(match (all, self.export_photo) {
                             (true, _) => Action::ExportAll(i),
-                            #[cfg(not(target_arch = "wasm32"))]
                             (false, Some(n)) => Action::ExportPhoto(i, n),
                             (false, _) => Action::Export(i),
                         });
