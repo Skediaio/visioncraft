@@ -67,7 +67,9 @@ pub enum Step {
     Textures(Option<&'static str>),
     Highlight(Option<(String, String)>),
     Faces(String),
-    WaitAssets,
+    /// With a size: draw every frame at that size, wait for the GPU and print the longest
+    /// frames (a load's hitches).
+    WaitAssets(Option<(u32, u32)>),
     Place {
         asset: String,
         x: f32,
@@ -232,7 +234,11 @@ pub fn parse_step(v: &Value) -> Result<Step, String> {
             y: y.parse().map_err(|_| "y")?,
         }),
         ["faces", owner] => Ok(Step::Faces(owner.to_string())),
-        ["wait", "assets"] => Ok(Step::WaitAssets),
+        ["wait", "assets"] => Ok(Step::WaitAssets(None)),
+        ["wait", "assets", "timed", w, h] => Ok(Step::WaitAssets(Some((
+            w.parse().map_err(|_| "width")?,
+            h.parse().map_err(|_| "height")?,
+        )))),
         ["object", path, name] => Ok(Step::Object {
             path: path.to_string(),
             name: name.to_string(),
@@ -371,15 +377,45 @@ mod native {
     }
 
     /// Prepares frames until plants are generated and library files have arrived and been uploaded.
-    fn settle(s: &mut Studio, device: &wgpu::Device, queue: &wgpu::Queue) {
+    fn settle(s: &mut Studio, device: &wgpu::Device, queue: &wgpu::Queue, timed: bool) {
         let mut calm = 0;
+        // Per frame: total and the CPU part before drawing (uploads, plant generation), ms.
+        let mut frames: Vec<(f64, f64, usize)> = Vec::new();
+        let report = |frames: &mut Vec<(f64, f64, usize)>| {
+            if !timed || frames.is_empty() {
+                return;
+            }
+            frames.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let at = |q: f64| frames[((frames.len() - 1) as f64 * q) as usize].0;
+            println!(
+                "load frames: {}, longest {:.1} ms, p99 {:.1} ms, median {:.1} ms",
+                frames.len(),
+                at(1.0),
+                at(0.99),
+                at(0.5)
+            );
+            let worst: Vec<String> = frames
+                .iter()
+                .rev()
+                .take(5)
+                .map(|(t, cpu, i)| format!("#{i} {t:.0} ms (prepare {cpu:.0})"))
+                .collect();
+            println!("longest frames: {}", worst.join(", "));
+        };
         for i in 0..60000 {
+            let t = std::time::Instant::now();
             s.prepare();
-            // Frames, so that the renderer's texture memory statistics are current.
-            if s.size[0] > 0 && i % 8 == 0 {
+            let cpu = t.elapsed().as_secs_f64() * 1000.0;
+            // Frames, so that the renderer's texture memory statistics are current; timed: every
+            // frame, waiting for the GPU, as a window would.
+            if s.size[0] > 0 && (timed || i % 8 == 0) {
                 let mut encoder = device.create_command_encoder(&Default::default());
                 s.renderer.render(&mut encoder);
                 queue.submit([encoder.finish()]);
+                if timed {
+                    let _ = device.poll(wgpu::PollType::wait_indefinitely());
+                    frames.push((t.elapsed().as_secs_f64() * 1000.0, cpu, i));
+                }
             }
             if s.plants_pending() > 0 || !s.scene.library.idle() {
                 calm = 0;
@@ -387,10 +423,12 @@ mod native {
             } else {
                 calm += 1;
                 if calm >= 30 {
+                    report(&mut frames);
                     return;
                 }
             }
         }
+        report(&mut frames);
         eprintln!("warning: assets still loading after the wait");
     }
 
@@ -598,7 +636,12 @@ mod native {
                         }
                     }
                 }
-                Step::WaitAssets => settle(&mut s, &device, &queue),
+                Step::WaitAssets(timed) => {
+                    if let Some((w, h)) = timed {
+                        s.resize(w, h);
+                    }
+                    settle(&mut s, &device, &queue, timed.is_some());
+                }
                 Step::Object { path, name } => {
                     let bytes = std::fs::read(&path).map_err(|e| at(format!("{path}: {e}")))?;
                     let id = s.import_object(&name, bytes).map_err(at)?;
@@ -749,7 +792,7 @@ mod native {
                     spacing,
                     fit,
                 } => {
-                    settle(&mut s, &device, &queue);
+                    settle(&mut s, &device, &queue, false);
                     let ids: Vec<(String, f32)> = s
                         .scene
                         .library
@@ -776,7 +819,7 @@ mod native {
                 Step::Screenshot { name, w, h } => {
                     s.resize(w, h);
                     // plants are generated one step per frame and library files stream in
-                    settle(&mut s, &device, &queue);
+                    settle(&mut s, &device, &queue, false);
                     s.prepare();
                     // The renderer converges over frames (sky environment, alternating shadow
                     // cascades): draw a few before the one that is read back.
