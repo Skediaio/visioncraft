@@ -249,7 +249,7 @@ const UI_METHODS: &[Method] = &[
     Method {
         name: "ui.screenshot",
         params: r#"{"width": integer = window, "height": integer = window}"#,
-        summary: "A PNG (base64) of the 3D view as the window's camera shows it, without the panels.",
+        summary: "A lossless truecolour PNG (base64) of the 3D view as the window's camera shows it, without the panels; by default at the canvas' physical resolution (what the Screenshot button saves).",
     },
 ];
 

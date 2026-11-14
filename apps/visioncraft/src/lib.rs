@@ -84,7 +84,8 @@ struct ExportAll {
 
 struct ExportJob {
     still: visioncraft_render::Still,
-    idx: usize,
+    /// The export preset; `None` for a screenshot of the 3D view at the canvas' own size.
+    idx: Option<usize>,
 }
 
 /// A project replacement waiting for the user to confirm that unsaved work may go.
@@ -350,9 +351,23 @@ impl App {
         match self.studio.renderer.render_still(w, h, view, proj, eye) {
             Ok(still) => {
                 self.toasts.info(format!("Rendering {name} {w} × {h}…"));
-                self.export = Some(ExportJob { still, idx });
+                self.export = Some(ExportJob {
+                    still,
+                    idx: Some(idx),
+                });
             }
             Err(e) => self.export_retry(idx, &e),
+        }
+    }
+
+    /// A lossless picture of the 3D view at the canvas' physical resolution, without the panels.
+    fn start_screenshot(&mut self) {
+        let [w, h] = self.studio.size;
+        self.studio.prepare();
+        let (view, proj, eye) = self.studio.camera.matrices(w as f32 / h.max(1) as f32);
+        match self.studio.renderer.render_still(w, h, view, proj, eye) {
+            Ok(still) => self.export = Some(ExportJob { still, idx: None }),
+            Err(e) => self.toasts.error(format!("Screenshot failed: {e}")),
         }
     }
 
@@ -432,26 +447,20 @@ impl App {
         let (idx, (w, h)) = (job.idx, job.still.size());
         self.export = None;
         match result {
-            Ok(rgba) => {
-                let mut png_bytes = Vec::new();
-                let mut enc = png::Encoder::new(&mut png_bytes, w, h);
-                enc.set_color(png::ColorType::Rgba);
-                enc.set_depth(png::BitDepth::Eight);
-                match enc
-                    .write_header()
-                    .and_then(|mut wr| wr.write_image_data(&rgba))
-                {
-                    Ok(()) => files::save_as(
-                        &self.inbox,
-                        ctx,
-                        format!("visioncraft-{w}x{h}.png"),
-                        png_bytes,
-                        "png",
-                    ),
-                    Err(e) => self.toasts.error(format!("PNG encoding failed: {e}")),
+            Ok(rgba) => match studio::png_rgb(&rgba, w, h) {
+                Ok(png) => {
+                    let name = match idx {
+                        Some(_) => format!("visioncraft-{w}x{h}.png"),
+                        None => format!("visioncraft-screenshot-{w}x{h}.png"),
+                    };
+                    files::save_as(&self.inbox, ctx, name, png, "png");
                 }
-            }
-            Err(e) => self.export_retry(idx, &e),
+                Err(e) => self.toasts.error(e),
+            },
+            Err(e) => match idx {
+                Some(idx) => self.export_retry(idx, &e),
+                None => self.toasts.error(format!("Screenshot failed: {e}")),
+            },
         }
         false
     }
@@ -815,6 +824,7 @@ impl App {
             Action::New if self.dirty() => self.pending_replace = Some(Replace::New),
             Action::New => self.new_project(),
             Action::Export(i) => self.start_export(i),
+            Action::Screenshot => self.start_screenshot(),
             Action::ExportAll(i) => {
                 let (_, w, h) = visioncraft_core::export_presets()[i];
                 let todo: Vec<_> = self

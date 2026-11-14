@@ -413,6 +413,8 @@ pub enum Action {
     SelectModel(String),
     New,
     Export(usize),
+    /// The 3D view at the canvas' resolution as a lossless PNG.
+    Screenshot,
     /// Every viewpoint at export preset `usize`.
     ExportAll(usize),
 }
@@ -616,6 +618,13 @@ impl Hud {
                 self.export_at = export.rect;
                 if export.clicked() {
                     self.export_open = !self.export_open;
+                }
+                if ui
+                    .selectable_label(false, t::SCREENSHOT)
+                    .on_hover_text(t::SCREENSHOT_TIP)
+                    .clicked()
+                {
+                    actions.push(Action::Screenshot);
                 }
                 if ui.selectable_label(walking, t::WALK).clicked() {
                     actions.push(Action::ToggleWalk);

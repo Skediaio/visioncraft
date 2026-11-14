@@ -179,10 +179,13 @@ pub const WIND: &str = "Wind";
 pub const WIND_DIRECTION: &str = "Wind direction";
 pub const GROUND: &str = "Ground plane";
 pub const EXPORT: &str = "Export";
+pub const SCREENSHOT: &str = "Screenshot";
 pub const MEASURING: &str = "Measuring this GPU…";
 pub const REMEASURE: &str = "Re-measure";
 pub const REMEASURE_TIP: &str =
     "Time this GPU again and start Auto from the quality it can carry at this window size";
+pub const SCREENSHOT_TIP: &str =
+    "Save the 3D view as a lossless PNG at the screen's full resolution, without the panels";
 pub const AUTO: &str = "auto";
 pub const REPLACE_PROJECT: &str = "Replace the current project? Unsaved changes are lost.";
 pub const REPLACE_ANYWAY: &str = "Replace";

@@ -510,7 +510,8 @@ impl Studio {
             self.targets_changed = true;
         }
         polled.map_err(|e| format!("the GPU did not finish: {e}"))?;
-        png_bytes(&pixels.ok_or("reading the picture back failed")?, w, h)
+        // Lossless truecolour (what `ui.screenshot` and agents send on).
+        png_rgb(&pixels.ok_or("reading the picture back failed")?, w, h)
     }
 
     /// Swaps the geometry of an existing model, touching nothing else. Returns warnings and the
@@ -992,6 +993,24 @@ pub fn png_bytes(rgba: &[u8], w: u32, h: u32) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+/// Truecolour RGB, lossless: what a screenshot is sent as (no alpha, no palette).
+pub fn png_rgb(rgba: &[u8], w: u32, h: u32) -> Result<Vec<u8>, String> {
+    let rgb: Vec<u8> = rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .flat_map(|p| [p[0], p[1], p[2]])
+        .collect();
+    let mut out = Vec::new();
+    let mut enc = png::Encoder::new(&mut out, w, h);
+    enc.set_color(png::ColorType::Rgb);
+    enc.set_depth(png::BitDepth::Eight);
+    enc.write_header()
+        .and_then(|mut wr| wr.write_image_data(&rgb))
+        .map_err(|e| format!("cannot encode the PNG: {e}"))?;
+    Ok(out)
+}
+
 /// The project's lights as the renderer wants them.
 pub fn render_lights(p: &Project) -> Vec<visioncraft_render::Light> {
     use visioncraft_core::{LightKind, kelvin_to_linear_rgb};
@@ -1093,5 +1112,35 @@ mod reach_tests {
         assert_eq!(eye.shadow_m, 80.0);
         assert!(eye.clear_m < 10.0, "{eye:?}");
         assert!(eye.small_impostors < far.small_impostors);
+    }
+
+    #[test]
+    fn screenshots_are_lossless_truecolour() {
+        // Every one of 4096 colours survives (a palette PNG would keep 256 at most).
+        let rgba: Vec<u8> = (0..64u32 * 64)
+            .flat_map(|i| {
+                [
+                    (i % 64 * 4) as u8,
+                    (i / 64 * 4) as u8,
+                    (i % 7 * 30) as u8,
+                    255,
+                ]
+            })
+            .collect();
+        let png = super::png_rgb(&rgba, 64, 64).unwrap();
+        let mut reader = png::Decoder::new(std::io::Cursor::new(png))
+            .read_info()
+            .unwrap();
+        assert_eq!(reader.info().color_type, png::ColorType::Rgb);
+        assert_eq!(reader.info().bit_depth, png::BitDepth::Eight);
+        let mut out = vec![0; reader.output_buffer_size()];
+        reader.next_frame(&mut out).unwrap();
+        let back: Vec<u8> = rgba
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|p| [p[0], p[1], p[2]])
+            .collect();
+        assert_eq!(out, back);
     }
 }
