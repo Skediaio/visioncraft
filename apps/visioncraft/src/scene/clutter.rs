@@ -21,10 +21,10 @@ const SNOW_BURIES: f32 = 0.3;
 const FADE_M: f32 = 25.0;
 const FADE_BAND_M: f32 = 10.0;
 /// One leaf patch (a flat ground cover of the tree's leaves) is this wide, unscaled.
-const PATCH_M: f32 = 0.35;
-/// Fallen-leaf patches per square metre of crown, by month: most just after leaf fall, rotting
-/// away through winter and spring, a few early drops in summer.
-const LEAVES_BY_MONTH: [f32; 12] = [1.8, 1.4, 1.0, 0.6, 0.3, 0.2, 0.2, 0.4, 1.0, 4.0, 4.8, 2.8];
+const PATCH_M: f32 = 0.22;
+/// Fallen-leaf patches per square metre of crown, by month: most just after leaf fall, a few
+/// left in winter, none in spring and summer (the lawn is raked, the border has grown over).
+const LEAVES_BY_MONTH: [f32; 12] = [0.5, 0.4, 0.1, 0.0, 0.0, 0.0, 0.0, 0.1, 1.5, 7.0, 8.0, 2.0];
 /// Twigs per square metre under a crown (all year) and on soil.
 const TWIGS_UNDER_CROWN: f32 = 0.6;
 const TWIGS_ON_SOIL: f32 = 0.5;
@@ -412,13 +412,14 @@ fn litter(tree: &flora::PlantParams) -> flora::PlantParams {
     p.flowers = None;
     p.budget = flora::BudgetClass::Tuft;
     p.form = flora::Form::GroundCover(flora::GroundCoverParams {
-        cards: 12,
-        depth_m: 0.012,
-        tilt_deg: 14.0,
+        cards: 5,
+        depth_m: 0.01,
+        tilt_deg: 22.0,
     });
     p.leaves.colour = p.leaves.autumn_colour;
-    p.leaves.colour_var = p.leaves.colour_var.max(0.5);
-    p.leaves.card_m = p.leaves.leaf_m * 1.4;
+    p.leaves.colour_var = p.leaves.colour_var.max(0.6);
+    // A fallen leaf is the size it grew: no larger card.
+    p.leaves.card_m = p.leaves.leaf_m;
     p
 }
 
@@ -426,9 +427,10 @@ fn litter(tree: &flora::PlantParams) -> flora::PlantParams {
 /// brown the rest of the year.
 fn litter_tint(p: &flora::PlantParams, month: u32) -> [f32; 3] {
     let lin = |c: f32| c.clamp(0.0, 1.0).powf(2.2);
-    let autumn = p.leaves.autumn_colour.map(|c| lin(c) * 0.5);
-    let brown = [0.10, 0.062, 0.032];
-    let t = if (9..=11).contains(&month) { 0.45 } else { 0.1 };
+    // Fresh fall keeps some of the tree's colour, muted; it browns as it lies.
+    let autumn = p.leaves.autumn_colour.map(|c| lin(c) * 0.4);
+    let brown = [0.085, 0.055, 0.03];
+    let t = if (9..=11).contains(&month) { 0.3 } else { 0.08 };
     [0, 1, 2].map(|k| autumn[k] * t + brown[k] * (1.0 - t))
 }
 
@@ -491,7 +493,7 @@ fn leaf_spots(c: [f32; 3], month: u32, seed: u64) -> Vec<[f32; 4]> {
     let density = LEAVES_BY_MONTH[(month.clamp(1, 12) - 1) as usize];
     disc_spots(c, 1.15, density, seed)
         .into_iter()
-        .map(|s| [s[0], s[1], s[2], 0.7 + 0.6 * s[3]])
+        .map(|s| [s[0], s[1], s[2], 0.6 + 0.5 * s[3]])
         .collect()
 }
 
@@ -720,7 +722,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn most_leaves_lie_in_autumn_and_all_under_the_crown() {
+    fn leaves_lie_in_autumn_a_few_in_winter_none_in_spring_and_summer() {
         let c = [3.0, -2.0, 2.5];
         let (nov, jun) = (leaf_spots(c, 11, 1), leaf_spots(c, 6, 1));
         assert!(
@@ -729,7 +731,9 @@ mod tests {
             nov.len(),
             jun.len()
         );
-        assert!(!jun.is_empty());
+        // None in spring and summer, a few left in winter.
+        assert!(jun.is_empty() && leaf_spots(c, 4, 1).is_empty());
+        assert!(!leaf_spots(c, 1, 1).is_empty());
         for s in &nov {
             assert!(((s[0] - c[0]).powi(2) + (s[1] - c[1]).powi(2)).sqrt() <= c[2] * 1.15 + 1e-4);
         }
