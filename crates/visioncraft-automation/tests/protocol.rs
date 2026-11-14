@@ -532,3 +532,29 @@ fn photo_parameters_are_checked_before_rendering() {
     assert!(error(&mut h, json!({"snow": 0.5})).contains("no renderer"));
     assert!(error(&mut h, json!({"season": "monsoon"})).contains("`season`"));
 }
+
+/// A saved example keeps its model as the program's own (`example:<file>`), so `render FILE`
+/// and `file.open` load it as `run` does; files saved before, with the example's name made a
+/// path in their folder, still open.
+#[test]
+fn a_saved_example_keeps_its_embedded_model() {
+    let root = dir("example-save");
+    let mut h = Headless::new(Access::roots(Some(root.clone()), Some(root.clone())));
+    let r = execute(&mut h, 1, "project.load_example", json!({"name": "estate"}));
+    assert_eq!(r["ok"], json!(true), "{r}");
+    let saved = execute(&mut h, 2, "file.save", json!({"path": "e.visioncraft"}));
+    assert_eq!(saved["ok"], json!(true), "{saved}");
+    let text = std::fs::read_to_string(root.join("e.visioncraft")).unwrap();
+    assert!(text.contains("\"example:villa.3dcraft\""));
+    let opened = execute(&mut h, 3, "file.open", json!({"path": "e.visioncraft"}));
+    assert_eq!(opened["result"]["missingModels"], json!([]), "{opened}");
+    // The old form.
+    let path = root.join("example:villa.3dcraft").display().to_string();
+    let old = text.replace(
+        "\"example:villa.3dcraft\"",
+        &serde_json::to_string(&path).unwrap(),
+    );
+    std::fs::write(root.join("old.visioncraft"), old).unwrap();
+    let opened = execute(&mut h, 4, "file.open", json!({"path": "old.visioncraft"}));
+    assert_eq!(opened["result"]["missingModels"], json!([]), "{opened}");
+}

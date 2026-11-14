@@ -213,7 +213,13 @@ impl HostState {
             return Err(format!("`{source}`: models from a URL are not loaded here"));
         }
         // An example's model travels inside the program.
-        let (path, bytes) = match visioncraft_core::example_file(source) {
+        // Files saved before example sources were kept as names have them as a path in the
+        // saved file's folder: `<folder>/example:<file>`.
+        let example = visioncraft_core::example_file(source).or_else(|| {
+            let name = Path::new(source).file_name()?.to_str()?;
+            visioncraft_core::example_file(name)
+        });
+        let (path, bytes) = match example {
             Some(b) => (std::path::PathBuf::from(source), b.to_vec()),
             None => {
                 let path = self.access.resolve(source, false, self.base().as_deref())?;
