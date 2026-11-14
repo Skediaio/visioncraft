@@ -202,7 +202,7 @@ fn add(
     Ok(json!({ "id": id }))
 }
 
-fn add_area(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
+pub(super) fn add_area(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct P {
@@ -229,7 +229,7 @@ fn add_area(project: &mut Project, params: &Value) -> Result<Value, CommandError
     })
 }
 
-fn add_extrusion(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
+pub(super) fn add_extrusion(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct P {

@@ -1,4 +1,5 @@
 use super::fail;
+use super::shapes::{add_area, add_extrusion};
 use crate::project::Project;
 use crate::session::{CommandError, Session, bad, parse};
 use crate::shape::Shape;
@@ -135,17 +136,31 @@ pub(super) fn register(s: &mut Session) {
         spec(
             "terrain.carve",
             "Carve Terrain",
-            "Lowers the ground inside an outline by a depth, with banks sloping up over a width outside it: a pond bed.",
+            "Lowers the ground inside an outline by a depth, with banks sloping up over a width outside it: a pond bed. It holds no water by itself: the result's `note` says so when no water area lies over it (terrain.add_pond carves, fills and edges a pond in one step).",
             vec![
                 outline(),
                 param("depth_m", T::Number, "How far to lower the ground.").unit("m").required(),
                 param("bank_m", T::Number, "Width of the sloped bank, 0 or more.").unit("m").required(),
                 param("bed_material", T::String, "Paints the basin and its bank with this material (a terrain layer is added for it if needed)."),
             ],
-            "null",
+            "null or {note}",
             json!({"outline": [[5, 5], [10, 5], [10, 9], [5, 9]], "depth_m": 0.8, "bank_m": 1.5}),
         ),
         carve,
+    );
+    s.register_with_spec(
+        spec(
+            "terrain.add_pond",
+            "Add Pond",
+            "A pond in one step, as the Pond tool makes it: the ground carved inside the outline with a straight wall and a soil bed, a level water surface just under the lowest ground on the outline, and a stone coping round the edge (at least one ground cell wide, so it covers the wall). Needs a terrain.",
+            vec![
+                outline(),
+                param("depth_m", T::Number, "Depth of the bed below the ground, above zero.").unit("m").default(json!(0.8)),
+            ],
+            "{water, edge}",
+            json!({"outline": [[5, 5], [10, 5], [10, 9], [5, 9]], "depth_m": 0.8}),
+        ),
+        add_pond,
     );
     s.register_with_spec(
         spec(
@@ -352,7 +367,87 @@ fn carve(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
         };
         t.paint_outline(&p.outline, p.bank_m, layer);
     }
-    Ok(Value::Null)
+    let water = crate::plant_ground::water_areas(project);
+    let filled = project.shapes.iter().any(|s| match s {
+        Shape::Area(a) => water.contains(&a.id) && crate::shape::overlaps(&a.outline, &p.outline),
+        Shape::Extrusion(_) => false,
+    });
+    if filled || p.depth_m <= 0.0 {
+        return Ok(Value::Null);
+    }
+    Ok(
+        json!({"note": "the basin holds no water: add a level water area over it (shape.add_area with drape false, material water, its elevation just under the ground on the outline), or use terrain.add_pond, which carves, fills and edges a pond in one step"}),
+    )
+}
+
+/// The Pond tool's coping: this wide at least (and one ground cell), 12 cm over the old rim,
+/// reaching 3 cm over the water.
+const POND_COPING_M: f32 = 0.3;
+const POND_COPING_H: f32 = 0.12;
+const POND_OVERHANG_M: f32 = 0.03;
+/// The water stands this far below the lowest ground on the outline, so the lawn meets the
+/// water instead of a dark strip of bank.
+const POND_MARGIN_M: f32 = 0.05;
+
+fn add_pond(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct P {
+        outline: Vec<[f32; 2]>,
+        #[serde(default = "depth")]
+        depth_m: f32,
+    }
+    fn depth() -> f32 {
+        0.8
+    }
+    let p: P = parse(params)?;
+    if !(p.depth_m.is_finite() && p.depth_m > 0.0) {
+        return Err(bad("the depth must be above zero"));
+    }
+    let terrain = project
+        .terrain
+        .clone()
+        .ok_or_else(|| fail("there is no terrain: terrain.create first"))?;
+    let water = p.outline;
+    let rim = water
+        .iter()
+        .filter_map(|q| terrain.height_at(q[0], q[1]))
+        .reduce(f32::min)
+        .unwrap_or(0.0);
+    // Carved a centimetre wider than the water, with a straight wall: the ground's cells then
+    // slope up under the coping, outside the water, on every side alike.
+    carve(
+        project,
+        &json!({"outline": crate::shape::offset_outline(&water, 0.01), "depth_m": p.depth_m, "bank_m": 0.0, "bed_material": "soil"}),
+    )?;
+    let w = add_area(
+        project,
+        &json!({"name": "Pond", "outline": water, "elevation": rim - POND_MARGIN_M, "drape": false, "material": "water"}),
+    )?;
+    // An open band round the edge (a closed one would be a solid block), from the middle of the
+    // first edge round to a centimetre short of it; its corners mitre.
+    let width = POND_COPING_M.max(terrain.cell_m);
+    let band = crate::shape::offset_outline(&water, width / 2.0 - POND_OVERHANG_M);
+    let (a, b) = (band[0], band[1 % band.len()]);
+    let mid = |t: f32| [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+    let len = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2))
+        .sqrt()
+        .max(0.1);
+    let mut ring = vec![mid(0.5)];
+    ring.extend(band.iter().skip(1));
+    ring.push(a);
+    ring.push(mid(0.5 - 0.01 / len));
+    // The band stands on the lowest ground under it (down the carved wall): as much taller that
+    // its top is the same height over the old rim all round.
+    let lowest = project.terrain.as_ref().map_or(rim, |t| {
+        crate::shape::footing(&ring, &|x, z| t.height_at(x, z))
+    });
+    let e = add_extrusion(
+        project,
+        &json!({"name": "Pond edge", "outline": ring, "closed": false, "thickness": width,
+                "height": (rim - lowest).max(0.0) + POND_COPING_H, "material": "paving"}),
+    )?;
+    Ok(json!({"water": w["id"], "edge": e["id"]}))
 }
 
 fn import_heights(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
@@ -388,4 +483,78 @@ fn import_heights(project: &mut Project, params: &Value) -> Result<Value, Comman
     t.validate().map_err(terr)?;
     project.terrain = Some(Arc::new(t));
     Ok(Value::Null)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::Session;
+    use serde_json::json;
+
+    /// The estate's basin on its 1 m terrain: a carve alone says it holds no water; the pond
+    /// command fills it level, edges it, and the lawn round it ends at the water's own edge.
+    #[test]
+    fn a_pond_on_a_coarse_terrain_is_filled_edged_and_cut_exactly() {
+        let pond = json!([[55, 40], [65, 40], [66, 48], [54, 47]]);
+        let mut s = Session::new(Default::default());
+        s.run("terrain.create", json!({"origin": [-10, -10], "width_m": 120, "depth_m": 80, "cell_m": 1.0, "base_material": "lawn"}))
+            .unwrap();
+        s.run("shape.add_area", json!({"name": "South lawn", "outline": [[22, 30], [100, 30], [100, 60], [22, 60]], "material": "lawn"}))
+            .unwrap();
+        let r = s
+            .run(
+                "terrain.carve",
+                json!({"outline": pond, "depth_m": 0.9, "bank_m": 1.5}),
+            )
+            .unwrap();
+        assert!(r["note"].as_str().unwrap().contains("no water"), "{r}");
+        assert!(s.undo());
+
+        let r = s
+            .run("terrain.add_pond", json!({"outline": pond, "depth_m": 0.9}))
+            .unwrap();
+        let p = s.project().clone();
+        let t = p.terrain.as_deref().unwrap();
+        let water = p.shapes.iter().find(|x| x.id() == r["water"]).unwrap();
+        let crate::Shape::Area(w) = water else {
+            panic!()
+        };
+        assert!(
+            !w.drape && (w.elevation + 0.05).abs() < 1e-4,
+            "{}",
+            w.elevation
+        );
+        assert!(t.height_at(60.0, 44.0).unwrap() < -0.85, "the bed");
+        let edge = p.shapes.iter().find(|x| x.id() == r["edge"]).unwrap();
+        let crate::Shape::Extrusion(e) = edge else {
+            panic!()
+        };
+        assert!(
+            !e.closed && e.thickness >= t.cell_m,
+            "the coping covers a cell"
+        );
+
+        let lawn = p.shapes.iter().find(|x| x.name() == "South lawn").unwrap();
+        let lifts: std::collections::HashMap<String, f32> =
+            crate::area_lifts(&p.shapes).into_iter().collect();
+        let (m, _) = crate::placed_shape_mesh(&p, lawn, &lifts, &crate::water_areas(&p)).unwrap();
+        let plan: f32 = m
+            .triangles
+            .iter()
+            .map(|tri| {
+                let [a, b, c] = tri.map(|i| m.positions[i as usize]);
+                ((b[0] - a[0]) * (c[2] - a[2]) - (b[2] - a[2]) * (c[0] - a[0])).abs() / 2.0
+            })
+            .sum();
+        // 78 x 30 m less the 82.5 m2 of water, to a few square centimetres.
+        assert!((plan - (2340.0 - 82.5)).abs() < 0.05, "{plan}");
+        assert!(
+            s.run(
+                "terrain.carve",
+                json!({"outline": pond, "depth_m": 0.9, "bank_m": 0})
+            )
+            .unwrap()
+            .is_null(),
+            "water lies over it now"
+        );
+    }
 }

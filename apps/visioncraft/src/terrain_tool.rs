@@ -246,7 +246,7 @@ impl TerrainTool {
             let p = [g.x, g.z];
             if cx.input.clicked {
                 if crate::draw::closes(&self.pond, p, close) {
-                    self.finish_pond(cx, terrain);
+                    self.finish_pond(cx);
                 } else {
                     self.pond.push(p);
                 }
@@ -264,37 +264,18 @@ impl TerrainTool {
             }
         }
         if (cx.input.enter || cx.input.double_clicked) && self.pond.len() >= 3 {
-            self.finish_pond(cx, terrain);
+            self.finish_pond(cx);
         }
     }
 
     /// Carves the outline and fills it with water a little below the old ground, one step.
-    fn finish_pond(&mut self, cx: &mut Cx, terrain: &Arc<Terrain>) {
+    fn finish_pond(&mut self, cx: &mut Cx) {
         let outline = std::mem::take(&mut self.pond);
+        let depth = self.pond_depth;
         self.planned = None;
         if outline.len() < 3 {
             return;
         }
-        let rim = outline
-            .iter()
-            .filter_map(|p| terrain.height_at(p[0], p[1]))
-            .fold(f32::INFINITY, f32::min);
-        let level = if rim.is_finite() {
-            rim - POND_MARGIN_M
-        } else {
-            -POND_MARGIN_M
-        };
-        let depth = self.pond_depth;
-        // The water is the outline as drawn, carved with a straight wall (no bank) under the
-        // coping, so no dry strip shows between the water and the grass, and a square pond stays
-        // square.
-        let water = outline.clone();
-        // Carved a centimetre wider, so ground points on the outline go down on every side alike:
-        // the ground's cells then slope up under the coping, outside the water (left above
-        // the water, that slope showed as a bright shallow wedge along one edge). The coping is
-        // at least one cell wide, to cover that slope.
-        let carve = offset_outline(&outline, 0.01);
-        let width = POND_COPING_M.max(terrain.cell_m);
         let create =
             cx.s.project()
                 .terrain
@@ -306,37 +287,8 @@ impl TerrainTool {
             }
             let before = s.project().terrain.clone();
             s.run(
-                "terrain.carve",
-                json!({"outline": carve, "depth_m": depth, "bank_m": 0.0, "bed_material": "soil"}),
-            )?;
-            s.run(
-                "shape.add_area",
-                json!({"name": t::TR_POND_NAME, "outline": water, "elevation": level, "drape": false, "material": "water"}),
-            )?;
-            // A stone coping along the water's edge, reaching a few centimetres over the water
-            // (over the slope the ground's cells make at the wall), so the edge looks intended;
-            // its corners mitre. An open band round the edge (a
-            // closed one would be a solid block): from the middle of the first edge round to a
-            // centimetre short of it.
-            let band = offset_outline(&water, width / 2.0 - POND_OVERHANG_M);
-            let (a, b) = (band[0], band[1 % band.len()]);
-            let mid = |t: f32| [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
-            let len = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt().max(0.1);
-            let mut ring = vec![mid(0.5)];
-            ring.extend(band.iter().skip(1));
-            ring.push(a);
-            ring.push(mid(0.5 - 0.01 / len));
-            // The band stands on the lowest ground under it (down the carved wall's slope): as
-            // much taller that its top is the same height above the old rim all round.
-            let rim = if rim.is_finite() { rim } else { 0.0 };
-            let lowest = s.project().terrain.as_ref().map_or(rim, |t| {
-                visioncraft_core::footing(&ring, &|x, z| t.height_at(x, z))
-            });
-            let height = (rim - lowest).max(0.0) + POND_COPING_H;
-            s.run(
-                "shape.add_extrusion",
-                json!({"name": t::TR_POND_EDGE, "outline": ring, "closed": false, "thickness": width,
-                       "height": height, "material": "paving"}),
+                "terrain.add_pond",
+                json!({"outline": outline, "depth_m": depth}),
             )?;
             follow_ground(s, before.as_deref())
         });
@@ -621,66 +573,5 @@ mod tests {
         assert!((pos(0)[1] - t.height_at(10.0, 10.0).unwrap()).abs() < 1e-4);
         assert!(pos(0)[1] > 0.1);
         assert_eq!(pos(1)[1], 3.0, "an object above the ground stays");
-    }
-}
-
-/// Width and height of the stone coping round a pond, and how far it reaches over the water.
-const POND_COPING_M: f32 = 0.3;
-const POND_OVERHANG_M: f32 = 0.03;
-const POND_COPING_H: f32 = 0.12;
-/// Its water stands this far below the lowest point of the old ground on the outline: 5 cm, so
-/// the lawn meets the water instead of a dark strip of bank.
-const POND_MARGIN_M: f32 = 0.05;
-
-/// `outline` moved `d` outward along its edges' normals (mitred corners, capped at 3 d).
-fn offset_outline(outline: &[[f32; 2]], d: f32) -> Vec<[f32; 2]> {
-    let n = outline.len();
-    if d <= 0.0 || n < 3 {
-        return outline.to_vec();
-    }
-    let area2: f32 = (0..n)
-        .map(|i| {
-            let (a, b) = (outline[i], outline[(i + 1) % n]);
-            a[0] * b[1] - b[0] * a[1]
-        })
-        .sum();
-    // Outward for a counter-clockwise ring (positive area in x, z) is to the right of an edge.
-    let side = if area2 > 0.0 { 1.0 } else { -1.0 };
-    let normal = |a: [f32; 2], b: [f32; 2]| {
-        let (dx, dz) = (b[0] - a[0], b[1] - a[1]);
-        let l = dx.hypot(dz).max(1e-6);
-        [side * dz / l, -side * dx / l]
-    };
-    (0..n)
-        .map(|i| {
-            let p = outline[i];
-            let n1 = normal(outline[(i + n - 1) % n], p);
-            let n2 = normal(p, outline[(i + 1) % n]);
-            let dot = (n1[0] * n2[0] + n1[1] * n2[1]).max(-0.9);
-            let k = (d / (1.0 + dot)).min(3.0 * d);
-            [p[0] + (n1[0] + n2[0]) * k, p[1] + (n1[1] + n2[1]) * k]
-        })
-        .collect()
-}
-
-#[cfg(test)]
-mod pond_tests {
-    use super::*;
-
-    #[test]
-    fn the_coping_band_keeps_a_square_square() {
-        // A 4 by 2 square, either winding, grows by d on every side with sharp corners.
-        for sq in [
-            vec![[0.0, 0.0], [4.0, 0.0], [4.0, 2.0], [0.0, 2.0]],
-            vec![[0.0, 0.0], [0.0, 2.0], [4.0, 2.0], [4.0, 0.0]],
-        ] {
-            let o = offset_outline(&sq, 0.15);
-            assert_eq!(o.len(), 4);
-            for p in &o {
-                let x_ok = (p[0] + 0.15).abs() < 1e-4 || (p[0] - 4.15).abs() < 1e-4;
-                let z_ok = (p[1] + 0.15).abs() < 1e-4 || (p[1] - 2.15).abs() < 1e-4;
-                assert!(x_ok && z_ok, "{o:?}");
-            }
-        }
     }
 }

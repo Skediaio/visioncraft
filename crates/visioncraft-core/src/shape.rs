@@ -523,7 +523,7 @@ pub const AREA_LIFT_M: f32 = 0.02;
 /// And this much more for every earlier area it overlaps.
 pub const STACK_STEP_M: f32 = 0.01;
 
-fn overlaps(a: &[P2], b: &[P2]) -> bool {
+pub(crate) fn overlaps(a: &[P2], b: &[P2]) -> bool {
     let inside = |p: P2, poly: &[P2]| crate::planting::point_in_polygon(p, poly);
     let crosses = |p: P2, q: P2, r: P2, s: P2| {
         let o = |a: P2, b: P2, c: P2| (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
@@ -579,6 +579,76 @@ pub fn areas_over<'a>(shapes: &'a [Shape], id: &str) -> Vec<&'a [P2]> {
         .filter_map(|s| match s {
             Shape::Area(b) if overlaps(&a.outline, &b.outline) => Some(b.outline.as_slice()),
             _ => None,
+        })
+        .collect()
+}
+
+/// `outline` moved `d` outward along its edges' normals (mitred corners, capped at 3 d).
+pub fn offset_outline(outline: &[[f32; 2]], d: f32) -> Vec<[f32; 2]> {
+    let n = outline.len();
+    if d <= 0.0 || n < 3 {
+        return outline.to_vec();
+    }
+    let area2: f32 = (0..n)
+        .map(|i| {
+            let (a, b) = (outline[i], outline[(i + 1) % n]);
+            a[0] * b[1] - b[0] * a[1]
+        })
+        .sum();
+    // Outward for a counter-clockwise ring (positive area in x, z) is to the right of an edge.
+    let side = if area2 > 0.0 { 1.0 } else { -1.0 };
+    let normal = |a: [f32; 2], b: [f32; 2]| {
+        let (dx, dz) = (b[0] - a[0], b[1] - a[1]);
+        let l = dx.hypot(dz).max(1e-6);
+        [side * dz / l, -side * dx / l]
+    };
+    (0..n)
+        .map(|i| {
+            let p = outline[i];
+            let n1 = normal(outline[(i + n - 1) % n], p);
+            let n2 = normal(p, outline[(i + 1) % n]);
+            let dot = (n1[0] * n2[0] + n1[1] * n2[1]).max(-0.9);
+            let k = (d / (1.0 + dot)).min(3.0 * d);
+            [p[0] + (n1[0] + n2[0]) * k, p[1] + (n1[1] + n2[1]) * k]
+        })
+        .collect()
+}
+
+/// A model's faces this close to the ground lie on it (a terrace slab, a model's own lawn).
+pub const GROUND_FACE_M: f32 = 0.05;
+
+/// The flat triangles of a model lying on the ground, as `[x, z]` triangles: `place` takes a
+/// model position to the world, `ground` is the ground's height (0 where there is none).
+///
+/// The rule for a model on the ground: a model with any is drawn [`AREA_LIFT_M`] up, as an area
+/// is, and the draped areas are cut out under these triangles and grow no grass there, so a
+/// terrace slab level with the lawn never fights with it.
+pub fn ground_faces(
+    model: &ImportedModel,
+    place: &dyn Fn([f32; 3]) -> [f32; 3],
+    ground: &dyn Fn(f32, f32) -> Option<f32>,
+) -> Vec<[P2; 3]> {
+    let world: Vec<[f32; 3]> = model.positions.iter().map(|&p| place(p)).collect();
+    model
+        .triangles
+        .iter()
+        .filter_map(|t| {
+            let [p, q, r] = t.map(|i| world[i as usize]);
+            let (u, v) = (
+                [q[0] - p[0], q[1] - p[1], q[2] - p[2]],
+                [r[0] - p[0], r[1] - p[1], r[2] - p[2]],
+            );
+            let n = [
+                u[1] * v[2] - u[2] * v[1],
+                u[2] * v[0] - u[0] * v[2],
+                u[0] * v[1] - u[1] * v[0],
+            ];
+            let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+            let flat = len > 1e-8 && n[1].abs() > 0.9 * len;
+            let low = [p, q, r]
+                .iter()
+                .all(|c| (c[1] - ground(c[0], c[2]).unwrap_or(0.0)).abs() <= GROUND_FACE_M);
+            (flat && low).then_some([[p[0], p[2]], [q[0], q[2]], [r[0], r[2]]])
         })
         .collect()
 }
@@ -895,6 +965,24 @@ pub fn shape_mesh_on_terrain(
     let [ox, oz] = terrain.origin;
     // Grid coordinates: cell edges at whole u and v, the cells' (0,0)-(1,1) diagonals at whole u - v.
     let to_uv = |p: P2| [(p[0] - ox) / cell, (p[1] - oz) / cell];
+    // The holes as triangles in grid coordinates, cut out of every piece exactly (along the
+    // water's own edge, not along the terrain's cells).
+    let hole_tris: Vec<[P2; 3]> = holes
+        .iter()
+        .flat_map(|h| {
+            let flat: Vec<f64> = h
+                .iter()
+                .flat_map(|p| [f64::from(p[0]), f64::from(p[1])])
+                .collect();
+            earcutr::earcut(&flat, &[], 2)
+                .unwrap_or_default()
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .map(|t| t.map(|i| to_uv(h[i])))
+                .collect::<Vec<_>>()
+        })
+        .collect();
     let mut b = Builder {
         model: ImportedModel::default(),
         triangles: vec![Vec::new()],
@@ -908,15 +996,13 @@ pub fn shape_mesh_on_terrain(
         for dir in [[1.0, 0.0], [0.0, 1.0], [1.0, -1.0]] {
             pieces = pieces.into_iter().flat_map(|p| slice(p, dir)).collect();
         }
+        for t in &hole_tris {
+            pieces = pieces
+                .into_iter()
+                .flat_map(|p| subtract_triangle(p, t))
+                .collect();
+        }
         for piece in pieces {
-            let n = piece.len() as f32;
-            let mid = piece
-                .iter()
-                .fold([0.0, 0.0], |m, q| [m[0] + q[0] / n, m[1] + q[1] / n]);
-            let mid = [ox + mid[0] * cell, oz + mid[1] * cell];
-            if holes.iter().any(|h| inside_outline(mid, h)) {
-                continue;
-            }
             let corner = |q: P2| {
                 let (x, z) = (ox + q[0] * cell, oz + q[1] * cell);
                 [
@@ -962,6 +1048,48 @@ fn slice(poly: Vec<P2>, dir: P2) -> Vec<Vec<P2>> {
     }
     if rest.len() >= 3 {
         out.push(rest);
+    }
+    out
+}
+
+/// The convex pieces of convex `poly` that lie outside triangle `t`.
+fn subtract_triangle(poly: Vec<P2>, t: &[P2; 3]) -> Vec<Vec<P2>> {
+    let (lo, hi) = poly.iter().fold(
+        ([f32::INFINITY; 2], [f32::NEG_INFINITY; 2]),
+        |(lo, hi), p| {
+            (
+                [lo[0].min(p[0]), lo[1].min(p[1])],
+                [hi[0].max(p[0]), hi[1].max(p[1])],
+            )
+        },
+    );
+    if t.iter().all(|q| q[0] <= lo[0])
+        || t.iter().all(|q| q[0] >= hi[0])
+        || t.iter().all(|q| q[1] <= lo[1])
+        || t.iter().all(|q| q[1] >= hi[1])
+    {
+        return vec![poly];
+    }
+    let [a, b, c] = *t;
+    let ccw = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]) > 0.0;
+    let mut out = Vec::new();
+    let mut rest = poly;
+    for i in 0..3 {
+        let (p, q) = if ccw {
+            (t[i], t[(i + 1) % 3])
+        } else {
+            (t[(i + 1) % 3], t[i])
+        };
+        // Outward normal of a counter-clockwise edge; `above` is the side outside the triangle.
+        let n = [q[1] - p[1], p[0] - q[0]];
+        let (inside, outside) = cut(&rest, n, n[0] * p[0] + n[1] * p[1]);
+        if outside.len() >= 3 {
+            out.push(outside);
+        }
+        rest = inside;
+        if rest.len() < 3 {
+            break;
+        }
     }
     out
 }
@@ -1034,12 +1162,60 @@ mod hill_tests {
         );
         // A pond on it: no lawn under the water.
         let pond: Vec<P2> = vec![[3.0, 3.0], [7.0, 3.0], [7.0, 7.0], [3.0, 7.0]];
-        let cut = shape_mesh_on_terrain(&Shape::Area(a), &t, &[&pond]).unwrap();
+        let cut = shape_mesh_on_terrain(&Shape::Area(a.clone()), &t, &[&pond]).unwrap();
         assert!(cut.triangles.len() < m.triangles.len());
         assert!(cut.triangles.iter().all(|tri| {
             let [p, q, r] = tri.map(|i| cut.positions[i as usize]);
             let c = [(p[0] + q[0] + r[0]) / 3.0, (p[2] + q[2] + r[2]) / 3.0];
             !(3.2..6.8).contains(&c[0]) || !(3.2..6.8).contains(&c[1])
         }));
+        // The cut runs along the water's own edge, not the terrain's cells: a skewed pond off the
+        // grid takes exactly its own area out of the lawn (no sawtooth either way).
+        let plan_area = |m: &ImportedModel| -> f32 {
+            m.triangles
+                .iter()
+                .map(|tri| {
+                    let [p, q, r] = tri.map(|i| m.positions[i as usize]);
+                    ((q[0] - p[0]) * (r[2] - p[2]) - (q[2] - p[2]) * (r[0] - p[0])).abs() / 2.0
+                })
+                .sum()
+        };
+        let skew: Vec<P2> = vec![[11.3, 3.1], [16.2, 3.4], [16.6, 7.7], [10.9, 7.2]];
+        let skew_area = 0.5
+            * (0..4)
+                .map(|i| {
+                    let (p, q) = (skew[i], skew[(i + 1) % 4]);
+                    p[0] * q[1] - q[0] * p[1]
+                })
+                .sum::<f32>()
+                .abs();
+        let cut = shape_mesh_on_terrain(&Shape::Area(a), &t, &[&skew]).unwrap();
+        let taken = plan_area(&m) - plan_area(&cut);
+        assert!(
+            (taken - skew_area).abs() < 0.01,
+            "{taken} m2 cut for a {skew_area} m2 pond"
+        );
+    }
+}
+
+#[cfg(test)]
+mod offset_tests {
+    use super::offset_outline;
+
+    #[test]
+    fn the_coping_band_keeps_a_square_square() {
+        // A 4 by 2 square, either winding, grows by d on every side with sharp corners.
+        for sq in [
+            vec![[0.0, 0.0], [4.0, 0.0], [4.0, 2.0], [0.0, 2.0]],
+            vec![[0.0, 0.0], [0.0, 2.0], [4.0, 2.0], [4.0, 0.0]],
+        ] {
+            let o = offset_outline(&sq, 0.15);
+            assert_eq!(o.len(), 4);
+            for p in &o {
+                let x_ok = (p[0] + 0.15).abs() < 1e-4 || (p[0] - 4.15).abs() < 1e-4;
+                let z_ok = (p[1] + 0.15).abs() < 1e-4 || (p[1] - 2.15).abs() < 1e-4;
+                assert!(x_ok && z_ok, "{o:?}");
+            }
+        }
     }
 }

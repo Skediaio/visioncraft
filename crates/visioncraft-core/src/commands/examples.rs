@@ -114,6 +114,33 @@ mod tests {
         assert!(p.terrain.is_some() && p.generators.len() >= 7);
     }
 
+    /// The villa stands on the ground as placed (no lift by hand): its terrace slab and its own
+    /// lawn lie on the ground, so the rule in `shape::ground_faces` applies (the model drawn an
+    /// area's lift up, draped areas cut out under those faces) instead of the two fighting.
+    #[test]
+    fn the_villa_lies_on_the_ground_by_the_rule() {
+        let p = super::example("estate").unwrap();
+        let m = &p.models[0];
+        assert_eq!(m.transform.translation[1], 0.0, "no lift by hand");
+        let model = crate::import_3dcraft(super::example_file(&m.source).unwrap()).unwrap();
+        let t = p.terrain.as_deref().unwrap();
+        let [tx, ty, tz] = m.transform.translation;
+        let (sn, cs) = m.transform.rotation_y_deg.to_radians().sin_cos();
+        let k = m.transform.scale;
+        let place = |q: [f32; 3]| {
+            let [x, y, z] = q.map(|c| c * k);
+            [tx + cs * x + sn * z, ty + y, tz - sn * x + cs * z]
+        };
+        let faces = crate::ground_faces(&model, &place, &|x, z| t.height_at(x, z));
+        let area: f32 = faces
+            .iter()
+            .map(|[a, b, c]| {
+                ((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])).abs() / 2.0
+            })
+            .sum();
+        assert!(area > 20.0, "{} ground triangles, {area} m2", faces.len());
+    }
+
     /// Every example's pond is a level water surface over its carved bed, not a sheet draped
     /// under it (the estate's pond was a dry pit).
     #[test]
