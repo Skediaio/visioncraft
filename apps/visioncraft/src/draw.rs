@@ -240,6 +240,27 @@ pub enum Tool {
     Area,
     Block,
     Wall,
+    /// Puts a window, or a door, in the wall of a block that is clicked.
+    Window,
+    Door,
+}
+
+/// The size and frame new windows and doors get.
+pub struct OpeningForm {
+    pub window: (f32, f32, f32),
+    pub door: (f32, f32),
+    pub frame: &'static str,
+}
+
+impl Default for OpeningForm {
+    fn default() -> Self {
+        Self {
+            // Width, height, sill; a door's width and height.
+            window: (1.2, 1.4, 0.9),
+            door: (1.0, 2.2),
+            frame: "slim",
+        }
+    }
 }
 
 /// What an area is: decides its name and its material, so a terrace drawn on a lawn shows at once.
@@ -301,6 +322,7 @@ pub struct DrawState {
     camera_before: Option<crate::camera::Camera>,
     /// The project had nothing in it when Draw opened.
     started_empty: bool,
+    pub opening: OpeningForm,
 }
 
 const ACCENT: [u8; 4] = [255, 200, 70, 255];
@@ -395,10 +417,10 @@ impl DrawState {
         {
             self.selected = None;
         }
-        if self.tool != Tool::Select {
-            self.drawing(cx, cursor, radius, &mut top);
-        } else {
-            self.editing(cx, cursor, radius, &mut top);
+        match self.tool {
+            Tool::Select => self.editing(cx, cursor, radius, &mut top),
+            Tool::Window | Tool::Door => self.placing(cx, cursor, radius, &mut top),
+            _ => self.drawing(cx, cursor, radius, &mut top),
         }
         if cx.input.escape && self.tool != Tool::Select && self.points.is_empty() {
             self.tool = Tool::Select;
@@ -594,26 +616,63 @@ impl DrawState {
                     json!({"name": name(label), "outline": points}),
                 )
             }
+            // A new block is a house: two storeys, plaster walls and a gable roof.
             Tool::Block => (
                 "shape.add_extrusion",
                 "plaster",
-                json!({"name": name(t::TOOL_BLOCK), "outline": points, "closed": true, "height": 6.0}),
+                json!({"name": name(t::TOOL_BLOCK), "outline": points, "closed": true, "height": 6.0, "roof": {"kind": "gable"}}),
             ),
             Tool::Wall => (
                 "shape.add_extrusion",
                 "timber",
                 json!({"name": name(t::TOOL_WALL), "outline": points, "closed": false, "height": 1.8, "thickness": 0.1}),
             ),
-            Tool::Select => return,
+            Tool::Select | Tool::Window | Tool::Door => return,
         };
         let mut params = params;
         params["material"] = json!(material); // one command: one undo step
+        let block = self.tool == Tool::Block;
         if let Some(r) = cx.run(cmd, params) {
             let id = r["id"].as_str().unwrap_or_default().to_string();
+            if block {
+                roof_tiles(cx, &id);
+            }
             // The tool stays: Area after Area until Escape (the new shape is selected, so its
             // panel shows its sizes).
             self.selected = Some(id);
             self.vertex = None;
+        }
+    }
+
+    /// Window and Door: the wall of a block nearest the pointer shows where the opening goes; a
+    /// click puts it there (`shape.add_opening`).
+    fn placing(&mut self, cx: &mut Cx, cursor: Option<P2>, radius: f32, top: &mut Vec<LineVertex>) {
+        let Some(c) = cursor else {
+            return;
+        };
+        let door = self.tool == Tool::Door;
+        let (w, h, sill) = if door {
+            (self.opening.door.0, self.opening.door.1, 0.0)
+        } else {
+            self.opening.window
+        };
+        let Some((id, side, offset, (p, d))) = nearest_wall(cx, c, radius * 2.0, w) else {
+            return;
+        };
+        let at = |u: f32| [p[0] + d[0] * u, p[1] + d[1] * u];
+        top.extend(line(
+            y_point(at(offset - w / 2.0), 0.08),
+            y_point(at(offset + w / 2.0), 0.08),
+            if door { [120, 190, 255, 255] } else { ACCENT },
+            6.0,
+        ));
+        if cx.input.clicked {
+            cx.run(
+                "shape.add_opening",
+                json!({"id": id, "side": side, "offset_m": offset, "kind": if door { "door" } else { "window" },
+                       "width_m": w, "height_m": h, "sill_m": sill, "frame": self.opening.frame}),
+            );
+            self.selected = Some(id);
         }
     }
 
@@ -787,6 +846,8 @@ impl DrawState {
                 (Tool::Area, t::TOOL_AREA),
                 (Tool::Block, t::TOOL_BLOCK),
                 (Tool::Wall, t::TOOL_WALL),
+                (Tool::Window, t::TOOL_WINDOW),
+                (Tool::Door, t::TOOL_DOOR),
             ] {
                 if ui.selectable_label(self.tool == tool, label).clicked() {
                     self.tool = tool;
@@ -794,10 +855,40 @@ impl DrawState {
                 }
             }
         });
+        if matches!(self.tool, Tool::Window | Tool::Door) {
+            self.opening_panel(ui);
+        }
         ui.small(match self.tool {
             Tool::Select => t::SELECT_HINT,
             Tool::Wall => t::WALL_HINT,
+            Tool::Window | Tool::Door => t::OPENING_HINT,
             _ => t::DRAW_HINT,
+        });
+    }
+
+    /// Sizes and frame of the windows and doors about to be placed.
+    fn opening_panel(&mut self, ui: &mut egui::Ui) {
+        let o = &mut self.opening;
+        if self.tool == Tool::Door {
+            drag_field(ui, t::WIDTH, &mut o.door.0, 0.01, 0.5..=4.0, " m");
+            drag_field(ui, t::HEIGHT, &mut o.door.1, 0.01, 1.5..=4.0, " m");
+        } else {
+            drag_field(ui, t::WIDTH, &mut o.window.0, 0.01, 0.3..=8.0, " m");
+            drag_field(ui, t::HEIGHT, &mut o.window.1, 0.01, 0.3..=4.0, " m");
+            drag_field(ui, t::SILL, &mut o.window.2, 0.01, 0.0..=20.0, " m");
+        }
+        ui.horizontal(|ui| {
+            ui.label(t::FRAME);
+            for (key, label) in [
+                ("slim", t::FRAME_SLIM),
+                ("wide", t::FRAME_WIDE),
+                ("split", t::FRAME_SPLIT),
+                ("none", t::FRAME_NONE),
+            ] {
+                if ui.selectable_label(o.frame == key, label).clicked() {
+                    o.frame = key;
+                }
+            }
         });
     }
 
@@ -885,6 +976,9 @@ impl DrawState {
                             }
                         }
                     });
+                }
+                if x.closed {
+                    house_panel(ui, cx, x);
                 }
                 if !x.closed {
                     let e = drag_field(ui, t::THICKNESS, &mut x.thickness, 0.01, 0.02..=5.0, " m");
@@ -981,6 +1075,112 @@ pub fn resized_rect(outline: &[P2], width: f32, depth: f32) -> Option<Vec<P2>> {
     let v = [(d[0] - a[0]) / d0, (d[1] - a[1]) / d0];
     let p = |s: f32, t: f32| [a[0] + u[0] * s + v[0] * t, a[1] + u[1] * s + v[1] * t];
     Some(vec![a, p(width, 0.0), p(width, depth), p(0.0, depth)])
+}
+
+/// The wall of a block nearest `c` within `reach`: (block id, edge, offset of an opening of
+/// width `w` centred at the pointer, kept inside the wall, (edge start, unit direction)).
+/// Where an opening goes: (block id, wall index, offset along it, (wall start, direction)).
+type WallSpot = (String, usize, f32, (P2, P2));
+
+fn nearest_wall(cx: &Cx, c: P2, reach: f32, w: f32) -> Option<WallSpot> {
+    let mut best: Option<(f32, WallSpot)> = None;
+    for s in &cx.s.project().shapes {
+        let Shape::Extrusion(e) = s else { continue };
+        if !e.closed {
+            continue;
+        }
+        let n = e.outline.len();
+        for i in 0..n {
+            let (p, q) = (e.outline[i], e.outline[(i + 1) % n]);
+            let len = dist(p, q);
+            if len < w + 0.2 {
+                continue;
+            }
+            let d = [(q[0] - p[0]) / len, (q[1] - p[1]) / len];
+            let u = ((c[0] - p[0]) * d[0] + (c[1] - p[1]) * d[1]).clamp(0.0, len);
+            let foot = [p[0] + d[0] * u, p[1] + d[1] * u];
+            let gap = dist(foot, c);
+            if gap <= reach && best.as_ref().is_none_or(|b| gap < b.0) {
+                let offset = u.clamp(w / 2.0 + 0.1, len - w / 2.0 - 0.1);
+                best = Some((gap, (e.id.clone(), i, offset, (p, d))));
+            }
+        }
+    }
+    best.map(|b| b.1)
+}
+
+/// A new block's roof in the library's roof tiles, when the library has them (else the
+/// palette's dark roof stays).
+fn roof_tiles(cx: &mut Cx, id: &str) {
+    const TILES: &str = "roofingtiles006";
+    if let Ok(material) = crate::material_library::ensure_material(cx.s, TILES) {
+        cx.run(
+            "material.assign",
+            json!({"target": {"type": "face", "owner": id, "face": format!("{id}:roof")}, "material": material}),
+        );
+    }
+}
+
+/// A block's roof, plinth and windows: each change one command.
+fn house_panel(ui: &mut egui::Ui, cx: &mut Cx, x: &visioncraft_core::shape::Extrusion) {
+    use visioncraft_core::house::RoofKind;
+    let Some(h) = &x.house else {
+        if ui.button(t::ADD_ROOF).clicked() {
+            cx.run("shape.set_roof", json!({"id": x.id, "kind": "gable"}));
+            roof_tiles(cx, &x.id);
+        }
+        return;
+    };
+    let roof = h.roof.clone();
+    ui.horizontal_wrapped(|ui| {
+        ui.label(t::ROOF);
+        for (kind, key, label) in [
+            (RoofKind::Gable, "gable", t::ROOF_GABLE),
+            (RoofKind::Hip, "hip", t::ROOF_HIP),
+            (RoofKind::LeanTo, "lean_to", t::ROOF_LEAN_TO),
+            (RoofKind::Flat, "flat", t::ROOF_FLAT),
+        ] {
+            if ui.selectable_label(roof.kind == kind, label).clicked() && roof.kind != kind {
+                cx.run(
+                    "shape.set_roof",
+                    json!({"id": x.id, "kind": key, "pitch_deg": roof.pitch_deg, "overhang_m": roof.overhang_m, "parapet_m": roof.parapet_m}),
+                );
+            }
+        }
+    });
+    let key = |k: RoofKind| match k {
+        RoofKind::Flat => "flat",
+        RoofKind::Gable => "gable",
+        RoofKind::Hip => "hip",
+        RoofKind::LeanTo => "lean_to",
+    };
+    let (mut pitch, mut over) = (roof.pitch_deg, roof.overhang_m);
+    let pe = if roof.kind != RoofKind::Flat {
+        drag_field(ui, t::PITCH, &mut pitch, 0.5, 5.0..=70.0, "°")
+    } else {
+        Edit::None
+    };
+    let oe = drag_field(ui, t::OVERHANG, &mut over, 0.01, 0.0..=2.0, " m");
+    if pe == Edit::Done || oe == Edit::Done {
+        cx.run(
+            "shape.set_roof",
+            json!({"id": x.id, "kind": key(roof.kind), "pitch_deg": pitch, "overhang_m": over, "parapet_m": roof.parapet_m}),
+        );
+    }
+    let mut plinth = h.plinth_m;
+    if drag_field(ui, t::PLINTH, &mut plinth, 0.01, 0.0..=3.0, " m") == Edit::Done {
+        cx.run("shape.set_plinth", json!({"id": x.id, "height_m": plinth}));
+    }
+    if !h.openings.is_empty() {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(format!("{} {}", h.openings.len(), t::OPENINGS));
+            if ui.small_button(t::REMOVE_LAST_OPENING).clicked()
+                && let Some(o) = h.openings.last()
+            {
+                cx.run("shape.remove_opening", json!({"id": x.id, "opening": o.id}));
+            }
+        });
+    }
 }
 
 #[cfg(test)]
