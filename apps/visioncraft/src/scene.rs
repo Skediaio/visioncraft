@@ -1240,6 +1240,21 @@ impl Scene {
     pub fn sync_terrain_layers(&mut self, r: &mut Renderer, project: &Project) {
         self.terrain_gpu
             .sync_layers(r, project, &mut self.library, &mut |m, lib| look_of(m, lib));
+        // The endless ground wears the terrain's base layer, so the terrain's edge cannot be
+        // seen against it (one ground look, in the overview and in the plan).
+        // Without a terrain it wears the lawn: a real ground material (its texture's mips give
+        // the far colour, the macro variation keeps it from tiling), not a flat colour.
+        let base_id = project
+            .terrain
+            .as_ref()
+            .and_then(|t| t.layers.first())
+            .map_or("lawn", |l| l.material.as_str());
+        let base = project.materials.iter().find(|m| m.id == base_id);
+        let ground = base.map(|m| {
+            let look = look_of(m, &mut self.library);
+            self.material(r, &look)
+        });
+        r.set_ground_material(ground);
     }
 
     /// One step of lazy plant generation; true when a generation finished (the scene must sync again).
