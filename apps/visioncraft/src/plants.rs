@@ -772,13 +772,15 @@ impl Flora {
         let height = generated.height;
         for (li, split, tint) in generated.levels {
             let dist = lod_distances(height)[li];
+            // Crowns of plants, not lawn tufts or fallen leaves lying flat: the leaves and the
+            // branches among them.
+            let crown = (crowned && height >= 1.5 && !id.starts_with(CLUTTER_PREFIX))
+                .then(|| split.iter().find(|(k, _)| *k == flora::Material::Foliage))
+                .flatten()
+                .map(|(_, p)| scene::part_bounds(&p.positions));
             for (kind, part) in split {
-                // Crowns of plants, not lawn tufts or fallen leaves lying flat.
-                let crown = kind == flora::Material::Foliage
-                    && crowned
-                    && height >= 1.5
-                    && !id.starts_with(CLUTTER_PREFIX);
-                let Some(m) = scene::upload_plant_mesh(r, &part, crown) else {
+                let wood = kind != flora::Material::Foliage;
+                let Some(m) = scene::upload_plant_mesh(r, &part, crown, wood) else {
                     continue;
                 };
                 let mat = *mats.entry(kind as usize).or_insert_with(|| {

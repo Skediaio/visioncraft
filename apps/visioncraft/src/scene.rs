@@ -224,10 +224,17 @@ fn gpu_material(look: &Look) -> visioncraft_render::Material {
     }
 }
 
-/// A plant mesh part (positions, normals, UVs, wind) into the renderer; a `crown` (the foliage
-/// of a plant) with the sky occlusion of its leaves (`crown_occlusion`).
-pub fn upload_plant_mesh(r: &mut Renderer, p: &flora::MeshPart, crown: bool) -> Option<MeshId> {
-    let occlusion = crown.then(|| crown_occlusion(&p.positions));
+/// A plant mesh part (positions, normals, UVs, wind) into the renderer; inside a crown (the
+/// bounds of a plant's foliage) with the sky occlusion of its place there (`crown_occlusion`):
+/// the leaves, and the branches among them (`wood`), which read bright salmon in the crown's
+/// shade without it.
+pub fn upload_plant_mesh(
+    r: &mut Renderer,
+    p: &flora::MeshPart,
+    crown: Option<(Vec3, Vec3)>,
+    wood: bool,
+) -> Option<MeshId> {
+    let occlusion = crown.map(|b| crown_occlusion(&p.positions, b, wood));
     let mesh = visioncraft_render::Mesh {
         positions: &p.positions,
         normals: &p.normals,
@@ -239,6 +246,14 @@ pub fn upload_plant_mesh(r: &mut Renderer, p: &flora::MeshPart, crown: bool) -> 
     r.add_mesh(&mesh).ok()
 }
 
+/// The bounds of a mesh part's positions.
+pub fn part_bounds(positions: &[[f32; 3]]) -> (Vec3, Vec3) {
+    positions.iter().fold(
+        (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)),
+        |(lo, hi), p| (lo.min(Vec3::from(*p)), hi.max(Vec3::from(*p))),
+    )
+}
+
 /// Tag of a face id that carries a leaf's sky occlusion in its low 16 bits (scene.wgsl's
 /// `CROWN_TAG`); plain face ids are small numbers.
 const CROWN_TAG: u32 = 0xC000_0000;
@@ -248,12 +263,8 @@ const CROWN_TAG: u32 = 0xC000_0000;
 /// falls through a crown in a few layers of leaves). The tops keep most of it, the bottom inside down
 /// to about a third, so a crown seen from above is not one pale, evenly lit surface; the sun
 /// on a leaf is dimmed by it too (scene.wgsl `light`).
-pub fn crown_occlusion(positions: &[[f32; 3]]) -> Vec<u32> {
-    let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
-    for p in positions {
-        lo = lo.min(Vec3::from(*p));
-        hi = hi.max(Vec3::from(*p));
-    }
+/// Branches (`wood`) outside the crown's ellipsoid see the whole sky.
+pub fn crown_occlusion(positions: &[[f32; 3]], (lo, hi): (Vec3, Vec3), wood: bool) -> Vec<u32> {
     let (c, rad) = ((lo + hi) * 0.5, ((hi - lo) * 0.5).max(Vec3::splat(1e-3)));
     positions
         .iter()
@@ -262,6 +273,9 @@ pub fn crown_occlusion(positions: &[[f32; 3]]) -> Vec<u32> {
             let top = c.y + rad.y * (1.0 - q.x * q.x - q.z * q.z).max(0.0).sqrt();
             let below = ((top - p[1]) / (2.0 * rad.y)).clamp(0.0, 1.0);
             let inside = (1.0 - q.length()).clamp(0.0, 1.0);
+            if wood && inside <= 0.0 {
+                return CROWN_TAG | 65535;
+            }
             let s = below.min(0.75) / 0.75;
             // Even the top leaves have neighbours that hide part of the sky.
             let sky = (0.85 - 0.45 * s * s * (3.0 - 2.0 * s) - 0.2 * inside).max(0.3);

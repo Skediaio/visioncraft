@@ -775,9 +775,8 @@ fn shade(in: Varying, front: bool, screen_effects: bool) -> Shaded {
         return Shaded(apply_fog(t.reflected + room, in.world), 1.0);
     }
     var s = surface(in, front);
-    if material.alpha.w > 0.0 {
-        s.ao *= crown_sky(in.face);
-    }
+    // Leaves, and the branches among them (both tagged by the app).
+    s.ao *= crown_sky(in.face);
     return light(in, s, material.alpha.w > 0.0, material.emissive.w, screen_effects);
 }
 
