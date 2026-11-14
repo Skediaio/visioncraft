@@ -136,7 +136,11 @@ mod tests {
                 .iter()
                 .fold([0.0, 0.0], |a, q| [a[0] + q[0] / n, a[1] + q[1] / n]);
             let bed = t.height_at(c[0], c[1]).unwrap();
-            assert!(pond.elevation > bed + 0.2 && pond.elevation < 0.0, "{name}: bed {bed}, water {}", pond.elevation);
+            assert!(
+                pond.elevation > bed + 0.2 && pond.elevation < 0.0,
+                "{name}: bed {bed}, water {}",
+                pond.elevation
+            );
         }
     }
 
