@@ -357,6 +357,7 @@ pub const TR_FLATTEN_HINT: &str =
     "Drag from the height you want: the ground under the first point.";
 pub const TR_POND_HINT: &str = "Click the pond's outline, then Enter or click the first point: the ground is dug out and filled with water.";
 pub const TR_POND_NAME: &str = "Pond";
+pub const TR_POND_EDGE: &str = "Pond edge";
 pub const TR_NONE: &str = "This project has no terrain yet: the ground is flat.";
 pub const TR_CREATE: &str = "Make terrain";
 pub const TR_REMOVE: &str = "Remove terrain";

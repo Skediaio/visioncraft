@@ -306,6 +306,21 @@ impl TerrainTool {
                 "shape.add_area",
                 json!({"name": t::TR_POND_NAME, "outline": water, "elevation": level, "drape": false, "material": "water"}),
             )?;
+            // A stone coping along the water's edge, so the bank's edge looks intended.
+            // An open band round the edge (a closed one would be a solid block): from the
+            // middle of the first edge round to a centimetre short of it.
+            let (a, b) = (water[0], water[1 % water.len()]);
+            let mid = |t: f32| [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+            let len = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt().max(0.1);
+            let mut ring = vec![mid(0.5)];
+            ring.extend(water.iter().skip(1));
+            ring.push(a);
+            ring.push(mid(0.5 - 0.01 / len));
+            s.run(
+                "shape.add_extrusion",
+                json!({"name": t::TR_POND_EDGE, "outline": ring, "closed": false, "thickness": POND_COPING_M,
+                       "height": POND_COPING_H, "material": "paving"}),
+            )?;
             follow_ground(s, before.as_deref())
         });
         if let Err(e) = r {
@@ -594,8 +609,12 @@ mod tests {
 
 /// A pond's bank slopes up over this distance outside its outline.
 const POND_BANK_M: f32 = 1.5;
-/// Its water stands this far below the lowest point of the old ground on the outline.
-const POND_MARGIN_M: f32 = 0.15;
+/// Width and height of the stone coping round a pond.
+const POND_COPING_M: f32 = 0.3;
+const POND_COPING_H: f32 = 0.12;
+/// Its water stands this far below the lowest point of the old ground on the outline: 5 cm, so
+/// the lawn meets the water instead of a dark strip of bank.
+const POND_MARGIN_M: f32 = 0.05;
 
 /// How far outside the outline the carved bank is still below the water: the carve lowers the
 /// ground by `depth * (1 - smoothstep(d / bank))` at distance `d` outside (the core's
