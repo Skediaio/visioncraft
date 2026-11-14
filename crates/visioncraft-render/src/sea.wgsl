@@ -269,7 +269,9 @@ fn fs_sea(in: Varying) -> @location(0) vec4<f32> {
 // opaque scene (and the bed below, which the water then covers) darker within
 // the swash band, as wet sand and stone absorb more (a water film lowers the
 // albedo: Lekner & Dorf, "Why some things are darker when wet", Applied
-// Optics 27(7), 1988).
+// Optics 27(7), 1988). Only ground the water actually reaches: a point in the
+// band must have the sea bed (ground below the level) within a few metres
+// around it on screen, so low ground inland stays dry.
 @vertex
 fn vs_sea_wet(@builtin(vertex_index) vi: u32) -> Varying {
     var out: Varying;
@@ -278,22 +280,61 @@ fn vs_sea_wet(@builtin(vertex_index) vi: u32) -> Varying {
     return out;
 }
 
+// The opaque scene's world position under `pixel` (perspective only), and whether anything is there.
+fn sea_wet_world(pixel: vec2<f32>) -> vec4<f32> {
+    let below = textureLoad(linear_depth, vec2<i32>(pixel), 0).r;
+    let ndc = vec2<f32>(pixel.x * g.viewport.z * 2.0 - 1.0, 1.0 - pixel.y * g.viewport.w * 2.0);
+    let h = g.inv_view_proj * vec4<f32>(ndc, 0.5, 1.0);
+    let ray = normalize(h.xyz / h.w - g.camera.xyz);
+    let forward = -normalize(vec3<f32>(g.view[0][2], g.view[1][2], g.view[2][2]));
+    let world = g.camera.xyz + ray * (below / max(dot(ray, forward), 1e-3));
+    return vec4<f32>(world, select(1.0, 0.0, below > SKY_DEPTH * 0.5));
+}
+
+// 0..1: how close the water's edge is to `world`: 1 at the bed, fading out by 8 m. A spiral of
+// samples (turned per pixel and photo frame), each under water counting by its nearness; at
+// the edge about half of them are, so twice that share is fully wet.
+fn sea_wet_near(world: vec3<f32>, pixel: vec2<f32>) -> f32 {
+    if world.y < sea.surface.x {
+        return 1.0;
+    }
+    let jitter = ign(pixel + 17.0 * g.grade.w);
+    var near = 0.0;
+    var total = 0.0;
+    for (var k = 0u; k < 24u; k++) {
+        let r = 8.0 * (f32(k) + jitter) / 24.0;
+        let a = (f32(k) + jitter) * 2.3999632; // the golden angle
+        let c = g.view_proj * vec4<f32>(world + r * vec3<f32>(cos(a), 0.0, sin(a)), 1.0);
+        let w = 1.0 - smoothstep(1.0, 8.0, r);
+        total += w;
+        if c.w <= 0.0 {
+            continue;
+        }
+        let ndc = c.xy / c.w;
+        if abs(ndc.x) > 1.0 || abs(ndc.y) > 1.0 {
+            continue;
+        }
+        let q = sea_wet_world(vec2<f32>((ndc.x * 0.5 + 0.5) * g.viewport.x, (0.5 - ndc.y * 0.5) * g.viewport.y));
+        if q.w > 0.0 && q.y < sea.surface.x && sea_covers(q.xz) {
+            near += w;
+        }
+    }
+    return saturate(2.0 * near / max(total, 1e-3));
+}
+
 @fragment
 fn fs_sea_wet(in: Varying) -> @location(0) vec4<f32> {
     let below = textureLoad(linear_depth, vec2<i32>(in.clip.xy), 0).r;
     if below > SKY_DEPTH * 0.5 || is_ortho() || g.time.w > 0.5 {
         return vec4<f32>(1.0);
     }
-    let ndc = vec2<f32>(in.clip.x * g.viewport.z * 2.0 - 1.0, 1.0 - in.clip.y * g.viewport.w * 2.0);
-    let h = g.inv_view_proj * vec4<f32>(ndc, 0.5, 1.0);
-    let ray = normalize(h.xyz / h.w - g.camera.xyz);
-    let forward = -normalize(vec3<f32>(g.view[0][2], g.view[1][2], g.view[2][2]));
-    let world = g.camera.xyz + ray * (below / max(dot(ray, forward), 1e-3));
+    let world = sea_wet_world(in.clip.xy).xyz;
     let top = sea.surface.x + sea.color.w;
-    let wet = (1.0 - smoothstep(top - 0.5 * sea.color.w, top, world.y))
+    var wet = (1.0 - smoothstep(top - 0.5 * sea.color.w, top, world.y))
         * (1.0 - smoothstep(300.0, 500.0, below)) * (1.0 - g.snow.x);
     if wet <= 0.0 || !sea_covers(world.xz) {
         return vec4<f32>(1.0);
     }
+    wet *= sea_wet_near(world, in.clip.xy);
     return vec4<f32>(vec3<f32>(mix(1.0, 0.5, wet)), 1.0);
 }
