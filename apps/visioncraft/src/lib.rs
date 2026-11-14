@@ -48,6 +48,7 @@ pub mod texture_worker;
 pub mod ui;
 pub mod user_objects;
 pub mod views;
+pub mod water_panel;
 
 pub use eframe::egui;
 pub use extension::{Extension, ExtensionCx, Overlay};
@@ -386,15 +387,16 @@ impl App {
         self.modelui = Default::default();
     }
 
-    /// The bundled example garden (`project.load_example`), as a new unsaved project.
-    fn open_example(&mut self) {
+    /// A bundled example (`project.load_example`: `garden`, `estate`, `beach-house` or
+    /// `coast`), as a new unsaved project named `title`.
+    fn open_example(&mut self, name: &str, title: &str) {
         self.new_project();
-        match self.studio.run(
-            "project.load_example",
-            serde_json::json!({"name": "garden"}),
-        ) {
+        match self
+            .studio
+            .run("project.load_example", serde_json::json!({"name": name}))
+        {
             Ok(_) => {
-                self.project_name = Some(strings::EXAMPLE_NAME.into());
+                self.project_name = Some(title.into());
                 self.studio.sync();
                 self.studio.frame_all();
             }
@@ -1363,11 +1365,18 @@ impl eframe::App for App {
                         - f32::from(u8::from(down(&[Key::A, Key::ArrowLeft]))),
                 )
             };
+            let sea = self.studio.project().sea.clone();
             let scene = &self.studio.scene;
             let before = self.studio.camera.walk.eye;
+            let ground_before = self.studio.camera.walk.ground;
             self.studio
                 .camera
                 .walk_update(dt, fwd, right, shift, &|x, y, z| scene.floor_below(x, y, z));
+            // Into the water up to wading depth, no further.
+            let w = &mut self.studio.camera.walk;
+            if sea.is_some_and(|s| !s.wadeable(w.eye.x, w.eye.z, w.ground)) {
+                (w.eye.x, w.eye.z, w.ground) = (before.x, before.z, ground_before);
+            }
             busy |= fwd != 0.0
                 || right != 0.0
                 || (self.studio.camera.walk.eye - before).length() > 1e-4;
@@ -1749,7 +1758,7 @@ impl eframe::App for App {
             && cx.s.project().terrain.is_none()
             && self.hud.mode.is_none()
         {
-            // A new user's three starting points instead of an empty field.
+            // A new user's starting points instead of an empty field.
             let mut start = None;
             egui::Area::new(egui::Id::new("empty"))
                 .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
@@ -1768,6 +1777,9 @@ impl eframe::App for App {
                                 (strings::START_DRAW, strings::START_DRAW_TIP),
                                 (strings::START_MODEL, strings::START_MODEL_TIP),
                                 (strings::START_EXAMPLE, strings::START_EXAMPLE_TIP),
+                                (strings::START_ESTATE, strings::START_ESTATE_TIP),
+                                (strings::START_BEACH_HOUSE, strings::START_BEACH_HOUSE_TIP),
+                                (strings::START_COAST, strings::START_COAST_TIP),
                             ]
                             .into_iter()
                             .enumerate()
@@ -1790,7 +1802,10 @@ impl eframe::App for App {
                     self.toasts.info(strings::START_DRAW_HINT);
                 }
                 Some(1) => files::pick(&self.inbox, &ctx, None, &["3dcraft", "obj"]),
-                Some(2) => self.open_example(),
+                Some(2) => self.open_example("garden", strings::EXAMPLE_NAME),
+                Some(3) => self.open_example("estate", strings::ESTATE_NAME),
+                Some(4) => self.open_example("beach-house", strings::BEACH_HOUSE_NAME),
+                Some(5) => self.open_example("coast", strings::COAST_NAME),
                 _ => {}
             }
         }

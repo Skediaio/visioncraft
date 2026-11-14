@@ -120,10 +120,24 @@ fn vs_impostor(@builtin(vertex_index) vi: u32, v: ImpostorIn) -> ImpostorVarying
     return out;
 }
 
+// The two cards a plant casts its shadow with (vertices 0-5 and 6-11), each lying as the view
+// it shows was taken: an upright card facing the sun's azimuth with a side view (trunk and
+// crown where they stand) and a level card through the centre with the view from above (the
+// crown's breadth along the sun). One card facing the sun showed a side view tilted: the trunk's
+// shadow started metres towards the sun of the trunk and a tree shadowed a hedge in front of it.
+// lib.rs draws 12 vertices per instance in shadow passes.
+fn impostor_shadow_towards(vi: u32, sun: vec3<f32>) -> vec3<f32> {
+    let level = vec3<f32>(sun.x, 0.0, sun.z);
+    if vi >= 6u || dot(level, level) < 1e-8 {
+        return vec3<f32>(0.0, 1.0, 0.0);
+    }
+    return normalize(level);
+}
+
 @vertex
 fn vs_impostor_shadow(@builtin(vertex_index) vi: u32, v: ImpostorIn) -> ImpostorVarying {
     let m = model(v.m0, v.m1, v.m2, v.m3);
-    var out = impostor_vertex(vi, m, g.sun_dir.xyz);
+    var out = impostor_vertex(vi, m, impostor_shadow_towards(vi, g.sun_dir.xyz));
     out.clip = cascade.view_proj * vec4<f32>(out.world, 1.0);
     out.fade = 1.0;
     return out;

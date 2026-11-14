@@ -105,6 +105,14 @@ pub enum Step {
         fit: Option<f32>,
     },
     Stats,
+    /// `bench FRAMES W H`: draws that many frames at that size after the assets settled,
+    /// waiting for the GPU each time, and prints the median and 90th-percentile frame time and
+    /// the GPU time per pass (where the device has timestamp queries).
+    Bench {
+        frames: u32,
+        w: u32,
+        h: u32,
+    },
     /// Sets the GPU texture memory cap of the asset store, in megabytes.
     TextureCap(u64),
     /// Writes the project as JSON (to seed the browser's stored project).
@@ -264,6 +272,11 @@ pub fn parse_step(v: &Value) -> Result<Step, String> {
         ["texture", "cap", mb] => Ok(Step::TextureCap(mb.parse().map_err(|_| "megabytes")?)),
         ["save", "project", path] => Ok(Step::SaveProject(path.to_string())),
         ["stats"] => Ok(Step::Stats),
+        ["bench", n, w, h] => Ok(Step::Bench {
+            frames: n.parse().map_err(|_| "frames")?,
+            w: w.parse().map_err(|_| "width")?,
+            h: h.parse().map_err(|_| "height")?,
+        }),
         ["place", asset, x, z, rest @ ..] => {
             let (mut rot, mut scale, mut y) = (0.0, 1.0, None);
             let mut i = 0;
@@ -681,6 +694,40 @@ mod native {
                     std::fs::write(&path, s.project().to_json_bytes())
                         .map_err(|e| at(format!("{path}: {e}")))?;
                     println!("wrote {path}");
+                }
+                Step::Bench { frames, w, h } => {
+                    s.resize(w, h);
+                    settle(&mut s, &device, &queue, false);
+                    let mut ms = Vec::new();
+                    let mut passes: std::collections::BTreeMap<&str, Vec<f32>> = Default::default();
+                    for _ in 0..frames.max(1) {
+                        let t = std::time::Instant::now();
+                        s.prepare();
+                        let mut encoder = device.create_command_encoder(&Default::default());
+                        s.renderer.render(&mut encoder);
+                        queue.submit([encoder.finish()]);
+                        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+                        ms.push(t.elapsed().as_secs_f64() * 1000.0);
+                        for (k, v) in s.renderer.stats().gpu_passes {
+                            passes.entry(k).or_default().push(v);
+                        }
+                    }
+                    ms.sort_by(f64::total_cmp);
+                    let at = |q: f64| ms[((ms.len() - 1) as f64 * q) as usize];
+                    let gpu: Vec<String> = passes
+                        .into_iter()
+                        .map(|(k, mut v)| {
+                            v.sort_by(f32::total_cmp);
+                            format!("{k} {:.2}", v[v.len() / 2])
+                        })
+                        .collect();
+                    println!(
+                        "bench {w}x{h}: {} frames, median {:.2} ms, p90 {:.2} ms; gpu ms (median per pass): {}",
+                        ms.len(),
+                        at(0.5),
+                        at(0.9),
+                        gpu.join(", ")
+                    );
                 }
                 Step::Stats => {
                     println!(

@@ -5,11 +5,10 @@ use glam::{Mat4, Vec3};
 use std::collections::HashMap;
 use std::sync::Arc;
 use visioncraft_core::{
-    AREA_LIFT_M, Asset, Evaluation, Generator, ImportedModel, LawnWindow, Material, ModelRef,
-    Project, Shape, SurfaceKind, Terrain, area_lifts, areas_over, blocked_by_buildings,
-    evaluate_in_scene, evaluate_surface_fill, ground_height, inside_outline, lawn_area,
-    lawn_scatter_within, placed_shape, raycast, resolve_materials, shape_mesh,
-    shape_mesh_on_terrain, water_areas,
+    Asset, Evaluation, Generator, ImportedModel, LawnWindow, Material, ModelRef, Project, Shape,
+    SurfaceKind, Terrain, area_lifts, areas_over, blocked_by_buildings, evaluate_in_scene,
+    evaluate_surface_fill, ground_height, inside_outline, lawn_area, lawn_scatter_within,
+    placed_shape, raycast, resolve_materials, shape_mesh, shape_mesh_on_terrain, water_areas,
 };
 use visioncraft_flora as flora;
 use visioncraft_render::{ImpostorId, ItemId, LineVertex, Renderer};
@@ -631,6 +630,8 @@ pub struct Scene {
     /// Where the ground changed since which stamp: generators depend on it.
     dirty: DirtyLog,
     terrain: Option<Arc<Terrain>>,
+    /// The project's sea level as last synced: plantings are kept off its bed.
+    sea: Option<visioncraft_core::Sea>,
     terrain_gpu: crate::terrain_gpu::TerrainGpu,
     pub timings: Timings,
     pub flora: Flora,
@@ -805,6 +806,11 @@ impl Scene {
             }
         }
         self.terrain.clone_from(&project.terrain);
+        // A new sea level re-places every planting: what it covers is kept off the bed.
+        if self.sea != project.sea {
+            self.sea.clone_from(&project.sea);
+            self.dirty.mark([[-1e7, -1e7], [1e7, 1e7]]);
+        }
         let clay = false; // the renderer's own clay mode handles it (`Renderer::set_clay`)
 
         // Owners: models, then shapes.
@@ -815,6 +821,8 @@ impl Scene {
             .as_ref()
             .map_or(0, |t| Arc::as_ptr(t) as usize);
         let mut on_ground: Vec<[[f32; 2]; 3]> = Vec::new();
+        let ground_lift =
+            visioncraft_core::ground_model_lift(&project.shapes, project.terrain.is_some());
         for m in &project.models {
             if let Some(l) = loaded.get(&m.id) {
                 let visible = project.layer_visible(&m.layer);
@@ -834,7 +842,7 @@ impl Scene {
                         f
                     }
                 };
-                let lift = if faces.is_empty() { 0.0 } else { AREA_LIFT_M };
+                let lift = if faces.is_empty() { 0.0 } else { ground_lift };
                 if visible {
                     on_ground.extend(faces.iter());
                 }
@@ -1966,13 +1974,22 @@ impl Scene {
                     truncated: false,
                 },
             },
-            _ => evaluate_in_scene(
-                g,
-                &self.ground_fn(),
-                &|x, z| self.open_ground(x, z),
-                &|p| self.up_to_building(p),
-                &|a| self.plant_dims(a),
-            ),
+            _ => {
+                let mut e = evaluate_in_scene(
+                    g,
+                    &self.ground_fn(),
+                    &|x, z| self.open_ground(x, z),
+                    &|p| self.up_to_building(p),
+                    &|a| self.plant_dims(a),
+                );
+                let catalog = self.library.catalog.as_ref();
+                visioncraft_core::keep_dry(self.sea.as_ref(), &mut e, &|a| {
+                    catalog
+                        .and_then(|c| c.asset(a))
+                        .is_some_and(visioncraft_core::water::floats)
+                });
+                e
+            }
         }
     }
 

@@ -66,6 +66,18 @@ pub const START_EXAMPLE: &str = "Open the example garden";
 pub const START_EXAMPLE_TIP: &str =
     "A small garden with a house, terrace, lawn, hedge, border, trees, a pond and lamps";
 pub const EXAMPLE_NAME: &str = "Example garden";
+pub const START_ESTATE: &str = "Open the estate";
+pub const START_ESTATE_TIP: &str =
+    "A large plot round an imported villa, with two lawns, a woodland, a border and a pond";
+pub const ESTATE_NAME: &str = "Example estate";
+pub const START_BEACH_HOUSE: &str = "Open the beach house";
+pub const START_BEACH_HOUSE_TIP: &str =
+    "A furnished single-storey house with a deck and carport, inside and out, on sand";
+pub const BEACH_HOUSE_NAME: &str = "Beach house";
+pub const START_COAST: &str = "Open the coast";
+pub const START_COAST_TIP: &str =
+    "The beach house on a bluff above a sandy beach, with palms and the sea to the horizon";
+pub const COAST_NAME: &str = "Coast";
 pub const VIEW_DISTANCE: &str = "View distance";
 pub const VIEW_DISTANCE_TIP: &str =
     "How far plants keep their detail, shadows reach and the air stays clear (1 is the default)";
@@ -449,3 +461,25 @@ pub const SP_SCAN_ALIKE: &str =
 pub const SP_SCAN_NONE: &str = "drawn";
 pub const SP_LEAVES: &str = "Leaves";
 pub const SP_BARK: &str = "Bark";
+
+// Sea & water (water_panel.rs).
+pub const WA_HEADER: &str = "Sea & water";
+pub const WA_ON: &str = "Sea level";
+pub const WA_HINT: &str =
+    "Water at one height out to the horizon: the terrain and ground above it make the coast.";
+pub const WA_SEA: &str = "Sea";
+pub const WA_LAKE: &str = "Lake";
+pub const WA_RIVER: &str = "River";
+pub const WA_LEVEL: &str = "Level";
+pub const WA_STATE: &str = "Sea state";
+pub const WA_HEIGHT: &str = "Wave height";
+pub const WA_FOLLOW_WIND: &str = "Waves follow the wind";
+pub const WA_DIRECTION: &str = "Wave direction";
+pub const WA_FLOW_DIR: &str = "Flow direction";
+pub const WA_FLOW: &str = "Flow";
+pub const WA_CLARITY: &str = "Clarity";
+pub const WA_FOAM: &str = "Foam";
+pub const WA_COLOR: &str = "Deep colour";
+pub const WA_BEACH: &str = "Beach across the view";
+pub const WA_BEACH_HINT: &str =
+    "A sandy beach along a line through the middle of the view, the sea beyond it.";

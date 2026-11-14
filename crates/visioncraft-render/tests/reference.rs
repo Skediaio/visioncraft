@@ -922,6 +922,58 @@ fn u_open_shade_ratio() {
     check("u_open_shade", &px);
 }
 
+/// A tree drawn as its impostor shadows the ground away from the sun, and not the ground on
+/// its sunny side: its side view used to be cast from a card facing the sun, tilted, so the
+/// trunk's shadow began metres towards the sun and fell on a hedge in front of the tree.
+#[test]
+fn impostor_shadow_stays_behind_the_tree() {
+    let mut r = renderer(W, H);
+    let mut ground = MeshData::default();
+    ground.add_box(Vec3::new(-40.0, -0.1, -40.0), Vec3::new(40.0, 0.0, 40.0));
+    let ground = r.add_mesh(&ground.mesh()).expect("ground");
+    let grey = r.add_material(&Material {
+        base_color: [0.2, 0.2, 0.2, 1.0],
+        roughness: 0.95,
+        ..Default::default()
+    });
+    r.add_item(ground, grey, &[Mat4::IDENTITY]);
+    // A tree 9 m tall, an impostor from 1 m on.
+    let tree = demo::plant_lods(&PlantShape::tree(), 42);
+    let mats = demo::plant_materials(&mut r, Vec3::new(0.16, 0.30, 0.07), 5);
+    demo::add_plants_with_impostor(
+        &mut r,
+        &tree,
+        &mats,
+        [0.5, 1.0, 300.0],
+        &[Mat4::from_scale(Vec3::splat(2.0))],
+    );
+    let aspect = W as f32 / H as f32;
+    let cam = demo::camera(Vec3::new(25.0, 18.0, 0.0), Vec3::ZERO, aspect);
+    // Sun from the south (+Z), 55 degrees up.
+    setup(&mut r, cam, Sun::from_angles(180.0, 55.0), 15.0);
+    settle(&mut r);
+    let px = capture(&mut r, W, H);
+    let at = |p: Vec3| {
+        let q = r.project(p).expect("in view");
+        scene_luminance(mean(
+            &px,
+            q.x as u32 - 2,
+            q.y as u32 - 2,
+            q.x as u32 + 3,
+            q.y as u32 + 3,
+        ))
+    };
+    let open = at(Vec3::new(6.0, 0.0, 1.5));
+    let sunny_side = at(Vec3::new(0.0, 0.0, 1.5));
+    let behind = at(Vec3::new(0.0, 0.0, -4.5));
+    eprintln!("open {open}, sunny side {sunny_side}, behind {behind}");
+    assert!(
+        sunny_side > 0.85 * open,
+        "sunny side {sunny_side} vs {open}"
+    );
+    assert!(behind < 0.6 * open, "behind {behind} vs {open}");
+}
+
 /// A white wall on a green lawn after sunset (physical sky): lit by the
 /// twilight sky and the little the lawn bounces, it reads neutral to cool,
 /// never green (the ground below the horizon used to take a daylight sky

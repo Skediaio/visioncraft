@@ -8,11 +8,22 @@ use crate::spec::{ParamType as T, param, spec};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-/// (name, commands) of every example.
-pub const EXAMPLES: [(&str, &str); 3] = [
-    ("garden", include_str!("../examples/garden.json")),
-    ("estate", include_str!("../examples/estate.json")),
-    ("beach-house", include_str!("../examples/beach-house.json")),
+/// The furnished beach house (model, materials per body, furniture, lights), shared by the
+/// `beach-house` example (on sand) and the `coast` example (on a bluff above the sea).
+const BEACH_HOUSE: &str = include_str!("../examples/beach-house-furnished.json");
+
+/// (name, command files run in order) of every example.
+pub const EXAMPLES: [(&str, &[&str]); 4] = [
+    ("garden", &[include_str!("../examples/garden.json")]),
+    ("estate", &[include_str!("../examples/estate.json")]),
+    (
+        "beach-house",
+        &[BEACH_HOUSE, include_str!("../examples/beach-house.json")],
+    ),
+    (
+        "coast",
+        &[BEACH_HOUSE, include_str!("../examples/coast.json")],
+    ),
 ];
 
 /// The files examples refer to, by their source (`example:<file>`): the estate's villa, a
@@ -42,8 +53,8 @@ pub(super) fn register(s: &mut Session) {
         spec(
             "project.load_example",
             "Open Example",
-            "Replaces the project with an example built from commands: `garden`, a 20 by 30 m plot with a house block, terrace, lawn, border, path, carved pond, hornbeam hedge, three trees, path lights, a bollard and six viewpoints; `estate`, a 100 by 60 m plot round an imported 3DCraft villa with two large lawns, a brushed woodland, a border, a pond in the terrain, path lights, a planting on a hidden layer and three viewpoints; `beach-house`, a furnished single-storey beach house imported from 3DCraft (walls, glass, doors, kitchen, bathrooms, deck, carport) on sand, with library materials per element, catalogue furniture, interior downlights and ten viewpoints inside and out, one at dusk.",
-            vec![param("name", T::String, "The example: garden, estate or beach-house.").required()],
+            "Replaces the project with an example built from commands: `garden`, a 20 by 30 m plot with a house block, terrace, lawn, border, path, carved pond, hornbeam hedge, three trees, path lights, a bollard and six viewpoints; `estate`, a 100 by 60 m plot round an imported 3DCraft villa with two large lawns, a brushed woodland, a border, a pond in the terrain, path lights, a planting on a hidden layer and three viewpoints; `beach-house`, a furnished single-storey beach house imported from 3DCraft (walls, glass, doors, kitchen, bathrooms, deck, carport) on sand, with library materials per element, catalogue furniture, interior downlights and ten viewpoints inside and out, one at dusk; `coast`, the same furnished house with its deck and carport on a 4 m bluff above a sandy beach in southern California, its glass wall to the sea, palms, cypresses, an olive, coastal grasses and ice plant, a path from the deck steps down to the beach, the sea to the horizon and eight viewpoints, one inside.",
+            vec![param("name", T::String, "The example: garden, estate, beach-house or coast.").required()],
             "{name, steps}",
             json!({"name": "garden"}),
         ),
@@ -53,16 +64,17 @@ pub(super) fn register(s: &mut Session) {
 
 /// The project an example builds.
 pub fn example(name: &str) -> Result<Project, String> {
-    let (_, commands) = EXAMPLES
-        .iter()
-        .find(|e| e.0 == name)
-        .ok_or_else(|| format!("no example `{name}`; there are: garden, estate, beach-house"))?;
-    let steps: Vec<(String, Value)> =
-        serde_json::from_str(commands).map_err(|e| format!("example {name}: {e}"))?;
+    let (_, files) = EXAMPLES.iter().find(|e| e.0 == name).ok_or_else(|| {
+        format!("no example `{name}`; there are: garden, estate, beach-house, coast")
+    })?;
     let mut s = Session::new(Project::default());
-    for (command, params) in steps {
-        s.run(&command, params)
-            .map_err(|e| format!("example {name}, {command}: {e}"))?;
+    for commands in *files {
+        let steps: Vec<(String, Value)> =
+            serde_json::from_str(commands).map_err(|e| format!("example {name}: {e}"))?;
+        for (command, params) in steps {
+            s.run(&command, params)
+                .map_err(|e| format!("example {name}, {command}: {e}"))?;
+        }
     }
     Ok(s.project().clone())
 }
@@ -84,8 +96,8 @@ fn load_example(project: &mut Project, params: &Value) -> Result<Value, CommandE
 mod tests {
     #[test]
     fn the_garden_builds_small_and_complete() {
-        let (_, json) = super::EXAMPLES[0];
-        assert!(json.len() < 50_000);
+        let (_, files) = super::EXAMPLES[0];
+        assert!(files.iter().map(|f| f.len()).sum::<usize>() < 50_000);
         let p = super::example("garden").unwrap();
         let names: Vec<&str> = p.shapes.iter().map(|s| s.name()).collect();
         for n in ["House", "Terrace", "Lawn", "Border", "Pond"] {
@@ -153,7 +165,7 @@ mod tests {
     /// under it (the estate's pond was a dry pit).
     #[test]
     fn every_example_pond_holds_water() {
-        for (name, _) in super::EXAMPLES.iter().filter(|e| e.0 != "beach-house") {
+        for name in ["garden", "estate"] {
             let p = super::example(name).unwrap();
             let t = p.terrain.as_deref().unwrap();
             let pond = p
@@ -197,6 +209,42 @@ mod tests {
         assert_eq!(p.viewpoints.len(), 10);
         assert_eq!(p.viewpoints.iter().filter(|v| v.time.is_some()).count(), 1);
         assert!(p.terrain.is_some());
+    }
+
+    #[test]
+    fn the_coast_has_a_house_above_the_beach_and_the_sea_beyond() {
+        let p = super::example("coast").unwrap();
+        let sea = p.sea.clone().expect("a sea");
+        let t = p.terrain.as_deref().unwrap();
+        let h = |x, z| t.height_at(x, z).unwrap();
+        // The house stands on dry land, the beach runs into the water, the far bed is deep.
+        for (x, z) in [(-6.6, -10.5), (24.6, -12.3), (-0.6, 7.65), (24.6, 6.6)] {
+            assert!(h(x, z).abs() < 0.05, "ground at the house: {}", h(x, z));
+        }
+        assert!(h(12.0, 36.0) > sea.level && h(12.0, 36.0) < sea.level + 1.0);
+        assert!(h(12.0, 126.0) < sea.level - 5.0);
+        // The endless ground lies under the water, so the sea reaches the horizon.
+        assert!(p.view.ground.unwrap().height < sea.level);
+        // The beach house itself, with its furniture and lights, not a stand-in block.
+        assert_eq!(p.models.len(), 1);
+        assert_eq!(p.models[0].source, "example:beach-house.3dcraft");
+        assert_eq!(p.models[0].transform.translation, [0.0, 0.0, 0.0]);
+        assert_eq!(
+            p.assignments.len(),
+            46 + 1,
+            "the house's bodies and the path"
+        );
+        assert_eq!(p.lights.len(), 23);
+        let names: Vec<&str> = p.shapes.iter().map(|s| s.name()).collect();
+        assert_eq!(names, ["Beach path"]);
+        assert_eq!(p.viewpoints.len(), 8);
+        // Nothing of the planting stands on the sea bed.
+        let dune = p.generators.iter().find(|g| g.name() == "Dune grass");
+        let dune = dune.unwrap();
+        let mut e = crate::evaluate(dune, &|x, z| t.height_at(x, z));
+        let n = e.placements.len();
+        crate::keep_dry(Some(&sea), &mut e, &|_| false);
+        assert_eq!(e.placements.len(), n, "the dune grass is above the water");
     }
 
     #[test]

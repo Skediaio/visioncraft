@@ -128,8 +128,13 @@ In this order; items 1 to 3 are in progress.
    when a set is a look-alike.
 2. The remaining ambientCG leaf sets and Poly Haven leaf textures; report coverage again.
 3. Ground clutter as a generator (fallen leaves by species and season, stones, lawn edges).
-4. Growth data: the table is estimated. Check it against open data (Wikidata, GBIF, Trefle) and
-   mark each value's source.
+4. Growth data: the table is estimated. Check it against open data and mark each value's source
+   and licence. Candidates, licences as stated by the sources on 2026-11-14: Ellenberg indicator
+   values (CC BY 4.0; light and soil of wild habitats, not garden tolerance), the NW-FVA forestry
+   yield tables and the Tallo tree database (both CC BY 4.0) for growth curves of trees, EU-Forest
+   (CC0), GBIF and WCVP for names. Not Trefle: its only bulk download is ODbL, its light and soil
+   fields come from a third-party database of unknown licence, and its API needs a server-side
+   token.
 5. Reference scans: a candidate list of CC0 botanical scans (ffish.asia / floraZia, Smithsonian)
    for the species we have, to compare generated forms against real plants, and a few reduced
    hero plants where a scan is clearly better than the generator.

@@ -195,13 +195,18 @@ fn placements(
                 visioncraft_flora::Species::by_id(id)
                     .map(|s| (s.mature_height_m, s.mature_width_m / 2.0))
             };
-            let e = evaluate_in_scene(
+            let mut e = evaluate_in_scene(
                 g,
                 &|x, z| ground_at(project, owners, x, z, true),
                 &|x, z| ground_at(project, owners, x, z, false),
                 &up,
                 &|a| plant_size(project, assets, a, &species),
             );
+            visioncraft_core::keep_dry(project.sea.as_ref(), &mut e, &|a| {
+                assets
+                    .iter()
+                    .any(|x| x.id == a && visioncraft_core::water::floats(x))
+            });
             (e.placements, e.truncated)
         }
     }
@@ -417,6 +422,16 @@ pub(crate) fn inspect(session: &Session, state: &HostState, v: &Verbosity) -> Va
     out.insert("lights".into(), json!(p.lights));
     out.insert("viewpoints".into(), json!(p.viewpoints));
     out.insert("terrain".into(), terrain.into());
+    // The sea with what it means: the waves' height and length from its sea state.
+    out.insert(
+        "sea".into(),
+        p.sea.as_ref().map_or(Value::Null, |s| {
+            let mut v = json!(s);
+            v["wave_height_m"] = json!(s.wave_height_m());
+            v["peak_wavelength_m"] = json!(s.peak_wavelength_m());
+            v
+        }),
+    );
     let missing = missing_json(state, p);
     if !missing.is_empty() {
         out.insert("missingModels".into(), missing.into());

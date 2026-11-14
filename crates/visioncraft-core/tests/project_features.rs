@@ -45,7 +45,7 @@ fn version_one_file_without_new_fields_loads() {
     assert_eq!(p.layers.len(), 4);
     assert_eq!(p.layers[0].name, "Model");
     assert_eq!(p.models[0].layer, "model");
-    assert_eq!(p.materials.len(), 13);
+    assert_eq!(p.materials.len(), 14);
     assert!(p.shapes.is_empty() && p.generators.is_empty() && !p.style.clay);
     assert!(p.species.is_empty() && p.view == Default::default() && p.terrain.is_none());
 }
