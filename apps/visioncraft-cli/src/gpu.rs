@@ -60,7 +60,7 @@ impl Pictures for GpuPictures {
             .as_mut()
             .map_err(|e| format!("no GPU for pictures: {e}"))?;
         let s = &mut g.studio;
-        s.session = Session::new(project.clone());
+        s.set_session(Session::new(project.clone()));
         // Geometry: the host's, installed once per model and version.
         s.loaded.retain(|id, _| models.contains_key(id));
         g.installed.retain(|id, _| models.contains_key(id));

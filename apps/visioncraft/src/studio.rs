@@ -414,6 +414,13 @@ impl Studio {
         std::mem::take(&mut self.lamp_problems)
     }
 
+    /// Puts `session` in place of the current one without clearing the scene (pictures of
+    /// another project state); its lamps get their lights at the next reconcile.
+    pub fn set_session(&mut self, session: Session) {
+        self.session = session;
+        self.lamps_reconciled = (u64::MAX, false);
+    }
+
     /// Makes the next `sync` look at the scene again although the project did not change.
     pub fn force_sync(&mut self) {
         self.draft_serial += 1;
@@ -587,10 +594,14 @@ impl Studio {
     pub fn settle_for_picture(&mut self) -> (u32, Vec<String>) {
         let start = crate::assets::now_ms();
         let mut steps = 0;
+        let mut lamp_problems = Vec::new();
         let stream = self.scene.library.store.stream_bytes;
         self.scene.library.store.stream_bytes = 64 << 20;
         loop {
             self.prepare();
+            // The lights of lamps, once the catalogue that says which assets are lamps is in (a
+            // project made without a window has none yet).
+            lamp_problems.extend(self.reconcile_lamps());
             steps += 1;
             if self.plants_pending() == 0 && self.scene.library.idle() {
                 break;
@@ -604,6 +615,7 @@ impl Studio {
         self.scene.library.store.stream_bytes = stream;
         self.prepare();
         let mut problems = picture_problems(self.plants_pending(), self.scene.library.idle());
+        problems.append(&mut lamp_problems);
         problems.append(&mut self.scene.library.messages);
         problems.append(&mut self.scene.library.store.messages);
         (steps, problems)
@@ -1056,6 +1068,9 @@ impl Studio {
         // A still waiting for its textures takes the highest tier at its own resolution.
         let tier = if self.still_textures.is_some() {
             "4k"
+        } else {
+                "4k"
+            }
         } else {
             self.textures.unwrap_or(match preset_name(&q) {
                 "ultra" => "4k",
