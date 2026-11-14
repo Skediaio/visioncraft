@@ -44,6 +44,10 @@ Subcommands:
   serve      JSON-lines server on stdin/stdout, for scripts
   mcp        Model Context Protocol server on stdin/stdout, for agents
 
+Asset library (materials, objects, plants' scanned leaves): `--assets DIR` anywhere on the
+command line, else the folder in VISIONCRAFT_ASSETS, else ./assets, else assets beside the
+executable. Pictures without it list \"No asset library found at ...\" in their problems.
+
 Exit codes: 0 success, 1 failure, 2 usage error.";
 
 const HELP_COMMANDS: &str = "\
@@ -1102,8 +1106,26 @@ fn run(raw: &[String]) -> Res {
     })
 }
 
+/// The arguments without `--assets DIR` (any subcommand takes it; the asset store reads it from
+/// the process' arguments).
+fn without_assets(args: impl Iterator<Item = String>) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut skip = false;
+    for a in args {
+        if std::mem::take(&mut skip) {
+            continue;
+        }
+        if a == "--assets" {
+            skip = true;
+            continue;
+        }
+        out.push(a);
+    }
+    out
+}
+
 fn main() -> ExitCode {
-    let raw: Vec<String> = std::env::args().skip(1).collect();
+    let raw = without_assets(std::env::args().skip(1));
     match run(&raw) {
         Ok(()) => ExitCode::SUCCESS,
         Err(CliError::Usage(m)) => {
@@ -1114,5 +1136,24 @@ fn main() -> ExitCode {
             let _ = writeln!(std::io::stderr(), "visioncraft-cli: {m}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod args_tests {
+    #[test]
+    fn assets_is_taken_out_wherever_it_stands() {
+        let args = [
+            "render",
+            "--assets",
+            "/lib",
+            "a.visioncraft",
+            "--out",
+            "x.png",
+        ];
+        assert_eq!(
+            super::without_assets(args.iter().map(|s| s.to_string())),
+            ["render", "a.visioncraft", "--out", "x.png"]
+        );
     }
 }

@@ -311,14 +311,20 @@ mod io {
 
     pub type Base = Arc<PathBuf>;
 
-    /// `--assets <dir>`, else `./assets`, else `assets` beside the executable.
+    /// `--assets <dir>`, else `VISIONCRAFT_ASSETS`, else `./assets`, else `assets` beside the
+    /// executable.
     pub fn base() -> Base {
         let args: Vec<String> = std::env::args().collect();
         let given = args
             .iter()
             .position(|a| a == "--assets")
             .and_then(|i| args.get(i + 1))
-            .map(PathBuf::from);
+            .map(PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("VISIONCRAFT_ASSETS")
+                    .filter(|v| !v.is_empty())
+                    .map(PathBuf::from)
+            });
         let beside = std::env::current_exe()
             .ok()
             .and_then(|e| e.parent().map(|p| p.join("assets")));
@@ -803,7 +809,7 @@ impl AssetStore {
         let catalog_failed = self.failed.iter().any(|k| k.path() == "catalog.json");
         if key.path() == "catalog.json" {
             self.messages.push(format!(
-                "No asset library found at {} ({why}). Objects and library materials are unavailable; start with --assets <dir> or open the page with ?assets=<url>.",
+                "No asset library found at {} ({why}). Objects and library materials are unavailable; start with --assets <dir>, set VISIONCRAFT_ASSETS, or open the page with ?assets=<url>.",
                 self.base_description()
             ));
         } else if matches!(key, Key::Thumb(_))
