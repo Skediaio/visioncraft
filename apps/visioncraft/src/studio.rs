@@ -679,6 +679,13 @@ impl Studio {
         self.ev_used = (ev, elevation);
         self.renderer.set_exposure(ev);
         self.renderer.set_grade(power, saturation);
+        self.renderer.set_clouds(&visioncraft_render::Clouds {
+            cover: match v.clouds.kind {
+                visioncraft_core::CloudKind::Clear => 0.0,
+                _ => v.clouds.cover,
+            },
+            overcast: v.clouds.kind == visioncraft_core::CloudKind::Overcast,
+        });
         // Light bounced up from what lies under the camera (paving under a canopy, lawn in the
         // garden), with most of its colour taken out: a green lawn tints a wall only a little.
         let eye = self.camera.eye();

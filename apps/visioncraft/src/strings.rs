@@ -206,6 +206,13 @@ pub const PLACE_PERSON: &str = "Place person";
 pub const SUMMER_TIME: &str = "Summer time follows the date";
 pub const EXPOSURE_AUTO: &str = "Auto exposure";
 pub const LOOK: &str = "Look";
+pub const CLOUDS: &str = "Clouds";
+pub const CLOUD_KINDS: [(&str, &str); 3] = [
+    ("clear", "Clear"),
+    ("cumulus", "Fair"),
+    ("overcast", "Overcast"),
+];
+pub const CLOUD_COVER: &str = "Cover";
 pub const LOOKS: [(&str, &str); 3] = [
     ("neutral", "Neutral"),
     ("natural", "Natural"),

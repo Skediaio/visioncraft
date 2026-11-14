@@ -421,6 +421,37 @@ fn view_fields(ui: &mut egui::Ui, cx: &mut Cx) {
             }
         }
     });
+    ui.horizontal(|ui| {
+        ui.label(t::CLOUDS);
+        let c = v.clouds;
+        let now = serde_json::to_value(c.kind).unwrap_or_default();
+        for (key, label) in t::CLOUD_KINDS {
+            if ui.selectable_label(now == key, label).clicked() && now != key {
+                let cover = if key == "overcast" {
+                    1.0
+                } else {
+                    c.cover.min(0.6)
+                };
+                cx.run("view.set", json!({"clouds": {"kind": key, "cover": cover}}));
+            }
+        }
+    });
+    if v.clouds.kind != visioncraft_core::CloudKind::Clear {
+        let mut cover = v.clouds.cover;
+        if ui
+            .add(
+                egui::Slider::new(&mut cover, 0.0..=1.0)
+                    .text(t::CLOUD_COVER)
+                    .max_decimals(2),
+            )
+            .drag_stopped()
+        {
+            cx.run(
+                "view.set",
+                json!({"clouds": {"kind": v.clouds.kind, "cover": cover}}),
+            );
+        }
+    }
     // Haze, wind and the ground plane: folded, they are rarely changed.
     egui::CollapsingHeader::new(egui::RichText::new(t::AIR_AND_GROUND).small())
         .id_salt("sun-air")
