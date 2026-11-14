@@ -233,8 +233,8 @@ const UI_METHODS: &[Method] = &[
     },
     Method {
         name: "ui.set",
-        params: r#"{"mode": "draw"|"materials"|"objects"|"sun"|"viewpoints"|extension id|null, "camera": {"position": [x, y, z], "target": [x, y, z], "fov_y_deg": number}, "lightsOn": boolean, "overlaysInPictures": boolean, "textures": "auto"|"1k"|"2k"|"4k"}"#,
-        summary: "Switches the mode, places the camera (orbiting `target`), turns the lights on or off, and whether pictures show the editor's overlays.",
+        params: r#"{"mode": "draw"|"materials"|"objects"|"sun"|"viewpoints"|extension id|null, "camera": {"position": [x, y, z], "target": [x, y, z], "fov_y_deg": number}, "lightsOn": boolean, "overlaysInPictures": boolean, "textures": "auto"|"1k"|"2k"|"4k", "quality": "auto"|"low"|"medium"|"high"|"ultra"}"#,
+        summary: "Switches the mode, places the camera (orbiting `target`), turns the lights on or off, whether pictures show the editor's overlays, the texture resolution and the rendering quality (the Quality menu).",
     },
     Method {
         name: "ui.fly",
@@ -370,6 +370,20 @@ impl Host for Bound<'_, '_> {
                 }
                 if let Some(on) = params.get("overlaysInPictures").and_then(Value::as_bool) {
                     h.studio.overlays_in_pictures = on;
+                }
+                if let Some(q) = params.get("quality") {
+                    let name = q.as_str().unwrap_or_default();
+                    if name == "auto" {
+                        h.studio.quality_auto = true;
+                    } else {
+                        h.studio.quality = visioncraft_render::Quality::PRESETS
+                            .iter()
+                            .position(|(n, _)| n.eq_ignore_ascii_case(name))
+                            .ok_or_else(|| {
+                                format!("quality: auto, low, medium, high or ultra, not {q}")
+                            })?;
+                        h.studio.quality_auto = false;
+                    }
                 }
                 if let Some(t) = params.get("textures") {
                     h.studio.textures = match t.as_str() {
