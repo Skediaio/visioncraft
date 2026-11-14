@@ -148,7 +148,7 @@ impl Sea {
 
     /// The water's depth over a ground point `y` high at (x, z): `None` when the point is dry.
     pub fn depth_over(&self, x: f32, z: f32, y: f32) -> Option<f32> {
-        (self.covers(x, z) && y < self.level).then(|| self.level - y)
+        (self.covers(x, z) && y < self.level).then_some(self.level - y)
     }
 }
 
