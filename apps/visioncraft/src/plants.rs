@@ -61,6 +61,9 @@ const TREE_M: f32 = 3.0;
 pub const LAWN_SPECIES: &str = "flora:lawn-tuft";
 /// Views around a tree an impostor is baked from.
 const IMPOSTOR_VIEWS: u32 = 8;
+/// Views drawn into an impostor's atlas per frame: a bake spreads over four frames (three of
+/// views, one of dilation and mips) instead of one long submit.
+const BAKE_VIEWS_PER_FRAME: u32 = 3;
 /// Impostors draw up to here at most (metres; beyond, a tree is a few pixels).
 pub const IMPOSTOR_MAX_M: f32 = 2500.0;
 /// An impostor draws while its plant is taller than about 1.5 pixels: at a 50 degree field of view
@@ -212,6 +215,8 @@ pub struct Flora {
     from_worker: Option<(String, Answer)>,
     /// The species whose meshes are being generated.
     meshing: Option<MeshJob>,
+    /// The impostor being baked: (species, class, variant) and the bake.
+    baking: Option<((String, u32, u32), visioncraft_render::ImpostorBake)>,
 }
 
 type Answer =
@@ -293,11 +298,15 @@ impl Flora {
 
     /// Bakes one waiting impostor (from the far mesh level). True when one was made.
     fn bake_one(&mut self, r: &mut Renderer) -> bool {
-        while let Some((id, class, variant)) = self.bakes.pop() {
+        // A bake runs over several frames, a few views a frame (`BAKE_VIEWS_PER_FRAME`).
+        while self.baking.is_none() {
+            let Some(key) = self.bakes.pop() else {
+                return false;
+            };
             let Some(v) = self
                 .classes
-                .get_mut(&(id, class))
-                .and_then(|c| c.get_mut(variant as usize))
+                .get(&(key.0.clone(), key.1))
+                .and_then(|c| c.get(key.2 as usize))
             else {
                 continue;
             };
@@ -308,37 +317,57 @@ impl Flora {
                 .filter(|p| p.2 == far)
                 .map(|p| (p.0, p.1))
                 .collect();
-            let Ok(imp) = r.bake_impostor(&src, None, IMPOSTOR_VIEWS) else {
-                continue; // stays a mesh to infinity
-            };
-            // Trees hand over early; smaller plants keep their meshes as far as before and
-            // then become an impostor instead of disappearing.
-            let ends = if v.height >= TREE_M {
-                impostor_distances(v.height)
-            } else {
-                lod_distances(v.height)
-            };
-            let mut levels: Vec<f32> = v.parts.iter().map(|p| p.2).collect();
-            levels.sort_by(f32::total_cmp);
-            levels.dedup();
-            let short = v
-                .parts
-                .iter()
-                .map(|&(m, mat, d)| {
-                    let rank = levels.iter().position(|l| *l == d).unwrap_or(0);
-                    // the last level is always the impostor's hand-over
-                    let rank = if d == far { 2 } else { rank.min(1) };
-                    (m, mat, ends[rank])
-                })
-                .collect();
-            // A rebake (another impostor resolution) frees the atlas it replaces.
-            if let Some((_, old)) = v.baked.replace((short, imp)) {
-                r.remove_impostor(old);
-            }
-            self.rev += 1;
-            return true;
+            if let Ok(bake) = r.start_impostor_bake(&src, None, IMPOSTOR_VIEWS) {
+                self.baking = Some((key, bake));
+            } // else it stays a mesh to infinity
         }
-        false
+        let Some((_, bake)) = self.baking.as_mut() else {
+            return false;
+        };
+        let Some(result) = r.impostor_bake_step(bake, BAKE_VIEWS_PER_FRAME) else {
+            return false;
+        };
+        let Some(((id, class, variant), _)) = self.baking.take() else {
+            return false;
+        };
+        let Ok(imp) = result else {
+            return false; // a part went away: stays a mesh
+        };
+        let Some(v) = self
+            .classes
+            .get_mut(&(id, class))
+            .and_then(|c| c.get_mut(variant as usize))
+        else {
+            r.remove_impostor(imp);
+            return false;
+        };
+        let far = v.parts.iter().map(|p| p.2).fold(0.0, f32::max);
+        // Trees hand over early; smaller plants keep their meshes as far as before and
+        // then become an impostor instead of disappearing.
+        let ends = if v.height >= TREE_M {
+            impostor_distances(v.height)
+        } else {
+            lod_distances(v.height)
+        };
+        let mut levels: Vec<f32> = v.parts.iter().map(|p| p.2).collect();
+        levels.sort_by(f32::total_cmp);
+        levels.dedup();
+        let short = v
+            .parts
+            .iter()
+            .map(|&(m, mat, d)| {
+                let rank = levels.iter().position(|l| *l == d).unwrap_or(0);
+                // the last level is always the impostor's hand-over
+                let rank = if d == far { 2 } else { rank.min(1) };
+                (m, mat, ends[rank])
+            })
+            .collect();
+        // A rebake (another impostor resolution) frees the atlas it replaces.
+        if let Some((_, old)) = v.baked.replace((short, imp)) {
+            r.remove_impostor(old);
+        }
+        self.rev += 1;
+        true
     }
 
     /// Bakes every impostor again, at the quality's impostor resolution now set.
@@ -366,7 +395,7 @@ impl Flora {
 
     /// Generations and impostor bakes still to do.
     pub fn pending(&self) -> usize {
-        self.queue.len() + self.bakes.len()
+        self.queue.len() + self.bakes.len() + usize::from(self.baking.is_some())
     }
 
     /// Frees species `id` (a species editor preview that changed) once nothing draws it.
@@ -376,6 +405,9 @@ impl Flora {
         // until the app closes; free them here if species previews get edited a lot
         if self.meshing.as_ref().is_some_and(|j| j.id == id) {
             self.meshing = None;
+        }
+        if self.baking.as_ref().is_some_and(|b| b.0.0 == id) {
+            self.baking = None;
         }
         self.bakes.retain(|b| b.0 != id);
         self.retired.push((id.to_string(), 3));
