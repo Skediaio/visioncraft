@@ -1044,9 +1044,13 @@ pub struct Tuft {
     pub height_m: f32,
 }
 
+/// Steepest ground 3D lawn blades grow on.
+pub const LAWN_MAX_SLOPE_DEG: f32 = 30.0;
+
 /// Tufts for a lawn on face number `face` (an index into `model.faces`): about `density_per_m2`
 /// per square metre of the face, never outside it, deterministic, with a height of 0.75-1.25
-/// times the blade height. Capped at [`MAX_PLACEMENTS`].
+/// times the blade height, on triangles no steeper than [`LAWN_MAX_SLOPE_DEG`]. Capped at
+/// [`MAX_PLACEMENTS`].
 pub fn lawn_scatter(model: &ImportedModel, face: usize, lawn: &Lawn3d) -> Vec<Tuft> {
     if !(lawn.density_per_m2.is_finite() && lawn.density_per_m2 > 0.0) {
         return Vec::new();
@@ -1056,7 +1060,9 @@ pub fn lawn_scatter(model: &ImportedModel, face: usize, lawn: &Lawn3d) -> Vec<Tu
         face,
         lawn.density_per_m2,
         lawn.seed,
-        f32::NEG_INFINITY,
+        // No blades on a bank steeper than 30 degrees (a pond's carved edge): seen from the
+        // lawn they stood out as a bright fringe against the dark bank, backlit at dusk.
+        LAWN_MAX_SLOPE_DEG.to_radians().cos(),
     )
     .into_iter()
     .map(|(position, mut rng)| Tuft {
