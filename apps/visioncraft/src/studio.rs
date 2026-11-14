@@ -903,6 +903,8 @@ impl Studio {
                 color: g.color,
                 ..Default::default()
             }));
+        self.renderer
+            .set_sea(self.project().sea.as_ref().map(|s| render_sea(s, &v)));
         let d = v.wind_direction_deg.to_radians();
         self.renderer.set_wind(&visioncraft_render::Wind {
             direction: Vec3::new(d.sin(), 0.0, -d.cos()),
@@ -1664,5 +1666,31 @@ mod picture_tests {
         assert_eq!(p.len(), 1);
         assert!(p[0].starts_with("7 plant generations"));
         assert_eq!(super::picture_problems(0, false).len(), 1);
+    }
+}
+
+/// The project's sea in the renderer's terms: waves along `direction_deg` or the wind, flow for
+/// a river only.
+pub fn render_sea(
+    s: &visioncraft_core::Sea,
+    v: &visioncraft_core::ViewState,
+) -> visioncraft_render::Sea {
+    let towards = |deg: f32| {
+        let d = deg.to_radians();
+        [d.sin(), -d.cos()]
+    };
+    let river = s.kind == visioncraft_core::WaterKind::River;
+    let flow = towards(s.flow_deg).map(|c| if river { c * s.flow_speed } else { 0.0 });
+    visioncraft_render::Sea {
+        level: s.level,
+        wave_height_m: s.wave_height_m(),
+        peak_wavelength_m: s.peak_wavelength_m(),
+        direction: towards(s.direction_deg.unwrap_or(v.wind_direction_deg)),
+        color: s.color,
+        turbidity: 1.0 - s.clarity,
+        flow,
+        foam: s.foam,
+        freezes: s.freezes(),
+        outline: s.outline.clone(),
     }
 }

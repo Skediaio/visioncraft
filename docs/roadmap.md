@@ -14,6 +14,13 @@ nothing here is a promise of a date.
 - **Four seasons, with snow:** Spring, Summer, Autumn, Winter and Snowy in Sun & sky
   (`view.set {season, snow}`), one plant state per season, the exact date folded away for sun
   studies. Next: snow on ledges narrower than the cover map's texels, falling snow.
+- **Sea and large water:** a sea level per project (`water.set_sea`: sea, lake or river, WMO
+  sea state, wave direction, colour, clarity, foam, flow, an optional outline) out to the
+  horizon, Gerstner waves filtered with distance, foam on crests and along the shore, the wet
+  band above the waterline, a beach or bluff along a line (`terrain.shore`), plants kept off
+  the bed, wading to 0.6 m, and the `coast` example. Next: waves that shoal and break on the
+  beach, refraction of the bed, a jetty or boat that floats (none in the library yet), a
+  coastline the endless ground follows instead of lying all below or all above the water.
 
 ## Next
 
