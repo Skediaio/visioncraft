@@ -5,10 +5,11 @@ use glam::{Mat4, Vec3};
 use std::collections::HashMap;
 use std::sync::Arc;
 use visioncraft_core::{
-    Asset, Evaluation, Generator, ImportedModel, LawnWindow, Material, ModelRef, Project, Shape,
-    SurfaceKind, Terrain, area_lifts, areas_over, blocked_by_buildings, evaluate_in_scene,
-    evaluate_surface_fill, ground_height, inside_outline, lawn_area, lawn_scatter_within,
-    placed_shape, raycast, resolve_materials, shape_mesh, shape_mesh_on_terrain, water_areas,
+    AREA_LIFT_M, Asset, Evaluation, Generator, ImportedModel, LawnWindow, Material, ModelRef,
+    Project, Shape, SurfaceKind, Terrain, area_lifts, areas_over, blocked_by_buildings,
+    evaluate_in_scene, evaluate_surface_fill, ground_height, inside_outline, lawn_area,
+    lawn_scatter_within, placed_shape, raycast, resolve_materials, shape_mesh,
+    shape_mesh_on_terrain, water_areas,
 };
 use visioncraft_flora as flora;
 use visioncraft_render::{ImpostorId, ItemId, LineVertex, Renderer};
@@ -633,7 +634,14 @@ pub struct Scene {
     clutter: clutter::Clutter,
     /// LOW quality: no clutter whatever the project says (`set_clutter_low`).
     clutter_low: bool,
+    /// Each model's faces lying on the ground (`visioncraft_core::ground_faces`), with what
+    /// they were found for: the model's version, its matrix and the terrain.
+    model_ground: HashMap<String, ModelGround>,
+    /// Those of every visible model: draped areas are cut out under them and grow no grass.
+    ground_faces: Arc<Vec<[[f32; 2]; 3]>>,
 }
+
+type ModelGround = ((u64, [u32; 16], usize), Arc<Vec<[[f32; 2]; 3]>>);
 
 #[derive(Clone, Debug)]
 pub struct Pick {
@@ -786,33 +794,65 @@ impl Scene {
 
         // Owners: models, then shapes.
         let mut wanted: Vec<Wanted> = Vec::new();
+        // shortcut: the terrain's address tells versions apart; an edit makes a new Arc
+        let terrain_key = project
+            .terrain
+            .as_ref()
+            .map_or(0, |t| Arc::as_ptr(t) as usize);
+        let mut on_ground: Vec<[[f32; 2]; 3]> = Vec::new();
         for m in &project.models {
             if let Some(l) = loaded.get(&m.id) {
                 let visible = project.layer_visible(&m.layer);
+                let mx = model_matrix(m);
+                // A model lying on the ground is drawn as an area is (`ground_faces`' rule).
+                let key = (l.version, mx.to_cols_array().map(f32::to_bits), terrain_key);
+                let faces = match self.model_ground.get(&m.id) {
+                    Some((k, f)) if *k == key => f.clone(),
+                    _ => {
+                        let t = project.terrain.as_deref();
+                        let f = Arc::new(visioncraft_core::ground_faces(
+                            &l.model,
+                            &|p| mx.transform_point3(Vec3::from(p)).into(),
+                            &|x, z| t.and_then(|t| t.height_at(x, z)),
+                        ));
+                        self.model_ground.insert(m.id.clone(), (key, f.clone()));
+                        f
+                    }
+                };
+                let lift = if faces.is_empty() { 0.0 } else { AREA_LIFT_M };
+                if visible {
+                    on_ground.extend(faces.iter());
+                }
                 wanted.push((
                     m.id.clone(),
                     Geom::Model(l.version),
                     l.model.clone(),
-                    model_matrix(m),
+                    Mat4::from_translation(Vec3::Y * lift) * mx,
                     visible,
                     false,
                     false,
                 ));
             }
         }
+        self.model_ground
+            .retain(|id, _| project.models.iter().any(|m| &m.id == id));
+        if *self.ground_faces != on_ground {
+            self.ground_faces = Arc::new(on_ground);
+        }
         // How shapes sit on the ground: `visioncraft_core::shape`'s module docs.
         let lifts: HashMap<String, f32> = area_lifts(&project.shapes).into_iter().collect();
         let terrain = project.terrain.clone();
         // Water areas: the areas under them are cut out there (the pond's bed is the terrain's).
         let water = water_areas(project);
-        // shortcut: the terrain's address tells versions apart; an edit makes a new Arc
-        let terrain_key = terrain.as_ref().map_or(0, |t| Arc::as_ptr(t) as usize);
         for s in &project.shapes {
             let id = s.id().to_string();
             let (placed, lift, holes) = placed_shape(project, s, &lifts, &water);
             let xf = Mat4::from_translation(Vec3::new(0.0, lift, 0.0));
             let draped = matches!(&placed, Shape::Area(a) if a.drape && terrain.is_some());
-            let holes: Vec<&[[f32; 2]]> = holes.iter().map(Vec::as_slice).collect();
+            let mut holes: Vec<&[[f32; 2]]> = holes.iter().map(Vec::as_slice).collect();
+            if draped {
+                holes.extend(self.ground_faces.iter().map(|f| f.as_slice()));
+            }
             // What the mesh depends on besides the shape: the terrain and the water on top.
             let depends = if draped {
                 holes
@@ -1129,6 +1169,7 @@ impl Scene {
                 todo.push((id.clone(), faces));
             }
         }
+        let on_ground = self.ground_faces.clone();
         for (id, faces) in todo {
             live.push(id.clone());
             let o = &self.owners[&id];
@@ -1145,7 +1186,9 @@ impl Scene {
             let follow = need > max_tufts as f32;
             self.lawns_follow |= follow;
             // No grass under a terrace, path or pond drawn on top of this lawn.
-            let over = areas_over(&project.shapes, &id);
+            // Nor under a model's faces lying on the ground (`ground_faces`).
+            let mut over = areas_over(&project.shapes, &id);
+            over.extend(on_ground.iter().map(|f| f.as_slice()));
             let over_key: Vec<u32> = over
                 .iter()
                 .flat_map(|o| o.iter().flat_map(|p| [p[0].to_bits(), p[1].to_bits()]))

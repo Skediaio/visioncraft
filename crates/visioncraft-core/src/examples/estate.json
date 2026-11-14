@@ -1,6 +1,6 @@
 [
   ["terrain.create", {"origin": [-10, -10], "width_m": 120, "depth_m": 80, "cell_m": 1.0, "base_material": "lawn"}],
-  ["model.add", {"name": "Villa", "kind": "3dcraft", "source": "example:villa.3dcraft", "transform": {"translation": [28, 0.04, 15], "rotation_y_deg": 0, "scale": 1}}],
+  ["model.add", {"name": "Villa", "kind": "3dcraft", "source": "example:villa.3dcraft", "transform": {"translation": [28, 0, 15], "rotation_y_deg": 0, "scale": 1}}],
   ["material.assign", {"target": {"type": "body", "owner": "m1", "body": "F1"}, "material": "lawn"}],
   ["material.assign", {"target": {"type": "body", "owner": "m1", "body": "F2"}, "material": "concrete"}],
   ["material.assign", {"target": {"type": "body", "owner": "m1", "body": "F4"}, "material": "paving"}],
@@ -39,8 +39,7 @@
   ["shape.add_area", {"name": "South lawn", "outline": [[22, 30], [100, 30], [100, 60], [22, 60]], "material": "lawn"}],
   ["shape.add_area", {"name": "Path", "outline": [[45, 29], [47, 29], [47, 60], [45, 60]], "material": "gravel"}],
   ["shape.add_area", {"name": "Border", "outline": [[22, 57], [80, 57], [80, 60], [22, 60]], "material": "soil"}],
-  ["terrain.carve", {"outline": [[55, 40], [65, 40], [66, 48], [54, 47]], "depth_m": 0.9, "bank_m": 1.5, "bed_material": "soil"}],
-  ["shape.add_area", {"name": "Pond", "outline": [[55, 40], [65, 40], [66, 48], [54, 47]], "elevation": -0.3, "drape": false, "material": "water"}],
+  ["terrain.add_pond", {"outline": [[55, 40], [65, 40], [66, 48], [54, 47]], "depth_m": 0.9}],
   ["planting.add_brush", {"name": "Woodland", "asset_palette": [{"asset": "flora:betula-pendula", "weight": 1}], "density_per_m2": 0.02, "seed": 5,
     "strokes": [{"points": [[84, 36], [96, 40], [92, 50], [86, 56]], "radius_m": 6, "erase": false}]}],
   ["planting.apply_preset", {"id": "g1", "preset": "mixed-woodland"}],
