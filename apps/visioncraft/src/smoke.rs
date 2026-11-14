@@ -6,7 +6,7 @@
 //! `"set camera orbit yaw pitch dist px py pz"`, `"set camera look ex ey ez tx ty tz"`,
 //! `"set camera walk x z heading_deg pitch_deg [from_y]"` (standing on the first floor below
 //! `from_y`, default 100 m), `"set camera top cx cz half_height"`,
-//! `"set camera frame"`, `"set quality low|medium|high|ultra|auto"`, `"set exposure stops"`,
+//! `"set camera frame"`, `"set quality low|medium|high|ultra|auto"`, `"set exposure stops"`, `"set clock seconds"`,
 //! `"set clay on|off"`, `"set textures auto|1k|2k|4k"`, `"highlight owner face-name"`, `"highlight none"`,
 //! `"screenshot name w h"`, `"object file.glb name"`) or an object `{"run": "command.name", "params": {...}}`.
 
@@ -65,6 +65,8 @@ pub enum Step {
     Camera(Cam),
     Quality(String),
     Exposure(f32),
+    /// `set clock SECONDS`: the animation clock (waves, wind), as the window's frame time.
+    Clock(f64),
     Clay(bool),
     /// The Textures choice: `None` follows the quality.
     Textures(Option<&'static str>),
@@ -247,6 +249,7 @@ pub fn parse_step(v: &Value) -> Result<Step, String> {
             Ok(Step::Quality(q.to_string()))
         }
         ["set", "exposure", n] => Ok(Step::Exposure(nums::<1>(&[n])?[0])),
+        ["set", "clock", n] => Ok(Step::Clock(n.parse().map_err(|_| "seconds")?)),
         ["set", "clay", on @ ("on" | "off")] => Ok(Step::Clay(*on == "on")),
         ["set", "textures", t] => Ok(Step::Textures(match *t {
             "auto" => None,
@@ -621,6 +624,7 @@ mod native {
                         .unwrap_or(1)
                 }
                 Step::Exposure(e) => s.exposure = e,
+                Step::Clock(t) => s.clock = t,
                 Step::Textures(t) => s.textures = t,
                 Step::Clay(c) => {
                     s.session
