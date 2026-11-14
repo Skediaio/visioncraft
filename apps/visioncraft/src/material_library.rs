@@ -19,7 +19,7 @@ pub const KINDS: [&str; 14] = [
 
 /// Which library material each plain palette material shows while the library is there
 /// (lawn: a grass ground, paving: paving stones, plaster, timber and so on).
-const DEFAULTS: [(&str, &str, f32); 9] = [
+const DEFAULTS: [(&str, &str, f32); 10] = [
     ("lawn", "grass001", 0.6),
     ("paving", "pavingstones005", 0.4),
     ("plaster", "plaster001", 0.25),
@@ -29,6 +29,7 @@ const DEFAULTS: [(&str, &str, f32); 9] = [
     ("concrete", "concrete046", 0.3),
     ("gravel", "gravel016", 0.3),
     ("soil", "ground043", 0.4),
+    ("sand", "ground052", 0.3),
 ];
 
 /// A library look for an unchanged palette material.

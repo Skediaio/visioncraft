@@ -28,6 +28,7 @@ pub mod sun;
 pub mod terrain;
 pub mod tiers;
 pub mod viewpoint;
+pub mod water;
 
 pub use catalog::{Asset, Catalog, CatalogError, attribution_markdown, validate_open_licences};
 pub use commands::examples::{EXAMPLES, example, example_file};
@@ -68,3 +69,4 @@ pub use terrain::{
 };
 pub use tiers::Tiers;
 pub use viewpoint::{Viewpoint, interpolate};
+pub use water::{Sea, WaterKind, keep_dry};
