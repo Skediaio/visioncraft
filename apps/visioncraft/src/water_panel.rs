@@ -145,13 +145,12 @@ fn beach_across_view(cx: &mut Cx) {
         );
     }
     // The shore only lowers ground: the water goes 1.5 m under the land at the line.
-    let land = cx
-        .s
-        .project()
-        .terrain
-        .as_ref()
-        .and_then(|t| t.height_at(c.x, c.y))
-        .unwrap_or(0.0);
+    let land =
+        cx.s.project()
+            .terrain
+            .as_ref()
+            .and_then(|t| t.height_at(c.x, c.y))
+            .unwrap_or(0.0);
     if cx.s.project().sea.is_none() {
         cx.run("water.set_sea", json!({"level": land - 1.5}));
     }
