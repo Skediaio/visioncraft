@@ -695,11 +695,11 @@ impl Studio {
                 });
             self.renderer.set_bounce_albedo(albedo);
             // Indoors: something over the head and walls (glass counts) nearly all round within a
-            // large house's reach. Under a canopy the garden side stays open.
+            // room's reach (15 m). Under an open canopy the garden side stays open.
             let hit = |dir: Vec3| {
                 self.scene
                     .raycast(eye, dir, false)
-                    .is_some_and(|p| p.distance < 60.0)
+                    .is_some_and(|p| p.distance < 15.0)
             };
             let walls = (0..8)
                 .filter(|k| {
