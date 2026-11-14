@@ -160,7 +160,12 @@
    "genus_from": "eye",
    "shape": "ovate_serrate",
    "season": "summer",
-   "notes": "doubly serrate leaves with parallel veins (hornbeam)"
+   "notes": "doubly serrate leaves with parallel veins (hornbeam)",
+   "flip": [
+    1,
+    2,
+    3
+   ]
   },
   {
    "source": "ambientCG",

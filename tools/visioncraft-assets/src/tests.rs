@@ -281,3 +281,19 @@ fn cutouts_find_each_leaf_with_its_petiole_as_pivot() {
     assert!(cuts[1].pivot[0] > 0.55 && cuts[1].axis[0] < -0.9);
     assert!(cuts.iter().all(|c| c.length > 0.4 && c.rect[2] > 0.4));
 }
+
+#[test]
+fn a_flipped_cut_out_turns_round_its_tip() {
+    let c = crate::flora::LeafCut {
+        rect: [0.0, 0.0, 0.2, 0.4],
+        pivot: [0.1, 0.05],
+        petiole: true,
+        centre: [0.1, 0.2],
+        axis: [0.0, 1.0],
+        length: 0.3,
+        area: 0.05,
+    };
+    let f = crate::flora::flipped(vec![c.clone(), c], &[1], 1.0);
+    assert_eq!(f[0].pivot, [0.1, 0.05]);
+    assert!((f[1].pivot[1] - 0.35).abs() < 1e-6 && f[1].axis == [0.0, -1.0]);
+}

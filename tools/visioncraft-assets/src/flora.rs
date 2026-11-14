@@ -29,6 +29,25 @@ pub struct LeafSetSpec {
     pub shape: String,
     pub season: String,
     pub notes: String,
+    /// Cut-outs (by index) whose found pivot is the leaf's tip (a long drip tip looks like a
+    /// petiole to `cutouts`): turned round on ingest, checked by eye.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub flip: Vec<usize>,
+}
+
+/// `cuts` with those at the indices in `flip` turned round: the pivot moves to the old tip and
+/// the axis points back.
+pub fn flipped(mut cuts: Vec<LeafCut>, flip: &[usize], aspect: f32) -> Vec<LeafCut> {
+    for &i in flip {
+        if let Some(c) = cuts.get_mut(i) {
+            c.pivot = [
+                c.pivot[0] + c.axis[0] * c.length,
+                c.pivot[1] + c.axis[1] * c.length * aspect,
+            ];
+            c.axis = [-c.axis[0], -c.axis[1]];
+        }
+    }
+    cuts
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -490,7 +509,12 @@ pub fn ingest_leafset(
             normal: rel("normal.jpg"),
             translucency: scatter.map(|_| rel("translucency.jpg")),
         },
-        leaves: cutouts(&opacity, sid.starts_with("Foliage")),
+        // Lengths are in sheet widths, y in sheet heights.
+        leaves: flipped(
+            cutouts(&opacity, sid.starts_with("Foliage")),
+            &spec.flip,
+            color.width() as f32 / color.height().max(1) as f32,
+        ),
     };
     write(&dir.join("entry.json"), &serde_json::to_vec_pretty(&entry)?)?;
     println!("flora leaf {id}: {} leaves", entry.leaves.len());
