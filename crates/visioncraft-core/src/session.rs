@@ -138,6 +138,20 @@ impl Session {
         );
         s.register_with_spec(
             spec(
+                "model.set_source",
+                "Relink Model",
+                "Points a model at another file (a model moved, or relinked); its geometry is read from there, its materials and placement stay. Saved with the project.",
+                vec![
+                    param("id", ParamType::String, "Model id.").required(),
+                    param("source", ParamType::String, "A path, relative to the project file or absolute, or `example:<file>`.").required(),
+                ],
+                "null",
+                json!({"id": "m1", "source": "house.3dcraft"}),
+            ),
+            model_set_source,
+        );
+        s.register_with_spec(
+            spec(
                 "site.set",
                 "Set Site",
                 "Sets where the project stands on Earth, which decides the sun.",
@@ -475,6 +489,21 @@ fn model_set_hidden_bodies(project: &mut Project, params: &Value) -> Result<Valu
     Ok(Value::Null)
 }
 
+fn model_set_source(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct P {
+        id: String,
+        source: String,
+    }
+    let p: P = parse(params)?;
+    if p.source.trim().is_empty() {
+        return Err(CommandError::Failed("a source cannot be empty".into()));
+    }
+    find(project, &p.id)?.source = p.source;
+    Ok(Value::Null)
+}
+
 fn site_set(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -567,6 +596,24 @@ mod tests {
         while s.redo() {}
         assert_eq!(*s.project(), end);
         assert!(s.revision() > rev);
+    }
+
+    #[test]
+    fn set_source_relinks_a_model_as_one_undo_step() {
+        let mut s = Session::new(Project::default());
+        let id = add(&mut s);
+        s.run(
+            "model.set_source",
+            json!({"id": id, "source": "/elsewhere/h.3dcraft"}),
+        )
+        .unwrap();
+        assert_eq!(s.project().models[0].source, "/elsewhere/h.3dcraft");
+        assert!(s.undo());
+        assert_eq!(s.project().models[0].source, "h.3dcraft");
+        assert!(
+            s.run("model.set_source", json!({"id": id, "source": " "}))
+                .is_err()
+        );
     }
 
     #[test]

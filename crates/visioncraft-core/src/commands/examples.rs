@@ -42,10 +42,21 @@ const EXAMPLE_FILES: [(&str, &[u8]); 2] = [
 
 /// The bytes of a model an example refers to (`source` of the form `example:<file>`).
 pub fn example_file(source: &str) -> Option<&'static [u8]> {
+    // Files saved before example sources were kept as names hold `<folder>/example:<file>`.
+    let name = source.rsplit(['/', '\\']).next().unwrap_or(source);
     EXAMPLE_FILES
         .iter()
-        .find(|(s, _)| *s == source)
+        .find(|(s, _)| *s == name)
         .map(|(_, b)| *b)
+}
+
+/// Whether `source` names a model carried inside the program (`example:<file>`), known to this
+/// build or not.
+pub fn is_example_source(source: &str) -> bool {
+    source
+        .rsplit(['/', '\\'])
+        .next()
+        .is_some_and(|n| n.starts_with("example:"))
 }
 
 pub(super) fn register(s: &mut Session) {
@@ -94,6 +105,18 @@ fn load_example(project: &mut Project, params: &Value) -> Result<Value, CommandE
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn example_sources_are_found_by_name_and_inside_an_old_saved_path() {
+        use super::{example_file, is_example_source};
+        assert!(example_file("example:beach-house.3dcraft").is_some());
+        assert!(example_file("/projects/x/example:beach-house.3dcraft").is_some());
+        assert!(example_file("C:\\x\\example:villa.3dcraft").is_some());
+        assert!(example_file("beach-house.3dcraft").is_none());
+        assert!(example_file("example:newer.3dcraft").is_none());
+        assert!(is_example_source("example:newer.3dcraft"));
+        assert!(!is_example_source("house.3dcraft"));
+    }
+
     #[test]
     fn the_garden_builds_small_and_complete() {
         let (_, files) = super::EXAMPLES[0];

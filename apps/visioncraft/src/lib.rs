@@ -67,6 +67,8 @@ use visioncraft_render::{Quality, Renderer};
 const KEY_PROJECT: &str = "project";
 const KEY_NAME: &str = "project_name";
 const KEY_BOUNDS: &str = "model_bounds";
+const KEY_PATH: &str = "project_path";
+const KEY_RELINK: &str = "relink_dir";
 #[cfg(not(target_arch = "wasm32"))]
 const KEY_AGENTS: &str = "allow_agents";
 
@@ -164,6 +166,10 @@ pub struct App {
     /// Models whose file changed, with the time to re-import them (debounce).
     changed: HashMap<String, f64>,
     project_name: Option<String>,
+    /// The project's file, natively (opened or saved): model paths are relative to its folder.
+    project_path: Option<PathBuf>,
+    /// The folder a model was last relinked from: other models are looked for there too.
+    relink_dir: Option<PathBuf>,
     saved_revision: u64,
     saving_revision: u64,
     stored_revision: Option<u64>,
@@ -242,6 +248,16 @@ impl App {
             pending_replace: None,
             changed: HashMap::new(),
             project_name: cc.storage.and_then(|s| s.get_string(KEY_NAME)),
+            project_path: cc
+                .storage
+                .and_then(|s| s.get_string(KEY_PATH))
+                .filter(|p| !p.is_empty())
+                .map(PathBuf::from),
+            relink_dir: cc
+                .storage
+                .and_then(|s| s.get_string(KEY_RELINK))
+                .filter(|p| !p.is_empty())
+                .map(PathBuf::from),
             saved_revision: 0,
             saving_revision: 0,
             stored_revision: None,
@@ -286,36 +302,43 @@ impl App {
             {
                 app.studio.bounds_hint = b;
             }
-            app.load_sources(None);
+            let dir = app.project_path.clone();
+            let r = app.studio.load_sources(
+                dir.as_deref().and_then(Path::parent),
+                app.relink_dir.as_deref(),
+            );
+            app.loaded_sources(r);
+            app.load_objects(dir.as_deref().and_then(Path::parent));
             app.drape_old_areas();
             app.studio.sync();
             app.studio.frame_all();
             app.stored_revision = Some(0);
         }
+        // A project file on the command line (`visioncraft garden.visioncraft`) opens as if chosen.
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(f) = std::env::args().skip(1).find(|a| {
+            matches!(extension(a).as_str(), "visioncraft" | "zip") && Path::new(a).is_file()
+        }) {
+            let path = std::path::absolute(&f).unwrap_or_else(|_| PathBuf::from(&f));
+            match std::fs::read(&path) {
+                Ok(bytes) => app.open_project(&f, &bytes, Some(&path)),
+                Err(e) => app.toasts.error(format!("{f}: {e}")),
+            }
+        }
         app
     }
 
-    /// Reads the files of models from the project's `source` paths (native only: a page cannot).
-    fn load_sources(&mut self, project_dir: Option<&Path>) {
-        #[cfg(not(target_arch = "wasm32"))]
-        for m in self.studio.project().models.clone() {
-            let p = PathBuf::from(&m.source);
-            let candidates = [Some(p.clone()), project_dir.map(|d| d.join(&p))];
-            for path in candidates.into_iter().flatten() {
-                if let Ok(bytes) = std::fs::read(&path) {
-                    let src = Source {
-                        bytes: Arc::from(bytes),
-                        path: Some(path.clone()),
-                    };
-                    if let Ok((w, _)) = self.studio.reimport(&m.id, src) {
-                        self.watcher.watch(&m.id, path);
-                        w.into_iter().for_each(|w| self.toasts.warn(w));
-                        break;
-                    }
-                }
-            }
+    /// Watches the files models were read from and says what went wrong.
+    fn loaded_sources(&mut self, r: studio::SourcesLoaded) {
+        for (id, path) in r.files {
+            self.watcher.watch(&id, path);
         }
-        // Imported objects next to a plain project file (natively; a page sees no folders).
+        r.warnings.into_iter().for_each(|w| self.toasts.warn(w));
+        r.errors.into_iter().for_each(|e| self.toasts.error(e));
+    }
+
+    /// Imported objects next to a plain project file (natively; a page sees no folders).
+    fn load_objects(&mut self, project_dir: Option<&Path>) {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(dir) = project_dir {
             for o in self.studio.project().objects.clone() {
@@ -325,6 +348,38 @@ impl App {
             }
         }
         let _ = project_dir;
+    }
+
+    /// After a relink: the other missing models whose file lies in the same folder load too,
+    /// and every model read from a new place keeps it as its source (so the next open finds it).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn relinked(&mut self, id: &str, path: &Path) {
+        self.relink_dir = path.parent().map(Path::to_path_buf);
+        let dir = self.project_path.clone();
+        let r = self.studio.load_sources(
+            dir.as_deref().and_then(Path::parent),
+            self.relink_dir.as_deref(),
+        );
+        let mut moved = vec![(id.to_string(), path.to_path_buf())];
+        moved.extend(r.files.iter().cloned());
+        self.loaded_sources(r);
+        for (id, path) in moved {
+            let source = path.to_string_lossy().into_owned();
+            let same = self
+                .studio
+                .project()
+                .models
+                .iter()
+                .any(|m| m.id == id && m.source == source);
+            if !same
+                && let Err(e) = self.studio.run(
+                    "model.set_source",
+                    serde_json::json!({"id": id, "source": source}),
+                )
+            {
+                self.toasts.error(e.to_string());
+            }
+        }
     }
 
     fn dirty(&self) -> bool {
@@ -382,6 +437,7 @@ impl App {
         self.studio.replace_project(Project::default());
         self.studio.people.clear();
         self.project_name = None;
+        self.project_path = None;
         self.saved_revision = self.studio.session.revision();
         self.hud.mode = None;
         self.modelui = Default::default();
@@ -758,9 +814,12 @@ impl App {
         match opened {
             Ok((p, files)) => {
                 self.watcher.forget_all();
-                self.studio.replace_project(p);
+                let dir = path.and_then(Path::parent);
+                let r = self.studio.open(p, dir, self.relink_dir.as_deref());
                 self.project_name = Some(stem(name.trim_end_matches(".zip")));
-                self.load_sources(path.and_then(Path::parent));
+                self.project_path = path.map(Path::to_path_buf);
+                self.loaded_sources(r);
+                self.load_objects(dir);
                 self.take_bundled(files);
                 self.drape_old_areas();
                 self.studio.sync();
@@ -868,6 +927,10 @@ impl App {
         match result {
             Ok((id, warnings)) => {
                 warnings.into_iter().for_each(|w| self.toasts.warn(w));
+                #[cfg(not(target_arch = "wasm32"))]
+                if let (Some(_), Some(p)) = (&target, &path) {
+                    self.relinked(&id, p);
+                }
                 if let Some(p) = path {
                     self.watcher.watch(&id, p);
                 }
@@ -1088,12 +1151,7 @@ impl App {
                         Err(e) => self.toasts.error(e),
                     }
                 } else {
-                    files::save(
-                        &self.inbox,
-                        ctx,
-                        format!("{stem}.visioncraft"),
-                        p.to_json_bytes(),
-                    );
+                    files::save(&self.inbox, ctx, format!("{stem}.visioncraft"), p.clone());
                 }
             }
             Action::New if self.dirty() => self.pending_replace = Some(Replace::New),
@@ -1189,6 +1247,12 @@ impl eframe::App for App {
             String::from_utf8_lossy(&self.studio.project().to_json_bytes()).into_owned(),
         );
         storage.set_string(KEY_BOUNDS, self.bounds_json());
+        let path = |p: &Option<PathBuf>| {
+            p.as_ref()
+                .map_or_else(String::new, |p| p.to_string_lossy().into_owned())
+        };
+        storage.set_string(KEY_PATH, path(&self.project_path));
+        storage.set_string(KEY_RELINK, path(&self.relink_dir));
         #[cfg(not(target_arch = "wasm32"))]
         storage.set_string(
             KEY_AGENTS,
@@ -1258,10 +1322,14 @@ impl eframe::App for App {
                 Msg::FileChanged(id) => {
                     self.changed.insert(id, now + 0.35);
                 }
-                Msg::Saved(name) => {
+                Msg::Saved(name, path) => {
                     self.toasts.info(format!("{} {name}", strings::SAVED));
                     self.saved_revision = self.saving_revision;
                     self.project_name = Some(stem(&name));
+                    if path.is_some() {
+                        self.project_path = path;
+                        self.stored_revision = None;
+                    }
                 }
                 Msg::Failed(e) => self.toasts.error(e),
             }

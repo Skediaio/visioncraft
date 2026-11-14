@@ -2,7 +2,8 @@
 //! against the same scene sync and renderer as the app and writes PNGs.
 //!
 //! A script is a JSON array (or `{"steps": [...]}`). A step is a string
-//! (`"load model path [name N] [at x y z] [rot deg] [scale s]"`, `"reimport m1 path"`,
+//! (`"open file.visioncraft"` (as the window's Open: prints the models still missing),
+//! `"load model path [name N] [at x y z] [rot deg] [scale s]"`, `"reimport m1 path"`,
 //! `"set camera orbit yaw pitch dist px py pz"`, `"set camera look ex ey ez tx ty tz"`,
 //! `"set camera walk x z heading_deg pitch_deg [from_y]"` (standing on the first floor below
 //! `from_y`, default 100 m), `"set camera top cx cz half_height"`,
@@ -62,6 +63,8 @@ pub enum Step {
         id: String,
         path: String,
     },
+    /// Opens a project file as the window's Open does (`Studio::open`).
+    Open(String),
     Camera(Cam),
     Quality(String),
     Exposure(f32),
@@ -201,6 +204,7 @@ pub fn parse_step(v: &Value) -> Result<Step, String> {
             id: id.to_string(),
             path: path.to_string(),
         }),
+        ["open", path] => Ok(Step::Open(path.to_string())),
         ["set", "camera", "frame"] => Ok(Step::Camera(Cam::Frame)),
         ["set", "camera", "orbit", n @ ..] => {
             let [yaw, pitch, dist, x, y, z] = nums::<6>(n)?;
@@ -568,6 +572,25 @@ mod native {
                     eprintln!(
                         "reimported {id}: {} warnings, {dangling} assignments without a face",
                         w.len()
+                    );
+                }
+                Step::Open(path) => {
+                    let bytes = std::fs::read(&path).map_err(|e| at(format!("{path}: {e}")))?;
+                    let p = visioncraft_core::Project::from_json_bytes(&bytes)
+                        .map_err(|e| at(format!("{path}: {e}")))?;
+                    let file = std::path::absolute(&path).map_err(|e| at(e.to_string()))?;
+                    let r = s.open(p, file.parent(), None);
+                    s.sync();
+                    let missing: Vec<String> = s
+                        .missing_models()
+                        .iter()
+                        .map(|m| format!("{} ({})", m.name, m.source))
+                        .collect();
+                    eprintln!(
+                        "opened {path}: {} models, missing {missing:?}, errors {:?}, warnings {}",
+                        s.project().models.len(),
+                        r.errors,
+                        r.warnings.len()
                     );
                 }
                 Step::Camera(c) => {
@@ -975,10 +998,12 @@ mod tests {
             "set quality high",
             "highlight m1 F2:endCap(e5,e6,e7,e8)",
             "screenshot villa 960 540",
-            "reimport m1 b.3dcraft"
+            "reimport m1 b.3dcraft",
+            "open coast.visioncraft"
         ]);
         let steps = parse_script(&script.to_string()).unwrap();
-        assert_eq!(steps.len(), 9);
+        assert_eq!(steps.len(), 10);
+        assert_eq!(steps[9], Step::Open("coast.visioncraft".into()));
         assert_eq!(
             steps[0],
             Step::LoadModel {

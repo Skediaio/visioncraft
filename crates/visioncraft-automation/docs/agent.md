@@ -410,7 +410,8 @@ its deck steps leading down a path to the beach.
   \`light.add\`; did you mean \`lumens\`?`), except where a command takes any field
   (`openParams: true`, e.g. `planting.update`).
 - **Models are files**: `model.add` is refused when its file cannot be read; `source` is relative
-  to the project file (or the read root).
+  to the project file (or the read root). A model whose file moved is pointed at its new place
+  with `model.set_source` (one undo step; materials and placement stay).
 - **`file.open` and `file.new` start a new history** (nothing to undo).
 - **Pictures need a GPU.** Without one `view.render` is an error that says so; everything else
   works. The first picture takes a few seconds (the device, then the plants).

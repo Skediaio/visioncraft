@@ -5,6 +5,7 @@ use eframe::egui;
 use std::future::Future;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use visioncraft_core::Project;
 
 pub enum Msg {
     /// A file the user chose or dropped. `target` is the model it should replace, if any.
@@ -16,7 +17,8 @@ pub enum Msg {
     },
     /// A watched model file changed on disk.
     FileChanged(String),
-    Saved(String),
+    /// A file saved, with its path when it is the project's file (natively).
+    Saved(String, Option<PathBuf>),
     Failed(String),
 }
 
@@ -87,9 +89,54 @@ pub fn pick(
     });
 }
 
-/// Saves `bytes` through a dialog (a download on the web).
-pub fn save(inbox: &Inbox, ctx: &egui::Context, suggested: String, bytes: Vec<u8>) {
-    save_as(inbox, ctx, suggested, bytes, "visioncraft");
+/// Saves the project through a dialog (a download on the web). Natively, model files inside
+/// the chosen folder are stored relative to it, so a moved project folder keeps working.
+#[cfg(target_arch = "wasm32")]
+pub fn save(inbox: &Inbox, ctx: &egui::Context, suggested: String, project: Project) {
+    save_as(
+        inbox,
+        ctx,
+        suggested,
+        project.to_json_bytes(),
+        "visioncraft",
+    );
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn save(inbox: &Inbox, ctx: &egui::Context, suggested: String, mut project: Project) {
+    let (inbox, ctx) = (inbox.clone(), ctx.clone());
+    spawn(async move {
+        let Some(h) = rfd::AsyncFileDialog::new()
+            .set_file_name(suggested)
+            .add_filter("File", &["visioncraft"])
+            .save_file()
+            .await
+        else {
+            return;
+        };
+        let path = h.path().to_path_buf();
+        if let Some(dir) = path.parent() {
+            relative_sources(&mut project, dir);
+        }
+        match h.write(&project.to_json_bytes()).await {
+            Ok(()) => inbox.push(Msg::Saved(h.file_name(), Some(path)), &ctx),
+            Err(e) => inbox.push(Msg::Failed(format!("could not save: {e}")), &ctx),
+        }
+    });
+}
+
+/// Model sources inside `dir` become paths relative to it (with `/`, as on every system).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn relative_sources(project: &mut Project, dir: &std::path::Path) {
+    let dir = std::path::absolute(dir).unwrap_or_else(|_| dir.to_path_buf());
+    for m in &mut project.models {
+        let source = std::path::Path::new(&m.source);
+        if source.is_absolute()
+            && let Ok(rel) = source.strip_prefix(&dir)
+        {
+            m.source = rel.to_string_lossy().replace('\\', "/");
+        }
+    }
 }
 
 /// Saves through a dialog with the given file extension filter.
@@ -105,7 +152,7 @@ pub fn save_as(
     #[cfg(target_arch = "wasm32")]
     match download(&suggested, &bytes) {
         Ok(()) => {
-            inbox.push(Msg::Saved(suggested), ctx);
+            inbox.push(Msg::Saved(suggested, None), ctx);
             return;
         }
         Err(e) => log::warn!("direct download failed, asking instead: {e}"),
@@ -121,7 +168,7 @@ pub fn save_as(
             return;
         };
         match h.write(&bytes).await {
-            Ok(()) => inbox.push(Msg::Saved(h.file_name()), &ctx),
+            Ok(()) => inbox.push(Msg::Saved(h.file_name(), None), &ctx),
             Err(e) => inbox.push(Msg::Failed(format!("could not save: {e}")), &ctx),
         }
     });
@@ -182,7 +229,7 @@ pub fn save_many(
                 }
             }
             inbox.push(
-                Msg::Saved(format!("{} files in {}", files.len(), dir.display())),
+                Msg::Saved(format!("{} files in {}", files.len(), dir.display()), None),
                 &ctx,
             );
         });
@@ -303,6 +350,27 @@ impl Watcher {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn model_files_inside_the_project_folder_are_saved_relative_to_it() {
+        let mut p = visioncraft_core::example("beach-house").unwrap();
+        let mut second = p.models[0].clone();
+        let mut third = p.models[0].clone();
+        p.models[0].source = "/work/garden/models/house.3dcraft".into();
+        second.source = "/elsewhere/shed.3dcraft".into();
+        third.source = "example:beach-house.3dcraft".into();
+        p.models.extend([second, third]);
+        relative_sources(&mut p, std::path::Path::new("/work/garden"));
+        let sources: Vec<&str> = p.models.iter().map(|m| m.source.as_str()).collect();
+        assert_eq!(
+            sources,
+            [
+                "models/house.3dcraft",
+                "/elsewhere/shed.3dcraft",
+                "example:beach-house.3dcraft"
+            ]
+        );
+    }
 
     #[test]
     fn a_stored_zip_reads_back() {

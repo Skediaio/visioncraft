@@ -4,7 +4,7 @@
 use glam::{Mat4, Vec3};
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use visioncraft_core::{
     Asset, Generator, ImportedModel, Material, ModelKind, Project, Session, Shape, Site, SunTime,
@@ -20,6 +20,48 @@ use crate::scene::{Loaded, Pick, Scene, box_outline, light_markers, model_matrix
 pub struct Source {
     pub bytes: Arc<[u8]>,
     pub path: Option<PathBuf>,
+}
+
+/// What `Studio::load_sources` did.
+#[derive(Debug, Default)]
+pub struct SourcesLoaded {
+    /// Models read from a file, with the file (to watch it).
+    pub files: Vec<(String, PathBuf)>,
+    pub warnings: Vec<String>,
+    pub errors: Vec<String>,
+}
+
+/// The file of a model's `source`, natively; the first that reads wins: the stored path as it
+/// is, relative to the project's folder, the same file name in the project's folder, the same
+/// file name in the folder a model was last relinked from.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn find_model_file(
+    source: &str,
+    project_dir: Option<&Path>,
+    relink_dir: Option<&Path>,
+) -> Option<(PathBuf, Vec<u8>)> {
+    let stored = Path::new(source);
+    // A path saved on another system may use the other separator.
+    let name = source.rsplit(['/', '\\']).next().filter(|n| !n.is_empty());
+    [
+        Some(stored.to_path_buf()),
+        project_dir.map(|d| d.join(stored)),
+        project_dir.zip(name).map(|(d, n)| d.join(n)),
+        relink_dir.zip(name).map(|(d, n)| d.join(n)),
+    ]
+    .into_iter()
+    .flatten()
+    .find_map(|p| std::fs::read(&p).ok().map(|b| (p, b)))
+}
+
+/// A page sees no folders.
+#[cfg(target_arch = "wasm32")]
+pub fn find_model_file(
+    _source: &str,
+    _project_dir: Option<&Path>,
+    _relink_dir: Option<&Path>,
+) -> Option<(PathBuf, Vec<u8>)> {
+    None
 }
 
 /// An uncommitted edit shown live: applied on a copy of the project, committed on release.
@@ -714,6 +756,63 @@ impl Studio {
         Ok((self.install(id, model, source), dangling))
     }
 
+    /// Opens `project` as the window's Open does: replaces the project and loads its models
+    /// (`load_sources`).
+    pub fn open(
+        &mut self,
+        project: Project,
+        project_dir: Option<&Path>,
+        relink_dir: Option<&Path>,
+    ) -> SourcesLoaded {
+        self.replace_project(project);
+        self.load_sources(project_dir, relink_dir)
+    }
+
+    /// Loads every model that is not loaded yet: an example's file from inside the program,
+    /// else (natively) the first file `find_model_file` finds. Models whose file is not found
+    /// stay missing, without a message (the relink bar asks for them).
+    pub fn load_sources(
+        &mut self,
+        project_dir: Option<&Path>,
+        relink_dir: Option<&Path>,
+    ) -> SourcesLoaded {
+        let mut out = SourcesLoaded::default();
+        for m in self.project().models.clone() {
+            if self.loaded.contains_key(&m.id) {
+                continue;
+            }
+            let found = match visioncraft_core::example_file(&m.source) {
+                Some(bytes) => Some((None, Arc::from(bytes))),
+                None if visioncraft_core::is_example_source(&m.source) => {
+                    out.errors.push(format!(
+                        "{}: `{}` is not in this version of VisionCraft (the file was made by a newer one)",
+                        m.name, m.source
+                    ));
+                    None
+                }
+                None => find_model_file(&m.source, project_dir, relink_dir)
+                    .map(|(p, b)| (Some(p), Arc::from(b))),
+            };
+            let Some((path, bytes)) = found else {
+                continue;
+            };
+            match self.reimport(
+                &m.id,
+                Source {
+                    bytes,
+                    path: path.clone(),
+                },
+            ) {
+                Ok((w, _)) => {
+                    out.warnings.extend(w);
+                    out.files.extend(path.map(|p| (m.id.clone(), p)));
+                }
+                Err(e) => out.errors.push(format!("{}: {e}", m.name)),
+            }
+        }
+        out
+    }
+
     // ---- rendering ----
 
     pub fn project_view(&self) -> Cow<'_, Project> {
@@ -777,13 +876,15 @@ impl Studio {
             .filter_map(|m| Some((m.id.clone(), visioncraft_core::example_file(&m.source)?)))
             .collect();
         for (id, bytes) in examples {
-            let _ = self.reimport(
+            if let Err(e) = self.reimport(
                 &id,
                 Source {
                     bytes: Arc::from(bytes),
                     path: None,
                 },
-            );
+            ) {
+                self.problems.push(format!("{id}: {e}"));
+            }
         }
         self.synced = Some(key);
         let project = self.project_view().into_owned();
@@ -1801,5 +1902,138 @@ pub fn render_sea(
         foam: s.foam,
         freezes: s.freezes(),
         outline: s.outline.clone(),
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod open_tests {
+    use super::{Studio, find_model_file};
+    use std::path::{Path, PathBuf};
+    use visioncraft_core::{EXAMPLES, Project};
+
+    fn temp(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("vc-open-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn found(source: &str, project: Option<&Path>, relink: Option<&Path>) -> Option<PathBuf> {
+        find_model_file(source, project, relink).map(|(p, _)| p)
+    }
+
+    #[test]
+    fn a_model_file_is_found_in_the_documented_order() {
+        let root = temp("order");
+        let (project, relink, elsewhere) = (root.join("p"), root.join("r"), root.join("e"));
+        for d in [&project, &relink, &elsewhere, &project.join("sub")] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        let write = |p: &Path| std::fs::write(p, b"x").unwrap();
+        let (p, r) = (Some(project.as_path()), Some(relink.as_path()));
+        // 4. The same file name in the folder last relinked from.
+        write(&relink.join("h.3dcraft"));
+        let gone = elsewhere.join("gone").join("h.3dcraft");
+        let gone = gone.to_str().unwrap();
+        assert_eq!(found(gone, p, r), Some(relink.join("h.3dcraft")));
+        assert_eq!(found(gone, p, None), None);
+        // 3. The same file name in the project's folder beats the relink folder.
+        write(&project.join("h.3dcraft"));
+        assert_eq!(found(gone, p, r), Some(project.join("h.3dcraft")));
+        assert_eq!(
+            found("C:\\old\\h.3dcraft", p, r),
+            Some(project.join("h.3dcraft"))
+        );
+        // 2. Relative to the project's folder beats the bare file name.
+        write(&project.join("sub").join("h.3dcraft"));
+        assert_eq!(
+            found("sub/h.3dcraft", p, r),
+            Some(project.join("sub").join("h.3dcraft"))
+        );
+        // 1. The stored path as it is beats everything.
+        write(&elsewhere.join("h.3dcraft"));
+        let there = elsewhere.join("h.3dcraft");
+        assert_eq!(found(there.to_str().unwrap(), p, r), Some(there.clone()));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn studio() -> Option<Studio> {
+        let (device, queue) = pollster::block_on(visioncraft_render::headless_device()).ok()?;
+        let r = visioncraft_render::Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+        Some(Studio::new(r, Project::default()))
+    }
+
+    /// Every built-in example, saved to bytes and opened as the window's Open does, has all its
+    /// models: an `example:` source never asks for its file.
+    #[test]
+    fn every_saved_example_opens_with_its_models() {
+        let Some(mut s) = studio() else {
+            eprintln!("no GPU adapter: skipped");
+            return;
+        };
+        let dir = temp("examples");
+        for (name, _) in EXAMPLES {
+            let bytes = visioncraft_core::example(name).unwrap().to_json_bytes();
+            let p = Project::from_json_bytes(&bytes).unwrap();
+            let r = s.open(p, Some(&dir), None);
+            assert!(r.errors.is_empty(), "{name}: {:?}", r.errors);
+            let missing: Vec<&str> = s
+                .missing_models()
+                .iter()
+                .map(|m| m.source.as_str())
+                .collect();
+            assert!(missing.is_empty(), "{name}: missing {missing:?}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The user's window was a build from before the beach house was carried inside the program:
+    /// `example:beach-house.3dcraft` was unknown to it, treated as a path, not found, and the
+    /// import error was swallowed, so all it showed was the relink bar. Now an unknown example
+    /// says why, and an example source an old save turned into a path still loads.
+    #[test]
+    fn an_unknown_example_says_why_and_an_old_saved_example_path_loads() {
+        let Some(mut s) = studio() else {
+            eprintln!("no GPU adapter: skipped");
+            return;
+        };
+        let mut p = visioncraft_core::example("beach-house").unwrap();
+        p.models[0].source = "/gone/folder/example:beach-house.3dcraft".into();
+        let r = s.open(p.clone(), None, None);
+        assert!(
+            r.errors.is_empty() && s.missing_models().is_empty(),
+            "{:?}",
+            r.errors
+        );
+        p.models[0].source = "example:newer-house.3dcraft".into();
+        let r = s.open(p, None, None);
+        assert_eq!(s.missing_models().len(), 1);
+        assert!(
+            r.errors.len() == 1 && r.errors[0].contains("example:newer-house.3dcraft"),
+            "{:?}",
+            r.errors
+        );
+    }
+
+    /// A model saved with a path that no longer exists opens from the same file name next to
+    /// the project file, without asking.
+    #[test]
+    fn a_moved_model_file_loads_from_next_to_the_project() {
+        let Some(mut s) = studio() else {
+            eprintln!("no GPU adapter: skipped");
+            return;
+        };
+        let dir = temp("moved");
+        std::fs::write(
+            dir.join("house.3dcraft"),
+            visioncraft_core::example_file("example:beach-house.3dcraft").unwrap(),
+        )
+        .unwrap();
+        let mut p = visioncraft_core::example("beach-house").unwrap();
+        p.models[0].source = "/gone/folder/house.3dcraft".into();
+        let r = s.open(p, Some(&dir), None);
+        assert!(s.missing_models().is_empty(), "{:?}", r.errors);
+        assert_eq!(r.files, [("m1".to_string(), dir.join("house.3dcraft"))]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

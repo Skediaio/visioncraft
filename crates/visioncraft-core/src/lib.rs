@@ -32,7 +32,7 @@ pub mod viewpoint;
 pub mod water;
 
 pub use catalog::{Asset, Catalog, CatalogError, attribution_markdown, validate_open_licences};
-pub use commands::examples::{EXAMPLES, example, example_file};
+pub use commands::examples::{EXAMPLES, example, example_file, is_example_source};
 pub use export::export_presets;
 pub use import::{import_3dcraft, import_obj};
 pub use light::{
