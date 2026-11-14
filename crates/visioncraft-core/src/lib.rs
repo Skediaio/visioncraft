@@ -13,6 +13,7 @@ pub mod material;
 pub mod measure;
 mod model;
 pub mod object;
+pub mod plant_ground;
 pub mod planting;
 pub mod presets;
 pub mod project;
@@ -36,6 +37,9 @@ pub use material::{
 };
 pub use model::{Body, Face, ImportError, ImportedModel, ModelCodecError};
 pub use object::UserObject;
+pub use plant_ground::{
+    evaluate_in_scene, over_ids, placed_shape, placed_shape_mesh, plant_size, water_areas,
+};
 pub use planting::{
     Evaluation, Generator, Placement, PlantLayer, Tuft, blocked_by_buildings, evaluate,
     evaluate_avoiding, evaluate_surface_fill, lawn_scatter,
