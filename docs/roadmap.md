@@ -41,6 +41,8 @@ nothing here is a promise of a date.
 - **Sea and large water:** a sea, lake or wide river to the horizon: waves and swell driven by
   the wind setting, a shoreline with foam where water meets land, depth colour, reflections and
   sun glitter, a beach or bank as terrain; boats and jetties from the library.
+- **Coast showcase:** an example of a beachfront house looking out over the sea, first on
+  shaped terrain, then on real coastal topography once ground from coordinates exists.
 - **Quantities:** areas, lengths, volumes and counts per object and per material as a query, so
   tools built on top can list what a design contains.
 
