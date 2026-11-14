@@ -41,6 +41,7 @@ pub mod studio;
 pub mod sun;
 pub mod terrain_gpu;
 pub mod terrain_tool;
+pub mod texture_worker;
 pub mod ui;
 pub mod user_objects;
 pub mod views;

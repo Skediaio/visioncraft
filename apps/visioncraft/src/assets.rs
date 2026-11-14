@@ -440,14 +440,34 @@ pub type MemoryFiles = Arc<Mutex<HashMap<String, Arc<[u8]>>>>;
 
 /// Compresses on one loader thread at a time: four threads compressing 4k maps at once left
 /// the frame's own thread waiting for a core (upload steps of 60-100 ms on a 4-core laptop).
+#[cfg(not(target_arch = "wasm32"))]
 fn compress_one(px: &[u8], w: u32, h: u32, kind: BcKind, space: ColorSpace) -> Option<Compressed> {
     static ONE: Mutex<()> = Mutex::new(());
     let _turn = ONE.lock().unwrap_or_else(|e| e.into_inner());
     visioncraft_render::bc::compress(px, w, h, kind, space)
 }
 
-/// `compress`: block-compress library material maps (natively, on a device with BC formats; the
-/// loader runs on its own thread there, so the frame does not pay for it).
+/// Natively on this loader thread (one at a time); on the web in the texture worker, so the
+/// page does not freeze for the seconds a 4k map takes in wasm.
+async fn compress_any(
+    px: &[u8],
+    w: u32,
+    h: u32,
+    kind: BcKind,
+    space: ColorSpace,
+) -> Option<Arc<Compressed>> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        compress_one(px, w, h, kind, space).map(Arc::new)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        crate::texture_worker::compress(px, w, h, kind, space).await
+    }
+}
+
+/// `compress`: block-compress library material maps and model pictures (on a device with BC
+/// formats; off the frame's thread: a loader thread natively, the texture worker on the web).
 async fn load(
     key: &Key,
     base: &io::Base,
@@ -469,8 +489,8 @@ async fn load(
                 } else {
                     ColorSpace::Linear
                 };
-                if let Some(c) = compress_one(&img.px, img.w, img.h, kind, space) {
-                    img.bc = Some(Arc::new(c));
+                if let Some(c) = compress_any(&img.px, img.w, img.h, kind, space).await {
+                    img.bc = Some(c);
                     img.px = Vec::new();
                 }
             }
@@ -506,8 +526,8 @@ async fn load(
                     {
                         kind = BcKind::Rgba;
                     }
-                    if let Some(c) = compress_one(&img.px, img.w, img.h, kind, space) {
-                        img.bc = Some(Arc::new(c));
+                    if let Some(c) = compress_any(&img.px, img.w, img.h, kind, space).await {
+                        img.bc = Some(c);
                         img.px = Vec::new();
                     }
                 }
@@ -816,9 +836,7 @@ impl AssetStore {
             self.inflight.insert(key.clone());
             let (inbox, base, memory) =
                 (self.inbox.clone(), self.base.clone(), self.memory.clone());
-            // shortcut: in the browser the loader runs on the page's thread, where a 4k map
-            // takes seconds to compress, so the web keeps RGBA8; a worker would lift that
-            let compress = self.compress && !cfg!(target_arch = "wasm32");
+            let compress = self.compress;
             io::spawn(async move {
                 let result = load(&key, &base, &memory, compress).await;
                 inbox.lock().expect("asset inbox").push((key, result));

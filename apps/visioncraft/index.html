@@ -9,6 +9,8 @@
   <link data-trunk rel="copy-file" href="initializer.js" />
   <!-- The same crate's second binary, run in a Web Worker so model imports do not freeze the page. -->
   <link data-trunk rel="rust" data-bin="import_worker" data-type="worker" data-loader-shim data-wasm-opt="z" />
+  <!-- And a third: block-compresses decoded textures off the page's thread. -->
+  <link data-trunk rel="rust" data-bin="texture_worker" data-type="worker" data-loader-shim data-wasm-opt="z" />
   <style>
     html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #0d1219; font-family: system-ui, sans-serif; }
     canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
