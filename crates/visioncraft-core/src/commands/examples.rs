@@ -205,7 +205,7 @@ mod tests {
         );
         assert_eq!(p.assignments.len(), 46);
         assert_eq!(p.generators.len(), 45);
-        assert_eq!(p.lights.len(), 23);
+        assert_eq!(p.lights.len(), 37); // 30 downlights (18 over the living space), 6 soffit lights, the door light
         assert_eq!(p.viewpoints.len(), 10);
         assert_eq!(p.viewpoints.iter().filter(|v| v.time.is_some()).count(), 1);
         assert!(p.terrain.is_some());
@@ -234,7 +234,7 @@ mod tests {
             46 + 1,
             "the house's bodies and the path"
         );
-        assert_eq!(p.lights.len(), 23);
+        assert_eq!(p.lights.len(), 37); // 30 downlights (18 over the living space), 6 soffit lights, the door light
         let names: Vec<&str> = p.shapes.iter().map(|s| s.name()).collect();
         assert_eq!(names, ["Beach path"]);
         assert_eq!(p.viewpoints.len(), 8);

@@ -656,8 +656,11 @@ for name, x, y in (("Island pendant", (IX0 + IX1) / 2, (IY0 + IY1) / 2), ("Dinin
     vc.append(["planting.add_single", {"name": name, "asset": "modern_ceiling_lamp_01",
                                        "position": w(x, y, CEIL_Z - 952), "rotation_y_deg": 0}])
 
-# Recessed downlights, 600 lm warm white, 300 mm under the ceiling.
-DOWN = [("Living", x, LIV_Y) for x in (2000, 4800)] + [("Kitchen", x, YC - 1200) for x in (7000, 9800)]
+# Recessed downlights, 600 lm warm white, 300 mm under the ceiling. The living, dining and
+# kitchen space gets a 6 x 3 grid, one per 5 m2 (about 80 lx on average by the lumen method with
+# the pendants), the smaller rooms one or two each.
+DOWN = [("Living room", I0 + (XB - I0) * (2 * i + 1) // 12, I0 + (YC - I0) * (2 * j + 1) // 6)
+        for j in range(3) for i in range(6)]
 DOWN += [("Hall", (XA + XB) / 2, YC + 1800), ("Corridor", XB + 2500, YD + 680), ("Corridor", XB + 6500, YD + 680)]
 DOWN += [("Master", XB + 1800, YD / 2), ("Master", XG - 1800, YD / 2), ("Ensuite", (XG + IX) / 2, YD / 2)]
 DOWN += [("Den", 2300, YC + 1800), ("Utility", (X_DEN + X_UTIL) / 2, YC + 1800),
@@ -695,7 +698,7 @@ VIEWS = [  # name, eye (X, Y, Z mm), target, vertical field of view, hour or Non
     ("Living room", (13600, 1200, FFL + 1550), (1000, 4000, FFL + 1100), 65, None),
     ("Kitchen", (4600, 1300, FFL + 1550), (9500, 6000, FFL + 900), 65, None),
     ("Master bedroom", (XB + 600, YD - 1200, FFL + 1550), (XG, -1500, FFL + 900), 65, None),
-    ("Dusk", (16000, -24000, 2500), (11000, 4000, 2000), 50, 20.3),
+    ("Dusk", (16000, -24000, 2500), (11000, 4000, 2000), 50, 20.75),   # blue hour: rooms glow
 ]
 for name, eye, target, fov, hour in VIEWS:
     v = {"name": name, "position": w(*eye), "target": w(*target), "fov_y_deg": fov}
