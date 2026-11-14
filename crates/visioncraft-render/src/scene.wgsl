@@ -812,7 +812,7 @@ fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, screen_effe
     // impostor): bare twig cards, lawn blades and fallen leaves stay as they are.
     let leafy = !foliage || (in.face & 0xFFFF0000u) == CROWN_TAG || in.face == 0xfffffffdu;
     if !clay && g.snow.x > 0.0 && leafy {
-        snow = snow_on(in.world, s.geometric);
+        snow = max(snow_on(in.world, s.geometric), snow_edge(in.world, s.geometric));
         s.metallic = mix(s.metallic, 0.0, snow);
         s.roughness = mix(s.roughness, 0.6, snow);
         s.n = normalize(mix(s.n, s.geometric, snow * 0.8));
@@ -968,6 +968,37 @@ fn snow_on(world: vec3<f32>, n: vec3<f32>) -> f32 {
     let nz = value_noise(world * 1.7) * 0.6 + value_noise(world * 7.3 + 11.0) * 0.4;
     let c = up * snow_open(world) * (0.45 + a) + (nz - 0.5) * 0.7 - 0.2;
     return smoothstep(0.0, 0.45, c) * smoothstep(0.0, 0.12, a);
+}
+
+// The height of the topmost surface over (x, z) by the snow cover map (an orthographic depth
+// map looking straight down: its depth is linear in the height), or a large negative number
+// outside it.
+fn snow_top(world: vec3<f32>) -> f32 {
+    if g.snow.z < 0.5 {
+        return -1e9;
+    }
+    let p0 = g.snow_cover * vec4<f32>(world.x, 0.0, world.z, 1.0);
+    let p1 = g.snow_cover * vec4<f32>(world.x, 1.0, world.z, 1.0);
+    let uv = vec2<f32>(p0.x * 0.5 + 0.5, 0.5 - p0.y * 0.5);
+    if any(uv < vec2<f32>(0.0)) || any(uv >= vec2<f32>(1.0)) || abs(p1.z - p0.z) < 1e-9 {
+        return -1e9;
+    }
+    let dims = vec2<f32>(textureDimensions(shadow_map));
+    let d = textureLoad(shadow_map, vec2<i32>(uv * dims), i32(g.snow.y), 0);
+    return (d - p0.z) / (p1.z - p0.z);
+}
+
+// Snow's thickness seen from the side: the band just under a snowy top edge (a roof verge, a
+// sill, a wall top, the coping), on the faces that drop from it.
+fn snow_edge(world: vec3<f32>, n: vec3<f32>) -> f32 {
+    let a = g.snow.x;
+    if a <= 0.0 || abs(n.y) > 0.35 {
+        return 0.0;
+    }
+    let inside = world - normalize(vec3<f32>(n.x, 0.0, n.z)) * 0.04;
+    let below = snow_top(inside) - world.y;
+    let thick = 0.02 + 0.08 * a;
+    return (1.0 - smoothstep(thick * 0.6, thick, below)) * step(0.0, below) * snow_open(vec3<f32>(inside.x, world.y + below, inside.z));
 }
 
 // Fresh snow: a high, slightly blue-white albedo, matt with a soft sheen.
@@ -1176,7 +1207,14 @@ fn glass_terms(in: Varying) -> GlassTerms {
     var sun = vec3<f32>(0.0);
     if nol > 0.0 {
         let shadow = sun_shadow(in.world, n, nol, depth);
-        sun = specular(n, v, l, nol, nov, vec3<f32>(0.04), a) * nol * g.sun_light.rgb * shadow * 2.0;
+        // The sun's mirror image in a pane: spread over the disc's half degree and the glass's
+        // waviness, and held below a few times a white wall's brightness, so a window that
+        // catches the sun glints instead of burning a white hole into the picture.
+        let a_sun = max(roughness, 0.12) * max(roughness, 0.12);
+        sun = min(
+            specular(n, v, l, nol, nov, vec3<f32>(0.04), a_sun) * nol * 2.0,
+            vec3<f32>(0.35),
+        ) * g.sun_light.rgb * shadow;
     }
     let lamps = local_lights(in.world, n, v, nov, vec3<f32>(0.0), vec3<f32>(0.04), a, false) * 2.0;
     let opacity = clamp(material.base_color.a, 0.0, 1.0);

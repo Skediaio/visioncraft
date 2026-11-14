@@ -129,9 +129,9 @@ fn look_of(m: &Material, lib: &mut Library, month: u32) -> Look {
         },
         ..Look::plain(0.0, 0.0, 0.0, 0.0)
     };
-    if ov.is_some() {
-        // the pictures decide
-        plain.color = [1.0; 4];
+    if let Some(o) = &ov {
+        // the pictures decide, under the overlay's tint
+        plain.color = [o.tint[0], o.tint[1], o.tint[2], 1.0];
         plain.metallic = 1.0;
         plain.roughness = 1.0;
     }

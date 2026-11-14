@@ -36,6 +36,9 @@ pub struct Overlay {
     pub spec: TexSpec,
     pub scale_m: f32,
     pub variation: f32,
+    /// Multiplies the pictures (linear): plaster's photo is a cold white that merged with snow
+    /// and sky; a render's plaster is a slightly warm off-white.
+    pub tint: [f32; 3],
 }
 
 fn spec_of_entry(m: &LibMaterial) -> TexSpec {
@@ -58,10 +61,20 @@ pub fn overlay(lib: &Library, m: &Material) -> Option<Overlay> {
     let (_, lib_id, variation) = DEFAULTS.iter().find(|d| d.0 == m.id)?;
     let entry = lib.materials.iter().find(|e| e.id == *lib_id)?;
     let builtin = builtin_palette().into_iter().find(|b| b.id == m.id)?;
-    (builtin == *m).then(|| Overlay {
+    // Mowing stripes do not make a lawn another material: it keeps its library look.
+    let mut unstriped = m.clone();
+    if let visioncraft_core::SurfaceKind::Lawn3d(l) = &mut unstriped.kind {
+        (l.stripes_m, l.stripes_deg) = (0.0, 0.0);
+    }
+    (builtin == unstriped).then(|| Overlay {
         spec: spec_of_entry(entry),
         scale_m: scale_of(entry),
         variation: *variation,
+        tint: if m.id == "plaster" {
+            [0.86, 0.81, 0.73]
+        } else {
+            [1.0; 3]
+        },
     })
 }
 
