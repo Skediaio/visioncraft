@@ -781,7 +781,11 @@ impl Studio {
             self.suggest_lights = true;
         }
         let q = self.current_quality();
+        let rebake = q.impostor_resolution != self.renderer.quality().impostor_resolution;
         self.renderer.set_quality(q);
+        if rebake {
+            self.scene.flora.rebake();
+        }
         let hl = self
             .highlight
             .as_ref()

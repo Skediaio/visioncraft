@@ -85,7 +85,8 @@ impl Pictures for GpuPictures {
         s.quality = Quality::PRESETS
             .iter()
             .position(|(name, _)| name.eq_ignore_ascii_case(&request.quality))
-            .unwrap_or(Quality::PRESETS.len() - 1);
+            // An unknown name renders on HIGH (ULTRA is for fast desktop GPUs).
+            .unwrap_or(2);
         s.resize(request.width, request.height);
         s.sync();
         let (position, target, fov) = match request.camera {

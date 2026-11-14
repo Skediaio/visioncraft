@@ -257,11 +257,26 @@ impl Flora {
                     (m, mat, ends[rank])
                 })
                 .collect();
-            v.baked = Some((short, imp));
+            // A rebake (another impostor resolution) frees the atlas it replaces.
+            if let Some((_, old)) = v.baked.replace((short, imp)) {
+                r.remove_impostor(old);
+            }
             self.rev += 1;
             return true;
         }
         false
+    }
+
+    /// Bakes every impostor again, at the quality's impostor resolution now set.
+    pub fn rebake(&mut self) {
+        for ((id, class), variants) in &self.classes {
+            for (v, variant) in variants.iter().enumerate() {
+                let key = (id.clone(), *class, v as u32);
+                if variant.baked.is_some() && !self.bakes.contains(&key) {
+                    self.bakes.push(key);
+                }
+            }
+        }
     }
 
     pub fn want(&mut self, id: &str, class: u32, month: u8, params: &flora::PlantParams) {
