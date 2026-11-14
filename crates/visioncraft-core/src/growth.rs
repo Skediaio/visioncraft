@@ -3,7 +3,8 @@
 //!
 //! The numbers are estimates from common horticultural knowledge (nursery catalogues, tree
 //! guides): mature height and width as the species catalogue states them, the years a plant
-//! takes from germination to about 95 % of that size, and the age it usually has when planted.
+//! takes from germination to about 95 % of that size, and the age it usually has when planted
+//! (perennials and grasses go in as half-season pot plants, hedges as two-year whips).
 //! They are all in the one table below so they are easy to correct.
 //!
 //! A clipped plant (hedge, topiary) grows the same way until it reaches its size and is then
@@ -69,23 +70,23 @@ pub const GROWTH: &[(&str, Grower, f32, f32, f32, f32)] = &[
     ("phyllostachys", Shrub, 5.0, 2.5, 6.0, 3.0),
     ("buxus-ball", Clipped, 0.6, 0.6, 12.0, 4.0),
     ("taxus-cone", Clipped, 1.8, 1.0, 15.0, 4.0),
-    ("carpinus-hedge", Clipped, 1.8, 0.6, 6.0, 2.0),
-    ("fagus-hedge", Clipped, 1.8, 0.6, 7.0, 2.0),
-    ("taxus-hedge", Clipped, 1.6, 0.7, 12.0, 4.0),
-    ("ligustrum-hedge", Clipped, 1.6, 0.6, 5.0, 2.0),
+    ("carpinus-hedge", Clipped, 1.8, 0.6, 8.0, 2.0),
+    ("fagus-hedge", Clipped, 1.8, 0.6, 9.0, 2.0),
+    ("taxus-hedge", Clipped, 1.6, 0.7, 14.0, 4.0),
+    ("ligustrum-hedge", Clipped, 1.6, 0.6, 7.0, 2.0),
     ("lawn-tuft", Lawn, 0.08, 0.1, 0.0, 0.0),
-    ("miscanthus-sinensis", Grass, 1.8, 1.3, 3.0, 1.0),
-    ("cortaderia-selloana", Grass, 2.5, 1.8, 3.0, 1.0),
-    ("pennisetum-alopecuroides", Grass, 0.9, 1.0, 3.0, 1.0),
-    ("festuca-glauca", Grass, 0.25, 0.3, 2.0, 1.0),
-    ("calamagrostis-acutiflora", Grass, 1.6, 0.6, 3.0, 1.0),
-    ("hosta", Perennial, 0.7, 0.9, 3.0, 1.0),
-    ("hemerocallis", Perennial, 0.9, 0.8, 3.0, 1.0),
-    ("geranium-rozanne", Perennial, 0.5, 0.7, 3.0, 1.0),
-    ("nepeta-faassenii", Perennial, 0.5, 0.6, 3.0, 1.0),
-    ("echinacea-purpurea", Perennial, 0.9, 0.5, 3.0, 1.0),
-    ("dryopteris-filix-mas", Perennial, 1.0, 1.0, 3.0, 1.0),
-    ("hedera-ground", GroundCover, 0.15, 0.6, 3.0, 1.0),
+    ("miscanthus-sinensis", Grass, 1.8, 1.3, 3.0, 0.5),
+    ("cortaderia-selloana", Grass, 2.5, 1.8, 3.0, 0.5),
+    ("pennisetum-alopecuroides", Grass, 0.9, 1.0, 3.0, 0.5),
+    ("festuca-glauca", Grass, 0.25, 0.3, 2.0, 0.5),
+    ("calamagrostis-acutiflora", Grass, 1.6, 0.6, 3.0, 0.5),
+    ("hosta", Perennial, 0.7, 0.9, 3.0, 0.5),
+    ("hemerocallis", Perennial, 0.9, 0.8, 3.0, 0.5),
+    ("geranium-rozanne", Perennial, 0.5, 0.7, 3.0, 0.5),
+    ("nepeta-faassenii", Perennial, 0.5, 0.6, 3.0, 0.5),
+    ("echinacea-purpurea", Perennial, 0.9, 0.5, 3.0, 0.5),
+    ("dryopteris-filix-mas", Perennial, 1.0, 1.0, 3.0, 0.5),
+    ("hedera-ground", GroundCover, 0.15, 0.6, 3.0, 0.5),
     ("hedera-wall", Climber, 2.5, 2.0, 6.0, 2.0),
     ("acer-platanoides", Tree, 20.0, 15.0, 30.0, 8.0),
     ("aesculus-hippocastanum", Tree, 25.0, 18.0, 40.0, 8.0),
@@ -100,7 +101,7 @@ pub const GROWTH: &[(&str, Grower, f32, f32, f32, f32)] = &[
     ("ginkgo-biloba", Tree, 18.0, 9.0, 50.0, 8.0),
     ("liquidambar-styraciflua", Tree, 18.0, 10.0, 35.0, 8.0),
     ("larix-decidua", Conifer, 25.0, 8.0, 30.0, 6.0),
-    ("cupressocyparis-hedge", Clipped, 2.5, 0.9, 4.0, 2.0),
+    ("cupressocyparis-hedge", Clipped, 2.5, 0.9, 6.0, 2.0),
     ("pinus-mugo", Conifer, 1.5, 2.5, 25.0, 6.0),
     ("phoenix-canariensis", Palm, 10.0, 8.0, 40.0, 6.0),
     ("forsythia", Shrub, 2.5, 2.5, 5.0, 3.0),
@@ -116,45 +117,45 @@ pub const GROWTH: &[(&str, Grower, f32, f32, f32, f32)] = &[
     ("hibiscus-syriacus", Shrub, 3.0, 2.0, 10.0, 3.0),
     ("pieris-japonica", Shrub, 2.0, 2.0, 12.0, 3.0),
     ("fargesia-hedge", Shrub, 3.0, 1.5, 6.0, 3.0),
-    ("laurocerasus-hedge", Clipped, 2.0, 1.0, 5.0, 2.0),
-    ("thuja-hedge", Clipped, 2.0, 0.6, 6.0, 2.0),
-    ("photinia-hedge", Clipped, 1.8, 0.6, 5.0, 2.0),
-    ("buxus-edging", Clipped, 0.3, 0.25, 6.0, 2.0),
+    ("laurocerasus-hedge", Clipped, 2.0, 1.0, 7.0, 2.0),
+    ("thuja-hedge", Clipped, 2.0, 0.6, 8.0, 2.0),
+    ("photinia-hedge", Clipped, 1.8, 0.6, 7.0, 2.0),
+    ("buxus-edging", Clipped, 0.3, 0.25, 8.0, 2.0),
     ("laurus-standard", Clipped, 2.2, 0.8, 10.0, 4.0),
-    ("tilia-pleached", Clipped, 4.0, 0.7, 10.0, 4.0),
-    ("carex-oshimensis", Grass, 0.35, 0.5, 3.0, 1.0),
-    ("hakonechloa-macra", Grass, 0.4, 0.6, 3.0, 1.0),
-    ("panicum-virgatum", Grass, 1.5, 0.8, 3.0, 1.0),
-    ("typha-latifolia", Grass, 2.0, 0.8, 3.0, 1.0),
-    ("paeonia-lactiflora", Perennial, 0.8, 0.9, 4.0, 1.0),
-    ("delphinium-elatum", Perennial, 1.6, 0.6, 3.0, 1.0),
-    ("lupinus-polyphyllus", Perennial, 1.0, 0.6, 3.0, 1.0),
-    ("sedum-herbstfreude", Perennial, 0.5, 0.5, 3.0, 1.0),
-    ("heuchera", Perennial, 0.4, 0.4, 3.0, 1.0),
-    ("astilbe-arendsii", Perennial, 0.6, 0.5, 3.0, 1.0),
-    ("salvia-nemorosa", Perennial, 0.5, 0.45, 3.0, 1.0),
-    ("rudbeckia-fulgida", Perennial, 0.7, 0.6, 3.0, 1.0),
-    ("phlox-paniculata", Perennial, 1.0, 0.6, 3.0, 1.0),
-    ("iris-germanica", Perennial, 0.8, 0.5, 3.0, 1.0),
-    ("alchemilla-mollis", Perennial, 0.4, 0.6, 3.0, 1.0),
-    ("bergenia-cordifolia", Perennial, 0.4, 0.5, 3.0, 1.0),
-    ("anemone-hupehensis", Perennial, 1.0, 0.6, 3.0, 1.0),
-    ("tulipa-clump", Perennial, 0.45, 0.3, 1.0, 1.0),
-    ("narcissus-clump", Perennial, 0.4, 0.3, 1.0, 1.0),
-    ("allium-purple-sensation", Perennial, 0.8, 0.3, 1.0, 1.0),
-    ("vinca-minor", GroundCover, 0.15, 0.6, 3.0, 1.0),
-    ("pachysandra-terminalis", GroundCover, 0.2, 0.6, 3.0, 1.0),
-    ("thymus-serpyllum", GroundCover, 0.08, 0.5, 3.0, 1.0),
+    ("tilia-pleached", Clipped, 4.0, 0.7, 12.0, 4.0),
+    ("carex-oshimensis", Grass, 0.35, 0.5, 3.0, 0.5),
+    ("hakonechloa-macra", Grass, 0.4, 0.6, 3.0, 0.5),
+    ("panicum-virgatum", Grass, 1.5, 0.8, 3.0, 0.5),
+    ("typha-latifolia", Grass, 2.0, 0.8, 3.0, 0.5),
+    ("paeonia-lactiflora", Perennial, 0.8, 0.9, 4.0, 0.5),
+    ("delphinium-elatum", Perennial, 1.6, 0.6, 3.0, 0.5),
+    ("lupinus-polyphyllus", Perennial, 1.0, 0.6, 3.0, 0.5),
+    ("sedum-herbstfreude", Perennial, 0.5, 0.5, 3.0, 0.5),
+    ("heuchera", Perennial, 0.4, 0.4, 3.0, 0.5),
+    ("astilbe-arendsii", Perennial, 0.6, 0.5, 3.0, 0.5),
+    ("salvia-nemorosa", Perennial, 0.5, 0.45, 3.0, 0.5),
+    ("rudbeckia-fulgida", Perennial, 0.7, 0.6, 3.0, 0.5),
+    ("phlox-paniculata", Perennial, 1.0, 0.6, 3.0, 0.5),
+    ("iris-germanica", Perennial, 0.8, 0.5, 3.0, 0.5),
+    ("alchemilla-mollis", Perennial, 0.4, 0.6, 3.0, 0.5),
+    ("bergenia-cordifolia", Perennial, 0.4, 0.5, 3.0, 0.5),
+    ("anemone-hupehensis", Perennial, 1.0, 0.6, 3.0, 0.5),
+    ("tulipa-clump", Perennial, 0.45, 0.3, 1.0, 0.5),
+    ("narcissus-clump", Perennial, 0.4, 0.3, 1.0, 0.5),
+    ("allium-purple-sensation", Perennial, 0.8, 0.3, 1.0, 0.5),
+    ("vinca-minor", GroundCover, 0.15, 0.6, 3.0, 0.5),
+    ("pachysandra-terminalis", GroundCover, 0.2, 0.6, 3.0, 0.5),
+    ("thymus-serpyllum", GroundCover, 0.08, 0.5, 3.0, 0.5),
     ("wisteria-wall", Climber, 3.0, 3.0, 10.0, 2.0),
     ("rosa-climbing-wall", Climber, 2.5, 2.0, 6.0, 2.0),
     ("clematis-wall", Climber, 2.5, 1.5, 6.0, 2.0),
     ("parthenocissus-wall", Climber, 3.0, 2.5, 6.0, 2.0),
-    ("solanum-lycopersicum", Perennial, 1.6, 0.6, 1.0, 1.0),
-    ("lactuca-sativa", Perennial, 0.2, 0.3, 1.0, 1.0),
-    ("rheum-rhabarbarum", Perennial, 1.0, 1.5, 3.0, 1.0),
-    ("fragaria-patch", GroundCover, 0.2, 0.6, 3.0, 1.0),
-    ("nymphaea-patch", GroundCover, 0.12, 1.2, 3.0, 1.0),
-    ("iris-pseudacorus", Perennial, 1.2, 0.8, 3.0, 1.0),
+    ("solanum-lycopersicum", Perennial, 1.6, 0.6, 1.0, 0.5),
+    ("lactuca-sativa", Perennial, 0.2, 0.3, 1.0, 0.5),
+    ("rheum-rhabarbarum", Perennial, 1.0, 1.5, 3.0, 0.5),
+    ("fragaria-patch", GroundCover, 0.2, 0.6, 3.0, 0.5),
+    ("nymphaea-patch", GroundCover, 0.12, 1.2, 3.0, 0.5),
+    ("iris-pseudacorus", Perennial, 1.2, 0.8, 3.0, 0.5),
 ];
 
 /// The growth data of an asset (`flora:<id>`), else a guess from its size: a plant taller than
@@ -218,8 +219,10 @@ impl Growth {
         }
         let p = match self.grower {
             Tree | Conifer | Palm => 1.6,
-            Shrub | Clipped | Climber => 1.3,
-            _ => 1.0,
+            // Whips and young topiary put on height slowly at first.
+            Clipped => 2.0,
+            Shrub | Climber => 1.3,
+            _ => 1.5,
         };
         let k = -(1.0 - 0.95f32.powf(1.0 / p)).ln() / self.years_to_maturity;
         let s = (1.0 - (-k * age_years.max(0.0)).exp()).powf(p);
@@ -268,9 +271,12 @@ mod tests {
         assert_eq!(birch.fraction(0.0), 0.0);
         let hedge = growth_of("flora:carpinus-hedge", None);
         assert_eq!(hedge.fraction(40.0), 1.0);
-        assert!(hedge.fraction(2.0) < 0.8);
+        // Whips planted at two years: well under half the kept height.
+        assert!(hedge.fraction(2.0) < 0.45, "{}", hedge.fraction(2.0));
+        assert!(hedge.fraction(10.0) > 0.95);
         let perennial = growth_of("flora:nepeta-faassenii", None);
-        assert!(perennial.fraction(3.0) > 0.9);
+        assert!(perennial.fraction(perennial.planted_age_years) < 0.35);
+        assert!(perennial.fraction(perennial.planted_age_years + 2.5) > 0.9);
         // A young tree is narrow for its height, the mature one is not.
         let young = birch.size(3.0);
         assert!(young.width < young.height);
