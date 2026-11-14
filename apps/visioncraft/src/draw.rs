@@ -490,15 +490,27 @@ impl DrawState {
                 self.finish(cx);
             }
         }
-        // Preview.
+        // Preview: the typed size where one is typed, else the pointer.
         let mut pts = self.points.clone();
-        if let Some(s) = snap
-            && pts.last() != Some(&s.pos)
-        {
+        let mut rect = false;
+        let typed_len: Option<f32> = self.typed.parse().ok().filter(|v: &f32| *v > 0.0);
+        if let (Some(&last), Some(s)) = (self.points.last(), snap) {
+            match (self.typed_width, typed_len) {
+                (Some(w), depth) if closed_shape && self.points.len() == 1 => {
+                    // Width typed: the rectangle, its depth typed or up to the pointer.
+                    let d = depth.unwrap_or((s.pos[1] - last[1]).abs().max(0.1));
+                    pts = rectangle(last, s.pos, w, d).to_vec();
+                    rect = true;
+                }
+                (_, Some(len)) => pts.push(typed_point(last, s.pos, len)),
+                _ if last != s.pos => pts.push(s.pos),
+                _ => {}
+            }
+        } else if let Some(s) = snap {
             pts.push(s.pos);
         }
         let y = 0.05;
-        top.extend(outline_lines(&pts, false, y, ACCENT, 3.0));
+        top.extend(outline_lines(&pts, rect, y, ACCENT, 3.0));
         if closed_shape
             && self.points.len() >= 2
             && let Some(&last) = pts.last()
