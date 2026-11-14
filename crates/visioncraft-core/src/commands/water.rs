@@ -42,7 +42,7 @@ pub(super) fn register(s: &mut Session) {
         spec(
             "water.remove_sea",
             "Remove Sea",
-            "Removes the sea level.",
+            "Removes the sea level; without one it does nothing.",
             vec![],
             "null",
             json!({}),
@@ -82,9 +82,7 @@ fn set_sea(project: &mut Project, params: &Value) -> Result<Value, CommandError>
 }
 
 fn remove_sea(project: &mut Project, _: &Value) -> Result<Value, CommandError> {
-    if project.sea.take().is_none() {
-        return Err(fail("there is no sea"));
-    }
+    project.sea = None;
     Ok(Value::Null)
 }
 
@@ -202,7 +200,10 @@ mod tests {
         );
         s.run("water.remove_sea", json!({})).unwrap();
         assert!(s.project().sea.is_none());
-        assert!(s.run("water.remove_sea", json!({})).is_err());
+        assert!(
+            s.run("water.remove_sea", json!({})).is_ok(),
+            "nothing to remove is fine"
+        );
         // A project without a sea writes nothing for it.
         let json = String::from_utf8(Project::default().to_json_bytes()).unwrap();
         assert!(!json.contains("\"sea\""));
