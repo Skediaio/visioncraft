@@ -844,7 +844,9 @@ impl Scene {
                         )
                     })
                     .collect::<Vec<_>>(),
-                self.flora.rev,
+                // Only the tuft species' own readiness: any other species finishing (the
+                // flora's revision) made every lawn again, 50 ms each, through a load.
+                u64::from(self.flora.ready(LAWN_SPECIES, class)),
                 month,
                 over_key,
             );
