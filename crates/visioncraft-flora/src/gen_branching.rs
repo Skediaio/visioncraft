@@ -392,8 +392,10 @@ pub fn generate(
     let flowers = p.flowers.as_ref().filter(|_| st.flowers);
     let n_flower = flowers.map_or(0, |f| ((nk as f32 * f.density).round() as usize).min(nk));
     let n_leaf = ((nk as f32 * st.leaf_fraction).round() as usize).min(nk - n_flower.min(nk));
+    // Bare twigs as cards are a haze, not a crown: a third of the cards the leaves had (the
+    // branches themselves carry the shape), or the winter tree reads as brown foliage.
     let n_twig = if p.deciduous {
-        ((nk - n_leaf - n_flower) as f32 * 0.9) as usize
+        ((nk - n_leaf - n_flower) as f32 * 0.35) as usize
     } else {
         0
     };
@@ -481,10 +483,10 @@ pub fn generate(
         emit(
             &mut out,
             idx,
-            ck * 0.9,
+            ck * 0.6,
             12 + (k % 2) as u8,
             Material::Twigs,
-            -(ck * 0.9 - c0) * 0.5,
+            -(ck * 0.6 - c0) * 0.5,
             0.2,
         );
     }
