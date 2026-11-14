@@ -822,6 +822,10 @@ fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, screen_effe
         // No sun glints off leaves facing away from the viewer.
         if nol > 0.0 && (!foliage || dot(n, v) > 0.0) {
             fr = specular(n, v, l, nol, nov, f0, a) * nol;
+            if foliage {
+                // A waxy leaf's sheen, not a mirror: grazing Fresnel would whiten crown tops.
+                fr = min(fr, vec3<f32>(0.06));
+            }
         }
         sun += (diffuse_color / PI * diffuse + fr) * g.sun_light.rgb * shadow;
     }
