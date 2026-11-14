@@ -85,8 +85,9 @@ impl Pictures for GpuPictures {
         s.quality = Quality::PRESETS
             .iter()
             .position(|(name, _)| name.eq_ignore_ascii_case(&request.quality))
-            // An unknown name renders on HIGH (ULTRA is for fast desktop GPUs).
-            .unwrap_or(2);
+            // A photo is taken at ULTRA; an unknown name renders on HIGH (ULTRA is for fast
+            // desktop GPUs).
+            .unwrap_or(if request.photo.is_some() { 3 } else { 2 });
         s.resize(request.width, request.height);
         s.sync();
         let (position, target, fov) = match request.camera {
@@ -118,13 +119,22 @@ impl Pictures for GpuPictures {
         }
         s.prepare();
         let pending = s.plants_pending();
-        let rb = Readback::start(s, &g.device, &g.queue);
-        g.device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .map_err(|e| format!("the GPU did not finish: {e}"))?;
-        let pixels = rb
-            .take(&g.device)
-            .ok_or("reading the picture back from the GPU failed")?;
+        let pixels = match &request.photo {
+            Some(p) => s.render_photo(
+                request.width,
+                request.height,
+                p.samples,
+                (p.aperture_m > 0.0).then_some((p.aperture_m, p.focus_m)),
+            )?,
+            None => {
+                let rb = Readback::start(s, &g.device, &g.queue);
+                g.device
+                    .poll(wgpu::PollType::wait_indefinitely())
+                    .map_err(|e| format!("the GPU did not finish: {e}"))?;
+                rb.take(&g.device)
+                    .ok_or("reading the picture back from the GPU failed")?
+            }
+        };
         let problems = std::mem::take(&mut s.problems);
         Ok(Rendered {
             png: encode_png(&pixels, request.width, request.height)?,
@@ -132,6 +142,7 @@ impl Pictures for GpuPictures {
                 "renderer": "gpu",
                 "camera": {"position": position, "target": target, "fov_y_deg": fov},
                 "quality": request.quality,
+                "samples": request.photo.as_ref().map(|p| p.samples),
                 "frames": frames,
                 "plantsPending": pending,
                 "problems": problems,
