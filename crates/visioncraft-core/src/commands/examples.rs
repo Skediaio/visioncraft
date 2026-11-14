@@ -70,4 +70,22 @@ mod tests {
         assert!(p.terrain.is_some());
         assert!(super::example("park").is_err());
     }
+
+    #[test]
+    fn the_pond_is_square_and_its_coping_stands_on_the_lawn() {
+        let p = super::example("garden").unwrap();
+        let t = p.terrain.as_deref().unwrap();
+        let pond = p.shapes.iter().find(|s| s.name() == "Pond").unwrap();
+        let crate::Shape::Area(a) = pond else {
+            panic!()
+        };
+        assert_eq!(a.outline.len(), 4, "the outline as drawn");
+        let edge = p.shapes.iter().find(|s| s.name() == "Pond edge").unwrap();
+        let crate::Shape::Extrusion(e) = edge else {
+            panic!()
+        };
+        let lift = crate::footing(&e.outline, &|x, z| t.height_at(x, z));
+        let top = lift + e.base + e.height;
+        assert!((top - 0.12).abs() < 0.02, "coping top {top} (lift {lift})");
+    }
 }
