@@ -49,8 +49,8 @@ pub use planting::{
 };
 pub use presets::{PlantingPreset, planting_presets};
 pub use project::{
-    CustomSpecies, GroundPlane, Layer, Look, ModelKind, ModelRef, Project, ProjectError,
-    RenderStyle, Site, SkyChoice, SunTime, Transform, ViewState,
+    CloudKind, Clouds, CustomSpecies, GroundPlane, Layer, Look, ModelKind, ModelRef, Project,
+    ProjectError, RenderStyle, Site, SkyChoice, SunTime, Transform, ViewState,
 };
 pub use raycast::{Hit, ground_height, raycast};
 pub use session::{Command, CommandError, Session};

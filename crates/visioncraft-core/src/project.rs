@@ -147,6 +147,44 @@ pub struct ViewState {
     /// `natural`, the default.
     #[serde(skip_serializing_if = "Look::is_natural")]
     pub look: Look,
+    /// The cloud layer over the analytic sky. Not written while the default.
+    #[serde(skip_serializing_if = "Clouds::is_default")]
+    pub clouds: Clouds,
+}
+
+/// A procedural cloud layer: what kind, and how much of the sky it covers.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Clouds {
+    pub kind: CloudKind,
+    /// 0..1 of the sky.
+    pub cover: f32,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CloudKind {
+    Clear,
+    /// Light fair-weather cumulus.
+    #[default]
+    Cumulus,
+    /// A closed grey layer: soft shadows, little direct sun.
+    Overcast,
+}
+
+impl Default for Clouds {
+    fn default() -> Self {
+        Clouds {
+            kind: CloudKind::Cumulus,
+            cover: 0.35,
+        }
+    }
+}
+
+impl Clouds {
+    fn is_default(&self) -> bool {
+        *self == Clouds::default()
+    }
 }
 
 /// How the picture is developed, as a photographer would choose a film.
@@ -191,6 +229,7 @@ impl Default for ViewState {
             }),
             view_distance: 1.0,
             look: Look::Natural,
+            clouds: Clouds::default(),
         }
     }
 }
@@ -205,6 +244,7 @@ impl ViewState {
             && self.wind_strength >= 0.0
             && finite(self.wind_direction_deg)
             && VIEW_DISTANCE_RANGE.contains(&self.view_distance)
+            && (0.0..=1.0).contains(&self.clouds.cover)
             && self.ground.is_none_or(|g| {
                 finite(g.height) && g.color.iter().all(|c| c.is_finite() && *c >= 0.0)
             })

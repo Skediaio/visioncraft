@@ -516,6 +516,35 @@ fn view_set_takes_any_subset() {
 }
 
 #[test]
+fn clouds_are_a_view_setting_absent_from_files_while_default() {
+    let mut s = Session::new(Project::default());
+    let plain = String::from_utf8(s.project().to_json_bytes()).unwrap();
+    assert!(!plain.contains("clouds"), "the default is not written");
+    s.run(
+        "view.set",
+        json!({"clouds": {"kind": "overcast", "cover": 1.0}}),
+    )
+    .unwrap();
+    assert_eq!(
+        s.project().view.clouds.kind,
+        visioncraft_core::CloudKind::Overcast
+    );
+    assert!(
+        s.run(
+            "view.set",
+            json!({"clouds": {"kind": "cumulus", "cover": 1.5}})
+        )
+        .is_err()
+    );
+    assert!(
+        s.run("view.set", json!({"clouds": {"kind": "storm"}}))
+            .is_err()
+    );
+    let p = Project::from_json_bytes(&s.project().to_json_bytes()).unwrap();
+    assert_eq!(p.view.clouds, s.project().view.clouds);
+}
+
+#[test]
 fn view_distance_is_a_view_setting_within_its_range_and_absent_from_old_files() {
     let mut s = Session::new(Project::default());
     assert_eq!(s.project().view.view_distance, 1.0);

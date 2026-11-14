@@ -90,7 +90,7 @@ pub(super) fn register(s: &mut Session) {
         spec(
             "view.set",
             "Set View",
-            "Sets exposure, look, sky, haze, wind, the ground plane and the view distance stored with the project; only the fields given change.",
+            "Sets exposure, look, sky, clouds, haze, wind, the ground plane and the view distance stored with the project; only the fields given change.",
             vec![
                 param("exposure_ev", T::Number, "Exposure offset in stops; null for automatic exposure."),
                 param("sky", T::Object, "{type: \"physical\"} or {type: \"hdri\", id: string, rotation_deg: number, intensity: number >= 0}.")
@@ -100,6 +100,7 @@ pub(super) fn register(s: &mut Session) {
                 param("wind_direction_deg", T::Number, "Direction the wind blows towards, clockwise from north seen from above.").unit("deg").default(json!(0)),
                 param("ground", T::Object, "Ground plane {height: m, color: [r, g, b] linear}; null for none.")
                     .default(json!({"height": 0, "color": [0.065, 0.12, 0.035]})),
+                param("clouds", T::Object, "The cloud layer over the analytic sky: {kind: \"clear\" | \"cumulus\" (light fair-weather clouds) | \"overcast\", cover: 0..1}; overcast softens shadows and dims the sun.").default(json!({"kind": "cumulus", "cover": 0.35})),
                 param("look", T::String, "neutral, natural or vivid: the picture's exposure, contrast and colour on top of the tone map.").default(json!("natural")),
                 param("view_distance", T::Number, "How far plants, shadows and a clear view reach, as a multiple of the default; 0.25 to 4.")
                     .unit("x")
@@ -202,8 +203,8 @@ fn style_set(project: &mut Project, params: &Value) -> Result<Value, CommandErro
 }
 
 fn view_set(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
-    // `view_distance` is not written while it is 1, `look` while natural.
-    let view = super::merge_update(&project.view, params, &["view_distance", "look"])?;
+    // `view_distance` is not written while it is 1, `look` while natural, `clouds` while default.
+    let view = super::merge_update(&project.view, params, &["view_distance", "look", "clouds"])?;
     view.validate().map_err(|e| crate::session::bad(&e))?;
     project.view = view;
     Ok(Value::Null)
