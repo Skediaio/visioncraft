@@ -34,6 +34,7 @@ mod gen_clipped;
 mod gen_conifer;
 mod gen_herb;
 mod gen_palm;
+mod gen_tree;
 mod schema;
 
 use std::ops::Range;
@@ -236,6 +237,70 @@ fn generate_in(params: &PlantParams, seed: u64, lod: Lod, season: Option<Season>
         Form::Climber(c) => gen_herb::climber(params, c, seed, lod, &state, budget),
         Form::Conifer(c) => gen_conifer::generate(params, c, seed, lod, &state, budget),
     };
+    settle(&mut mesh, &state);
+    debug_assert!(
+        mesh.triangle_count() <= budget,
+        "budget {budget} exceeded: {}",
+        mesh.triangle_count()
+    );
+    mesh
+}
+
+/// Every level a renderer draws a plant with, nearest first. With `detail`, trees (the
+/// broadleaf species grown by space colonisation) get two more levels before [`Lod::Lod0`]:
+/// first every lit shoot with its leaves at true size ([`detail_triangles`]`[0]`), then the
+/// spray cards at a larger budget (`[1]`). Otherwise the three [`Lod`]s. The skeleton is grown
+/// once for all of them, so this is cheaper than one [`generate_in_season`] per level.
+pub fn generate_levels(
+    params: &PlantParams,
+    seed: u64,
+    season: Option<Season>,
+    detail: bool,
+) -> Vec<PlantMesh> {
+    let Form::Branching(b) = &params.form else {
+        return Lod::ALL
+            .map(|lod| generate_in(params, seed, lod, season))
+            .to_vec();
+    };
+    let state = SeasonState::new(params, season);
+    let sk = gen_branching::skeleton(params, b, seed);
+    let budgets = Lod::ALL.map(|l| params.budget.triangles(l));
+    let mut out = Vec::new();
+    let detail = detail && gen_branching::grown(params);
+    if detail {
+        let [near, sprays] = gen_tree::detail_budget(params.budget);
+        out.push(gen_tree::leaf_level(params, b, &sk, seed, &state, near));
+        // The spray level: the card generator's first level at a larger budget, its far
+        // levels unchanged, so its sprays sit where the near card level's do.
+        let t = [sprays, budgets[1], budgets[2]];
+        out.push(gen_branching::cards(
+            params, b, &sk, seed, 0, &state, sprays, t,
+        ));
+    }
+    for (li, &budget) in budgets.iter().enumerate() {
+        out.push(gen_branching::cards(
+            params, b, &sk, seed, li, &state, budget, budgets,
+        ));
+    }
+    for m in &mut out {
+        settle(m, &state);
+    }
+    out
+}
+
+/// Triangle budgets of the two leaf-level detail levels of [`generate_levels`] (`[0, 0]` for
+/// plants without them).
+pub fn detail_triangles(params: &PlantParams) -> [usize; 2] {
+    match &params.form {
+        Form::Branching(_) if gen_branching::grown(params) => {
+            gen_tree::detail_budget(params.budget)
+        }
+        _ => [0, 0],
+    }
+}
+
+/// The season's foliage tint, and nothing below the ground.
+fn settle(mesh: &mut PlantMesh, state: &SeasonState) {
     mesh.foliage_tint = state.tint;
     // Leaves and drooping cards near the base may dip below the ground plane: lay them on it.
     // Anything resting on the ground does not sway: the bend weight is 0 below 2 mm and fades
@@ -246,12 +311,6 @@ fn generate_in(params: &PlantParams, seed: u64, lod: Lod, season: Option<Season>
             w[0] *= ((p[1] - 0.002) / 0.003).clamp(0.0, 1.0);
         }
     }
-    debug_assert!(
-        mesh.triangle_count() <= budget,
-        "budget {budget} exceeded: {}",
-        mesh.triangle_count()
-    );
-    mesh
 }
 
 /// Generate the textures (leaf atlas and bark) for a species.

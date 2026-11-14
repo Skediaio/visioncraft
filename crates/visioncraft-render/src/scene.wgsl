@@ -944,7 +944,15 @@ fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, screen_effe
     let vis = sky_volume(in.world, n, 0.0);
     let seen = sky_seen(vis, n);
     let bounce = room_bounce(in.world, n);
-    var ambient_diffuse = diffuse_color * (sh_irradiance(n) * seen + bounce * (1.0 - seen)) / PI * ao;
+    var sky_irr = sh_irradiance(n);
+    if foliage {
+        // A leaf is thin: of the sky light on its far side about as much comes through as its
+        // near side reflects (diffuse transmission of thin leaves, as in Habel, Kusternig &
+        // Wimmer, "Physically Based Real-Time Translucency for Leaves", EGSR 2007). Without it
+        // the leaves under a crown, facing the dark ground, read near black.
+        sky_irr = mix(sky_irr, sh_irradiance(-n), 0.4);
+    }
+    var ambient_diffuse = diffuse_color * (sky_irr * seen + bounce * (1.0 - seen)) / PI * ao;
     // Photos from their second sample on: the diffuse light arriving from the scene itself,
     // gathered along two cosine-distributed rays per sample against the depth buffer and lit
     // by the previous sample (so bounces add up over the samples); where a ray leaves the
