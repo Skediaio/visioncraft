@@ -1101,28 +1101,209 @@ pub const LAWN_MAX_SLOPE_DEG: f32 = 30.0;
 
 /// Tufts for a lawn on face number `face` (an index into `model.faces`): about `density_per_m2`
 /// per square metre of the face, never outside it, deterministic, with a height of 0.75-1.25
-/// times the blade height, on triangles no steeper than [`LAWN_MAX_SLOPE_DEG`]. Capped at
-/// [`MAX_PLACEMENTS`].
+/// times the blade height, on triangles no steeper than [`LAWN_MAX_SLOPE_DEG`]. At most
+/// [`MAX_PLACEMENTS`]: a larger lawn gets a lower density, evenly ([`lawn_scatter_within`]).
 pub fn lawn_scatter(model: &ImportedModel, face: usize, lawn: &Lawn3d) -> Vec<Tuft> {
-    if !(lawn.density_per_m2.is_finite() && lawn.density_per_m2 > 0.0) {
+    lawn_scatter_within(model, face, lawn, None, MAX_PLACEMENTS)
+}
+
+/// Where a lawn too large for its tuft budget gets them: around `center` (x, z in the model's
+/// space) out to `radius` metres.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LawnWindow {
+    pub center: [f32; 2],
+    pub radius: f32,
+}
+
+/// Lawn tufts are scattered on a grid of cells this wide (metres), seeded by cell.
+const LAWN_CELL_M: f32 = 1.0;
+
+/// The triangles of `face` flat enough for blades, and their area seen from above (m²).
+fn lawn_triangles(model: &ImportedModel, face: usize) -> (Vec<[[f32; 3]; 3]>, f32) {
+    let min_up = LAWN_MAX_SLOPE_DEG.to_radians().cos();
+    let mut area = 0.0;
+    let tris = model
+        .triangle_faces
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| **f as usize == face)
+        .filter_map(|(t, _)| {
+            let [a, b, c] = model.triangles[t].map(|i| model.positions[i as usize]);
+            let (u, v) = (
+                [b[0] - a[0], b[1] - a[1], b[2] - a[2]],
+                [c[0] - a[0], c[1] - a[1], c[2] - a[2]],
+            );
+            let n = [
+                u[1] * v[2] - u[2] * v[1],
+                u[2] * v[0] - u[0] * v[2],
+                u[0] * v[1] - u[1] * v[0],
+            ];
+            let double_area = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+            // No blades on a bank steeper than 30 degrees (a pond's carved edge): seen from the
+            // lawn they stood out as a bright fringe against the dark bank, backlit at dusk.
+            (double_area > 0.0 && n[1] / double_area >= min_up).then(|| {
+                area += n[1].abs() / 2.0;
+                [a, b, c]
+            })
+        })
+        .collect();
+    (tris, area)
+}
+
+/// The area of a lawn face that takes blades, seen from above (m²): what its tufts cost.
+pub fn lawn_area(model: &ImportedModel, face: usize) -> f32 {
+    lawn_triangles(model, face).1
+}
+
+/// [`lawn_scatter`] with a budget of `max` tufts. The tufts are scattered by area over the
+/// face as seen from above (a grid of cells, each seeded by its place), so the density is the
+/// same over the whole outline whatever its size or triangulation. Without a `window` a lawn
+/// over budget gets a lower density, evenly. With one, only the window is scattered: at full
+/// density within the distance of its centre that the budget allows, thinning with the square
+/// of the distance beyond (the same number of tufts per screen area, further off).
+pub fn lawn_scatter_within(
+    model: &ImportedModel,
+    face: usize,
+    lawn: &Lawn3d,
+    window: Option<LawnWindow>,
+    max: usize,
+) -> Vec<Tuft> {
+    if !(lawn.density_per_m2.is_finite() && lawn.density_per_m2 > 0.0) || max == 0 {
         return Vec::new();
     }
-    triangle_points(
-        model,
-        face,
-        lawn.density_per_m2,
-        lawn.seed,
-        // No blades on a bank steeper than 30 degrees (a pond's carved edge): seen from the
-        // lawn they stood out as a bright fringe against the dark bank, backlit at dusk.
-        LAWN_MAX_SLOPE_DEG.to_radians().cos(),
-    )
-    .into_iter()
-    .map(|(position, mut rng)| Tuft {
-        position,
-        rotation_y_deg: 360.0 * rng.f32(),
-        height_m: lawn.blade_height_m * (0.75 + 0.5 * rng.f32()),
-    })
-    .collect()
+    let (tris, area) = lawn_triangles(model, face);
+    if tris.is_empty() {
+        return Vec::new();
+    }
+    let cell = LAWN_CELL_M;
+    let key = |x: f32| (x / cell).floor() as i32;
+    // The cells each triangle's bounding box touches, within the window.
+    let mut buckets: HashMap<(i32, i32), Vec<u32>> = HashMap::new();
+    for (i, t) in tris.iter().enumerate() {
+        let mut x = [
+            t[0][0].min(t[1][0]).min(t[2][0]),
+            t[0][0].max(t[1][0]).max(t[2][0]),
+        ];
+        let mut z = [
+            t[0][2].min(t[1][2]).min(t[2][2]),
+            t[0][2].max(t[1][2]).max(t[2][2]),
+        ];
+        if let Some(w) = window {
+            x = [
+                x[0].max(w.center[0] - w.radius),
+                x[1].min(w.center[0] + w.radius),
+            ];
+            z = [
+                z[0].max(w.center[1] - w.radius),
+                z[1].min(w.center[1] + w.radius),
+            ];
+            if x[0] > x[1] || z[0] > z[1] {
+                continue;
+            }
+        }
+        for cx in key(x[0])..=key(x[1]) {
+            for cz in key(z[0])..=key(z[1]) {
+                buckets.entry((cx, cz)).or_default().push(i as u32);
+            }
+        }
+    }
+    let full = lawn.density_per_m2;
+    // A little under the budget: the count is random, and cutting it off would leave the last
+    // cells bare.
+    let budget = max as f32 * 0.97;
+    // The density of a cell: uniform without a window; with one, full out to `near`.
+    let mut cells: Vec<(i32, i32)> = buckets.keys().copied().collect();
+    cells.sort_unstable();
+    let dist = |c: (i32, i32), w: &LawnWindow| {
+        let (x, z) = ((c.0 as f32 + 0.5) * cell, (c.1 as f32 + 0.5) * cell);
+        ((x - w.center[0]).powi(2) + (z - w.center[1]).powi(2)).sqrt()
+    };
+    let (uniform, near) = match window {
+        None => (full.min(budget / area.max(1e-6)), 0.0),
+        Some(w) => {
+            // The count if the cells were full of lawn (an upper bound) for a near radius `r`.
+            let count = |r: f32| -> f32 {
+                cells
+                    .iter()
+                    .map(|&c| {
+                        let d = dist(c, &w);
+                        if d > w.radius {
+                            0.0
+                        } else {
+                            full * (r / d.max(r)).powi(2) * cell * cell
+                        }
+                    })
+                    .sum()
+            };
+            if count(w.radius) <= budget {
+                (full, w.radius)
+            } else {
+                let (mut a, mut b) = (0.0f32, w.radius);
+                for _ in 0..24 {
+                    let m = (a + b) / 2.0;
+                    if count(m) <= budget { a = m } else { b = m }
+                }
+                (full, a)
+            }
+        }
+    };
+    let mut out = Vec::new();
+    for c in cells {
+        let density = match &window {
+            None => uniform,
+            Some(w) => {
+                let d = dist(c, w);
+                if d > w.radius + cell {
+                    continue;
+                }
+                uniform * (near / d.max(near).max(1e-6)).powi(2).min(1.0)
+            }
+        };
+        let mut rng = Rng::new(mix(mix(lawn.seed, i64::from(c.0)), i64::from(c.1)));
+        let expected = density * cell * cell;
+        let n = expected.floor() as usize + usize::from(rng.f32() < expected.fract());
+        let cand = &buckets[&c];
+        for _ in 0..n {
+            let (x, z) = (
+                (c.0 as f32 + rng.f32()) * cell,
+                (c.1 as f32 + rng.f32()) * cell,
+            );
+            let (rot, h) = (rng.f32(), rng.f32());
+            if let Some(w) = &window
+                && (x - w.center[0]).powi(2) + (z - w.center[1]).powi(2) > w.radius * w.radius
+            {
+                continue;
+            }
+            let Some(y) = cand
+                .iter()
+                .find_map(|&i| height_in(&tris[i as usize], x, z))
+            else {
+                continue;
+            };
+            out.push(Tuft {
+                position: [x, y, z],
+                rotation_y_deg: 360.0 * rot,
+                height_m: lawn.blade_height_m * (0.75 + 0.5 * h),
+            });
+            if out.len() >= max {
+                return out;
+            }
+        }
+    }
+    out
+}
+
+/// The height of triangle `t` above (x, z), when the point lies inside it seen from above.
+fn height_in(t: &[[f32; 3]; 3], x: f32, z: f32) -> Option<f32> {
+    let [a, b, c] = t;
+    let det = (b[2] - c[2]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[2] - c[2]);
+    if det.abs() < 1e-12 {
+        return None;
+    }
+    let l1 = ((b[2] - c[2]) * (x - c[0]) + (c[0] - b[0]) * (z - c[2])) / det;
+    let l2 = ((c[2] - a[2]) * (x - c[0]) + (a[0] - c[0]) * (z - c[2])) / det;
+    let l3 = 1.0 - l1 - l2;
+    (l1 >= 0.0 && l2 >= 0.0 && l3 >= 0.0).then(|| c[1] + l1 * (a[1] - c[1]) + l2 * (b[1] - c[1]))
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1628,6 +1809,86 @@ mod tests {
             lawn_scatter(&m, wall, &lawn)
                 .iter()
                 .all(|t| t.position[2].abs() < 1e-5)
+        );
+    }
+
+    fn lawn_rect(w: f32, d: f32) -> ImportedModel {
+        let lawn = Shape::Area(Area {
+            id: "S1".into(),
+            name: "Lawn".into(),
+            layer: "l0".into(),
+            outline: vec![[0.0, 0.0], [w, 0.0], [w, d], [0.0, d]],
+            elevation: 0.0,
+            drape: false,
+            extensions: Default::default(),
+        });
+        shape_mesh(&lawn).unwrap()
+    }
+
+    /// Tufts per quadrant of the rectangle [0, w] x [0, d].
+    fn quadrants(t: &[Tuft], w: f32, d: f32) -> [usize; 4] {
+        let mut q = [0; 4];
+        for t in t {
+            let i = usize::from(t.position[0] > w / 2.0) + 2 * usize::from(t.position[2] > d / 2.0);
+            q[i] += 1;
+        }
+        q
+    }
+
+    #[test]
+    fn a_large_lawn_has_tufts_over_all_of_it() {
+        let lawn = Lawn3d {
+            density_per_m2: 600.0,
+            blade_height_m: 0.08,
+            seed: 1,
+        };
+        // 51 by 25.8 m (two triangles) and a lawn over 5,000 m2, over the budget.
+        for (w, d) in [(51.0, 25.8), (90.0, 60.0)] {
+            let m = lawn_rect(w, d);
+            let top = m.faces.iter().position(|f| f.name == "S1:top").unwrap();
+            assert!((super::lawn_area(&m, top) - w * d).abs() < 0.5);
+            let t = lawn_scatter_within(&m, top, &lawn, None, 240_000);
+            assert!(t.len() <= 240_000 && t.len() > 200_000, "{}", t.len());
+            let q = quadrants(&t, w, d);
+            let mean = t.len() as f32 / 4.0;
+            assert!(
+                q.iter().all(|&n| (n as f32 - mean).abs() < mean * 0.03),
+                "{q:?}"
+            );
+            assert!(
+                t.iter()
+                    .all(|t| (0.0..=w).contains(&t.position[0])
+                        && (0.0..=d).contains(&t.position[2]))
+            );
+        }
+        // A small lawn keeps its full density.
+        let m = lawn_rect(10.0, 8.0);
+        let top = m.faces.iter().position(|f| f.name == "S1:top").unwrap();
+        let t = lawn_scatter_within(&m, top, &lawn, None, 240_000);
+        assert!((t.len() as f32 - 48_000.0).abs() < 1_000.0, "{}", t.len());
+        // A window: full density near its centre, every quadrant of the window covered, thinner
+        // further out, within the budget.
+        let m = lawn_rect(90.0, 60.0);
+        let w = LawnWindow {
+            center: [45.0, 30.0],
+            radius: 48.0,
+        };
+        let top = m.faces.iter().position(|f| f.name == "S1:top").unwrap();
+        let t = lawn_scatter_within(&m, top, &lawn, Some(w), 240_000);
+        assert!(t.len() <= 240_000, "{}", t.len());
+        let near = t
+            .iter()
+            .filter(|t| (t.position[0] - 45.0).hypot(t.position[2] - 30.0) < 2.0)
+            .count();
+        assert!(
+            (near as f32 / (std::f32::consts::PI * 4.0) - 600.0).abs() < 60.0,
+            "{near}"
+        );
+        let q = quadrants(&t, 90.0, 60.0);
+        let mean = t.len() as f32 / 4.0;
+        assert!(
+            q.iter().all(|&n| (n as f32 - mean).abs() < mean * 0.05),
+            "{q:?}"
         );
     }
 

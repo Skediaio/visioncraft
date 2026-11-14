@@ -45,8 +45,8 @@ pub use plant_ground::{
     evaluate_in_scene, over_ids, placed_shape, placed_shape_mesh, plant_size, water_areas,
 };
 pub use planting::{
-    Evaluation, Generator, Placement, PlantLayer, Tuft, blocked_by_buildings, evaluate,
-    evaluate_avoiding, evaluate_surface_fill, lawn_scatter,
+    Evaluation, Generator, LawnWindow, Placement, PlantLayer, Tuft, blocked_by_buildings, evaluate,
+    evaluate_avoiding, evaluate_surface_fill, lawn_area, lawn_scatter, lawn_scatter_within,
 };
 pub use presets::{PlantingPreset, planting_presets};
 pub use project::{

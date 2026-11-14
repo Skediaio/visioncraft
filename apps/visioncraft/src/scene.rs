@@ -5,10 +5,10 @@ use glam::{Mat4, Vec3};
 use std::collections::HashMap;
 use std::sync::Arc;
 use visioncraft_core::{
-    Asset, Evaluation, Generator, ImportedModel, Material, ModelRef, Project, Shape, SurfaceKind,
-    Terrain, area_lifts, areas_over, blocked_by_buildings, evaluate_in_scene,
-    evaluate_surface_fill, ground_height, inside_outline, lawn_scatter, placed_shape, raycast,
-    resolve_materials, shape_mesh, shape_mesh_on_terrain, water_areas,
+    Asset, Evaluation, Generator, ImportedModel, LawnWindow, Material, ModelRef, Project, Shape,
+    SurfaceKind, Terrain, area_lifts, areas_over, blocked_by_buildings, evaluate_in_scene,
+    evaluate_surface_fill, ground_height, inside_outline, lawn_area, lawn_scatter_within,
+    placed_shape, raycast, resolve_materials, shape_mesh, shape_mesh_on_terrain, water_areas,
 };
 use visioncraft_flora as flora;
 use visioncraft_render::{ImpostorId, ItemId, LineVertex, Renderer};
@@ -360,7 +360,15 @@ struct Owner {
 type Wanted = (String, Geom, Arc<ImportedModel>, Mat4, bool, bool, bool);
 
 /// The 3D grass of one owner's lawn faces.
-type LawnKey = (Geom, Mat4, Vec<(usize, [u32; 5], u64)>, u64, u8, Vec<u32>);
+type LawnKey = (
+    Geom,
+    Mat4,
+    Vec<(usize, [u32; 5], u64)>,
+    u64,
+    u8,
+    Vec<u32>,
+    Option<[i32; 2]>,
+);
 
 struct LawnGpu {
     key: LawnKey,
@@ -388,6 +396,9 @@ const CULL_FADE_SHARE: f32 = 0.25;
 /// density and four times the count, with narrower blades, when dense (HIGH and ULTRA).
 const LAWN_MAX_DENSITY: f32 = 300.0;
 const LAWN_MAX_TUFTS: usize = 60_000;
+/// A lawn over its tuft budget is scattered around the eye's cell of this size, out to
+/// `LAWN_FADE_M` plus this from the cell's centre, and again when the eye moves to another cell.
+const LAWN_EYE_CELL_M: f32 = 8.0;
 /// Linear mean of the grass picture a plain lawn shows from the library (grass001), so the
 /// tufts take the colour of the ground they stand in.
 const LAWN_PICTURE_MEAN: [f32; 3] = [0.059, 0.107, 0.022];
@@ -539,6 +550,10 @@ pub struct Scene {
     people: Option<ItemId>,
     /// Denser, finer lawn tufts (HIGH and ULTRA; `set_dense_lawns`).
     dense_lawns: bool,
+    /// The eye's cell (`LAWN_EYE_CELL_M` squares): lawns over their tuft budget are scattered
+    /// around it (`lawns_follow`), and again when it moves to another cell.
+    lawn_eye: [i32; 2],
+    lawns_follow: bool,
     /// Fallen leaves, stones, twigs and lawn edges (`clutter`).
     clutter: clutter::Clutter,
     /// LOW quality: no clutter whatever the project says (`set_clutter_low`).
@@ -961,6 +976,12 @@ impl Scene {
         owners.sort();
         type Faces = Vec<(usize, visioncraft_core::material::Lawn3d, [f32; 3])>;
         let mut todo: Vec<(String, Faces)> = Vec::new();
+        let (max_density, max_tufts, narrow) = if self.dense_lawns {
+            (LAWN_MAX_DENSITY * 2.0, LAWN_MAX_TUFTS * 4, 0.7)
+        } else {
+            (LAWN_MAX_DENSITY, LAWN_MAX_TUFTS, 1.0)
+        };
+        self.lawns_follow = false;
         for id in owners {
             let o = &self.owners[id];
             if !o.key.visible || !o.is_shape {
@@ -986,6 +1007,18 @@ impl Scene {
         for (id, faces) in todo {
             live.push(id.clone());
             let o = &self.owners[&id];
+            // A lawn whose tufts are over budget gets them around the eye (`lawn_scatter_within`).
+            let areas: Vec<f32> = faces
+                .iter()
+                .map(|(f, _, _)| lawn_area(&o.geom, *f))
+                .collect();
+            let need: f32 = faces
+                .iter()
+                .zip(&areas)
+                .map(|((_, l, _), a)| l.density_per_m2.min(max_density) * a)
+                .sum();
+            let follow = need > max_tufts as f32;
+            self.lawns_follow |= follow;
             // No grass under a terrace, path or pond drawn on top of this lawn.
             let over = areas_over(&project.shapes, &id);
             let over_key: Vec<u32> = over
@@ -1017,6 +1050,7 @@ impl Scene {
                 u64::from(self.flora.ready(LAWN_SPECIES, class)),
                 month,
                 over_key,
+                follow.then_some(self.lawn_eye),
             );
             if self.lawns.get(&id).is_some_and(|g| g.key == key)
                 || self.lawn_jobs.get(&id).is_some_and(|j| j.key == key)
@@ -1030,11 +1064,15 @@ impl Scene {
             }
             // The tufts are scattered off the frame (a thread; on the web at once) and drawn
             // when ready (`finish_lawns`): a dense lawn is a quarter of a million of them.
-            let (max_density, max_tufts, narrow) = if self.dense_lawns {
-                (LAWN_MAX_DENSITY * 2.0, LAWN_MAX_TUFTS * 4, 0.7)
-            } else {
-                (LAWN_MAX_DENSITY, LAWN_MAX_TUFTS, 1.0)
-            };
+            let window = follow.then(|| {
+                let c = self.lawn_eye.map(|k| (k as f32 + 0.5) * LAWN_EYE_CELL_M);
+                let local = o.xf.inverse().transform_point3(Vec3::new(c[0], 0.0, c[1]));
+                LawnWindow {
+                    center: [local.x, local.z],
+                    radius: LAWN_FADE_M + LAWN_EYE_CELL_M,
+                }
+            });
+            let total: f32 = areas.iter().sum::<f32>().max(1e-6);
             // shortcut: one colour per lawn (its first lawn face's), fine until lawns mix colours
             let color = faces[0].2;
             let (geom, xf) = (o.geom.clone(), o.xf);
@@ -1044,15 +1082,14 @@ impl Scene {
                 // One matrix list per variant, so the lawn does not repeat one tuft.
                 let mut by_variant: Vec<Vec<Mat4>> = vec![Vec::new(); plants::VARIANTS as usize];
                 let mut n = 0usize;
-                for (face, lawn, _) in &faces {
+                for ((face, lawn, _), area) in faces.iter().zip(&areas) {
                     let lawn = visioncraft_core::material::Lawn3d {
                         density_per_m2: lawn.density_per_m2.min(max_density),
                         ..*lawn
                     };
-                    for t in lawn_scatter(&geom, *face, &lawn) {
-                        if n >= max_tufts {
-                            break;
-                        }
+                    // The budget shared by the lawn's faces by area.
+                    let max = (max_tufts as f32 * area / total) as usize;
+                    for t in lawn_scatter_within(&geom, *face, &lawn, window, max) {
                         let p = xf.transform_point3(Vec3::from(t.position));
                         if over.iter().any(|a| inside_outline([p.x, p.z], a)) {
                             continue;
@@ -1604,7 +1641,9 @@ impl Scene {
         let library = self.library.pump(r, eye);
         self.flora.scans.pump(&mut self.library.store);
         self.finish_lawns(r);
-        self.flora.pump(r) | library
+        let cell = [eye.x, eye.z].map(|v| (v / LAWN_EYE_CELL_M).floor() as i32);
+        let moved = std::mem::replace(&mut self.lawn_eye, cell) != cell && self.lawns_follow;
+        self.flora.pump(r) | library | moved
     }
 
     /// Screen pixels per texture repeat of each textured material at its nearest visible

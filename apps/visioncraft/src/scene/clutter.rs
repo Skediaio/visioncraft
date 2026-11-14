@@ -272,11 +272,39 @@ impl Scene {
                 lines.extend(polygon_edges(o, true));
             }
             let inv = o.xf.inverse();
+            // Grass hangs over paving, a border or water: another drawn area that is not a
+            // lawn. Where lawn meets lawn or the bare ground round it, there is no edge to see.
+            let others: Vec<(&[[f32; 2]], bool)> = project
+                .shapes
+                .iter()
+                .filter_map(|s| match s {
+                    Shape::Area(b) if b.id != *id && project.layer_visible(&b.layer) => {
+                        let lawn = self.owners.get(&b.id).is_some_and(|ob| {
+                            resolve_materials(project, &b.id, &ob.geom)
+                                .into_iter()
+                                .flatten()
+                                .filter_map(|m| project.materials.get(m))
+                                .any(|m| matches!(m.kind, SurfaceKind::Lawn3d(_)))
+                        });
+                        Some((b.outline.as_slice(), lawn))
+                    }
+                    _ => None,
+                })
+                .collect();
             for (k, s) in edge_spots(&lines, EDGE_SPACING_M, 3)
                 .into_iter()
                 .enumerate()
             {
                 if !inside_outline(s.at, &a.outline) || over.iter().any(|o| inside_outline(s.at, o))
+                {
+                    continue;
+                }
+                let beyond = [s.at[0] + s.out[0] * 0.1, s.at[1] + s.out[1] * 0.1];
+                if !others
+                    .iter()
+                    .rev()
+                    .find(|(outline, _)| inside_outline(beyond, outline))
+                    .is_some_and(|(_, lawn)| !lawn)
                 {
                     continue;
                 }
