@@ -215,6 +215,8 @@ impl App {
             #[cfg(not(target_arch = "wasm32"))]
             focused: false,
         };
+        app.studio.scene.library.store.cap_bytes =
+            hardware::texture_budget(&app.studio.renderer.probe());
         for e in &app.extensions {
             e.register(&mut app.studio.session);
             if let Some(label) = e.mode() {

@@ -214,6 +214,11 @@ pub struct Library {
     pub catalog: Option<Arc<Catalog>>,
     pub materials: Vec<LibMaterial>,
     pub skies: Vec<LibSky>,
+    /// The higher tiers of library files (`tiers.json`), when the library has them.
+    pub tiers: Option<Arc<visioncraft_core::Tiers>>,
+    /// The texture tier materials use when the files are there: "1k" (the base files), "2k" or
+    /// "4k" (`Studio::prepare` sets it from the quality or the Textures choice).
+    pub texture_tier: &'static str,
     /// Set when the catalogue has just arrived (the studio adds its assets for placeholders).
     pub catalog_arrived: bool,
     /// The project's imported objects as catalogue assets (`user_objects`).
@@ -267,6 +272,8 @@ impl Library {
             catalog: None,
             materials: Vec::new(),
             skies: Vec::new(),
+            tiers: None,
+            texture_tier: "1k",
             catalog_arrived: false,
             user_assets: Vec::new(),
             ground_offsets: HashMap::new(),
@@ -325,7 +332,19 @@ impl Library {
     pub fn parts(&self, asset: &str) -> Option<Vec<(MeshId, MaterialId, f32)>> {
         let a = self.catalog.as_ref()?.asset(asset)?;
         let n = a.lods.len();
-        let loaded: Vec<Option<&Model>> = a.lods.iter().map(|l| self.models.get(&l.file)).collect();
+        let loaded: Vec<Option<&Model>> = a
+            .lods
+            .iter()
+            .enumerate()
+            .map(|(i, l)| {
+                // The 2k nearest level stands in for the base one once it is resident.
+                (i == 0)
+                    .then(|| self.model_tier(asset))
+                    .flatten()
+                    .and_then(|f| self.models.get(&f))
+                    .or_else(|| self.models.get(&l.file))
+            })
+            .collect();
         let mut out = Vec::new();
         for (i, lod) in a.lods.iter().enumerate() {
             let m = (i..n)
@@ -388,6 +407,9 @@ impl Library {
             ] {
                 if let Some(TexSrc::Lib(p)) = src {
                     let _ = self.store.texture(p, srgb, true, 10.0);
+                    if let Some(t) = self.tier_map(p) {
+                        let _ = self.store.texture(&t, srgb, true, 20.0);
+                    }
                 }
             }
         }
@@ -403,9 +425,14 @@ impl Library {
                     match src {
                         None => None,
                         Some(TexSrc::Lib(p)) => {
-                            let id = this.store.texture(p, srgb, true, 10.0);
-                            pending |= id.is_none();
-                            id
+                            // The base file at once, the higher tier in its place once it is
+                            // resident (asked for only while it fits the memory budget).
+                            let base = this.store.texture(p, srgb, true, 10.0);
+                            let tier = this
+                                .tier_map(p)
+                                .and_then(|t| this.store.texture(&t, srgb, true, 20.0));
+                            pending |= base.is_none();
+                            tier.or(base)
                         }
                         Some(TexSrc::Mem(n)) => {
                             if !this.mem_tex.contains_key(n)
@@ -445,6 +472,47 @@ impl Library {
         }
     }
 
+    /// The 2k nearest level of a catalogue model at the 2k and 4k tiers, unless it failed.
+    fn model_tier(&self, asset: &str) -> Option<String> {
+        if self.texture_tier == "1k" {
+            return None;
+        }
+        let f = &self
+            .tiers
+            .as_ref()?
+            .models
+            .get(asset)?
+            .tiers
+            .get("2k")?
+            .file;
+        (self.store.state(&Key::Glb(f.clone())) != State::Failed).then(|| f.clone())
+    }
+
+    /// Sets the texture tier; materials pick their maps again.
+    pub fn set_texture_tier(&mut self, tier: &'static str) {
+        if self.texture_tier != tier {
+            self.texture_tier = tier;
+            self.dirty = true;
+        }
+    }
+
+    /// The higher-tier file for base map `p` at the current texture tier, when there is one and
+    /// it is resident or fits the texture budget.
+    fn tier_map(&self, p: &str) -> Option<String> {
+        if self.texture_tier == "1k" {
+            return None;
+        }
+        let (path, px) = self.tiers.as_ref()?.material_map(p, self.texture_tier)?;
+        let resident = [true, false].into_iter().any(|srgb| {
+            self.store.state(&Key::Image {
+                path: path.to_string(),
+                srgb,
+                repeat: true,
+            }) == State::Ready
+        });
+        (resident || self.store.fits(crate::assets::texture_cost(px, px))).then(|| path.to_string())
+    }
+
     // ---- the frame ----
 
     fn read_indexes(&mut self) {
@@ -468,6 +536,15 @@ impl Library {
                 Err(e) => self
                     .messages
                     .push(format!("materials.json is unusable: {e}")),
+            }
+        }
+        if let Some(Loaded::Bytes(b)) = self.store.take(&Key::Bytes("tiers.json".into())) {
+            match visioncraft_core::Tiers::from_json_bytes(&b) {
+                Ok(t) => {
+                    self.tiers = Some(Arc::new(t));
+                    self.dirty = true;
+                }
+                Err(e) => self.messages.push(e),
             }
         }
         if let Some(Loaded::Bytes(b)) = self.store.take(&Key::Bytes("skies.json".into())) {
@@ -518,6 +595,11 @@ impl Library {
                 // that are resident then stop being used and are the first to go.
                 if i == n - 1 || (i == need && !self.store.over_cap) {
                     self.request(&l.file, priority(d, i, n - 1));
+                    if i == 0
+                        && let Some(f) = self.model_tier(&asset)
+                    {
+                        self.request(&f, priority(d, i, n - 1) + 1.0);
+                    }
                 }
             }
         }
@@ -641,7 +723,7 @@ impl Library {
         }
         if !self.indexes_asked {
             self.indexes_asked = true;
-            for f in ["catalog.json", "materials.json", "skies.json"] {
+            for f in ["catalog.json", "materials.json", "skies.json", "tiers.json"] {
                 self.store.want(Key::Bytes(f.into()), 0.0);
             }
         }

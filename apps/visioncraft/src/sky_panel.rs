@@ -5,7 +5,7 @@
 //! illuminance of a clear sky with the sun at the height the image shows it (an overcast image
 //! gets `OVERCAST_LUX`), which is what the automatic exposure assumes.
 
-use crate::assets::{HdrData, Key, Loaded};
+use crate::assets::{HdrData, Key, Loaded, State};
 use crate::strings as t;
 use crate::studio::Studio;
 use crate::ui::Cx;
@@ -17,6 +17,8 @@ use visioncraft_render::{HdriImage, Sky, Sun, calibrate_hdri};
 
 struct Hdr {
     id: String,
+    /// The file it came from: the base one or a higher tier (`sky_4k.hdr`).
+    file: String,
     data: HdrData,
     /// The sun at rotation 0: direction, and whether the image shows one.
     sun: Option<Vec3>,
@@ -29,7 +31,7 @@ pub struct SkyState {
     hdr: Option<Hdr>,
     /// Sky id asked for by a click, waiting for its image to choose the intensity.
     pub pick: Option<String>,
-    applied: Option<SkyChoice>,
+    applied: Option<(SkyChoice, String)>,
     pub use_sun: bool,
     /// The ground colour while its picker is being dragged.
     pub ground_draft: Option<[f32; 3]>,
@@ -43,7 +45,7 @@ fn az_el(dir: Vec3) -> (f32, f32) {
 }
 
 impl Hdr {
-    fn new(id: String, data: HdrData) -> Self {
+    fn new(id: String, file: String, data: HdrData) -> Self {
         let image = HdriImage {
             width: data.w,
             height: data.h,
@@ -57,6 +59,7 @@ impl Hdr {
         let calibrated = cal.map_or(1.0, |c| c.intensity);
         Self {
             id,
+            file,
             data,
             sun,
             calibrated,
@@ -79,7 +82,7 @@ impl SkyState {
     }
 
     fn applied_choice(&self) -> Option<SkyChoice> {
-        self.applied.clone()
+        self.applied.as_ref().map(|a| a.0.clone())
     }
 
     fn sky_sun_with(&self, choice: &Option<SkyChoice>) -> Option<(Sun, f32)> {
@@ -130,7 +133,7 @@ impl SkyState {
 
     /// Exposure for the sun at `elevation`; an image without a sun is lit like an overcast day.
     pub fn auto_ev(&self, elevation: f32, lamps: bool) -> f32 {
-        let overcast = matches!(self.applied, Some(SkyChoice::Hdri { .. }))
+        let overcast = matches!(self.applied, Some((SkyChoice::Hdri { .. }, _)))
             && self.hdr.as_ref().is_some_and(|h| h.sun.is_none());
         crate::studio::auto_ev(
             if overcast {
@@ -173,9 +176,9 @@ pub fn apply(s: &mut Studio) {
     }
     match &choice {
         SkyChoice::Physical => {
-            if s.sky.applied.as_ref() != Some(&choice) {
+            if s.sky.applied.as_ref().map(|a| &a.0) != Some(&choice) {
                 let _ = s.renderer.set_sky(&Sky::Physical);
-                s.sky.applied = Some(choice);
+                s.sky.applied = Some((choice, String::new()));
             }
         }
         SkyChoice::Hdri {
@@ -191,12 +194,27 @@ pub fn apply(s: &mut Studio) {
                 .find(|k| k.id == *id)
                 .map(|k| k.file.clone());
             let Some(file) = file else { return };
-            if s.sky.hdr.as_ref().is_none_or(|h| h.id != *id) {
+            // At 2k and 4k textures the 4k image when the library has one; the one shown
+            // stays until it arrives, a failed fetch keeps the base.
+            let lib = &s.scene.library;
+            let tier = lib
+                .tiers
+                .as_ref()
+                .filter(|_| lib.texture_tier != "1k")
+                .and_then(|t| t.skies.get(id.as_str())?.tiers.get("4k"))
+                .map(|t| t.file.clone())
+                .filter(|f| lib.store.state(&Key::Hdr(f.clone())) != State::Failed);
+            let file = tier.unwrap_or(file);
+            if s.sky
+                .hdr
+                .as_ref()
+                .is_none_or(|h| h.id != *id || h.file != file)
+            {
                 take_or_ask(s, id, &file);
             }
             let ready = s.sky.hdr.as_ref().filter(|h| h.id == *id);
             if let Some(h) = ready
-                && s.sky.applied.as_ref() != Some(&choice)
+                && s.sky.applied.as_ref() != Some(&(choice.clone(), h.file.clone()))
             {
                 let image = HdriImage {
                     width: h.data.w,
@@ -208,7 +226,7 @@ pub fn apply(s: &mut Studio) {
                     rotation_deg: *rotation_deg,
                     intensity: *intensity,
                 });
-                s.sky.applied = Some(choice.clone());
+                s.sky.applied = Some((choice.clone(), h.file.clone()));
             }
         }
     }
@@ -226,7 +244,7 @@ fn take_or_ask(s: &mut Studio, id: &str, file: &str) {
     let key = Key::Hdr(file.to_string());
     let store = &mut s.scene.library.store;
     match store.take(&key) {
-        Some(Loaded::Hdr(d)) => s.sky.hdr = Some(Hdr::new(id.to_string(), d)),
+        Some(Loaded::Hdr(d)) => s.sky.hdr = Some(Hdr::new(id.to_string(), file.to_string(), d)),
         _ => store.want(key, 0.0),
     }
 }
@@ -359,7 +377,7 @@ mod tests {
             h: 32,
             rgb: vec![0.5; 64 * 32 * 3],
         };
-        let h = Hdr::new("flat".into(), d);
+        let h = Hdr::new("flat".into(), String::new(), d);
         assert!(h.sun.is_none());
         assert!(h.calibrated > 0.0);
     }
@@ -382,7 +400,7 @@ mod tests {
                 rgb[i..i + 3].copy_from_slice(&[4000.0, 3600.0, 3000.0]);
             }
         }
-        let hdr = Hdr::new("sunny".into(), HdrData { w, h, rgb });
+        let hdr = Hdr::new("sunny".into(), String::new(), HdrData { w, h, rgb });
         let dir = hdr.sun.expect("a sun");
         let (az, el) = az_el(dir);
         assert!(

@@ -54,6 +54,9 @@ pub struct Studio {
     pub auto_rose_at: f64,
     /// What the hardware probe found and chose (`hardware::Measured::line`), for the Quality menu.
     pub hardware_line: Option<String>,
+    /// The Textures choice of the Quality menu: `None` follows the quality, else "1k", "2k" or
+    /// "4k".
+    pub textures: Option<&'static str>,
     /// The Quality menu's Re-measure: calibrate again on the next frame.
     pub remeasure: bool,
     pub measuring: bool,
@@ -236,6 +239,7 @@ impl Studio {
             auto_hold: 10.0,
             auto_rose_at: f64::NEG_INFINITY,
             hardware_line: None,
+            textures: None,
             remeasure: false,
             measuring: false,
             auto_dst: true,
@@ -824,6 +828,13 @@ impl Studio {
             self.suggest_lights = true;
         }
         let q = self.current_quality();
+        // Textures follow the quality unless the person chose a tier.
+        let tier = self.textures.unwrap_or(match preset_name(&q) {
+            "ultra" => "4k",
+            "high" => "2k",
+            _ => "1k",
+        });
+        self.scene.library.set_texture_tier(tier);
         self.scene.flora.leaf_scale = if matches!(preset_name(&q), "high" | "ultra") {
             2
         } else {

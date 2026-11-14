@@ -233,7 +233,7 @@ const UI_METHODS: &[Method] = &[
     },
     Method {
         name: "ui.set",
-        params: r#"{"mode": "draw"|"materials"|"objects"|"sun"|"viewpoints"|extension id|null, "camera": {"position": [x, y, z], "target": [x, y, z], "fov_y_deg": number}, "lightsOn": boolean, "overlaysInPictures": boolean}"#,
+        params: r#"{"mode": "draw"|"materials"|"objects"|"sun"|"viewpoints"|extension id|null, "camera": {"position": [x, y, z], "target": [x, y, z], "fov_y_deg": number}, "lightsOn": boolean, "overlaysInPictures": boolean, "textures": "auto"|"1k"|"2k"|"4k"}"#,
         summary: "Switches the mode, places the camera (orbiting `target`), turns the lights on or off, and whether pictures show the editor's overlays.",
     },
     Method {
@@ -334,6 +334,8 @@ impl Host for Bound<'_, '_> {
                 "selected": {"planting": h.planting.selected, "model": h.model_selected},
                 "lightsOn": h.studio.lights_on,
                 "overlaysInPictures": h.studio.overlays_in_pictures,
+                "textures": h.studio.textures.unwrap_or("auto"),
+                "textureTier": h.studio.scene.library.texture_tier,
                 "size": h.studio.size,
             })),
             "ui.set" => (|| {
@@ -368,6 +370,15 @@ impl Host for Bound<'_, '_> {
                 }
                 if let Some(on) = params.get("overlaysInPictures").and_then(Value::as_bool) {
                     h.studio.overlays_in_pictures = on;
+                }
+                if let Some(t) = params.get("textures") {
+                    h.studio.textures = match t.as_str() {
+                        Some("auto") => None,
+                        Some("1k") => Some("1k"),
+                        Some("2k") => Some("2k"),
+                        Some("4k") => Some("4k"),
+                        _ => return Err(format!("textures: auto, 1k, 2k or 4k, not {t}")),
+                    };
                 }
                 Ok(Value::Null)
             })(),

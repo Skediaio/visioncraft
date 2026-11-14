@@ -240,6 +240,21 @@ pub fn report() -> Result<(), String> {
     Ok(())
 }
 
+/// GPU texture memory the asset store may hold (`AssetStore::cap_bytes`): a 4k material is four
+/// 4096 x 4096 maps with mips, about 360 MB, a 2k one 90 MB. A discrete GPU 3 GB, an integrated
+/// one (sharing system memory) 1.5 GB, anything else 1 GB; in the browser the wasm heap's 700 MB
+/// for decoded pictures stays the limit.
+pub fn texture_budget(probe: &HardwareProbe) -> u64 {
+    if cfg!(target_arch = "wasm32") {
+        return 700 << 20;
+    }
+    match probe.kind {
+        visioncraft_render::GpuKind::Discrete => 3 << 30,
+        visioncraft_render::GpuKind::Integrated => 1536 << 20,
+        _ => 1 << 30,
+    }
+}
+
 fn stored(st: &dyn eframe::Storage) -> HashMap<String, Measured> {
     st.get_string(STORAGE_KEY)
         .and_then(|j| serde_json::from_str(&j).ok())

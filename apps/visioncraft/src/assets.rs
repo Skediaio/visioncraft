@@ -195,6 +195,23 @@ impl Lru {
     }
 }
 
+/// Whether `path` is `tiers.json` or one of the higher-tier files it lists (`.../2k/...`,
+/// `sky_4k.hdr`, `lod0_2k.glb`).
+pub fn is_tier_file(path: &str) -> bool {
+    path == "tiers.json"
+        || ["/2k/", "/4k/", "_2k.", "_4k."]
+            .iter()
+            .any(|t| path.contains(t))
+}
+
+/// Whether `bytes` more fit under the cap with some room to spare (a higher tier is only asked
+/// for then: eviction takes it back to the base tier, never below).
+impl AssetStore {
+    pub fn fits(&self, bytes: u64) -> bool {
+        self.lru.total + bytes <= self.cap_bytes / 100 * 85
+    }
+}
+
 /// Memory of an RGBA8 texture with its mip chain.
 pub fn texture_cost(w: u32, h: u32) -> u64 {
     u64::from(w) * u64::from(h) * 4 * 4 / 3
@@ -604,7 +621,11 @@ impl AssetStore {
                 "No asset library found at {} ({why}). Objects and library materials are unavailable; start with --assets <dir> or open the page with ?assets=<url>.",
                 self.base_description()
             ));
-        } else if matches!(key, Key::Thumb(_)) || (matches!(key, Key::Bytes(_)) && catalog_failed) {
+        } else if matches!(key, Key::Thumb(_))
+            || (matches!(key, Key::Bytes(_)) && catalog_failed)
+            || is_tier_file(key.path())
+        {
+            // A missing higher tier (or tiers.json) quietly falls back to the base files.
         } else if self.failed.len() < 4 {
             self.messages
                 .push(format!("Could not load {}: {why}", key.path()));
@@ -698,6 +719,26 @@ mod tests {
 
     fn k(p: &str) -> Key {
         Key::Glb(p.into())
+    }
+
+    #[test]
+    fn tier_files_are_told_apart_from_base_files() {
+        for p in [
+            "tiers.json",
+            "materials/bricks028/2k/basecolor.jpg",
+            "materials/bricks028/4k/orm.jpg",
+            "skies/noon/sky_4k.hdr",
+            "models/bench/lod0_2k.glb",
+        ] {
+            assert!(super::is_tier_file(p), "{p}");
+        }
+        for p in [
+            "materials/bricks028/basecolor.jpg",
+            "skies/noon/sky_1k.hdr",
+            "catalog.json",
+        ] {
+            assert!(!super::is_tier_file(p), "{p}");
+        }
     }
 
     #[test]

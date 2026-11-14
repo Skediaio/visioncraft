@@ -6,7 +6,7 @@
 //! `"set camera orbit yaw pitch dist px py pz"`, `"set camera look ex ey ez tx ty tz"`,
 //! `"set camera walk x z heading_deg pitch_deg"`, `"set camera top cx cz half_height"`,
 //! `"set camera frame"`, `"set quality low|medium|high|ultra|auto"`, `"set exposure stops"`,
-//! `"set clay on|off"`, `"highlight owner face-name"`, `"highlight none"`,
+//! `"set clay on|off"`, `"set textures auto|1k|2k|4k"`, `"highlight owner face-name"`, `"highlight none"`,
 //! `"screenshot name w h"`, `"object file.glb name"`) or an object `{"run": "command.name", "params": {...}}`.
 
 use serde_json::Value;
@@ -63,6 +63,8 @@ pub enum Step {
     Quality(String),
     Exposure(f32),
     Clay(bool),
+    /// The Textures choice: `None` follows the quality.
+    Textures(Option<&'static str>),
     Highlight(Option<(String, String)>),
     Faces(String),
     WaitAssets,
@@ -218,6 +220,13 @@ pub fn parse_step(v: &Value) -> Result<Step, String> {
         }
         ["set", "exposure", n] => Ok(Step::Exposure(nums::<1>(&[n])?[0])),
         ["set", "clay", on @ ("on" | "off")] => Ok(Step::Clay(*on == "on")),
+        ["set", "textures", t] => Ok(Step::Textures(match *t {
+            "auto" => None,
+            "1k" => Some("1k"),
+            "2k" => Some("2k"),
+            "4k" => Some("4k"),
+            _ => return Err(format!("set textures: auto, 1k, 2k or 4k, not `{t}`")),
+        })),
         ["pick", x, y] => Ok(Step::Pick {
             x: x.parse().map_err(|_| "x")?,
             y: y.parse().map_err(|_| "y")?,
@@ -532,6 +541,7 @@ mod native {
                         .unwrap_or(1)
                 }
                 Step::Exposure(e) => s.exposure = e,
+                Step::Textures(t) => s.textures = t,
                 Step::Clay(c) => {
                     s.session
                         .run("style.set", serde_json::json!({"clay": c}))

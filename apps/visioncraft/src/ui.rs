@@ -598,6 +598,19 @@ impl Hud {
                         if r.drag_stopped() || (r.changed() && !r.dragged()) {
                             cx.run("view.set", serde_json::json!({"view_distance": vd}));
                         }
+                        ui.horizontal(|ui| {
+                            ui.label(t::TEXTURES).on_hover_text(t::TEXTURES_TIP);
+                            for (label, v) in [
+                                (t::AUTO, None),
+                                ("1k", Some("1k")),
+                                ("2k", Some("2k")),
+                                ("4k", Some("4k")),
+                            ] {
+                                if ui.selectable_label(cx.s.textures == v, label).clicked() {
+                                    cx.s.textures = v;
+                                }
+                            }
+                        });
                         ui.separator();
                         // What the hardware probe found: where Auto started.
                         if cx.s.measuring {
