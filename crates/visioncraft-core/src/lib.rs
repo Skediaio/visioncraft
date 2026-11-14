@@ -59,7 +59,7 @@ pub use season::Season;
 pub use session::{Command, CommandError, Session};
 pub use shape::{
     AREA_LIFT_M, GROUND_FACE_M, STACK_STEP_M, Shape, ShapeError, area_lifts, areas_over, footing,
-    ground_faces, inside_outline, offset_outline, shape_mesh, shape_mesh_on, shape_mesh_on_terrain,
+    ground_faces, ground_model_lift, inside_outline, offset_outline, shape_mesh, shape_mesh_on, shape_mesh_on_terrain,
 };
 pub use spec::{CommandSpec, ParamSpec, ParamType, example_project};
 pub use terrain::{

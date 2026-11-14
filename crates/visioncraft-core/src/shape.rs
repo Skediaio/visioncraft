@@ -614,15 +614,29 @@ pub fn offset_outline(outline: &[[f32; 2]], d: f32) -> Vec<[f32; 2]> {
         .collect()
 }
 
+/// How far a model lying on the ground ([`ground_faces`]) is drawn up. With a terrain the
+/// draped areas are cut out under it, so an area's lift will do. Without one the areas are flat
+/// at their lifts and nothing is cut: the model goes a step over the highest of them, so a slab
+/// level with a lawn area is drawn on top of it, not through it.
+// shortcut: over the highest area anywhere, not only those under the model; a few cm at most.
+pub fn ground_model_lift(shapes: &[Shape], terrain: bool) -> f32 {
+    if terrain {
+        return AREA_LIFT_M;
+    }
+    area_lifts(shapes)
+        .into_iter()
+        .fold(AREA_LIFT_M, |m, (_, l)| m.max(l + STACK_STEP_M))
+}
+
 /// A model's faces this close to the ground lie on it (a terrace slab, a model's own lawn).
 pub const GROUND_FACE_M: f32 = 0.05;
 
 /// The flat triangles of a model lying on the ground, as `[x, z]` triangles: `place` takes a
 /// model position to the world, `ground` is the ground's height (0 where there is none).
 ///
-/// The rule for a model on the ground: a model with any is drawn [`AREA_LIFT_M`] up, as an area
-/// is, and the draped areas are cut out under these triangles and grow no grass there, so a
-/// terrace slab level with the lawn never fights with it.
+/// The rule for a model on the ground: a model with any is drawn [`ground_model_lift`] up, the
+/// draped areas are cut out under these triangles, and no grass grows there, so a terrace slab
+/// level with the lawn never fights with it.
 pub fn ground_faces(
     model: &ImportedModel,
     place: &dyn Fn([f32; 3]) -> [f32; 3],
@@ -939,6 +953,23 @@ mod stacking_tests {
         let slope = |x: f32, _: f32| Some(0.1 * x);
         assert_eq!(footing(&rect(2.0, 0.0, 10.0, 5.0), &slope), 0.2);
         assert_eq!(footing(&rect(2.0, 0.0, 10.0, 5.0), &|_, _| None), 0.0);
+    }
+
+    #[test]
+    fn a_ground_model_without_a_terrain_lies_over_every_area() {
+        // A lawn, and a path over it (one step up).
+        let shapes = vec![
+            area("lawn", rect(0.0, 0.0, 10.0, 10.0)),
+            area("path", rect(4.0, 0.0, 5.0, 10.0)),
+        ];
+        let top = area_lifts(&shapes)
+            .into_iter()
+            .map(|(_, l)| l)
+            .fold(0.0, f32::max);
+        assert!(ground_model_lift(&shapes, false) >= top + STACK_STEP_M - 1e-6);
+        // With a terrain the draped areas are cut out under it instead.
+        assert_eq!(ground_model_lift(&shapes, true), AREA_LIFT_M);
+        assert_eq!(ground_model_lift(&[], false), AREA_LIFT_M);
     }
 }
 

@@ -5,11 +5,10 @@ use glam::{Mat4, Vec3};
 use std::collections::HashMap;
 use std::sync::Arc;
 use visioncraft_core::{
-    AREA_LIFT_M, Asset, Evaluation, Generator, ImportedModel, LawnWindow, Material, ModelRef,
-    Project, Shape, SurfaceKind, Terrain, area_lifts, areas_over, blocked_by_buildings,
-    evaluate_in_scene, evaluate_surface_fill, ground_height, inside_outline, lawn_area,
-    lawn_scatter_within, placed_shape, raycast, resolve_materials, shape_mesh,
-    shape_mesh_on_terrain, water_areas,
+    Asset, Evaluation, Generator, ImportedModel, LawnWindow, Material, ModelRef, Project, Shape,
+    SurfaceKind, Terrain, area_lifts, areas_over, blocked_by_buildings, evaluate_in_scene,
+    evaluate_surface_fill, ground_height, inside_outline, lawn_area, lawn_scatter_within,
+    placed_shape, raycast, resolve_materials, shape_mesh, shape_mesh_on_terrain, water_areas,
 };
 use visioncraft_flora as flora;
 use visioncraft_render::{ImpostorId, ItemId, LineVertex, Renderer};
@@ -814,6 +813,8 @@ impl Scene {
             .as_ref()
             .map_or(0, |t| Arc::as_ptr(t) as usize);
         let mut on_ground: Vec<[[f32; 2]; 3]> = Vec::new();
+        let ground_lift =
+            visioncraft_core::ground_model_lift(&project.shapes, project.terrain.is_some());
         for m in &project.models {
             if let Some(l) = loaded.get(&m.id) {
                 let visible = project.layer_visible(&m.layer);
@@ -833,7 +834,7 @@ impl Scene {
                         f
                     }
                 };
-                let lift = if faces.is_empty() { 0.0 } else { AREA_LIFT_M };
+                let lift = if faces.is_empty() { 0.0 } else { ground_lift };
                 if visible {
                     on_ground.extend(faces.iter());
                 }
