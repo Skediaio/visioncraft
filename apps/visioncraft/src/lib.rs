@@ -10,6 +10,7 @@ pub mod camera;
 #[cfg(test)]
 mod command_params;
 pub mod draw;
+pub mod example;
 pub mod extension;
 pub mod files;
 pub mod fixtures;
