@@ -460,13 +460,14 @@ mod tests {
 
     #[test]
     fn south_is_around_solar_noon() {
+        // Brussels on summer time: the sun is south at about 13:40.
         let (site, time) = (Site::default(), SunTime::default());
         let h = hour_for_azimuth(&site, &time, 180.0);
-        assert!((12.0..13.5).contains(&h), "{h}");
+        assert!((13.0..14.5).contains(&h), "{h}");
         let morning = hour_for_azimuth(&site, &time, 90.0);
         assert!(morning < h && morning > 6.0, "{morning}");
         let evening = hour_for_azimuth(&site, &time, 270.0);
-        assert!(evening > h && evening < 21.5, "{evening}");
+        assert!(evening > h && evening < 22.5, "{evening}");
     }
 
     #[test]

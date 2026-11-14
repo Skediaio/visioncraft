@@ -735,6 +735,7 @@ impl App {
             input: &Input::default(),
             ctx,
         };
+        let was_plan = cx.s.camera.view == camera::View::Top;
         match self.hud.mode {
             Some(Mode::Draw) => self.draw.leave(&mut cx),
             Some(Mode::Materials) => self.materials.leave(&mut cx),
@@ -756,6 +757,9 @@ impl App {
             cx.s.camera.leave_walk();
             cx.s.camera.cancel_fly();
             self.draw.enter(&mut cx);
+        } else if was_plan && matches!(mode, Some(Mode::Objects | Mode::Sun)) {
+            // From a plan to the modes that work in one: stay in the plan.
+            cx.s.camera.view = camera::View::Top;
         }
         self.hud.mode = mode;
     }

@@ -80,6 +80,8 @@ pub struct TerrainTool {
     flatten_to: Option<f32>,
     pond: Vec<[f32; 2]>,
     lib_pick: Option<String>,
+    /// The flat terrain a pond drawn without one is made in (kept while it is drawn).
+    planned: Option<Arc<Terrain>>,
 }
 
 impl Default for TerrainTool {
@@ -95,6 +97,7 @@ impl Default for TerrainTool {
             flatten_to: None,
             pond: Vec::new(),
             lib_pick: None,
+            planned: None,
         }
     }
 }
@@ -139,8 +142,20 @@ impl TerrainTool {
         if !self.open {
             return;
         }
-        let Some(terrain) = cx.s.project().terrain.clone() else {
-            return;
+        // No terrain yet: a pond is drawn on the flat ground the terrain will have, and making
+        // the terrain is part of the pond's one step (`finish_pond`).
+        let terrain = match cx.s.project().terrain.clone() {
+            Some(t) => t,
+            None if self.brush == Brush::Pond => {
+                if self.planned.is_none() {
+                    self.planned = planned_terrain(cx.s);
+                }
+                match self.planned.clone() {
+                    Some(t) => t,
+                    None => return,
+                }
+            }
+            None => return,
         };
         let ctrl = cx.ctx.input(|i| i.modifiers.command);
         let ground = cx.input.hover.and_then(|h| ground_at(cx, h));
@@ -256,6 +271,7 @@ impl TerrainTool {
     /// Carves the outline and fills it with water a little below the old ground, one step.
     fn finish_pond(&mut self, cx: &mut Cx, terrain: &Arc<Terrain>) {
         let outline = std::mem::take(&mut self.pond);
+        self.planned = None;
         if outline.len() < 3 {
             return;
         }
@@ -272,7 +288,15 @@ impl TerrainTool {
         // The water reaches as far out as the carved bank is below it: no dry strip of bank shows
         // between the water's edge and the grass.
         let water = offset_outline(&outline, wet_bank(depth, POND_BANK_M, POND_MARGIN_M));
+        let create =
+            cx.s.project()
+                .terrain
+                .is_none()
+                .then(|| create_params(cx.s));
         let r = cx.s.with_lamps(|s| {
+            if let Some(p) = create {
+                s.run("terrain.create", p)?;
+            }
             let before = s.project().terrain.clone();
             s.run(
                 "terrain.carve",
@@ -292,9 +316,23 @@ impl TerrainTool {
     pub fn panel(&mut self, ui: &mut egui::Ui, cx: &mut Cx) {
         let Some(terrain) = cx.s.project().terrain.clone() else {
             ui.small(t::TR_NONE);
-            if ui.button(t::TR_CREATE).clicked() {
-                let p = create_params(cx.s);
-                cx.run("terrain.create", p);
+            ui.horizontal(|ui| {
+                if ui.button(t::TR_CREATE).clicked() {
+                    let p = create_params(cx.s);
+                    cx.run("terrain.create", p);
+                }
+                // A pond makes the terrain it is dug into, in the same step.
+                if ui
+                    .selectable_label(self.brush == Brush::Pond, t::TR_POND)
+                    .on_hover_text(t::TR_POND_HINT)
+                    .clicked()
+                {
+                    self.brush = Brush::Pond;
+                }
+            });
+            if self.brush == Brush::Pond {
+                ui.small(self.brush.hint());
+                slider_field(ui, t::TR_DEPTH, &mut self.pond_depth, 0.2..=3.0);
             }
             return;
         };
@@ -413,6 +451,25 @@ impl TerrainTool {
 
 /// A terrain over everything there is, with 20 m to spare (at least 60 × 60 m), at 0.5 m cells
 /// while that stays within the core's 1024 cells per side.
+/// The flat terrain `create_params` would make, for drawing a pond before there is one.
+fn planned_terrain(s: &Studio) -> Option<Arc<Terrain>> {
+    let p = create_params(s);
+    let num = |k: &str| p[k].as_f64().map(|v| v as f32);
+    let origin = [
+        p["origin"][0].as_f64()? as f32,
+        p["origin"][1].as_f64()? as f32,
+    ];
+    Terrain::flat(
+        origin,
+        num("width_m")?,
+        num("depth_m")?,
+        num("cell_m")?,
+        p["base_material"].as_str()?,
+    )
+    .ok()
+    .map(Arc::new)
+}
+
 pub fn create_params(s: &Studio) -> Value {
     let mut lo = [-30.0f32, -30.0];
     let mut hi = [30.0f32, 30.0];

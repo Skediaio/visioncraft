@@ -112,6 +112,15 @@ pub fn edge_hit(outline: &[P2], closed: bool, p: P2, radius: f32) -> Option<(usi
 }
 
 /// Whether a click at `p` closes a pending outline of `points`.
+/// The mean of a shape's corners (a centre to push labels away from).
+fn centroid(points: &[P2]) -> P2 {
+    let n = points.len().max(1) as f32;
+    let s = points
+        .iter()
+        .fold([0.0, 0.0], |a, p| [a[0] + p[0], a[1] + p[1]]);
+    [s[0] / n, s[1] / n]
+}
+
 pub fn closes(points: &[P2], p: P2, radius: f32) -> bool {
     points.len() >= 3 && dist(points[0], p) <= radius
 }
@@ -540,7 +549,7 @@ impl DrawState {
             top.extend(dot(s.pos, y, col, 6.0));
         }
         for w in pts.windows(2) {
-            self.length_label(cx, w[0], w[1]);
+            self.length_label(cx, w[0], w[1], centroid(&pts));
         }
         if (!self.typed.is_empty() || self.typed_width.is_some())
             && let Some(at) = cx.input.hover
@@ -553,15 +562,24 @@ impl DrawState {
         }
     }
 
-    fn length_label(&self, cx: &Cx, a: P2, b: P2) {
+    /// The edge's length at its middle, pushed outwards from the shape's centre on screen so the
+    /// labels of a narrow shape's two long sides do not sit on each other.
+    fn length_label(&self, cx: &Cx, a: P2, b: P2, centre: P2) {
         let len = dist(a, b);
         if len < 0.05 {
             return;
         }
         let mid = y_point([(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0], 0.05);
-        if let Some(p) = cx.project(mid) {
-            cx.label(p, &format!("{len:.2} m"));
-        }
+        let (Some(p), c) = (cx.project(mid), cx.project(y_point(centre, 0.05))) else {
+            return;
+        };
+        let out = c.map_or(egui::Vec2::ZERO, |c| (p - c).normalized());
+        let out = if out.is_finite() {
+            out
+        } else {
+            egui::Vec2::ZERO
+        };
+        cx.label(p + out * 22.0, &format!("{len:.2} m"));
     }
 
     fn finish(&mut self, cx: &mut Cx) {
@@ -592,9 +610,10 @@ impl DrawState {
         params["material"] = json!(material); // one command: one undo step
         if let Some(r) = cx.run(cmd, params) {
             let id = r["id"].as_str().unwrap_or_default().to_string();
+            // The tool stays: Area after Area until Escape (the new shape is selected, so its
+            // panel shows its sizes).
             self.selected = Some(id);
             self.vertex = None;
-            self.tool = Tool::Select;
         }
     }
 
@@ -718,7 +737,7 @@ impl DrawState {
             } else {
                 n.saturating_sub(1)
             } {
-                self.length_label(cx, o[i], o[(i + 1) % n]);
+                self.length_label(cx, o[i], o[(i + 1) % n], centroid(o));
             }
         }
     }
