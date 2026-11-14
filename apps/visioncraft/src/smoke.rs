@@ -615,6 +615,20 @@ mod native {
                         "sun elevation {:.1} deg, exposure EV {:.1}",
                         s.ev_used.1, s.ev_used.0
                     );
+                    let rs = s.renderer.stats();
+                    let flora = s.scene.flora.texture_bytes(&s.renderer);
+                    let library = s.scene.library.store.held_bytes(|_| true);
+                    let mut parts: Vec<String> = rs
+                        .texture_breakdown
+                        .iter()
+                        .map(|(k, b)| format!("{k} {} MB", b >> 20))
+                        .collect();
+                    parts.push(format!(
+                        "(of the textures: plants {} MB, library {} MB)",
+                        flora >> 20,
+                        library >> 20
+                    ));
+                    println!("texture memory: {}", parts.join(", "));
                     let lib = &s.scene.library;
                     println!(
                         "textures: tier {}, cap {} MB, library {} MB of which tiers {} MB, renderer {} MB",

@@ -139,7 +139,7 @@ impl MaterialsState {
                 let name = format!("mcmat:{}#{stamp}/{key}", mat.name);
                 cx.s.scene
                     .library
-                    .add_memory_image(name.clone(), crate::assets::Rgba { w, h, px });
+                    .add_memory_image(name.clone(), crate::assets::Rgba::new(w, h, px));
                 maps.insert(key.into(), json!(name));
             }
         }

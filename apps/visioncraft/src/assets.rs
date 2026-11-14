@@ -14,12 +14,44 @@
 use crate::gltf_load::{self, Glb};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
+use visioncraft_render::bc::{BcKind, Compressed};
 use visioncraft_render::{ColorSpace, Renderer, TextureDesc, TextureId};
 
 pub struct Rgba {
     pub w: u32,
     pub h: u32,
+    /// The pixels; empty once `bc` holds them compressed.
     pub px: Vec<u8>,
+    /// Block-compressed with its mips (natively, on a device with BC formats).
+    pub bc: Option<Arc<Compressed>>,
+}
+
+impl Rgba {
+    pub fn new(w: u32, h: u32, px: Vec<u8>) -> Self {
+        Self { w, h, px, bc: None }
+    }
+
+    /// GPU memory once uploaded.
+    pub fn gpu_bytes(&self) -> u64 {
+        self.bc
+            .as_ref()
+            .map_or_else(|| texture_cost(self.w, self.h), |c| c.bytes())
+    }
+}
+
+/// The BC kind of a library material map, by its file name (`materials/<id>/[<tier>/]<map>.jpg`):
+/// colour BC1, packed occlusion-roughness-metallic BC1, normal BC5, height BC4.
+pub fn bc_kind_of(path: &str) -> Option<BcKind> {
+    if !path.starts_with("materials/") {
+        return None;
+    }
+    let file = path.rsplit('/').next()?;
+    Some(match file.split('.').next()? {
+        "basecolor" | "orm" => BcKind::Rgb,
+        "normal" => BcKind::Normal,
+        "height" => BcKind::Gray,
+        _ => return None,
+    })
 }
 
 pub struct HdrData {
@@ -307,11 +339,7 @@ mod io {
     pub async fn decode(bytes: Vec<u8>) -> Result<Rgba, String> {
         let img = image::load_from_memory(&bytes).map_err(|e| e.to_string())?;
         let rgba = img.into_rgba8();
-        Ok(Rgba {
-            w: rgba.width(),
-            h: rgba.height(),
-            px: rgba.into_raw(),
-        })
+        Ok(Rgba::new(rgba.width(), rgba.height(), rgba.into_raw()))
     }
 
     pub fn spawn(job: impl std::future::Future<Output = ()> + Send + 'static) {
@@ -394,7 +422,7 @@ export async function vc_decode(bytes) {
         if px.len() != (w * h * 4) as usize {
             return Err("the browser returned an image of the wrong size".into());
         }
-        Ok(Rgba { w, h, px })
+        Ok(Rgba::new(w, h, px))
     }
 
     pub fn spawn(job: impl std::future::Future<Output = ()> + 'static) {
@@ -406,7 +434,14 @@ export async function vc_decode(bytes) {
 /// read from a bundle), by path.
 pub type MemoryFiles = Arc<Mutex<HashMap<String, Arc<[u8]>>>>;
 
-async fn load(key: &Key, base: &io::Base, memory: &MemoryFiles) -> Result<Loaded, String> {
+/// `compress`: block-compress library material maps (natively, on a device with BC formats; the
+/// loader runs on its own thread there, so the frame does not pay for it).
+async fn load(
+    key: &Key,
+    base: &io::Base,
+    memory: &MemoryFiles,
+    compress: bool,
+) -> Result<Loaded, String> {
     let held = memory.lock().ok().and_then(|m| m.get(key.path()).cloned());
     let bytes = match held {
         Some(b) => b.to_vec(),
@@ -414,12 +449,61 @@ async fn load(key: &Key, base: &io::Base, memory: &MemoryFiles) -> Result<Loaded
     };
     Ok(match key {
         Key::Bytes(_) => Loaded::Bytes(bytes),
-        Key::Image { .. } | Key::Thumb(_) => Loaded::Image(io::decode(bytes).await?),
+        Key::Image { path, srgb, .. } => {
+            let mut img = io::decode(bytes).await?;
+            if compress && let Some(kind) = bc_kind_of(path) {
+                let space = if *srgb {
+                    ColorSpace::Srgb
+                } else {
+                    ColorSpace::Linear
+                };
+                if let Some(c) =
+                    visioncraft_render::bc::compress(&img.px, img.w, img.h, kind, space)
+                {
+                    img.bc = Some(Arc::new(c));
+                    img.px = Vec::new();
+                }
+            }
+            Loaded::Image(img)
+        }
+        Key::Thumb(_) => Loaded::Image(io::decode(bytes).await?),
         Key::Glb(_) => {
             let glb = gltf_load::parse(&bytes)?;
             let mut images = Vec::new();
-            for encoded in &glb.images {
-                images.push(io::decode(encoded.clone()).await?);
+            // Each picture compresses as what its material uses it for: colour BC1 (BC3 with
+            // alpha), normal map BC5, occlusion-roughness-metallic BC1. One used two ways stays.
+            let mut role: HashMap<usize, Option<(BcKind, ColorSpace)>> = HashMap::new();
+            for m in &glb.materials {
+                let uses = [
+                    m.base_image.map(|i| (i, BcKind::Rgb, ColorSpace::Srgb)),
+                    m.normal_image
+                        .map(|i| (i, BcKind::Normal, ColorSpace::Linear)),
+                    m.orm_image.map(|i| (i, BcKind::Rgb, ColorSpace::Linear)),
+                ];
+                for (i, kind, space) in uses.into_iter().flatten() {
+                    let e = role.entry(i).or_insert(Some((kind, space)));
+                    if *e != Some((kind, space)) {
+                        *e = None;
+                    }
+                }
+            }
+            for (i, encoded) in glb.images.iter().enumerate() {
+                let mut img = io::decode(encoded.clone()).await?;
+                if compress && let Some(Some((mut kind, space))) = role.get(&i).copied() {
+                    if kind == BcKind::Rgb
+                        && space == ColorSpace::Srgb
+                        && !img.px.as_chunks::<4>().0.iter().all(|p| p[3] == 255)
+                    {
+                        kind = BcKind::Rgba;
+                    }
+                    if let Some(c) =
+                        visioncraft_render::bc::compress(&img.px, img.w, img.h, kind, space)
+                    {
+                        img.bc = Some(Arc::new(c));
+                        img.px = Vec::new();
+                    }
+                }
+                images.push(img);
             }
             Loaded::Glb(GlbData { glb, images })
         }
@@ -482,6 +566,8 @@ pub struct AssetStore {
     pub stats: StoreStats,
     /// The GPU holds more texture memory than `cap_bytes` (as of the last frame).
     pub over_cap: bool,
+    /// Compress library material maps (the device has BC formats).
+    pub compress: bool,
     /// The renderer's texture memory as of the last frame.
     pub texture_bytes: u64,
 }
@@ -520,6 +606,7 @@ impl AssetStore {
             max_inflight: if cfg!(target_arch = "wasm32") { 6 } else { 4 },
             stats: StoreStats::default(),
             over_cap: false,
+            compress: false,
             texture_bytes: 0,
         }
     }
@@ -631,19 +718,22 @@ impl AssetStore {
         repeat: bool,
     ) -> Option<TextureId> {
         let t = now_ms();
-        let id = r
-            .add_texture(&TextureDesc {
-                width: img.w,
-                height: img.h,
-                rgba8: &img.px,
-                color_space: if srgb {
-                    ColorSpace::Srgb
-                } else {
-                    ColorSpace::Linear
-                },
-                repeat,
-            })
-            .ok();
+        let id = match &img.bc {
+            Some(c) => r.add_compressed(c, repeat).ok(),
+            None => r
+                .add_texture(&TextureDesc {
+                    width: img.w,
+                    height: img.h,
+                    rgba8: &img.px,
+                    color_space: if srgb {
+                        ColorSpace::Srgb
+                    } else {
+                        ColorSpace::Linear
+                    },
+                    repeat,
+                })
+                .ok(),
+        };
         let ms = now_ms() - t;
         self.stats.uploads += 1;
         self.stats.total_upload_ms += ms;
@@ -687,8 +777,11 @@ impl AssetStore {
             self.inflight.insert(key.clone());
             let (inbox, base, memory) =
                 (self.inbox.clone(), self.base.clone(), self.memory.clone());
+            // shortcut: in the browser the loader runs on the page's thread, where a 4k map
+            // takes seconds to compress, so the web keeps RGBA8; a worker would lift that
+            let compress = self.compress && !cfg!(target_arch = "wasm32");
             io::spawn(async move {
-                let result = load(&key, &base, &memory).await;
+                let result = load(&key, &base, &memory, compress).await;
                 inbox.lock().expect("asset inbox").push((key, result));
             });
         }
@@ -745,12 +838,12 @@ impl AssetStore {
             };
             // A higher tier that no longer fits (the base files filled the budget meanwhile)
             // is dropped, not uploaded: the base stays, it may be asked for again later.
-            if is_tier_file(key.path()) && !self.fits(texture_cost(img.w, img.h)) {
+            if is_tier_file(key.path()) && !self.fits(img.gpu_bytes()) {
                 continue;
             }
             match self.upload(r, &img, srgb, repeat) {
                 Some(id) => {
-                    let cost = texture_cost(img.w, img.h);
+                    let cost = img.gpu_bytes();
                     self.lru.insert(key.clone(), cost, self.tick);
                     self.texture_bytes += cost;
                     self.textures.insert(key, id);

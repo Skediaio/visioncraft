@@ -355,6 +355,23 @@ impl Flora {
         }
     }
 
+    /// GPU memory of the species' textures (leaf atlases, their normal maps, bark).
+    pub fn texture_bytes(&self, r: &Renderer) -> u64 {
+        self.textures
+            .values()
+            .flat_map(|t| {
+                [
+                    Some(t.atlas),
+                    t.atlas_normal,
+                    Some(t.bark),
+                    Some(t.bark_normal),
+                ]
+            })
+            .flatten()
+            .map(|id| r.texture_bytes(id))
+            .sum()
+    }
+
     /// How many species (with their seasons) are generated and kept.
     pub fn kept(&self) -> usize {
         self.classes.len()
@@ -372,7 +389,27 @@ impl Flora {
         let (id, class, month) = (w.id.clone(), w.class, w.month);
         if !self.textures.contains_key(&id) {
             let t = flora::textures_at(&w.params, self.leaf_scale.max(1));
+            // Block-compressed where the device can (a quarter to an eighth of the memory; the
+            // leaf atlas keeps its cutout coverage in every mip), else RGBA8.
             let up = |r: &mut Renderer, i: &flora::Image, srgb: bool, repeat: bool| {
+                use visioncraft_render::bc::{BcKind, compress};
+                let kind = match (srgb, repeat) {
+                    (true, false) => BcKind::Rgba, // the leaf atlas
+                    (true, true) => BcKind::Rgb,   // bark
+                    (false, _) => BcKind::Normal,
+                };
+                let space = if srgb {
+                    visioncraft_render::ColorSpace::Srgb
+                } else {
+                    visioncraft_render::ColorSpace::Linear
+                };
+                if r.supports_bc()
+                    && !cfg!(target_arch = "wasm32")
+                    && let Some(c) = compress(&i.rgba, i.width, i.height, kind, space)
+                    && let Ok(id) = r.add_compressed(&c, repeat)
+                {
+                    return Some(id);
+                }
                 scene::upload_texture(r, i.width, i.height, &i.rgba, srgb, repeat)
             };
             let tex = (|| {

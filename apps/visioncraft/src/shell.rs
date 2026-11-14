@@ -140,13 +140,14 @@ impl Shell {
     }
 }
 
-/// Asks for timestamp queries when the adapter offers them: the hardware calibration then times
-/// on the GPU (`crate::hardware`).
+/// Asks for timestamp queries (the hardware calibration times on the GPU, `crate::hardware`) and
+/// BC texture compression (`visioncraft_render::bc`) when the adapter offers them.
 fn with_timestamps(mut setup: egui_wgpu::WgpuSetupCreateNew) -> egui_wgpu::WgpuSetupCreateNew {
     let base = setup.device_descriptor.clone();
     setup.device_descriptor = std::sync::Arc::new(move |adapter| {
         let mut d = base(adapter);
-        d.required_features |= adapter.features() & wgpu::Features::TIMESTAMP_QUERY;
+        d.required_features |= adapter.features()
+            & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TEXTURE_COMPRESSION_BC);
         d
     });
     setup

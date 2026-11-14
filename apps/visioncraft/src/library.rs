@@ -537,7 +537,10 @@ impl Library {
                 // Dropped at upload for want of room (or evicted): ask the budget again.
                 self.tier_asked.borrow_mut().remove(path);
             }
-            self.budget_for(path, crate::assets::texture_cost(px, px))
+            // Compressed maps take a quarter (BC5) to an eighth (BC1) of RGBA8.
+            let cost =
+                crate::assets::texture_cost(px, px) / if self.store.compress { 4 } else { 1 };
+            self.budget_for(path, cost)
         };
         ok.then(|| path.to_string())
     }
@@ -762,6 +765,7 @@ impl Library {
     /// camera position, lamps. Returns true when scene items must be rebuilt.
     pub fn pump(&mut self, r: &mut Renderer, eye: Vec3) -> bool {
         let t0 = now_ms();
+        self.store.compress = r.supports_bc();
         let budget = Budget::new(4.0);
         let rev_before = self.rev;
         for m in std::mem::take(&mut self.garbage) {
