@@ -3148,9 +3148,15 @@ impl Renderer {
             pass.set_bind_group(2, &self.draw_bind, &[(slot as u64 * SLOT) as u32]);
         }
         pass.set_vertex_buffer(1, item.instances.slice(..));
+        // Shadows: two cards per plant (impostor.wgsl, `impostor_shadow_towards`).
+        let vertices = if matches!(kind, Pass::Shadow { .. }) {
+            12
+        } else {
+            6
+        };
         for r in runs {
             self.counters.add(2, r.len() as u32, kind == Pass::Forward);
-            pass.draw(0..6, r);
+            pass.draw(0..vertices, r);
         }
         for (r, slot) in fading {
             pass.set_bind_group(2, &self.fade_bind, &[(slot as u64 * SLOT) as u32]);
