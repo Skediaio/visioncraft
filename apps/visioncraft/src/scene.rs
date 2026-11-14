@@ -131,7 +131,7 @@ fn look_of(m: &Material, lib: &mut Library) -> Look {
     }
     match &m.kind {
         SurfaceKind::ArchitecturalGlass { tint, roughness } => Look {
-            color: [tint[0], tint[1], tint[2], 0.25],
+            color: [tint[0], tint[1], tint[2], 0.06],
             roughness: *roughness,
             surface: 1,
             ..plain

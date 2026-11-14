@@ -1196,7 +1196,31 @@ pub fn render_lights(p: &Project) -> Vec<visioncraft_render::Light> {
                 range_m: l.range_m,
             }
         })
+        .chain(lit_rooms(p))
         .collect()
+}
+
+/// A warm room lamp behind each lit window of the visible houses (`shape.set_lit_rooms`).
+fn lit_rooms(p: &Project) -> impl Iterator<Item = visioncraft_render::Light> + '_ {
+    let c = visioncraft_core::kelvin_to_linear_rgb(2700.0);
+    let m = c[0].max(c[1]).max(c[2]).max(1e-3);
+    p.shapes
+        .iter()
+        .filter_map(|s| match s {
+            visioncraft_core::Shape::Extrusion(e) if e.closed && p.layer_visible(&e.layer) => e
+                .house
+                .as_ref()
+                .map(|h| visioncraft_core::house::lit_windows(&e.outline, h, e.base)),
+            _ => None,
+        })
+        .flatten()
+        .map(move |at| visioncraft_render::Light {
+            position: Vec3::from(at),
+            kind: visioncraft_render::LightKind::Point,
+            color: Vec3::new(c[0] / m, c[1] / m, c[2] / m),
+            intensity: 1200.0,
+            range_m: 3.5,
+        })
 }
 
 #[cfg(test)]
