@@ -18,11 +18,13 @@ nothing here is a promise of a date.
   sea state, wave direction, colour, clarity, foam, flow, an optional outline) out to the
   horizon, Gerstner waves filtered with distance, foam on crests and along the shore, the wet
   band above the waterline, a beach or bluff along a line (`terrain.shore`), plants kept off
-  the bed, wading to 0.6 m, and the `coast` example. Next: waves that shoal and break on the
-  beach, refraction of the bed, a jetty or boat that floats (none in the library yet), a
-  coastline the endless ground follows instead of lying all below or all above the water.
-- **Coast showcase:** the `coast` example, a beachfront house on a bluff over a beach and the
-  sea, on shaped terrain. Next: the same on real coastal topography once ground from
+  the bed, wading to 0.6 m, a coastline the endless ground follows (`coast`), surf that
+  shoals and breaks over shallow beds with a swash running up the sand, and the `coast`
+  example. Next: refraction of the bed, the surf's bed slope measured instead of assumed,
+  breakers that lift the surface (they only tilt it now), a jetty or boat that floats (none in
+  the library yet).
+- **Coast showcase:** the `coast` example, a beachfront house low on a mainland beach with a
+  coastal garden round it, on shaped terrain. Next: the same on real coastal topography once ground from
   coordinates exists.
 
 ## Next

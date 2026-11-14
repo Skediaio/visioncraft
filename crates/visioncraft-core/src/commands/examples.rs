@@ -9,7 +9,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 /// The furnished beach house (model, materials per body, furniture, lights), shared by the
-/// `beach-house` example (on sand) and the `coast` example (on a bluff above the sea).
+/// `beach-house` example (on sand) and the `coast` example (on the mainland beach).
 const BEACH_HOUSE: &str = include_str!("../examples/beach-house-furnished.json");
 
 /// (name, command files run in order) of every example.
@@ -53,7 +53,7 @@ pub(super) fn register(s: &mut Session) {
         spec(
             "project.load_example",
             "Open Example",
-            "Replaces the project with an example built from commands: `garden`, a 20 by 30 m plot with a house block, terrace, lawn, border, path, carved pond, hornbeam hedge, three trees, path lights, a bollard and six viewpoints; `estate`, a 100 by 60 m plot round an imported 3DCraft villa with two large lawns, a brushed woodland, a border, a pond in the terrain, path lights, a planting on a hidden layer and three viewpoints; `beach-house`, a furnished single-storey beach house imported from 3DCraft (walls, glass, doors, kitchen, bathrooms, deck, carport) on sand, with library materials per element, catalogue furniture, interior downlights and ten viewpoints inside and out, one at dusk; `coast`, the same furnished house with its deck and carport on a 4 m bluff above a sandy beach in southern California, its glass wall to the sea, palms, cypresses, an olive, coastal grasses and ice plant, a path from the deck steps down to the beach, the sea to the horizon and eight viewpoints, one inside.",
+            "Replaces the project with an example built from commands: `garden`, a 20 by 30 m plot with a house block, terrace, lawn, border, path, carved pond, hornbeam hedge, three trees, path lights, a bollard and six viewpoints; `estate`, a 100 by 60 m plot round an imported 3DCraft villa with two large lawns, a brushed woodland, a border, a pond in the terrain, path lights, a planting on a hidden layer and three viewpoints; `beach-house`, a furnished single-storey beach house imported from 3DCraft (walls, glass, doors, kitchen, bathrooms, deck, carport) on sand, with library materials per element, catalogue furniture, interior downlights and ten viewpoints inside and out, one at dusk; `coast`, the same furnished house on the mainland coast of southern California, 1.8 m above the sea with 25 m of beach from its deck steps to the surf, its glass wall to the sea, the land rising inland to dunes and pines and a headland in the far west, and a coastal garden round it on the land side and the flanks (a gravel drive between Italian cypresses, an entrance court with an olive, a hedged garden room with a lawn and layered borders in drifts, a gravel garden of palms, grasses and succulents, dune grass and ice plant towards the beach, pots on the deck, path lights) and fifteen viewpoints: the beach, the deck, the living room, a drone along the coast, golden hour, dusk, the water, the surf, the garden in summer, in winter and after 10 years.",
             vec![param("name", T::String, "The example: garden, estate, beach-house or coast.").required()],
             "{name, steps}",
             json!({"name": "garden"}),
@@ -212,39 +212,79 @@ mod tests {
     }
 
     #[test]
-    fn the_coast_has_a_house_above_the_beach_and_the_sea_beyond() {
+    fn the_coast_is_a_mainland_beach_with_the_house_low_by_the_water() {
         let p = super::example("coast").unwrap();
         let sea = p.sea.clone().expect("a sea");
         let t = p.terrain.as_deref().unwrap();
         let h = |x, z| t.height_at(x, z).unwrap();
-        // The house stands on dry land, the beach runs into the water, the far bed is deep.
+        // The house stands on its level plot 1.8 m above the sea.
         for (x, z) in [(-6.6, -10.5), (24.6, -12.3), (-0.6, 7.65), (24.6, 6.6)] {
             assert!(h(x, z).abs() < 0.05, "ground at the house: {}", h(x, z));
         }
-        assert!(h(12.0, 36.0) > sea.level && h(12.0, 36.0) < sea.level + 1.0);
-        assert!(h(12.0, 126.0) < sea.level - 5.0);
-        // The endless ground lies under the water, so the sea reaches the horizon.
-        assert!(p.view.ground.unwrap().height < sea.level);
-        // The beach house itself, with its furniture and lights, not a stand-in block.
+        assert!((sea.level + 1.8).abs() < 1e-4);
+        // Sand from the deck steps down to the waterline 20 to 30 m beyond the deck (z 6.6).
+        let dry = |z| h(8.0, z) > sea.level;
+        assert!(dry(20.0) && h(8.0, 20.0) < sea.level + 1.2);
+        let waterline = (66..=80).map(|z| z as f32 * 0.5).find(|z| !dry(*z));
+        let waterline = waterline.expect("the waterline in front of the house");
+        assert!((26.6..=36.6).contains(&waterline), "waterline at z {waterline}");
+        assert!(h(8.0, 200.0) < sea.level - 3.0, "the bed deepens offshore");
+        // Mainland: the land rises inland to the endless ground, which stays land behind the
+        // coast to the horizon; beyond its far headland in the west, open sea again.
+        let ground = p.view.ground.unwrap();
+        assert!(ground.height > sea.level + 4.0);
+        assert!((h(0.0, -318.0) - ground.height).abs() < 0.5, "{}", h(0.0, -318.0));
+        assert!(sea.coast.len() >= 2 && sea.validate().is_ok());
+        assert!(!sea.covers(0.0, -2000.0) && sea.covers(0.0, 2000.0));
+        assert!(!sea.covers(-2000.0, 1200.0) && sea.covers(-2000.0, 1500.0));
+        // The beach house itself, with its furniture and lights.
         assert_eq!(p.models.len(), 1);
         assert_eq!(p.models[0].source, "example:beach-house.3dcraft");
         assert_eq!(p.models[0].transform.translation, [0.0, 0.0, 0.0]);
-        assert_eq!(
-            p.assignments.len(),
-            46 + 1,
-            "the house's bodies and the path"
-        );
         assert_eq!(p.lights.len(), 23);
         let names: Vec<&str> = p.shapes.iter().map(|s| s.name()).collect();
-        assert_eq!(names, ["Beach path"]);
-        assert_eq!(p.viewpoints.len(), 8);
-        // Nothing of the planting stands on the sea bed.
-        let dune = p.generators.iter().find(|g| g.name() == "Dune grass");
-        let dune = dune.unwrap();
-        let mut e = crate::evaluate(dune, &|x, z| t.height_at(x, z));
-        let n = e.placements.len();
-        crate::keep_dry(Some(&sea), &mut e, &|_| false);
-        assert_eq!(e.placements.len(), n, "the dune grass is above the water");
+        assert_eq!(
+            names,
+            ["Drive", "Entrance court", "Garden room lawn", "Garden path", "Beach walk", "West gravel garden"]
+        );
+        assert_eq!(p.assignments.len(), 46 + names.len());
+        assert_eq!(p.viewpoints.len(), 15);
+        // Golden hour, dusk and winter carry their own date and hour.
+        assert_eq!(p.viewpoints.iter().filter(|v| v.time.is_some()).count(), 3);
+        assert!(p.viewpoints.iter().any(|v| v.years.is_some()));
+        // A finished garden: tens of trees and large shrubs, hundreds of perennials and grasses,
+        // nothing on the sea bed, nothing but low dune planting in front of the glass wall.
+        let house = super::example("beach-house").unwrap().generators.len();
+        let mut trees = 0;
+        let mut small = 0;
+        for g in &p.generators[house..] {
+            let mut e = crate::evaluate(g, &|x, z| t.height_at(x, z));
+            let n = e.placements.len();
+            crate::keep_dry(Some(&sea), &mut e, &|_| false);
+            assert_eq!(e.placements.len(), n, "{} reaches into the water", g.name());
+            if g.name().starts_with("Inland") || g.name().starts_with("Coastal scrub") {
+                continue;
+            }
+            for pl in &e.placements {
+                let [x, _, z] = pl.position;
+                let open = (-0.5..21.5).contains(&x) && (6.7..40.0).contains(&z);
+                assert!(
+                    !open || ["Dune", "Ice"].iter().any(|w| g.name().starts_with(w)),
+                    "{} at {x}, {z} stands in the view from the glass wall",
+                    g.name()
+                );
+                let tree = ["cupressus", "olea", "phoenix", "trachycarpus", "pinus", "ficus", "laurus", "rosa-shrub", "hibiscus", "photinia-red", "cortaderia"]
+                    .iter()
+                    .any(|w| pl.asset.contains(w));
+                if tree {
+                    trees += 1;
+                } else if !pl.asset.contains("hedge") && !pl.asset.contains("light") {
+                    small += 1;
+                }
+            }
+        }
+        assert!((25..=60).contains(&trees), "{trees} trees and large shrubs");
+        assert!(small > 300, "{small} perennials and grasses");
     }
 
     #[test]
