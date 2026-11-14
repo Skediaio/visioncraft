@@ -793,7 +793,10 @@ fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, screen_effe
     // Snow over the surface (`snow_on`): matt and smoother, its bumps buried; its albedo goes
     // over the surface's after weathering below.
     var snow = 0.0;
-    if !clay && g.snow.x > 0.0 {
+    // On leaves only where a crown carries them (a hedge, an evergreen; tagged by the app, or an
+    // impostor): bare twig cards, lawn blades and fallen leaves stay as they are.
+    let leafy = !foliage || (in.face & 0xFFFF0000u) == CROWN_TAG || in.face == 0xfffffffdu;
+    if !clay && g.snow.x > 0.0 && leafy {
         snow = snow_on(in.world, s.geometric);
         s.metallic = mix(s.metallic, 0.0, snow);
         s.roughness = mix(s.roughness, 0.6, snow);
@@ -833,11 +836,19 @@ fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, screen_effe
     let diffuse_color = base * (1.0 - s.metallic);
 
     var sun = vec3<f32>(0.0);
+    // How much of the sun reaches the surface (1 without a sun): snow in shade turns blue-grey.
+    var sunlit = 0.0;
     let nol_raw = dot(n, l);
     let nol = max(nol_raw, 0.0);
     if g.sun_light.r + g.sun_light.g + g.sun_light.b > 0.0 && (nol > 0.0 || foliage) {
         let shadow = min(sun_shadow(in.world, s.geometric, max(dot(s.geometric, l), 0.0), depth), screen.g);
+        sunlit = shadow * smoothstep(0.0, 0.15, nol);
         var diffuse = nol;
+        // Snow is no Lambertian surface: its grains scatter a low sun forward and up, so a
+        // snowfield under a winter sun is far brighter than its cosine says (and than its shade).
+        if snow > 0.0 {
+            diffuse = mix(nol, min(sqrt(nol) * 1.6, 1.0), snow);
+        }
         if foliage {
             // Leaves: wrapped diffuse (Green, "Real-Time Approximations to
             // Subsurface Scattering", GPU Gems 1, ch. 16, 2004) plus light
@@ -888,6 +899,11 @@ fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, screen_effe
     if g.grade.w >= 1.0 {
         ambient_diffuse = diffuse_color * photo_bounce(in.world, n, in.clip.xy, ao);
     }
+    // Snow out of the sun is blue-grey, clearly darker than sunlit snow: under a winter sun the
+    // sky's light alone made shade and sun on snow almost the same white.
+    if snow > 0.0 {
+        ambient_diffuse *= mix(vec3<f32>(1.0), mix(vec3<f32>(0.75, 0.8, 0.92), vec3<f32>(1.0), sunlit), snow);
+    }
     // Specular occlusion from AO: Lagarde & de Rousiers 2014, section 4.10.2.
     let spec_ao = clamp(pow(nov + ao, exp2(-16.0 * s.roughness - 1.0)) - 1.0 + ao, 0.0, 1.0);
     let ambient_specular = env_brdf_approx(f0, s.roughness, nov) * environment(r, s.roughness) * spec_ao;
@@ -928,7 +944,9 @@ fn snow_on(world: vec3<f32>, n: vec3<f32>) -> f32 {
     if a <= 0.0 {
         return 0.0;
     }
-    let up = smoothstep(mix(0.92, 0.45, a), mix(0.99, 0.75, a), n.y);
+    // Flat ground takes it first; a 38 degree roof (n.y 0.79) only patchily even at 0.7, so its
+    // tiles show at the eaves and the steep parts.
+    let up = smoothstep(mix(0.95, 0.62, a), mix(1.0, 0.9, a), n.y);
     if up <= 0.0 {
         return 0.0;
     }
@@ -1274,10 +1292,11 @@ fn water(in: Varying) -> vec4<f32> {
     if ice > 0.0 {
         let up = vec3<f32>(0.0, 1.0, 0.0);
         let nz = value_noise(in.world * 0.9) * 0.6 + value_noise(in.world * 4.1) * 0.4;
-        let drift = smoothstep(0.55, 0.8, nz + (g.snow.x - 0.7) * 0.6) * snow_open(in.world);
-        let albedo = mix(vec3<f32>(0.32, 0.38, 0.42), SNOW_ALBEDO, drift);
+        let drift = smoothstep(0.62, 0.85, nz + (g.snow.x - 0.7) * 0.6) * snow_open(in.world);
+        // Dark, slightly blue ice that still mirrors the bank, with snow blown over it in places.
+        let albedo = mix(vec3<f32>(0.08, 0.11, 0.14), SNOW_ALBEDO, drift);
         let lit = albedo * (sh_irradiance(up) + g.sun_light.rgb * max(l.y, 0.0) * sun_on) / PI
-            + f * reflected * (1.0 - drift) * 0.5;
+            + reflected * (0.05 + 0.7 * f) * (1.0 - drift);
         color = mix(color, lit, ice);
         alpha = mix(alpha, 1.0, ice);
     }

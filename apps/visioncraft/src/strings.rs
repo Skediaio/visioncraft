@@ -165,9 +165,11 @@ pub const MATERIAL_ADDED: &str = "Material added";
 pub const DENSITY: &str = "Density per m²";
 pub const PLANTINGS: &str = "Placed";
 pub const SEASON: &str = "Season";
+pub const VIEW_KEEP_TIME: &str = "Keep the time of this view";
+pub const VIEW_KEEP_TIME_TIP: &str = "This view shows its own date and time (a dusk view, a sun study); otherwise it shows the project's season and time";
 pub const SEASONS: [&str; 4] = ["Spring", "Summer", "Autumn", "Winter"];
 pub const SNOWY: &str = "Snowy";
-pub const SNOWY_TIP: &str = "Winter under snow, with a bright overcast sky";
+pub const SNOWY_TIP: &str = "Winter under snow";
 pub const SNOW: &str = "Snow";
 pub const SNOW_TIP: &str = "How much snow lies on the ground, roofs, hedges and branches";
 pub const EXACT_DATE: &str = "Exact date";
@@ -191,7 +193,7 @@ pub const UTC_OFFSET: &str = "UTC offset";
 pub const CITY: &str = "City";
 pub const EXPOSURE: &str = "Exposure";
 pub const SUN_HINT: &str =
-    "Drag the sun around the compass for the time of day, click the month dial for the season.";
+    "Drag the sun around the compass for the time of day; Exact date opens the month dial.";
 pub const MONTHS: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];

@@ -146,8 +146,8 @@ fn season_row(ui: &mut egui::Ui, cx: &mut Cx) {
             .clicked()
             && !snowy
         {
-            run = Some(json!({"season": "winter", "snow": SNOWY,
-                "clouds": {"kind": "overcast", "cover": 0.8}}));
+            // The sky stays the person's: a sunny snowy day has the most form.
+            run = Some(json!({"season": "winter", "snow": SNOWY}));
         }
     });
     if now == Season::Winter || snow > 0.0 {

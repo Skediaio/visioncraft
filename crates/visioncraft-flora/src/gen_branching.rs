@@ -409,10 +409,11 @@ pub fn generate(
     let flowers = p.flowers.as_ref().filter(|_| st.flowers);
     let n_flower = flowers.map_or(0, |f| ((nk as f32 * f.density).round() as usize).min(nk));
     let n_leaf = ((nk as f32 * st.leaf_fraction).round() as usize).min(nk - n_flower.min(nk));
-    // Bare twigs as cards are a haze, not a crown: a third of the cards the leaves had (the
-    // branches themselves carry the shape), or the winter tree reads as brown foliage.
+    // Bare twigs as cards are a haze, not a crown: a few of the cards the leaves had (the
+    // branches themselves carry the shape); at a third, a winter cherry read as red-brown
+    // foliage.
     let n_twig = if p.deciduous {
-        ((nk - n_leaf - n_flower) as f32 * 0.35) as usize
+        ((nk - n_leaf - n_flower) as f32 * 0.12) as usize
     } else {
         0
     };

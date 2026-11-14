@@ -93,7 +93,7 @@ impl Scene {
     pub(super) fn sync_clutter(&mut self, r: &mut Renderer, project: &Project) {
         let month = u32::from(project.plant_month());
         // Fallen leaves, stones and edge grass lie under the snow.
-        let on = project.view.clutter && !self.clutter_low && project.view.snow < SNOW_BURIES;
+        let on = project.view.clutter && !self.clutter_low && project.snow() < SNOW_BURIES;
         // Deciduous trees drop leaves round their crowns: those placed one by one, and those a
         // planting area, line, brush or cluster scatters (their placements, as drawn).
         let deciduous = |asset: &str| {

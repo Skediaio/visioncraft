@@ -89,6 +89,16 @@ impl Project {
         Season::of(self.time.month, self.site.latitude)
     }
 
+    /// The snow drawn: the project's, in winter only (a date moved to summer leaves it stored
+    /// and not drawn).
+    pub fn snow(&self) -> f32 {
+        if self.season() == Season::Winter {
+            self.view.snow
+        } else {
+            0.0
+        }
+    }
+
     /// The month the plants are drawn in: their state for the season of the date shown.
     pub fn plant_month(&self) -> u8 {
         self.season().plant_month()
@@ -139,6 +149,17 @@ mod tests {
         let back = Project::from_json_bytes(&s.project().to_json_bytes()).unwrap();
         assert_eq!((back.view.snow, back.season()), (0.7, Season::Winter));
         assert!(s.run("view.set", json!({"snow": 1.5})).is_err());
+        // Snow belongs to winter: refused in another season, kept but not drawn after a date
+        // moved out of winter.
+        let autumn = s.project().clone();
+        let mut a = Session::new(Project {
+            time: Season::Autumn.time(autumn.time, 50.0),
+            ..autumn
+        });
+        assert!(a.run("view.set", json!({"snow": 0.5})).is_err());
+        s.run("time.set", json!({"month": 7})).unwrap();
+        assert_eq!((s.project().view.snow, s.project().snow()), (0.7, 0.0));
+        s.run("view.set", json!({"season": "winter"})).unwrap();
         assert!(s.run("view.set", json!({"season": "monsoon"})).is_err());
         // Without snow nothing is written: older files stay as they were.
         s.run("view.set", json!({"snow": 0})).unwrap();

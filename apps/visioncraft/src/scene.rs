@@ -1059,7 +1059,7 @@ impl Scene {
         type Faces = Vec<(usize, visioncraft_core::material::Lawn3d, [f32; 3])>;
         let mut todo: Vec<(String, Faces)> = Vec::new();
         // Deep snow buries the lawn's blades: only the snow over the lawn shows.
-        let buried = project.view.snow > LAWN_SNOW_BURIES;
+        let buried = project.snow() > LAWN_SNOW_BURIES;
         let (max_density, max_tufts, narrow) = if self.dense_lawns {
             (LAWN_MAX_DENSITY * 2.0, LAWN_MAX_TUFTS * 4, 0.7)
         } else {

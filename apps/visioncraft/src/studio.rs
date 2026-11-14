@@ -813,32 +813,20 @@ impl Studio {
     /// Sky, haze, ground, wind, exposure and lights from the project's view state.
     fn apply_view(&mut self, elevation: f32) {
         let v = self.project().view.clone();
+        let snow = self.project().snow();
         let lamps = self.lights_on() && self.project().lights.iter().any(|l| l.enabled);
         let (brighter, power, saturation) = look_grade(v.look, elevation);
-        // Snow under the default sky: a bright overcast one, as on a snowy day.
-        let clouds = if v.snow > 0.0 && v.clouds == visioncraft_core::Clouds::default() {
-            visioncraft_core::Clouds {
-                kind: visioncraft_core::CloudKind::Overcast,
-                cover: 0.8,
-            }
-        } else {
-            v.clouds
-        };
-        // A camera metering a snowy scene makes the snow grey; a photographer opens up. Under an
-        // overcast sky (the sun's light mostly gone) more: on the box the snowy pond at 15:00
-        // in January measured sRGB 90 of 255 with the sun's exposure, about 190 with this.
-        let overcast = if clouds.kind == visioncraft_core::CloudKind::Overcast {
-            clouds.cover
-        } else {
-            0.0
-        };
-        let ev = v.exposure_ev.unwrap_or_else(|| {
-            self.sky.auto_ev(elevation, lamps) - brighter - v.snow * (1.0 + 3.5 * overcast)
-        }) - self.exposure;
+        let clouds = v.clouds;
+        // A camera metering a snowy scene greys the snow; a photographer opens up a little, not
+        // so far that sunlit snow clips or the rest of the picture lifts (`SNOW_EV`).
+        let ev = v
+            .exposure_ev
+            .unwrap_or_else(|| self.sky.auto_ev(elevation, lamps) - brighter - snow * SNOW_EV)
+            - self.exposure;
         self.ev_used = (ev, elevation);
         self.renderer.set_exposure(ev);
         self.renderer.set_grade(power, saturation);
-        self.renderer.set_snow(v.snow);
+        self.renderer.set_snow(snow);
         self.renderer.set_clouds(&visioncraft_render::Clouds {
             cover: match clouds.kind {
                 visioncraft_core::CloudKind::Clear => 0.0,
@@ -850,10 +838,7 @@ impl Studio {
         // garden), with most of its colour taken out: a green lawn tints a wall only a little.
         let eye = self.camera.eye();
         // The cell, and the snow in the w (the ground bounces snow's white).
-        let cell = (eye * 2.0)
-            .round()
-            .as_ivec3()
-            .extend((v.snow * 100.0) as i32);
+        let cell = (eye * 2.0).round().as_ivec3().extend((snow * 100.0) as i32);
         if self.bounce_cell != Some(cell) {
             self.bounce_cell = Some(cell);
             let albedo = self
@@ -862,7 +847,7 @@ impl Studio {
                 .or(v.ground.map(|g| g.color))
                 .map(|c| {
                     let c: [f32; 3] =
-                        std::array::from_fn(|k| c[k] + ([0.8, 0.83, 0.88][k] - c[k]) * v.snow);
+                        std::array::from_fn(|k| c[k] + ([0.8, 0.83, 0.88][k] - c[k]) * snow);
                     let lum = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
                     c.map(|k| ((lum + BOUNCE_CHROMA * (k - lum)) * 100.0).round() / 100.0)
                 });
@@ -1649,6 +1634,9 @@ mod reach_tests {
 
 /// How long a picture waits for plants and library files before it is taken anyway.
 pub const PICTURE_WAIT_S: f64 = 120.0;
+
+/// Stops the exposure opens up per unit of snow.
+const SNOW_EV: f32 = 1.2;
 
 /// What a picture taken with `pending` plants still being made, or the library still loading,
 /// says about it.

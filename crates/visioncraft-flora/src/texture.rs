@@ -1606,14 +1606,15 @@ pub fn generate_scanned(p: &PlantParams, scale: usize, scans: &Scans) -> PlantTe
             Form::Tussock(t) if cell >= 14 => blade_fan(&mut cv, p, &mut rng, t.droop),
             Form::Branching(_) | Form::Conifer(_) if cell < 14 => {
                 // Bare winter twigs: a fine branching silhouette in bark colours.
-                let col = mix(p.bark.colour, [0.27, 0.21, 0.17], 0.6); // fine twigs are darker than the trunk
+                // Fine twigs are darker and greyer than the trunk (a cherry's red bark is not).
+                let col = mix(p.bark.colour, [0.24, 0.22, 0.2], 0.8);
                 let base = (cpx * 0.5 + 6.0 * rng.sym(), cpx - CELL_MARGIN as f32 - 1.0);
                 bare_twig(
                     &mut cv,
                     base,
                     0.08 * rng.sym(),
                     inner * 0.55,
-                    2.4,
+                    1.5,
                     4,
                     col,
                     &mut rng,
