@@ -859,6 +859,8 @@ pub struct Renderer {
     impostor_reach: f32,
     wind: Wind,
     time: f32,
+    /// The clock unwrapped (`set_time`): what the clouds drift by, so they never jump.
+    clock: f64,
     clay: bool,
     highlight: Option<(MeshId, u32)>,
     /// The cached last shadow cascade (see `shadow`): where the camera was
@@ -1165,6 +1167,7 @@ impl Renderer {
             impostor_reach: 1.0,
             wind: Wind::default(),
             time: 0.0,
+            clock: 0.0,
             clay: false,
             highlight: None,
             far_cache: None,
@@ -1303,6 +1306,7 @@ impl Renderer {
     /// Animation time in seconds (wind, water). Wraps every 4096 s.
     pub fn set_time(&mut self, seconds: f64) {
         self.time = seconds.rem_euclid(TIME_WRAP) as f32;
+        self.clock = seconds;
     }
 
     /// Clay presentation: opaque and cutout materials draw matte white
@@ -3499,10 +3503,14 @@ impl Renderer {
             if self.indoors { 1.0 } else { 0.0 },
             0.0,
         ]);
-        // Clouds drift with the wind, about 3 m/s in a moderate breeze.
-        let drift = Vec2::new(self.wind.direction.x, self.wind.direction.z).normalize_or_zero()
-            * (1.0 + 2.0 * self.wind.strength)
-            * self.time;
+        // Clouds drift with the wind, about 3 m/s in a moderate breeze, by the unwrapped clock
+        // (the shader clock wraps every 68 minutes): continuous for weeks of running.
+        let wind = Vec2::new(self.wind.direction.x, self.wind.direction.z).normalize_or_zero();
+        let travelled = (1.0 + 2.0 * f64::from(self.wind.strength)) * self.clock;
+        let drift = Vec2::new(
+            (f64::from(wind.x) * travelled) as f32,
+            (f64::from(wind.y) * travelled) as f32,
+        );
         b.floats(&[
             self.clouds.cover.clamp(0.0, 1.0),
             if self.clouds.overcast { 1.0 } else { 0.0 },
