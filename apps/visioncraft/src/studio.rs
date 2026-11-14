@@ -57,6 +57,8 @@ pub struct Studio {
     /// The Textures choice of the Quality menu: `None` follows the quality, else "1k", "2k" or
     /// "4k".
     pub textures: Option<&'static str>,
+    /// The height of a still waiting for the highest texture tier of what is in frame.
+    pub still_textures: Option<u32>,
     /// The Quality menu's Re-measure: calibrate again on the next frame.
     pub remeasure: bool,
     pub measuring: bool,
@@ -240,6 +242,7 @@ impl Studio {
             auto_rose_at: f64::NEG_INFINITY,
             hardware_line: None,
             textures: None,
+            still_textures: None,
             remeasure: false,
             measuring: false,
             auto_dst: true,
@@ -803,7 +806,21 @@ impl Studio {
     pub fn prepare(&mut self) {
         self.scene.library.lamps_on = self.lights_on;
         let eye = self.camera.eye();
-        if self.scene.pump(&mut self.renderer, eye) {
+        let h = self.still_textures.unwrap_or(self.size[1]).max(1) as f32;
+        let cam = &self.camera;
+        let (top, half, tan) = (
+            cam.view == crate::camera::View::Top,
+            cam.top_half_height,
+            (cam.fov_y / 2.0).tan(),
+        );
+        let px_per_m = move |d: f32| {
+            if top {
+                h / (2.0 * half)
+            } else {
+                h / (2.0 * d * tan)
+            }
+        };
+        if self.scene.pump(&mut self.renderer, eye, &px_per_m) {
             self.draft_serial += 1;
         }
         self.scene
@@ -829,11 +846,16 @@ impl Studio {
         }
         let q = self.current_quality();
         // Textures follow the quality unless the person chose a tier.
-        let tier = self.textures.unwrap_or(match preset_name(&q) {
-            "ultra" => "4k",
-            "high" => "2k",
-            _ => "1k",
-        });
+        // A still waiting for its textures takes the highest tier at its own resolution.
+        let tier = if self.still_textures.is_some() {
+            "4k"
+        } else {
+            self.textures.unwrap_or(match preset_name(&q) {
+                "ultra" => "4k",
+                "high" => "2k",
+                _ => "1k",
+            })
+        };
         self.scene.library.set_texture_tier(tier);
         self.scene.flora.leaf_scale = if matches!(preset_name(&q), "high" | "ultra") {
             2

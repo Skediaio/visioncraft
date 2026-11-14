@@ -234,6 +234,21 @@ pub fn plant_material(
     ),
     tint: [f32; 3],
 ) -> MaterialId {
+    r.add_material(&plant_material_desc(kind, tex, tint))
+}
+
+/// The renderer material of a plant part (`plant_material`; also what a regenerated atlas
+/// updates in place).
+pub fn plant_material_desc(
+    kind: flora::Material,
+    tex: (
+        visioncraft_render::TextureId,
+        Option<visioncraft_render::TextureId>,
+        visioncraft_render::TextureId,
+        visioncraft_render::TextureId,
+    ),
+    tint: [f32; 3],
+) -> visioncraft_render::Material {
     use visioncraft_render::{AlphaMode, Material as M};
     let (atlas, atlas_normal, bark, bark_normal) = tex;
     let leaf = |color: [f32; 4], foliage: bool| M {
@@ -246,7 +261,7 @@ pub fn plant_material(
         foliage,
         ..Default::default()
     };
-    let m = match kind {
+    match kind {
         flora::Material::Bark => M {
             base_color_map: Some(bark),
             normal_map: Some(bark_normal),
@@ -256,8 +271,7 @@ pub fn plant_material(
         flora::Material::Foliage => leaf([tint[0], tint[1], tint[2], 1.0], true),
         flora::Material::Flower => leaf([1.0; 4], true),
         flora::Material::Twigs => leaf([1.0; 4], false),
-    };
-    r.add_material(&m)
+    }
 }
 
 /// The one place a `visioncraft_render::Mesh` is built.
@@ -1229,9 +1243,34 @@ impl Scene {
     }
 
     /// One step of lazy plant generation; true when a generation finished (the scene must sync again).
-    pub fn pump(&mut self, r: &mut Renderer, eye: Vec3) -> bool {
+    /// `px_per_m(d)`: screen pixels a metre spans at distance `d` (the camera's projection).
+    pub fn pump(&mut self, r: &mut Renderer, eye: Vec3, px_per_m: &dyn Fn(f32) -> f32) -> bool {
+        if self.library.store.tick().is_multiple_of(10) {
+            self.library.set_need(self.texel_need(eye, px_per_m));
+        }
         let library = self.library.pump(r, eye);
         self.flora.pump(r) | library
+    }
+
+    /// Screen pixels per texture repeat of each textured material at its nearest visible
+    /// surface: what decides whether 4096 texels per repeat show more than 2048 would.
+    fn texel_need(&self, eye: Vec3, px_per_m: &dyn Fn(f32) -> f32) -> HashMap<usize, f32> {
+        let mut need: HashMap<usize, f32> = HashMap::new();
+        for o in self.owners.values().filter(|o| o.key.visible) {
+            let Some((lo, hi)) = world_bounds(&o.geom, &o.xf) else {
+                continue;
+            };
+            let d = (eye.clamp(lo, hi) - eye).length().max(0.1);
+            for k in &o.key.looks {
+                let (scale, tex) = (f32::from_bits(k[11]), k[12] as usize);
+                if tex != 0 {
+                    let n = scale * px_per_m(d);
+                    let e = need.entry(tex).or_insert(0.0);
+                    *e = e.max(n);
+                }
+            }
+        }
+        need
     }
 
     /// The placements of a generator against the current ground (a surface fill against its

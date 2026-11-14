@@ -629,6 +629,12 @@ mod native {
                         library >> 20
                     ));
                     println!("texture memory: {}", parts.join(", "));
+                    println!(
+                        "worst upload: {} ({:.1} ms); worst library pump {:.1} ms",
+                        s.scene.library.store.stats.worst_upload,
+                        s.scene.library.store.stats.worst_upload_ms,
+                        s.scene.library.worst_pump_ms
+                    );
                     let lib = &s.scene.library;
                     println!(
                         "textures: tier {}, cap {} MB, library {} MB of which tiers {} MB, renderer {} MB",

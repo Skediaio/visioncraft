@@ -190,6 +190,7 @@ pub const WIND_DIRECTION: &str = "Wind direction";
 pub const GROUND: &str = "Ground plane";
 pub const EXPORT: &str = "Export";
 pub const SCREENSHOT: &str = "Screenshot";
+pub const STILL_TEXTURES_LATE: &str = "Captured before every higher-resolution texture had arrived";
 pub const TEXTURES: &str = "Textures";
 pub const TEXTURES_TIP: &str = "Resolution of the library materials, the sky and the nearest object models: Auto follows the quality (2k at High, 4k at Ultra); higher tiers load on demand and fall back to the base files when memory runs short";
 pub const MEASURING: &str = "Measuring this GPU…";

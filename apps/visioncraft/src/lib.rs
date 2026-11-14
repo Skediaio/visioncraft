@@ -83,6 +83,9 @@ struct ExportAll {
     count: usize,
 }
 
+/// How long a still waits for higher-resolution textures before it is captured anyway.
+const STILL_WAIT_S: f64 = 20.0;
+
 struct ExportJob {
     still: visioncraft_render::Still,
     /// The export preset; `None` for a screenshot of the 3D view at the canvas' own size.
@@ -121,6 +124,9 @@ pub struct App {
     /// Model imports waiting for `loading` (a bundle brings several).
     queued_jobs: Vec<Job>,
     export: Option<ExportJob>,
+    /// A still (an export preset, or `None`: the screenshot) waiting for the highest texture
+    /// tier of what is in frame, with when it was asked for.
+    still_wait: Option<(Option<usize>, f64)>,
     export_all: Option<ExportAll>,
     pending_replace: Option<Replace>,
     /// Models whose file changed, with the time to re-import them (debounce).
@@ -196,6 +202,7 @@ impl App {
             loading: None,
             queued_jobs: Vec::new(),
             export: None,
+            still_wait: None,
             export_all: None,
             pending_replace: None,
             changed: HashMap::new(),
@@ -361,6 +368,43 @@ impl App {
     }
 
     /// Renders the current view at preset `idx` (a still at HIGH quality); falls back to the next smaller preset on failure.
+    /// Stills use the highest texture tier of what is in frame, at their own resolution, whatever
+    /// the live tier: ask for it, and capture once it has arrived (`poll_still_textures`).
+    fn wait_for_textures(&mut self, still: Option<usize>) {
+        let h = match still {
+            Some(i) => visioncraft_core::export_presets()[i].2,
+            None => self.studio.size[1],
+        };
+        self.studio.still_textures = Some(h);
+        self.still_wait = Some((still, self.last_time));
+    }
+
+    /// Captures a waiting still once the library has nothing left to fetch (after a few frames
+    /// for the requests to go out), or after 20 s with a note that some did not make it.
+    fn poll_still_textures(&mut self, now: f64) -> bool {
+        let Some((still, since)) = self.still_wait else {
+            return false;
+        };
+        let waited = now - since;
+        let idle = !self.studio.scene.library.store.busy();
+        if !(waited > 0.5 && idle) && waited < STILL_WAIT_S {
+            return true;
+        }
+        if !idle {
+            self.toasts.warn(format!(
+                "{} ({STILL_WAIT_S:.0} s)",
+                strings::STILL_TEXTURES_LATE
+            ));
+        }
+        self.still_wait = None;
+        match still {
+            Some(i) => self.start_export(i),
+            None => self.start_screenshot(),
+        }
+        self.studio.still_textures = None;
+        false
+    }
+
     fn start_export(&mut self, idx: usize) {
         let presets = visioncraft_core::export_presets();
         let (name, w, h) = presets[idx];
@@ -841,8 +885,8 @@ impl App {
             }
             Action::New if self.dirty() => self.pending_replace = Some(Replace::New),
             Action::New => self.new_project(),
-            Action::Export(i) => self.start_export(i),
-            Action::Screenshot => self.start_screenshot(),
+            Action::Export(i) => self.wait_for_textures(Some(i)),
+            Action::Screenshot => self.wait_for_textures(None),
             Action::ExportAll(i) => {
                 let (_, w, h) = visioncraft_core::export_presets()[i];
                 let todo: Vec<_> = self
@@ -1498,6 +1542,7 @@ impl eframe::App for App {
         }
         #[cfg(not(target_arch = "wasm32"))]
         self.agents_pill(&ctx, now);
+        busy |= self.poll_still_textures(now);
         busy |= self.poll_export(&ctx);
         busy |= self.poll_export_all(&ctx);
         let mut confirm = None;

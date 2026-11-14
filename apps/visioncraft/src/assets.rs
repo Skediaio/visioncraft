@@ -15,7 +15,7 @@ use crate::gltf_load::{self, Glb};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use visioncraft_render::bc::{BcKind, Compressed};
-use visioncraft_render::{ColorSpace, Renderer, TextureDesc, TextureId};
+use visioncraft_render::{ColorSpace, Renderer, TextureDesc, TextureId, UploadJob};
 
 pub struct Rgba {
     pub w: u32,
@@ -165,6 +165,10 @@ impl Queue {
 
     pub fn contains(&self, key: &Key) -> bool {
         self.items.iter().any(|e| &e.0 == key)
+    }
+
+    fn remove_path(&mut self, path: &str) {
+        self.items.retain(|e| e.0.path() != path);
     }
 }
 
@@ -537,6 +541,8 @@ pub enum State {
 pub struct StoreStats {
     pub uploads: u32,
     pub worst_upload_ms: f64,
+    /// What the worst upload was: size and whether compressed.
+    pub worst_upload: String,
     pub total_upload_ms: f64,
     pub evictions: u32,
     pub peak_texture_bytes: u64,
@@ -566,11 +572,18 @@ pub struct AssetStore {
     pub stats: StoreStats,
     /// The GPU holds more texture memory than `cap_bytes` (as of the last frame).
     pub over_cap: bool,
+    /// Paths `cancel` dropped, taken out of the queue at the next pump.
+    cancelled: std::cell::RefCell<Vec<String>>,
+    /// The compressed picture going up over frames: (key, job, its GPU bytes).
+    streaming: Option<(Key, UploadJob, u64)>,
     /// Compress library material maps (the device has BC formats).
     pub compress: bool,
     /// The renderer's texture memory as of the last frame.
     pub texture_bytes: u64,
 }
+
+/// Bytes of a compressed picture written per frame (a 4k BC1 map with mips is about 11 MB).
+const STREAM_BYTES_PER_FRAME: usize = 1 << 20;
 
 /// Entries used within this many ticks (frames) are never evicted.
 const PROTECT_TICKS: u64 = 90;
@@ -607,6 +620,8 @@ impl AssetStore {
             stats: StoreStats::default(),
             over_cap: false,
             compress: false,
+            streaming: None,
+            cancelled: Default::default(),
             texture_bytes: 0,
         }
     }
@@ -631,6 +646,11 @@ impl AssetStore {
     /// The bytes of a file held in memory.
     pub fn provided(&self, path: &str) -> Option<Arc<[u8]>> {
         self.memory.lock().ok()?.get(path).cloned()
+    }
+
+    /// Drops a file asked for and not yet being fetched (a fetch under way finishes).
+    pub fn cancel(&self, path: &str) {
+        self.cancelled.borrow_mut().push(path.to_string());
     }
 
     /// Asks for a file; nothing happens when it is loaded, loading or has failed.
@@ -702,7 +722,10 @@ impl AssetStore {
     }
 
     pub fn busy(&self) -> bool {
-        !self.queue.is_empty() || !self.inflight.is_empty() || !self.pending_tex.is_empty()
+        !self.queue.is_empty()
+            || !self.inflight.is_empty()
+            || !self.pending_tex.is_empty()
+            || self.streaming.is_some()
     }
 
     pub fn queued(&self) -> usize {
@@ -719,7 +742,7 @@ impl AssetStore {
     ) -> Option<TextureId> {
         let t = now_ms();
         let id = match &img.bc {
-            Some(c) => r.add_compressed(c, repeat).ok(),
+            Some(c) => r.add_compressed(c.clone(), repeat).ok(),
             None => r
                 .add_texture(&TextureDesc {
                     width: img.w,
@@ -737,6 +760,14 @@ impl AssetStore {
         let ms = now_ms() - t;
         self.stats.uploads += 1;
         self.stats.total_upload_ms += ms;
+        if ms > self.stats.worst_upload_ms {
+            self.stats.worst_upload = format!(
+                "{}x{} {}",
+                img.w,
+                img.h,
+                if img.bc.is_some() { "BC" } else { "RGBA8" }
+            );
+        }
         self.stats.worst_upload_ms = self.stats.worst_upload_ms.max(ms);
         id
     }
@@ -770,6 +801,9 @@ impl AssetStore {
     /// changed (anything holding texture ids must look again).
     pub fn pump(&mut self, r: &mut Renderer, budget: &Budget) -> bool {
         self.tick += 1;
+        for p in self.cancelled.get_mut().drain(..) {
+            self.queue.remove_path(&p);
+        }
         while self.inflight.len() < self.max_inflight {
             let Some((key, _)) = self.queue.pop() else {
                 break;
@@ -831,7 +865,32 @@ impl AssetStore {
         }
         // Nothing new goes up while over the cap and nothing could be freed: no thrashing.
         let room = over == 0 || changed || !self.evicted.is_empty();
-        while room && !self.pending_tex.is_empty() {
+        // A compressed picture goes up a few megabytes per frame (a 4k map in one write cost
+        // the frame up to 100 ms); only once complete does anything use it.
+        if let Some((key, job, cost)) = &mut self.streaming {
+            let t = now_ms();
+            let done = r.upload_step(job, STREAM_BYTES_PER_FRAME);
+            let ms = now_ms() - t;
+            self.stats.worst_upload_ms = self.stats.worst_upload_ms.max(ms);
+            match done {
+                None => {}
+                Some(result) => {
+                    let (key, cost) = (key.clone(), *cost);
+                    self.streaming = None;
+                    self.stats.uploads += 1;
+                    match result {
+                        Ok(id) => {
+                            self.lru.insert(key.clone(), cost, self.tick);
+                            self.texture_bytes += cost;
+                            self.textures.insert(key, id);
+                            changed = true;
+                        }
+                        Err(e) => self.fail_key(key, &e),
+                    }
+                }
+            }
+        }
+        while room && self.streaming.is_none() && !self.pending_tex.is_empty() {
             let (key, _, img) = self.pending_tex.swap_remove(0);
             let Key::Image { srgb, repeat, .. } = key else {
                 continue;
@@ -840,6 +899,10 @@ impl AssetStore {
             // is dropped, not uploaded: the base stays, it may be asked for again later.
             if is_tier_file(key.path()) && !self.fits(img.gpu_bytes()) {
                 continue;
+            }
+            if let Some(c) = &img.bc {
+                self.streaming = Some((key, UploadJob::new(c.clone(), repeat), img.gpu_bytes()));
+                break;
             }
             match self.upload(r, &img, srgb, repeat) {
                 Some(id) => {

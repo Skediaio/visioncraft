@@ -219,6 +219,8 @@ pub struct Library {
     /// The texture tier materials use when the files are there: "1k" (the base files), "2k" or
     /// "4k" (`Studio::prepare` sets it from the quality or the Textures choice).
     pub texture_tier: &'static str,
+    /// Pixels per texture repeat by texture spec (`set_need`).
+    need: HashMap<usize, f32>,
     /// Tier files asked for and not yet resident, with their expected bytes.
     tier_asked: std::cell::RefCell<HashMap<String, u64>>,
     /// Tier models that did not fit when they arrived; asked again after a tier change.
@@ -279,6 +281,7 @@ impl Library {
             tiers: None,
             texture_tier: "1k",
             tier_asked: Default::default(),
+            need: HashMap::new(),
             tier_refused: HashSet::new(),
             catalog_arrived: false,
             user_assets: Vec::new(),
@@ -413,7 +416,7 @@ impl Library {
             ] {
                 if let Some(TexSrc::Lib(p)) = src {
                     let _ = self.store.texture(p, srgb, true, 10.0);
-                    if let Some(t) = self.tier_map(p) {
+                    if let Some(t) = self.tier_map(p, self.textured[i].spec) {
                         let _ = self.store.texture(&t, srgb, true, 20.0);
                     }
                 }
@@ -423,6 +426,7 @@ impl Library {
 
     fn resolve_textured(&mut self, r: &mut Renderer) {
         for i in 0..self.textured.len() {
+            let spec_index = self.textured[i].spec;
             let spec = self.specs[self.textured[i].spec].clone();
             let mut m = self.textured[i].base;
             let mut pending = false;
@@ -435,7 +439,7 @@ impl Library {
                             // resident (asked for only while it fits the memory budget).
                             let base = this.store.texture(p, srgb, true, 10.0);
                             let tier = this
-                                .tier_map(p)
+                                .tier_map(p, spec_index)
                                 .and_then(|t| this.store.texture(&t, srgb, true, 20.0));
                             pending |= base.is_none();
                             tier.or(base)
@@ -502,6 +506,27 @@ impl Library {
             .map_or(0, |t| t.bytes)
     }
 
+    /// The tier a material's maps use: the texture tier, except that at 4k only materials on a
+    /// surface near enough for 4096 texels per repeat to land on more than 2048 pixels get it
+    /// (`need`, from `Scene::pump`); the others, and those out of view, get 2k.
+    fn tier_for(&self, spec: usize) -> &'static str {
+        match self.texture_tier {
+            "4k" if self.need.get(&spec).is_some_and(|&n| n > 2048.0) => "4k",
+            "4k" => "2k",
+            t => t,
+        }
+    }
+
+    /// Screen pixels per texture repeat each textured material spans at its nearest visible
+    /// surface (`Scene::pump`); materials whose tier changes pick their maps again.
+    pub fn set_need(&mut self, need: HashMap<usize, f32>) {
+        let before: Vec<&'static str> = (0..self.specs.len()).map(|s| self.tier_for(s)).collect();
+        self.need = need;
+        if (0..self.specs.len()).any(|s| self.tier_for(s) != before[s]) {
+            self.dirty = true;
+        }
+    }
+
     /// Sets the texture tier; materials pick their maps again.
     pub fn set_texture_tier(&mut self, tier: &'static str) {
         if self.texture_tier != tier {
@@ -513,11 +538,18 @@ impl Library {
 
     /// The higher-tier file for base map `p` at the current texture tier, when there is one and
     /// it is resident or fits the texture budget.
-    fn tier_map(&self, p: &str) -> Option<String> {
-        if self.texture_tier == "1k" {
+    fn tier_map(&self, p: &str, spec: usize) -> Option<String> {
+        let tier = self.tier_for(spec);
+        if tier == "1k" {
             return None;
         }
-        let (path, px) = self.tiers.as_ref()?.material_map(p, self.texture_tier)?;
+        if tier != "4k"
+            && let Some((four, _)) = self.tiers.as_ref()?.material_map(p, "4k")
+        {
+            // No longer wanted at 4k (moved away, or out of view): a fetch not begun is dropped.
+            self.store.cancel(four);
+        }
+        let (path, px) = self.tiers.as_ref()?.material_map(p, tier)?;
         let state = |srgb| {
             self.store.state(&Key::Image {
                 path: path.to_string(),
