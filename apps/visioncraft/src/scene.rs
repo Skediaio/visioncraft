@@ -97,7 +97,7 @@ pub fn shown_variation(lib: &Library, m: &Material) -> f32 {
     material_library::overlay(lib, m).map_or(0.0, |o| o.variation)
 }
 
-fn look_of(m: &Material, lib: &mut Library) -> Look {
+fn look_of(m: &Material, lib: &mut Library, month: u32) -> Look {
     let own = library::spec_of(&m.maps);
     // An unchanged palette material shows its library look while the library is there.
     let ov = if own.is_empty() {
@@ -155,12 +155,27 @@ fn look_of(m: &Material, lib: &mut Library) -> Look {
             ..plain
         },
         // The tufts are scattered separately (`Scene::sync_lawns`); the ground under them is this.
-        SurfaceKind::Lawn3d(_) => Look {
-            variation: plain.variation.max(0.6),
-            scale_m: ov.as_ref().map_or(1.0, |o| o.scale_m),
-            relief: if ov.is_some() { 1.0 } else { 0.0 },
-            ..plain
-        },
+        SurfaceKind::Lawn3d(_) => {
+            let t = lawn_season(month);
+            let c = plain.color;
+            Look {
+                color: [c[0] * t[0], c[1] * t[1], c[2] * t[2], c[3]],
+                variation: plain.variation.max(0.6),
+                scale_m: ov.as_ref().map_or(1.0, |o| o.scale_m),
+                relief: if ov.is_some() { 1.0 } else { 0.0 },
+                ..plain
+            }
+        }
+    }
+}
+
+/// What the season does to a lawn's colour: duller and a little straw-coloured in winter,
+/// between in the months around it, as it is all summer.
+fn lawn_season(month: u32) -> [f32; 3] {
+    match month {
+        12 | 1 | 2 => [0.78, 0.7, 0.52],
+        3 | 11 => [0.9, 0.85, 0.76],
+        _ => [1.0; 3],
     }
 }
 
@@ -682,7 +697,7 @@ impl Scene {
                         if clay {
                             CLAY
                         } else if let Some(i) = m {
-                            look_of(&project.materials[i], &mut self.library)
+                            look_of(&project.materials[i], &mut self.library, project.time.month)
                         } else if let Some(c) = model.bodies[f.body as usize].color {
                             Look {
                                 color: c,
@@ -806,7 +821,8 @@ impl Scene {
                             } else {
                                 [m.base_color[0], m.base_color[1], m.base_color[2]]
                             };
-                            Some((f, *l, ground.map(|c| c * LAWN_BLADE_LIFT)))
+                            let t = lawn_season(project.time.month);
+                            Some((f, *l, [0, 1, 2].map(|k| ground[k] * t[k] * LAWN_BLADE_LIFT)))
                         }
                         _ => None,
                     }
@@ -1278,8 +1294,11 @@ impl Scene {
 
     /// The terrain's painted layers from their materials (pictures arrive over time).
     pub fn sync_terrain_layers(&mut self, r: &mut Renderer, project: &Project) {
+        let month = project.time.month;
         self.terrain_gpu
-            .sync_layers(r, project, &mut self.library, &mut |m, lib| look_of(m, lib));
+            .sync_layers(r, project, &mut self.library, &mut |m, lib| {
+                look_of(m, lib, month)
+            });
         // The endless ground wears the terrain's base layer, so the terrain's edge cannot be
         // seen against it (one ground look, in the overview and in the plan).
         // Without a terrain it wears the lawn: a real ground material (its texture's mips give
@@ -1291,7 +1310,7 @@ impl Scene {
             .map_or("lawn", |l| l.material.as_str());
         let base = project.materials.iter().find(|m| m.id == base_id);
         let ground = base.map(|m| {
-            let look = look_of(m, &mut self.library);
+            let look = look_of(m, &mut self.library, month);
             self.material(r, &look)
         });
         r.set_ground_material(ground);
