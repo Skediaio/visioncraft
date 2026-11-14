@@ -271,6 +271,7 @@ impl Scene {
                             density_per_m2: density,
                             blade_height_m: 0.04,
                             seed,
+                            ..Default::default()
                         },
                     )
                     .into_iter()

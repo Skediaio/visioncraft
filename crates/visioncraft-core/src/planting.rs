@@ -1814,6 +1814,7 @@ mod tests {
             density_per_m2: 50.0,
             blade_height_m: 0.05,
             seed: 2,
+            ..Default::default()
         };
         let top = m.faces.iter().position(|f| f.name == "S2:top").unwrap();
         let tufts = lawn_scatter(&m, top, &lawn);
@@ -1861,6 +1862,7 @@ mod tests {
             density_per_m2: 600.0,
             blade_height_m: 0.08,
             seed: 1,
+            ..Default::default()
         };
         // 51 by 25.8 m (two triangles) and a lawn over 5,000 m2, over the budget.
         for (w, d) in [(51.0, 25.8), (90.0, 60.0)] {
@@ -1918,6 +1920,7 @@ mod tests {
             density_per_m2: 200.0,
             blade_height_m: 0.08,
             seed: 3,
+            ..Default::default()
         };
         let m = lawn_rect(90.0, 60.0);
         let top = m.faces.iter().position(|f| f.name == "S1:top").unwrap();

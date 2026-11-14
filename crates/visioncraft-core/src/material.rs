@@ -29,11 +29,21 @@ pub struct MaterialMaps {
     pub height: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Lawn3d {
     pub density_per_m2: f32,
     pub blade_height_m: f32,
     pub seed: u64,
+    /// Mowing stripes this wide (metres, 0.3 to 5; 0: none, not written), running at
+    /// `stripes_deg` clockwise from north.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub stripes_m: f32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub stripes_deg: f32,
+}
+
+fn is_zero(v: &f32) -> bool {
+    *v == 0.0
 }
 
 /// How a surface is shaded; the renderer picks its shader from this.
@@ -129,6 +139,8 @@ impl Material {
                     && l.density_per_m2 > 0.0
                     && l.blade_height_m.is_finite()
                     && l.blade_height_m > 0.0
+                    && (l.stripes_m == 0.0 || (0.3..=5.0).contains(&l.stripes_m))
+                    && l.stripes_deg.is_finite()
             }
         };
         if ok {
@@ -320,6 +332,7 @@ pub fn builtin_palette() -> Vec<Material> {
                 density_per_m2: 2000.0,
                 blade_height_m: 0.04,
                 seed: 1,
+                ..Default::default()
             }),
         ),
         plain("gravel", "Gravel", [0.38, 0.35, 0.30], 0.0, 0.95, pbr(0.5)),
@@ -464,6 +477,28 @@ pub fn read_mcmat(bytes: &[u8]) -> Result<McMat, McMatError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mowing_stripes_are_checked_and_not_written_when_off() {
+        let mut lawn = builtin_palette()
+            .into_iter()
+            .find(|m| m.id == "lawn")
+            .unwrap();
+        assert!(!serde_json::to_string(&lawn).unwrap().contains("stripes"));
+        let SurfaceKind::Lawn3d(l) = &mut lawn.kind else {
+            panic!()
+        };
+        l.stripes_m = 0.9;
+        l.stripes_deg = 30.0;
+        assert!(lawn.validate().is_ok());
+        let back: Material = serde_json::from_str(&serde_json::to_string(&lawn).unwrap()).unwrap();
+        assert_eq!(back, lawn);
+        let SurfaceKind::Lawn3d(l) = &mut lawn.kind else {
+            panic!()
+        };
+        l.stripes_m = 12.0;
+        assert!(lawn.validate().is_err());
+    }
 
     #[test]
     fn palette_is_valid_and_unique() {

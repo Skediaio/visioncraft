@@ -238,6 +238,9 @@ pub struct Material {
     /// metres (world-space noise), against the carpet look of big flat
     /// single-material surfaces such as lawns and paving.
     pub variation: f32,
+    /// Mowing stripes: width in centimetres in the low 16 bits, direction in degrees clockwise
+    /// from north in the high 16; 0 for none.
+    pub stripes: u32,
 }
 
 impl Default for Material {
@@ -263,6 +266,7 @@ impl Default for Material {
             foliage: false,
             surface: Surface::Standard,
             variation: 0.0,
+            stripes: 0,
         }
     }
 }
@@ -3780,7 +3784,12 @@ fn material_bytes(material: &Material, bits: u32) -> Vec<u8> {
         material.foliage as u32 as f32,
     ]);
     let variation = material.variation.clamp(0.0, 1.0).to_bits();
-    for u in [bits, material.double_sided as u32, variation, 0] {
+    for u in [
+        bits,
+        material.double_sided as u32,
+        variation,
+        material.stripes,
+    ] {
         b.0.extend_from_slice(&u.to_le_bytes());
     }
     debug_assert_eq!(b.0.len() as u64, MATERIAL_SIZE);

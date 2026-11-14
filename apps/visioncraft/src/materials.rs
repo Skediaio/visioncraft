@@ -384,6 +384,41 @@ impl MaterialsState {
             }
             Edit::None => {}
         }
+        // A lawn: mowing stripes, their width and direction (`material.update` kind lawn3d).
+        if let SurfaceKind::Lawn3d(l) = &m.kind {
+            let mut l = *l;
+            let mut on = l.stripes_m > 0.0;
+            let mut changed = false;
+            if ui
+                .checkbox(&mut on, t::MOWING_STRIPES)
+                .on_hover_text(t::MOWING_STRIPES_TIP)
+                .changed()
+            {
+                l.stripes_m = if on { 0.9 } else { 0.0 };
+                changed = true;
+            }
+            if on {
+                let w = ui.add(
+                    egui::Slider::new(&mut l.stripes_m, 0.3..=5.0)
+                        .text(t::STRIPE_WIDTH)
+                        .suffix(" m"),
+                );
+                let d = ui.add(
+                    egui::Slider::new(&mut l.stripes_deg, 0.0..=179.0)
+                        .text(t::STRIPE_DIRECTION)
+                        .suffix(" deg"),
+                );
+                changed |= w.drag_stopped() || d.drag_stopped();
+                changed |= (w.changed() && !w.dragged()) || (d.changed() && !d.dragged());
+            }
+            if changed {
+                cx.run(
+                    "material.update",
+                    json!({"id": id, "kind": SurfaceKind::Lawn3d(l)}),
+                );
+            }
+            return;
+        }
         let SurfaceKind::StandardTriplanarPbr {
             map_scale_m,
             relief,

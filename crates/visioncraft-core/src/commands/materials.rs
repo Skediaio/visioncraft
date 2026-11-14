@@ -13,7 +13,7 @@ pub(super) fn register(s: &mut Session) {
         param(
             "kind",
             T::Object,
-            "Surface shading: {type: \"standard_triplanar_pbr\", map_scale_m, relief, gloss, weathering} | {type: \"architectural_glass\", tint: [r,g,b], roughness} | {type: \"animated_water\", flow_dir_deg, speed, tint: [r,g,b], depth_m} | {type: \"lawn3d\", density_per_m2, blade_height_m, seed}.",
+            "Surface shading: {type: \"standard_triplanar_pbr\", map_scale_m, relief, gloss, weathering} | {type: \"architectural_glass\", tint: [r,g,b], roughness} | {type: \"animated_water\", flow_dir_deg, speed, tint: [r,g,b], depth_m} | {type: \"lawn3d\", density_per_m2, blade_height_m, seed, stripes_m (mowing stripes 0.3..5 m wide, 0 none), stripes_deg (their direction, clockwise from north)}.",
         )
     };
     let color = || {

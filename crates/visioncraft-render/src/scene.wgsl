@@ -52,7 +52,7 @@ struct Material {
     params: vec4<f32>,     // x metallic, y perceptual roughness, z relief, w gloss
     emissive: vec4<f32>,   // rgb emitted luminance (cd/m2), w weathering
     alpha: vec4<f32>,      // x cutout threshold, y 1 / triplanar scale (0: UVs), z surface (0 standard, 1 glass, 2 water), w foliage
-    flags: vec4<u32>,      // x texture bits (1 base, 2 normal, 4 orm, 8 roughness, 16 metallic, 32 occlusion), y double-sided, z macro variation (f32 bits)
+    flags: vec4<u32>,      // x texture bits (1 base, 2 normal, 4 orm, 8 roughness, 16 metallic, 32 occlusion), y double-sided, z macro variation (f32 bits), w mowing stripes (cm | deg << 16)
 }
 @group(1) @binding(0) var<uniform> material: Material;
 // Absent maps are bound to a 1x1 white texture (a neutral factor).
@@ -656,7 +656,22 @@ fn surface(in: Varying, front: bool) -> Surface {
         }
     }
     s.emissive = material.emissive.rgb;
-    return macro_variation(s, in.world, bitcast<f32>(material.flags.z));
+    s = macro_variation(s, in.world, bitcast<f32>(material.flags.z));
+    // Mowing stripes: the blades of each pass lean the way the mower went, so a band is lighter
+    // seen along its lean and darker seen against it, alternating band by band.
+    let stripes = material.flags.w;
+    if stripes != 0u {
+        let width = max(f32(stripes & 0xFFFFu) / 100.0, 0.1);
+        let a = radians(f32(stripes >> 16u));
+        let along = vec2<f32>(sin(a), -cos(a));
+        let across = vec2<f32>(-along.y, along.x);
+        let band = i32(floor(dot(in.world.xz, across) / width));
+        let lean = select(-1.0, 1.0, (band & 1) == 0);
+        let to_eye_xz = to_eye(in.world).xz;
+        let look = dot(normalize(to_eye_xz + vec2<f32>(1e-4)), along);
+        s.base = vec4<f32>(s.base.rgb * (1.0 + 0.14 * lean * clamp(look * 1.5, -1.0, 1.0)), s.base.a);
+    }
+    return s;
 }
 
 // Macro variation against the carpet look of large single-material

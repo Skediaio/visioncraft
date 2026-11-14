@@ -29,7 +29,7 @@ pub struct Loaded {
     pub version: u64,
 }
 
-pub type LookKey = [u32; 13];
+pub type LookKey = [u32; 14];
 
 /// What a surface looks like to the renderer.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -48,6 +48,8 @@ pub struct Look {
     pub scale_m: f32,
     /// Index of the material's maps in the library (0: none).
     pub tex: u32,
+    /// Mowing stripes, packed as the renderer takes them (0: none).
+    pub stripes: u32,
 }
 
 impl Look {
@@ -63,6 +65,7 @@ impl Look {
             variation: 0.0,
             scale_m: 1.0,
             tex: 0,
+            stripes: 0,
         }
     }
 
@@ -82,6 +85,7 @@ impl Look {
             self.variation,
             self.scale_m,
             f32::from_bits(self.tex),
+            f32::from_bits(self.stripes),
         ]
         .map(f32::to_bits)
     }
@@ -160,7 +164,7 @@ fn look_of(m: &Material, lib: &mut Library, month: u32) -> Look {
             ..plain
         },
         // The tufts are scattered separately (`Scene::sync_lawns`); the ground under them is this.
-        SurfaceKind::Lawn3d(_) => {
+        SurfaceKind::Lawn3d(l) => {
             let t = lawn_season(month);
             let c = plain.color;
             Look {
@@ -168,10 +172,21 @@ fn look_of(m: &Material, lib: &mut Library, month: u32) -> Look {
                 variation: plain.variation.max(0.6),
                 scale_m: ov.as_ref().map_or(1.0, |o| o.scale_m),
                 relief: if ov.is_some() { 1.0 } else { 0.0 },
+                stripes: stripes_packed(l),
                 ..plain
             }
         }
     }
+}
+
+/// A lawn's mowing stripes as the renderer takes them: width in cm, direction in degrees << 16.
+fn stripes_packed(l: &visioncraft_core::material::Lawn3d) -> u32 {
+    if l.stripes_m <= 0.0 {
+        return 0;
+    }
+    let cm = (l.stripes_m * 100.0).round().clamp(1.0, 65535.0) as u32;
+    let deg = l.stripes_deg.rem_euclid(360.0).round() as u32 % 360;
+    cm | deg << 16
 }
 
 /// What the season does to a lawn's colour: duller and a little straw-coloured in winter,
@@ -195,6 +210,7 @@ fn gpu_material(look: &Look) -> visioncraft_render::Material {
         gloss: look.gloss,
         weathering: look.weathering,
         variation: look.variation,
+        stripes: look.stripes,
         projection: visioncraft_render::Projection::Triplanar {
             scale_m: look.scale_m.max(0.01),
         },
@@ -1188,8 +1204,20 @@ impl Scene {
                             continue;
                         }
                         let s = (t.height_m / 0.08).clamp(0.3, 2.5);
+                        // Mowing stripes: each band's blades lean the way the mower went.
+                        let lean = if lawn.stripes_m > 0.0 {
+                            let a = lawn.stripes_deg.to_radians();
+                            let along = Vec3::new(a.sin(), 0.0, -a.cos());
+                            let across = Vec3::new(-along.z, 0.0, along.x);
+                            let band = (p.dot(across) / lawn.stripes_m).floor() as i64;
+                            let sign = if band.rem_euclid(2) == 0 { 1.0 } else { -1.0 };
+                            Mat4::from_axis_angle(Vec3::Y.cross(along).normalize(), 0.3 * sign)
+                        } else {
+                            Mat4::IDENTITY
+                        };
                         by_variant[n % plants::VARIANTS as usize].push(
                             Mat4::from_translation(p)
+                                * lean
                                 * Mat4::from_rotation_y(t.rotation_y_deg.to_radians())
                                 * Mat4::from_scale(Vec3::new(s * narrow, s, s * narrow)),
                         );
@@ -2187,20 +2215,20 @@ mod tests {
 
     #[test]
     fn classify_picks_the_cheapest_update() {
-        let a = key(1, vec![[0; 13]], true);
+        let a = key(1, vec![[0; 14]], true);
         let (i, t) = (Mat4::IDENTITY, Mat4::from_translation(Vec3::X));
         assert_eq!(classify(&a, &a.clone(), &i, &i), Change::Keep);
         assert_eq!(classify(&a, &a.clone(), &i, &t), Change::Transform);
         assert_eq!(
-            classify(&a, &key(2, vec![[0; 13]], true), &i, &i),
+            classify(&a, &key(2, vec![[0; 14]], true), &i, &i),
             Change::Rebuild
         );
         assert_eq!(
-            classify(&a, &key(1, vec![[1; 13]], true), &i, &i),
+            classify(&a, &key(1, vec![[1; 14]], true), &i, &i),
             Change::Rebuild
         );
         assert_eq!(
-            classify(&a, &key(1, vec![[0; 13]], false), &i, &t),
+            classify(&a, &key(1, vec![[0; 14]], false), &i, &t),
             Change::Rebuild
         );
     }

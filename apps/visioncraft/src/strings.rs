@@ -165,6 +165,11 @@ pub const MATERIAL_ADDED: &str = "Material added";
 pub const DENSITY: &str = "Density per m²";
 pub const PLANTINGS: &str = "Placed";
 pub const SEASON: &str = "Season";
+pub const MOWING_STRIPES: &str = "Mowing stripes";
+pub const MOWING_STRIPES_TIP: &str =
+    "Bands of grass leaning the way the mower went, lighter and darker by turns";
+pub const STRIPE_WIDTH: &str = "Width";
+pub const STRIPE_DIRECTION: &str = "Direction";
 pub const VIEW_KEEP_TIME: &str = "Keep the time of this view";
 pub const VIEW_KEEP_TIME_TIP: &str = "This view shows its own date and time (a dusk view, a sun study); otherwise it shows the project's season and time";
 pub const SEASONS: [&str; 4] = ["Spring", "Summer", "Autumn", "Winter"];
