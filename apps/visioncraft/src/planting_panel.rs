@@ -550,6 +550,37 @@ impl PlantingTools {
                 }
             });
         }
+        // New plantings go onto a hidden layer: say so where the tool is set up.
+        if self.tool != Tool::Select
+            && let Some(name) = crate::ui::hidden_layer(cx.s.project(), &self.form.layer)
+        {
+            let mut show = false;
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    RichText::new(format!(
+                        "{} {name} {}",
+                        t::LAYER_WORD,
+                        t::LAYER_HIDDEN_NOTICE
+                    ))
+                    .color(ui.visuals().warn_fg_color),
+                );
+                show = ui.small_button(t::LAYER_SHOW).clicked();
+            });
+            if show {
+                let layer = self.form.layer.clone();
+                cx.run(
+                    "layer.set_visible",
+                    serde_json::json!({"id": layer, "visible": true}),
+                );
+            }
+        }
+        // The brush being extended placed nothing: say why, under the brush settings.
+        if self.tool == Tool::Brush
+            && let Some((id, _)) = &self.brush_target
+            && let Some(why) = cx.s.scene.gen_stats(id).and_then(|s| s.empty)
+        {
+            ui.label(RichText::new(why).small().color(ui.visuals().warn_fg_color));
+        }
         let show_form = selected.is_some() || self.tool != Tool::Select;
         if show_form {
             let names = |id: &str| display_name(cx, id);
@@ -616,6 +647,11 @@ impl PlantingTools {
         if rows.is_empty() {
             return;
         }
+        // Why a planting placed nothing, for its row.
+        let empty: std::collections::HashMap<String, &'static str> = rows
+            .iter()
+            .filter_map(|r| Some((r.0.clone(), cx.s.scene.gen_stats(&r.0)?.empty?)))
+            .collect();
         ui.separator();
         let (mut pick, mut toggle) = (None, None);
         // Folded by default (and in the Select tool open): the list is what made the panel tall.
@@ -637,8 +673,14 @@ impl PlantingTools {
                     for (id, name, kind, count, layer, visible) in &rows {
                         ui.horizontal(|ui| {
                             let on = self.selected.as_deref() == Some(id.as_str());
+                            // On a hidden layer: greyed and marked, its count still the real one.
+                            let label = if *visible {
+                                RichText::new(name)
+                            } else {
+                                RichText::new(name).weak()
+                            };
                             if ui
-                                .selectable_label(on, name)
+                                .selectable_label(on, label)
                                 .on_hover_text(format!(
                                     "{kind}, {} {}",
                                     thousands(*count),
@@ -649,6 +691,14 @@ impl PlantingTools {
                                 pick = Some(id.clone());
                             }
                             ui.small(format!("{kind} · {}", thousands(*count)));
+                            if !*visible {
+                                ui.small(RichText::new(t::PT_HIDDEN).weak())
+                                    .on_hover_text(t::PT_HIDDEN_TIP);
+                            }
+                            if let Some(why) = empty.get(id) {
+                                ui.small(RichText::new("why?").color(ui.visuals().warn_fg_color))
+                                    .on_hover_text(*why);
+                            }
                             let mut v = *visible;
                             if ui
                                 .checkbox(&mut v, "")

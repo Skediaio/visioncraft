@@ -164,6 +164,22 @@ pub const MATERIAL_ADDED: &str = "Material added";
 // Objects
 pub const DENSITY: &str = "Density per m²";
 pub const PLANTINGS: &str = "Placed";
+pub const SEASON: &str = "Season";
+pub const SEASONS: [&str; 4] = ["Spring", "Summer", "Autumn", "Winter"];
+pub const SNOWY: &str = "Snowy";
+pub const SNOWY_TIP: &str = "Winter under snow, with a bright overcast sky";
+pub const SNOW: &str = "Snow";
+pub const SNOW_TIP: &str = "How much snow lies on the ground, roofs, hedges and branches";
+pub const EXACT_DATE: &str = "Exact date";
+pub const EXACT_DATE_TIP: &str =
+    "A day of the year for sun studies; the plants show the season of that day";
+pub const PT_HIDDEN: &str = "\u{1F441} hidden";
+pub const PT_HIDDEN_TIP: &str =
+    "Its layer is hidden: the plants are kept, not drawn. Tick the box to show the layer.";
+pub const EMPTY_DENSITY: &str = "0 plants: too few for this density over this stroke or area (paint longer or raise the density)";
+pub const EMPTY_OUTSIDE: &str = "0 plants: every spot lies outside the area it keeps inside";
+pub const EMPTY_BUILDINGS: &str =
+    "0 plants: every spot is on a roof, inside a block or model, or under a low canopy";
 pub const REMOVE: &str = "Remove";
 
 // Sun
@@ -410,6 +426,10 @@ pub const EXPORT_ALL_TIP: &str = "One picture per saved viewpoint, each with its
 pub const EXPORTING_VIEWS: &str = "Rendering every viewpoint at";
 pub const CLAY_NOTICE: &str = "Clay view: materials and plant colours are hidden.";
 pub const CLAY_OFF: &str = "Show materials";
+pub const LAYER_WORD: &str = "Layer";
+pub const LAYER_HIDDEN_NOTICE: &str = "is hidden: what you add there is not drawn.";
+pub const LAYER_SHOW: &str = "Show it";
+pub const LAYERS_HIDDEN_ON_OPEN: &str = "Hidden layers in this project (Layers to show them)";
 pub const SP_MY: &str = "My";
 pub const OBJECT_IMPORTED: &str = "is in the plant browser under Objects: place it with any tool.";
 pub const OBJECTS_MISSING: &str =

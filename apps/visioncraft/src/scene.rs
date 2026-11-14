@@ -509,6 +509,10 @@ struct GenGpu {
     groups: HashMap<(String, u32), Group>,
     insts: Vec<Inst>,
     truncated: bool,
+    empty: Option<&'static str>,
+    /// Its plants, drawn or not (on a hidden layer).
+    count: usize,
+    hidden: bool,
 }
 
 /// Plants of one generator, as the panel shows them.
@@ -516,6 +520,10 @@ struct GenGpu {
 pub struct GenStats {
     pub count: usize,
     pub truncated: bool,
+    /// Why it placed nothing (`Scene::why_empty`), in plain words.
+    pub empty: Option<&'static str>,
+    /// On a hidden layer: counted, not drawn.
+    pub hidden: bool,
 }
 
 /// Milliseconds the last generator evaluation and its upload to the renderer took.
@@ -1587,12 +1595,11 @@ impl Scene {
         old: Option<GenGpu>,
     ) -> GenGpu {
         let t0 = plant_scene::now_ms();
-        let (placements, truncated) = if sig.2 {
-            let e = self.evaluate_generator(g);
-            (e.placements, e.truncated)
-        } else {
-            (Vec::new(), false)
-        };
+        // A planting on a hidden layer is evaluated all the same (the panel counts its plants)
+        // and draws nothing.
+        let e = self.evaluate_generator(g);
+        let (count, truncated) = (e.placements.len(), e.truncated);
+        let placements = if sig.2 { e.placements } else { Vec::new() };
         let t1 = plant_scene::now_ms();
         let month = sig.1;
         let stamp = self.dirty.stamp();
@@ -1660,6 +1667,8 @@ impl Scene {
         }
         Self::drop_groups(r, old_groups);
         let insts = plant_scene::instances(project, assets, &placements);
+        let empty = (count == 0).then(|| self.why_empty(g)).flatten();
+        let hidden = !sig.2;
         self.timings = Timings {
             eval_ms: t1 - t0,
             upload_ms: plant_scene::now_ms() - t1,
@@ -1675,12 +1684,42 @@ impl Scene {
             groups,
             insts,
             truncated,
+            empty,
+            count,
+            hidden,
         }
+    }
+
+    /// Why generator `g` places no plant: evaluated again without the building rule and the
+    /// area it keeps inside, the first that brings plants back is the reason.
+    pub fn why_empty(&self, g: &Generator) -> Option<&'static str> {
+        let without = |keys: &[&str]| {
+            let mut v = serde_json::to_value(g).ok()?;
+            let o = v.as_object_mut()?;
+            for k in keys {
+                match o.get(*k) {
+                    Some(serde_json::Value::Bool(_)) => o.insert((*k).into(), false.into()),
+                    Some(serde_json::Value::Array(_)) => {
+                        o.insert((*k).into(), serde_json::json!([]))
+                    }
+                    _ => None,
+                };
+            }
+            let g: Generator = serde_json::from_value(v).ok()?;
+            Some(!self.evaluate_generator(&g).placements.is_empty())
+        };
+        if without(&["avoid_buildings", "clip_outline", "clip_holes"]) != Some(true) {
+            return Some(crate::strings::EMPTY_DENSITY);
+        }
+        if without(&["clip_outline", "clip_holes"]) == Some(true) {
+            return Some(crate::strings::EMPTY_OUTSIDE);
+        }
+        Some(crate::strings::EMPTY_BUILDINGS)
     }
 
     /// The terrain's painted layers from their materials (pictures arrive over time).
     pub fn sync_terrain_layers(&mut self, r: &mut Renderer, project: &Project) {
-        let month = project.time.month;
+        let month = u32::from(project.plant_month());
         self.terrain_gpu
             .sync_layers(r, project, &mut self.library, &mut |m, lib| {
                 look_of(m, lib, month)
@@ -1840,8 +1879,10 @@ impl Scene {
     pub fn gen_stats(&self, id: &str) -> Option<GenStats> {
         let g = self.gens.get(id)?;
         Some(GenStats {
-            count: g.insts.len(),
+            count: g.count,
             truncated: g.truncated,
+            empty: g.empty,
+            hidden: g.hidden,
         })
     }
 

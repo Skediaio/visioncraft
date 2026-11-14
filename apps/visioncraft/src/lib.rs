@@ -753,6 +753,14 @@ impl App {
                 self.studio.frame_all();
                 self.saved_revision = self.studio.session.revision();
                 self.hud.mode = None;
+                let hidden = ui::hidden_layers_in_use(self.studio.project());
+                if !hidden.is_empty() {
+                    self.toasts.warn(format!(
+                        "{}: {}",
+                        strings::LAYERS_HIDDEN_ON_OPEN,
+                        hidden.join(", ")
+                    ));
+                }
                 let missing: Vec<String> = self
                     .studio
                     .missing_objects()
@@ -1672,6 +1680,54 @@ impl eframe::App for App {
             );
             if off {
                 cx.run("style.set", serde_json::json!({"clay": false}));
+            }
+        }
+        // The active tool's layer is hidden: what it adds would not be drawn. Say so, with the
+        // way back, like clay view.
+        let target = match self.hud.mode {
+            Some(Mode::Draw) => Some(visioncraft_core::project::LAYER_SHAPES.to_string()),
+            Some(Mode::Objects) if self.objects.tools.lights => {
+                Some(visioncraft_core::project::LAYER_LIGHTING.to_string())
+            }
+            Some(Mode::Objects) => Some(self.objects.tools.form.layer.clone()),
+            None if self.modelui.selected.is_some() => {
+                Some(visioncraft_core::project::LAYER_MODEL.to_string())
+            }
+            _ => None,
+        };
+        if let Some(layer) = target
+            && let Some(name) = ui::hidden_layer(cx.s.project(), &layer)
+        {
+            let mut show = false;
+            ui::floating(
+                &ctx,
+                "hidden-layer-notice",
+                Align2::CENTER_BOTTOM,
+                Vec2::new(
+                    0.0,
+                    if ui::clay_notice(cx.s.project()) {
+                        -104.0
+                    } else {
+                        -64.0
+                    },
+                ),
+                380.0,
+                |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(format!(
+                            "{} {name} {}",
+                            strings::LAYER_WORD,
+                            strings::LAYER_HIDDEN_NOTICE
+                        ));
+                        show = ui.button(strings::LAYER_SHOW).clicked();
+                    });
+                },
+            );
+            if show {
+                cx.run(
+                    "layer.set_visible",
+                    serde_json::json!({"id": layer, "visible": true}),
+                );
             }
         }
         if cx.s.project().models.is_empty()

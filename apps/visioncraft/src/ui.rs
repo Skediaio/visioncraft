@@ -246,6 +246,24 @@ pub fn clay_notice(p: &visioncraft_core::Project) -> bool {
     p.style.clay
 }
 
+/// The name of `layer` when it is hidden: what the active tool adds there would not be drawn.
+pub fn hidden_layer(p: &visioncraft_core::Project, layer: &str) -> Option<String> {
+    p.layers
+        .iter()
+        .find(|l| l.id == layer && !l.visible)
+        .map(|l| l.name.clone())
+}
+
+/// The names of the hidden layers that hold something, to say so when a project opens: layer
+/// visibility is saved with the project, so a layer hidden last week stays hidden.
+pub fn hidden_layers_in_use(p: &visioncraft_core::Project) -> Vec<String> {
+    p.layers
+        .iter()
+        .filter(|l| !l.visible && p.layer_in_use(&l.id))
+        .map(|l| l.name.clone())
+        .collect()
+}
+
 /// A floating panel for content that scrolls by itself (the planting panel sizes its own
 /// scroll area from the window height).
 pub fn floating_own_scroll(
@@ -797,6 +815,35 @@ impl Hud {
 #[cfg(test)]
 mod tests {
     use visioncraft_core::{Project, Session};
+
+    #[test]
+    fn a_hidden_layer_is_named_for_its_tool_and_on_opening() {
+        let mut s = Session::new(Project::default());
+        assert_eq!(super::hidden_layer(s.project(), "planting"), None);
+        s.run("planting.add_single", serde_json::json!({"name": "Oak", "asset": "flora:quercus-robur", "position": [0, 0, 0]}))
+            .unwrap();
+        s.run(
+            "layer.set_visible",
+            serde_json::json!({"id": "planting", "visible": false}),
+        )
+        .unwrap();
+        let restored = Project::from_json_bytes(&s.project().to_json_bytes()).unwrap();
+        assert_eq!(
+            super::hidden_layer(&restored, "planting").as_deref(),
+            Some("Planting")
+        );
+        assert_eq!(
+            super::hidden_layers_in_use(&restored),
+            vec!["Planting".to_string()]
+        );
+        // An empty hidden layer is not worth announcing.
+        s.run(
+            "layer.set_visible",
+            serde_json::json!({"id": "shapes", "visible": false}),
+        )
+        .unwrap();
+        assert_eq!(super::hidden_layers_in_use(s.project()).len(), 1);
+    }
 
     #[test]
     fn clay_view_is_off_by_default_and_announced_when_on() {

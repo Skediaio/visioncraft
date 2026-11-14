@@ -2031,6 +2031,57 @@ mod layer_tests {
         })
     }
 
+    #[test]
+    fn a_woodland_preset_brushed_on_a_lawn_beside_a_block_places_plants() {
+        // A 51 by 25.8 m lawn, a 0.3 m block east of it; the block refuses what is in it.
+        let lawn = vec![[0.0, 0.0], [51.0, 0.0], [51.0, 25.8], [0.0, 25.8]];
+        let up = |p: [f32; 3]| {
+            ((52.0..=60.0).contains(&p[0]) && (0.0..=6.0).contains(&p[2]) && p[1] < 0.3)
+                .then_some(0.3 - p[1])
+        };
+        for preset in crate::planting_presets()
+            .into_iter()
+            .filter(|p| p.id.contains("woodland"))
+        {
+            let n = preset.layers.len();
+            let g = Generator::MixedBrush(MixedBrush {
+                id: "g1".into(),
+                name: preset.name.clone(),
+                planted_age_years: None,
+                layer: "planting".into(),
+                asset_palette: Vec::new(),
+                // A short dab of a 3.5 m brush, as in the app.
+                strokes: vec![Stroke {
+                    points: vec![[10.0, 10.0], [12.0, 11.0]],
+                    radius_m: 3.5,
+                    erase: false,
+                }],
+                density_per_m2: 0.0,
+                scale_min: 0.85,
+                scale_max: 1.15,
+                min_distance_m: 0.0,
+                seed: 1,
+                layers: preset.layers,
+                clip_outline: lawn.clone(),
+                clip_holes: Vec::new(),
+                avoid_buildings: true,
+            });
+            let e =
+                crate::evaluate_in_scene(&g, &|_, _| Some(0.0), &|_, _| Some(0.0), &up, &|_| {
+                    (8.0, 3.0)
+                });
+            let layers: std::collections::BTreeSet<_> =
+                e.placements.iter().filter_map(|p| p.layer).collect();
+            // Trees at 0.01 per m2 and sparse shrubs may miss a short dab; the herbs may not.
+            assert!(
+                layers.contains(&(n as u32 - 1)) && e.placements.len() > 10,
+                "{}: {} plants in layers {layers:?}",
+                g.name(),
+                e.placements.len()
+            );
+        }
+    }
+
     fn forest() -> Vec<PlantLayer> {
         vec![
             layer("tree", 0.02, 4.0, 0.0, 1.0),
