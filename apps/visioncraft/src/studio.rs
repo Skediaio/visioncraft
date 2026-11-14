@@ -972,7 +972,7 @@ impl Studio {
 
     /// Plants still being generated.
     pub fn plants_pending(&self) -> usize {
-        self.scene.flora.pending() + self.scene.lawns_pending()
+        self.scene.flora.pending() + self.scene.lawns_pending() + self.scene.clutter_pending()
     }
 
     pub fn animating(&self) -> bool {
@@ -1068,6 +1068,9 @@ impl Studio {
         self.scene.flora.leaf_scale = if fine { 2 } else { 1 };
         if self.scene.set_dense_lawns(&mut self.renderer, fine) {
             self.synced = None; // the lawns are made again on the next sync
+        }
+        if self.scene.set_clutter_low(preset_name(&q) == "low") {
+            self.synced = None;
         }
         let rebake = q.impostor_resolution != self.renderer.quality().impostor_resolution;
         self.renderer.set_quality(q);

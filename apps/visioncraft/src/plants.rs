@@ -66,6 +66,8 @@ const TREE_M: f32 = 3.0;
 /// The lawn's tufts never get an impostor: there are tens of thousands of them and the lawn
 /// material carries their colour from afar.
 pub const LAWN_SPECIES: &str = "flora:lawn-tuft";
+/// Species ids of ground clutter (fallen leaves of a tree species): never an impostor either.
+pub const CLUTTER_PREFIX: &str = "clutter:";
 /// Views around a tree an impostor is baked from.
 pub const IMPOSTOR_VIEWS: u32 = 8;
 /// Views drawn into an impostor's atlas per frame: a bake spreads over four frames (three of
@@ -794,7 +796,9 @@ impl Flora {
         let job = self.meshing.take().expect("set above");
         self.queue.remove(0);
         for (v, variant) in job.variants.iter().enumerate() {
-            if id != LAWN_SPECIES && (variant.height >= TREE_M || v == 0) {
+            // Lawn tufts and ground clutter are culled near: no impostor.
+            let near_only = id == LAWN_SPECIES || id.starts_with(CLUTTER_PREFIX);
+            if !near_only && (variant.height >= TREE_M || v == 0) {
                 self.bakes.push((id.clone(), class, v as u32));
             }
         }

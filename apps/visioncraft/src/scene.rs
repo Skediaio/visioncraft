@@ -20,6 +20,8 @@ use crate::placeholder::{self, MeshData};
 use crate::plant_scene::{self, DirtyLog, EVERYTHING, Inst, Rect};
 use crate::plants::{self, Flora, LAWN_SPECIES};
 
+mod clutter;
+
 /// A loaded or generated design, with a counter that changes when its triangles do.
 #[derive(Clone)]
 pub struct Loaded {
@@ -479,6 +481,33 @@ pub struct Timings {
     pub rebuilds: u64,
 }
 
+/// The trees and conifers placed one by one, with their crown circle [x, z, radius] as grown
+/// for the years shown.
+fn tree_crowns(project: &Project) -> Vec<(&visioncraft_core::planting::Single, [f32; 3])> {
+    project
+        .generators
+        .iter()
+        .filter_map(|g| {
+            let Generator::Single(s) = g else { return None };
+            let gr = visioncraft_core::growth::growth_of(&s.asset, None);
+            matches!(
+                gr.grower,
+                visioncraft_core::growth::Grower::Tree | visioncraft_core::growth::Grower::Conifer
+            )
+            .then(|| {
+                let width = match project.view.years {
+                    Some(y) => {
+                        let planted = s.planted_age_years.unwrap_or(gr.planted_age_years);
+                        gr.mature_width_m * gr.size(planted + y).width
+                    }
+                    None => gr.mature_width_m,
+                };
+                (s, [s.position[0], s.position[2], width * s.scale * 0.5])
+            })
+        })
+        .collect()
+}
+
 /// The model transform: scale, then rotation about +Y, then translation.
 pub fn model_matrix(m: &ModelRef) -> Mat4 {
     let t = m.transform;
@@ -510,6 +539,10 @@ pub struct Scene {
     people: Option<ItemId>,
     /// Denser, finer lawn tufts (HIGH and ULTRA; `set_dense_lawns`).
     dense_lawns: bool,
+    /// Fallen leaves, stones, twigs and lawn edges (`clutter`).
+    clutter: clutter::Clutter,
+    /// LOW quality: no clutter whatever the project says (`set_clutter_low`).
+    clutter_low: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -596,6 +629,7 @@ impl Scene {
         for (_, l) in self.lawns.drain() {
             l.items.into_iter().for_each(|i| r.remove_item(i));
         }
+        self.clutter.clear(r);
         self.terrain_gpu.clear(r);
         self.terrain = None;
         self.dirty.mark(EVERYTHING);
@@ -817,6 +851,7 @@ impl Scene {
 
         self.sync_generators(r, project, assets);
         self.sync_lawns(r, project);
+        self.sync_clutter(r, project);
         self.prune_materials(r);
         problems
     }
@@ -896,6 +931,17 @@ impl Scene {
         true
     }
 
+    /// The colour of a lawn's blades: the ground they stand in, in the season.
+    fn blade_color(&self, m: &Material, month: u32) -> [f32; 3] {
+        let ground = if material_library::overlay(&self.library, m).is_some() {
+            LAWN_PICTURE_MEAN
+        } else {
+            [m.base_color[0], m.base_color[1], m.base_color[2]]
+        };
+        let t = lawn_season(month);
+        [0, 1, 2].map(|k| ground[k] * t[k] * LAWN_BLADE_LIFT)
+    }
+
     /// 3D grass on every face whose material is a lawn: tufts of `flora:lawn-tuft` scattered with
     /// the core's `lawn_scatter`, an LOD item that stops drawing at `LAWN_FADE_M`.
     fn sync_lawns(&mut self, r: &mut Renderer, project: &Project) {
@@ -907,28 +953,9 @@ impl Scene {
         let class = plants::class(&res.params, month);
         // Grass thins under the crowns of trees (as grown for the years shown): their circles,
         // a little inside the drip line.
-        let crowns: Vec<[f32; 3]> = project
-            .generators
-            .iter()
-            .filter_map(|g| {
-                let Generator::Single(s) = g else { return None };
-                let gr = visioncraft_core::growth::growth_of(&s.asset, None);
-                matches!(
-                    gr.grower,
-                    visioncraft_core::growth::Grower::Tree
-                        | visioncraft_core::growth::Grower::Conifer
-                )
-                .then(|| {
-                    let width = match project.view.years {
-                        Some(y) => {
-                            let planted = s.planted_age_years.unwrap_or(gr.planted_age_years);
-                            gr.mature_width_m * gr.size(planted + y).width
-                        }
-                        None => gr.mature_width_m,
-                    };
-                    [s.position[0], s.position[2], width * s.scale * 0.4]
-                })
-            })
+        let crowns: Vec<[f32; 3]> = tree_crowns(project)
+            .into_iter()
+            .map(|(_, c)| [c[0], c[1], c[2] * 0.4])
             .collect();
         let mut owners: Vec<&String> = self.owners.keys().collect();
         owners.sort();
@@ -946,13 +973,7 @@ impl Scene {
                     let m = project.materials.get(m?)?;
                     match &m.kind {
                         SurfaceKind::Lawn3d(l) => {
-                            let ground = if material_library::overlay(&self.library, m).is_some() {
-                                LAWN_PICTURE_MEAN
-                            } else {
-                                [m.base_color[0], m.base_color[1], m.base_color[2]]
-                            };
-                            let t = lawn_season(project.time.month);
-                            Some((f, *l, [0, 1, 2].map(|k| ground[k] * t[k] * LAWN_BLADE_LIFT)))
+                            Some((f, *l, self.blade_color(m, project.time.month)))
                         }
                         _ => None,
                     }
