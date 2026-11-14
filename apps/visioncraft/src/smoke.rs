@@ -4,7 +4,8 @@
 //! A script is a JSON array (or `{"steps": [...]}`). A step is a string
 //! (`"load model path [name N] [at x y z] [rot deg] [scale s]"`, `"reimport m1 path"`,
 //! `"set camera orbit yaw pitch dist px py pz"`, `"set camera look ex ey ez tx ty tz"`,
-//! `"set camera walk x z heading_deg pitch_deg"`, `"set camera top cx cz half_height"`,
+//! `"set camera walk x z heading_deg pitch_deg [from_y]"` (standing on the first floor below
+//! `from_y`, default 100 m), `"set camera top cx cz half_height"`,
 //! `"set camera frame"`, `"set quality low|medium|high|ultra|auto"`, `"set exposure stops"`,
 //! `"set clay on|off"`, `"set textures auto|1k|2k|4k"`, `"highlight owner face-name"`, `"highlight none"`,
 //! `"screenshot name w h"`, `"object file.glb name"`) or an object `{"run": "command.name", "params": {...}}`.
@@ -28,6 +29,8 @@ pub enum Cam {
         z: f32,
         heading_deg: f32,
         pitch_deg: f32,
+        /// Stand on the first floor below this height (under a canopy: below its slab).
+        from_y: f32,
     },
     Top {
         cx: f32,
@@ -200,12 +203,19 @@ pub fn parse_step(v: &Value) -> Result<Step, String> {
             }))
         }
         ["set", "camera", "walk", n @ ..] => {
-            let [x, z, heading_deg, pitch_deg] = nums::<4>(n)?;
+            let [x, z, heading_deg, pitch_deg, from_y] = match n.len() {
+                4 => {
+                    let [a, b, c, d] = nums::<4>(n)?;
+                    [a, b, c, d, 100.0]
+                }
+                _ => nums::<5>(n)?,
+            };
             Ok(Step::Camera(Cam::Walk {
                 x,
                 z,
                 heading_deg,
                 pitch_deg,
+                from_y,
             }))
         }
         ["set", "camera", "top", n @ ..] => {
@@ -554,8 +564,9 @@ mod native {
                             z,
                             heading_deg,
                             pitch_deg,
+                            from_y,
                         } => {
-                            let g = s.scene.floor_below(x, 100.0, z).unwrap_or(0.0);
+                            let g = s.scene.floor_below(x, from_y, z).unwrap_or(0.0);
                             s.camera.view = View::Walk;
                             s.camera.walk = crate::camera::Walk {
                                 eye: Vec3::new(x, g + crate::camera::EYE_HEIGHT, z),
