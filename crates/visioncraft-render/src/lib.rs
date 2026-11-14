@@ -2645,7 +2645,7 @@ impl Renderer {
         out.into_iter().map(|(_, r)| r).collect()
     }
 
-    /// Draws every opaque and cutout part (and, into shadow maps, glass)
+    /// Draws every opaque and cutout part (and, into shadow maps and the water reflection, glass)
     /// whose bounds overlap `cull` (a view-projection), opaque parts first,
     /// clusters front to back, then all impostor quads. `near_far` also culls
     /// on depth.
@@ -2655,8 +2655,11 @@ impl Renderer {
         let shaded = matches!(kind, Pass::Forward | Pass::Reflection);
         let fades = matches!(kind, Pass::Depth | Pass::Forward);
         let order = shadow as usize;
-        // 0 opaque, 1 cutout, 2 glass (shadow maps only).
-        for category in 0..2 + shadow as usize {
+        // 0 opaque, 1 cutout, 2 glass: into shadow maps, and into the water's reflection as
+        // an opaque pane (without it the reflection looked through every window into the dark
+        // room behind it: the dark blobs in a pond).
+        let glass = shadow || matches!(kind, Pass::Reflection);
+        for category in 0..2 + glass as usize {
             for item in self.items.iter().flatten() {
                 let Some(bounds) = item.bounds else { continue };
                 if outside(cull, bounds, near_far) {
