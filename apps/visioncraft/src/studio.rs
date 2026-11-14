@@ -1455,7 +1455,9 @@ fn lit_rooms(p: &Project) -> impl Iterator<Item = visioncraft_render::Light> + '
             position: Vec3::from(at),
             kind: visioncraft_render::LightKind::Point,
             color: Vec3::new(c[0] / m, c[1] / m, c[2] / m),
-            intensity: 1200.0,
+            // A living room's lamps together (2000-3000 lm): at 1200 lm the windows read dim
+            // against the dusk sky, where lit rooms are what a dusk picture is about.
+            intensity: 2500.0,
             range_m: 3.5,
         })
 }
