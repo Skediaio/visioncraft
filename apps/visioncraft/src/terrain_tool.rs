@@ -289,6 +289,12 @@ impl TerrainTool {
         // coping, so no dry strip shows between the water and the grass, and a square pond stays
         // square.
         let water = outline.clone();
+        // Carved a centimetre wider, so ground points on the outline go down on every side alike:
+        // the ground's cells then slope up under the coping, outside the water (left above
+        // the water, that slope showed as a bright shallow wedge along one edge). The coping is
+        // at least one cell wide, to cover that slope.
+        let carve = offset_outline(&outline, 0.01);
+        let width = POND_COPING_M.max(terrain.cell_m);
         let create =
             cx.s.project()
                 .terrain
@@ -301,7 +307,7 @@ impl TerrainTool {
             let before = s.project().terrain.clone();
             s.run(
                 "terrain.carve",
-                json!({"outline": outline, "depth_m": depth, "bank_m": 0.0, "bed_material": "soil"}),
+                json!({"outline": carve, "depth_m": depth, "bank_m": 0.0, "bed_material": "soil"}),
             )?;
             s.run(
                 "shape.add_area",
@@ -312,7 +318,7 @@ impl TerrainTool {
             // its corners mitre. An open band round the edge (a
             // closed one would be a solid block): from the middle of the first edge round to a
             // centimetre short of it.
-            let band = offset_outline(&water, POND_COPING_M / 2.0 - POND_OVERHANG_M);
+            let band = offset_outline(&water, width / 2.0 - POND_OVERHANG_M);
             let (a, b) = (band[0], band[1 % band.len()]);
             let mid = |t: f32| [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
             let len = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt().max(0.1);
@@ -329,7 +335,7 @@ impl TerrainTool {
             let height = (rim - lowest).max(0.0) + POND_COPING_H;
             s.run(
                 "shape.add_extrusion",
-                json!({"name": t::TR_POND_EDGE, "outline": ring, "closed": false, "thickness": POND_COPING_M,
+                json!({"name": t::TR_POND_EDGE, "outline": ring, "closed": false, "thickness": width,
                        "height": height, "material": "paving"}),
             )?;
             follow_ground(s, before.as_deref())
