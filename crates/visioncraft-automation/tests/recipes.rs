@@ -19,7 +19,7 @@ pub fn recipes() -> Vec<Value> {
 #[test]
 fn every_recipe_of_the_guide_runs() {
     let recipes = recipes();
-    assert_eq!(recipes.len(), 10);
+    assert_eq!(recipes.len(), 15);
     for (n, recipe) in recipes.into_iter().enumerate() {
         let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("recipe-{n}"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -71,6 +71,24 @@ fn every_recipe_of_the_guide_runs() {
             }
             7 => assert!(
                 results[3]["result"]["height"].as_f64().unwrap() < -0.2,
+                "{report}"
+            ),
+            11 => {
+                let shape = &results[7]["result"]["shapes"][0];
+                assert!(shape.to_string().contains("roof"), "{shape}");
+            }
+            // The ground there is the water surface, below the lawn.
+            12 => assert!(
+                results[4]["result"]["height"].as_f64().unwrap() < 0.0,
+                "{report}"
+            ),
+            14 => assert_eq!(
+                results[1]["result"].as_array().map(Vec::len),
+                Some(1),
+                "{report}"
+            ),
+            15 => assert!(
+                results[1]["result"]["shapes"].as_array().unwrap().len() > 5,
                 "{report}"
             ),
             10 => assert!(

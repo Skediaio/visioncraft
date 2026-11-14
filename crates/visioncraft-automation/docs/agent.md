@@ -191,6 +191,84 @@ From the command line, every viewpoint at the export presets:
 
 `view.render`'s `time` changes the picture only; the project keeps 9:00.
 
+### 11. A house with a roof, windows and a door
+
+```json recipe
+{"intent": "a two-storey house", "steps": [
+  {"id": "shape.add_extrusion", "params": {"name": "House", "outline": [[0, 0], [10, 0], [10, 8], [0, 8]], "height": 6, "material": "plaster", "roof": {"kind": "gable", "pitch_deg": 38, "overhang_m": 0.45}}},
+  {"id": "shape.set_plinth", "params": {"id": "S1", "height_m": 0.35}},
+  {"id": "shape.add_opening", "params": {"id": "S1", "side": 0, "offset_m": 2.5, "width_m": 2.0, "height_m": 1.6, "sill_m": 0.6, "frame": "split"}},
+  {"id": "shape.add_opening", "params": {"id": "S1", "side": 0, "offset_m": 5.0, "kind": "door", "width_m": 1.0, "height_m": 2.2}},
+  {"id": "shape.add_opening", "params": {"id": "S1", "side": 0, "offset_m": 7.5, "width_m": 1.2, "height_m": 1.3, "sill_m": 3.8}},
+  {"id": "shape.set_roof", "params": {"id": "S1", "kind": "hip", "pitch_deg": 30}},
+  {"id": "shape.set_lit_rooms", "params": {"id": "S1", "share": 0.6}},
+  {"id": "document.inspect", "params": {"faces": false}}
+]}
+```
+
+Openings are numbered `o1`, `o2` per block (`shape.update_opening`, `shape.remove_opening`).
+The faces are `S1:roof`, `S1:glass`, `S1:frame`, `S1:door`, `S1:sill`, `S1:interior` and so
+on, for `material.assign`. Lit rooms show when the lamps are on.
+
+### 12. A pond with a stone coping
+
+```json recipe
+{"intent": "a formal square pond", "steps": [
+  {"id": "terrain.create", "params": {"origin": [-10, -10], "width_m": 20, "depth_m": 20, "cell_m": 0.5, "base_material": "lawn"}},
+  {"id": "terrain.carve", "params": {"outline": [[-2.51, -2.01], [2.51, -2.01], [2.51, 2.01], [-2.51, 2.01]], "depth_m": 0.8, "bank_m": 0, "bed_material": "soil"}},
+  {"id": "shape.add_area", "params": {"name": "Pond", "outline": [[-2.5, -2], [2.5, -2], [2.5, 2], [-2.5, 2]], "elevation": -0.05, "drape": false, "material": "water"}},
+  {"id": "shape.add_extrusion", "params": {"name": "Pond edge", "outline": [[0, -2.22], [2.72, -2.22], [2.72, 2.22], [-2.72, 2.22], [-2.72, -2.22], [-0.01, -2.22]], "closed": false, "thickness": 0.5, "height": 0.6, "material": "paving"}},
+  {"id": "query.ground_height", "params": {"x": 0, "z": 0}}
+]}
+```
+
+The water is the outline as drawn, the carve a centimetre wider with a straight wall, the coping
+an open band (a closed outline would be a solid block) at least one ground cell wide, standing on
+the lowest ground under it: give it the height that brings its top to the lawn plus 12 cm. The
+Pond tool in the Landscape panel does all this in one step.
+
+### 13. The picture's look and air
+
+```json recipe
+{"steps": [
+  {"id": "shape.add_area", "params": {"name": "Lawn", "outline": [[-10, -10], [10, -10], [10, 10], [-10, 10]], "material": "lawn"}},
+  {"id": "view.set", "params": {"look": "vivid", "haze": 1.5}},
+  {"id": "view.set", "params": {"look": "natural"}},
+  {"id": "document.inspect", "params": {"faces": false}}
+]}
+```
+
+`look` is `neutral` (plain tone map), `natural` (default) or `vivid`. The rendering quality and
+the texture resolution belong to the window, not the project: set them over the control channel
+with `ui.set {"quality": "auto" | "low" | "medium" | "high" | "ultra", "textures": "auto" | "1k"
+| "2k" | "4k"}`; `view.render` takes its own `quality`.
+
+### 14. Your own models
+
+```json recipe
+{"steps": [
+  {"id": "object.add", "params": {"name": "Garden bench", "file": "objects/bench.glb", "size_m": [1.8, 0.9, 0.6]}},
+  {"id": "object.list", "params": {}},
+  {"id": "planting.add_single", "params": {"name": "Bench", "asset": "user:uo1", "position": [2, 0, 3]}}
+]}
+```
+
+`object.add` records the file (relative to the project) and its size; it is placed like any
+catalogue asset as `user:<id>`. `object.remove` is refused while a planting uses it.
+
+### 15. The example garden
+
+```json recipe
+{"steps": [
+  {"id": "project.load_example", "params": {"name": "garden"}},
+  {"id": "document.inspect", "params": {"faces": false}},
+  {"id": "view.render", "params": {"viewpoint": "v1", "width": 1280, "height": 720, "path": "example.png"}}
+]}
+```
+
+It replaces the project (undoable) with a 20 by 30 m plot built from commands: house, terrace,
+lawn, border, path, pond, hedge, trees, lights and six viewpoints.
+
 ## Known traps
 
 - **Ids are not names**: `S2`, not `House`; viewpoints are `v1`, lights `li1`.
