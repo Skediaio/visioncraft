@@ -362,6 +362,17 @@ struct LawnGpu {
     items: Vec<ItemId>,
 }
 
+/// A lawn's tufts being scattered: per variant, their matrices.
+struct LawnJob {
+    key: LawnKey,
+    class: u32,
+    color: [f32; 3],
+    slot: plants::Slot<Vec<Vec<Mat4>>>,
+    /// The scattered matrices once arrived, and the items drawn so far (one a frame).
+    matrices: Option<Vec<Vec<Mat4>>>,
+    built: Vec<Option<ItemId>>,
+}
+
 /// Tufts stop being drawn beyond this distance: far lawns are just the ground texture. The last
 /// `LAWN_FADE_BAND_M` dither out (`set_item_cull_fade`), so the edge is a gradient, not a line.
 const LAWN_FADE_M: f32 = 40.0;
@@ -452,6 +463,7 @@ pub struct Scene {
     /// Height and crown radius of the project's own species, for the building rule.
     custom_sizes: HashMap<String, (f32, f32)>,
     lawns: HashMap<String, LawnGpu>,
+    lawn_jobs: HashMap<String, LawnJob>,
     materials: HashMap<LookKey, MaterialId>,
     /// Looks made for placeholders and the figure: never pruned.
     pinned: std::collections::HashSet<LookKey>,
@@ -778,6 +790,68 @@ impl Scene {
         problems
     }
 
+    /// Draws the lawns whose tufts are scattered (`sync_lawns`); called every frame too. True
+    /// while some are still being scattered.
+    pub fn finish_lawns(&mut self, r: &mut Renderer) -> bool {
+        // One variant's item per lawn and frame: a dense lawn's quarter of a million matrices
+        // at once took 50 ms.
+        let ids: Vec<String> = self.lawn_jobs.keys().cloned().collect();
+        for id in ids {
+            let Some(job) = self.lawn_jobs.get_mut(&id) else {
+                continue;
+            };
+            if job.matrices.is_none() {
+                job.matrices = job.slot.lock().ok().and_then(|mut s| s.take());
+            }
+            let Some(matrices) = job.matrices.as_ref() else {
+                continue;
+            };
+            if let Some(v) = (job.built.len()..matrices.len()).next() {
+                let list = &matrices[v];
+                let item = if list.is_empty() {
+                    None
+                } else {
+                    self.flora
+                        .tinted(r, LAWN_SPECIES, job.class, v as u32, job.color)
+                        .map(|parts| {
+                            // The coarsest level is the last one drawn, fading out, then nothing.
+                            let parts: Vec<_> = parts
+                                .iter()
+                                .map(|&(m, mat, d)| (m, mat, d.min(LAWN_FADE_M)))
+                                .collect();
+                            let item = r.add_lod_item(&parts, list);
+                            r.set_item_cull_fade(item, LAWN_FADE_BAND_M);
+                            item
+                        })
+                };
+                job.built.push(item);
+                if job.built.len() < matrices.len() {
+                    continue;
+                }
+            }
+            let Some(job) = self.lawn_jobs.remove(&id) else {
+                continue;
+            };
+            if let Some(old) = self.lawns.remove(&id) {
+                old.items.into_iter().for_each(|i| r.remove_item(i));
+            }
+            let items = job.built.into_iter().flatten().collect();
+            self.lawns.insert(
+                id,
+                LawnGpu {
+                    key: job.key,
+                    items,
+                },
+            );
+        }
+        !self.lawn_jobs.is_empty()
+    }
+
+    /// Lawns still being scattered.
+    pub fn lawns_pending(&self) -> usize {
+        self.lawn_jobs.len()
+    }
+
     /// Denser, finer lawns (HIGH, ULTRA) or the lighter default. True when it changed: the
     /// lawns are then dropped, for the next sync to make again.
     pub fn set_dense_lawns(&mut self, r: &mut Renderer, dense: bool) -> bool {
@@ -866,16 +940,17 @@ impl Scene {
                 month,
                 over_key,
             );
-            if self.lawns.get(&id).is_some_and(|g| g.key == key) {
+            if self.lawns.get(&id).is_some_and(|g| g.key == key)
+                || self.lawn_jobs.get(&id).is_some_and(|j| j.key == key)
+            {
                 continue;
             }
             if self.flora.parts(LAWN_SPECIES, class, 0).is_none() {
                 self.flora.want(LAWN_SPECIES, class, month, &res.params);
                 continue;
             }
-            // One matrix list per variant, so the lawn does not repeat one tuft.
-            let mut by_variant: Vec<Vec<Mat4>> = vec![Vec::new(); plants::VARIANTS as usize];
-            let mut n = 0usize;
+            // The tufts are scattered off the frame (a thread; on the web at once) and drawn
+            // when ready (`finish_lawns`): a dense lawn is a quarter of a million of them.
             let (max_density, max_tufts, narrow) = if self.dense_lawns {
                 (LAWN_MAX_DENSITY * 2.0, LAWN_MAX_TUFTS * 4, 0.7)
             } else {
@@ -883,51 +958,50 @@ impl Scene {
             };
             // shortcut: one colour per lawn (its first lawn face's), fine until lawns mix colours
             let color = faces[0].2;
-            for (face, lawn, _) in &faces {
-                let lawn = visioncraft_core::material::Lawn3d {
-                    density_per_m2: lawn.density_per_m2.min(max_density),
-                    ..*lawn
-                };
-                for t in lawn_scatter(&o.geom, *face, &lawn) {
-                    if n >= max_tufts {
-                        break;
+            let (geom, xf) = (o.geom.clone(), o.xf);
+            let over: Vec<Vec<[f32; 2]>> = over.iter().map(|a| a.to_vec()).collect();
+            let slot = plants::spawn(move || {
+                // One matrix list per variant, so the lawn does not repeat one tuft.
+                let mut by_variant: Vec<Vec<Mat4>> = vec![Vec::new(); plants::VARIANTS as usize];
+                let mut n = 0usize;
+                for (face, lawn, _) in &faces {
+                    let lawn = visioncraft_core::material::Lawn3d {
+                        density_per_m2: lawn.density_per_m2.min(max_density),
+                        ..*lawn
+                    };
+                    for t in lawn_scatter(&geom, *face, &lawn) {
+                        if n >= max_tufts {
+                            break;
+                        }
+                        let p = xf.transform_point3(Vec3::from(t.position));
+                        if over.iter().any(|a| inside_outline([p.x, p.z], a)) {
+                            continue;
+                        }
+                        let s = (t.height_m / 0.08).clamp(0.3, 2.5);
+                        by_variant[n % plants::VARIANTS as usize].push(
+                            Mat4::from_translation(p)
+                                * Mat4::from_rotation_y(t.rotation_y_deg.to_radians())
+                                * Mat4::from_scale(Vec3::new(s * narrow, s, s * narrow)),
+                        );
+                        n += 1;
                     }
-                    let p = o.xf.transform_point3(Vec3::from(t.position));
-                    if over.iter().any(|a| inside_outline([p.x, p.z], a)) {
-                        continue;
-                    }
-                    let s = (t.height_m / 0.08).clamp(0.3, 2.5);
-                    by_variant[n % plants::VARIANTS as usize].push(
-                        Mat4::from_translation(p)
-                            * Mat4::from_rotation_y(t.rotation_y_deg.to_radians())
-                            * Mat4::from_scale(Vec3::new(s * narrow, s, s * narrow)),
-                    );
-                    n += 1;
                 }
-            }
-            if let Some(old) = self.lawns.remove(&id) {
-                old.items.into_iter().for_each(|i| r.remove_item(i));
-            }
-            let mut items = Vec::new();
-            for (v, matrices) in by_variant.iter().enumerate() {
-                let v = v as u32;
-                if matrices.is_empty() {
-                    continue;
-                }
-                let Some(parts) = self.flora.tinted(r, LAWN_SPECIES, class, v, color) else {
-                    continue;
-                };
-                // The coarsest level is the last one drawn, fading out, then nothing.
-                let parts: Vec<_> = parts
-                    .iter()
-                    .map(|&(m, mat, d)| (m, mat, d.min(LAWN_FADE_M)))
-                    .collect();
-                let item = r.add_lod_item(&parts, matrices);
-                r.set_item_cull_fade(item, LAWN_FADE_BAND_M);
-                items.push(item);
-            }
-            self.lawns.insert(id, LawnGpu { key, items });
+                by_variant
+            });
+            self.lawn_jobs.insert(
+                id,
+                LawnJob {
+                    key,
+                    class,
+                    color,
+                    slot,
+                    matrices: None,
+                    built: Vec::new(),
+                },
+            );
         }
+        self.lawn_jobs.retain(|k, _| live.contains(k));
+        self.finish_lawns(r);
         let gone: Vec<String> = self
             .lawns
             .keys()
@@ -1323,6 +1397,7 @@ impl Scene {
             self.library.set_need(self.texel_need(eye, px_per_m));
         }
         let library = self.library.pump(r, eye);
+        self.finish_lawns(r);
         self.flora.pump(r) | library
     }
 

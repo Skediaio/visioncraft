@@ -100,6 +100,8 @@ pub struct Studio {
     pub dropped_lights: usize,
     /// The half-metre cell the ground bounce and indoors were last sampled in (`apply_view`).
     bounce_cell: Option<glam::IVec3>,
+    /// Impostor atlases have been made ahead for the current quality.
+    impostors_reserved: bool,
     /// The revision (and whether the catalogue was there) the lamp lights were last made for.
     lamps_reconciled: (u64, bool),
     /// Lamps over `lamps::MAX_FIXTURE_LIGHTS` at the last reconcile, and problems to show.
@@ -292,6 +294,7 @@ impl Studio {
             suggested: false,
             dropped_lights: 0,
             bounce_cell: None,
+            impostors_reserved: false,
             lamps_reconciled: (u64::MAX, false),
             lamps_skipped: 0,
             lamp_problems: Vec::new(),
@@ -845,7 +848,7 @@ impl Studio {
 
     /// Plants still being generated.
     pub fn plants_pending(&self) -> usize {
-        self.scene.flora.pending()
+        self.scene.flora.pending() + self.scene.lawns_pending()
     }
 
     pub fn animating(&self) -> bool {
@@ -944,6 +947,23 @@ impl Studio {
         }
         let rebake = q.impostor_resolution != self.renderer.quality().impostor_resolution;
         self.renderer.set_quality(q);
+        if rebake || !self.impostors_reserved {
+            // The atlases a load bakes, made before it (a few large ones on ULTRA).
+            let count = match q.impostor_resolution {
+                512.. => 6,
+                256.. => 16,
+                _ => 24,
+            };
+            // First the memory the load's textures will take, so none is taken mid-load.
+            self.renderer.warm_texture_memory(match preset_name(&q) {
+                "ultra" => 256,
+                "high" => 128,
+                _ => 64,
+            });
+            self.renderer
+                .reserve_impostors(crate::plants::IMPOSTOR_VIEWS, count);
+            self.impostors_reserved = true;
+        }
         if rebake {
             self.scene.flora.rebake();
         }

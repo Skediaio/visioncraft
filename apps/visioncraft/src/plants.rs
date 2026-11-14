@@ -60,7 +60,7 @@ const TREE_M: f32 = 3.0;
 /// material carries their colour from afar.
 pub const LAWN_SPECIES: &str = "flora:lawn-tuft";
 /// Views around a tree an impostor is baked from.
-const IMPOSTOR_VIEWS: u32 = 8;
+pub const IMPOSTOR_VIEWS: u32 = 8;
 /// Views drawn into an impostor's atlas per frame: a bake spreads over four frames (three of
 /// views, one of dilation and mips) instead of one long submit.
 const BAKE_VIEWS_PER_FRAME: u32 = 3;
@@ -758,11 +758,11 @@ struct MeshJob {
     pending: Option<Slot<Generated>>,
 }
 
-type Slot<T> = std::sync::Arc<std::sync::Mutex<Option<T>>>;
+pub(crate) type Slot<T> = std::sync::Arc<std::sync::Mutex<Option<T>>>;
 
 /// Runs `f` on a thread of its own (on the web, where there are none, at once); its result
 /// lands in the slot.
-fn spawn<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Slot<T> {
+pub(crate) fn spawn<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Slot<T> {
     let slot = Slot::default();
     let out = slot.clone();
     let run = move || {
