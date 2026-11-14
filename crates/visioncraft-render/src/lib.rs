@@ -105,7 +105,7 @@ const CLUSTER_CELL: f32 = 8.0;
 /// `set_time` wraps here (seconds) to keep f32 precision in the shaders.
 const TIME_WRAP: f64 = 4096.0;
 /// Byte offset of the SH in the globals (written by the GPU, see env.rs).
-const SH_OFFSET: u64 = 8 * 64 + 27 * 16;
+const SH_OFFSET: u64 = 8 * 64 + 28 * 16;
 
 const COMMON: &str = include_str!("common.wgsl");
 const SKY: &str = include_str!("sky.wgsl");
@@ -827,6 +827,8 @@ pub struct Renderer {
     grade: (f32, f32),
     /// The camera is in a room (`set_indoors`): glass mirrors the room, not the sky.
     indoors: bool,
+    /// The procedural cloud layer of the analytic skies (`set_clouds`).
+    clouds: Clouds,
     light_buffer: wgpu::Buffer,
     grid_buffer: wgpu::Buffer,
     grid: lights::Grid,
@@ -1138,6 +1140,7 @@ impl Renderer {
             bloom_strength: 0.025,
             grade: (1.0, 1.0),
             indoors: false,
+            clouds: Clouds::default(),
             light_buffer,
             grid_buffer,
             grid,
@@ -1445,6 +1448,15 @@ impl Renderer {
 
     pub fn indoors(&self) -> bool {
         self.indoors
+    }
+
+    /// The cloud layer over the analytic skies (an HDRI brings its own). It shows in the sky,
+    /// in reflections and in the ambient light, and takes its share of the sun.
+    pub fn set_clouds(&mut self, clouds: &Clouds) {
+        if *clouds != self.clouds {
+            self.clouds = *clouds;
+            self.update_ambient(true);
+        }
     }
 
     /// The display look on top of AgX, as in Filament's AgX looks: `power` above 1 deepens
@@ -3317,7 +3329,7 @@ impl Renderer {
         for m in &cascades.view_proj {
             b.floats(&m.to_cols_array());
         }
-        let sun_light = self.sun.color * self.sun.illuminance * exposure;
+        let sun_light = self.sun.color * self.sun.illuminance * exposure * self.clouds.sun_share();
         let disc_solid_angle = std::f32::consts::PI * sky::SUN_DISC_RADIUS * sky::SUN_DISC_RADIUS;
         let disc = (self.sun.illuminance / disc_solid_angle * exposure).min(64.0);
         b.floats(&[eye.x, eye.y, eye.z, self.atmosphere.clear_m]);
@@ -3425,6 +3437,16 @@ impl Renderer {
             self.grade.1,
             if self.indoors { 1.0 } else { 0.0 },
             0.0,
+        ]);
+        // Clouds drift with the wind, about 3 m/s in a moderate breeze.
+        let drift = Vec2::new(self.wind.direction.x, self.wind.direction.z).normalize_or_zero()
+            * (1.0 + 2.0 * self.wind.strength)
+            * self.time;
+        b.floats(&[
+            self.clouds.cover.clamp(0.0, 1.0),
+            if self.clouds.overcast { 1.0 } else { 0.0 },
+            drift.x,
+            drift.y,
         ]);
         debug_assert_eq!(b.0.len() as u64, SH_OFFSET);
         self.queue.write_buffer(buffer, 0, &b.0);
@@ -3643,8 +3665,30 @@ fn u32_bytes(u: &[u32]) -> Vec<u8> {
 }
 
 fn globals_size() -> u64 {
-    // 8 matrices, 27 vec4s, the 9 SH vec4s last; see common.wgsl.
+    // 8 matrices, 28 vec4s, the 9 SH vec4s last; see common.wgsl.
     SH_OFFSET + 9 * 16
+}
+
+/// A procedural cloud layer (fractal noise on a plane 1.5 km up, lit by the sun and the sky).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Clouds {
+    /// 0 clear .. 1 covered.
+    pub cover: f32,
+    /// A closed grey layer instead of separate fair-weather clouds.
+    pub overcast: bool,
+}
+
+impl Clouds {
+    /// How much of the sun's direct light comes through: fair-weather clouds pass most of it
+    /// on average, an overcast layer little (soft shadows, a low sun to sky ratio).
+    pub fn sun_share(&self) -> f32 {
+        let cover = self.cover.clamp(0.0, 1.0);
+        if self.overcast {
+            1.0 - 0.85 * cover
+        } else {
+            1.0 - 0.15 * cover
+        }
+    }
 }
 
 /// An impostor bake in progress (`Renderer::start_impostor_bake`).
@@ -5100,8 +5144,8 @@ mod tests {
 
     #[test]
     fn globals_match_the_shader_layout() {
-        // common.wgsl: 8 mat4, then 27 vec4 before the 9 SH vec4.
-        assert_eq!(SH_OFFSET, 8 * 64 + 27 * 16);
+        // common.wgsl: 8 mat4, then 28 vec4 before the 9 SH vec4.
+        assert_eq!(SH_OFFSET, 8 * 64 + 28 * 16);
         assert_eq!(SH_OFFSET % 16, 0, "SH copy needs 16-byte texel alignment");
         assert_eq!(globals_size(), SH_OFFSET + 144);
     }

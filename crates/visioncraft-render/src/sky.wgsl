@@ -94,10 +94,79 @@ fn sky_kcd(dir: vec3<f32>, lod: f32) -> vec3<f32> {
     if dir.y < 0.0 {
         return ground_kcd(sky_up_sh()) + g.night.rgb;
     }
+    var c: vec3<f32>;
     if source == 1u {
-        return sky_view(dir) * g.sky.z + g.night.rgb;
+        c = sky_view(dir) * g.sky.z + g.night.rgb;
+    } else {
+        c = preetham(dir) + g.night.rgb;
     }
-    return preetham(dir) + g.night.rgb;
+    let cl = cloud(dir);
+    return mix(c, cl.rgb, cl.a);
+}
+
+// ---- clouds over the analytic skies -----------------------------------------
+
+fn cloud_noise(p: vec2<f32>) -> f32 {
+    let i = vec2<i32>(floor(p));
+    let f = fract(p);
+    let u = f * f * (3.0 - 2.0 * f);
+    let a = hash2(i);
+    let b = hash2(i + vec2<i32>(1, 0));
+    let c = hash2(i + vec2<i32>(0, 1));
+    let d = hash2(i + vec2<i32>(1, 1));
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+fn cloud_fbm(p_in: vec2<f32>) -> f32 {
+    var p = p_in;
+    var v = 0.0;
+    var amp = 0.5;
+    for (var k = 0; k < 5; k++) {
+        v += amp * cloud_noise(p);
+        p = vec2<f32>(p.x * 1.6 - p.y * 1.2, p.x * 1.2 + p.y * 1.6) + vec2<f32>(17.3, 9.1);
+        amp *= 0.5;
+    }
+    return v / 0.97;
+}
+
+// The cloud layer seen in `dir` (kcd/m2 and coverage): fractal noise on a plane 1.5 km up,
+// drifting with the wind. Fair-weather clouds are lit by the sun (brighter where the cloud
+// thins towards it, a forward-scattering glow round the sun) and the sky; an overcast layer
+// is an even grey of the sun's diffused light. Their share of the sun goes from the direct
+// light (lib.rs `Clouds::sun_share`); here it is put back for the light on the clouds.
+fn cloud(dir: vec3<f32>) -> vec4<f32> {
+    let cover = g.clouds.x;
+    if cover <= 0.0 || dir.y <= 0.0 {
+        return vec4<f32>(0.0);
+    }
+    let overcast = g.clouds.y > 0.5;
+    let p = (dir.xz / max(dir.y, 0.04) * 1500.0 + g.clouds.zw) * 0.0011;
+    let n = cloud_fbm(p);
+    var a: f32;
+    if overcast {
+        a = cover * mix(0.9, 1.0, n);
+    } else {
+        a = smoothstep(1.0 - cover - 0.06, 1.0 - cover + 0.22, n);
+    }
+    // Far clouds thin into the haze at the horizon.
+    a *= smoothstep(0.0, 0.1, dir.y);
+    if a <= 0.0 {
+        return vec4<f32>(0.0);
+    }
+    let share = select(1.0 - 0.15 * cover, 1.0 - 0.85 * cover, overcast);
+    let sun = g.sun_light.rgb / max(g.night.w, 1e-12) / max(share, 0.05);
+    let high = max(g.sun_dir.y, 0.05);
+    let sky = sky_up_sh();
+    var rad: vec3<f32>;
+    if overcast {
+        rad = (sun * high * 0.35 + sky * 0.5) / PI * mix(0.8, 1.05, n);
+    } else {
+        let toward = cloud_fbm(p + normalize(g.sun_dir.xz + vec2<f32>(1e-4, 0.0)) * 0.08);
+        let lit = clamp(0.6 + (n - toward) * 3.0, 0.3, 1.0);
+        let glow = 1.0 + 1.2 * pow(max(dot(dir, g.sun_dir.xyz), 0.0), 12.0);
+        rad = (sun * high * lit * glow * 0.85 + sky * 0.6) / PI;
+    }
+    return vec4<f32>(rad, a);
 }
 
 // The ground below the horizon under the analytic skies (kcd/m2): a
@@ -126,12 +195,16 @@ fn background(dir: vec3<f32>) -> vec3<f32> {
     var c: vec3<f32>;
     if source == 2u {
         c = hdri(dir, 0.0);
-    } else if source == 1u {
-        let up = vec3<f32>(dir.x, max(dir.y, 0.0), dir.z);
-        let below = mix(1.0, 0.35, smoothstep(0.0, -0.15, dir.y));
-        c = sky_view(up) * g.sky.z * below + g.night.rgb;
     } else {
-        c = preetham(dir) + g.night.rgb;
+        if source == 1u {
+            let up = vec3<f32>(dir.x, max(dir.y, 0.0), dir.z);
+            let below = mix(1.0, 0.35, smoothstep(0.0, -0.15, dir.y));
+            c = sky_view(up) * g.sky.z * below + g.night.rgb;
+        } else {
+            c = preetham(dir) + g.night.rgb;
+        }
+        let cl = cloud(dir);
+        c = mix(c, cl.rgb, cl.a);
     }
     return c * g.night.w;
 }
@@ -160,7 +233,8 @@ fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
     let cos_sun = dot(dir, g.sun_dir.xyz);
     let edge = smoothstep(g.sun_light.w - 2e-5, g.sun_light.w + 2e-5, cos_sun);
     let tint = g.sun_light.rgb / max(dot(g.sun_light.rgb, vec3<f32>(0.2126, 0.7152, 0.0722)), 1e-9);
-    color += tint * g.sun_dir.w * edge * mix(0.6, 1.0, smoothstep(g.sun_light.w, 1.0, cos_sun));
+    let behind = select(0.0, cloud(dir).a, u32(g.sky.x + 0.5) != 2u);
+    color += tint * g.sun_dir.w * edge * mix(0.6, 1.0, smoothstep(g.sun_light.w, 1.0, cos_sun)) * (1.0 - behind);
     // Haze to infinity, near the horizon only: the horizon (and any sky below it) dissolves
     // into the haze the ground fades to, while the sky higher up keeps its own colour. The sky
     // models already carry the air's scattering; hazing all of it greyed the zenith.

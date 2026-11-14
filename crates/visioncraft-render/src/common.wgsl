@@ -35,6 +35,7 @@ struct Globals {
     options: vec4<f32>,         // x PCF taps (4 or 9), y bloom strength, z AO target divisor (1 full, 2 half), w ground height
     reflection: vec4<f32>,      // x planar reflection available (0/1), y water height (m), z clip below (0/1), w clip height (m)
     grade: vec4<f32>,           // x look contrast power, y look saturation (1, 1: plain AgX), z camera indoors (0/1)
+    clouds: vec4<f32>,          // x cover 0..1, y overcast (0/1), zw drift (m)
     sh: array<vec4<f32>, 9>,    // sky irradiance as L2 SH (kcd/m2 * sr), written on the GPU (env.wgsl)
 }
 @group(0) @binding(0) var<uniform> g: Globals;
