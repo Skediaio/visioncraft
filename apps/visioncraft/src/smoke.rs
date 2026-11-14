@@ -666,8 +666,15 @@ mod native {
                 }
                 Step::Stats => {
                     println!(
-                        "sun elevation {:.1} deg, exposure EV {:.1}",
-                        s.ev_used.1, s.ev_used.0
+                        "sun elevation {:.1} deg, exposure EV {:.1}, camera at {:.2}{}",
+                        s.ev_used.1,
+                        s.ev_used.0,
+                        s.camera.eye(),
+                        if s.renderer.indoors() {
+                            ", indoors"
+                        } else {
+                            ""
+                        }
                     );
                     let rs = s.renderer.stats();
                     let flora = s.scene.flora.texture_bytes(&s.renderer);
