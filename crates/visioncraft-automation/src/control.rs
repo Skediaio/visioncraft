@@ -33,6 +33,15 @@ const MAX_CONNECTIONS: usize = 16;
 const IDLE: Duration = Duration::from_secs(30);
 /// How long a connection waits for the program to answer one request.
 const ANSWER: Duration = Duration::from_secs(300);
+/// How long a request may wait for the program to take it: a window takes requests in its
+/// frames, and one that does not repaint (minimised, on another desktop) takes none. Then the
+/// request is withdrawn, so it never runs late, and the agent hears why.
+const PICKUP: Duration = Duration::from_secs(20);
+/// While a request waits to be taken, the window is woken again this often.
+const REWAKE: Duration = Duration::from_millis(500);
+const QUEUED: u8 = 0;
+const TAKEN: u8 = 1;
+const WITHDRAWN: u8 = 2;
 
 /// Where to listen and with which token.
 #[derive(Clone, Debug, Default)]
@@ -49,6 +58,61 @@ pub struct ControlOptions {
 struct Request {
     line: String,
     reply: Sender<String>,
+    /// `QUEUED` until the program takes it (`TAKEN`) or the connection gives up (`WITHDRAWN`).
+    state: Arc<std::sync::atomic::AtomicU8>,
+}
+
+impl Request {
+    /// Takes the request unless its connection gave up on it.
+    fn take(&self) -> bool {
+        use std::sync::atomic::Ordering::SeqCst;
+        self.state
+            .compare_exchange(QUEUED, TAKEN, SeqCst, SeqCst)
+            .is_ok()
+    }
+}
+
+/// Waits for the answer to a request: woken again while it is not taken, withdrawn with an
+/// error after `pickup`, else waited for up to `answer` once taken.
+fn wait_answer(
+    answer: &Receiver<String>,
+    state: &std::sync::atomic::AtomicU8,
+    wake: &dyn Fn(),
+    pickup: Duration,
+    total: Duration,
+    rewake: Duration,
+) -> String {
+    use std::sync::atomic::Ordering::SeqCst;
+    let start = std::time::Instant::now();
+    loop {
+        if let Ok(out) = answer.recv_timeout(rewake) {
+            return out;
+        }
+        let waited = start.elapsed();
+        if state.load(SeqCst) == QUEUED {
+            if waited >= pickup
+                && state
+                    .compare_exchange(QUEUED, WITHDRAWN, SeqCst, SeqCst)
+                    .is_ok()
+            {
+                return error_reply(
+                    &Value::Null,
+                    &format!(
+                        "the window did not take the request within {} s, so it was not run: it \
+                         takes requests while it draws frames, and a minimised window or one on \
+                         another desktop draws none; bring it to the front and send it again",
+                        pickup.as_secs()
+                    ),
+                );
+            }
+            wake();
+        } else if waited >= total {
+            return error_reply(
+                &Value::Null,
+                &format!("the program did not answer within {} s", total.as_secs()),
+            );
+        }
+    }
 }
 
 /// A listening control channel. Dropping it stops listening and removes the discovery entry.
@@ -265,15 +329,22 @@ fn connection(
             return Ok(());
         }
         let (reply, answer) = channel();
-        if send.send(Request { line, reply }).is_err() {
+        let state = Arc::new(std::sync::atomic::AtomicU8::new(QUEUED));
+        let request = Request {
+            line,
+            reply,
+            state: state.clone(),
+        };
+        if send.send(request).is_err() {
             return Ok(());
         }
-        if let Some(wake) = waker.lock().ok().as_ref().and_then(|w| w.as_ref()) {
-            wake();
-        }
-        let out = answer.recv_timeout(ANSWER).unwrap_or_else(|_| {
-            error_reply(&Value::Null, "the program did not answer within 300 s")
-        });
+        let wake = || {
+            if let Some(wake) = waker.lock().ok().as_ref().and_then(|w| w.as_ref()) {
+                wake();
+            }
+        };
+        wake();
+        let out = wait_answer(&answer, &state, &wake, PICKUP, ANSWER, REWAKE);
         write_line(&mut stream, &out)?;
     }
 }
@@ -305,8 +376,10 @@ impl ControlHandle {
     pub fn poll(&self, host: &mut dyn Host) -> usize {
         let mut n = 0;
         while let Ok(request) = self.requests.try_recv() {
-            let _ = request.reply.send(answer(host, &request.line));
-            n += 1;
+            if request.take() {
+                let _ = request.reply.send(answer(host, &request.line));
+                n += 1;
+            }
         }
         n
     }
@@ -315,7 +388,9 @@ impl ControlHandle {
     pub fn serve_one(&self, host: &mut dyn Host, timeout: Duration) -> bool {
         match self.requests.recv_timeout(timeout) {
             Ok(request) => {
-                let _ = request.reply.send(answer(host, &request.line));
+                if request.take() {
+                    let _ = request.reply.send(answer(host, &request.line));
+                }
                 true
             }
             Err(_) => false,
@@ -342,5 +417,59 @@ impl Drop for ControlHandle {
         if let Some((folder, entry)) = &self.entry {
             discovery::remove_entry(folder, entry.pid);
         }
+    }
+}
+
+#[cfg(test)]
+mod wait_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering::SeqCst};
+
+    /// A host that draws no frames: the request is withdrawn with an error, never run late,
+    /// and the window was woken more than once meanwhile.
+    #[test]
+    fn a_request_nobody_takes_is_withdrawn_with_a_reason() {
+        let (_reply, answer) = channel::<String>();
+        let state = AtomicU8::new(QUEUED);
+        let wakes = AtomicUsize::new(0);
+        let ms = Duration::from_millis;
+        let out = wait_answer(
+            &answer,
+            &state,
+            &|| {
+                wakes.fetch_add(1, SeqCst);
+            },
+            ms(200),
+            ms(5_000),
+            ms(20),
+        );
+        assert!(out.contains("did not take the request"), "{out}");
+        assert_eq!(state.load(SeqCst), WITHDRAWN);
+        assert!(wakes.load(SeqCst) >= 3);
+        // A request taken in time waits for its answer, however long the pickup limit.
+        let (reply, answer) = channel::<String>();
+        let state = Arc::new(AtomicU8::new(QUEUED));
+        let req = Request {
+            line: String::new(),
+            reply,
+            state: state.clone(),
+        };
+        let t = std::thread::spawn(move || {
+            std::thread::sleep(ms(50));
+            assert!(req.take());
+            std::thread::sleep(ms(300));
+            req.reply.send("done".into()).unwrap();
+        });
+        let out = wait_answer(&answer, &state, &|| {}, ms(100), ms(5_000), ms(20));
+        t.join().unwrap();
+        assert_eq!(out, "done");
+        // A withdrawn request is not taken any more.
+        let (reply, _a) = channel::<String>();
+        let req = Request {
+            line: String::new(),
+            reply,
+            state: Arc::new(AtomicU8::new(WITHDRAWN)),
+        };
+        assert!(!req.take());
     }
 }
