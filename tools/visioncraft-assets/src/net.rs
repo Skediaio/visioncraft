@@ -270,7 +270,9 @@ pub fn fetch(cands: &[Candidate], cache: &Path, http: &Http, tier: Option<&str>)
 /// Whether a candidate has a `tier` file set: materials 2k (and 4k when `max_tier` says so),
 /// skies 4k, models 2k.
 pub fn has_tier(c: &Candidate, tier: &str) -> bool {
-    if c.is_material() {
+    if c.category == "leafset" || c.category == "barkset" {
+        tier == "2k"
+    } else if c.is_material() {
         tier == "2k" || (tier == "4k" && c.max_tier.as_deref() == Some("4k"))
     } else if c.is_sky() {
         tier == "4k"
@@ -288,7 +290,7 @@ fn fetch_tier(c: &Candidate, cache: &Path, http: &Http, tier: Option<&str>) -> R
     }
     let (dir, sid) = (c.dir(cache), c.source_id());
     let mut n = 0;
-    if c.is_material() {
+    if c.source() == Some(Source::AmbientCg) {
         let attr = format!("{}-JPG", tier.to_uppercase());
         let info: Value = serde_json::from_slice(&fs::read(dir.join("info.json"))?)?;
         let dl = info["assets"][0]["downloads"]
@@ -318,7 +320,16 @@ fn fetch_tier(c: &Candidate, cache: &Path, http: &Http, tier: Option<&str>) -> R
         )?);
         Ok(())
     };
-    if c.is_sky() {
+    if c.category == "barkset" {
+        for key in ["Diffuse", "nor_gl", "arm", "Displacement"] {
+            let e = &files[key][tier]["jpg"];
+            let name = e["url"]
+                .as_str()
+                .and_then(|u| u.rsplit('/').next())
+                .context("no such bark file")?;
+            get(e, &format!("{tier}/{name}"))?;
+        }
+    } else if c.is_sky() {
         let e = &files["hdri"][tier]["hdr"];
         let name = e["url"]
             .as_str()
@@ -386,7 +397,7 @@ fn fetch_one(c: &Candidate, cache: &Path, http: &Http) -> Result<usize> {
     );
     api_authors.sort();
     cand_authors.sort();
-    if api_authors != cand_authors {
+    if api_authors != cand_authors && !c.author.is_empty() {
         mismatch(sid, "author", &c.author, &api_authors.join(", "));
     }
     if let (Some(t), Some(p)) = (c.triangles, info["polycount"].as_u64())
@@ -406,7 +417,11 @@ fn fetch_one(c: &Candidate, cache: &Path, http: &Http) -> Result<usize> {
         )?);
         Ok(())
     };
-    if c.is_sky() {
+    if c.category == "barkset" {
+        for key in ["Diffuse", "nor_gl", "arm", "Displacement"] {
+            get(&files[key]["1k"]["jpg"], None)?;
+        }
+    } else if c.is_sky() {
         get(&files["hdri"]["1k"]["hdr"], None)?;
     } else {
         let g = &files["gltf"]["1k"]["gltf"];

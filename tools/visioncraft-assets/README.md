@@ -15,6 +15,9 @@ data out of it) and `--delay-ms` (pause between requests, default 500).
 - `fetch --tier 2k|4k` and `ingest --tier 2k|4k` build the higher tiers next to the base set: materials
   2k and 4k (`materials/<id>/2k/`, `4k/`), models `lod0_2k.glb`, skies `sky_4k.hdr`. `catalog` lists them
   in `tiers.json`. The base set is never replaced.
+- `fetch --flora candidates/flora.json [--tier 2k]` and `ingest --flora candidates/flora.json [--tier 2k]`
+  build the scanned leaf atlases and bark sets of the plant generator (`assets/flora/`); `catalog`
+  writes `flora.json` (sets, leaf cut-outs, species mapping) and the flora part of `tiers.json`.
 - `catalog --out assets` writes `catalog.json`, `materials.json`, `skies.json`, `ATTRIBUTION.md`.
 - `check --out assets` re-validates everything on disk and exits non-zero on any problem:
   `cargo run -p visioncraft-assets -- check --out assets`. Run it in CI after `catalog`.

@@ -1,6 +1,7 @@
 //! `catalog`, `check`, and the contact-sheet / LOD-comparison helpers.
 
 use crate::{
+    flora::FloraFile,
     glb::png,
     ingest::{MIN_TRIS, MaterialEntry, SkyEntry, budget},
     raster,
@@ -78,8 +79,25 @@ pub fn catalog(out: &Path) -> Result<()> {
         serde_json::to_vec_pretty(&materials)?,
     )?;
     fs::write(out.join("skies.json"), serde_json::to_vec_pretty(&skies)?)?;
+    let flora = FloraFile {
+        version: 1,
+        leaf_sets: entries(out, "flora/leaves")?,
+        bark_sets: entries(out, "flora/bark")?,
+        species: fs::read(out.join("flora/species.json"))
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default(),
+    };
+    fs::write(out.join("flora.json"), serde_json::to_vec_pretty(&flora)?)?;
+    md += "\n## Scanned leaves and bark (CC0-1.0)\n\n";
+    for s in &flora.leaf_sets {
+        md += &format!("- {} (leaves) by {} ({})\n", s.name, s.author, s.source_url);
+    }
+    for s in &flora.bark_sets {
+        md += &format!("- {} (bark) by {} ({})\n", s.name, s.author, s.source_url);
+    }
     fs::write(out.join("ATTRIBUTION.md"), md)?;
-    let tiers = build_tiers(out, &catalog, &materials, &skies);
+    let tiers = build_tiers(out, &catalog, &materials, &skies, &flora);
     fs::write(out.join("tiers.json"), serde_json::to_vec_pretty(&tiers)?)?;
     println!(
         "tiers: {} materials, {} skies, {} models with higher tiers",
@@ -133,13 +151,39 @@ pub struct Tiers {
     pub materials: std::collections::BTreeMap<String, TierEntry<MaterialTier>>,
     pub skies: std::collections::BTreeMap<String, TierEntry<FileTier>>,
     pub models: std::collections::BTreeMap<String, TierEntry<FileTier>>,
+    /// Scanned leaf atlases and bark; absent in older files.
+    #[serde(default)]
+    pub flora: FloraTiers,
+}
+
+/// A leaf atlas at a higher resolution.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct LeafTier {
+    pub color: String,
+    pub opacity: String,
+    pub normal: String,
+    pub translucency: Option<String>,
+    pub px: u32,
+    pub bytes: u64,
+}
+
+#[derive(Serialize, Deserialize, Default, Debug)]
+pub struct FloraTiers {
+    pub leaves: std::collections::BTreeMap<String, TierEntry<LeafTier>>,
+    pub bark: std::collections::BTreeMap<String, TierEntry<MaterialTier>>,
 }
 
 fn size_of(out: &Path, rel: &str) -> Option<u64> {
     fs::metadata(out.join(rel)).ok().map(|m| m.len())
 }
 
-pub fn build_tiers(out: &Path, cat: &Catalog, mats: &Materials, skies: &Skies) -> Tiers {
+pub fn build_tiers(
+    out: &Path,
+    cat: &Catalog,
+    mats: &Materials,
+    skies: &Skies,
+    flora: &FloraFile,
+) -> Tiers {
     let mut t = Tiers {
         version: 1,
         ..Tiers::default()
@@ -217,6 +261,65 @@ pub fn build_tiers(out: &Path, cat: &Catalog, mats: &Materials, skies: &Skies) -
                 },
             );
         }
+    }
+    for s in &flora.leaf_sets {
+        let rel = |f: &str| format!("flora/leaves/{}/2k/{f}", s.id);
+        let Some(mut bytes) = size_of(out, &rel("color.jpg")) else {
+            continue;
+        };
+        bytes += ["opacity.png", "normal.jpg"]
+            .iter()
+            .filter_map(|f| size_of(out, &rel(f)))
+            .sum::<u64>();
+        let translucency = size_of(out, &rel("translucency.jpg")).inspect(|b| bytes += b);
+        let px = image::image_dimensions(out.join(rel("color.jpg"))).map_or(0, |d| d.0.max(d.1));
+        let tier = LeafTier {
+            color: rel("color.jpg"),
+            opacity: rel("opacity.png"),
+            normal: rel("normal.jpg"),
+            translucency: translucency.map(|_| rel("translucency.jpg")),
+            px,
+            bytes,
+        };
+        t.flora.leaves.insert(
+            s.id.clone(),
+            TierEntry {
+                license: s.license.clone(),
+                author: s.author.clone(),
+                source_url: s.source_url.clone(),
+                tiers: std::collections::BTreeMap::from([("2k".to_string(), tier)]),
+            },
+        );
+    }
+    for s in &flora.bark_sets {
+        let rel = |f: &str| format!("flora/bark/{}/2k/{f}", s.id);
+        let Some(mut bytes) = size_of(out, &rel("basecolor.jpg")) else {
+            continue;
+        };
+        bytes += ["normal.jpg", "orm.jpg"]
+            .iter()
+            .filter_map(|f| size_of(out, &rel(f)))
+            .sum::<u64>();
+        let height = size_of(out, &rel("height.jpg")).inspect(|b| bytes += b);
+        let px =
+            image::image_dimensions(out.join(rel("basecolor.jpg"))).map_or(0, |d| d.0.max(d.1));
+        let tier = MaterialTier {
+            basecolor: rel("basecolor.jpg"),
+            normal: rel("normal.jpg"),
+            orm: rel("orm.jpg"),
+            height: height.map(|_| rel("height.jpg")),
+            px,
+            bytes,
+        };
+        t.flora.bark.insert(
+            s.id.clone(),
+            TierEntry {
+                license: s.license.clone(),
+                author: s.author.clone(),
+                source_url: s.source_url.clone(),
+                tiers: std::collections::BTreeMap::from([("2k".to_string(), tier)]),
+            },
+        );
     }
     t
 }
@@ -365,6 +468,32 @@ pub fn check(out: &Path) -> Vec<String> {
             {
                 files.push((e.file.clone(), e.bytes));
             }
+            for e in t.flora.leaves.values().flat_map(|e| e.tiers.values()) {
+                for f in [
+                    Some(&e.color),
+                    Some(&e.opacity),
+                    Some(&e.normal),
+                    e.translucency.as_ref(),
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    files.push((f.clone(), 0));
+                }
+            }
+            for e in t.flora.bark.values().flat_map(|e| e.tiers.values()) {
+                for f in [
+                    Some(&e.basecolor),
+                    Some(&e.normal),
+                    Some(&e.orm),
+                    e.height.as_ref(),
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    files.push((f.clone(), 0));
+                }
+            }
             for (f, bytes) in files {
                 match fs::metadata(out.join(&f)) {
                     Err(_) => errors.push(format!("tiers.json: missing file {f}")),
@@ -376,12 +505,77 @@ pub fn check(out: &Path) -> Vec<String> {
             }
         }
     }
+    // flora.json: every file exists, every cut-out is inside its atlas, every species points at a set
+    match fs::read(out.join("flora.json"))
+        .map_err(|e| e.to_string())
+        .and_then(|b| serde_json::from_slice::<FloraFile>(&b).map_err(|e| e.to_string()))
+    {
+        Err(e) => errors.push(format!("flora.json: {e}")),
+        Ok(f) => {
+            for s in &f.leaf_sets {
+                for p in [
+                    Some(&s.maps.color),
+                    Some(&s.maps.opacity),
+                    Some(&s.maps.normal),
+                    s.maps.translucency.as_ref(),
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    need(p, &mut errors);
+                }
+                if s.leaves.is_empty() {
+                    errors.push(format!("leaf set {} has no cut-outs", s.id));
+                }
+                for c in &s.leaves {
+                    let inside = c.pivot.iter().all(|v| (0.0..=1.0).contains(v))
+                        && c.rect[0] + c.rect[2] <= 1.001
+                        && c.rect[1] + c.rect[3] <= 1.001;
+                    if !inside {
+                        errors.push(format!("leaf set {} has a cut-out outside the atlas", s.id));
+                    }
+                }
+            }
+            for s in &f.bark_sets {
+                for p in [
+                    Some(&s.maps.basecolor),
+                    Some(&s.maps.normal),
+                    Some(&s.maps.orm),
+                    s.maps.height.as_ref(),
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    need(p, &mut errors);
+                }
+            }
+            let leaf_ids: Vec<&String> = f.leaf_sets.iter().map(|s| &s.id).collect();
+            let bark_ids: Vec<&String> = f.bark_sets.iter().map(|s| &s.id).collect();
+            for (sp, r) in &f.species {
+                if r.leaf.as_ref().is_some_and(|l| !leaf_ids.contains(&&l[0]))
+                    || r.leaf_autumn
+                        .as_ref()
+                        .is_some_and(|l| !leaf_ids.contains(&l))
+                {
+                    errors.push(format!(
+                        "flora.json: species {sp} points at a leaf set that is not there"
+                    ));
+                }
+                if r.bark.as_ref().is_some_and(|b| !bark_ids.contains(&&b[0])) {
+                    errors.push(format!(
+                        "flora.json: species {sp} points at a bark set that is not there"
+                    ));
+                }
+            }
+        }
+    }
     // the tracked text files must not carry anything private
     for f in [
         "catalog.json",
         "materials.json",
         "skies.json",
         "tiers.json",
+        "flora.json",
         "ATTRIBUTION.md",
     ] {
         let text = fs::read_to_string(out.join(f)).unwrap_or_default();

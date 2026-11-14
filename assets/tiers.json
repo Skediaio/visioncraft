@@ -6203,5 +6203,731 @@
         }
       }
     }
+  },
+  "flora": {
+    "leaves": {
+      "foliage001": {
+        "license": "CC0-1.0",
+        "author": "ambientCG (Lennart Demes)",
+        "source_url": "https://ambientcg.com/a/Foliage001",
+        "tiers": {
+          "2k": {
+            "color": "flora/leaves/foliage001/2k/color.jpg",
+            "opacity": "flora/leaves/foliage001/2k/opacity.png",
+            "normal": "flora/leaves/foliage001/2k/normal.jpg",
+            "translucency": null,
+            "px": 2048,
+            "bytes": 1721418
+          }
+        }
+      },
+      "foliage002": {
+        "license": "CC0-1.0",
+        "author": "ambientCG (Lennart Demes)",
+        "source_url": "https://ambientcg.com/a/Foliage002",
+        "tiers": {
+          "2k": {
+            "color": "flora/leaves/foliage002/2k/color.jpg",
+            "opacity": "flora/leaves/foliage002/2k/opacity.png",
+            "normal": "flora/leaves/foliage002/2k/normal.jpg",
+            "translucency": null,
+            "px": 2048,
+            "bytes": 1247375
+          }
+        }
+      },
+      "foliage005": {
+        "license": "CC0-1.0",
+        "author": "ambientCG (Lennart Demes)",
+        "source_url": "https://ambientcg.com/a/Foliage005",
+        "tiers": {
+          "2k": {
+            "color": "flora/leaves/foliage005/2k/color.jpg",
+            "opacity": "flora/leaves/foliage005/2k/opacity.png",
+            "normal": "flora/leaves/foliage005/2k/normal.jpg",
+            "translucency": null,
+            "px": 2048,
+            "bytes": 300018
+          }
+        }
+      },
+      "foliage006": {
+        "license": "CC0-1.0",
+        "author": "ambientCG (Lennart Demes)",
+        "source_url": "https://ambientcg.com/a/Foliage006",
+        "tiers": {
+          "2k": {
+            "color": "flora/leaves/foliage006/2k/color.jpg",
+            "opacity": "flora/leaves/foliage006/2k/opacity.png",
+            "normal": "flora/leaves/foliage006/2k/normal.jpg",
+            "translucency": null,
+            "px": 2048,
+            "bytes": 786285
+          }
+        }
+      },
+      "foliage007": {
+        "license": "CC0-1.0",
+        "author": "ambientCG (Lennart Demes)",
+        "source_url": "https://ambientcg.com/a/Foliage007",
+        "tiers": {
+          "2k": {
+            "color": "flora/leaves/foliage007/2k/color.jpg",
+            "opacity": "flora/leaves/foliage007/2k/opacity.png",
+            "normal": "flora/leaves/foliage007/2k/normal.jpg",
+            "translucency": "flora/leaves/foliage007/2k/translucency.jpg",
+            "px": 2048,
+            "bytes": 1039649
+          }
+        }
+      },
+      "foliage008": {
+        "license": "CC0-1.0",
+        "author": "ambientCG (Lennart Demes)",
+        "source_url": "https://ambientcg.com/a/Foliage008",
+        "tiers": {
+          "2k": {
+            "color": "flora/leaves/foliage008/2k/color.jpg",
+            "opacity": "flora/leaves/foliage008/2k/opacity.png",
+            "normal": "flora/leaves/foliage008/2k/normal.jpg",
+            "translucency": "flora/leaves/foliage008/2k/translucency.jpg",
+            "px": 2048,
+            "bytes": 949192
+          }
+        }
+      },
+      "leaf001": {
+        "license": "CC0-1.0",
+        "author": "ambientCG (Lennart Demes)",
+        "source_url": "https://ambientcg.com/a/Leaf001",
+        "tiers": {
+          "2k": {
+            "color": "flora/leaves/leaf001/2k/color.jpg",
+            "opacity": "flora/leaves/leaf001/2k/opacity.png",
+            "normal": "flora/leaves/leaf001/2k/normal.jpg",
+            "translucency": null,
+            "px": 2048,
+            "bytes": 2074231
+          }
+        }
+      },
+      "leaf003": {
+        "license": "CC0-1.0",
+        "author": "ambientCG (Lennart Demes)",
+        "source_url": "https://ambientcg.com/a/Leaf003",
+        "tiers": {
+          "2k": {
+            "color": "flora/leaves/leaf003/2k/color.jpg",
+            "opacity": "flora/leaves/leaf003/2k/opacity.png",
+            "normal": "flora/leaves/leaf003/2k/normal.jpg",
+            "translucency": null,
+            "px": 2048,
+            "bytes": 2774872
+          }
+        }
+      },
+      "leafset002": {
+        "license": "CC0-1.0",
+        "author": "ambientCG (Lennart Demes)",
+        "source_url": "https://ambientcg.com/a/LeafSet002",
+        "tiers": {
+          "2k": {
+            "color": "flora/leaves/leafset002/2k/color.jpg",
+            "opacity": "flora/leaves/leafset002/2k/opacity.png",
+            "normal": "flora/leaves/leafset002/2k/normal.jpg",
+            "translucency": null,
+            "px": 2048,
+            "bytes": 2920755
+          }
+        }
+      },
+      "leafset003": {
+        "license": "CC0-1.0",
+        "author": "ambientCG (Lennart Demes)",
+        "source_url": "https://ambientcg.com/a/LeafSet003",
+        "tiers": {
+          "2k": {
+            "color": "flora/leaves/leafset003/2k/color.jpg",
+            "opacity": "flora/leaves/leafset003/2k/opacity.png",
+            "normal": "flora/leaves/leafset003/2k/normal.jpg",
+            "translucency": null,
+            "px": 2048,
+            "bytes": 1944053
+          }
+        }
+      },
+      "leafset004": {
+        "license": "CC0-1.0",
+        "author": "ambientCG (Lennart Demes)",
+        "source_url": "https://ambientcg.com/a/LeafSet004",
+        "tiers": {
+          "2k": {
+            "color": "flora/leaves/leafset004/2k/color.jpg",
+            "opacity": "flora/leaves/leafset004/2k/opacity.png",
+            "normal": "flora/leaves/leafset004/2k/normal.jpg",
+            "translucency": null,
+            "px": 2048,
+            "bytes": 1547029
+          }
+        }
+      },
+      "leafset005": {
+        "license": "CC0-1.0",
+        "author": "ambientCG (Lennart Demes)",
+        "source_url": "https://ambientcg.com/a/LeafSet005",
+        "tiers": {
+          "2k": {
+            "color": "flora/leaves/leafset005/2k/color.jpg",
+            "opacity": "flora/leaves/leafset005/2k/opacity.png",
+            "normal": "flora/leaves/leafset005/2k/normal.jpg",
+            "translucency": null,
+            "px": 2048,
+            "bytes": 1417075
+          }
+        }
+      },
+      "leafset009": {
+        "license": "CC0-1.0",
+        "author": "ambientCG (Lennart Demes)",
+        "source_url": "https://ambientcg.com/a/LeafSet009",
+        "tiers": {
+          "2k": {
+            "color": "flora/leaves/leafset009/2k/color.jpg",
+            "opacity": "flora/leaves/leafset009/2k/opacity.png",
+            "normal": "flora/leaves/leafset009/2k/normal.jpg",
+            "translucency": null,
+            "px": 2048,
+            "bytes": 2432008
+          }
+        }
+      },
+      "leafset010": {
+        "license": "CC0-1.0",
+        "author": "ambientCG (Lennart Demes)",
+        "source_url": "https://ambientcg.com/a/LeafSet010",
+        "tiers": {
+          "2k": {
+            "color": "flora/leaves/leafset010/2k/color.jpg",
+            "opacity": "flora/leaves/leafset010/2k/opacity.png",
+            "normal": "flora/leaves/leafset010/2k/normal.jpg",
+            "translucency": null,
+            "px": 2048,
+            "bytes": 2396795
+          }
+        }
+      },
+      "leafset011": {
+        "license": "CC0-1.0",
+        "author": "ambientCG (Lennart Demes)",
+        "source_url": "https://ambientcg.com/a/LeafSet011",
+        "tiers": {
+          "2k": {
+            "color": "flora/leaves/leafset011/2k/color.jpg",
+            "opacity": "flora/leaves/leafset011/2k/opacity.png",
+            "normal": "flora/leaves/leafset011/2k/normal.jpg",
+            "translucency": null,
+            "px": 2048,
+            "bytes": 2519036
+          }
+        }
+      },
+      "leafset012": {
+        "license": "CC0-1.0",
+        "author": "ambientCG (Lennart Demes)",
+        "source_url": "https://ambientcg.com/a/LeafSet012",
+        "tiers": {
+          "2k": {
+            "color": "flora/leaves/leafset012/2k/color.jpg",
+            "opacity": "flora/leaves/leafset012/2k/opacity.png",
+            "normal": "flora/leaves/leafset012/2k/normal.jpg",
+            "translucency": null,
+            "px": 2048,
+            "bytes": 1550821
+          }
+        }
+      },
+      "leafset013": {
+        "license": "CC0-1.0",
+        "author": "ambientCG (Lennart Demes)",
+        "source_url": "https://ambientcg.com/a/LeafSet013",
+        "tiers": {
+          "2k": {
+            "color": "flora/leaves/leafset013/2k/color.jpg",
+            "opacity": "flora/leaves/leafset013/2k/opacity.png",
+            "normal": "flora/leaves/leafset013/2k/normal.jpg",
+            "translucency": null,
+            "px": 2048,
+            "bytes": 1085761
+          }
+        }
+      },
+      "leafset014": {
+        "license": "CC0-1.0",
+        "author": "ambientCG (Lennart Demes)",
+        "source_url": "https://ambientcg.com/a/LeafSet014",
+        "tiers": {
+          "2k": {
+            "color": "flora/leaves/leafset014/2k/color.jpg",
+            "opacity": "flora/leaves/leafset014/2k/opacity.png",
+            "normal": "flora/leaves/leafset014/2k/normal.jpg",
+            "translucency": null,
+            "px": 2048,
+            "bytes": 2303181
+          }
+        }
+      },
+      "leafset016": {
+        "license": "CC0-1.0",
+        "author": "ambientCG (Lennart Demes)",
+        "source_url": "https://ambientcg.com/a/LeafSet016",
+        "tiers": {
+          "2k": {
+            "color": "flora/leaves/leafset016/2k/color.jpg",
+            "opacity": "flora/leaves/leafset016/2k/opacity.png",
+            "normal": "flora/leaves/leafset016/2k/normal.jpg",
+            "translucency": null,
+            "px": 2048,
+            "bytes": 2516104
+          }
+        }
+      },
+      "leafset017": {
+        "license": "CC0-1.0",
+        "author": "ambientCG (Lennart Demes)",
+        "source_url": "https://ambientcg.com/a/LeafSet017",
+        "tiers": {
+          "2k": {
+            "color": "flora/leaves/leafset017/2k/color.jpg",
+            "opacity": "flora/leaves/leafset017/2k/opacity.png",
+            "normal": "flora/leaves/leafset017/2k/normal.jpg",
+            "translucency": null,
+            "px": 2048,
+            "bytes": 2033114
+          }
+        }
+      },
+      "leafset018": {
+        "license": "CC0-1.0",
+        "author": "ambientCG (Lennart Demes)",
+        "source_url": "https://ambientcg.com/a/LeafSet018",
+        "tiers": {
+          "2k": {
+            "color": "flora/leaves/leafset018/2k/color.jpg",
+            "opacity": "flora/leaves/leafset018/2k/opacity.png",
+            "normal": "flora/leaves/leafset018/2k/normal.jpg",
+            "translucency": null,
+            "px": 2048,
+            "bytes": 1355002
+          }
+        }
+      },
+      "leafset019": {
+        "license": "CC0-1.0",
+        "author": "ambientCG (Lennart Demes)",
+        "source_url": "https://ambientcg.com/a/LeafSet019",
+        "tiers": {
+          "2k": {
+            "color": "flora/leaves/leafset019/2k/color.jpg",
+            "opacity": "flora/leaves/leafset019/2k/opacity.png",
+            "normal": "flora/leaves/leafset019/2k/normal.jpg",
+            "translucency": null,
+            "px": 2048,
+            "bytes": 3084262
+          }
+        }
+      },
+      "leafset020": {
+        "license": "CC0-1.0",
+        "author": "ambientCG (Lennart Demes)",
+        "source_url": "https://ambientcg.com/a/LeafSet020",
+        "tiers": {
+          "2k": {
+            "color": "flora/leaves/leafset020/2k/color.jpg",
+            "opacity": "flora/leaves/leafset020/2k/opacity.png",
+            "normal": "flora/leaves/leafset020/2k/normal.jpg",
+            "translucency": null,
+            "px": 2048,
+            "bytes": 767854
+          }
+        }
+      },
+      "leafset022": {
+        "license": "CC0-1.0",
+        "author": "ambientCG (Lennart Demes)",
+        "source_url": "https://ambientcg.com/a/LeafSet022",
+        "tiers": {
+          "2k": {
+            "color": "flora/leaves/leafset022/2k/color.jpg",
+            "opacity": "flora/leaves/leafset022/2k/opacity.png",
+            "normal": "flora/leaves/leafset022/2k/normal.jpg",
+            "translucency": "flora/leaves/leafset022/2k/translucency.jpg",
+            "px": 2048,
+            "bytes": 1683823
+          }
+        }
+      },
+      "leafset023": {
+        "license": "CC0-1.0",
+        "author": "ambientCG (Lennart Demes)",
+        "source_url": "https://ambientcg.com/a/LeafSet023",
+        "tiers": {
+          "2k": {
+            "color": "flora/leaves/leafset023/2k/color.jpg",
+            "opacity": "flora/leaves/leafset023/2k/opacity.png",
+            "normal": "flora/leaves/leafset023/2k/normal.jpg",
+            "translucency": "flora/leaves/leafset023/2k/translucency.jpg",
+            "px": 2048,
+            "bytes": 3398698
+          }
+        }
+      },
+      "leafset024": {
+        "license": "CC0-1.0",
+        "author": "ambientCG (Lennart Demes)",
+        "source_url": "https://ambientcg.com/a/LeafSet024",
+        "tiers": {
+          "2k": {
+            "color": "flora/leaves/leafset024/2k/color.jpg",
+            "opacity": "flora/leaves/leafset024/2k/opacity.png",
+            "normal": "flora/leaves/leafset024/2k/normal.jpg",
+            "translucency": null,
+            "px": 2048,
+            "bytes": 2886382
+          }
+        }
+      },
+      "leafset025": {
+        "license": "CC0-1.0",
+        "author": "ambientCG (Lennart Demes)",
+        "source_url": "https://ambientcg.com/a/LeafSet025",
+        "tiers": {
+          "2k": {
+            "color": "flora/leaves/leafset025/2k/color.jpg",
+            "opacity": "flora/leaves/leafset025/2k/opacity.png",
+            "normal": "flora/leaves/leafset025/2k/normal.jpg",
+            "translucency": "flora/leaves/leafset025/2k/translucency.jpg",
+            "px": 2048,
+            "bytes": 2211487
+          }
+        }
+      },
+      "leafset027": {
+        "license": "CC0-1.0",
+        "author": "ambientCG (Lennart Demes)",
+        "source_url": "https://ambientcg.com/a/LeafSet027",
+        "tiers": {
+          "2k": {
+            "color": "flora/leaves/leafset027/2k/color.jpg",
+            "opacity": "flora/leaves/leafset027/2k/opacity.png",
+            "normal": "flora/leaves/leafset027/2k/normal.jpg",
+            "translucency": "flora/leaves/leafset027/2k/translucency.jpg",
+            "px": 2048,
+            "bytes": 2049440
+          }
+        }
+      },
+      "leafset029": {
+        "license": "CC0-1.0",
+        "author": "ambientCG (Lennart Demes)",
+        "source_url": "https://ambientcg.com/a/LeafSet029",
+        "tiers": {
+          "2k": {
+            "color": "flora/leaves/leafset029/2k/color.jpg",
+            "opacity": "flora/leaves/leafset029/2k/opacity.png",
+            "normal": "flora/leaves/leafset029/2k/normal.jpg",
+            "translucency": "flora/leaves/leafset029/2k/translucency.jpg",
+            "px": 2048,
+            "bytes": 1535052
+          }
+        }
+      }
+    },
+    "bark": {
+      "bark001": {
+        "license": "CC0-1.0",
+        "author": "ambientCG (Lennart Demes)",
+        "source_url": "https://ambientcg.com/a/Bark001",
+        "tiers": {
+          "2k": {
+            "basecolor": "flora/bark/bark001/2k/basecolor.jpg",
+            "normal": "flora/bark/bark001/2k/normal.jpg",
+            "orm": "flora/bark/bark001/2k/orm.jpg",
+            "height": "flora/bark/bark001/2k/height.jpg",
+            "px": 2048,
+            "bytes": 6452393
+          }
+        }
+      },
+      "bark002": {
+        "license": "CC0-1.0",
+        "author": "ambientCG (Lennart Demes)",
+        "source_url": "https://ambientcg.com/a/Bark002",
+        "tiers": {
+          "2k": {
+            "basecolor": "flora/bark/bark002/2k/basecolor.jpg",
+            "normal": "flora/bark/bark002/2k/normal.jpg",
+            "orm": "flora/bark/bark002/2k/orm.jpg",
+            "height": "flora/bark/bark002/2k/height.jpg",
+            "px": 2048,
+            "bytes": 7778413
+          }
+        }
+      },
+      "bark004": {
+        "license": "CC0-1.0",
+        "author": "ambientCG (Lennart Demes)",
+        "source_url": "https://ambientcg.com/a/Bark004",
+        "tiers": {
+          "2k": {
+            "basecolor": "flora/bark/bark004/2k/basecolor.jpg",
+            "normal": "flora/bark/bark004/2k/normal.jpg",
+            "orm": "flora/bark/bark004/2k/orm.jpg",
+            "height": "flora/bark/bark004/2k/height.jpg",
+            "px": 2048,
+            "bytes": 7533185
+          }
+        }
+      },
+      "bark005": {
+        "license": "CC0-1.0",
+        "author": "ambientCG (Lennart Demes)",
+        "source_url": "https://ambientcg.com/a/Bark005",
+        "tiers": {
+          "2k": {
+            "basecolor": "flora/bark/bark005/2k/basecolor.jpg",
+            "normal": "flora/bark/bark005/2k/normal.jpg",
+            "orm": "flora/bark/bark005/2k/orm.jpg",
+            "height": "flora/bark/bark005/2k/height.jpg",
+            "px": 2048,
+            "bytes": 2488436
+          }
+        }
+      },
+      "bark009": {
+        "license": "CC0-1.0",
+        "author": "ambientCG (Lennart Demes)",
+        "source_url": "https://ambientcg.com/a/Bark009",
+        "tiers": {
+          "2k": {
+            "basecolor": "flora/bark/bark009/2k/basecolor.jpg",
+            "normal": "flora/bark/bark009/2k/normal.jpg",
+            "orm": "flora/bark/bark009/2k/orm.jpg",
+            "height": "flora/bark/bark009/2k/height.jpg",
+            "px": 2048,
+            "bytes": 8540496
+          }
+        }
+      },
+      "bark011": {
+        "license": "CC0-1.0",
+        "author": "ambientCG (Lennart Demes)",
+        "source_url": "https://ambientcg.com/a/Bark011",
+        "tiers": {
+          "2k": {
+            "basecolor": "flora/bark/bark011/2k/basecolor.jpg",
+            "normal": "flora/bark/bark011/2k/normal.jpg",
+            "orm": "flora/bark/bark011/2k/orm.jpg",
+            "height": "flora/bark/bark011/2k/height.jpg",
+            "px": 2048,
+            "bytes": 4561754
+          }
+        }
+      },
+      "bark012": {
+        "license": "CC0-1.0",
+        "author": "ambientCG (Lennart Demes)",
+        "source_url": "https://ambientcg.com/a/Bark012",
+        "tiers": {
+          "2k": {
+            "basecolor": "flora/bark/bark012/2k/basecolor.jpg",
+            "normal": "flora/bark/bark012/2k/normal.jpg",
+            "orm": "flora/bark/bark012/2k/orm.jpg",
+            "height": "flora/bark/bark012/2k/height.jpg",
+            "px": 2048,
+            "bytes": 10182873
+          }
+        }
+      },
+      "bark014": {
+        "license": "CC0-1.0",
+        "author": "ambientCG (Lennart Demes)",
+        "source_url": "https://ambientcg.com/a/Bark014",
+        "tiers": {
+          "2k": {
+            "basecolor": "flora/bark/bark014/2k/basecolor.jpg",
+            "normal": "flora/bark/bark014/2k/normal.jpg",
+            "orm": "flora/bark/bark014/2k/orm.jpg",
+            "height": "flora/bark/bark014/2k/height.jpg",
+            "px": 2048,
+            "bytes": 8271303
+          }
+        }
+      },
+      "bark_brown_02": {
+        "license": "CC0-1.0",
+        "author": "Rob Tuytel",
+        "source_url": "https://polyhaven.com/a/bark_brown_02",
+        "tiers": {
+          "2k": {
+            "basecolor": "flora/bark/bark_brown_02/2k/basecolor.jpg",
+            "normal": "flora/bark/bark_brown_02/2k/normal.jpg",
+            "orm": "flora/bark/bark_brown_02/2k/orm.jpg",
+            "height": "flora/bark/bark_brown_02/2k/height.jpg",
+            "px": 2048,
+            "bytes": 7449027
+          }
+        }
+      },
+      "bark_platanus": {
+        "license": "CC0-1.0",
+        "author": "Dimitrios Savva",
+        "source_url": "https://polyhaven.com/a/bark_platanus",
+        "tiers": {
+          "2k": {
+            "basecolor": "flora/bark/bark_platanus/2k/basecolor.jpg",
+            "normal": "flora/bark/bark_platanus/2k/normal.jpg",
+            "orm": "flora/bark/bark_platanus/2k/orm.jpg",
+            "height": "flora/bark/bark_platanus/2k/height.jpg",
+            "px": 2048,
+            "bytes": 11422076
+          }
+        }
+      },
+      "bark_willow": {
+        "license": "CC0-1.0",
+        "author": "Dario Barresi, Dimitrios Savva",
+        "source_url": "https://polyhaven.com/a/bark_willow",
+        "tiers": {
+          "2k": {
+            "basecolor": "flora/bark/bark_willow/2k/basecolor.jpg",
+            "normal": "flora/bark/bark_willow/2k/normal.jpg",
+            "orm": "flora/bark/bark_willow/2k/orm.jpg",
+            "height": "flora/bark/bark_willow/2k/height.jpg",
+            "px": 2048,
+            "bytes": 13637116
+          }
+        }
+      },
+      "bark_willow_02": {
+        "license": "CC0-1.0",
+        "author": "Charlotte Baglioni",
+        "source_url": "https://polyhaven.com/a/bark_willow_02",
+        "tiers": {
+          "2k": {
+            "basecolor": "flora/bark/bark_willow_02/2k/basecolor.jpg",
+            "normal": "flora/bark/bark_willow_02/2k/normal.jpg",
+            "orm": "flora/bark/bark_willow_02/2k/orm.jpg",
+            "height": "flora/bark/bark_willow_02/2k/height.jpg",
+            "px": 2048,
+            "bytes": 14536786
+          }
+        }
+      },
+      "japanese_cedar_bark": {
+        "license": "CC0-1.0",
+        "author": "Charlotte Baglioni",
+        "source_url": "https://polyhaven.com/a/japanese_cedar_bark",
+        "tiers": {
+          "2k": {
+            "basecolor": "flora/bark/japanese_cedar_bark/2k/basecolor.jpg",
+            "normal": "flora/bark/japanese_cedar_bark/2k/normal.jpg",
+            "orm": "flora/bark/japanese_cedar_bark/2k/orm.jpg",
+            "height": "flora/bark/japanese_cedar_bark/2k/height.jpg",
+            "px": 4096,
+            "bytes": 20326760
+          }
+        }
+      },
+      "jolcham_oak_bark_01": {
+        "license": "CC0-1.0",
+        "author": "Charlotte Baglioni",
+        "source_url": "https://polyhaven.com/a/jolcham_oak_bark_01",
+        "tiers": {
+          "2k": {
+            "basecolor": "flora/bark/jolcham_oak_bark_01/2k/basecolor.jpg",
+            "normal": "flora/bark/jolcham_oak_bark_01/2k/normal.jpg",
+            "orm": "flora/bark/jolcham_oak_bark_01/2k/orm.jpg",
+            "height": "flora/bark/jolcham_oak_bark_01/2k/height.jpg",
+            "px": 4096,
+            "bytes": 27574283
+          }
+        }
+      },
+      "palm_bark": {
+        "license": "CC0-1.0",
+        "author": "Charlotte Baglioni",
+        "source_url": "https://polyhaven.com/a/palm_bark",
+        "tiers": {
+          "2k": {
+            "basecolor": "flora/bark/palm_bark/2k/basecolor.jpg",
+            "normal": "flora/bark/palm_bark/2k/normal.jpg",
+            "orm": "flora/bark/palm_bark/2k/orm.jpg",
+            "height": "flora/bark/palm_bark/2k/height.jpg",
+            "px": 2048,
+            "bytes": 12725409
+          }
+        }
+      },
+      "palm_tree_bark": {
+        "license": "CC0-1.0",
+        "author": "Dimitrios Savva, Rico Cilliers",
+        "source_url": "https://polyhaven.com/a/palm_tree_bark",
+        "tiers": {
+          "2k": {
+            "basecolor": "flora/bark/palm_tree_bark/2k/basecolor.jpg",
+            "normal": "flora/bark/palm_tree_bark/2k/normal.jpg",
+            "orm": "flora/bark/palm_tree_bark/2k/orm.jpg",
+            "height": "flora/bark/palm_tree_bark/2k/height.jpg",
+            "px": 4096,
+            "bytes": 23443134
+          }
+        }
+      },
+      "sakura_bark": {
+        "license": "CC0-1.0",
+        "author": "Charlotte Baglioni",
+        "source_url": "https://polyhaven.com/a/sakura_bark",
+        "tiers": {
+          "2k": {
+            "basecolor": "flora/bark/sakura_bark/2k/basecolor.jpg",
+            "normal": "flora/bark/sakura_bark/2k/normal.jpg",
+            "orm": "flora/bark/sakura_bark/2k/orm.jpg",
+            "height": "flora/bark/sakura_bark/2k/height.jpg",
+            "px": 2048,
+            "bytes": 13926265
+          }
+        }
+      },
+      "tree_bark_03": {
+        "license": "CC0-1.0",
+        "author": "Rob Tuytel",
+        "source_url": "https://polyhaven.com/a/tree_bark_03",
+        "tiers": {
+          "2k": {
+            "basecolor": "flora/bark/tree_bark_03/2k/basecolor.jpg",
+            "normal": "flora/bark/tree_bark_03/2k/normal.jpg",
+            "orm": "flora/bark/tree_bark_03/2k/orm.jpg",
+            "height": "flora/bark/tree_bark_03/2k/height.jpg",
+            "px": 2048,
+            "bytes": 12767316
+          }
+        }
+      },
+      "trident_maple_bark": {
+        "license": "CC0-1.0",
+        "author": "Charlotte Baglioni",
+        "source_url": "https://polyhaven.com/a/trident_maple_bark",
+        "tiers": {
+          "2k": {
+            "basecolor": "flora/bark/trident_maple_bark/2k/basecolor.jpg",
+            "normal": "flora/bark/trident_maple_bark/2k/normal.jpg",
+            "orm": "flora/bark/trident_maple_bark/2k/orm.jpg",
+            "height": "flora/bark/trident_maple_bark/2k/height.jpg",
+            "px": 2048,
+            "bytes": 11056604
+          }
+        }
+      }
+    }
   }
 }

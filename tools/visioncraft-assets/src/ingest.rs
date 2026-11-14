@@ -439,14 +439,14 @@ fn other() -> String {
 }
 
 /// The maps of an ambientCG zip, fitted to `px`: colour, GL normal, packed ORM, optional height.
-struct MaterialMaps3 {
-    color: DynamicImage,
-    normal: DynamicImage,
-    orm: image::RgbImage,
-    height: Option<GrayImage>,
+pub struct MaterialMaps3 {
+    pub color: DynamicImage,
+    pub normal: DynamicImage,
+    pub orm: image::RgbImage,
+    pub height: Option<GrayImage>,
 }
 
-fn material_maps(zip: &Path, px: u32) -> Result<MaterialMaps3> {
+pub fn material_maps(zip: &Path, px: u32) -> Result<MaterialMaps3> {
     let maps = zip_images(zip)?;
     let find = |suffix: &str| {
         maps.iter()

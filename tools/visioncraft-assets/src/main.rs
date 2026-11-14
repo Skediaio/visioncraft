@@ -3,6 +3,7 @@
 #![allow(clippy::needless_range_loop)] // vector maths reads better indexed
 
 mod emit;
+mod flora;
 mod glb;
 mod ingest;
 mod library;
@@ -32,8 +33,11 @@ enum Cmd {
     /// Download the sources of the candidates into the cache (verified, resumable, polite).
     Fetch {
         /// One or more candidate files.
-        #[arg(long, num_args = 1.., required = true)]
+        #[arg(long, num_args = 1.., required_unless_present = "flora")]
         list: Vec<PathBuf>,
+        /// Fetch the scanned leaf and bark sets of a `candidates/flora.json` instead.
+        #[arg(long)]
+        flora: Option<PathBuf>,
         /// Only these source ids.
         #[arg(long, num_args = 1..)]
         only: Vec<String>,
@@ -58,6 +62,9 @@ enum Cmd {
         /// Build a higher tier next to the base set (see `fetch --tier`).
         #[arg(long)]
         tier: Option<String>,
+        /// Ingest the scanned leaf and bark sets of a `candidates/flora.json` instead.
+        #[arg(long)]
+        flora: Option<PathBuf>,
     },
     /// Write catalog.json, materials.json, skies.json and ATTRIBUTION.md.
     Catalog {
@@ -122,22 +129,33 @@ fn main() -> Result<()> {
     match cli.cmd {
         Cmd::Fetch {
             list,
+            flora,
             only,
             cache,
             tier,
-        } => net::fetch(
-            &net::load_candidates(&list, &only)?,
-            &cache,
-            &http,
-            tier.as_deref(),
-        ),
+        } => {
+            let cands = match flora {
+                Some(f) => flora::FloraSpec::load(&f)?.candidates(),
+                None => net::load_candidates(&list, &only)?,
+            };
+            net::fetch(&cands, &cache, &http, tier.as_deref())
+        }
         Cmd::Ingest {
             cache,
             out,
             only,
             jobs,
             tier,
+            flora,
         } => {
+            if let Some(f) = flora {
+                return flora::ingest_all(
+                    &flora::FloraSpec::load(&f)?,
+                    &cache,
+                    &out,
+                    tier.as_deref(),
+                );
+            }
             let cands = net::load_candidates(&[cache.join("candidates.json")], &only)?;
             ingest::ingest_all(&cands, &cache, &out, jobs, tier.as_deref())
         }

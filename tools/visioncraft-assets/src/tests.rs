@@ -240,11 +240,44 @@ fn tiers_are_found_on_disk_and_carry_licence_and_size() {
     let mats = library::Materials {
         materials: vec![mat],
     };
-    let t = library::build_tiers(&out, &Catalog::default(), &mats, &library::Skies::default());
+    let t = library::build_tiers(
+        &out,
+        &Catalog::default(),
+        &mats,
+        &library::Skies::default(),
+        &crate::flora::FloraFile::default(),
+    );
     let e = &t.materials["m"];
     assert_eq!(e.license, "CC0-1.0");
     assert_eq!(e.tiers["2k"].px, 64);
     assert!(e.tiers["2k"].height.is_none() && e.tiers["2k"].bytes > 0);
     assert!(!e.tiers.contains_key("4k"));
     std::fs::remove_dir_all(&out).unwrap();
+}
+
+#[test]
+fn cutouts_find_each_leaf_with_its_petiole_as_pivot() {
+    let mut m = GrayImage::new(200, 100);
+    // two leaves: a blade (wide) with a thin stalk to the left, the second one mirrored
+    let mut leaf = |x0: u32, y: u32, stalk_left: bool| {
+        for dy in 0..40u32 {
+            for dx in 0..60u32 {
+                m.put_pixel(x0 + 30 + dx, y + dy, Luma([255]));
+            }
+        }
+        for dx in 0..30u32 {
+            let x = if stalk_left { x0 + dx } else { x0 + 90 + dx };
+            for dy in 18..22u32 {
+                m.put_pixel(x, y + dy, Luma([255]));
+            }
+        }
+    };
+    leaf(0, 5, true);
+    leaf(0, 55, false);
+    let cuts = crate::flora::cutouts(&m, false);
+    assert_eq!(cuts.len(), 2);
+    // first leaf: pivot at the left end, axis points right; second: the other way round
+    assert!(cuts[0].pivot[0] < 0.05 && cuts[0].axis[0] > 0.9);
+    assert!(cuts[1].pivot[0] > 0.55 && cuts[1].axis[0] < -0.9);
+    assert!(cuts.iter().all(|c| c.length > 0.4 && c.rect[2] > 0.4));
 }

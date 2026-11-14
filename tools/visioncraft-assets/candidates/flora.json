@@ -1,0 +1,1455 @@
+{
+ "leaf_sets": [
+  {
+   "source": "ambientCG",
+   "id": "Foliage001",
+   "genus": null,
+   "genus_from": "",
+   "shape": "linear",
+   "season": "summer",
+   "notes": "grass blades, nine scans"
+  },
+  {
+   "source": "ambientCG",
+   "id": "Foliage002",
+   "genus": null,
+   "genus_from": "",
+   "shape": "grass_panicle",
+   "season": "summer",
+   "notes": "reed-grass panicles on culms"
+  },
+  {
+   "source": "ambientCG",
+   "id": "Foliage005",
+   "genus": null,
+   "genus_from": "",
+   "shape": "linear_broad",
+   "season": "summer",
+   "notes": "three broad grass or strap blades"
+  },
+  {
+   "source": "ambientCG",
+   "id": "Foliage006",
+   "genus": null,
+   "genus_from": "",
+   "shape": "linear",
+   "season": "summer",
+   "notes": "narrow grass blades and stems"
+  },
+  {
+   "source": "ambientCG",
+   "id": "Foliage007",
+   "genus": null,
+   "genus_from": "",
+   "shape": "linear_fine",
+   "season": "summer",
+   "notes": "fine grass stems"
+  },
+  {
+   "source": "ambientCG",
+   "id": "Foliage008",
+   "genus": null,
+   "genus_from": "",
+   "shape": "linear_long",
+   "season": "summer",
+   "notes": "long strap blades"
+  },
+  {
+   "source": "ambientCG",
+   "id": "Leaf001",
+   "genus": null,
+   "genus_from": "",
+   "shape": "ovate_serrate",
+   "season": "summer",
+   "notes": "large ovate serrate leaf, two scans (looks like Hydrangea)"
+  },
+  {
+   "source": "ambientCG",
+   "id": "Leaf003",
+   "genus": null,
+   "genus_from": "",
+   "shape": "pinnate_fine",
+   "season": "summer",
+   "notes": "finely bipinnate leaf (chervil-like), two scans"
+  },
+  {
+   "source": "ambientCG",
+   "id": "LeafSet002",
+   "genus": "Buxus",
+   "genus_from": "eye",
+   "shape": "elliptic",
+   "season": "all",
+   "notes": "box sprigs, small opposite leaves"
+  },
+  {
+   "source": "ambientCG",
+   "id": "LeafSet003",
+   "genus": null,
+   "genus_from": "",
+   "shape": "elliptic_serrate",
+   "season": "summer",
+   "notes": "elliptic serrulate leaves (Prunus/Pyrus type)"
+  },
+  {
+   "source": "ambientCG",
+   "id": "LeafSet004",
+   "genus": "Syringa",
+   "genus_from": "eye",
+   "shape": "cordate",
+   "season": "summer",
+   "notes": "glossy ovate-cordate leaves (lilac)"
+  },
+  {
+   "source": "ambientCG",
+   "id": "LeafSet005",
+   "genus": "Castanea",
+   "genus_from": "eye",
+   "shape": "lanceolate_serrate",
+   "season": "summer",
+   "notes": "long serrate leaves, strong parallel veins, on a twig (sweet chestnut)"
+  },
+  {
+   "source": "ambientCG",
+   "id": "LeafSet009",
+   "genus": "Corylus",
+   "genus_from": "eye",
+   "shape": "ovate_rounded",
+   "season": "summer",
+   "notes": "broad rounded serrate leaves (hazel type)"
+  },
+  {
+   "source": "ambientCG",
+   "id": "LeafSet010",
+   "genus": "Acer",
+   "genus_from": "eye",
+   "shape": "palmate",
+   "season": "summer",
+   "notes": "five-lobed pointed maple leaves"
+  },
+  {
+   "source": "ambientCG",
+   "id": "LeafSet011",
+   "genus": "Fagus",
+   "genus_from": "eye",
+   "shape": "ovate",
+   "season": "autumn",
+   "notes": "brown dry beech-type leaves"
+  },
+  {
+   "source": "ambientCG",
+   "id": "LeafSet012",
+   "genus": "Quercus",
+   "genus_from": "source",
+   "shape": "lobed",
+   "season": "autumn",
+   "notes": "oak leaves, autumn (tag: oak)"
+  },
+  {
+   "source": "ambientCG",
+   "id": "LeafSet013",
+   "genus": "Salix",
+   "genus_from": "eye",
+   "shape": "lanceolate",
+   "season": "summer",
+   "notes": "narrow willow-type leaves"
+  },
+  {
+   "source": "ambientCG",
+   "id": "LeafSet014",
+   "genus": "Carpinus",
+   "genus_from": "eye",
+   "shape": "ovate_serrate",
+   "season": "summer",
+   "notes": "doubly serrate leaves with parallel veins (hornbeam)"
+  },
+  {
+   "source": "ambientCG",
+   "id": "LeafSet016",
+   "genus": "Quercus",
+   "genus_from": "source",
+   "shape": "lobed",
+   "season": "summer",
+   "notes": "oak leaves, spring/summer (tag: oak)"
+  },
+  {
+   "source": "ambientCG",
+   "id": "LeafSet017",
+   "genus": "Hedera",
+   "genus_from": "source",
+   "shape": "palmate",
+   "season": "all",
+   "notes": "ivy leaves (tag: ivy)"
+  },
+  {
+   "source": "ambientCG",
+   "id": "LeafSet018",
+   "genus": "Cornus",
+   "genus_from": "eye",
+   "shape": "lanceolate",
+   "season": "summer",
+   "notes": "broad lanceolate leaves with arcuate veins (dogwood)"
+  },
+  {
+   "source": "ambientCG",
+   "id": "LeafSet019",
+   "genus": null,
+   "genus_from": "",
+   "shape": "scale",
+   "season": "all",
+   "notes": "flattened scale-leaf conifer sprays (Cupressaceae type)"
+  },
+  {
+   "source": "ambientCG",
+   "id": "LeafSet020",
+   "genus": "Taraxacum",
+   "genus_from": "source",
+   "shape": "lobed",
+   "season": "summer",
+   "notes": "dandelion leaves (tag: dandelion)"
+  },
+  {
+   "source": "ambientCG",
+   "id": "LeafSet022",
+   "genus": null,
+   "genus_from": "",
+   "shape": "elliptic",
+   "season": "summer",
+   "notes": "glossy elliptic entire leaves"
+  },
+  {
+   "source": "ambientCG",
+   "id": "LeafSet023",
+   "genus": null,
+   "genus_from": "",
+   "shape": "cordate",
+   "season": "summer",
+   "notes": "cordate acuminate entire leaves"
+  },
+  {
+   "source": "ambientCG",
+   "id": "LeafSet024",
+   "genus": "Fagus",
+   "genus_from": "eye",
+   "shape": "ovate",
+   "season": "summer",
+   "notes": "beech leaves, wavy entire margin, parallel veins"
+  },
+  {
+   "source": "ambientCG",
+   "id": "LeafSet025",
+   "genus": "Geranium",
+   "genus_from": "eye",
+   "shape": "palmate",
+   "season": "summer",
+   "notes": "deeply palmately lobed cranesbill leaves"
+  },
+  {
+   "source": "ambientCG",
+   "id": "LeafSet027",
+   "genus": "Acer",
+   "genus_from": "source",
+   "shape": "palmate",
+   "season": "autumn",
+   "notes": "maple leaves, autumn colours (tag: maple)"
+  },
+  {
+   "source": "ambientCG",
+   "id": "LeafSet029",
+   "genus": "Hedera",
+   "genus_from": "source",
+   "shape": "palmate",
+   "season": "all",
+   "notes": "ivy leaves (tag: ivy)"
+  }
+ ],
+ "bark_sets": [
+  {
+   "source": "Poly Haven",
+   "id": "bark_brown_02",
+   "genus": null,
+   "genus_from": "",
+   "pattern": "furrowed",
+   "notes": "brown vertically furrowed bark"
+  },
+  {
+   "source": "Poly Haven",
+   "id": "bark_platanus",
+   "genus": "Platanus",
+   "genus_from": "source",
+   "pattern": "flaky",
+   "notes": "plane bark, dark flaking plates"
+  },
+  {
+   "source": "Poly Haven",
+   "id": "bark_willow",
+   "genus": "Salix",
+   "genus_from": "source",
+   "pattern": "furrowed",
+   "notes": "willow bark, dark twisted ridges"
+  },
+  {
+   "source": "Poly Haven",
+   "id": "bark_willow_02",
+   "genus": "Salix",
+   "genus_from": "source",
+   "pattern": "furrowed",
+   "notes": "willow bark, pale grey ridges"
+  },
+  {
+   "source": "Poly Haven",
+   "id": "japanese_cedar_bark",
+   "genus": "Cryptomeria",
+   "genus_from": "source",
+   "pattern": "fibrous",
+   "notes": "stringy fibrous cedar bark"
+  },
+  {
+   "source": "Poly Haven",
+   "id": "jolcham_oak_bark_01",
+   "genus": "Quercus",
+   "genus_from": "source",
+   "pattern": "furrowed",
+   "notes": "oak bark, mossy"
+  },
+  {
+   "source": "Poly Haven",
+   "id": "palm_bark",
+   "genus": null,
+   "genus_from": "",
+   "pattern": "fibrous",
+   "notes": "palm trunk bark"
+  },
+  {
+   "source": "Poly Haven",
+   "id": "palm_tree_bark",
+   "genus": null,
+   "genus_from": "",
+   "pattern": "fibrous",
+   "notes": "palm trunk bark, pale"
+  },
+  {
+   "source": "Poly Haven",
+   "id": "sakura_bark",
+   "genus": "Prunus",
+   "genus_from": "source",
+   "pattern": "horizontal_lenticels",
+   "notes": "cherry (sakura) bark with horizontal lenticels"
+  },
+  {
+   "source": "Poly Haven",
+   "id": "tree_bark_03",
+   "genus": null,
+   "genus_from": "",
+   "pattern": "furrowed",
+   "notes": "pale diamond-furrowed bark with moss"
+  },
+  {
+   "source": "Poly Haven",
+   "id": "trident_maple_bark",
+   "genus": "Acer",
+   "genus_from": "source",
+   "pattern": "smooth",
+   "notes": "trident maple bark, smooth brown"
+  },
+  {
+   "source": "ambientCG",
+   "id": "Bark001",
+   "genus": null,
+   "genus_from": "",
+   "pattern": "furrowed",
+   "notes": "deep grey furrows and plates"
+  },
+  {
+   "source": "ambientCG",
+   "id": "Bark002",
+   "genus": null,
+   "genus_from": "",
+   "pattern": "furrowed",
+   "notes": "fine vertical furrows, brown-grey"
+  },
+  {
+   "source": "ambientCG",
+   "id": "Bark004",
+   "genus": "Pinus",
+   "genus_from": "eye",
+   "pattern": "plated",
+   "notes": "pink-grey plated pine bark"
+  },
+  {
+   "source": "ambientCG",
+   "id": "Bark005",
+   "genus": null,
+   "genus_from": "",
+   "pattern": "smooth",
+   "notes": "smooth dark green-grey bark"
+  },
+  {
+   "source": "ambientCG",
+   "id": "Bark009",
+   "genus": null,
+   "genus_from": "",
+   "pattern": "flaky",
+   "notes": "white-cream peeling patches (plane type)"
+  },
+  {
+   "source": "ambientCG",
+   "id": "Bark011",
+   "genus": null,
+   "genus_from": "",
+   "pattern": "smooth",
+   "notes": "smooth pale grey bark"
+  },
+  {
+   "source": "ambientCG",
+   "id": "Bark012",
+   "genus": "Quercus",
+   "genus_from": "source",
+   "pattern": "furrowed",
+   "notes": "oak bark (tag: oak)"
+  },
+  {
+   "source": "ambientCG",
+   "id": "Bark014",
+   "genus": null,
+   "genus_from": "",
+   "pattern": "scaly",
+   "notes": "red-brown scaly bark (spruce type)"
+  }
+ ],
+ "species": {
+  "quercus-robur": {
+   "leaf": [
+    "LeafSet016",
+    "genus"
+   ],
+   "leaf_autumn": "LeafSet012",
+   "bark": [
+    "jolcham_oak_bark_01",
+    "genus"
+   ]
+  },
+  "fagus-sylvatica": {
+   "leaf": [
+    "LeafSet024",
+    "genus"
+   ],
+   "leaf_autumn": "LeafSet011",
+   "bark": [
+    "Bark011",
+    "shape"
+   ]
+  },
+  "betula-pendula": {
+   "leaf": [
+    "LeafSet014",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": [
+    "Bark009",
+    "shape"
+   ]
+  },
+  "tilia-cordata": {
+   "leaf": [
+    "LeafSet023",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": [
+    "Bark002",
+    "shape"
+   ]
+  },
+  "acer-campestre": {
+   "leaf": [
+    "LeafSet010",
+    "genus"
+   ],
+   "leaf_autumn": "LeafSet027",
+   "bark": [
+    "Bark002",
+    "shape"
+   ]
+  },
+  "acer-palmatum": {
+   "leaf": [
+    "LeafSet010",
+    "genus"
+   ],
+   "leaf_autumn": "LeafSet027",
+   "bark": [
+    "trident_maple_bark",
+    "genus"
+   ]
+  },
+  "salix-sepulcralis": {
+   "leaf": [
+    "LeafSet013",
+    "genus"
+   ],
+   "leaf_autumn": null,
+   "bark": [
+    "bark_willow",
+    "genus"
+   ]
+  },
+  "populus-nigra-italica": {
+   "leaf": [
+    "LeafSet023",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": [
+    "Bark001",
+    "shape"
+   ]
+  },
+  "carpinus-betulus": {
+   "leaf": [
+    "LeafSet014",
+    "genus"
+   ],
+   "leaf_autumn": null,
+   "bark": [
+    "Bark011",
+    "shape"
+   ]
+  },
+  "malus-domestica": {
+   "leaf": [
+    "LeafSet003",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": [
+    "Bark012",
+    "shape"
+   ]
+  },
+  "prunus-serrulata": {
+   "leaf": [
+    "LeafSet003",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": [
+    "sakura_bark",
+    "genus"
+   ]
+  },
+  "magnolia-soulangeana": {
+   "leaf": [
+    "LeafSet022",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": [
+    "Bark011",
+    "shape"
+   ]
+  },
+  "sorbus-aucuparia": {
+   "leaf": [
+    "LeafSet003",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": [
+    "Bark011",
+    "shape"
+   ]
+  },
+  "juglans-regia": {
+   "leaf": [
+    "LeafSet022",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": [
+    "Bark001",
+    "shape"
+   ]
+  },
+  "platanus-hispanica": {
+   "leaf": [
+    "LeafSet010",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": [
+    "bark_platanus",
+    "genus"
+   ]
+  },
+  "olea-europaea": {
+   "leaf": [
+    "LeafSet013",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": [
+    "Bark001",
+    "shape"
+   ]
+  },
+  "pinus-sylvestris": {
+   "leaf": null,
+   "leaf_autumn": null,
+   "bark": [
+    "Bark004",
+    "genus"
+   ]
+  },
+  "picea-abies": {
+   "leaf": null,
+   "leaf_autumn": null,
+   "bark": [
+    "Bark014",
+    "shape"
+   ]
+  },
+  "abies-nordmanniana": {
+   "leaf": null,
+   "leaf_autumn": null,
+   "bark": [
+    "Bark011",
+    "shape"
+   ]
+  },
+  "taxus-baccata": {
+   "leaf": null,
+   "leaf_autumn": null,
+   "bark": [
+    "Bark014",
+    "shape"
+   ]
+  },
+  "thuja-smaragd": {
+   "leaf": [
+    "LeafSet019",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": [
+    "japanese_cedar_bark",
+    "shape"
+   ]
+  },
+  "cupressus-sempervirens": {
+   "leaf": [
+    "LeafSet019",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": [
+    "japanese_cedar_bark",
+    "shape"
+   ]
+  },
+  "trachycarpus-fortunei": {
+   "leaf": null,
+   "leaf_autumn": null,
+   "bark": [
+    "palm_bark",
+    "shape"
+   ]
+  },
+  "buxus-sempervirens": {
+   "leaf": [
+    "LeafSet002",
+    "genus"
+   ],
+   "leaf_autumn": null,
+   "bark": [
+    "Bark005",
+    "shape"
+   ]
+  },
+  "hydrangea-macrophylla": {
+   "leaf": [
+    "Leaf001",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "rhododendron": {
+   "leaf": [
+    "LeafSet022",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": [
+    "Bark005",
+    "shape"
+   ]
+  },
+  "prunus-laurocerasus": {
+   "leaf": [
+    "LeafSet022",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": [
+    "Bark005",
+    "shape"
+   ]
+  },
+  "lavandula-angustifolia": {
+   "leaf": [
+    "Foliage006",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "rosa-shrub": {
+   "leaf": [
+    "LeafSet003",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "buddleja-davidii": {
+   "leaf": [
+    "LeafSet018",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": [
+    "Bark002",
+    "shape"
+   ]
+  },
+  "cornus-alba": {
+   "leaf": [
+    "LeafSet018",
+    "genus"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "phyllostachys": {
+   "leaf": [
+    "LeafSet013",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "buxus-ball": {
+   "leaf": [
+    "LeafSet002",
+    "genus"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "taxus-cone": {
+   "leaf": null,
+   "leaf_autumn": null,
+   "bark": [
+    "Bark014",
+    "shape"
+   ]
+  },
+  "taxus-hedge": {
+   "leaf": null,
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "ligustrum-hedge": {
+   "leaf": [
+    "LeafSet022",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "lawn-tuft": {
+   "leaf": [
+    "Foliage001",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "miscanthus-sinensis": {
+   "leaf": [
+    "Foliage008",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "cortaderia-selloana": {
+   "leaf": [
+    "Foliage008",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "pennisetum-alopecuroides": {
+   "leaf": [
+    "Foliage006",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "festuca-glauca": {
+   "leaf": [
+    "Foliage007",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "calamagrostis-acutiflora": {
+   "leaf": [
+    "Foliage002",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "hosta": {
+   "leaf": [
+    "LeafSet004",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "hemerocallis": {
+   "leaf": [
+    "Foliage008",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "geranium-rozanne": {
+   "leaf": [
+    "LeafSet025",
+    "genus"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "nepeta-faassenii": {
+   "leaf": [
+    "LeafSet003",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "echinacea-purpurea": {
+   "leaf": [
+    "LeafSet018",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "dryopteris-filix-mas": {
+   "leaf": [
+    "Leaf003",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "hedera-ground": {
+   "leaf": [
+    "LeafSet017",
+    "genus"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "hedera-wall": {
+   "leaf": [
+    "LeafSet029",
+    "genus"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "acer-platanoides": {
+   "leaf": [
+    "LeafSet010",
+    "genus"
+   ],
+   "leaf_autumn": "LeafSet027",
+   "bark": [
+    "Bark002",
+    "shape"
+   ]
+  },
+  "aesculus-hippocastanum": {
+   "leaf": [
+    "LeafSet003",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": [
+    "Bark001",
+    "shape"
+   ]
+  },
+  "fraxinus-excelsior": {
+   "leaf": [
+    "LeafSet005",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": [
+    "tree_bark_03",
+    "shape"
+   ]
+  },
+  "alnus-glutinosa": {
+   "leaf": [
+    "LeafSet009",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": [
+    "Bark002",
+    "shape"
+   ]
+  },
+  "salix-alba": {
+   "leaf": [
+    "LeafSet013",
+    "genus"
+   ],
+   "leaf_autumn": null,
+   "bark": [
+    "bark_willow_02",
+    "genus"
+   ]
+  },
+  "castanea-sativa": {
+   "leaf": [
+    "LeafSet005",
+    "genus"
+   ],
+   "leaf_autumn": null,
+   "bark": [
+    "bark_brown_02",
+    "shape"
+   ]
+  },
+  "robinia-pseudoacacia": {
+   "leaf": [
+    "LeafSet022",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": [
+    "Bark001",
+    "shape"
+   ]
+  },
+  "pyrus-communis": {
+   "leaf": [
+    "LeafSet003",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": [
+    "Bark012",
+    "shape"
+   ]
+  },
+  "prunus-domestica": {
+   "leaf": [
+    "LeafSet003",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": [
+    "Bark002",
+    "shape"
+   ]
+  },
+  "ficus-carica": {
+   "leaf": [
+    "LeafSet010",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": [
+    "Bark011",
+    "shape"
+   ]
+  },
+  "liquidambar-styraciflua": {
+   "leaf": [
+    "LeafSet010",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": [
+    "Bark001",
+    "shape"
+   ]
+  },
+  "larix-decidua": {
+   "leaf": null,
+   "leaf_autumn": null,
+   "bark": [
+    "Bark014",
+    "shape"
+   ]
+  },
+  "cupressocyparis-hedge": {
+   "leaf": [
+    "LeafSet019",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "pinus-mugo": {
+   "leaf": null,
+   "leaf_autumn": null,
+   "bark": [
+    "Bark004",
+    "genus"
+   ]
+  },
+  "phoenix-canariensis": {
+   "leaf": null,
+   "leaf_autumn": null,
+   "bark": [
+    "palm_tree_bark",
+    "shape"
+   ]
+  },
+  "forsythia": {
+   "leaf": [
+    "LeafSet003",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "syringa-vulgaris": {
+   "leaf": [
+    "LeafSet004",
+    "genus"
+   ],
+   "leaf_autumn": null,
+   "bark": [
+    "Bark002",
+    "shape"
+   ]
+  },
+  "sambucus-nigra": {
+   "leaf": [
+    "LeafSet003",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": [
+    "Bark002",
+    "shape"
+   ]
+  },
+  "ilex-aquifolium": {
+   "leaf": [
+    "LeafSet022",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": [
+    "Bark005",
+    "shape"
+   ]
+  },
+  "viburnum-opulus": {
+   "leaf": [
+    "LeafSet010",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "photinia-red-robin": {
+   "leaf": [
+    "LeafSet022",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "spiraea-vanhouttei": {
+   "leaf": [
+    "LeafSet003",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "weigela-florida": {
+   "leaf": [
+    "LeafSet003",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "mahonia-aquifolium": {
+   "leaf": [
+    "LeafSet022",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "skimmia-japonica": {
+   "leaf": [
+    "LeafSet022",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "hibiscus-syriacus": {
+   "leaf": [
+    "LeafSet003",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "pieris-japonica": {
+   "leaf": [
+    "LeafSet022",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "fargesia-hedge": {
+   "leaf": [
+    "LeafSet013",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "laurocerasus-hedge": {
+   "leaf": [
+    "LeafSet022",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "thuja-hedge": {
+   "leaf": [
+    "LeafSet019",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "photinia-hedge": {
+   "leaf": [
+    "LeafSet022",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "buxus-edging": {
+   "leaf": [
+    "LeafSet002",
+    "genus"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "laurus-standard": {
+   "leaf": [
+    "LeafSet022",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": [
+    "Bark005",
+    "shape"
+   ]
+  },
+  "tilia-pleached": {
+   "leaf": [
+    "LeafSet023",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": [
+    "Bark002",
+    "shape"
+   ]
+  },
+  "carex-oshimensis": {
+   "leaf": [
+    "Foliage008",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "hakonechloa-macra": {
+   "leaf": [
+    "Foliage008",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "panicum-virgatum": {
+   "leaf": [
+    "Foliage006",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "typha-latifolia": {
+   "leaf": [
+    "Foliage005",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "delphinium-elatum": {
+   "leaf": [
+    "LeafSet025",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "heuchera": {
+   "leaf": [
+    "LeafSet025",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "astilbe-arendsii": {
+   "leaf": [
+    "Leaf003",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "salvia-nemorosa": {
+   "leaf": [
+    "LeafSet003",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "rudbeckia-fulgida": {
+   "leaf": [
+    "LeafSet018",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "phlox-paniculata": {
+   "leaf": [
+    "LeafSet018",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "iris-germanica": {
+   "leaf": [
+    "Foliage008",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "alchemilla-mollis": {
+   "leaf": [
+    "LeafSet025",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "bergenia-cordifolia": {
+   "leaf": [
+    "LeafSet009",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "anemone-hupehensis": {
+   "leaf": [
+    "LeafSet025",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "tulipa-clump": {
+   "leaf": [
+    "Foliage005",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "narcissus-clump": {
+   "leaf": [
+    "Foliage005",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "allium-purple-sensation": {
+   "leaf": [
+    "Foliage005",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "vinca-minor": {
+   "leaf": [
+    "LeafSet022",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "pachysandra-terminalis": {
+   "leaf": [
+    "LeafSet003",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "thymus-serpyllum": {
+   "leaf": [
+    "LeafSet002",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "wisteria-wall": {
+   "leaf": [
+    "LeafSet022",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "rosa-climbing-wall": {
+   "leaf": [
+    "LeafSet003",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "clematis-wall": {
+   "leaf": [
+    "LeafSet004",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "solanum-lycopersicum": {
+   "leaf": null,
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "lactuca-sativa": {
+   "leaf": [
+    "LeafSet020",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "rheum-rhabarbarum": {
+   "leaf": [
+    "LeafSet023",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "fragaria-patch": {
+   "leaf": [
+    "LeafSet003",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "iris-pseudacorus": {
+   "leaf": [
+    "Foliage008",
+    "shape"
+   ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "ginkgo-biloba": {
+   "leaf": null,
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "paeonia-lactiflora": {
+   "leaf": null,
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "lupinus-polyphyllus": {
+   "leaf": null,
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "sedum-herbstfreude": {
+   "leaf": null,
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "parthenocissus-wall": {
+   "leaf": null,
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "nymphaea-patch": {
+   "leaf": null,
+   "leaf_autumn": null,
+   "bark": null
+  }
+ }
+}
