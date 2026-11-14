@@ -103,7 +103,17 @@ enum Replace {
     New,
 }
 
+/// The compare wipe: the view as planted beside the view at the years set.
+struct Compare {
+    texture: egui::TextureHandle,
+    /// Where the handle is, 0..1 across the view.
+    wipe: f32,
+    /// The years the live view showed when the picture was taken.
+    years: f32,
+}
+
 pub struct App {
+    compare: Option<Compare>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     egui_renderer: Arc<egui::mutex::RwLock<egui_wgpu::Renderer>>,
@@ -183,6 +193,7 @@ impl App {
         let was_restored = restored.is_some();
         let inbox = Inbox::default();
         let mut app = Self {
+            compare: None,
             device: state.device.clone(),
             queue: state.queue.clone(),
             egui_renderer: state.renderer.clone(),
@@ -425,6 +436,86 @@ impl App {
     }
 
     /// A lossless picture of the 3D view at the canvas' physical resolution, without the panels.
+    /// Pictures the view as planted (year 0) for the compare wipe; the live view shows the
+    /// years set. Blocks until the young plants are generated.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn take_compare(&mut self, ctx: &egui::Context) {
+        let [w, h] = self.studio.size;
+        if w == 0 || h == 0 {
+            return;
+        }
+        let years = self.studio.project().view.years.unwrap_or(0.0);
+        self.studio.set_years_draft(Some(0.0));
+        let pixels = self.studio.render_pixels(&self.device, &self.queue, w, h);
+        self.studio.set_years_draft(None);
+        match pixels {
+            Ok(px) => {
+                let image = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &px);
+                let texture = ctx.load_texture("compare", image, egui::TextureOptions::LINEAR);
+                self.compare = Some(Compare {
+                    texture,
+                    wipe: 0.5,
+                    years,
+                });
+            }
+            Err(e) => self.toasts.error(format!("Compare failed: {e}")),
+        }
+    }
+
+    /// The planted picture over the left of the view up to a handle that drags.
+    fn compare_wipe(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
+        self.studio.compare_open = self.compare.is_some();
+        let Some(c) = &mut self.compare else {
+            return;
+        };
+        let x = rect.left() + rect.width() * c.wipe;
+        let left = egui::Rect::from_min_max(rect.min, egui::pos2(x, rect.bottom()));
+        ui.painter().with_clip_rect(left).image(
+            c.texture.id(),
+            rect,
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+            egui::Color32::WHITE,
+        );
+        let handle = egui::Rect::from_center_size(
+            egui::pos2(x, rect.center().y),
+            egui::vec2(16.0, rect.height()),
+        );
+        let r = ui.interact(handle, ui.id().with("compare-wipe"), egui::Sense::drag());
+        if r.dragged()
+            && let Some(p) = r.interact_pointer_pos()
+        {
+            c.wipe = ((p.x - rect.left()) / rect.width()).clamp(0.02, 0.98);
+        }
+        let stroke = egui::Stroke::new(2.0, egui::Color32::WHITE);
+        ui.painter().line_segment(
+            [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+            stroke,
+        );
+        ui.painter()
+            .circle_filled(egui::pos2(x, rect.center().y), 8.0, egui::Color32::WHITE);
+        let font = egui::FontId::proportional(15.0);
+        let label = |ui: &egui::Ui, at: egui::Pos2, align: Align2, text: String| {
+            ui.painter()
+                .text(at, align, text, font.clone(), egui::Color32::WHITE);
+        };
+        label(
+            ui,
+            egui::pos2(x - 12.0, rect.bottom() - 70.0),
+            Align2::RIGHT_BOTTOM,
+            strings::COMPARE_PLANTED.to_string(),
+        );
+        label(
+            ui,
+            egui::pos2(x + 12.0, rect.bottom() - 70.0),
+            Align2::LEFT_BOTTOM,
+            format!("{} {}", strings::COMPARE_YEAR, c.years),
+        );
+        if self.studio.compare_close {
+            self.studio.compare_close = false;
+            self.compare = None;
+        }
+    }
+
     fn start_screenshot(&mut self) {
         let [w, h] = self.studio.size;
         self.studio.prepare();
@@ -1260,6 +1351,10 @@ impl eframe::App for App {
         busy |= self.studio.animating()
             || self.studio.plants_pending() > 0
             || !self.studio.scene.library.idle();
+        #[cfg(not(target_arch = "wasm32"))]
+        if std::mem::take(&mut self.studio.compare_requested) {
+            self.take_compare(ui.ctx());
+        }
         self.studio.prepare();
         let mut encoder = self.device.create_command_encoder(&Default::default());
         let view = self.studio.renderer.render(&mut encoder);
@@ -1289,6 +1384,7 @@ impl eframe::App for App {
             egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
             egui::Color32::WHITE,
         );
+        self.compare_wipe(ui, rect);
 
         // Smoothed rate of consecutive frames; a pause between repaints (idle) does not count, but
         // a slow frame after a repaint request does (else Auto never sees a scene it cannot draw).

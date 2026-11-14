@@ -286,6 +286,32 @@ impl ViewsState {
                         );
                     }
                 });
+                // The years after planting this view shows: its own, or the project's.
+                let years =
+                    cx.s.project()
+                        .viewpoints
+                        .iter()
+                        .find(|v| v.id == id)
+                        .and_then(|v| v.years);
+                ui.horizontal(|ui| {
+                    let mut own = years.is_some();
+                    if ui.checkbox(&mut own, t::VIEW_YEARS).changed() {
+                        let y = own.then(|| cx.s.project().view.years.unwrap_or(0.0));
+                        cx.run("viewpoint.update", json!({"id": id, "years": y}));
+                    }
+                    if let Some(mut y) = years
+                        && ui
+                            .add(
+                                egui::DragValue::new(&mut y)
+                                    .range(0.0..=60.0)
+                                    .speed(0.2)
+                                    .suffix(" y"),
+                            )
+                            .drag_stopped()
+                    {
+                        cx.run("viewpoint.update", json!({"id": id, "years": y}));
+                    }
+                });
                 if ui.button(t::UPDATE_VIEW).clicked() {
                     let mut p = Self::pose(cx);
                     p["id"] = json!(id);

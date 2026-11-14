@@ -418,6 +418,19 @@ fn years_fields(ui: &mut egui::Ui, cx: &mut Cx) {
             cx.s.set_years_draft(None);
             cx.run("view.set", json!({"years": y}));
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        if ui
+            .button(t::COMPARE)
+            .on_hover_text(t::COMPARE_TIP)
+            .clicked()
+        {
+            // Toggles: the app closes an open wipe, else takes the picture.
+            if cx.s.compare_open {
+                cx.s.compare_close = true;
+            } else {
+                cx.s.compare_requested = true;
+            }
+        }
         for step in [0.0, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0] {
             if ui
                 .selectable_label(committed == Some(step), format!("{step}"))

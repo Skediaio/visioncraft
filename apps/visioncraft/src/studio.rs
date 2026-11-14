@@ -73,6 +73,12 @@ pub struct Studio {
     /// The species editor's plant: drawn, never part of the session's project.
     pub species_preview: Option<(visioncraft_core::CustomSpecies, Generator)>,
     pub time_draft: Option<SunTime>,
+    /// The Compare button: a picture as planted is to be taken (`App::take_compare`), or the
+    /// wipe closed.
+    pub compare_requested: bool,
+    pub compare_close: bool,
+    /// Whether the wipe shows (set by the app each frame).
+    pub compare_open: bool,
     /// The years after planting while the Years slider is dragged (`set_years_draft`).
     years_draft: Option<f32>,
     pub site_draft: Option<Site>,
@@ -281,6 +287,9 @@ impl Studio {
             species_preview: None,
             time_draft: None,
             years_draft: None,
+            compare_requested: false,
+            compare_close: false,
+            compare_open: false,
             site_draft: None,
             highlight: None,
             pointer_captured: false,
@@ -532,6 +541,19 @@ impl Studio {
         w: u32,
         h: u32,
     ) -> Result<Vec<u8>, String> {
+        let pixels = self.render_pixels(device, queue, w, h)?;
+        // Lossless truecolour (what `ui.screenshot` and agents send on).
+        png_rgb(&pixels, w, h)
+    }
+
+    /// The 3D view at `w` x `h` as RGBA8 once every plant is generated (blocks until then).
+    pub fn render_pixels(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        w: u32,
+        h: u32,
+    ) -> Result<Vec<u8>, String> {
         if w == 0 || h == 0 || w > 8192 || h > 8192 {
             return Err(format!("picture size {w}x{h} outside 1x1..=8192x8192"));
         }
@@ -557,8 +579,7 @@ impl Studio {
             self.targets_changed = true;
         }
         polled.map_err(|e| format!("the GPU did not finish: {e}"))?;
-        // Lossless truecolour (what `ui.screenshot` and agents send on).
-        png_rgb(&pixels.ok_or("reading the picture back failed")?, w, h)
+        pixels.ok_or_else(|| "reading the picture back failed".to_string())
     }
 
     /// Swaps the geometry of an existing model, touching nothing else. Returns warnings and the
