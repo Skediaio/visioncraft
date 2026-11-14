@@ -51,8 +51,8 @@ pub enum BudgetClass {
 impl BudgetClass {
     pub fn triangles(self, lod: Lod) -> usize {
         let t = match self {
-            BudgetClass::LargeTree => [12_000, 3_500, 600],
-            BudgetClass::SmallTree => [8_000, 2_500, 400],
+            BudgetClass::LargeTree => [12_000, 3_500, 1_500],
+            BudgetClass::SmallTree => [8_000, 2_500, 1_000],
             BudgetClass::Shrub => [2_500, 800, 150],
             BudgetClass::Herb => [600, 200, 40],
             BudgetClass::Tuft => [60, 24, 8],
