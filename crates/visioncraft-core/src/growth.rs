@@ -82,6 +82,8 @@ pub const GROWTH: &[(&str, Grower, f32, f32, f32, f32)] = &[
     ("calamagrostis-acutiflora", Grass, 1.6, 0.6, 3.0, 0.5),
     ("hosta", Perennial, 0.7, 0.9, 3.0, 0.5),
     ("hemerocallis", Perennial, 0.9, 0.8, 3.0, 0.5),
+    ("narcissus", Perennial, 0.35, 0.25, 2.0, 0.5),
+    ("helleborus", Perennial, 0.4, 0.5, 3.0, 0.5),
     ("geranium-rozanne", Perennial, 0.5, 0.7, 3.0, 0.5),
     ("nepeta-faassenii", Perennial, 0.5, 0.6, 3.0, 0.5),
     ("echinacea-purpurea", Perennial, 0.9, 0.5, 3.0, 0.5),
