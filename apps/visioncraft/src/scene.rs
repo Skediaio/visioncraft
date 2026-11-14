@@ -414,13 +414,41 @@ struct Group {
     /// levels) still means new items.
     impostor: Option<ImpostorId>,
     matrices: Vec<Mat4>,
+    /// The growth stage its plants are drawn at (`When::age`), and the one wanted (the same
+    /// once generated).
+    age: Option<u8>,
+    want: Option<u8>,
+}
+
+/// What a plant generation depends on besides the species: the month (its season) and, while
+/// the years after planting are shown, its growth stage in tenths of maturity (1..=9; none: full
+/// grown).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct When {
+    month: u8,
+    age: Option<u8>,
+}
+
+impl When {
+    /// The flora cache class and the parameters to generate with.
+    fn class(&self, params: &flora::PlantParams) -> (u32, flora::PlantParams) {
+        let mut p = params.clone();
+        if let Some(a) = self.age {
+            p.age = f32::from(a) / 10.0;
+        }
+        (
+            plants::class(params, self.month) | (u32::from(self.age.unwrap_or(0)) << 8),
+            p,
+        )
+    }
 }
 
 type LodParts = Vec<(MeshId, MaterialId, f32)>;
 
 struct GenGpu {
-    /// What the evaluation depended on besides the ground: the generator, the month, visibility.
-    sig: (Generator, u8, bool),
+    /// What the evaluation depended on besides the ground: the generator, the month, visibility,
+    /// the years after planting shown.
+    sig: (Generator, u8, bool, Option<u32>),
     /// The dirty-log stamp it was evaluated at, and where it puts plants.
     stamp: u64,
     bounds: Option<Rect>,
@@ -874,6 +902,31 @@ impl Scene {
             return;
         };
         let class = plants::class(&res.params, month);
+        // Grass thins under the crowns of trees (as grown for the years shown): their circles,
+        // a little inside the drip line.
+        let crowns: Vec<[f32; 3]> = project
+            .generators
+            .iter()
+            .filter_map(|g| {
+                let Generator::Single(s) = g else { return None };
+                let gr = visioncraft_core::growth::growth_of(&s.asset, None);
+                matches!(
+                    gr.grower,
+                    visioncraft_core::growth::Grower::Tree
+                        | visioncraft_core::growth::Grower::Conifer
+                )
+                .then(|| {
+                    let width = match project.view.years {
+                        Some(y) => {
+                            let planted = s.planted_age_years.unwrap_or(gr.planted_age_years);
+                            gr.mature_width_m * gr.size(planted + y).width
+                        }
+                        None => gr.mature_width_m,
+                    };
+                    [s.position[0], s.position[2], width * s.scale * 0.4]
+                })
+            })
+            .collect();
         let mut owners: Vec<&String> = self.owners.keys().collect();
         owners.sort();
         type Faces = Vec<(usize, visioncraft_core::material::Lawn3d, [f32; 3])>;
@@ -914,6 +967,7 @@ impl Scene {
             let over_key: Vec<u32> = over
                 .iter()
                 .flat_map(|o| o.iter().flat_map(|p| [p[0].to_bits(), p[1].to_bits()]))
+                .chain(crowns.iter().flat_map(|c| c.map(f32::to_bits)))
                 .collect();
             let key = (
                 o.key.geom.clone(),
@@ -960,6 +1014,7 @@ impl Scene {
             let color = faces[0].2;
             let (geom, xf) = (o.geom.clone(), o.xf);
             let over: Vec<Vec<[f32; 2]>> = over.iter().map(|a| a.to_vec()).collect();
+            let crowns = crowns.clone();
             let slot = plants::spawn(move || {
                 // One matrix list per variant, so the lawn does not repeat one tuft.
                 let mut by_variant: Vec<Vec<Mat4>> = vec![Vec::new(); plants::VARIANTS as usize];
@@ -975,6 +1030,14 @@ impl Scene {
                         }
                         let p = xf.transform_point3(Vec3::from(t.position));
                         if over.iter().any(|a| inside_outline([p.x, p.z], a)) {
+                            continue;
+                        }
+                        // Under a crown, three tufts in five go (shade): deterministic by place.
+                        let shaded = crowns
+                            .iter()
+                            .any(|c| (p.x - c[0]).powi(2) + (p.z - c[1]).powi(2) < c[2] * c[2]);
+                        let hash = ((p.x * 7919.0) as i32 ^ (p.z * 104729.0) as i32) as u32;
+                        if shaded && hash.wrapping_mul(2654435761) % 5 < 3 {
                             continue;
                         }
                         let s = (t.height_m / 0.08).clamp(0.3, 2.5);
@@ -1111,7 +1174,12 @@ impl Scene {
         }
         let month = project.time.month as u8;
         for g in &project.generators {
-            let sig = (g.clone(), month, project.layer_visible(g.layer()));
+            let sig = (
+                g.clone(),
+                month,
+                project.layer_visible(g.layer()),
+                project.view.years.map(f32::to_bits),
+            );
             let bounds = match g {
                 Generator::SurfaceFill(f) => self
                     .owners
@@ -1124,6 +1192,7 @@ impl Scene {
             if let Some(o) = &mut old
                 && o.sig == sig
                 && !self.dirty.touches(o.stamp, o.bounds)
+                && !self.growth_stale(project, month, &o.groups)
             {
                 if o.flora_rev != self.flora.rev || o.library_rev != self.library.rev {
                     self.upgrade(r, project, assets, month, &mut o.groups);
@@ -1140,10 +1209,100 @@ impl Scene {
         }
     }
 
+    /// While the project shows years after planting: the growth stage a planting's plants of
+    /// `asset` are generated at (tenths of maturity; none: full grown) and the scale that brings
+    /// them from it to their exact size. Catalogue models only scale.
+    fn growth_stage(
+        &self,
+        project: &Project,
+        assets: &[Asset],
+        g: &Generator,
+        asset: &str,
+    ) -> (Option<u8>, f32, bool) {
+        let Some(years) = project.view.years else {
+            return (None, 1.0, false);
+        };
+        let size = self.custom_sizes.get(asset).copied().or_else(|| {
+            assets
+                .iter()
+                .find(|a| a.id == asset)
+                .map(|a| (a.size_m[1], a.size_m[0].max(a.size_m[2])))
+        });
+        let growth = visioncraft_core::growth::growth_of(asset, size);
+        let planted = g.planted_age_years().unwrap_or(growth.planted_age_years);
+        let s = growth.size(planted + years).height;
+        let flora = !self.library.knows(asset) && plants::resolve(project, asset).is_some();
+        if !flora {
+            return (None, s, false);
+        }
+        let tenth = ((s * 10.0).round() as u8).clamp(1, 10);
+        ((tenth < 10).then_some(tenth), s, true)
+    }
+
+    /// The stage to draw a group at: the wanted one when generated, else the nearest one that
+    /// is (scaled to size meanwhile, so dragging the years is smooth), and the scale to apply.
+    fn stage_to_draw(
+        &mut self,
+        project: &Project,
+        asset: &str,
+        variant: u32,
+        month: u8,
+        (want, s, flora): (Option<u8>, f32, bool),
+    ) -> (Option<u8>, f32) {
+        if !flora {
+            return (None, s);
+        }
+        let ready = |me: &Self, a: Option<u8>| {
+            me.source(project, asset, variant, When { month, age: a })
+                .is_some()
+        };
+        let tenths = |a: Option<u8>| f32::from(a.unwrap_or(10));
+        let chosen = if ready(self, want) {
+            want
+        } else {
+            // Ask for the wanted stage, draw the nearest ready one meanwhile.
+            if let Some(res) = plants::resolve(project, asset) {
+                let (class, params) = When { month, age: want }.class(&res.params);
+                self.flora.want(asset, class, month, &params);
+            }
+            let mut stages: Vec<Option<u8>> = (1..10).map(Some).chain([None]).collect();
+            stages.sort_by(|a, b| {
+                (tenths(*a) - tenths(want))
+                    .abs()
+                    .total_cmp(&(tenths(*b) - tenths(want)).abs())
+            });
+            stages.into_iter().find(|a| ready(self, *a)).unwrap_or(want)
+        };
+        (chosen, s / (tenths(chosen) / 10.0))
+    }
+
+    /// Whether a group draws a stand-in stage while its wanted one has since been generated.
+    fn growth_stale(
+        &self,
+        project: &Project,
+        month: u8,
+        groups: &HashMap<(String, u32), Group>,
+    ) -> bool {
+        groups.iter().any(|((asset, variant), grp)| {
+            grp.age != grp.want
+                && self
+                    .source(
+                        project,
+                        asset,
+                        *variant,
+                        When {
+                            month,
+                            age: grp.want,
+                        },
+                    )
+                    .is_some()
+        })
+    }
+
     /// What a group draws as its real self: a catalogue asset's resident LOD parts (the
     /// catalogue wins over a plant of the same id), else the generated plant. `None` while only a
     /// stand-in can show.
-    fn source(&self, project: &Project, asset: &str, variant: u32, month: u8) -> Option<LodParts> {
+    fn source(&self, project: &Project, asset: &str, variant: u32, when: When) -> Option<LodParts> {
         if self.library.knows(asset) {
             let mut parts = self.library.parts(asset)?;
             // Small objects (a pot, a bench) stop drawing far away, at a size-proportional distance.
@@ -1164,7 +1323,7 @@ impl Scene {
             return Some(parts);
         }
         let res = plants::resolve(project, asset)?;
-        let class = plants::class(&res.params, month);
+        let (class, _) = when.class(&res.params);
         self.flora.parts(asset, class, variant).map(<[_]>::to_vec)
     }
 
@@ -1178,7 +1337,7 @@ impl Scene {
         assets: &[Asset],
         asset: &str,
         variant: u32,
-        month: u8,
+        when: When,
         src: Option<&LodParts>,
         matrices: &[Mat4],
     ) -> Vec<ItemId> {
@@ -1190,7 +1349,7 @@ impl Scene {
                 .and_then(flora::Species::by_id)
                 .is_some_and(|s| matches!(s.params.form, flora::Form::Clipped(_)));
             r.set_item_shadow_exact(item, clipped);
-            let impostor = self.impostor_for(project, asset, variant, month);
+            let impostor = self.impostor_for(project, asset, variant, when);
             let last = parts.iter().map(|p| p.2).fold(0.0, f32::max);
             match impostor {
                 // fails only for a removed impostor: the tree then stops at its far mesh
@@ -1211,8 +1370,8 @@ impl Scene {
             .flatten();
         let protos = match plant {
             Some(res) => {
-                let class = plants::class(&res.params, month);
-                self.flora.want(asset, class, month, &res.params);
+                let (class, params) = when.class(&res.params);
+                self.flora.want(asset, class, when.month, &params);
                 let stand_in = placeholder::flora_asset(asset, &res);
                 self.proto(r, asset, Some(&stand_in))
             }
@@ -1231,13 +1390,13 @@ impl Scene {
         project: &Project,
         asset: &str,
         variant: u32,
-        month: u8,
+        when: When,
     ) -> Option<(ImpostorId, f32, bool)> {
         if self.library.knows(asset) {
             return None;
         }
         let res = plants::resolve(project, asset)?;
-        let class = plants::class(&res.params, month);
+        let (class, _) = when.class(&res.params);
         self.flora.impostor(asset, class, variant)
     }
 
@@ -1252,9 +1411,13 @@ impl Scene {
         groups: &mut HashMap<(String, u32), Group>,
     ) {
         for ((asset, variant), grp) in groups.iter_mut() {
-            let src = self.source(project, asset, *variant, month);
+            let when = When {
+                month,
+                age: grp.age,
+            };
+            let src = self.source(project, asset, *variant, when);
             let imp = self
-                .impostor_for(project, asset, *variant, month)
+                .impostor_for(project, asset, *variant, when)
                 .map(|i| i.0);
             if src == grp.parts && imp == grp.impostor {
                 continue;
@@ -1266,7 +1429,7 @@ impl Scene {
                 assets,
                 asset,
                 *variant,
-                month,
+                when,
                 src.as_ref(),
                 &grp.matrices,
             );
@@ -1285,7 +1448,7 @@ impl Scene {
         project: &Project,
         assets: &[Asset],
         g: &Generator,
-        sig: (Generator, u8, bool),
+        sig: (Generator, u8, bool, Option<u32>),
         bounds: Option<Rect>,
         old: Option<GenGpu>,
     ) -> GenGpu {
@@ -1305,16 +1468,29 @@ impl Scene {
         for (asset, variant, matrices) in
             plant_scene::group_placements(&placements, plants::VARIANTS)
         {
+            // Grown for the years shown: a growth stage to generate at, and the scale to it.
+            let stage = self.growth_stage(project, assets, g, &asset);
+            let want = stage.0;
+            let (age, k) = self.stage_to_draw(project, &asset, variant, month, stage);
+            let matrices: Vec<Mat4> = if k == 1.0 {
+                matrices
+            } else {
+                matrices
+                    .into_iter()
+                    .map(|m| m * Mat4::from_scale(Vec3::splat(k)))
+                    .collect()
+            };
+            let when = When { month, age };
             if self.library.knows(&asset) {
                 // the library streams the level the nearest instance needs
                 self.library.note(g.id(), &asset, &matrices);
             }
-            let src = self.source(project, &asset, variant, month);
+            let src = self.source(project, &asset, variant, when);
             let imp = self
-                .impostor_for(project, &asset, variant, month)
+                .impostor_for(project, &asset, variant, when)
                 .map(|i| i.0);
             let items = match old_groups.remove(&(asset.clone(), variant)) {
-                Some(prev) if prev.parts == src && prev.impostor == imp => {
+                Some(prev) if prev.parts == src && prev.impostor == imp && prev.age == age => {
                     prev.items
                         .iter()
                         .for_each(|i| r.set_instances(*i, &matrices));
@@ -1330,7 +1506,7 @@ impl Scene {
                         assets,
                         &asset,
                         variant,
-                        month,
+                        when,
                         src.as_ref(),
                         &matrices,
                     )
@@ -1343,6 +1519,8 @@ impl Scene {
                     parts: src,
                     impostor: imp,
                     matrices,
+                    age,
+                    want,
                 },
             );
         }

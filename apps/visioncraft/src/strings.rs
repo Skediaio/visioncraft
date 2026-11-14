@@ -206,6 +206,10 @@ pub const PLACE_PERSON: &str = "Place person";
 pub const SUMMER_TIME: &str = "Summer time follows the date";
 pub const EXPOSURE_AUTO: &str = "Auto exposure";
 pub const LOOK: &str = "Look";
+pub const YEARS: &str = "Years";
+pub const YEARS_GROW: &str = "Show growth";
+pub const YEARS_TIP: &str = "Years after planting: plants grow from their planting age along their species' curve. Library plants change form as they grow; catalogue models only scale.";
+pub const YEARS_CONFLICTS: &str = "Growing into each other";
 pub const CLOUDS: &str = "Clouds";
 pub const CLOUD_KINDS: [(&str, &str); 3] = [
     ("clear", "Clear"),

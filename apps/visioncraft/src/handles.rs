@@ -182,6 +182,7 @@ mod tests {
         Generator::AreaScatter(AreaScatter {
             id: "g1".into(),
             name: "Area".into(),
+            planted_age_years: None,
             layer: "planting".into(),
             asset_palette: pal(),
             outline: vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]],
@@ -201,6 +202,7 @@ mod tests {
         Generator::Single(Single {
             id: "g2".into(),
             name: "S".into(),
+            planted_age_years: None,
             layer: "planting".into(),
             asset: "flora:quercus-robur".into(),
             position: [5.0, 1.0, 5.0],
@@ -266,6 +268,7 @@ mod tests {
         let line = Generator::SplineMass(SplineMass {
             id: "g3".into(),
             name: "L".into(),
+            planted_age_years: None,
             layer: "planting".into(),
             asset_palette: pal(),
             points: vec![[0.0, 0.0], [5.0, 0.0]],
@@ -317,6 +320,7 @@ mod tests {
         let c = Generator::Cluster(Cluster {
             id: "g4".into(),
             name: "C".into(),
+            planted_age_years: None,
             layer: "planting".into(),
             asset_palette: pal(),
             center: [1.0, 1.0],

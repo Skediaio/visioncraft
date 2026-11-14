@@ -303,6 +303,7 @@ fn panel_body(ui: &mut egui::Ui, cx: &mut Cx) {
             ),
         );
     });
+    years_fields(ui, cx);
     match time_edit {
         Edit::Live => cx.s.time_draft = Some(time),
         Edit::Done => {
@@ -385,6 +386,79 @@ fn follow_summer_time(cx: &mut Cx) {
     let want = offset_for(cx.s.base_offset, &cx.s.project().time);
     if (want - cx.s.project().site.utc_offset_hours).abs() > 1e-6 {
         cx.run("site.set", json!({"utc_offset_hours": want}));
+    }
+}
+
+/// Years after planting: a slider (0..30) with the usual steps, live while dragged, and the
+/// conflicts that growing brings.
+fn years_fields(ui: &mut egui::Ui, cx: &mut Cx) {
+    let committed = cx.s.project().view.years;
+    ui.horizontal_wrapped(|ui| {
+        ui.label(t::YEARS).on_hover_text(t::YEARS_TIP);
+        let mut grow = committed.is_some();
+        if ui.checkbox(&mut grow, t::YEARS_GROW).changed() {
+            cx.s.set_years_draft(None);
+            cx.run(
+                "view.set",
+                json!({"years": if grow { Some(0.0) } else { None }}),
+            );
+        }
+        let Some(now) = cx.s.years_draft().or(committed) else {
+            return;
+        };
+        let mut y = now;
+        let r = ui.add(
+            egui::Slider::new(&mut y, 0.0..=30.0)
+                .step_by(0.5)
+                .suffix(" y"),
+        );
+        if r.dragged() {
+            cx.s.set_years_draft(Some(y));
+        } else if r.drag_stopped() || (r.changed() && Some(y) != committed) {
+            cx.s.set_years_draft(None);
+            cx.run("view.set", json!({"years": y}));
+        }
+        for step in [0.0, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0] {
+            if ui
+                .selectable_label(committed == Some(step), format!("{step}"))
+                .clicked()
+            {
+                cx.s.set_years_draft(None);
+                cx.run("view.set", json!({"years": step}));
+            }
+        }
+    });
+    if let Some(years) = committed
+        && let Ok(c) = cx.s.session.run(
+            "planting.growth_conflicts",
+            json!({"years": years.max(0.0)}),
+        )
+        && let Some(list) = c["conflicts"].as_array()
+        && !list.is_empty()
+    {
+        egui::CollapsingHeader::new(egui::RichText::new(t::YEARS_CONFLICTS).small())
+            .id_salt("sun-growth-conflicts")
+            .show(ui, |ui| {
+                for c in list.iter().take(12) {
+                    let with = if c["kind"] == "wall" {
+                        format!(
+                            "the wall of {}",
+                            c["with_name"].as_str().unwrap_or("a block")
+                        )
+                    } else {
+                        c["with_name"]
+                            .as_str()
+                            .unwrap_or("another plant")
+                            .to_string()
+                    };
+                    ui.small(format!(
+                        "{} reaches {} in year {}",
+                        c["name"].as_str().unwrap_or("A plant"),
+                        with,
+                        c["year"]
+                    ));
+                }
+            });
     }
 }
 

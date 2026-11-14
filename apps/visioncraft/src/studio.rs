@@ -73,6 +73,8 @@ pub struct Studio {
     /// The species editor's plant: drawn, never part of the session's project.
     pub species_preview: Option<(visioncraft_core::CustomSpecies, Generator)>,
     pub time_draft: Option<SunTime>,
+    /// The years after planting while the Years slider is dragged (`set_years_draft`).
+    years_draft: Option<f32>,
     pub site_draft: Option<Site>,
     pub highlight: Option<(String, usize)>,
     /// A tool uses the primary drag (a handle, a stroke): the camera does not orbit. Tools set it
@@ -278,6 +280,7 @@ impl Studio {
             draft: None,
             species_preview: None,
             time_draft: None,
+            years_draft: None,
             site_draft: None,
             highlight: None,
             pointer_captured: false,
@@ -608,12 +611,28 @@ impl Studio {
             Some(Draft::Terrain(t)) => p.to_mut().terrain = Some(t.clone()),
             None => {}
         }
+        if let Some(y) = self.years_draft {
+            p.to_mut().view.years = Some(y);
+        }
         if let Some((sp, g)) = &self.species_preview {
             let p = p.to_mut();
             p.species.push(sp.clone());
             p.generators.push(g.clone());
         }
         p
+    }
+
+    /// Shows the plants at `years` after planting without a command (while a slider moves);
+    /// `None` returns to the project's setting.
+    pub fn set_years_draft(&mut self, years: Option<f32>) {
+        if self.years_draft != years {
+            self.years_draft = years;
+            self.draft_serial += 1;
+        }
+    }
+
+    pub fn years_draft(&self) -> Option<f32> {
+        self.years_draft
     }
 
     pub fn sync(&mut self) {

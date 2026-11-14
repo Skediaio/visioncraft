@@ -315,6 +315,7 @@ impl Camera {
             target: t.to_array(),
             fov_y_deg: self.fov_y.to_degrees(),
             time: None,
+            years: None,
         };
         if self.view != View::Orbit {
             self.look_from(p, t);

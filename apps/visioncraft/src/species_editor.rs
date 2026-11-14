@@ -105,6 +105,7 @@ impl SpeciesEditor {
                 id: PREVIEW_GENERATOR.into(),
                 name: e.name.clone(),
                 layer: "planting".into(),
+                planted_age_years: None,
                 asset: id,
                 position: [p.x, y, p.z],
                 rotation_y_deg: 0.0,

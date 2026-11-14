@@ -248,6 +248,11 @@ impl ViewsState {
             {
                 cx.run("time.set", json!({"year": time.year, "month": time.month, "day": time.day, "hour": time.hour}));
             }
+            if let Some(years) = v.years
+                && Some(years) != cx.s.project().view.years
+            {
+                cx.run("view.set", json!({"years": years}));
+            }
         }
         if let Some((id, index)) = reorder {
             cx.run("viewpoint.reorder", json!({"id": id, "index": index}));

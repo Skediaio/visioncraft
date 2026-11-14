@@ -257,6 +257,7 @@ mod tests {
         let c = Generator::Cluster(Cluster {
             id: "g1".into(),
             name: "c".into(),
+            planted_age_years: None,
             layer: "planting".into(),
             asset_palette: vec![Weighted {
                 asset: "a".into(),
