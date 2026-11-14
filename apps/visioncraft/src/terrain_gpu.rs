@@ -174,6 +174,8 @@ impl TerrainGpu {
                     base_color: look.color,
                     roughness: look.roughness,
                     variation: look.variation,
+                    relief: look.relief,
+                    roughness_offset: -look.gloss,
                 }
             })
             .collect();

@@ -40,6 +40,9 @@ pub struct Overlay {
     /// Multiplies the pictures (linear): plaster's photo is a cold white that merged with snow
     /// and sky; a render's plaster is a slightly warm off-white.
     pub tint: [f32; 3],
+    /// Normal map strength and gloss offset (negative: rougher) over the photo's own maps.
+    pub relief: f32,
+    pub gloss: f32,
 }
 
 fn spec_of_entry(m: &LibMaterial) -> TexSpec {
@@ -78,6 +81,15 @@ pub fn overlay(lib: &Library, m: &Material) -> Option<Overlay> {
             // so the ground beyond the blades matches them instead of reading olive.
             "lawn" => [0.74, 1.0, 0.45],
             _ => [1.0; 3],
+        },
+        // A lawn is a mat of blades and beach sand a few millimetres of ripple: neither shines
+        // like the scanned samples' roughness maps suggest at grazing sun, and the sand photo's
+        // relief is a wind-rippled dune's, too deep for a beach at a low sun.
+        relief: if m.id == "sand" { 0.35 } else { 1.0 },
+        gloss: match m.id.as_str() {
+            "lawn" => -0.4,
+            "sand" => -0.25,
+            _ => 0.0,
         },
     })
 }
