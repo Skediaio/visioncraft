@@ -81,6 +81,8 @@ struct Draw {
 @group(3) @binding(3) var linear_depth: texture_2d<f32>;
 // The scene mirrored about the water plane (reflection pass), pre-exposed HDR.
 @group(3) @binding(4) var planar_reflection: texture_2d<f32>;
+// A photo's previous sample, pre-exposed HDR (1x1 outside photos): the bounce light's source.
+@group(3) @binding(5) var previous_hdr: texture_2d<f32>;
 
 // MSAA sample count of the pipeline (depth pre-pass coverage mask).
 override SAMPLES: u32 = 1u;
@@ -841,13 +843,65 @@ fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, screen_effe
     // Ambient: diffuse irradiance from the sky's SH, specular from the
     // prefiltered environment cube with the split-sum BRDF fit.
     let r = reflect(-v, n);
-    let ambient_diffuse = diffuse_color * sh_irradiance(n) / PI * ao;
+    var ambient_diffuse = diffuse_color * sh_irradiance(n) / PI * ao;
+    // Photos from their second sample on: the diffuse light arriving from the scene itself,
+    // gathered along two cosine-distributed rays per sample against the depth buffer and lit
+    // by the previous sample (so bounces add up over the samples); where a ray leaves the
+    // picture or finds nothing, the sky's light as before.
+    if g.grade.w >= 1.0 {
+        ambient_diffuse = diffuse_color * photo_bounce(in.world, n, in.clip.xy, ao);
+    }
     // Specular occlusion from AO: Lagarde & de Rousiers 2014, section 4.10.2.
     let spec_ao = clamp(pow(nov + ao, exp2(-16.0 * s.roughness - 1.0)) - 1.0 + ao, 0.0, 1.0);
     let ambient_specular = env_brdf_approx(f0, s.roughness, nov) * environment(r, s.roughness) * spec_ao;
     let local = local_lights(in.world, n, v, nov, diffuse_color, f0, a, foliage);
     let emitted = s.emissive * g.time.y;
     return Shaded(apply_fog(sun + ambient_diffuse + ambient_specular + local + emitted, in.world), s.base.a);
+}
+
+// One cosine-weighted ray from `p` along a direction about `n`: the radiance it brings (the
+// previous sample's colour where it meets a surface in the depth buffer, else the sky, dimmed
+// by `ao` for the occlusion the coarse march cannot see).
+fn bounce_ray(p: vec3<f32>, n: vec3<f32>, r1: f32, r2: f32, ao: f32) -> vec3<f32> {
+    let phi = 2.0 * PI * r1;
+    let s = sqrt(r2);
+    let t = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), abs(n.x) > 0.9);
+    let a = normalize(cross(t, n));
+    let b = cross(n, a);
+    let d = normalize(a * cos(phi) * s + b * sin(phi) * s + n * sqrt(max(1.0 - r2, 0.0)));
+    let full = vec2<f32>(textureDimensions(previous_hdr));
+    let ld = vec2<f32>(textureDimensions(linear_depth));
+    var dist = 0.08;
+    for (var i = 0; i < 12; i++) {
+        let q = p + n * 0.02 + d * dist;
+        let c = g.view_proj * vec4<f32>(q, 1.0);
+        if c.w <= 0.0 {
+            break;
+        }
+        let ndc = c.xy / c.w;
+        if any(abs(ndc) > vec2<f32>(1.0)) {
+            break;
+        }
+        let uv = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+        let behind = -(g.view * vec4<f32>(q, 1.0)).z - textureLoad(linear_depth, vec2<i32>(uv * ld), 0).r;
+        if behind > 0.03 && behind < 0.6 + dist * 0.2 {
+            return textureLoad(previous_hdr, vec2<i32>(uv * full), 0).rgb;
+        }
+        dist *= 1.45;
+    }
+    return sh_irradiance(d) / PI * ao;
+}
+
+fn photo_bounce(p: vec3<f32>, n: vec3<f32>, pixel: vec2<f32>, ao: f32) -> vec3<f32> {
+    let k = g.grade.w;
+    var sum = vec3<f32>(0.0);
+    for (var i = 0; i < 2; i++) {
+        let o = vec2<f32>(f32(i) * 37.0, f32(i) * 11.0);
+        let r1 = fract(ign(pixel + o) + k * 0.618034);
+        let r2 = fract(ign(pixel.yx + o + vec2<f32>(13.0, 7.0)) + k * 0.754878);
+        sum += bounce_ray(p, n, r1, r2, ao);
+    }
+    return sum * 0.5;
 }
 
 @fragment

@@ -115,6 +115,7 @@ impl Renderer {
             &self.shadow_sampler,
             &self.post_sampler,
             &self.white,
+            false,
         );
         let stride = (width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
         let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -404,6 +405,7 @@ impl Renderer {
             &self.shadow_sampler,
             &self.post_sampler,
             &self.white,
+            true,
         );
         let sampled = (quality.msaa != self.quality.msaa).then(|| {
             SampledPipelines::new(
@@ -557,6 +559,12 @@ impl Renderer {
         );
         self.shadow_jitter = Vec3::ZERO;
         self.photo_seed = 0.0;
+        // The next sample gathers its bounce light from this one.
+        encoder.copy_texture_to_texture(
+            targets.hdr_texture.as_image_copy(),
+            targets.prev_hdr.as_image_copy(),
+            targets.prev_hdr.size(),
+        );
         let src = targets.output.create_view(&wgpu::TextureViewDescriptor {
             format: Some(self.output_format.add_srgb_suffix()),
             ..Default::default()

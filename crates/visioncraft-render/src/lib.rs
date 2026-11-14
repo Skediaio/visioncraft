@@ -671,6 +671,10 @@ struct Targets {
     depth: wgpu::TextureView,
     hdr_msaa: Option<wgpu::TextureView>,
     hdr: wgpu::TextureView,
+    hdr_texture: wgpu::Texture,
+    /// A photo's previous sample (`photo`: full size, else 1x1): what the one-bounce diffuse
+    /// light of the next sample gathers.
+    prev_hdr: wgpu::Texture,
     linear_depth: wgpu::TextureView,
     occlusion: [wgpu::TextureView; 2],
     output: wgpu::Texture,
@@ -1062,6 +1066,7 @@ impl Renderer {
             &shadow_sampler,
             &post_sampler,
             &white,
+            false,
         );
         let mipmapper = texture::Mipmapper::new(device, module(&modules, "mip"));
         let sun = Sun::from_angles(180.0, 45.0);
@@ -3511,7 +3516,8 @@ impl Renderer {
             self.grade.0,
             self.grade.1,
             if self.indoors { 1.0 } else { 0.0 },
-            self.photo_seed,
+            // The mirrored camera of the planar reflection gathers no bounce light.
+            if clip.is_some() { 0.0 } else { self.photo_seed },
         ]);
         // Clouds drift with the wind, about 3 m/s in a moderate breeze, by the unwrapped clock
         // (the shader clock wraps every 68 minutes): continuous for weeks of running.
@@ -3576,6 +3582,7 @@ impl Renderer {
             &self.shadow_sampler,
             &self.post_sampler,
             &self.white,
+            false,
         );
     }
 }
@@ -4089,6 +4096,7 @@ impl Layouts {
                     texture_entry(2, unfilterable, D::D2, false),
                     texture_entry(3, unfilterable, D::D2, false),
                     texture_entry(4, filterable, D::D2, false),
+                    texture_entry(5, unfilterable, D::D2, false),
                 ],
             ),
             depth_ms: layout("depth ms", &[texture_entry(0, S::Depth, D::D2, true)]),
@@ -4811,6 +4819,7 @@ impl Targets {
         shadow_sampler: &wgpu::Sampler,
         post_sampler: &wgpu::Sampler,
         white: &wgpu::TextureView,
+        photo: bool,
     ) -> Self {
         let samples = quality.samples();
         let scale = quality.render_scale.clamp(0.5, 1.0);
@@ -4846,7 +4855,16 @@ impl Targets {
         let sampled = attach | wgpu::TextureUsages::TEXTURE_BINDING;
         let depth = view(texture("depth", DEPTH, samples, sampled));
         let hdr_msaa = (samples > 1).then(|| view(texture("hdr msaa", HDR, samples, attach)));
-        let hdr = view(texture("hdr", HDR, 1, sampled));
+        let hdr_texture = texture("hdr", HDR, 1, sampled | wgpu::TextureUsages::COPY_SRC);
+        let hdr = view(hdr_texture.clone());
+        let prev_hdr = texture_sized(
+            "previous hdr",
+            HDR,
+            1,
+            wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            if photo { (width, height) } else { (1, 1) },
+        );
+        let prev_view = view(prev_hdr.clone());
         let linear_depth = view(texture("linear depth", LINEAR_DEPTH, 1, sampled));
         // Half resolution unless the quality asks for full: AO and contact
         // shadows are low-frequency.
@@ -4971,7 +4989,8 @@ impl Targets {
         };
         let forward = |occlusion: &wgpu::TextureView,
                        linear_depth: &wgpu::TextureView,
-                       reflection: &wgpu::TextureView| {
+                       reflection: &wgpu::TextureView,
+                       previous: &wgpu::TextureView| {
             bind(
                 "forward",
                 &l.forward,
@@ -4981,6 +5000,7 @@ impl Targets {
                     (2, wgpu::BindingResource::TextureView(occlusion)),
                     (3, wgpu::BindingResource::TextureView(linear_depth)),
                     (4, wgpu::BindingResource::TextureView(reflection)),
+                    (5, wgpu::BindingResource::TextureView(previous)),
                 ],
             )
         };
@@ -5009,12 +5029,14 @@ impl Targets {
             fxaa_bind: post(&ldr[0], white),
             upscale_bind: [post(&ldr[0], white), post(&ldr[1], white)],
             overlay_bind: bind("overlay", &l.texture, &[(0, tv(&linear_depth))]),
-            forward_bind: forward(&occlusion[0], &linear_depth, &reflection),
-            reflect_forward_bind: forward(white, white, white),
+            forward_bind: forward(&occlusion[0], &linear_depth, &reflection, &prev_view),
+            reflect_forward_bind: forward(white, white, white, white),
             resolve_bind,
             depth,
             hdr_msaa,
             hdr,
+            hdr_texture,
+            prev_hdr,
             linear_depth,
             occlusion,
             output,
