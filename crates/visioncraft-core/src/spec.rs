@@ -322,6 +322,10 @@ pub fn example_project(command: &str) -> crate::project::Project {
             "shape.add_extrusion",
             json!({"name": "Fence", "outline": [[0, 0], [10, 0]], "closed": false, "height": 1.8}),
         ),
+        (
+            "shape.add_opening",
+            json!({"id": "S2", "side": 0, "offset_m": 3.0}),
+        ),
         ("material.add", json!({"name": "Spare material"})),
         (
             "planting.add_brush",

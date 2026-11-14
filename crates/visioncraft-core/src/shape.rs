@@ -56,6 +56,9 @@ pub struct Extrusion {
     /// Data of other tools by namespace, kept untouched.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extensions: Extensions,
+    /// A closed block's roof, windows, doors and plinth (`crate::house`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub house: Option<crate::house::House>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -281,6 +284,17 @@ struct Builder {
     triangles: Vec<Vec<[u32; 3]>>,
 }
 
+impl crate::house::Sink for Builder {
+    fn tri(&mut self, face: usize, v: [[f32; 3]; 3], outward: [f32; 3]) {
+        Builder::tri(self, face, v, outward);
+    }
+}
+
+/// `shoelace` for the house module.
+pub(crate) fn shoelace_f32(ring: &[P2]) -> f64 {
+    shoelace(ring)
+}
+
 impl Builder {
     /// A triangle on `face`, wound so its normal agrees with `outward`; degenerate ones are dropped.
     fn tri(&mut self, face: usize, v: [[f32; 3]; 3], outward: [f32; 3]) {
@@ -384,6 +398,11 @@ pub fn shape_mesh(shape: &Shape) -> Result<ImportedModel, ShapeError> {
             if !e.closed {
                 names.extend([format!("{id}:start"), format!("{id}:end")]);
             }
+            let house = e.house.as_ref().filter(|_| e.closed);
+            let first_house = names.len();
+            if house.is_some() {
+                names.extend(crate::house::HOUSE_FACES.map(|f| format!("{id}:{f}")));
+            }
             let mut b = Builder {
                 model: ImportedModel::default(),
                 triangles: vec![Vec::new(); names.len()],
@@ -394,6 +413,21 @@ pub fn shape_mesh(shape: &Shape) -> Result<ImportedModel, ShapeError> {
             // For a positive shoelace (counter-clockwise on the x/z plane) the wall of an edge
             // `d` faces along `(dz, -dx)`; for a negative one the other way.
             let sign = if shoelace(&ring) > 0.0 { 1.0 } else { -1.0 };
+            if let Some(h) = house {
+                crate::house::walls(
+                    &mut b,
+                    h,
+                    &ring,
+                    sign,
+                    (lo, hi),
+                    &|i| ring_face[i],
+                    first_house,
+                );
+                let note = crate::house::roof(&mut b, h, &ring, hi, first_house);
+                let mut m = b.finish(id, &e.name, names);
+                m.warnings.extend(note);
+                return Ok(m);
+            }
             for (i, &face) in ring_face.iter().enumerate() {
                 let (p, q) = (ring[i], ring[(i + 1) % ring.len()]);
                 let outward = [sign * (q[1] - p[1]), 0.0, -sign * (q[0] - p[0])];
@@ -586,6 +620,7 @@ mod tests {
             height: 3.0,
             thickness: 0.2,
             extensions: Default::default(),
+            house: None,
         })
     }
 
@@ -600,6 +635,7 @@ mod tests {
             height: 2.0,
             thickness: 0.4,
             extensions: Default::default(),
+            house: None,
         })
     }
 

@@ -49,6 +49,7 @@ pub(super) fn register(s: &mut Session) {
                 param("thickness", T::Number, "Width of an open extrusion; ignored when closed.").unit("m").default(json!(0.2)),
                 layer(),
                 material(),
+                param("roof", T::Object, "A closed block's roof, making it a house: {kind: flat|gable|hip|lean_to, pitch_deg, overhang_m, parapet_m}; windows and doors then go in with shape.add_opening."),
             ],
             "{id}; faces `<id>:top`, `:bottom`, `:side(n)` (n = outline edge), and `:start`, `:end` when open",
             json!({"name": "House", "outline": [[2, 2], [8, 2], [8, 6], [2, 6]], "height": 3.0, "base": 0.0}),
@@ -243,6 +244,8 @@ fn add_extrusion(project: &mut Project, params: &Value) -> Result<Value, Command
         thickness: f32,
         layer: Option<String>,
         material: Option<String>,
+        /// A closed block's roof (`crate::house::Roof`): it becomes a house.
+        roof: Option<crate::house::Roof>,
     }
     fn yes() -> bool {
         true
@@ -251,7 +254,16 @@ fn add_extrusion(project: &mut Project, params: &Value) -> Result<Value, Command
         0.2
     }
     let p: P = parse(params)?;
-    add(project, (p.layer, p.material), |id, layer| {
+    let house = match (p.roof, p.closed) {
+        (Some(roof), true) => Some(crate::house::House {
+            roof,
+            ..Default::default()
+        }),
+        (Some(_), false) => return Err(fail("only a closed block takes a roof")),
+        (None, _) => None,
+    };
+    let roofed = house.is_some();
+    let r = add(project, (p.layer, p.material), |id, layer| {
         Shape::Extrusion(Extrusion {
             id,
             name: p.name,
@@ -262,8 +274,13 @@ fn add_extrusion(project: &mut Project, params: &Value) -> Result<Value, Command
             height: p.height,
             thickness: p.thickness,
             extensions: Default::default(),
+            house,
         })
-    })
+    })?;
+    if roofed && let Some(id) = r["id"].as_str() {
+        super::house::default_materials(project, id);
+    }
+    Ok(r)
 }
 
 /// Applies `f` to a copy of the shape and keeps it only if it still meshes.

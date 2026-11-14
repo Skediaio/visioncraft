@@ -7,6 +7,7 @@
 pub mod catalog;
 mod commands;
 pub mod export;
+pub mod house;
 mod import;
 pub mod light;
 pub mod material;
