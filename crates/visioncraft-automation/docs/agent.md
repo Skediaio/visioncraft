@@ -333,9 +333,15 @@ plants of its season. A viewpoint keeps its own season (`season` on `viewpoint.a
 `viewpoint.update`). `view.set {snow: 0..1}` lays snow on what faces up and lies open to the sky:
 ground, lawns, roofs, terraces, hedge tops, evergreen crowns, branches, wall tops and sills, not
 under roofs or dense evergreens; from about 0.55 it buries the lawn's blades, from 0.3 the fallen
-leaves, and from about 0.5 the pond freezes. About 0.7 is a snowy winter (the window's Snowy);
-with snow and the default sky the sky turns a bright overcast. Snow is kept whatever the season:
-set it back to 0 for spring.
+leaves, and from about 0.5 the pond freezes. About 0.7 is a snowy winter (the window's Snowy).
+Snow lies only in winter: `view.set {snow}` in another season is refused (give `season:
+"winter"` with it), and a date moved out of winter keeps the value but draws no snow.
+
+A viewpoint shows the project's season and time unless it keeps its own (`time` or `season` on
+`viewpoint.add`; the window's "Keep the time of this view"): choosing a season changes every
+other view. `view.render` takes `season` and `snow` for one picture (snow alone brings winter),
+and so does the CLI: `visioncraft-cli render garden.visioncraft --viewpoint Pond --season winter
+--snow 0.7 --out snowy.png`.
 
 ## Known traps
 
