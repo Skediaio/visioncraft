@@ -23,7 +23,6 @@ nothing here is a promise of a date.
 - **Weathering:** dirt, moss and wear on walls and paving, so materials stop looking new.
 - **Tree form:** a better branch solver in the plant generator, compared against reference scans
   of real plants.
-
 - **North and site:** turn the whole drawing against north after the fact, and set the site by
   address or coordinates, so the sun is right without knowing compass directions.
 - **Sun hours:** hours of sun per day for any spot or area, as a number and as a map over the
@@ -38,6 +37,14 @@ nothing here is a promise of a date.
   converted to the drawing's metres and north.
 - **Quantities:** areas, lengths, volumes and counts per object and per material as a query, so
   tools built on top can list what a design contains.
+
+- **Curves:** outlines with arcs and smooth curves for paths, borders and lawns, with the same
+  typed-size precision as straight edges.
+- **Levels:** steps and stairs, retaining walls, raised beds and terraces at different heights
+  as first-class shapes.
+- **Fences and screens:** generated along a line (slats, panels, posts, gates), like hedges.
+- **Denser borders:** layered perennial plantings that close up, with flowers that read from
+  eye level.
 
 ## Later
 
