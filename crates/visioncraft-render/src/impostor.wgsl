@@ -325,6 +325,7 @@ struct BakeOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) normal: vec3<f32>,
+    @location(2) @interpolate(flat) face: u32,
 }
 
 @vertex
@@ -333,6 +334,7 @@ fn vs_bake(v: VertexIn) -> BakeOut {
     out.clip = cascade.view_proj * vec4<f32>(v.position, 1.0);
     out.uv = v.uv;
     out.normal = v.normal;
+    out.face = v.face;
     return out;
 }
 
