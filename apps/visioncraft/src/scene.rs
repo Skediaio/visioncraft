@@ -2184,15 +2184,21 @@ impl Scene {
     }
 
     /// The world triangles that block the sky for the sky visibility volume: the visible
-    /// imported models' faces, less glass (drawn shapes and objects are left out: a garden's
-    /// walls and furniture are the screen-space occlusion's to darken).
+    /// imported models' faces and the drawn houses' (blocks with a roof, windows or doors), less
+    /// glass. Other shapes and objects are left out: a garden's walls and furniture are the
+    /// screen-space occlusion's to darken.
     pub fn sky_occluders(&self, project: &Project) -> Vec<[[f32; 3]; 3]> {
         let mut ids: Vec<&String> = self.owners.keys().collect();
         ids.sort();
         let mut out = Vec::new();
         for id in ids {
             let o = &self.owners[id];
-            if !o.key.visible || o.is_shape || o.is_area {
+            let house = || {
+                project.shapes.iter().any(|s| {
+                    matches!(s, Shape::Extrusion(e) if &e.id == id && e.closed && e.house.is_some())
+                })
+            };
+            if !o.key.visible || o.is_area || (o.is_shape && !house()) {
                 continue;
             }
             let materials = resolve_materials(project, id, &o.geom);
