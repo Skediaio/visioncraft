@@ -216,7 +216,17 @@ impl TerrainTool {
         } else if cx.input.backspace {
             self.pond.pop();
         }
-        let close = 0.6 * (cx.s.camera.eye().length().max(5.0) / 20.0);
+        // Twelve points on screen around the first corner, in metres (the old guess from the
+        // eye's distance to the origin took 4 m in a plan and closed ponds a corner early).
+        let h = cx.input.rect.height().max(1.0);
+        let close = if cx.s.camera.view == crate::camera::View::Top {
+            12.0 * 2.0 * cx.s.camera.top_half_height / h
+        } else {
+            let d = self.pond.first().map_or(10.0, |q| {
+                cx.s.camera.eye().distance(Vec3::new(q[0], 0.0, q[1]))
+            });
+            12.0 * 2.0 * (cx.s.camera.fov_y / 2.0).tan() * d / h
+        };
         if let Some(g) = ground {
             let p = [g.x, g.z];
             if cx.input.clicked {
