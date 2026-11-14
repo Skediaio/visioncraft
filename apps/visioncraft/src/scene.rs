@@ -1758,7 +1758,11 @@ impl Scene {
         let month = u32::from(project.plant_month());
         self.terrain_gpu
             .sync_layers(r, project, &mut self.library, &mut |m, lib| {
-                look_of(m, lib, month)
+                // Mowing stripes belong to the drawn lawn, not the ground round it.
+                Look {
+                    stripes: 0,
+                    ..look_of(m, lib, month)
+                }
             });
         // The endless ground wears the terrain's base layer, so the terrain's edge cannot be
         // seen against it (one ground look, in the overview and in the plan).
@@ -1771,7 +1775,10 @@ impl Scene {
             .map_or("lawn", |l| l.material.as_str());
         let base = project.materials.iter().find(|m| m.id == base_id);
         let ground = base.map(|m| {
-            let look = look_of(m, &mut self.library, month);
+            let look = Look {
+                stripes: 0,
+                ..look_of(m, &mut self.library, month)
+            };
             self.material(r, &look)
         });
         r.set_ground_material(ground);

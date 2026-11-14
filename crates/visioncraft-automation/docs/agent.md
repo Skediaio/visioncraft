@@ -86,6 +86,11 @@ The model's `bbox` in `document.inspect` is in world space, after the transform.
 
 `S1:side(2)` runs from outline point 2 to point 3: here the south facade at z = 8.
 
+A lawn can be mown in stripes: `material.update {"id": "lawn", "kind": {"type": "lawn3d",
+"density_per_m2": 2000, "blade_height_m": 0.04, "seed": 1, "stripes_m": 0.9, "stripes_deg": 0}}`
+(bands 0.3 to 5 m wide, their direction clockwise from north; `stripes_m: 0` for none). The bands
+read lighter and darker by the side they are seen from, as mown grass does.
+
 ### 4. A hedge along a boundary
 
 ```json recipe
