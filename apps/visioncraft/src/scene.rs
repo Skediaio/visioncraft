@@ -207,17 +207,50 @@ fn gpu_material(look: &Look) -> visioncraft_render::Material {
     }
 }
 
-/// A plant mesh part (positions, normals, UVs, wind) into the renderer.
-pub fn upload_plant_mesh(r: &mut Renderer, p: &flora::MeshPart) -> Option<MeshId> {
+/// A plant mesh part (positions, normals, UVs, wind) into the renderer; a `crown` (the foliage
+/// of a plant) with the sky occlusion of its leaves (`crown_occlusion`).
+pub fn upload_plant_mesh(r: &mut Renderer, p: &flora::MeshPart, crown: bool) -> Option<MeshId> {
+    let occlusion = crown.then(|| crown_occlusion(&p.positions));
     let mesh = visioncraft_render::Mesh {
         positions: &p.positions,
         normals: &p.normals,
         indices: &p.indices,
-        face_ids: None,
+        face_ids: occlusion.as_deref(),
         uvs: Some(&p.uvs),
         wind: Some(&p.wind),
     };
     r.add_mesh(&mesh).ok()
+}
+
+/// Tag of a face id that carries a leaf's sky occlusion in its low 16 bits (scene.wgsl's
+/// `CROWN_TAG`); plain face ids are small numbers.
+const CROWN_TAG: u32 = 0xC000_0000;
+
+/// Per leaf vertex, how much sky it sees through the crown, as a tagged face id: leaves deep
+/// under the crown's top and inside it see little (an ellipsoid round the leaves' bounds; light
+/// falls through a crown in a few layers of leaves). The tops keep most of it, the bottom inside down
+/// to about a third, so a crown seen from above is not one pale, evenly lit surface; the sun
+/// on a leaf is dimmed by it too (scene.wgsl `light`).
+pub fn crown_occlusion(positions: &[[f32; 3]]) -> Vec<u32> {
+    let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+    for p in positions {
+        lo = lo.min(Vec3::from(*p));
+        hi = hi.max(Vec3::from(*p));
+    }
+    let (c, rad) = ((lo + hi) * 0.5, ((hi - lo) * 0.5).max(Vec3::splat(1e-3)));
+    positions
+        .iter()
+        .map(|p| {
+            let q = (Vec3::from(*p) - c) / rad;
+            let top = c.y + rad.y * (1.0 - q.x * q.x - q.z * q.z).max(0.0).sqrt();
+            let below = ((top - p[1]) / (2.0 * rad.y)).clamp(0.0, 1.0);
+            let inside = (1.0 - q.length()).clamp(0.0, 1.0);
+            let s = below.min(0.75) / 0.75;
+            // Even the top leaves have neighbours that hide part of the sky.
+            let sky = (0.85 - 0.45 * s * s * (3.0 - 2.0 * s) - 0.2 * inside).max(0.3);
+            CROWN_TAG | (sky * 65535.0) as u32
+        })
+        .collect()
 }
 
 pub fn upload_texture(

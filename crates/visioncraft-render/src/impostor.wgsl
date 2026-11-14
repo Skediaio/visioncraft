@@ -354,5 +354,10 @@ fn fs_bake(in: BakeOut, @builtin(front_facing) front: bool) -> BakeTargets {
     if material.flags.y != 0u && material.alpha.w == 0.0 && !front {
         n = -n;
     }
-    return BakeTargets(vec4<f32>(base.rgb, 1.0), vec4<f32>(n * 0.5 + 0.5, 1.0));
+    // The impostor has no light of its own inside the crown: the leaves' sky goes into the albedo.
+    var sky = 1.0;
+    if material.alpha.w > 0.0 {
+        sky = crown_sky(in.face);
+    }
+    return BakeTargets(vec4<f32>(base.rgb * sky, 1.0), vec4<f32>(n * 0.5 + 0.5, 1.0));
 }

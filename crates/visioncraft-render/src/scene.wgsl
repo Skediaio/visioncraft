@@ -759,7 +759,22 @@ fn shade(in: Varying, front: bool, screen_effects: bool) -> Shaded {
         let room = t.transmitted * ROOM_ALBEDO * sh_irradiance(normalize(in.normal)) / PI;
         return Shaded(apply_fog(t.reflected + room, in.world), 1.0);
     }
-    return light(in, surface(in, front), material.alpha.w > 0.0, material.emissive.w, screen_effects);
+    var s = surface(in, front);
+    if material.alpha.w > 0.0 {
+        s.ao *= crown_sky(in.face);
+    }
+    return light(in, s, material.alpha.w > 0.0, material.emissive.w, screen_effects);
+}
+
+// A plant's leaves carry the sky their place in the crown sees (the app's crown_occlusion)
+// in a tagged face id: without it, every leaf took the full sky and crowns read pale and
+// flat from above.
+const CROWN_TAG: u32 = 0xC0000000u;
+fn crown_sky(face: u32) -> f32 {
+    if (face & 0xFFFF0000u) == CROWN_TAG {
+        return f32(face & 0xFFFFu) / 65535.0;
+    }
+    return 1.0;
 }
 
 // Lighting of a surface (any source: a material, the terrain layers, an
@@ -838,6 +853,12 @@ fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, screen_effe
             }
         }
         sun += (diffuse_color / PI * diffuse + fr) * g.sun_light.rgb * shadow;
+        if foliage {
+            // Leaves deep in a crown are mostly in the shade of the leaves above them, finer
+            // than the shadow map resolves: their place in the crown (`crown_sky`, in the
+            // surface's occlusion) dims the sun on them too.
+            sun *= mix(1.0, s.ao, 0.6);
+        }
     }
 
     // Ambient: diffuse irradiance from the sky's SH, specular from the
