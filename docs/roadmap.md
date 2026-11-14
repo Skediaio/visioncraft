@@ -32,9 +32,15 @@ nothing here is a promise of a date.
 - **A plan as underlay:** a scaled image or PDF page of a floor plan or site plan under the
   drawing, to trace over.
 - **Photos on walls:** a facade photo as the texture of a wall, straightened and scaled.
-- **Map data as a start:** import of outlines (parcel, buildings), a height raster as terrain and
-  an aerial image as ground texture from common geodata formats and services, with coordinates
-  converted to the drawing's metres and north.
+- **Ground from coordinates:** give a latitude and longitude (or an address) and get the real
+  ground under the model: terrain from an open elevation model, an aerial or satellite image as
+  ground texture, and outlines (parcel, buildings, roads, water) where open data has them, with
+  coordinates converted to the drawing's metres and north, the site set for the sun, and each
+  source's licence and attribution shown. The model is then placed on that ground. Import from
+  common geodata files and services as well.
+- **Sea and large water:** a sea, lake or wide river to the horizon: waves and swell driven by
+  the wind setting, a shoreline with foam where water meets land, depth colour, reflections and
+  sun glitter, a beach or bank as terrain; boats and jetties from the library.
 - **Quantities:** areas, lengths, volumes and counts per object and per material as a query, so
   tools built on top can list what a design contains.
 
