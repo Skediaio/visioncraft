@@ -3,7 +3,7 @@ use std::time::Instant;
 use visioncraft_flora::{
     ATLAS_SIZE, BARK_SIZE, BudgetClass, Category, ClipShape, Form, Lod, Material, PlantMesh,
     Season, Species, generate, generate_in_season, get_param, param_schema, set_param, species,
-    textures,
+    textures, textures_at,
 };
 
 fn height(m: &PlantMesh) -> f32 {
@@ -336,6 +336,29 @@ fn winter_strips_deciduous_trees_only() {
             .triangles_of(Material::Flower),
         0
     );
+}
+
+#[test]
+fn finer_atlases_keep_the_layout_and_bring_a_leaf_normal_map() {
+    let s = Species::by_id("acer-campestre").unwrap();
+    let base = textures(&s.params);
+    assert!(base.atlas_normal.is_none());
+    let fine = textures_at(&s.params, 2);
+    assert_eq!(fine.atlas.width, 2 * ATLAS_SIZE);
+    let normal = fine.atlas_normal.expect("a normal map");
+    assert_eq!(
+        (normal.width, normal.height),
+        (2 * ATLAS_SIZE, 2 * ATLAS_SIZE)
+    );
+    // The same silhouettes: coverage per cell matches the base atlas within a few percent.
+    let opaque = |rgba: &[u8], scale: usize| {
+        rgba.chunks(4).filter(|p| p[3] > 127).count() as f32 / (scale * scale) as f32
+    };
+    let (a, b) = (opaque(&base.atlas.rgba, 1), opaque(&fine.atlas.rgba, 2));
+    assert!((a - b).abs() < 0.05 * a, "{a} vs {b}");
+    // Leaves are not flat: many texels lean away from +Z.
+    let tilted = normal.rgba.chunks(4).filter(|p| p[2] < 245).count();
+    assert!(tilted > 20_000, "{tilted}");
 }
 
 #[test]

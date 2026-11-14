@@ -28,18 +28,29 @@ pub(crate) const CELL_MARGIN: u32 = 6;
 type Rgb = [f32; 3];
 
 struct Canvas {
+    /// Side in texels.
     size: usize,
+    /// Texels per drawing unit: the drawing code works in cells of `CELL_PX` units, a finer
+    /// atlas samples the same shapes at more points.
+    scale: usize,
     px: Vec<[f32; 4]>,
-    /// Clip rectangle of the current cell (x0, y0, x1, y1).
+    /// Clip rectangle of the current cell (x0, y0, x1, y1), in texels.
     clip: (i32, i32, i32, i32),
-    /// Origin of the current cell.
+    /// Origin of the current cell, in texels.
     origin: (f32, f32),
 }
 
 impl Canvas {
     fn new(size: usize) -> Canvas {
+        Canvas::scaled(size, 1)
+    }
+
+    /// A canvas of `units` drawing units a side at `scale` texels per unit.
+    fn scaled(units: usize, scale: usize) -> Canvas {
+        let size = units * scale;
         Canvas {
             size,
+            scale,
             px: vec![[0.0; 4]; size * size],
             clip: (0, 0, size as i32, size as i32),
             origin: (0.0, 0.0),
@@ -47,19 +58,16 @@ impl Canvas {
     }
 
     fn select_cell(&mut self, cell: u32) {
-        let cx = (cell % ATLAS_CELLS * CELL_PX) as i32;
-        let cy = (cell / ATLAS_CELLS * CELL_PX) as i32;
-        let m = (CELL_MARGIN / 2) as i32;
-        self.clip = (
-            cx + m,
-            cy + m,
-            cx + CELL_PX as i32 - m,
-            cy + CELL_PX as i32 - m,
-        );
+        let k = self.scale as i32;
+        let cx = (cell % ATLAS_CELLS * CELL_PX) as i32 * k;
+        let cy = (cell / ATLAS_CELLS * CELL_PX) as i32 * k;
+        let m = (CELL_MARGIN / 2) as i32 * k;
+        let side = CELL_PX as i32 * k;
+        self.clip = (cx + m, cy + m, cx + side - m, cy + side - m);
         self.origin = (cx as f32, cy as f32);
     }
 
-    /// Composite `col` with coverage `a` over pixel (x, y) in cell coordinates. The canvas holds
+    /// Composite `col` with coverage `a` over texel (x, y) relative to the cell's origin. The canvas holds
     /// premultiplied colour; [`finish_atlas`] converts back to straight alpha.
     fn blend(&mut self, x: i32, y: i32, col: Rgb, a: f32) {
         let (gx, gy) = (x + self.origin.0 as i32, y + self.origin.1 as i32);
@@ -96,11 +104,19 @@ impl Canvas {
             self.clip.2 - self.origin.0 as i32,
             self.clip.3 - self.origin.1 as i32,
         );
-        let (xa, ya) = ((x0.floor() as i32).max(lo_x), (y0.floor() as i32).max(lo_y));
-        let (xb, yb) = ((x1.ceil() as i32).min(hi_x), (y1.ceil() as i32).min(hi_y));
+        let k = self.scale as f32;
+        let (xa, ya) = (
+            ((x0 * k).floor() as i32).max(lo_x),
+            ((y0 * k).floor() as i32).max(lo_y),
+        );
+        let (xb, yb) = (
+            ((x1 * k).ceil() as i32).min(hi_x),
+            ((y1 * k).ceil() as i32).min(hi_y),
+        );
         for y in ya..yb {
             for x in xa..xb {
-                if let Some((c, a)) = f(x as f32 + 0.5, y as f32 + 0.5) {
+                // Texel centres in drawing units: edges keep their width in units.
+                if let Some((c, a)) = f((x as f32 + 0.5) / k, (y as f32 + 0.5) / k) {
                     self.blend(x, y, c, a);
                 }
             }
@@ -1283,12 +1299,19 @@ fn blade_cell(cv: &mut Canvas, col: Rgb) {
 }
 
 pub fn generate(p: &PlantParams) -> PlantTextures {
+    generate_at(p, 1)
+}
+
+/// The textures with the leaf atlas at `scale` texels per drawing unit: 1 gives
+/// [`ATLAS_SIZE`] (256 px cells), 2 twice that (512 px cells), with a leaf normal map.
+pub fn generate_at(p: &PlantParams, scale: usize) -> PlantTextures {
+    let scale = scale.clamp(1, 4);
     // Seeded from the leaf parameters so each species gets its own, repeatable variation.
     let mut rng = Rng::new(
         0x7e57 ^ ((p.leaves.leaf_m.to_bits() as u64) << 7) ^ p.leaves.colour[1].to_bits() as u64,
         3,
     );
-    let mut cv = Canvas::new(ATLAS_SIZE as usize);
+    let mut cv = Canvas::scaled(ATLAS_SIZE as usize, scale);
     let cpx = CELL_PX as f32;
     let inner = cpx - 2.0 * CELL_MARGIN as f32;
     let lf = &p.leaves;
@@ -1379,13 +1402,16 @@ pub fn generate(p: &PlantParams) -> PlantTextures {
     {
         let tile = mass_tile(p, &mut rng);
         let s = (CELL_PX - 2 * CELL_MARGIN) as i32;
-        let (ox, oy) = ((3 * CELL_PX) as usize, CELL_PX as usize);
-        for y in 0..CELL_PX as i32 {
-            for x in 0..CELL_PX as i32 {
-                let t = tile[((y - CELL_MARGIN as i32).rem_euclid(s) * s
-                    + (x - CELL_MARGIN as i32).rem_euclid(s))
+        let k = cv.scale;
+        let (ox, oy) = ((3 * CELL_PX) as usize * k, CELL_PX as usize * k);
+        // The tile at drawing-unit resolution, each texel taking its unit's (nearest).
+        for y in 0..(CELL_PX as usize * k) {
+            for x in 0..(CELL_PX as usize * k) {
+                let (ux, uy) = ((x / k) as i32, (y / k) as i32);
+                let t = tile[((uy - CELL_MARGIN as i32).rem_euclid(s) * s
+                    + (ux - CELL_MARGIN as i32).rem_euclid(s))
                     as usize];
-                cv.px[(oy + y as usize) * ATLAS_SIZE as usize + ox + x as usize] = t;
+                cv.px[(oy + y) * cv.size + ox + x] = t;
             }
         }
     }
@@ -1433,10 +1459,13 @@ pub fn generate(p: &PlantParams) -> PlantTextures {
             _ => {}
         }
     }
+    // The finer atlases get a normal map: the same cost as before at scale 1.
+    let atlas_normal = (scale > 1).then(|| leaf_normals(&cv));
     let atlas = finish_atlas(cv);
     let (bark, bark_normal) = bark(p);
     PlantTextures {
         atlas,
+        atlas_normal,
         bark,
         bark_normal,
     }
@@ -1455,7 +1484,7 @@ fn finish_atlas(cv: Canvas) -> Image {
             }
         }
     }
-    let cp = CELL_PX as usize;
+    let cp = n / ATLAS_CELLS as usize;
     let mut queue = std::collections::VecDeque::new();
     for cy in 0..ATLAS_CELLS as usize {
         for cx in 0..ATLAS_CELLS as usize {
@@ -1507,8 +1536,109 @@ fn finish_atlas(cv: Canvas) -> Image {
         .flat_map(|p| [to8(p[0]), to8(p[1]), to8(p[2]), to8(p[3])])
         .collect();
     Image {
-        width: ATLAS_SIZE,
-        height: ATLAS_SIZE,
+        width: n as u32,
+        height: n as u32,
+        rgba,
+    }
+}
+
+/// A tangent-space normal map of the atlas (RGB = xyz * 0.5 + 0.5, +Z out of the card, as the
+/// bark's): every leaf curls, its middle higher than its rim (distance from the silhouette), and
+/// its veins stand out of the blade (where the drawing made them lighter than around them).
+fn leaf_normals(cv: &Canvas) -> Image {
+    let n = cv.size;
+    let k = cv.scale as f32;
+    let alpha = |i: usize| cv.px[i][3];
+    let lum = |i: usize| {
+        let p = cv.px[i];
+        if p[3] > 0.02 {
+            (0.3 * p[0] + 0.59 * p[1] + 0.11 * p[2]) / p[3]
+        } else {
+            0.0
+        }
+    };
+    // Chamfer distance (texels) to the outside of the silhouettes.
+    let mut d: Vec<f32> = cv
+        .px
+        .iter()
+        .map(|p| if p[3] > 0.5 { 1e6 } else { 0.0 })
+        .collect();
+    let diag = std::f32::consts::SQRT_2;
+    for y in 0..n {
+        for x in 0..n {
+            let i = y * n + x;
+            if x > 0 {
+                d[i] = d[i].min(d[i - 1] + 1.0);
+            }
+            if y > 0 {
+                d[i] = d[i].min(d[i - n] + 1.0);
+                if x > 0 {
+                    d[i] = d[i].min(d[i - n - 1] + diag);
+                }
+                if x + 1 < n {
+                    d[i] = d[i].min(d[i - n + 1] + diag);
+                }
+            }
+        }
+    }
+    for y in (0..n).rev() {
+        for x in (0..n).rev() {
+            let i = y * n + x;
+            if x + 1 < n {
+                d[i] = d[i].min(d[i + 1] + 1.0);
+            }
+            if y + 1 < n {
+                d[i] = d[i].min(d[i + n] + 1.0);
+                if x + 1 < n {
+                    d[i] = d[i].min(d[i + n + 1] + diag);
+                }
+                if x > 0 {
+                    d[i] = d[i].min(d[i + n - 1] + diag);
+                }
+            }
+        }
+    }
+    // Height: the curl over the first few units in from the rim, plus the veins' relief.
+    let curl = 5.0 * k;
+    let at = |x: usize, y: usize| y.min(n - 1) * n + x.min(n - 1);
+    let mut h = vec![0.0f32; n * n];
+    for y in 0..n {
+        for x in 0..n {
+            let i = y * n + x;
+            if alpha(i) <= 0.5 {
+                continue;
+            }
+            let dome = smoothstep(0.0, 1.0, d[i] / curl) * 2.0 * k;
+            let around = (lum(at(x.saturating_sub(2), y))
+                + lum(at(x + 2, y))
+                + lum(at(x, y.saturating_sub(2)))
+                + lum(at(x, y + 2)))
+                / 4.0;
+            let vein = (lum(i) - around).max(0.0) * 6.0 * k;
+            h[i] = dome + vein;
+        }
+    }
+    let to8 = |v: f32| ((v * 0.5 + 0.5).clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+    let mut rgba = Vec::with_capacity(n * n * 4);
+    for y in 0..n {
+        for x in 0..n {
+            let i = y * n + x;
+            let (gx, gy) = if alpha(i) > 0.5 {
+                let hx = h[at(x + 1, y)] - h[at(x.saturating_sub(1), y)];
+                let hy = h[at(x, y + 1)] - h[at(x, y.saturating_sub(1))];
+                (hx * 0.5, hy * 0.5)
+            } else {
+                (0.0, 0.0)
+            };
+            // Image rows run down while V runs up the card: +y in the image is -V.
+            let (nx, ny) = (-gx, gy);
+            let l = (nx * nx + ny * ny + 1.0).sqrt();
+            rgba.extend([to8(nx / l), to8(ny / l), to8(1.0 / l), 255]);
+        }
+    }
+    Image {
+        width: n as u32,
+        height: n as u32,
         rgba,
     }
 }

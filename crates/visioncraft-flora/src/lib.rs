@@ -194,6 +194,9 @@ pub struct PlantTextures {
     /// Leaf / flower atlas, [`ATLAS_SIZE`] square, [`ATLAS_CELLS`] x [`ATLAS_CELLS`] cells.
     /// Colour outside the silhouettes is bled from the nearest edge so mipmaps do not darken.
     pub atlas: Image,
+    /// Tangent-space normal map of the atlas (leaf curl and veins, the bark normal's
+    /// convention), made with the finer atlases of [`textures_at`] only.
+    pub atlas_normal: Option<Image>,
     /// Tileable bark albedo, [`BARK_SIZE`] square, opaque.
     pub bark: Image,
     /// Tileable tangent-space normal map for the bark (RGB = xyz * 0.5 + 0.5, +Z out of the
@@ -252,6 +255,12 @@ fn generate_in(params: &PlantParams, seed: u64, lod: Lod, season: Option<Season>
 /// Generate the textures (leaf atlas and bark) for a species.
 pub fn textures(params: &PlantParams) -> PlantTextures {
     texture::generate(params)
+}
+
+/// The textures with the leaf atlas at `scale` times [`ATLAS_SIZE`] (1..=4; 2 gives 512 px
+/// cells) and, above 1, its normal map.
+pub fn textures_at(params: &PlantParams, scale: usize) -> PlantTextures {
+    texture::generate_at(params, scale)
 }
 
 /// What the season does to a plant.
