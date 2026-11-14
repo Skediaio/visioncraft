@@ -70,10 +70,13 @@ pub fn overlay(lib: &Library, m: &Material) -> Option<Overlay> {
         spec: spec_of_entry(entry),
         scale_m: scale_of(entry),
         variation: *variation,
-        tint: if m.id == "plaster" {
-            [0.86, 0.81, 0.73]
-        } else {
-            [1.0; 3]
+        tint: match m.id.as_str() {
+            "plaster" => [0.86, 0.81, 0.73],
+            // Light leaving a lawn has mostly crossed a blade on its way (as the 3D blades'
+            // translucency shows): the photo's green deepened by sqrt(mean / mean.g) per channel,
+            // so the ground beyond the blades matches them instead of reading olive.
+            "lawn" => [0.74, 1.0, 0.45],
+            _ => [1.0; 3],
         },
     })
 }

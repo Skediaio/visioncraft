@@ -679,14 +679,19 @@ fn surface(in: Varying, front: bool) -> Surface {
 // ~15 m) modulate brightness and roughness, a third paints drier, yellower
 // patches, and fields of ~100 m keep a large ground from being one flat
 // colour in the middle distance where the finer octaves average out.
+// The octaves run on turned axes: on the world's own axes the lattice of the value noise showed
+// from above as a regular grid of blotches.
+const MACRO_TURN_A = mat3x3<f32>(vec3<f32>(0.8, 0.0, 0.6), vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(-0.6, 0.0, 0.8));
+const MACRO_TURN_B = mat3x3<f32>(vec3<f32>(0.28, 0.0, -0.96), vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(0.96, 0.0, 0.28));
 fn macro_variation(surf: Surface, world: vec3<f32>, variation: f32) -> Surface {
     var s = surf;
     if variation > 0.0 {
-        let m = value_noise(world * 0.21) * 0.65 + value_noise(world * 0.067 + 31.0) * 0.35 - 0.5;
-        let big = value_noise(world * 0.011 + 3.0) - 0.5;
-        let dry = smoothstep(0.45, 0.8, value_noise(world * 0.13 + 7.0)) * variation;
-        var c = s.base.rgb * (1.0 + m * 0.6 * variation) * (1.0 + big * 0.6 * variation);
-        c = mix(c, c * vec3<f32>(1.3, 1.08, 0.55), dry * 0.6);
+        let m = value_noise(world * 0.21) * 0.65 + value_noise(MACRO_TURN_A * world * 0.067 + 31.0) * 0.35 - 0.5;
+        let big = value_noise(MACRO_TURN_B * world * 0.011 + 3.0) - 0.5;
+        let dry = smoothstep(0.5, 0.85, value_noise(MACRO_TURN_B * world * 0.13 + 7.0)) * variation;
+        // Subtle: from a few tens of metres up stronger patches read as a blotched carpet.
+        var c = s.base.rgb * (1.0 + m * 0.4 * variation) * (1.0 + big * 0.4 * variation);
+        c = mix(c, c * vec3<f32>(1.15, 1.05, 0.7), dry * 0.5);
         s.base = vec4<f32>(c, s.base.a);
         s.roughness = clamp(s.roughness + m * 0.2 * variation, 0.045, 1.0);
     }
