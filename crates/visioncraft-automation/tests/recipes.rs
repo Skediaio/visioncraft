@@ -19,7 +19,7 @@ pub fn recipes() -> Vec<Value> {
 #[test]
 fn every_recipe_of_the_guide_runs() {
     let recipes = recipes();
-    assert_eq!(recipes.len(), 15);
+    assert_eq!(recipes.len(), 16);
     for (n, recipe) in recipes.into_iter().enumerate() {
         let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("recipe-{n}"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -91,6 +91,16 @@ fn every_recipe_of_the_guide_runs() {
                 results[1]["result"]["shapes"].as_array().unwrap().len() > 5,
                 "{report}"
             ),
+            16 => {
+                let years = results[3]["result"]["assets"][0]["years"]
+                    .as_array()
+                    .unwrap();
+                assert_eq!(years.len(), 21, "{report}");
+                assert_eq!(
+                    results[4]["result"]["conflicts"][0]["kind"], "wall",
+                    "{report}"
+                );
+            }
             10 => assert!(
                 results[5]["result"]["elevation_deg"].as_f64().unwrap()
                     > results[4]["result"]["elevation_deg"].as_f64().unwrap()

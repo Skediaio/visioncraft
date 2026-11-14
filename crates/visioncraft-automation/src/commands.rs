@@ -468,8 +468,17 @@ pub fn host_docs() -> Vec<CommandDoc> {
                     &["low", "medium", "high"],
                     "The renderer's quality preset",
                 ),
+                p(
+                    "years",
+                    "number",
+                    None,
+                    false,
+                    Some("the viewpoint's, else the project's"),
+                    &[],
+                    "Years after planting to show the plants at (0..60), for this picture only",
+                ),
             ],
-            "{path? | mime, base64; width, height, camera, time, ...the renderer's info}",
+            "{path? | mime, base64; width, height, camera, time, years, ...the renderer's info}",
             json!({"width": 960, "height": 540, "viewpoint": "From the gate"}),
             false,
         ),
@@ -888,6 +897,7 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
             "camera",
             "time",
             "quality",
+            "years",
         ],
     )?;
     let width = a.integer("width", 16, 4096)?.unwrap_or(800) as u32;
@@ -927,6 +937,16 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
         if let Some(t) = vp.time {
             project.time = t;
         }
+        if vp.years.is_some() {
+            project.view.years = vp.years;
+        }
+    }
+    if let Some(y) = a.get("years") {
+        let y = y
+            .as_f64()
+            .filter(|y| (0.0..=f64::from(visioncraft_core::YEARS_MAX)).contains(y))
+            .ok_or_else(|| format!("{id}: `years` must be a number from 0 to 60"))?;
+        project.view.years = Some(y as f32);
     }
     if let Some(c) = a.get("camera") {
         let pos = need::<[f32; 3]>(id, c, "position")?;
@@ -968,6 +988,7 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
     out.insert("width".into(), width.into());
     out.insert("height".into(), height.into());
     out.insert("time".into(), json!(project.time));
+    out.insert("years".into(), json!(project.view.years));
     out.insert("sun".into(), inspect::sun_json(&project));
     match path {
         Some(path) => {

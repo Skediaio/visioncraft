@@ -273,6 +273,27 @@ catalogue asset as `user:<id>`. `object.remove` is refused while a planting uses
 It replaces the project (undoable) with a 20 by 30 m plot built from commands: house, terrace,
 lawn, border, path, pond, hedge, trees, lights and six viewpoints.
 
+### 16. How the garden grows
+
+```json recipe
+{"intent": "the garden after ten years", "steps": [
+  {"id": "shape.add_extrusion", "params": {"name": "House", "outline": [[0, 0], [10, 0], [10, 8], [0, 8]], "height": 6}},
+  {"id": "planting.add_single", "params": {"name": "Field maple", "asset": "flora:acer-campestre", "position": [5, 0, 10.5]}},
+  {"id": "planting.update", "params": {"id": "g1", "planted_age_years": 6}},
+  {"id": "planting.growth", "params": {"id": "g1", "years": 20}},
+  {"id": "planting.growth_conflicts", "params": {"years": 30}},
+  {"id": "view.set", "params": {"years": 10}},
+  {"id": "view.render", "params": {"camera": {"position": [5, 1.7, 25], "target": [5, 3, 8]}, "years": 20, "width": 960, "height": 540, "path": "maple-year-20.png"}}
+]}
+```
+
+`view.set {years}` shows every plant that many years after planting (null: all full grown, as
+projects were before); `view.render` and viewpoints can take their own `years`. Each planting
+starts at its `planted_age_years` (default per species: a nursery tree 8, hedge whips 2,
+perennials 1). The growth data are estimates, one table per species (`planting.growth` says
+which). `visioncraft-cli export FILE --out DIR --years 0 --years 5 --years 10` renders a growth
+series of every viewpoint.
+
 ## Known traps
 
 - **Ids are not names**: `S2`, not `House`; viewpoints are `v1`, lights `li1`.
