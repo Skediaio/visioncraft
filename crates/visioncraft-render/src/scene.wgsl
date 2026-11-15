@@ -1043,6 +1043,11 @@ fn snow_top(world: vec3<f32>) -> f32 {
     }
     let dims = vec2<f32>(textureDimensions(shadow_map));
     let d = textureLoad(shadow_map, vec2<i32>(uv * dims), i32(g.snow.y), 0);
+    // Nothing drawn there (open sea beyond the terrain): unknown, not a floor at the map's far
+    // plane (the sea took that for a shallow bed, a dark disc round the eye far out at sea).
+    if d >= 0.99999 {
+        return -1e9;
+    }
     return (d - p0.z) / (p1.z - p0.z);
 }
 
@@ -1271,7 +1276,9 @@ const GROUND_RINGS: u32 = 80u;
 const GROUND_SEGMENTS: u32 = 192u;
 const GROUND_GROWTH: f32 = 1.15359; // 0.5 m * 1.15359^79 = 40 km
 const GROUND_FACE: u32 = 0xfffffffeu;
-const GROUND_DEPTH: f32 = 0.999999;
+// Behind the sea's far rings (sea.wgsl SEA_DEPTH, 0.999999): at the same depth the two fought
+// near the horizon, rows of ground showing through the far sea as pale flecks.
+const GROUND_DEPTH: f32 = 0.9999995;
 const EYE_SLOPE_NEAR: f32 = 1.7 / 40.0; // where the horizon fade begins
 
 @vertex

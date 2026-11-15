@@ -65,6 +65,11 @@ c("water.set_sea", level=LEVEL, kind="sea", sea_state=3.2, direction_deg=355, cl
          [-340, 85], [-230, 35], [-110, 27], [110, 25], [230, 12], [360, -11], [500, -35], [1500, -160], [4000, -450]])
 c("terrain.shore", points=[[-500, 150], [-430, 120], [-340, 45], [-230, 10], [-110, 10], [0, 10], [110, 8], [230, -8], [360, -36], [500, -62]],
   top_m=6, bank_m=1.5, berm_m=1.0, beach_m=15.5, shelf_m=250, depth_m=6, material="sand")
+# Offshore the bed falls away towards the endless ground's sea floor (20 m under the surface), so
+# the terrain does not end in an underwater step: the surf over a 6 m shelf stopped at its edge,
+# a line across the sea seen from the air.
+for pts in ([[-520, 300], [520, 300]], [[525, 80], [525, 300]], [[-525, 270], [-525, 300]]):
+    c("terrain.stroke", tool="flatten", points=pts, radius_m=110, strength=1.0, falloff=0.9, target_height=LEVEL - 20)
 c("view.set", ground={"height": 6 + LEVEL, "color": [0.2, 0.18, 0.11]}, wind_direction_deg=0, wind_strength=0.5, haze=1.4, surroundings="dunes")
 
 # ---- Hard landscape --------------------------------------------------------------------------

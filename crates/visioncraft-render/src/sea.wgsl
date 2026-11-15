@@ -241,9 +241,12 @@ fn vs_sea(@builtin(vertex_index) vi: u32) -> Varying {
     if bed > -1e8 {
         let d = sea.surface.x - bed;
         let surf = sea_surf(p, d);
-        offset *= (1.0 - 0.85 * surf.weight) * smoothstep(0.0, 1.5, d);
+        // Faded out towards the cover map's edge (as fs_sea's depth): no ring where it ends.
+        let q = g.snow_cover * vec4<f32>(p.x, 0.0, p.y, 1.0);
+        let w = 1.0 - smoothstep(0.6, 0.95, max(abs(q.x), abs(q.y)));
+        offset *= mix(1.0, (1.0 - 0.85 * surf.weight) * smoothstep(0.0, 1.5, d), w);
         let keep = smoothstep(3.0, 6.0, 2.0 * PI / max(surf.k, 1e-3) / cell);
-        offset.y += surf.eta * keep;
+        offset.y += surf.eta * keep * w;
     }
     let world = vec3<f32>(p.x + offset.x, sea.surface.x + offset.y, p.y + offset.z);
     var out: Varying;
@@ -355,6 +358,10 @@ fn fs_sea(in: Varying) -> @location(0) vec4<f32> {
     var water_depth = select(1e4, max(sea.surface.x - (in.world - v * path).y, 0.0), below < SKY_DEPTH * 0.5);
     if known {
         // Through the column and out: no further than the bed below this point.
+        // shortcut: beyond the cover map the depth is taken along the view ray, deeper than the
+        // column at a grazing view, so over a shallow shelf the surf can end at the map's edge;
+        // blending the two there turned near shallows glassy (v_sea_beach). Upgrade with a
+        // coarse whole-terrain height map for the bed beyond the map.
         path = min(path, (in.world.y - top) / max(v.y, 0.03));
         water_depth = sea.surface.x - top;
     }
