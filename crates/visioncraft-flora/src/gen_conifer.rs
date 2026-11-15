@@ -141,7 +141,7 @@ pub fn generate(
     }
 
     let mut out = Builder::default();
-    out.tube(&trunk, [10, 7, 5][li], 0.0);
+    out.tube(&trunk, [16, 8, 5][li], 0.0);
     // Branch wood: lowest (thickest, longest) first within the LOD's wood share.
     let leafless = 1.0 - st.leaf_fraction;
     let wood_share = [0.22, 0.16, 0.08][li] + [0.25, 0.15, 0.06][li] * leafless;

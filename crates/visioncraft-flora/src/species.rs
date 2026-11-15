@@ -310,6 +310,9 @@ fn build() -> Vec<Species> {
     let mut v = Vec::new();
 
     // ---- trees ----
+    // Summer leaf colours of the reference trees follow the field guides' descriptions (O.
+    // Johnson & D. More, "Collins Tree Guide", 2004): oak dark and dull, birch light
+    // yellow-green, walnut yellowish, plane and field maple mid green, apple a greyish green.
     v.push(sp(
         "quercus-robur",
         "Pedunculate oak",
@@ -342,7 +345,7 @@ fn build() -> Vec<Species> {
             0.1,
             0.55,
             0.0,
-            [0.22, 0.35, 0.14],
+            [0.21, 0.3, 0.14],
             [0.55, 0.4, 0.15],
             0.9,
             2.4,
@@ -416,7 +419,7 @@ fn build() -> Vec<Species> {
             0.05,
             0.7,
             0.6,
-            [0.31, 0.45, 0.15],
+            [0.4, 0.5, 0.18],
             [0.8, 0.7, 0.2],
             0.45,
             0.9,
@@ -489,7 +492,7 @@ fn build() -> Vec<Species> {
             0.07,
             1.0,
             0.0,
-            [0.26, 0.42, 0.16],
+            [0.26, 0.38, 0.16],
             YELLOW,
             0.55,
             2.4,
@@ -645,7 +648,7 @@ fn build() -> Vec<Species> {
         "Malus domestica",
         Tree,
         6.0,
-        6.0,
+        8.0,
         false,
         &[4, 5],
         Sun,
@@ -657,7 +660,7 @@ fn build() -> Vec<Species> {
                 0.25,
                 Hemispherical,
                 [
-                    lv(6, 0.6, 65.0, 137.5, 1, 15.0, 10.0, 0.0, 5, 0.7, 0.6),
+                    lv(6, 0.6, 72.0, 137.5, 1, 15.0, 10.0, 0.0, 5, 0.7, 0.6),
                     lv(9, 0.5, 50.0, 137.5, 1, -5.0, 8.0, -0.15, 3, 0.5, 0.2),
                     lv(6, 0.4, 40.0, 137.5, 1, 0.0, 10.0, 0.0, 2, 0.5, 0.25),
                 ],
@@ -669,7 +672,7 @@ fn build() -> Vec<Species> {
             0.07,
             0.6,
             0.3,
-            [0.3, 0.43, 0.17],
+            [0.3, 0.39, 0.21],
             [0.6, 0.55, 0.2],
             0.5,
             2.2,
@@ -836,7 +839,7 @@ fn build() -> Vec<Species> {
             0.35,
             0.4,
             0.0,
-            [0.28, 0.4, 0.15],
+            [0.37, 0.44, 0.19],
             [0.55, 0.45, 0.2],
             0.9,
             2.0,
@@ -874,7 +877,7 @@ fn build() -> Vec<Species> {
             0.18,
             1.0,
             0.2,
-            [0.3, 0.45, 0.16],
+            [0.29, 0.41, 0.18],
             [0.6, 0.45, 0.2],
             1.0,
             2.2,

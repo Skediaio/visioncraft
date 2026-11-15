@@ -88,6 +88,38 @@ pub struct Card {
     pub outward_mix: f32,
 }
 
+/// Root buttresses at a trunk's foot: the radius swells by up to `amount` in `lobes` ridges
+/// round the stem (where the main roots leave it), fading out by `height` metres up.
+#[derive(Clone, Copy, Debug)]
+pub struct Buttress {
+    pub height: f32,
+    pub amount: f32,
+    pub lobes: f32,
+    pub phase: f32,
+}
+
+impl Buttress {
+    /// The swelling round the stem at angle `a` (radians) and its derivative by `a`.
+    fn lobe(&self, a: f32) -> (f32, f32) {
+        let x = self.lobes * a + self.phase;
+        let c = cos(x);
+        if c <= 0.0 {
+            return (0.0, 0.0);
+        }
+        (c * c * c, -3.0 * c * c * sin(x) * self.lobes)
+    }
+
+    /// How much of the swelling there is at height `y` and its derivative by `y`.
+    fn rise(&self, y: f32) -> (f32, f32) {
+        let t = 1.0 - y / self.height.max(1e-3);
+        if t <= 0.0 {
+            return (0.0, 0.0);
+        }
+        let t = t.min(1.0);
+        (self.amount * t * t, -2.0 * self.amount * t / self.height.max(1e-3))
+    }
+}
+
 #[derive(Default)]
 pub struct Builder {
     pos: Vec<[f32; 3]>,
@@ -119,9 +151,14 @@ pub fn cell_uv(cell: u8, s: f32, t: f32) -> [f32; 2] {
 
 impl Builder {
     pub fn vert(&mut self, p: V3, n: V3, uv: [f32; 2], wind: [f32; 2]) -> u32 {
+        self.push(p, n, [uv[0].clamp(0.0, 1.0), uv[1].clamp(0.0, 1.0)], wind)
+    }
+
+    /// A vertex with its UV as given: bark, whose texture repeats.
+    fn push(&mut self, p: V3, n: V3, uv: [f32; 2], wind: [f32; 2]) -> u32 {
         self.pos.push(p.arr());
         self.nrm.push(n.norm().arr());
-        self.uv.push([uv[0].clamp(0.0, 1.0), uv[1].clamp(0.0, 1.0)]);
+        self.uv.push(uv);
         self.wind.push([wind[0].clamp(0.0, 1.0), wind[1]]);
         (self.pos.len() - 1) as u32
     }
@@ -175,20 +212,33 @@ impl Builder {
     }
 
     /// A tapered generalised cylinder through `nodes` with `sides` facets, ending in an apex at
-    /// the last node. The bark V coordinate repeats about once per base circumference; each
-    /// segment gets its own pair of rings so UVs stay inside [0,1] without a wrapping sampler.
+    /// the last node. The bark texture goes once round and repeats along every local girth (its
+    /// V runs past 1: bark is drawn with a repeating sampler).
     pub fn tube(&mut self, nodes: &[Node], sides: u32, phase: f32) {
-        self.tube_as(nodes, sides, phase, None);
+        self.tube_as(nodes, sides, phase, None, None);
+    }
+
+    /// A [`Builder::tube`] for a trunk standing on the ground, its foot swelling into root
+    /// buttresses.
+    pub fn trunk(&mut self, nodes: &[Node], sides: u32, phase: f32, b: Buttress) {
+        self.tube_as(nodes, sides, phase, None, Some(b));
     }
 
     /// A [`Builder::tube`] of fine twigs: drawn with [`Material::Twigs`], every vertex on the
     /// solid twig-coloured atlas cell 7 of grown trees (fine twigs are darker and greyer than
     /// the trunk's bark, a birch's most of all).
     pub fn twig_tube(&mut self, nodes: &[Node], sides: u32, phase: f32) {
-        self.tube_as(nodes, sides, phase, Some(cell_uv(7, 0.5, 0.5)));
+        self.tube_as(nodes, sides, phase, Some(cell_uv(7, 0.5, 0.5)), None);
     }
 
-    fn tube_as(&mut self, nodes: &[Node], sides: u32, phase: f32, solid: Option<[f32; 2]>) {
+    fn tube_as(
+        &mut self,
+        nodes: &[Node],
+        sides: u32,
+        phase: f32,
+        solid: Option<[f32; 2]>,
+        buttress: Option<Buttress>,
+    ) {
         let material = if solid.is_some() {
             Material::Twigs
         } else {
@@ -197,10 +247,15 @@ impl Builder {
         if nodes.len() < 2 {
             return;
         }
-        let circ = (TAU * nodes[0].r).max(0.01);
-        let total: f32 = nodes.windows(2).map(|w| (w[1].p - w[0].p).len()).sum();
-        let seg_len = total / (nodes.len() - 1) as f32;
-        let per_repeat = ((circ / seg_len.max(1e-4)).round() as usize).max(1); // segments per texture repeat
+        // Bark: U goes once round, V along the branch at the local girth's scale, so the photo
+        // keeps its aspect where the branch tapers or flares (V was one base girth per repeat:
+        // a flared trunk's bark stretched up its whole length). V runs on past 1: the bark
+        // texture repeats.
+        let mut along = vec![0.0f32; nodes.len()];
+        for i in 1..nodes.len() {
+            let r = ((nodes[i - 1].r + nodes[i].r) * 0.5).max(1e-3);
+            along[i] = along[i - 1] + (nodes[i].p - nodes[i - 1].p).len() / (TAU * r);
+        }
         let dir = |i: usize| -> V3 {
             let a = nodes[i.saturating_sub(1)].p;
             let b = nodes[(i + 1).min(nodes.len() - 1)].p;
@@ -214,39 +269,50 @@ impl Builder {
             side = (side - d * side.dot(d)).norm();
             frames.push((d, side, d.cross(side)));
         }
-        let ring = |b: &mut Builder, i: usize, v: f32| -> u32 {
-            let (_, s, c) = frames[i];
+        let last = nodes.len() - 1;
+        // One ring per node, shared by the segments either side: normals and UVs run on
+        // unbroken. A ring's normals lean with the taper (towards the thin end), so a flare
+        // or a swelling shades as one.
+        let ring = |b: &mut Builder, i: usize| -> u32 {
+            let (d, s, c) = frames[i];
+            let (i0, i1) = (i.saturating_sub(1), (i + 1).min(last));
+            let ds = (nodes[i1].p - nodes[i0].p).len().max(1e-4);
+            let slope = ((nodes[i0].r - nodes[i1].r) / ds).clamp(-2.0, 2.0);
             let first = b.pos.len() as u32;
+            let r = nodes[i].r;
             for k in 0..=sides {
                 let a = TAU * k as f32 / sides as f32;
                 let n = s * cos(a) + c * sin(a);
-                b.vert(
-                    nodes[i].p + n * nodes[i].r,
-                    n,
-                    solid.unwrap_or([k as f32 / sides as f32, v]),
-                    [nodes[i].w, phase],
-                );
+                let uv = solid.unwrap_or([k as f32 / sides as f32, 1.0 - along[i]]);
+                let (mut rk, mut nk) = (r, n + d * slope);
+                if let Some(bt) = buttress {
+                    let (lobe, dlobe) = bt.lobe(a);
+                    let (g, dg) = bt.rise(nodes[i].p.y);
+                    rk = r * (1.0 + lobe * g);
+                    // The lobe's sides face round it; its top slopes into the stem.
+                    let round = c * cos(a) - s * sin(a);
+                    nk = nk - round * (dlobe * g) - d * (lobe * dg * r);
+                }
+                b.push(nodes[i].p + n * rk, nk.norm(), uv, [nodes[i].w, phase]);
             }
             first
         };
-        let last = nodes.len() - 1;
+        let mut r0 = ring(self, 0);
         for j in 0..last {
-            let v0 = (j % per_repeat) as f32 / per_repeat as f32;
-            let v1 = v0 + 1.0 / per_repeat as f32;
-            let r0 = ring(self, j, 1.0 - v0);
             if j + 1 < last {
-                let r1 = ring(self, j + 1, 1.0 - v1);
+                let r1 = ring(self, j + 1);
                 for k in 0..sides {
                     self.quad(material, r0 + k, r0 + k + 1, r1 + k + 1, r1 + k);
                 }
+                r0 = r1;
             } else {
                 // Apex: one tip vertex per facet so each keeps its own U.
                 let (d, _, _) = frames[last];
                 for k in 0..sides {
-                    let tip = self.vert(
+                    let tip = self.push(
                         nodes[last].p,
                         d,
-                        solid.unwrap_or([(k as f32 + 0.5) / sides as f32, 1.0 - v1]),
+                        solid.unwrap_or([(k as f32 + 0.5) / sides as f32, 1.0 - along[last]]),
                         [nodes[last].w, phase],
                     );
                     self.tri(material, r0 + k, r0 + k + 1, tip);
@@ -347,5 +413,61 @@ pub fn rand_dir(rng: &mut Rng) -> V3 {
         if l > 1e-4 && l <= 1.0 {
             return v * (1.0 / l.sqrt());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn node(y: f32, r: f32) -> Node {
+        Node {
+            p: v3(0.0, y, 0.0),
+            r,
+            w: 0.0,
+        }
+    }
+
+    /// Bark keeps its aspect: V runs one repeat per local girth along the branch, unbroken
+    /// where segments meet, and past 1.
+    #[test]
+    fn bark_runs_along_the_local_girth() {
+        let mut b = Builder::default();
+        b.tube(&[node(0.0, 0.2), node(1.0, 0.1), node(2.0, 0.1), node(3.0, 0.05)], 8, 0.0);
+        let m = b.finish();
+        let v_at = |y: f32| {
+            let i = m.positions.iter().position(|p| (p[1] - y).abs() < 1e-4).unwrap();
+            1.0 - m.uvs[i][1]
+        };
+        let girth = |r: f32| TAU * r;
+        assert!((v_at(1.0) - 1.0 / girth(0.15)).abs() < 1e-3);
+        assert!((v_at(2.0) - v_at(1.0) - 1.0 / girth(0.1)).abs() < 1e-3);
+        assert!(v_at(2.0) > 1.0);
+    }
+
+    /// Root buttresses swell the foot in ridges and are gone above their height.
+    #[test]
+    fn buttresses_swell_the_foot_only() {
+        let mut b = Builder::default();
+        let bt = Buttress {
+            height: 0.9,
+            amount: 0.4,
+            lobes: 5.0,
+            phase: 0.3,
+        };
+        b.trunk(&[node(0.0, 0.3), node(0.5, 0.3), node(1.0, 0.3), node(3.0, 0.2)], 24, 0.0, bt);
+        let m = b.finish();
+        let radii = |y: f32| -> Vec<f32> {
+            m.positions
+                .iter()
+                .filter(|p| (p[1] - y).abs() < 1e-4)
+                .map(|p| (p[0] * p[0] + p[2] * p[2]).sqrt())
+                .collect()
+        };
+        let foot = radii(0.0);
+        let max = foot.iter().fold(0.0f32, |a, &r| a.max(r));
+        let min = foot.iter().fold(f32::MAX, |a, &r| a.min(r));
+        assert!(max > 0.3 * 1.15 && (min - 0.3).abs() < 1e-3, "{min} .. {max}");
+        assert!(radii(1.0).iter().all(|r| (r - 0.3).abs() < 1e-3));
     }
 }

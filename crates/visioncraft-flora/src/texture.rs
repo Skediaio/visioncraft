@@ -208,6 +208,20 @@ fn mul(c: Rgb, k: f32) -> Rgb {
     ]
 }
 
+/// A leaf colour `c` in the sun or the shade, `k` = brightness factor: sun leaves (k > 1) are
+/// lighter and yellower, shade leaves (k < 1) darker and bluer, as in the pigment and colour
+/// measurements of sun and shade leaves (Lichtenthaler et al., "Differences in pigment
+/// composition, photosynthetic rates and chlorophyll fluorescence images of sun and shade
+/// leaves of four tree species", Plant Physiology and Biochemistry 45, 2007).
+fn tone(c: Rgb, k: f32) -> Rgb {
+    let d = k - 1.0;
+    [
+        c[0] * (1.0 + 1.6 * d).max(0.1),
+        c[1] * (1.0 + d).max(0.1),
+        c[2] * (1.0 + 0.3 * d).max(0.1),
+    ]
+}
+
 fn mix(a: Rgb, b: Rgb, t: f32) -> Rgb {
     [
         lerp(a[0], b[0], t),
@@ -852,7 +866,7 @@ fn spray(
     cell_tint: f32,
 ) {
     let lf = &p.leaves;
-    let col = mul(lf.colour, cell_tint);
+    let col = tone(lf.colour, cell_tint);
     let leaf_px = lf.leaf_m * px_per_m;
     let base = (
         centre.0 - sin(ang) * len * 0.5,
@@ -900,7 +914,7 @@ fn cluster(cv: &mut Canvas, p: &PlantParams, opposite: bool, rng: &mut Rng, tint
     let inner = cpx - 2.0 * CELL_MARGIN as f32;
     let lf = &p.leaves;
     let leaf_px = lf.leaf_m * inner / crate::gen_tree::cluster_m(p);
-    let col = mul(lf.colour, tint);
+    let col = tone(lf.colour, tint);
     let twig_col = mix(p.bark.colour, [0.35, 0.3, 0.2], 0.5);
     let base = (cpx * 0.5, cpx - CELL_MARGIN as f32 - 1.0);
     let len = inner * 0.52;
@@ -954,7 +968,7 @@ fn clump(cv: &mut Canvas, p: &PlantParams, rng: &mut Rng, tint: f32) {
     let r = CELL_PX as f32 * 0.5 - CELL_MARGIN as f32 - 2.0;
     let px_per_m = (2.0 * r) / (p.leaves.card_m * CLUMP_SCALE);
     let leaf_px = (p.leaves.leaf_m * px_per_m).max(3.0);
-    let col = mul(p.leaves.colour, tint);
+    let col = tone(p.leaves.colour, tint);
     let n = 34;
     for k in 0..n {
         let f = (k as f32 + rng.f()) / n as f32;
@@ -1547,7 +1561,7 @@ pub fn generate_scanned(p: &PlantParams, scale: usize, scans: &Scans) -> PlantTe
     for cell in 0..4u32 {
         cv.select_cell(cell);
         let tint = 1.0 + lf.colour_var * 0.25 * (cell as f32 - 1.5) / 1.5;
-        let col = mul(lf.colour, tint);
+        let col = tone(lf.colour, tint);
         match &p.form {
             Form::Rosette(r) if !r.shoots && matches!(lf.shape, LeafShape::Linear) => {
                 blade_cell(&mut cv, col)
@@ -1708,15 +1722,23 @@ pub fn generate_scanned(p: &PlantParams, scale: usize, scans: &Scans) -> PlantTe
         let opposite = b.levels[2].whorl >= 2;
         for cell in 14..16u32 {
             cv.select_cell(cell);
-            let tint = 1.0 + lf.colour_var * 0.2 * (cell as f32 - 14.5);
+            // Cell 14 the shade leaves inside the crown, 15 the sun leaves of its shell
+            // (`gen_tree::leaf_level` picks by the shoot's light).
+            let tint = if cell == 14 {
+                1.0 - 0.22 * lf.colour_var
+            } else {
+                1.0 + 0.12 * lf.colour_var
+            };
             cluster(&mut cv, p, opposite, &mut rng, tint);
         }
     }
     // The finer atlases get a normal map: the same cost as before at scale 1.
     let atlas_normal = (scale > 1).then(|| leaf_normals(&cv));
     let atlas = finish_atlas(cv);
-    // Bark gains detail with the atlas: 512 px from scale 2 (HIGH and ULTRA).
-    let n = BARK_SIZE as usize * scale.min(2);
+    // Bark gains detail with the atlas: 768 px from scale 2 (HIGH and ULTRA). The texture
+    // covers a whole girth of the trunk; at 512 px an oak's 4 m girth had 8 mm texels, a blur
+    // from 2 m. (Not 1024: uncompressed in the browser that is 10 MB a species.)
+    let n = BARK_SIZE as usize * if scale >= 2 { 3 } else { 1 };
     let (mut bark, mut bark_normal) = bark(p, n);
     if let Some(b) = &scans.bark {
         let reps = bark_repeats(b.size_m, trunk_radius(p));
@@ -1953,6 +1975,17 @@ fn trunk_radius(p: &PlantParams) -> f32 {
 
 fn bark(p: &PlantParams, n: usize) -> (Image, Image) {
     let b = &p.bark;
+    // The texture goes once round the trunk: its ridges and plates are counted by the girth so
+    // they keep their real size (fixed counts drew a pine's plates 60 cm wide, dark-seamed
+    // polygons from any distance). Each count stays an integer, so the texture still tiles.
+    let girth = TAU * trunk_radius(p);
+    let per = |m: f32, lo: i32, hi: i32| ((girth / m).round() as i32).clamp(lo, hi);
+    let ridges = per(0.09, 6, 40);
+    let (plates_x, plates_y) = if b.pattern == BarkPattern::Scaly {
+        (per(0.1, 6, 36), per(0.075, 8, 48))
+    } else {
+        (per(0.22, 4, 16), per(0.25, 4, 16))
+    };
     let mut height = vec![0.0f32; n * n];
     let mut col = vec![[0.0f32; 3]; n * n];
     for y in 0..n {
@@ -1983,21 +2016,17 @@ fn bark(p: &PlantParams, n: usize) -> (Image, Image) {
                 }
                 BarkPattern::Furrowed => {
                     let warp = tile_fbm(u, v, 2, 3, 3, 31) - 0.5;
-                    let xr = (u + warp * 0.25) * 7.0;
+                    let xr = (u + warp * 0.25) * ridges as f32;
                     let ridge = 1.0 - ((xr.rem_euclid(1.0)) * 2.0 - 1.0).abs();
-                    let breaks = smoothstep(0.55, 0.75, tile_noise(u, v, 7, 5, 32));
+                    let breaks =
+                        smoothstep(0.55, 0.75, tile_noise(u, v, ridges, (ridges * 2) / 3, 32));
                     let h =
                         smoothstep(0.25, 0.7, ridge) * (1.0 - 0.6 * breaks) * (0.8 + 0.3 * fine);
                     (h, mix(b.accent, mul(b.colour, 0.85 + 0.3 * fine), h))
                 }
                 BarkPattern::Flaky | BarkPattern::Scaly => {
-                    let (gx, gy) = if b.pattern == BarkPattern::Scaly {
-                        (10, 14)
-                    } else {
-                        (5, 6)
-                    };
-                    let (f1, f2, id) = worley(u, v, gx, gy, 41);
-                    let crack = smoothstep(0.02, 0.12, f2 - f1);
+                    let (f1, f2, id) = worley(u, v, plates_x, plates_y, 41);
+                    let crack = smoothstep(0.02, 0.1, f2 - f1);
                     let k = crate::math::hash2(id as i32, 7, 42);
                     let plate = mix(
                         b.colour,
@@ -2008,7 +2037,8 @@ fn bark(p: &PlantParams, n: usize) -> (Image, Image) {
                             k * 0.35
                         },
                     );
-                    let c = mix(mul(b.accent, 0.45), mul(plate, 0.9 + 0.2 * fine), crack);
+                    // The cracks between plates are the inner bark, darker but not black.
+                    let c = mix(mul(b.accent, 0.7), mul(plate, 0.9 + 0.2 * fine), crack);
                     (crack * (0.7 + 0.3 * (1.0 - f1)), c)
                 }
                 BarkPattern::Fluted => {
