@@ -3139,20 +3139,19 @@ impl Renderer {
     }
 
     /// Runs of consecutive clusters (adjacent in the instance buffer) that
-    /// pass `keep` and are inside `cull`, one draw each, ordered front to
+    /// pass `keep` and are `visible` (`visible_clusters`), one draw each, ordered front to
     /// back by their nearest cluster (so early depth testing rejects hidden
     /// foliage layers while a run of cells stays one draw).
     fn runs(
         item: &Item,
         order: usize,
-        cull: Mat4,
-        near_far: bool,
+        visible: &[bool],
         keep: impl Fn(&Cluster) -> bool,
     ) -> Vec<std::ops::Range<u32>> {
         let mut out: Vec<(f32, std::ops::Range<u32>)> = Vec::new();
         let mut open = false;
-        for c in &item.clusters {
-            if !keep(c) || c.bounds.is_none_or(|b| outside(cull, b, near_far)) {
+        for (c, &seen) in item.clusters.iter().zip(visible) {
+            if !seen || !keep(c) {
                 open = false;
                 continue;
             }
@@ -3167,6 +3166,26 @@ impl Renderer {
         }
         out.sort_by(|a, b| a.0.total_cmp(&b.0));
         out.into_iter().map(|(_, r)| r).collect()
+    }
+
+    /// Per item, which of its clusters `cull` keeps (empty: none, or the item is outside):
+    /// tested once a pass, and only clusters near enough to draw at all (`cluster_lod`). Testing
+    /// them per part, category and fade took a third of a coast frame's CPU time in the browser.
+    fn visible_clusters(&self, cull: Mat4, near_far: bool) -> Vec<Vec<bool>> {
+        self.items
+            .iter()
+            .map(|item| match item {
+                Some(item) if item.bounds.is_some_and(|b| !outside(cull, b, near_far)) => item
+                    .clusters
+                    .iter()
+                    .map(|c| {
+                        (c.lod as usize) < item.lods.len()
+                            && c.bounds.is_some_and(|b| !outside(cull, b, near_far))
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            })
+            .collect()
     }
 
     /// Draws every opaque and cutout part (and, into shadow maps and the water reflection, glass)
@@ -3188,10 +3207,11 @@ impl Renderer {
             Pass::Mirrors => 3..4,
             _ => 0..2 + glass as usize,
         };
+        let visible = self.visible_clusters(cull, near_far);
         for category in categories {
-            for item in self.items.iter().flatten() {
-                let Some(bounds) = item.bounds else { continue };
-                if outside(cull, bounds, near_far) {
+            for (item, seen) in self.items.iter().zip(&visible) {
+                let Some(item) = item else { continue };
+                if seen.is_empty() {
                     continue;
                 }
                 for (part_index, part) in item.parts.iter().enumerate() {
@@ -3253,13 +3273,12 @@ impl Renderer {
                         let runs: Vec<(std::ops::Range<u32>, u32)> = if fading {
                             item.clusters
                                 .iter()
-                                .filter(|c| {
-                                    keep(c) && c.bounds.is_some_and(|b| !outside(cull, b, near_far))
-                                })
-                                .map(|c| (c.range.clone(), c.fade_slot + part_index as u32))
+                                .zip(seen)
+                                .filter(|(c, s)| **s && keep(c))
+                                .map(|(c, _)| (c.range.clone(), c.fade_slot + part_index as u32))
                                 .collect()
                         } else {
-                            Self::runs(item, order, cull, near_far, keep)
+                            Self::runs(item, order, seen, keep)
                                 .into_iter()
                                 .map(|r| (r, part.slot))
                                 .collect()
@@ -3301,9 +3320,11 @@ impl Renderer {
             }
             // All impostors after the cutout meshes: one pipeline switch.
             if category == 1 {
-                for item in self.items.iter().flatten() {
-                    if item.bounds.is_some_and(|b| !outside(cull, b, near_far)) {
-                        self.draw_impostor(pass, item, cull, near_far, kind, &mut current);
+                for (item, seen) in self.items.iter().zip(&visible) {
+                    if let Some(item) = item
+                        && !seen.is_empty()
+                    {
+                        self.draw_impostor(pass, item, seen, kind, &mut current);
                     }
                 }
             }
@@ -3316,8 +3337,7 @@ impl Renderer {
         &self,
         pass: &mut wgpu::RenderPass,
         item: &Item,
-        cull: Mat4,
-        near_far: bool,
+        visible: &[bool],
         kind: Pass,
         current: &mut Option<usize>,
     ) {
@@ -3330,7 +3350,7 @@ impl Renderer {
         let level = item.lods.len() as u8 - 1;
         let order = matches!(kind, Pass::Shadow { .. }) as usize;
         let fades = matches!(kind, Pass::Depth | Pass::Forward);
-        let runs = Self::runs(item, order, cull, near_far, |c| {
+        let runs = Self::runs(item, order, visible, |c| {
             Self::cluster_lod(item, c, kind) == Some(level) && !(fades && c.fading)
         });
         // Dissolving clusters draw their impostor with their own fade slot
@@ -3338,12 +3358,9 @@ impl Renderer {
         let fading: Vec<(std::ops::Range<u32>, u32)> = if fades {
             item.clusters
                 .iter()
-                .filter(|c| {
-                    c.fading
-                        && c.far == level
-                        && c.bounds.is_some_and(|b| !outside(cull, b, near_far))
-                })
-                .map(|c| (c.range.clone(), c.fade_slot + item.parts.len() as u32))
+                .zip(visible)
+                .filter(|(c, s)| **s && c.fading && c.far == level)
+                .map(|(c, _)| (c.range.clone(), c.fade_slot + item.parts.len() as u32))
                 .collect()
         } else {
             Vec::new()
@@ -3980,13 +3997,19 @@ fn transform_bounds(m: Mat4, b: Bounds) -> Bounds {
 
 /// True when the box is entirely outside one clip plane of `view_proj`.
 fn outside(view_proj: Mat4, b: Bounds, near_far: bool) -> bool {
-    let c = corners(b).map(|p| view_proj * p.extend(1.0));
-    let all = |f: &dyn Fn(Vec4) -> bool| c.iter().all(|&p| f(p));
-    all(&|p| p.x < -p.w)
-        || all(&|p| p.x > p.w)
-        || all(&|p| p.y < -p.w)
-        || all(&|p| p.y > p.w)
-        || (near_far && (all(&|p| p.z < 0.0) || all(&|p| p.z > p.w)))
+    // Every corner beyond one clip plane (x < -w, x > w, ...) is the box's corner furthest
+    // inside it still beyond: its centre plus the extents along the plane's normal. Six dot
+    // products instead of eight corners through the matrix (the culling of every cluster, every
+    // pass, was a tenth of a frame's CPU time in the browser).
+    let (c, e) = ((b.0 + b.1) * 0.5, (b.1 - b.0) * 0.5);
+    let m = view_proj.transpose();
+    let (x, y, z, w) = (m.x_axis, m.y_axis, m.z_axis, m.w_axis);
+    let beyond = |n: Vec4| n.truncate().dot(c) + n.w + n.truncate().abs().dot(e) < 0.0;
+    beyond(w + x)
+        || beyond(w - x)
+        || beyond(w + y)
+        || beyond(w - y)
+        || (near_far && (beyond(z) || beyond(w - z)))
 }
 
 /// Little-endian byte packing for uniforms and vertex data (no bytemuck,
@@ -5683,6 +5706,41 @@ mod tests {
             .validate(&module)
             .unwrap_or_else(|e| panic!("{name}.wgsl: {}", e.emit_to_string(&source)));
         }
+    }
+
+    /// The plane test culls exactly what testing the eight corners culled.
+    #[test]
+    fn culling_by_planes_matches_the_corners() {
+        let by_corners = |m: Mat4, b: Bounds, near_far: bool| {
+            let c = corners(b).map(|p| m * p.extend(1.0));
+            let all = |f: &dyn Fn(Vec4) -> bool| c.iter().all(|&p| f(p));
+            all(&|p| p.x < -p.w)
+                || all(&|p| p.x > p.w)
+                || all(&|p| p.y < -p.w)
+                || all(&|p| p.y > p.w)
+                || (near_far && (all(&|p| p.z < 0.0) || all(&|p| p.z > p.w)))
+        };
+        let view = Mat4::look_at_rh(Vec3::new(3.0, 2.0, 9.0), Vec3::ZERO, Vec3::Y);
+        let views = [
+            Mat4::perspective_rh(1.0, 1.6, 0.1, 50.0) * view,
+            Mat4::orthographic_rh(-8.0, 8.0, -5.0, 5.0, 0.1, 40.0) * view,
+        ];
+        let mut seed = 7u32;
+        let mut next = || {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 8) as f32 / (1 << 24) as f32
+        };
+        let (mut culled, mut kept) = (0, 0);
+        for _ in 0..4000 {
+            let lo = Vec3::new(next(), next(), next()) * 80.0 - 40.0;
+            let b = (lo, lo + Vec3::new(next(), next(), next()) * 6.0);
+            for (m, near_far) in views.iter().flat_map(|m| [(*m, false), (*m, true)]) {
+                let want = by_corners(m, b, near_far);
+                assert_eq!(outside(m, b, near_far), want, "{b:?}");
+                if want { culled += 1 } else { kept += 1 }
+            }
+        }
+        assert!(culled > 1000 && kept > 1000, "{culled} {kept}");
     }
 
     /// A user editing: 2000 random adds, replacements and removals of
