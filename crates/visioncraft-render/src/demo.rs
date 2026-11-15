@@ -1338,7 +1338,11 @@ pub fn budget_with(r: &mut Renderer, o: &BudgetOptions) -> (usize, usize) {
     }
     r.set_wind(&crate::Wind {
         direction: Vec3::new(1.0, 0.0, 0.4),
-        speed_mps: if o.wind { crate::wind::RELATIVE_MPS } else { 0.0 },
+        speed_mps: if o.wind {
+            crate::wind::RELATIVE_MPS
+        } else {
+            0.0
+        },
         gustiness: 0.5,
     });
     (static_tris, per * shrubs.len())
