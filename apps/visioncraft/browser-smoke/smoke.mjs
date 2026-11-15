@@ -285,8 +285,8 @@ const interact = async ex => {
     out.saved_bytes = fs.statSync(path.join(dl, saved)).size;
     await exec('file.new');
     await chooseFile(OPEN_BUTTON, path.join(dl, saved));
-    await sleep(3000);
-    const reopened = await names();
+    let reopened = '';
+    for (let i = 0; i < 40 && !reopened.includes('Smoke lawn'); i++) { await sleep(500); reopened = await names(); }
     check(`${ex}: Open reads the downloaded project back`, reopened.includes('Smoke lawn'), `${saved}, ${out.saved_bytes} bytes`);
   }
   // A 3dcraft model file.
@@ -342,10 +342,11 @@ try {
       // As a person: the start card's button (centred; one row per example, `START_ROWS`).
       await sleep(500);
       const row = START_ROWS.indexOf(ex);
-      await click(W / 2, H / 2 - 47 + 39 * row);
+      await click(W / 2, H / 2 - 86 + 39 * row);
       await sleep(1500);
       const opened = await exec('document.inspect', { faces: false, measures: false });
-      r.opened_by_click = (opened.viewpoints ?? []).length > 0;
+      // The right example: each has its own number of viewpoints.
+      r.opened_by_click = (opened.viewpoints ?? []).length === { garden: 6, estate: 3, 'beach-house': 10, coast: 15 }[ex];
       check(`${ex}: the start screen button opens it`, r.opened_by_click);
       if (!r.opened_by_click) await exec('project.load_example', { name: ex });
       await rpc('ui.set', { mode: null });
