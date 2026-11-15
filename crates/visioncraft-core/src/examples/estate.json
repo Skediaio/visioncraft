@@ -43,6 +43,7 @@
   ["planting.add_brush", {"name": "Woodland", "asset_palette": [{"asset": "flora:betula-pendula", "weight": 1}], "density_per_m2": 0.02, "seed": 5,
     "strokes": [{"points": [[84, 36], [96, 40], [92, 50], [86, 56]], "radius_m": 6, "erase": false}]}],
   ["planting.apply_preset", {"id": "g1", "preset": "mixed-woodland"}],
+  ["planting.add_floor", {"id": "g1"}],
   ["planting.add_area", {"name": "Border planting", "outline": [[22, 57], [80, 57], [80, 60], [22, 60]], "density_per_m2": 2.5, "seed": 3,
     "asset_palette": [{"asset": "flora:nepeta-faassenii", "weight": 2}, {"asset": "flora:salvia-nemorosa", "weight": 2}, {"asset": "flora:echinacea-purpurea", "weight": 1}, {"asset": "flora:calamagrostis-acutiflora", "weight": 1}]}],
   ["planting.add_spline", {"name": "West hedge", "asset_palette": [{"asset": "flora:carpinus-hedge", "weight": 1}], "points": [[0.3, 0], [0.3, 60]], "straight": true, "spacing": {"every": 0.8}}],
