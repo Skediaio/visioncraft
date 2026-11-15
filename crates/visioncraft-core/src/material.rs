@@ -339,15 +339,25 @@ pub fn builtin_palette() -> Vec<Material> {
         plain("paving", "Paving", [0.35, 0.34, 0.33], 0.0, 0.80, pbr(0.6)),
         plain("metal", "Metal", [0.55, 0.56, 0.58], 1.0, 0.35, pbr(1.0)),
         plain("soil", "Soil", [0.06, 0.035, 0.02], 0.0, 1.0, pbr(1.0)),
-        // Leaf litter under woodland: dark brown with a little olive (`planting.add_floor`).
-        plain(
-            "forest-floor",
-            "Forest floor",
-            [0.028, 0.024, 0.011],
-            0.0,
-            1.0,
-            pbr(1.0),
-        ),
+        // Humus and moss under woodland (`planting.add_floor`): the library's CC0 Ground 045
+        // (ambientCG, Lennart Demes), 3 m to a tile.
+        {
+            let mut m = plain(
+                "forest-floor",
+                "Forest floor",
+                [0.85, 0.85, 0.85],
+                0.0,
+                1.0,
+                pbr(3.0),
+            );
+            m.maps = MaterialMaps {
+                base_color: Some("materials/ground045/basecolor.jpg".into()),
+                normal: Some("materials/ground045/normal.jpg".into()),
+                orm: Some("materials/ground045/orm.jpg".into()),
+                ..Default::default()
+            };
+            m
+        },
         // Dry beach sand: pale, warm; darkened where wet by the sea's shore band.
         plain("sand", "Sand", [0.50, 0.42, 0.30], 0.0, 0.95, pbr(1.0)),
         // The room behind a window: dark, so glass reads as glass, lit by lamps inside.

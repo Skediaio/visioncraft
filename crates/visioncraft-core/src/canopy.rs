@@ -81,9 +81,70 @@ pub fn canopy_cover(
     }
 }
 
+/// A ground outline that follows `crowns` (centre, radius): from their centroid, rays every
+/// 5 degrees go as far as the farthest point still under a crown's inner 85 %, and the radii
+/// are smoothed over three neighbours. Irregular, round the crowns and not a ruler line; for a
+/// wood that is one stand (star-shaped round its middle). `None` without crowns.
+pub fn crown_outline(crowns: &[([f32; 2], f32)]) -> Option<Vec<[f32; 2]>> {
+    if crowns.is_empty() {
+        return None;
+    }
+    let n = crowns.len() as f32;
+    let c = [
+        crowns.iter().map(|k| k.0[0]).sum::<f32>() / n,
+        crowns.iter().map(|k| k.0[1]).sum::<f32>() / n,
+    ];
+    let under = |p: [f32; 2]| {
+        crowns
+            .iter()
+            .any(|(k, r)| (k[0] - p[0]).hypot(k[1] - p[1]) <= 0.85 * r)
+    };
+    let reach = crowns
+        .iter()
+        .map(|(k, r)| (k[0] - c[0]).hypot(k[1] - c[1]) + r)
+        .fold(0.0, f32::max);
+    const RAYS: usize = 72;
+    let mut radius = [0.0f32; RAYS];
+    for (i, r) in radius.iter_mut().enumerate() {
+        let a = std::f32::consts::TAU * i as f32 / RAYS as f32;
+        let (dx, dz) = (a.cos(), a.sin());
+        let mut d = 0.0;
+        while d <= reach {
+            if under([c[0] + dx * d, c[1] + dz * d]) {
+                *r = d;
+            }
+            d += 0.5;
+        }
+    }
+    Some(
+        (0..RAYS)
+            .map(|i| {
+                let r = (radius[(i + RAYS - 1) % RAYS] + radius[i] + radius[(i + 1) % RAYS]) / 3.0;
+                let a = std::f32::consts::TAU * i as f32 / RAYS as f32;
+                [c[0] + a.cos() * r.max(1.0), c[1] + a.sin() * r.max(1.0)]
+            })
+            .collect(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_crown_outline_follows_the_crowns_not_a_ruler() {
+        let crowns = [([0.0, 0.0], 5.0), ([8.0, 0.0], 5.0), ([4.0, 9.0], 4.0)];
+        let o = crown_outline(&crowns).unwrap();
+        assert_eq!(o.len(), 72);
+        assert!(crate::planting::point_in_polygon([4.0, 3.0], &o));
+        assert!(!crate::planting::point_in_polygon([4.0, -20.0], &o));
+        let c = [4.0, 3.0];
+        let r: Vec<f32> = o.iter().map(|p| (p[0] - c[0]).hypot(p[1] - c[1])).collect();
+        let lo = r.iter().copied().fold(f32::MAX, f32::min);
+        let hi = r.iter().copied().fold(0.0, f32::max);
+        assert!(hi > 1.3 * lo, "{lo} {hi}");
+        assert!(crown_outline(&[]).is_none());
+    }
 
     #[test]
     fn overlapping_crowns_count_once_and_outside_cells_not_at_all() {

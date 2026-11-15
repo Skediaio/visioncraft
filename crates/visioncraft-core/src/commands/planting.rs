@@ -272,10 +272,11 @@ pub(super) fn register(s: &mut Session) {
         spec(
             "planting.add_floor",
             "Add Forest Floor",
-            "Lays an area of ground material (default the dark leaf litter `forest-floor`) over the ground a woodland planting stands on, so gaps between the crowns read as forest floor and not as lawn: the outline of an area scatter, a disc for a cluster, the convex hull of a brush's strokes. It is an ordinary area (move, restyle or remove it with the shape commands; the lawn does not grow under it).",
+            "Lays an area of ground material (default `forest-floor`: dark humus with moss, from the library's CC0 Ground 045) under a woodland. Its outline follows the crowns of the planting's trees (a ray from their centre to the farthest crown, smoothed), so it is irregular and ends under the outer crowns; it is an ordinary area (the lawn does not grow under it, and the lawn's edge wanders as a mowing edge does). Trees thinned or small in an open edge band leave the lawn showing.",
             vec![
                 param("id", T::String, "Planting id (area scatter, brush or cluster).").required(),
                 param("material", T::String, "Material id of the ground.").default(json!("forest-floor")),
+                param("years", T::Number, "Crowns as they are this many years after planting (0..60); 60 is fully grown, as pictures show them unless the view sets years.").default(json!(60)),
                 param("margin_m", T::Number, "Grow the outline outward by this much (0..20).").unit("m").default(json!(0)),
             ],
             "{id}",
@@ -670,23 +671,34 @@ fn add_floor(project: &mut Project, params: &Value) -> Result<Value, CommandErro
         id: String,
         #[serde(default = "forest_floor")]
         material: String,
+        #[serde(default = "full_grown")]
+        years: f32,
         #[serde(default)]
         margin_m: f32,
     }
     fn forest_floor() -> String {
         "forest-floor".into()
     }
+    fn full_grown() -> f32 {
+        60.0
+    }
     let p: P = parse(params)?;
-    if !(0.0..=20.0).contains(&p.margin_m) {
-        return Err(bad("margin_m: 0..20"));
+    if !(0.0..=20.0).contains(&p.margin_m) || !(0.0..=60.0).contains(&p.years) {
+        return Err(bad("margin_m: 0..20, years: 0..60"));
     }
     let g = project
         .generators
         .iter()
         .find(|g| g.id() == p.id)
         .ok_or_else(|| fail(format!("no generator `{}`", p.id)))?;
-    let outline = crate::planting::planted_outline(g)
-        .ok_or_else(|| fail("a forest floor needs an area scatter, a brush or a cluster"))?;
+    if crate::planting::planted_area(g).is_none() {
+        return Err(fail(
+            "a forest floor needs an area scatter, a brush or a cluster",
+        ));
+    }
+    let crowns = super::growth::crowns(project, g, p.years, false);
+    let outline = crate::canopy::crown_outline(&crowns)
+        .ok_or_else(|| fail("the planting has no trees to lay a floor under"))?;
     let outline = crate::shape::offset_outline(&outline, p.margin_m);
     let name = format!("{} floor", g.name());
     // A project from before the palette had it gets the library's leaf litter now.
@@ -976,18 +988,13 @@ mod tests {
         let crate::shape::Shape::Area(a) = &p.shapes[0] else {
             panic!("an area");
         };
-        // The hull holds every stroke point and reaches the stroke discs' edge.
-        for q in [[0.0, 0.0], [20.0, 0.0], [20.0, 20.0]] {
-            assert!(crate::planting::point_in_polygon(q, &a.outline));
-        }
-        let (lo, hi) = a
+        // The outline follows the crowns: a polygon of rays round their centre, ending under
+        // the outer crowns (inside the brush's reach), not a ruler-straight hull.
+        assert_eq!(a.outline.len(), 72);
+        assert!(a
             .outline
             .iter()
-            .fold((f32::MAX, f32::MIN), |(l, h), q| (l.min(q[0]), h.max(q[0])));
-        assert!(
-            (lo + 5.0).abs() < 0.1 && (hi - 25.0).abs() < 0.1,
-            "{lo} {hi}"
-        );
+            .all(|q| (-10.0..=30.0).contains(&q[0]) && (-10.0..=30.0).contains(&q[1])));
         assert!(p.assignments.iter().any(|x| x.material == "forest-floor"));
         s.run(
             "planting.add_single",

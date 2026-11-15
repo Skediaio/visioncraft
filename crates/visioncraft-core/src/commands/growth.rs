@@ -120,6 +120,37 @@ fn planting_growth(project: &mut Project, params: &Value) -> Result<Value, Comma
     Ok(json!({"id": p.id, "assets": assets}))
 }
 
+/// The crowns (centre, radius) of a generator's woody plants `years` after planting: trees,
+/// conifers and palms, and with `shrubs` the shrubs too.
+pub(super) fn crowns(
+    project: &Project,
+    g: &Generator,
+    years: f32,
+    shrubs: bool,
+) -> Vec<([f32; 2], f32)> {
+    let ground = |x: f32, z: f32| {
+        project
+            .terrain
+            .as_deref()
+            .and_then(|t| t.height_at(x, z))
+            .or(Some(0.0))
+    };
+    crate::planting::evaluate(g, &ground)
+        .placements
+        .iter()
+        .filter_map(|pl| {
+            let gr = growth_of(&pl.asset, None);
+            (matches!(gr.grower, Grower::Tree | Grower::Conifer | Grower::Palm)
+                || (shrubs && gr.grower == Grower::Shrub))
+                .then(|| {
+                    let age = planted_age(g, &pl.asset) + years;
+                    let width = gr.mature_width_m * gr.size(age).width * pl.scale;
+                    ([pl.position[0], pl.position[2]], width / 2.0)
+                })
+        })
+        .collect()
+}
+
 fn canopy_cover(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -144,29 +175,7 @@ fn canopy_cover(project: &mut Project, params: &Value) -> Result<Value, CommandE
         .ok_or_else(|| fail(format!("no planting `{}`", p.id)))?;
     let (bounds, inside) = crate::planting::planted_area(g)
         .ok_or_else(|| fail("canopy cover needs an area scatter or a brush"))?;
-    let ground = |x: f32, z: f32| {
-        project
-            .terrain
-            .as_deref()
-            .and_then(|t| t.height_at(x, z))
-            .or(Some(0.0))
-    };
-    let crowns: Vec<([f32; 2], f32)> = crate::planting::evaluate(g, &ground)
-        .placements
-        .iter()
-        .filter_map(|pl| {
-            let gr = growth_of(&pl.asset, None);
-            matches!(
-                gr.grower,
-                Grower::Tree | Grower::Conifer | Grower::Palm | Grower::Shrub
-            )
-            .then(|| {
-                let age = planted_age(g, &pl.asset) + p.years;
-                let width = gr.mature_width_m * gr.size(age).width * pl.scale;
-                ([pl.position[0], pl.position[2]], width / 2.0)
-            })
-        })
-        .collect();
+    let crowns = crowns(project, g, p.years, true);
     let c = crate::canopy::canopy_cover(bounds, &*inside, &crowns, p.cell_m);
     let mean = crowns.iter().map(|c| 2.0 * c.1).sum::<f32>() / crowns.len().max(1) as f32;
     Ok(json!({
