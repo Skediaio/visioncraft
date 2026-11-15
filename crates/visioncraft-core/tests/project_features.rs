@@ -697,7 +697,7 @@ fn layered_planting_commands_and_presets() {
     let g = id(s.run("planting.add_brush", json!({"name": "Forest", "asset_palette": [{"asset": "flora:quercus-robur", "weight": 1.0}], "density_per_m2": 0.01, "strokes": [{"points": [[0.0, 0.0], [30.0, 0.0]], "radius_m": 8.0, "erase": false}]})).unwrap());
     s.run(
         "planting.apply_preset",
-        json!({"id": g, "preset": "broadleaf-woodland"}),
+        json!({"id": g, "preset": "broadleaf-woodland", "edge_band_m": 0}),
     )
     .unwrap();
     assert!(
