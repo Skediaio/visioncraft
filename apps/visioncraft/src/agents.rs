@@ -1,16 +1,20 @@
-//! AI agents driving the open window (desktop only): the automation crate's control channel
+//! AI agents driving the open window: on the desktop the automation crate's control channel
 //! (`visioncraft-cli mcp --bridge` finds it), answered every frame on the UI thread through
 //! [`WindowHost`] over the window's own `Session`, so agent commands appear live and are undone
 //! with Ctrl+Z like the person's own. As in 3dcraft, nothing listens until the person turns on
 //! *Allow AI agents* (or starts the window with `--control`); turning it off disconnects.
+//!
+//! In the browser the same protocol answers scripts in the page itself (`web_rpc`):
+//! `await vcRpc("engine.execute", {command: "time.set", params: {hour: 20}})` (index.html).
 
-use crate::camera::{Camera, View};
+use crate::camera::View;
 use crate::planting_tools::PlantingTools;
 use crate::studio::Studio;
 use crate::ui::Mode;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
 use visioncraft_automation::control::{ControlHandle, ControlOptions, serve_control};
 use visioncraft_automation::rpc::Method;
 use visioncraft_automation::{Access, Host, HostState, LoadedModel, RenderRequest, Rendered};
@@ -18,6 +22,7 @@ use visioncraft_core::{Project, Session};
 
 /// The window's control channel and what it shows about it.
 pub struct Agents {
+    #[cfg(not(target_arch = "wasm32"))]
     control: Option<ControlHandle>,
     pub state: HostState,
     /// The last command an agent ran, and when (seconds of the window's clock).
@@ -29,6 +34,7 @@ pub struct Agents {
 impl Default for Agents {
     fn default() -> Self {
         Self {
+            #[cfg(not(target_arch = "wasm32"))]
             control: None,
             // The person's own files: an agent may read and write where the person can.
             state: HostState::new(Access::any()),
@@ -39,6 +45,7 @@ impl Default for Agents {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Agents {
     pub fn allowed(&self) -> bool {
         self.control.is_some()
@@ -105,6 +112,34 @@ impl Agents {
         if n == 0 {
             return false;
         }
+        self.answered(host, before, now)
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl Agents {
+    /// Answers the page's waiting requests (`web_rpc`); true when something was answered.
+    pub fn poll(&mut self, mut host: WindowHost, now: f64) -> bool {
+        let lines = web_rpc::take();
+        if lines.is_empty() {
+            return false;
+        }
+        host.models_to_agents(&mut self.state);
+        let before = host.studio.session.revision();
+        for line in lines {
+            let mut bound = Bound {
+                host: &mut host,
+                state: &mut self.state,
+            };
+            let reply = visioncraft_automation::rpc::handle_line(&mut bound, &line);
+            web_rpc::reply(&reply.unwrap_or_else(|| "null".into()));
+        }
+        self.answered(host, before, now)
+    }
+}
+
+impl Agents {
+    fn answered(&mut self, mut host: WindowHost, before: u64, now: f64) -> bool {
         host.models_from_agents(&self.state);
         if host.studio.session.revision() != before {
             host.studio.set_draft(None);
@@ -229,7 +264,7 @@ const UI_METHODS: &[Method] = &[
     Method {
         name: "ui.get",
         params: "{}",
-        summary: "What the window shows: mode, camera (view, position, target, fov_y_deg), the selected planting and model, lights on, size.",
+        summary: "What the window shows: mode, camera (view, position, target, fov_y_deg), the selected planting and model, lights on, size, and what is still on its way (pending: plants to generate, library downloads, the sky volume).",
     },
     Method {
         name: "ui.set",
@@ -239,7 +274,7 @@ const UI_METHODS: &[Method] = &[
     Method {
         name: "ui.fly",
         params: r#"{"viewpoint": string}"#,
-        summary: "Flies the window's camera to a saved viewpoint.",
+        summary: "Flies the window's camera to a saved viewpoint and, as a click on it, sets its time of day and years.",
     },
     Method {
         name: "ui.select",
@@ -258,6 +293,17 @@ impl Host for Bound<'_, '_> {
         (&mut self.host.studio.session, self.state)
     }
 
+    #[cfg(target_arch = "wasm32")]
+    fn render(
+        &mut self,
+        _: &Project,
+        _: &BTreeMap<String, LoadedModel>,
+        _: &RenderRequest,
+    ) -> Result<Rendered, String> {
+        Err(NO_READBACK.into())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn render(
         &mut self,
         project: &Project,
@@ -277,7 +323,7 @@ impl Host for Bound<'_, '_> {
         let camera = h.studio.camera.clone();
         let (quality, auto) = (h.studio.quality, h.studio.quality_auto);
         if let Some((p, t, fov)) = request.camera {
-            h.studio.camera = Camera::default();
+            h.studio.camera = crate::camera::Camera::default();
             h.studio.camera.fov_y = fov.to_radians();
             h.studio
                 .camera
@@ -352,6 +398,16 @@ impl Host for Bound<'_, '_> {
                 "textures": h.studio.textures.unwrap_or("auto"),
                 "textureTier": h.studio.scene.library.texture_tier,
                 "size": h.studio.size,
+                "quality": {
+                    "auto": h.studio.quality_auto,
+                    "preset": crate::studio::preset_name(&h.studio.current_quality()),
+                    "renderScale": h.studio.current_quality().render_scale,
+                },
+                "pending": {
+                    "plants": h.studio.plants_pending(),
+                    "library": !h.studio.scene.library.idle(),
+                    "skyVolume": h.studio.sky_volume_pending(),
+                },
             })),
             "ui.set" => (|| {
                 if let Some(m) = params.get("mode") {
@@ -425,6 +481,19 @@ impl Host for Bound<'_, '_> {
                     .cloned()
                     .ok_or_else(|| format!("no viewpoint `{id}`"))?;
                 h.studio.camera.start_fly(&v, h.now);
+                // As a click on the viewpoint (views.rs): its time of day and years come along.
+                if let Some(t) = v.time
+                    && t != h.studio.project().time
+                {
+                    let p = json!({"year": t.year, "month": t.month, "day": t.day, "hour": t.hour});
+                    h.studio.run("time.set", p).map_err(|e| e.to_string())?;
+                }
+                if let Some(years) = v.years
+                    && Some(years) != h.studio.project().view.years
+                {
+                    let p = json!({"years": years});
+                    h.studio.run("view.set", p).map_err(|e| e.to_string())?;
+                }
                 Ok(Value::Null)
             })(),
             "ui.select" => (|| {
@@ -458,6 +527,9 @@ impl Host for Bound<'_, '_> {
                 }
                 Ok(Value::Null)
             })(),
+            #[cfg(target_arch = "wasm32")]
+            "ui.screenshot" => Err(NO_READBACK.into()),
+            #[cfg(not(target_arch = "wasm32"))]
             "ui.screenshot" => (|| {
                 let [w0, h0] = h.studio.size;
                 let dim = |k: &str, d: u32| {
@@ -478,6 +550,7 @@ impl Host for Bound<'_, '_> {
 /// The same host without a window, for checking it where no display is available: a headless
 /// device and `Studio`, answering agents for `seconds` (`visioncraft --agents-headless PORT
 /// TOKEN_FILE SECONDS --assets DIR`).
+#[cfg(not(target_arch = "wasm32"))]
 pub fn serve_headless(port: u16, token_file: &str, seconds: f64) -> Result<(), String> {
     let (device, queue) = pollster::block_on(visioncraft_render::headless_device())?;
     let renderer =
@@ -517,6 +590,51 @@ pub fn serve_headless(port: u16, token_file: &str, seconds: f64) -> Result<(), S
         std::thread::sleep(std::time::Duration::from_millis(16));
     }
     Ok(())
+}
+
+/// WebGPU reads pictures back asynchronously; the bridge answers within one frame.
+#[cfg(target_arch = "wasm32")]
+const NO_READBACK: &str =
+    "pictures cannot be read back in the browser; take them from the page (the canvas)";
+
+/// The page's request queue: `vcRpc` (index.html) pushes JSON-lines requests onto
+/// `__vcRpcIn` and gets each reply through `__vcRpcReply`.
+#[cfg(target_arch = "wasm32")]
+pub mod web_rpc {
+    use wasm_bindgen::{JsCast, JsValue, closure::Closure};
+
+    /// The waiting request lines, emptying the queue.
+    pub fn take() -> Vec<String> {
+        let Ok(queue) = js_sys::Reflect::get(&js_sys::global(), &"__vcRpcIn".into()) else {
+            return Vec::new();
+        };
+        let Some(queue) = queue.dyn_ref::<js_sys::Array>() else {
+            return Vec::new();
+        };
+        let lines = queue.iter().filter_map(|v| v.as_string()).collect();
+        queue.set_length(0);
+        lines
+    }
+
+    pub fn reply(line: &str) {
+        if let Ok(f) = js_sys::Reflect::get(&js_sys::global(), &"__vcRpcReply".into())
+            && let Some(f) = f.dyn_ref::<js_sys::Function>()
+        {
+            let _ = f.call1(&JsValue::NULL, &line.into());
+        }
+    }
+
+    /// `__vcRpcWake()`: the page asks for a frame, so a request is answered while nothing moves.
+    pub fn install_waker(ctx: &eframe::egui::Context) {
+        let ctx = ctx.clone();
+        let wake = Closure::<dyn Fn()>::new(move || ctx.request_repaint());
+        let _ = js_sys::Reflect::set(
+            &js_sys::global(),
+            &"__vcRpcWake".into(),
+            wake.as_ref().unchecked_ref(),
+        );
+        wake.forget();
+    }
 }
 
 /// Standard base64 with padding.

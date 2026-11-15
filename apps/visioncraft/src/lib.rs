@@ -2,7 +2,6 @@
 //! the frame loop, input routing, files and persistence. The scene, the camera and the modes live
 //! in their own modules; `studio` is everything that does not need a window.
 
-#[cfg(not(target_arch = "wasm32"))]
 pub mod agents;
 pub mod assets;
 pub mod bundle;
@@ -185,7 +184,6 @@ pub struct App {
     plan_fit: Option<(glam::Vec2, f32, f32)>,
     /// The last frame asked for the next one: the time between them is a frame, not idle.
     repainting: bool,
-    #[cfg(not(target_arch = "wasm32"))]
     agents: agents::Agents,
     #[cfg(not(target_arch = "wasm32"))]
     focused: bool,
@@ -269,7 +267,6 @@ impl App {
             settling_restore: was_restored,
             plan_fit: None,
             repainting: false,
-            #[cfg(not(target_arch = "wasm32"))]
             agents: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             focused: false,
@@ -282,6 +279,8 @@ impl App {
                 app.hud.extension_modes.push((e.id(), label));
             }
         }
+        #[cfg(target_arch = "wasm32")]
+        agents::web_rpc::install_waker(&cc.egui_ctx);
         // AI agents: the person's switch, or `--control [PORT]` for this run.
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -1036,13 +1035,15 @@ impl App {
     }
 
     /// Answers AI agents (see `agents`): their commands run on the window's session.
-    #[cfg(not(target_arch = "wasm32"))]
     fn serve_agents(&mut self, ctx: &egui::Context, now: f64) -> bool {
-        let focused = ctx.input(|i| i.focused);
-        if focused && !self.focused {
-            self.agents.focused();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let focused = ctx.input(|i| i.focused);
+            if focused && !self.focused {
+                self.agents.focused();
+            }
+            self.focused = focused;
         }
-        self.focused = focused;
         let mut mode = self.hud.mode;
         let host = agents::WindowHost {
             studio: &mut self.studio,
@@ -1308,10 +1309,7 @@ impl eframe::App for App {
                 }
             }
         }
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            busy |= self.serve_agents(&ctx, now);
-        }
+        busy |= self.serve_agents(&ctx, now);
         for m in self.inbox.take() {
             match m {
                 Msg::Opened {
