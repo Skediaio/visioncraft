@@ -74,6 +74,12 @@ fn check_mesh(m: &PlantMesh, budget: usize, tag: &str) -> Result<(), String> {
     {
         return fail("parts do not cover the indices".into());
     }
+    let mut bark = vec![false; n];
+    for p in m.parts.iter().filter(|p| p.material == Material::Bark) {
+        for &i in &m.indices[p.index_range.start as usize..p.index_range.end as usize] {
+            bark[i as usize] = true;
+        }
+    }
     for k in 0..n {
         if !m.positions[k].iter().all(|v| v.is_finite()) {
             return fail(format!("position {:?}", m.positions[k]));
@@ -83,7 +89,9 @@ fn check_mesh(m: &PlantMesh, budget: usize, tag: &str) -> Result<(), String> {
         if !l.is_finite() || (l - 1.0).abs() > 1e-3 {
             return fail(format!("normal length {l}"));
         }
-        if !m.uvs[k].iter().all(|v| (0.0..=1.0).contains(v)) {
+        // Bark repeats along a branch (its V runs on past 1); everything else stays in its cell.
+        let ok = |v: &f32| (0.0..=1.0).contains(v) || (bark[k] && v.is_finite());
+        if !m.uvs[k].iter().all(ok) {
             return fail(format!("uv {:?}", m.uvs[k]));
         }
         if !(0.0..=1.0).contains(&m.wind[k][0]) || !m.wind[k][1].is_finite() {
@@ -217,10 +225,10 @@ fn golden_hashes() {
     let lib = species();
     let mut got = Vec::new();
     for (id, lod, want) in [
-        ("quercus-robur", Lod::Lod0, 0x58ce_d880_361b_d26c_u64),
-        ("hosta", Lod::Lod1, 0xbf24_e811_9f50_ee6c),
+        ("quercus-robur", Lod::Lod0, 0xef80_3f58_89ec_43a1_u64),
+        ("hosta", Lod::Lod1, 0x3fe7_73fb_1413_23c5),
         ("carpinus-hedge", Lod::Lod2, 0xc567_f698_a41b_6c32),
-        ("picea-abies", Lod::Lod1, 0xdd72_8a9a_25eb_1bc2),
+        ("picea-abies", Lod::Lod1, 0x9762_4c2a_a435_0689),
     ] {
         let s = lib.iter().find(|s| s.id == id).unwrap();
         let h = fnv(&generate(&s.params, 1234, lod));
@@ -356,11 +364,11 @@ fn finer_atlases_keep_the_layout_and_bring_a_leaf_normal_map() {
         rgba.chunks(4).filter(|p| p[3] > 127).count() as f32 / (scale * scale) as f32
     };
     let (a, b) = (opaque(&base.atlas.rgba, 1), opaque(&fine.atlas.rgba, 2));
-    // Bark doubles from scale 2.
-    assert_eq!(fine.bark.width, 2 * BARK_SIZE);
+    // Bark triples from scale 2.
+    assert_eq!(fine.bark.width, 3 * BARK_SIZE);
     assert_eq!(
         fine.bark_normal.rgba.len(),
-        (4 * BARK_SIZE * BARK_SIZE * 4) as usize
+        (9 * BARK_SIZE * BARK_SIZE * 4) as usize
     );
     assert!((a - b).abs() < 0.05 * a, "{a} vs {b}");
     // Leaves are not flat: many texels lean away from +Z.

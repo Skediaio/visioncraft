@@ -710,6 +710,7 @@ fn finish(
     let l2 = &b.levels[1];
     let l3 = &b.levels[2];
     let floor = (h * 0.05).min(0.8);
+    let hang = (-l2.gravity - 1.0).max(0.0) * 0.6;
     let periph = 6;
     let mut twigs: Vec<(u32, [V3; 3], f32)> = Vec::new(); // (owner node, points, phase)
     // (owner node, owner twig or NONE, shoot)
@@ -765,7 +766,8 @@ fn finish(
             // Spread along the parent's last step, not all from its node.
             let q0 = sc.p[i] - d * (step * trng.f() * 0.9);
             let q1 = q0 + td * (len * 0.5);
-            let q2 = q0 + td * len;
+            // A weeping habit's strands bend over and hang (a birch's long pendulous shoots).
+            let q2 = q1 + (td - UP * hang).norm() * (len * 0.5);
             if q2.y < floor {
                 continue;
             }
@@ -977,16 +979,23 @@ fn finish(
     for (t, (owner, q, ph)) in twigs.iter().enumerate() {
         let wo = bend(dist[*owner as usize]);
         let r = radius(twig_area[t]);
+        let tip = Node {
+            p: q[2],
+            r: r_shoot,
+            w: (wo + 0.15).min(1.0),
+        };
         sk.branches.push(Branch {
-            // A straight stick: one cone of a few facets.
-            nodes: vec![
-                Node { p: q[0], r, w: wo },
-                Node {
-                    p: q[2],
-                    r: r_shoot,
-                    w: (wo + 0.15).min(1.0),
-                },
-            ],
+            // A straight stick: one cone of a few facets; a hanging strand bends at its middle.
+            nodes: if hang > 0.0 {
+                let mid = Node {
+                    p: q[1],
+                    r: (r + r_shoot) * 0.5,
+                    w: (wo + 0.08).min(1.0),
+                };
+                vec![Node { p: q[0], r, w: wo }, mid, tip]
+            } else {
+                vec![Node { p: q[0], r, w: wo }, tip]
+            },
             phase: *ph,
         });
         sk.levels.push(twig_level);
@@ -1055,13 +1064,41 @@ fn finish(
 /// Shoots with less light than this are shed (they carry no leaves).
 const LIT: f32 = 0.1;
 
+/// The root buttresses of branch `i` when it is a stem standing on the ground: five to seven
+/// ridges where the main roots leave it, about one and a half diameters high, stronger in old
+/// trees and in species with a strong root flare (Mattheck's "Design in Nature" explains them as
+/// the stem's own uniform-stress shape where it is anchored).
+pub(crate) fn buttress(
+    p: &PlantParams,
+    b: &BranchingParams,
+    sk: &Skeleton,
+    i: usize,
+    seed: u64,
+) -> Option<crate::mesh::Buttress> {
+    let br = &sk.branches[i];
+    if sk.levels[i] != 0 || br.nodes[0].p.y > 0.05 || br.nodes[0].r < 0.04 {
+        return None;
+    }
+    let age = p.age.clamp(0.0, 1.0);
+    let mut rng = Rng::new(seed, 19);
+    Some(crate::mesh::Buttress {
+        height: br.nodes[0].r * 3.0,
+        amount: ((0.12 + 0.5 * b.trunk_flare) * age * age).min(0.5),
+        lobes: 5.0 + rng.below(3) as f32,
+        phase: rng.f() * TAU,
+    })
+}
+
 /// Branches thinner than this at their base are fine twigs ([`Builder::twig_tube`]).
 pub(crate) const FINE_M: f32 = 0.012;
 
 /// Sides of a branch's tube by its base radius, for the leaf level.
 fn sides(r: f32) -> u32 {
-    if r > 0.12 {
-        12
+    // A trunk seen from 2 m needs facets of a few centimetres or its outline is a polygon.
+    if r > 0.25 {
+        24
+    } else if r > 0.12 {
+        16
     } else if r > 0.05 {
         8
     } else if r > 0.015 {
@@ -1113,6 +1150,8 @@ pub(crate) fn leaf_level(
         used += cost;
         if br.nodes[0].r < FINE_M {
             out.twig_tube(&br.nodes, s, br.phase);
+        } else if let Some(bt) = buttress(p, b, sk, i, seed) {
+            out.trunk(&br.nodes, s, br.phase, bt);
         } else {
             out.tube(&br.nodes, s, br.phase);
         }
@@ -1166,7 +1205,9 @@ pub(crate) fn leaf_level(
             side,
             length: cm,
             width: cm,
-            cell: 14 + (i % 2) as u8,
+            // Sun leaves (lighter, yellower) where the shoot is in the light, shade leaves
+            // inside the crown; a hash so the boundary is not a line.
+            cell: 14 + u8::from(crate::math::hash2(i as i32, seed as i32, 0x5c11) < s.light),
             material: Material::Foliage,
             wind: (s.w, (s.w + 0.15).min(1.0)),
             phase: s.phase,

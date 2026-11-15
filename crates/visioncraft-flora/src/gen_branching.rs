@@ -370,8 +370,10 @@ fn shaped(br: &Branch, lvl: usize, lod: usize, all_levels: bool) -> (Vec<Node>, 
     let seg = (br.nodes[1].p - br.nodes[0].p).len().max(1e-3);
     let stride = ((([0.5, 0.9, 1.5][lod] / seg) as usize).max(STRIDE[lod])).max(1);
     let r = br.nodes[0].r;
-    let sides = if r > 0.15 {
-        [10, 8, 6][lod]
+    let sides = if r > 0.25 {
+        [16, 10, 6][lod]
+    } else if r > 0.15 {
+        [12, 8, 6][lod]
     } else if r > 0.05 {
         [7, 5, 4][lod]
     } else if r > 0.015 {
@@ -382,13 +384,13 @@ fn shaped(br: &Branch, lvl: usize, lod: usize, all_levels: bool) -> (Vec<Node>, 
     (decimate(&br.nodes, stride), sides)
 }
 
-/// Which branches to mesh at `lod` and what that costs.
+/// Which branches to mesh at `lod` with how many sides, and what that costs.
 fn wood_plan(
     sk: &Skeleton,
     lod: usize,
     wood_budget: usize,
     all_levels: bool,
-) -> (Vec<usize>, usize) {
+) -> (Vec<(usize, u32)>, usize) {
     let trunk_r = sk
         .branches
         .iter()
@@ -424,11 +426,19 @@ fn wood_plan(
         if lod == 2 && lvl > 1 && !all_levels {
             continue;
         }
-        let (nodes, sides) = shaped(br, lvl, lod, all_levels);
+        let (nodes, mut sides) = shaped(br, lvl, lod, all_levels);
+        // A long stem of many sides can cost more than the level's whole wood budget: it
+        // takes fewer sides rather than being left out (a plane's bole went missing at 40 m).
+        while chosen.is_empty()
+            && sides > 6
+            && Builder::tube_cost(nodes.len(), sides) > wood_budget / 3
+        {
+            sides -= 2;
+        }
         let cost = Builder::tube_cost(nodes.len(), sides);
         if used + cost <= wood_budget {
             used += cost;
-            chosen.push(i);
+            chosen.push((i, sides));
         }
     }
     (chosen, used)
@@ -574,12 +584,15 @@ pub(crate) fn cards(
     };
 
     let mut out = Builder::default();
-    for &i in &chosen {
+    for &(i, sides) in &chosen {
         let lvl = sk.levels[i] as usize;
         let br = &sk.branches[i];
-        let (nodes, sides) = shaped(br, lvl, li, grown(p));
+        let (nodes, _) = shaped(br, lvl, li, grown(p));
         if grown(p) && br.nodes[0].r < crate::gen_tree::FINE_M {
             out.twig_tube(&nodes, sides, br.phase);
+        } else if let Some(bt) = crate::gen_tree::buttress(p, b, sk, i, seed).filter(|_| sides >= 8)
+        {
+            out.trunk(&nodes, sides, br.phase, bt);
         } else {
             out.tube(&nodes, sides, br.phase);
         }
@@ -657,11 +670,20 @@ pub(crate) fn cards(
     // (`emit` takes the place in that sequence).
     let cards = npts * CARDS_PER_POINT;
     for k in 0..n_leaf.min(cards) {
+        // A grown tree's points come most lit first: their cards take the lighter, yellower
+        // cells (sun leaves), the last ones the darker (shade leaves); a hash mixes them.
+        let cell = if grown(p) {
+            let sun = 1.0 - order[k % npts] as f32 / npts as f32;
+            let t = 0.7 * sun + 0.3 * crate::math::hash2(k as i32, seed as i32, 0x5c11);
+            leaf_cells[((t * leaf_cells.len() as f32) as usize).min(leaf_cells.len() - 1)]
+        } else {
+            leaf_cells[k % leaf_cells.len()]
+        };
         emit(
             &mut out,
             k,
             ck,
-            leaf_cells[k % leaf_cells.len()],
+            cell,
             Material::Foliage,
             -(ck - c0) * 0.5,
             // Grown cards (the far levels) lie less flat: a card several leaves wide facing the

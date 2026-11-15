@@ -391,11 +391,19 @@ impl Flora {
             else {
                 continue;
             };
-            let far = v.parts.iter().map(|p| p.2).fold(0.0, f32::max);
+            // From the nearest card level, not the far one: the impostor is drawn once, and the
+            // far level's few cards (its triangle budget is for every frame) baked a crown of
+            // bare limbs with a few tufts, and cast them as long arcs in its shadow.
+            let mut ends: Vec<f32> = v.parts.iter().map(|p| p.2).collect();
+            ends.sort_by(f32::total_cmp);
+            ends.dedup();
+            let Some(&src_end) = ends.get(ends.len().saturating_sub(3)) else {
+                continue;
+            };
             let src: Vec<(MeshId, MaterialId)> = v
                 .parts
                 .iter()
-                .filter(|p| p.2 == far)
+                .filter(|p| p.2 == src_end)
                 .map(|p| (p.0, p.1))
                 .collect();
             if let Ok(bake) = r.start_impostor_bake(&src, None, IMPOSTOR_VIEWS) {

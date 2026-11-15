@@ -285,9 +285,17 @@ impl ScanLib {
                 })
                 .flatten()
                 .or_else(|| s.leaf.clone()),
-            // A look-alike bark would lose what the drawn one keeps (a birch's white and
-            // black, a cherry's red-brown bands): only the genus' own.
-            bark: s.bark.clone().filter(|b| b.1 == "genus"),
+            // A look-alike bark would lose what the drawn one keeps where that is the species'
+            // mark (a birch's white and black, a cherry's red-brown bands): those take only the
+            // genus' own. Every other look-alike photo beats the drawn plates and furrows.
+            bark: s.bark.clone().filter(|b| {
+                b.1 == "genus"
+                    || !matches!(
+                        params.bark.pattern,
+                        visioncraft_flora::BarkPattern::Birch
+                            | visioncraft_flora::BarkPattern::Stem
+                    )
+            }),
             listed,
         }
     }
@@ -367,6 +375,11 @@ mod tests {
         // Not listed, its genus is: the hedge form of a hornbeam.
         assert_eq!(lib.sets("acer-hedge", 6, &p).leaf.unwrap().0, "l1");
         assert_eq!(lib.sets("acer-x", 6, &p).leaf.unwrap().1, "genus");
+        // A look-alike bark photo, except over a birch's own white and black.
+        assert_eq!(lib.sets("acer-x", 6, &p).bark.unwrap().0, "b1");
+        let mut birch = PlantParams::default();
+        birch.bark.pattern = visioncraft_flora::BarkPattern::Birch;
+        assert_eq!(lib.sets("acer-x", 6, &birch).bark, None);
         let drawn = PlantParams {
             drawn: true,
             ..PlantParams::default()
