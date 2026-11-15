@@ -15,8 +15,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use visioncraft_core::Catalog;
 use visioncraft_render::{
-    AlphaMode, ColorSpace, Material, MaterialId, Mesh, MeshId, Projection, Renderer, Surface,
-    TextureDesc, TextureId,
+    AlphaMode, ColorSpace, ImpostorBake, ImpostorId, Material, MaterialId, Mesh, MeshId,
+    Projection, Renderer, Surface, TextureDesc, TextureId,
 };
 
 // ---- indexes ----
@@ -252,6 +252,15 @@ pub struct Library {
     dirty: bool,
     pub messages: Vec<String>,
     pub worst_pump_ms: f64,
+    /// Impostors of catalogue plants (MEDIUM and LOW, `set_plant_impostors`): a plant's coarsest
+    /// model hands over to one, baked from the model before it. The scanned shrubs' coarsest
+    /// models keep thousands of triangles each (some no fewer than the level before), and a
+    /// coastal planting draws hundreds of them far off, in every pass.
+    plant_impostors: bool,
+    impostors: HashMap<String, ImpostorId>,
+    /// Plants whose bake failed: they stay meshes.
+    no_impostor: HashSet<String>,
+    baking: Option<(String, ImpostorBake)>,
 }
 
 impl Default for Library {
@@ -306,6 +315,10 @@ impl Library {
             dirty: false,
             messages: Vec::new(),
             worst_pump_ms: 0.0,
+            plant_impostors: false,
+            impostors: HashMap::new(),
+            no_impostor: HashSet::new(),
+            baking: None,
         }
     }
 
@@ -913,7 +926,102 @@ impl Library {
         if cfg!(target_arch = "wasm32") && tick.is_multiple_of(30) {
             self.publish_stats(r);
         }
+        self.bake_plants(r, tick);
         self.rev != rev_before
+    }
+
+    /// Turns the catalogue plants' impostors on or off (off frees them). True when it changed:
+    /// their items are built again.
+    pub fn set_plant_impostors(&mut self, r: &mut Renderer, on: bool) -> bool {
+        if on == self.plant_impostors {
+            return false;
+        }
+        self.plant_impostors = on;
+        self.baking = None;
+        for (_, imp) in self.impostors.drain() {
+            r.remove_impostor(imp);
+        }
+        self.no_impostor.clear();
+        self.rev += 1;
+        true
+    }
+
+    /// A catalogue plant's impostor once baked, and the plant's height (m).
+    pub fn plant_impostor(&self, asset: &str) -> Option<(ImpostorId, f32)> {
+        let imp = *self.impostors.get(asset)?;
+        let a = self.catalog.as_ref()?.asset(asset)?;
+        Some((imp, a.size_m[1]))
+    }
+
+    /// The parts an impostor of `asset` is baked from: a catalogue plant's model before its
+    /// coarsest, once resident.
+    fn impostor_source(&self, asset: &str) -> Option<Vec<(MeshId, MaterialId)>> {
+        let a = self.catalog.as_ref()?.asset(asset)?;
+        if a.plant.is_none() || a.lods.len() < 2 {
+            return None;
+        }
+        let m = self.models.get(&a.lods[a.lods.len() - 2].file)?;
+        Some(m.parts.clone())
+    }
+
+    /// A wanted catalogue plant whose impostor is still to be baked, with its source parts.
+    fn next_bake(&self) -> Option<(String, Vec<(MeshId, MaterialId)>)> {
+        self.wants.values().flatten().find_map(|(a, _)| {
+            (!self.impostors.contains_key(a) && !self.no_impostor.contains(a))
+                .then(|| self.impostor_source(a).map(|src| (a.clone(), src)))
+                .flatten()
+        })
+    }
+
+    /// One step of the catalogue plants' impostors: frees those no generator wants any more
+    /// (now and then), else starts the next wanted plant's bake or draws a few of its views.
+    fn bake_plants(&mut self, r: &mut Renderer, tick: u64) {
+        if !self.plant_impostors {
+            return;
+        }
+        if tick.is_multiple_of(60) {
+            let wanted: HashSet<&String> = self.wants.values().flatten().map(|(a, _)| a).collect();
+            let unwanted: Vec<String> = (self.impostors.keys())
+                .filter(|a| !wanted.contains(a))
+                .cloned()
+                .collect();
+            for a in unwanted {
+                if let Some(imp) = self.impostors.remove(&a) {
+                    r.remove_impostor(imp);
+                }
+            }
+        }
+        if self.baking.is_none() {
+            let Some((asset, src)) = self.next_bake() else {
+                return;
+            };
+            match r.start_impostor_bake(&src, None, crate::plants::IMPOSTOR_VIEWS) {
+                Ok(bake) => self.baking = Some((asset, bake)),
+                Err(_) => {
+                    self.no_impostor.insert(asset);
+                    return;
+                }
+            }
+        }
+        let Some((_, bake)) = self.baking.as_mut() else {
+            return;
+        };
+        let Some(result) = r.impostor_bake_step(bake, crate::plants::BAKE_VIEWS_PER_FRAME) else {
+            return;
+        };
+        let Some((asset, _)) = self.baking.take() else {
+            return;
+        };
+        match result {
+            Ok(imp) => {
+                self.impostors.insert(asset, imp);
+                self.rev += 1;
+            }
+            // A model went away during the bake, or the bake failed: it stays a mesh.
+            Err(_) => {
+                self.no_impostor.insert(asset);
+            }
+        }
     }
 
     fn lumens_of(&self, path: &str) -> f32 {
@@ -964,6 +1072,7 @@ impl Library {
             && self.uploading.is_empty()
             && self.awaiting.is_empty()
             && !self.unscanned
+            && (!self.plant_impostors || (self.baking.is_none() && self.next_bake().is_none()))
     }
 }
 
@@ -1025,6 +1134,64 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    /// Below HIGH a catalogue plant wanted by a generator gets an impostor, baked from its model
+    /// before the coarsest; off, it is freed. A plant with one level, or no plant, gets none.
+    #[test]
+    fn catalogue_plants_get_their_impostors_below_high() {
+        let Ok((device, queue)) = pollster::block_on(visioncraft_render::headless_device()) else {
+            eprintln!("no GPU adapter: skipped");
+            return;
+        };
+        let mut r = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+        let mut l = Library::new();
+        let bollard = crate::fixtures::glb_path("vc-bollard");
+        let bytes = crate::fixtures::files()
+            .into_iter()
+            .find(|(p, _)| *p == bollard)
+            .expect("the bollard's model")
+            .1;
+        for f in ["t/near.glb", "t/far.glb"] {
+            l.store.provide(f, Arc::from(bytes.clone()));
+        }
+        let entry = |id: &str, lods: &str, plant: bool| {
+            format!(
+                r#"{{"id":"{id}","name":"{id}","category":"shrub","tags":[],"license":"CC0-1.0","origin":"BuiltIn","author":"a","source_url":"u","size_m":[1,1.5,1],"lods":[{lods}],"thumbnail":"t.png","plant":{},"light":null}}"#,
+                if plant {
+                    r#"{"mature_height_m":1.5,"mature_width_m":1.0,"evergreen":null,"bloom_months":[],"exposure":null}"#
+                } else {
+                    "null"
+                }
+            )
+        };
+        let two = r#"{"file":"t/near.glb","max_distance_m":5.0},{"file":"t/far.glb","max_distance_m":3.4e38}"#;
+        let one = r#"{"file":"t/near.glb","max_distance_m":3.4e38}"#;
+        let json = format!(
+            r#"{{"assets":[{},{},{}]}}"#,
+            entry("shrub", two, true),
+            entry("tuft", one, true),
+            entry("stone", two, false)
+        );
+        l.catalog = Some(Arc::new(Catalog::from_json_bytes(json.as_bytes()).unwrap()));
+        for a in ["shrub", "tuft", "stone"] {
+            l.note("g", a, &[Mat4::IDENTITY]);
+        }
+        assert!(l.set_plant_impostors(&mut r, true));
+        assert!(!l.set_plant_impostors(&mut r, true), "no change");
+        for _ in 0..500 {
+            l.pump(&mut r, Vec3::ZERO);
+            if l.plant_impostor("shrub").is_some() && l.idle() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let (_, h) = l.plant_impostor("shrub").expect("the shrub's impostor");
+        assert_eq!(h, 1.5);
+        assert!(l.plant_impostor("tuft").is_none() && l.plant_impostor("stone").is_none());
+        assert!(l.idle(), "nothing left to bake");
+        assert!(l.set_plant_impostors(&mut r, false));
+        assert!(l.plant_impostor("shrub").is_none(), "freed at HIGH");
     }
 
     #[test]

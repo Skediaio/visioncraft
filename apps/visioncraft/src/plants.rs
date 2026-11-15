@@ -63,7 +63,7 @@ pub fn class(p: &flora::PlantParams, month: u8) -> u32 {
 type Part = (MeshId, MaterialId, f32);
 
 /// Plants at least this tall (unscaled) are trees: they hand over to their baked impostor early.
-const TREE_M: f32 = 3.0;
+pub(crate) const TREE_M: f32 = 3.0;
 /// The lawn's tufts never get an impostor: there are tens of thousands of them and the lawn
 /// material carries their colour from afar.
 pub const LAWN_SPECIES: &str = "flora:lawn-tuft";
@@ -73,7 +73,7 @@ pub const CLUTTER_PREFIX: &str = "clutter:";
 pub const IMPOSTOR_VIEWS: u32 = 8;
 /// Views drawn into an impostor's atlas per frame: a bake spreads over four frames (three of
 /// views, one of dilation and mips) instead of one long submit.
-const BAKE_VIEWS_PER_FRAME: u32 = 3;
+pub(crate) const BAKE_VIEWS_PER_FRAME: u32 = 3;
 /// Impostors draw up to here at most (metres; beyond, a tree is a few pixels).
 pub const IMPOSTOR_MAX_M: f32 = 2500.0;
 /// An impostor draws while its plant is taller than about 1.5 pixels: at a 50 degree field of view

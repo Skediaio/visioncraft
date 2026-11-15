@@ -1641,6 +1641,14 @@ impl Studio {
         if self.scene.set_clutter_low(preset_name(&q) == "low") {
             self.synced = None;
         }
+        // Catalogue plants far off as impostors below HIGH (`Library::set_plant_impostors`).
+        if self
+            .scene
+            .library
+            .set_plant_impostors(&mut self.renderer, !fine)
+        {
+            self.synced = None;
+        }
         let rebake = q.impostor_resolution != self.renderer.quality().impostor_resolution;
         self.renderer.set_quality(q);
         if rebake || !self.impostors_reserved {

@@ -619,6 +619,12 @@ fn scale_lod_distances(parts: &LodParts, matrices: &[Mat4]) -> LodParts {
         .collect()
 }
 
+/// Where a catalogue plant's coarsest model hands over to its impostor: metres (before the
+/// quality's level-of-detail scale) per metre of height. At MEDIUM's half distances a plant is
+/// then about 10 pixels tall: its impostor, baked from the model's twigs, fills them out to a
+/// blob that showed from nearer (a 0.5 m bush at 17 m).
+const PLANT_IMPOSTOR_M_PER_M: f32 = 150.0;
+
 fn parts_before(parts: &[(MeshId, MaterialId, f32)], last: f32) -> f32 {
     parts
         .iter()
@@ -1704,6 +1710,16 @@ impl Scene {
     fn source(&self, project: &Project, asset: &str, variant: u32, when: When) -> Option<LodParts> {
         if self.library.knows(asset) {
             let mut parts = self.library.parts(asset)?;
+            let last = parts.iter().map(|p| p.2).fold(0.0, f32::max);
+            // A plant with its impostor (MEDIUM and LOW): its coarsest model hands over to it
+            // once the plant is small on screen (`PLANT_IMPOSTOR_M_PER_M`).
+            if let Some((_, h)) = self.library.plant_impostor(asset) {
+                let end = (PLANT_IMPOSTOR_M_PER_M * h).max(parts_before(&parts, last) + 1.0);
+                for p in parts.iter_mut().filter(|p| p.2 == last) {
+                    p.2 = end;
+                }
+                return Some(parts);
+            }
             // Small objects (a pot, a bench) stop drawing far away, at a size-proportional distance.
             let size = self
                 .library
@@ -1713,7 +1729,6 @@ impl Scene {
                 .map_or(1.0, |a| a.size_m.into_iter().fold(0.0, f32::max));
             if size < SMALL_OBJECT_M {
                 let cull = (OBJECT_CULL_PER_M * size).clamp(60.0, 1500.0);
-                let last = parts.iter().map(|p| p.2).fold(0.0, f32::max);
                 let cull = cull.max(parts_before(&parts, last) + 1.0);
                 for p in parts.iter_mut().filter(|p| p.2 == last) {
                     p.2 = p.2.min(cull);
@@ -1806,7 +1821,8 @@ impl Scene {
             .collect()
     }
 
-    /// A plant's baked impostor and how far it draws (none for catalogue models).
+    /// A plant's baked impostor and how far it draws (catalogue models: a plant's on MEDIUM and
+    /// LOW, `Library::set_plant_impostors`).
     fn impostor_for(
         &self,
         project: &Project,
@@ -1815,7 +1831,10 @@ impl Scene {
         when: When,
     ) -> Option<(ImpostorId, f32, bool)> {
         if self.library.knows(asset) {
-            return None;
+            return self
+                .library
+                .plant_impostor(asset)
+                .map(|(imp, h)| (imp, plants::impostor_max(h), h < plants::TREE_M));
         }
         let res = plants::resolve(project, asset)?;
         let (class, _) = when.class(&res.params);
