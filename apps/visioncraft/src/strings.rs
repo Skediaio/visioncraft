@@ -266,7 +266,8 @@ pub const LOOKS: [(&str, &str); 3] = [
     ("vivid", "Vivid"),
 ];
 pub const HAZE: &str = "Haze";
-pub const WIND: &str = "Wind";
+pub const WIND: &str = "Wind speed (m/s)";
+pub const WIND_GUSTINESS: &str = "Gustiness";
 pub const WIND_DIRECTION: &str = "Wind direction";
 pub const GROUND: &str = "Ground plane";
 pub const EXPORT: &str = "Export";

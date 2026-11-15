@@ -93,49 +93,16 @@ const HAS_NORMAL: u32 = 2u;
 
 // ---- wind -----------------------------------------------------------------
 
-// Vegetation animation after Sousa, "Vegetation Procedural Animation and
-// Shading in Crysis", GPU Gems 3, ch. 16 (2007): a main bend of the whole
-// plant along the wind, growing with the squared bend weight and length-
-// preserved about the plant's origin, plus detail (branch) motion from the
-// per-vertex weight and phase, driven by smoothed triangle waves. The
-// per-instance phase is a hash of the instance position, so a hedge does not
-// sway in unison; gusts travel across the garden along the wind.
-fn smooth_triangle(x: vec4<f32>) -> vec4<f32> {
-    let t = abs(fract(x + 0.5) * 2.0 - 1.0);
-    return t * t * (3.0 - 2.0 * t);
-}
-
+// The wind sway itself is in common.wgsl (`wind_sway`), shared with the
+// impostors. Every pass that draws a mesh calls this with the same inputs.
 fn animated_world(position: vec3<f32>, wind: vec2<f32>, m: mat4x4<f32>, animate: bool) -> vec3<f32> {
     let p = (m * vec4<f32>(position, 1.0)).xyz;
-    let strength = g.wind.z;
-    if !animate || wind.x <= 0.0 || strength <= 0.0 {
+    if !animate || wind.x <= 0.0 || g.wind_amp.x <= 0.0 {
         return p;
     }
     let origin = m[3].xyz;
-    let dir = vec3<f32>(g.wind.x, 0.0, g.wind.y);
-    let t = g.time.x;
-    // R2 low-discrepancy weights (Roberts 2018): neighbouring plants get
-    // well-spread phases for two multiply-adds.
-    let instance_phase = fract(dot(origin.xz, vec2<f32>(0.7548777, 0.5698403)));
-    let travel = dot(origin.xz, g.wind.xy) * 0.05; // gusts move downwind (~20 m per cycle)
-    let waves = smooth_triangle(vec4<f32>(
-        t * 0.07 - travel,              // slow gust envelope
-        t * 0.31 + instance_phase,      // whole-plant sway
-        t * 1.13 + wind.y + instance_phase, // branch motion
-        t * 2.37 + wind.y * 1.7,        // leaf flutter
-    )) * 2.0 - 1.0;
-    let gust = 1.0 + g.wind.w * waves.x;
-    let rel = p - origin;
-    let size = length(rel);
-    // Main bend: tips lean downwind by up to ~4 % of their distance from the
-    // base at strength 1, plus a sway around that.
-    let lean = strength * gust * (0.6 + 0.4 * waves.y);
-    var q = rel + dir * (wind.x * wind.x * lean * 0.04 * size);
-    q = q * (size / max(length(q), 1e-6));
-    // Detail: branches bob along the wind and vertically, leaves flutter.
-    let detail = strength * gust * wind.x * (0.02 + 0.01 * min(size, 6.0));
-    q += (dir * waves.z + vec3<f32>(0.0, 0.6, 0.0) * waves.w) * detail;
-    return origin + q;
+    // m[0].w carries the plant's sway frequency (lib.rs `set_instances`).
+    return origin + wind_sway(wind_state(), p - origin, origin, wind.x, wind.y, m[0].w);
 }
 
 fn model(m0: vec4<f32>, m1: vec4<f32>, m2: vec4<f32>, m3: vec4<f32>) -> mat4x4<f32> {

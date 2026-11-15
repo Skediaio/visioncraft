@@ -30,6 +30,7 @@ pub mod terrain;
 pub mod tiers;
 pub mod viewpoint;
 pub mod water;
+pub mod wind;
 
 pub use catalog::{Asset, Catalog, CatalogError, attribution_markdown, validate_open_licences};
 pub use commands::examples::{EXAMPLES, example, example_file, is_example_source};

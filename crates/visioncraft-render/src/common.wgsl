@@ -34,7 +34,9 @@ struct Globals {
     zenith: vec4<f32>,          // zenith (Y, x, y) / F(0, theta_sun); w day factor
     night: vec4<f32>,           // rgb night sky (kcd/m2); w kcd/m2 -> pre-exposed HDR (1000 * exposure)
     highlight: vec4<u32>,       // x mesh id, y face id, z first on-top overlay segment
-    wind: vec4<f32>,            // xy direction (world x, z; unit), z strength, w gustiness
+    wind: vec4<f32>,            // xy direction (world x, z; unit), z relative strength (speed / 6.5 m/s), w gustiness
+    wind_phase: vec4<f32>,      // x gust cycles (0..1), y sway clock (s, wraps at WIND_CLOCK), z flutter cycles (0..1), w speed (m/s)
+    wind_amp: vec4<f32>,        // x mean lean per unit length, y detail amplitude (1 at 6.5 m/s)
     time: vec4<f32>,            // x seconds, y exposure, z env cube's last mip, w clay mode (0/1)
     light_grid: vec4<f32>,      // xy grid origin (world x, z), z 1 / cell size, w light count
     grid_dims: vec4<u32>,       // x, y cells along world x and z
@@ -331,4 +333,82 @@ fn apply_fog(color: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
 // dark hedges at dusk from turning milky.
 fn fog_near(transmit: f32) -> f32 {
     return mix(1.0, 0.5, transmit);
+}
+
+// ---- wind -----------------------------------------------------------------
+//
+// One sway for every level of a plant: the mesh levels (scene.wgsl
+// `animated_world`) and the impostor's quad (impostor.wgsl) both call
+// `wind_sway`, so a crown top is displaced the same whichever draws it.
+// rust: wind.rs `sway` is the same function on the CPU (tested to agree).
+//
+// Vegetation animation after Sousa, "Vegetation Procedural Animation and
+// Shading in Crysis", GPU Gems 3, ch. 16 (2007): a main bend of the whole
+// plant along the wind, length-preserved about the plant's origin, plus
+// detail (branch) motion from the per-vertex weight and phase, driven by
+// smoothed triangle waves. The bend weight is squared: w^2 is 0 at the base
+// with zero slope, so the foot stays put. Speeds, amplitudes and phases come
+// from the CPU (wind.rs): the lean follows drag (growing with speed squared,
+// saturating as crowns streamline: de Langre, Ann. Rev. Fluid Mech. 40,
+// 2008), the phases are integrated there so they never wrap into a jump, and
+// each plant sways at its own natural frequency (`hz`, the instance
+// matrix's spare w component).
+
+const WIND_CLOCK: f32 = 64.0;    // the sway clock wraps here (s); per-plant rates are whole cycles per wrap
+const GUST_WAVELENGTH: f32 = 80.0; // metres: gusts travel downwind at the wind speed
+
+struct WindState {
+    wind: vec4<f32>,
+    phase: vec4<f32>,
+    amp: vec4<f32>,
+}
+
+fn wind_state() -> WindState {
+    return WindState(g.wind, g.wind_phase, g.wind_amp);
+}
+
+fn smooth_triangle(x: vec4<f32>) -> vec4<f32> {
+    let t = abs(fract(x + 0.5) * 2.0 - 1.0);
+    return t * t * (3.0 - 2.0 * t);
+}
+
+// `rel`: the point from the plant's origin (world, m); `w`: bend weight 0..1
+// (0 at the base); `phase`: the limb's phase (cycles); `hz`: the plant's sway
+// frequency. Returns the displaced point, still relative to the origin.
+fn wind_sway(ws: WindState, rel: vec3<f32>, origin: vec3<f32>, w: f32, phase: f32, hz: f32) -> vec3<f32> {
+    if w <= 0.0 || ws.amp.x <= 0.0 {
+        return rel;
+    }
+    let dir = vec3<f32>(ws.wind.x, 0.0, ws.wind.y);
+    // R2 low-discrepancy weights (Roberts 2018): neighbouring plants get
+    // well-spread phases for two multiply-adds.
+    let instance_phase = fract(dot(origin.xz, vec2<f32>(0.7548777, 0.5698403)));
+    // Whole cycles per clock wrap, so the wrap itself is no jump.
+    let k = clamp(round(hz * WIND_CLOCK), 2.0, 6.0 * WIND_CLOCK);
+    let kb = min(4.0 * k, 6.0 * WIND_CLOCK);
+    let waves = smooth_triangle(vec4<f32>(
+        ws.phase.x - dot(origin.xz, ws.wind.xy) / GUST_WAVELENGTH, // slow gust envelope
+        ws.phase.y * (k / WIND_CLOCK) + instance_phase,            // whole-plant sway
+        ws.phase.y * (kb / WIND_CLOCK) + phase + instance_phase,   // branch motion
+        ws.phase.z + phase * 1.7,                                  // leaf flutter
+    )) * 2.0 - 1.0;
+    let gust = 1.0 + ws.wind.w * waves.x;
+    let size = length(rel);
+    // Main bend: tips lean downwind by `amp.x` of their distance from the
+    // base, plus a sway around that.
+    let bend = ws.amp.x * gust * (0.6 + 0.4 * waves.y);
+    var q = rel + dir * (w * w * bend * size);
+    q = q * (size / max(length(q), 1e-6));
+    // Detail: branches bob along the wind and vertically, leaves flutter.
+    // (no detail right at the origin: the very foot of the stem stays put whatever its weight)
+    let detail = ws.amp.y * gust * w * (0.02 + 0.01 * min(size, 6.0)) * min(size * 2.0, 1.0);
+    q += (dir * waves.z + vec3<f32>(0.0, 0.6, 0.0) * waves.w) * detail;
+    return q;
+}
+
+// The same sway for a point of an impostor's quad: `h` is its height as a
+// share of the plant's (0 base, 1 crown top); the bend weight of a mesh
+// grows about as h^1.5 up a stem, and 1 at the top; the limb phase is the mean.
+fn impostor_sway(ws: WindState, rel: vec3<f32>, origin: vec3<f32>, h: f32, hz: f32) -> vec3<f32> {
+    return wind_sway(ws, rel, origin, pow(clamp(h, 0.0, 1.0), 1.5), 0.0, hz);
 }

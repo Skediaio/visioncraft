@@ -496,6 +496,15 @@ pub fn host_docs() -> Vec<CommandDoc> {
                     "Photo only: distance in focus, 0.1 to 1000",
                 ),
                 p(
+                    "animation_s",
+                    "number",
+                    Some("s"),
+                    false,
+                    Some("0"),
+                    &[],
+                    "The animation clock the picture is taken at, 0 to 86400: where the wind has the plants swaying and the water moving (view.set wind_speed_mps). Two pictures at times a fraction of a second apart show the motion",
+                ),
+                p(
                     "years",
                     "number",
                     None,
@@ -952,8 +961,13 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
             "samples",
             "aperture_m",
             "focus_m",
+            "animation_s",
         ],
     )?;
+    let animation_s = a.number("animation_s")?.unwrap_or(0.0);
+    if !(0.0..=86_400.0).contains(&animation_s) {
+        return Err(format!("{id}: `animation_s` must be from 0 to 86400"));
+    }
     let width = a.integer("width", 16, 4096)?.unwrap_or(800) as u32;
     let height = a.integer("height", 16, 4096)?.unwrap_or(600) as u32;
     let quality = a.str("quality")?.unwrap_or("high");
@@ -1078,6 +1092,7 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
         camera,
         quality: quality.to_string(),
         photo,
+        animation_s,
     };
     let models = host.state().models.clone();
     let rendered = host

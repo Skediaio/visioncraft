@@ -90,10 +90,11 @@ fn impostor_vertex(vi: u32, m: mat4x4<f32>, towards: vec3<f32>) -> ImpostorVaryi
     right = normalize(right);
     let up = cross(towards, right);
     var world = centre + (right * st.x * ext.x + up * st.y * ext.y) * scale;
-    // Wind: the whole crown sways gently, the base stays.
-    let sway = g.wind.z * 0.03 * ext.y * scale * (st.y + 1.0) * 0.5
-        * sin(g.time.x * 0.9 + dot(m[3].xz, vec2<f32>(0.7548777, 0.5698403)) * 6.28);
-    world += vec3<f32>(g.wind.x, 0.0, g.wind.y) * sway;
+    // Wind: the same sway as the mesh levels (common.wgsl), by height up the plant.
+    let top = impostor.centre.y + impostor.extent.y;
+    let h = (impostor.centre.y + st.y * impostor.extent.y) / max(top, 1e-4);
+    let origin = m[3].xyz;
+    world = origin + impostor_sway(wind_state(), world - origin, origin, h, m[0].w);
     out.world = world;
     out.ext = ext;
     out.st = st;

@@ -64,6 +64,8 @@ pub struct RenderRequest {
     pub quality: String,
     /// With quality `photo`: how to take it.
     pub photo: Option<PhotoRequest>,
+    /// The animation clock (s) the picture is taken at: wind and water move with it.
+    pub animation_s: f64,
 }
 
 /// A photo: `samples` frames averaged; depth of field when `aperture_m` is over 0, focused at
