@@ -1646,7 +1646,9 @@ fn cull_fade_dissolves_over_a_few_frames() {
         let tufts: Vec<Mat4> = (0..40)
             .map(|i| Mat4::from_translation(Vec3::new(0.0, 0.0, -10.0 - i as f32)))
             .collect();
-        let item = demo::add_plants(&mut r, &lods, &mats, [8.0, 20.0, 30.0], &tufts);
+        // One mesh level up to the cull distance: a switch between two mesh levels dissolves
+        // whatever the cull fade (lib.rs `update_lods`), so only the cut is measured here.
+        let item = demo::add_plants(&mut r, &lods, &mats, [30.0, 30.0, 30.0], &tufts);
         r.set_item_cull_fade(item, band);
         let at = |z: f32| {
             demo::camera(
