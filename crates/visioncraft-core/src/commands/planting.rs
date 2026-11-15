@@ -916,7 +916,7 @@ mod tests {
             let mut s = Session::new(Project::default());
             s.run(
                 "planting.add_area",
-                json!({"name": "Wood", "outline": [[0, 0], [60, 0], [60, 60], [0, 60]], "seed": 4,
+                json!({"name": "Wood", "outline": [[0, 0], [60, 0], [60, 60], [0, 60]], "seed": 4, "density_per_m2": 0.01,
                     "asset_palette": [{"asset": "flora:betula-pendula", "weight": 1}]}),
             )
             .unwrap();
