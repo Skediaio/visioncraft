@@ -495,7 +495,12 @@ fn herbs_vary_in_size_by_seed() {
 /// size, so the levels still agree (bamboo's far cards moved when the skeleton was scaled).
 #[test]
 fn shrubs_vary_by_seed_and_their_levels_agree() {
-    for id in ["buxus-sempervirens", "pinus-mugo", "phyllostachys", "rosa-shrub"] {
+    for id in [
+        "buxus-sempervirens",
+        "pinus-mugo",
+        "phyllostachys",
+        "rosa-shrub",
+    ] {
         let p = &Species::by_id(id).unwrap().params;
         let mut tops = Vec::new();
         let mut tints = Vec::new();
@@ -507,7 +512,8 @@ fn shrubs_vary_by_seed_and_their_levels_agree() {
                 for k in [0, 1, 2] {
                     let ext = (hi0[k] - lo0[k]).max(0.1);
                     assert!(
-                        (lo[k] - lo0[k]).abs() <= 0.15 * ext && (hi[k] - hi0[k]).abs() <= 0.15 * ext,
+                        (lo[k] - lo0[k]).abs() <= 0.15 * ext
+                            && (hi[k] - hi0[k]).abs() <= 0.15 * ext,
                         "{id} seed {seed}: a level's box moved on axis {k}"
                     );
                 }
@@ -516,7 +522,9 @@ fn shrubs_vary_by_seed_and_their_levels_agree() {
             tops.push(hi0[1]);
             tints.push(levels[0].foliage_tint[1]);
         }
-        let spread = |v: &[f32]| v.iter().cloned().fold(0.0, f32::max) / v.iter().cloned().fold(f32::MAX, f32::min);
+        let spread = |v: &[f32]| {
+            v.iter().cloned().fold(0.0, f32::max) / v.iter().cloned().fold(f32::MAX, f32::min)
+        };
         assert!(spread(&tops) > 1.06, "{id}: heights {tops:?}");
         assert!(spread(&tints) > 1.05, "{id}: shades {tints:?}");
     }

@@ -950,7 +950,13 @@ fn pine_spray(
             }
         }
         // The terminal bud, pale brown.
-        cv.line(tip, at(tip, a, nl * 0.25), 2.2, 1.2, mix(twig_col, [0.75, 0.62, 0.45], 0.6));
+        cv.line(
+            tip,
+            at(tip, a, nl * 0.25),
+            2.2,
+            1.2,
+            mix(twig_col, [0.75, 0.62, 0.45], 0.6),
+        );
     };
     // A leader with two whorls of side shoots along it (a year's growth apart) and a whorl at
     // its tip, needled over its outer two thirds: the older wood further in has shed its needles.
@@ -968,7 +974,13 @@ fn pine_spray(
     }
     let top = at(fork, ang, lead * 0.82);
     for s in [-1.0f32, 1.0] {
-        shoot(cv, top, ang + s * deg_r(22.0 + 15.0 * rng.f()), lead * rng.range(0.15, 0.22), rng);
+        shoot(
+            cv,
+            top,
+            ang + s * deg_r(22.0 + 15.0 * rng.f()),
+            lead * rng.range(0.15, 0.22),
+            rng,
+        );
     }
     // The leader last, so its needles lie over the side shoots'.
     shoot(cv, fork, ang + 0.05 * rng.sym(), lead, rng);
@@ -1580,7 +1592,14 @@ fn mat_in_flower(cv: &mut Canvas, p: &PlantParams, rng: &mut Rng) {
         let rr = full * 0.85 * rng.f().sqrt();
         let q = (c.0 + sin(a) * rr, c.1 - cos(a) * rr);
         let col = mul(jitter(lf.colour, lf.colour_var, rng), 0.75 + 0.3 * rng.f());
-        draw_leaf(cv, q, rng.f() * TAU, leaf_px * rng.range(0.8, 1.15), st, col);
+        draw_leaf(
+            cv,
+            q,
+            rng.f() * TAU,
+            leaf_px * rng.range(0.8, 1.15),
+            st,
+            col,
+        );
     }
     let heads = 13;
     let head_r = full * 0.17;

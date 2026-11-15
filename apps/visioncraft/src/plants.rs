@@ -782,7 +782,11 @@ impl Flora {
             self.free_retired(r);
         }
         let detail = self.leaf_scale >= 2;
-        if self.detail_made.replace(detail).is_some_and(|d| d != detail) {
+        if self
+            .detail_made
+            .replace(detail)
+            .is_some_and(|d| d != detail)
+        {
             self.remesh(r);
         }
         let mut finished = self.regenerate(r);
