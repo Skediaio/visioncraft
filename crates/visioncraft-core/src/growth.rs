@@ -78,7 +78,7 @@ pub const GROWTH: &[(&str, Grower, f32, f32, f32, f32)] = &[
     ("miscanthus-sinensis", Grass, 1.8, 1.3, 3.0, 0.5),
     ("cortaderia-selloana", Grass, 2.5, 1.8, 3.0, 0.5),
     ("pennisetum-alopecuroides", Grass, 0.9, 1.0, 3.0, 0.5),
-    ("festuca-glauca", Grass, 0.25, 0.3, 2.0, 0.5),
+    ("festuca-glauca", Grass, 0.25, 0.38, 2.0, 0.5),
     ("calamagrostis-acutiflora", Grass, 1.6, 0.6, 3.0, 0.5),
     ("hosta", Perennial, 0.7, 0.9, 3.0, 0.5),
     ("hemerocallis", Perennial, 0.9, 0.8, 3.0, 0.5),

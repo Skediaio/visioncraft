@@ -1826,12 +1826,15 @@ fn build() -> Vec<Species> {
         "Blue fescue",
         "Festuca glauca",
         Grass,
+        // "Matures to a height of 9 to 12 inches", "spreads from 12 to 18 inches", "a dense
+        // clump" with a "dome-shaped habit" (NC State Extension Gardener Plant Toolbox,
+        // "Festuca glauca"): 0.25 m by 0.38 m, more blades from a broader base.
         0.25,
-        0.3,
+        0.38,
         true,
         &[],
         Sun,
-        grass(70, 10, 0.0025, 0.04, 0.0, 75.0, 0.3, 1.0, 0, 0.0, 0.0),
+        grass(90, 10, 0.0025, 0.05, 0.0, 78.0, 0.3, 1.0, 0, 0.0, 0.0),
         // "Glaucous, finely-textured, blue-gray" (Wikipedia, "Festuca glauca"): a grey with a
         // blue cast, not a cyan.
         blade([0.5, 0.59, 0.62], [0.5, 0.59, 0.62]),
@@ -2085,9 +2088,11 @@ fn build() -> Vec<Species> {
         ),
         flower(
             FlowerShape::Daisy { droop: true },
-            // Purple-pink ray florets round an orange-brown cone.
-            [0.76, 0.36, 0.62],
-            [0.65, 0.35, 0.12],
+            // "Drooping, lavender rays" round "domed, purplish-brown, spiny disc flowers" (NC
+            // State Extension, "Echinacea purpurea"); rays "pink to purplish" (Minnesota
+            // Seasons, "Eastern purple coneflower"): a mauve-pink round a dark brown cone.
+            [0.7, 0.37, 0.64],
+            [0.38, 0.21, 0.13],
             0.12,
             1.0,
         ),

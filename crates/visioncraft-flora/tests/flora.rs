@@ -491,6 +491,55 @@ fn herbs_vary_in_size_by_seed() {
     }
 }
 
+/// Branched shrubs and cane shrubs too, in size and shade; every level of one seed takes the same
+/// size, so the levels still agree (bamboo's far cards moved when the skeleton was scaled).
+#[test]
+fn shrubs_vary_by_seed_and_their_levels_agree() {
+    for id in ["buxus-sempervirens", "pinus-mugo", "phyllostachys", "rosa-shrub"] {
+        let p = &Species::by_id(id).unwrap().params;
+        let mut tops = Vec::new();
+        let mut tints = Vec::new();
+        for seed in 1..=6 {
+            let levels = generate_levels(p, seed, None, false);
+            let (lo0, hi0) = levels[0].bounds();
+            for m in &levels[1..] {
+                let (lo, hi) = m.bounds();
+                for k in [0, 1, 2] {
+                    let ext = (hi0[k] - lo0[k]).max(0.1);
+                    assert!(
+                        (lo[k] - lo0[k]).abs() <= 0.15 * ext && (hi[k] - hi0[k]).abs() <= 0.15 * ext,
+                        "{id} seed {seed}: a level's box moved on axis {k}"
+                    );
+                }
+                assert_eq!(m.foliage_tint, levels[0].foliage_tint, "{id}");
+            }
+            tops.push(hi0[1]);
+            tints.push(levels[0].foliage_tint[1]);
+        }
+        let spread = |v: &[f32]| v.iter().cloned().fold(0.0, f32::max) / v.iter().cloned().fold(f32::MAX, f32::min);
+        assert!(spread(&tops) > 1.06, "{id}: heights {tops:?}");
+        assert!(spread(&tints) > 1.05, "{id}: shades {tints:?}");
+    }
+}
+
+/// A ground-cover mat in leaf has a closed core (the opaque leaf mass, atlas cell 7) under its
+/// cards on its near levels; out of leaf and on the far level it has none.
+#[test]
+fn ground_cover_mats_are_closed() {
+    let in_mass = |m: &PlantMesh| {
+        m.uvs
+            .iter()
+            .filter(|uv| uv[0] > 0.75 && (0.25..0.5).contains(&uv[1]))
+            .count()
+    };
+    let p = &Species::by_id("thymus-serpyllum").unwrap().params;
+    assert!(in_mass(&generate(p, 3, Lod::Lod0)) >= 9);
+    assert!(in_mass(&generate(p, 3, Lod::Lod1)) >= 7);
+    assert_eq!(in_mass(&generate(p, 3, Lod::Lod2)), 0);
+    let vinca = &Species::by_id("vinca-minor").unwrap().params;
+    assert!(in_mass(&generate(vinca, 3, Lod::Lod0)) >= 9);
+}
+
 /// Grasses and herbaceous plants get one stem level before their three card levels with detail:
 /// within its budget, every blade a strip (no fan cards), several times the flowering stems of
 /// the near card level; the card levels stay exactly as generated one by one. Ground cover and

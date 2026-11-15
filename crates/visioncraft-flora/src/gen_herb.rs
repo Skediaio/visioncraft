@@ -409,7 +409,18 @@ pub fn rosette(
     // A flowering plant has many more stems than the card levels draw: lavender's slender,
     // leafless flowering stems (10-30 cm, a 2-8 cm spike on each; Wikipedia, "Lavandula
     // angustifolia") stand in their hundreds over a mature mound.
-    let m0 = r.stalks as usize * if dense { 3 } else { 1 };
+    // A daisy's flowering stems carry one head each, one to three at most (Native Plant Trust,
+    // Go Botany, "Echinacea purpurea": "each flowering stem has only one to three flower
+    // heads"): the stem level draws half as many again as the card levels (a dozen on a
+    // coneflower; judged, no published count per clump found), not three times (a solid sheet
+    // of pink).
+    let m0 = if !dense {
+        r.stalks as usize
+    } else if flowers.is_some_and(|f| spike_like(f.shape)) {
+        r.stalks as usize * 3
+    } else {
+        (r.stalks as usize * 3).div_ceil(2)
+    };
     let mk = if flowers.is_some() {
         [m0, (m0 * 3).div_ceil(5), m0.div_ceil(3)][li]
     } else {
@@ -789,11 +800,40 @@ pub fn ground_cover(
     p: &PlantParams,
     g: &GroundCoverParams,
     seed: u64,
-    _lod: Lod,
+    lod: Lod,
     st: &SeasonState,
     budget: usize,
 ) -> PlantMesh {
     let r_patch = p.width_m * p.age * 0.5;
+    let li = lod.index();
+    let mut out = Builder::default();
+    // A mat in leaf is closed: a low dome of the opaque leaf mass (cell 7) under the cards, so
+    // the soil does not show between them and the patch reads as one cushion, not as loose
+    // cards (creeping thyme: stems rooting at the nodes into a mat up to 10 cm tall; Wikipedia,
+    // "Thymus serpyllum"). Its rim stays inside the cards' reach, which hide the edge.
+    // Not on the far level: its few cards are the patch's outline and its flowers.
+    let dome_sides = [8usize, 6, 0][li];
+    if st.leaf_fraction > 0.5 && dome_sides > 0 && budget >= dome_sides + 12 {
+        let top = g.depth_m * p.age * 0.8;
+        let rim_r = r_patch * 0.72;
+        let mut drng = Rng::new(seed, 9);
+        let uv = |x: f32, z: f32| cell_uv(7, 0.5 + 0.5 * x / r_patch, 0.5 + 0.5 * z / r_patch);
+        let apex = out.vert(v3(0.0, top, 0.0), UP, uv(0.0, 0.0), [0.0, 0.0]);
+        let rim: Vec<u32> = (0..dome_sides)
+            .map(|k| {
+                let a = TAU * (k as f32 + 0.3 * drng.sym()) / dome_sides as f32;
+                let rr = rim_r * drng.range(0.85, 1.05);
+                let (x, z) = (cos(a) * rr, sin(a) * rr);
+                let n = (UP + v3(cos(a), 0.0, sin(a)) * 0.6).norm();
+                out.vert(v3(x, 0.003, z), n, uv(x, z), [0.0, 0.0])
+            })
+            .collect();
+        for k in 0..dome_sides {
+            // Counter-clockwise seen from above.
+            out.tri(Material::Foliage, apex, rim[(k + 1) % dome_sides], rim[k]);
+        }
+    }
+    let budget = budget - out.tris();
     let n0 = g.cards as usize;
     let nk = n0.min(budget / 2).max(1);
     let grow = (n0 as f32 / nk as f32).sqrt();
@@ -809,7 +849,6 @@ pub fn ground_cover(
         nk - n_flower
     };
     let order = shuffled(n0, &mut Rng::new(seed, 2));
-    let mut out = Builder::default();
     let field = Outward::Dir(UP);
     let place = |i: usize, size: f32, r: &mut Rng| {
         // Vogel's model gives an even, non-gridded spread over the disc.
