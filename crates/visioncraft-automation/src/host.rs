@@ -30,6 +30,11 @@ pub trait Host {
         let _ = (project, models, request);
         Err("this host has no renderer; start visioncraft-cli on a machine with a GPU".into())
     }
+    /// Asset ids the host knows beyond [`HostState::catalog`] (a window's downloaded library):
+    /// planting commands refuse an id that is in neither.
+    fn extra_assets(&self) -> Vec<String> {
+        Vec::new()
+    }
     /// Methods of the host's own besides the protocol's (a window's `ui.*`), as `methods`
     /// lists them; `call` answers them.
     fn methods(&self) -> &[crate::rpc::Method] {

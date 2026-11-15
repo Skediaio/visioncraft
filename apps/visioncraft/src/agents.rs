@@ -297,6 +297,16 @@ impl Host for Bound<'_, '_> {
         (&mut self.host.studio.session, self.state)
     }
 
+    fn extra_assets(&self) -> Vec<String> {
+        let s = &self.host.studio;
+        let library = s.scene.library.catalog.iter().flat_map(|c| c.assets.iter());
+        library
+            .chain(&s.assets)
+            .map(|a| a.id.clone())
+            .chain(crate::fixtures::assets().into_iter().map(|a| a.id))
+            .collect()
+    }
+
     #[cfg(target_arch = "wasm32")]
     fn render(
         &mut self,

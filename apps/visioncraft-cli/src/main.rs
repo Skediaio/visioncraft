@@ -329,9 +329,34 @@ impl Args {
     }
 }
 
+/// A host whose catalogue is the built-in one, the garden-light fixtures and the asset folder's
+/// own `catalog.json` (`--assets DIR`, VISIONCRAFT_ASSETS, ./assets), the ids planting accepts.
+fn headless(access: Access) -> Headless {
+    let mut host = Headless::new(access);
+    host.state
+        .catalog
+        .assets
+        .extend(visioncraft::fixtures::assets());
+    let args: Vec<String> = std::env::args().collect();
+    let dir = args
+        .iter()
+        .position(|a| a == "--assets")
+        .and_then(|i| args.get(i + 1).cloned())
+        .or_else(|| std::env::var("VISIONCRAFT_ASSETS").ok())
+        .unwrap_or_else(|| "assets".into());
+    let own = std::fs::read(std::path::Path::new(&dir).join("catalog.json"))
+        .ok()
+        .and_then(|b| visioncraft_core::Catalog::from_json_bytes(&b).ok());
+    host.state
+        .catalog
+        .assets
+        .extend(own.into_iter().flat_map(|c| c.assets));
+    host
+}
+
 /// A host for a trusted local user: any file, pictures on the GPU.
 fn local_host() -> Headless {
-    let mut host = Headless::new(Access::any());
+    let mut host = headless(Access::any());
     host.pictures = Some(Box::new(gpu::GpuPictures::default()));
     host
 }
@@ -592,7 +617,7 @@ fn cmd_info(raw: &[String]) -> Res {
         .positionals
         .first()
         .ok_or_else(|| CliError::Usage("missing FILE".into()))?;
-    let mut host = Headless::new(Access::any());
+    let mut host = headless(Access::any());
     open_or_new(&mut host, Some(file))?;
     let r = exec(
         &mut host,
@@ -971,7 +996,7 @@ fn cmd_new(raw: &[String]) -> Res {
         .positionals
         .first()
         .ok_or_else(|| CliError::Usage("missing FILE".into()))?;
-    let mut host = Headless::new(Access::any());
+    let mut host = headless(Access::any());
     if let Some(name) = a.value("--example")? {
         exec(&mut host, "project.load_example", json!({"name": name}))?;
     }
@@ -1093,7 +1118,7 @@ fn cmd_serve(raw: &[String], mcp_protocol: bool) -> Res {
         };
         return serve(&config, stdin, stdout).map_err(io);
     }
-    let mut host = Headless::new(roots(&a)?);
+    let mut host = headless(roots(&a)?);
     host.pictures = Some(Box::new(gpu::GpuPictures::default()));
     if let Some(p) = a.value("--control")? {
         use visioncraft_automation::control::{ControlOptions, serve_control};

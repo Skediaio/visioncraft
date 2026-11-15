@@ -416,6 +416,8 @@ fn a_small_scaled_object_far_away_draws_its_model() {
         json!({"name": "Panel", "asset": "panel", "position": [0.0, 0.0, 0.0], "scale": 2.4});
     let made = cli(
         &[
+            "--assets",
+            "lib",
             "run",
             "--cmd",
             "planting.add_single",

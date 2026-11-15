@@ -711,6 +711,9 @@ fn need<T: serde::de::DeserializeOwned>(id: &str, params: &Value, key: &str) -> 
 
 /// A core command: unknown keys refused (where the docs list them all), then `Session::run`.
 fn run_core(host: &mut dyn Host, id: &str, params: &Value) -> Result<Value, String> {
+    if id.starts_with("planting.") {
+        check_assets(host, id, params)?;
+    }
     let (session, state) = host.parts();
     if session.command_spec(id).is_none() {
         return Err(suggest(id, &docs(session)));
@@ -739,6 +742,77 @@ fn run_core(host: &mut dyn Host, id: &str, params: &Value) -> Result<Value, Stri
     }
     state.sync_models(session.project());
     Ok(result)
+}
+
+/// Every `asset` string in `v` (a single's, a palette's, a storey's).
+fn asset_ids<'a>(v: &'a Value, out: &mut Vec<&'a str>) {
+    match v {
+        Value::Object(m) => {
+            for (k, v) in m {
+                match v.as_str() {
+                    Some(s) if k == "asset" => out.push(s),
+                    _ => asset_ids(v, out),
+                }
+            }
+        }
+        Value::Array(a) => a.iter().for_each(|v| asset_ids(v, out)),
+        _ => {}
+    }
+}
+
+fn edit_distance(a: &str, b: &str) -> usize {
+    let b: Vec<char> = b.chars().collect();
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.chars().enumerate() {
+        let mut diag = std::mem::replace(&mut row[0], i + 1);
+        for (j, cb) in b.iter().enumerate() {
+            let up = row[j + 1];
+            row[j + 1] = (diag + usize::from(ca != *cb)).min(up + 1).min(row[j] + 1);
+            diag = up;
+        }
+    }
+    row[b.len()]
+}
+
+/// Planting commands refuse an asset id that resolves to nothing (a saved file with one still
+/// loads, drawn as a placeholder): a catalogue or fixture asset, `flora:<species>`, a custom
+/// species of the project or `user:<object>`.
+fn check_assets(host: &mut dyn Host, id: &str, params: &Value) -> Result<(), String> {
+    let mut asked = Vec::new();
+    asset_ids(params, &mut asked);
+    if asked.is_empty() {
+        return Ok(());
+    }
+    let extra = host.extra_assets();
+    let (session, state) = host.parts();
+    let p = session.project();
+    let mut valid: Vec<String> = visioncraft_flora::species()
+        .iter()
+        .map(|s| format!("flora:{}", s.id))
+        .chain(p.species.iter().map(|c| c.id.clone()))
+        .chain(p.objects.iter().map(|o| o.asset_id()))
+        .chain(state.catalog.assets.iter().map(|a| a.id.clone()))
+        .chain(extra)
+        .collect();
+    valid.sort();
+    valid.dedup();
+    if let Some(bad) = asked
+        .into_iter()
+        .find(|a| valid.binary_search_by(|v| v.as_str().cmp(a)).is_err())
+    {
+        let bare = |s: &str| s.rsplit(':').next().unwrap_or(s).to_string();
+        let mut near: Vec<(usize, &String)> = valid
+            .iter()
+            .map(|v| (edit_distance(&bare(bad), &bare(v)), v))
+            .collect();
+        near.sort();
+        let near: Vec<String> = near.iter().take(5).map(|(_, v)| format!("`{v}`")).collect();
+        return Err(format!(
+            "{id}: unknown asset `{bad}`; closest: {}",
+            near.join(", ")
+        ));
+    }
+    Ok(())
 }
 
 fn history(host: &mut dyn Host, id: &str, params: &Value) -> Result<Value, String> {
