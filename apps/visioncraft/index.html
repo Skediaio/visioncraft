@@ -82,6 +82,23 @@
       return true;
     })();
     window.__vcReady.catch(() => {});
+    // Scripts in this page drive the app with the JSON-lines protocol of `visioncraft-cli serve`:
+    // `await vcRpc("engine.execute", {command: "time.set", params: {hour: 20}})` resolves to the
+    // reply ({ok, result | error}). The app answers on its next frame (agents.rs, web_rpc).
+    window.__vcRpcIn = [];
+    const rpcWaiting = new Map();
+    let rpcNext = 1;
+    window.vcRpc = (method, params = {}) => new Promise(resolve => {
+      const id = rpcNext++;
+      rpcWaiting.set(id, resolve);
+      window.__vcRpcIn.push(JSON.stringify({ id, method, params }));
+      if (window.__vcRpcWake) window.__vcRpcWake();
+    });
+    window.__vcRpcReply = line => {
+      const reply = JSON.parse(line);
+      const resolve = reply && rpcWaiting.get(reply.id);
+      if (resolve) { rpcWaiting.delete(reply.id); resolve(reply); }
+    };
   </script>
 </body>
 </html>

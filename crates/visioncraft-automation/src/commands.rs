@@ -1170,12 +1170,16 @@ pub fn execute_logged(
         .into_iter()
         .collect();
     let changed: Vec<&str> = params["id"].as_str().into_iter().collect();
+    // The browser's std has no clock: `SystemTime::now` panics there, so it is not even called.
+    #[cfg(not(target_arch = "wasm32"))]
     let time_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as u64);
+    #[cfg(target_arch = "wasm32")]
+    let time_ms = 0u64;
     state.log.push_back(json!({
         "client": state.client.clone().unwrap_or_else(|| "agent".into()),
-        "timeMs": if cfg!(target_arch = "wasm32") { 0 } else { time_ms },
+        "timeMs": time_ms,
         "command": id, "label": label, "ok": ok, "message": message,
         "created": created, "changed": changed, "intent": intent.and_then(clean_intent),
     }));

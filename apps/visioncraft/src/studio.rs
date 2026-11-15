@@ -157,6 +157,12 @@ pub struct Studio {
     sky_volume_key: u64,
     sky_volume: Option<visioncraft_core::SkyVolume>,
     sky_task: Option<crate::sky_task::SkyTask>,
+    /// Examples' models being imported in the import worker (the web: on the page they froze
+    /// it for seconds), by model id; `wake` repaints when one is done (the window sets it).
+    #[cfg(target_arch = "wasm32")]
+    example_imports: Vec<(String, crate::import_task::ImportTask)>,
+    #[cfg(target_arch = "wasm32")]
+    pub wake: eframe::egui::Context,
     /// Empty when to be made again (`upload_sky_volume`).
     lamp_bounce: Vec<[f32; 3]>,
     /// The sun's light passed round the rooms per unit of its illuminance (empty: to be made
@@ -380,6 +386,10 @@ impl Studio {
             sky_volume_key: 0,
             sky_volume: None,
             sky_task: None,
+            #[cfg(target_arch = "wasm32")]
+            example_imports: Vec::new(),
+            #[cfg(target_arch = "wasm32")]
+            wake: Default::default(),
             lamp_bounce: Vec::new(),
             sun_bounce: Vec::new(),
             sun_bounce_dir: Vec3::ZERO,
@@ -918,6 +928,18 @@ impl Studio {
             .filter(|m| !self.loaded.contains_key(&m.id))
             .filter_map(|m| Some((m.id.clone(), visioncraft_core::example_file(&m.source)?)))
             .collect();
+        #[cfg(target_arch = "wasm32")]
+        for (id, bytes) in examples {
+            if self.example_imports.iter().any(|(i, _)| *i == id) {
+                continue;
+            }
+            let Some(kind) = self.model_kind(&id) else {
+                continue;
+            };
+            let task = crate::import_task::ImportTask::start(kind, bytes.into(), self.wake.clone());
+            self.example_imports.push((id, task));
+        }
+        #[cfg(not(target_arch = "wasm32"))]
         for (id, bytes) in examples {
             if let Err(e) = self.reimport(
                 &id,
@@ -974,6 +996,44 @@ impl Studio {
     /// A sky volume is being made.
     pub fn sky_volume_pending(&self) -> bool {
         self.sky_task.is_some()
+    }
+
+    /// Examples' models still being imported (the web; natively they load in `sync`).
+    pub fn models_pending(&self) -> usize {
+        #[cfg(target_arch = "wasm32")]
+        return self.example_imports.len();
+        #[cfg(not(target_arch = "wasm32"))]
+        0
+    }
+
+    /// Installs the examples' models the import worker has finished (`sync`); one that is no
+    /// longer in the project (another file opened meanwhile) is dropped.
+    #[cfg(target_arch = "wasm32")]
+    fn poll_example_imports(&mut self) {
+        let mut done = Vec::new();
+        self.example_imports.retain(|(id, task)| match task.take() {
+            Some(r) => {
+                done.push((id.clone(), r));
+                false
+            }
+            None => true,
+        });
+        for (id, result) in done {
+            let still = self.project().models.iter().find(|m| m.id == id).cloned();
+            let Some(m) = still.filter(|_| !self.loaded.contains_key(&id)) else {
+                continue;
+            };
+            let Some(bytes) = visioncraft_core::example_file(&m.source) else {
+                continue;
+            };
+            let source = Source {
+                bytes: Arc::from(bytes),
+                path: None,
+            };
+            if let Err(e) = result.and_then(|model| self.reimport_imported(&id, model, source)) {
+                self.problems.push(format!("{id}: {e}"));
+            }
+        }
     }
 
     /// Sends the sky volume to the renderer with the light of the lamps now on and of the sun
@@ -1511,6 +1571,8 @@ impl Studio {
         self.take_catalog();
         self.sync();
         self.poll_sky_volume();
+        #[cfg(target_arch = "wasm32")]
+        self.poll_example_imports();
         self.scene
             .sync_terrain_layers(&mut self.renderer, self.session.project());
         let (view, proj, eye) = self.camera.matrices(self.aspect());
