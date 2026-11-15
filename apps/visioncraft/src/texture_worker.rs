@@ -401,7 +401,7 @@ mod tests {
         // atlas, its normal map, bark, bark normal map
         assert_eq!(meta.images.len(), 4);
         assert_eq!(meta.images.iter().map(|i| i.5).sum::<usize>(), levels.len());
-        assert_eq!(meta.images[2].0, 2 * visioncraft_flora::BARK_SIZE);
+        assert_eq!(meta.images[2].0, 3 * visioncraft_flora::BARK_SIZE);
         assert!(meta.leaf_mean.iter().all(|c| *c > 0.0));
     }
 }
