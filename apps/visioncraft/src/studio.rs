@@ -282,8 +282,8 @@ const NIGHT_SKY_LUX: f64 = 0.0575 + visioncraft_core::sun::STARLIGHT_LUX;
 /// Perception in Tone Reproduction for High Dynamic Range Images", Eurographics 2005; here a
 /// fit by eye): 1 stop at sunset, 2 at the end of civil twilight, 2.6 under a full moon, about
 /// 3.4 on a moonless night. So dusk keeps the blue hour's soft light on everything and a moonlit
-/// night reads blue-grey. With `lamps` the night stays a little darker (up to 0.8 EV) so garden
-/// lights glow. Never brighter than EV -2.5.
+/// night reads blue-grey. With `lamps` the blue hour is exposed 2 EV darker (the sky keeps a
+/// deep blue, windows and lamp pools glow) and the night 0.8 EV. Never brighter than EV -2.5.
 pub fn auto_ev(elevation_deg: f32, moon_lux: f32, lamps: bool) -> f32 {
     let e = elevation_deg;
     if e >= 45.0 {
@@ -313,8 +313,12 @@ pub fn auto_ev(elevation_deg: f32, moon_lux: f32, lamps: bool) -> f32 {
         .map_or(DARKER[5].1, |w| {
             w[0].1 + (w[1].1 - w[0].1) * (l - w[0].0) / (w[1].0 - w[0].0)
         });
+    // With lamps a photographer exposes the blue hour a stop and a half under the meter so the
+    // sky keeps its colour and the lamps glow; in full night the pools carry the picture anyway.
     let lamp = if lamps {
-        0.8 * ((-e) / 8.0).clamp(0.0, 1.0)
+        let dusk = ((2.0 - e) / 4.0).clamp(0.0, 1.0);
+        let night = ((-e - 9.0) / 3.0).clamp(0.0, 1.0);
+        dusk * (2.0 - 1.2 * night)
     } else {
         0.0
     };

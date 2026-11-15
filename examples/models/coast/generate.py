@@ -65,6 +65,11 @@ c("water.set_sea", level=LEVEL, kind="sea", sea_state=3.2, direction_deg=355, cl
          [-340, 85], [-230, 35], [-110, 27], [110, 25], [230, 12], [360, -11], [500, -35], [1500, -160], [4000, -450]])
 c("terrain.shore", points=[[-500, 150], [-430, 120], [-340, 45], [-230, 10], [-110, 10], [0, 10], [110, 8], [230, -8], [360, -36], [500, -62]],
   top_m=6, bank_m=1.5, berm_m=1.0, beach_m=15.5, shelf_m=250, depth_m=6, material="sand")
+# Offshore the bed falls away towards the endless ground's sea floor (20 m under the surface), so
+# the terrain does not end in an underwater step: the surf over a 6 m shelf stopped at its edge,
+# a line across the sea seen from the air.
+for pts in ([[-520, 300], [520, 300]], [[525, 80], [525, 300]], [[-525, 270], [-525, 300]]):
+    c("terrain.stroke", tool="flatten", points=pts, radius_m=110, strength=1.0, falloff=0.9, target_height=LEVEL - 20)
 c("view.set", ground={"height": 6 + LEVEL, "color": [0.2, 0.18, 0.11]}, wind_direction_deg=0, wind_strength=0.5, haze=1.4, surroundings="dunes")
 
 # ---- Hard landscape --------------------------------------------------------------------------
@@ -102,8 +107,9 @@ for name, sp, pos, s in [
     ("Terrace olive", "olea-europaea", [-4.0, 0, 4.2], 1.0),
     ("Garden room olive", "olea-europaea", [-21.8, 0, -2.0], 0.9),
     # Well east of the house, in the gravel garden: nearer, their crowns showed over the roof
-    # from the entrance court, looking like pots standing on it.
-    ("Fan palm east 1", "trachycarpus-fortunei", [33.5, 0, 2.0], 1.1),
+    # from the entrance court, looking like pots standing on it. From the court's north end the
+    # sight line past the house's east end (x 24.6) must clear it with the trunk in view.
+    ("Fan palm east 1", "trachycarpus-fortunei", [39.0, 0, 1.0], 1.1),
     ("Fan palm east 2", "trachycarpus-fortunei", [36.0, 0, -1.5], 0.9),
     ("Fan palm east 3", "trachycarpus-fortunei", [32.5, 0, -4.5], 1.0),
     ("Canary palm east", "phoenix-canariensis", [44.0, 0, 5.0], 1.0),
@@ -182,9 +188,9 @@ for k, (cx, cz, n, r) in enumerate([(-55, -60, 5, 10), (-90, -95, 7, 14), (-30, 
 # ---- Objects: pots on the deck, a bench and a pot at the garden room's axes, lights -------------
 c("planting.add_single", name="Deck pot west", asset="flora:laurus-standard", position=[0.8, 0.58, 5.9], scale=0.7)
 c("planting.add_single", name="Deck pot east", asset="flora:laurus-standard", position=[24.2, 0.58, 5.9], scale=0.7)
-# A concrete-topped timber bench (1.2 x 0.39 x 0.6 m, long side along z) at scale 1.15: 1.38 m
-# long, 0.45 m seat height, 0.69 m deep. Turned 90 degrees it runs along the north border.
-c("planting.add_single", name="Garden bench", asset="modern_coffee_table_01", position=[-15.0, 0, -5.0], rotation_y_deg=90, scale=1.15)
+# A wooden bench with a back (1.16 x 0.89 x 0.5 m) at scale 1.2: 1.4 m long along the north
+# border, facing the lawn (south).
+c("planting.add_single", name="Garden bench", asset="painted_wooden_bench", position=[-15.0, 0, -5.0], scale=1.2)
 # The clay pot is 0.27 x 0.22 x 0.26 m: at scale 2.4 a 0.64 m wide, 0.53 m high terracotta pot.
 c("planting.add_single", name="Garden room pot", asset="planter_pot_clay", position=[-21.6, 0, -1.5], scale=2.4)
 # A clipped bay rising from it, so the axis ends in a green sphere over the pot.

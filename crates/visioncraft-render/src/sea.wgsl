@@ -241,9 +241,12 @@ fn vs_sea(@builtin(vertex_index) vi: u32) -> Varying {
     if bed > -1e8 {
         let d = sea.surface.x - bed;
         let surf = sea_surf(p, d);
-        offset *= (1.0 - 0.85 * surf.weight) * smoothstep(0.0, 1.5, d);
+        // Faded out towards the cover map's edge (as fs_sea's depth): no ring where it ends.
+        let q = g.snow_cover * vec4<f32>(p.x, 0.0, p.y, 1.0);
+        let w = 1.0 - smoothstep(0.6, 0.95, max(abs(q.x), abs(q.y)));
+        offset *= mix(1.0, (1.0 - 0.85 * surf.weight) * smoothstep(0.0, 1.5, d), w);
         let keep = smoothstep(3.0, 6.0, 2.0 * PI / max(surf.k, 1e-3) / cell);
-        offset.y += surf.eta * keep;
+        offset.y += surf.eta * keep * w;
     }
     let world = vec3<f32>(p.x + offset.x, sea.surface.x + offset.y, p.y + offset.z);
     var out: Varying;
@@ -355,6 +358,10 @@ fn fs_sea(in: Varying) -> @location(0) vec4<f32> {
     var water_depth = select(1e4, max(sea.surface.x - (in.world - v * path).y, 0.0), below < SKY_DEPTH * 0.5);
     if known {
         // Through the column and out: no further than the bed below this point.
+        // shortcut: beyond the cover map the depth is taken along the view ray, deeper than the
+        // column at a grazing view, so over a shallow shelf the surf can end at the map's edge;
+        // blending the two there turned near shallows glassy (v_sea_beach). Upgrade with a
+        // coarse whole-terrain height map for the bed beyond the map.
         path = min(path, (in.world.y - top) / max(v.y, 0.03));
         water_depth = sea.surface.x - top;
     }
@@ -415,6 +422,23 @@ fn fs_sea(in: Varying) -> @location(0) vec4<f32> {
     let deep = tint * crest * (sh_irradiance(up) + g.sun_light.rgb * max(l.y, 0.0) * sun_on) / PI;
     var color = f * reflected + glint + (1.0 - f) * (1.0 - transmit) * deep;
     var alpha_out = f + (1.0 - f) * (1.0 - transmit);
+    // The bed seen through shallow water: darker patches (weed, wet stones) of a few metres that
+    // still read from far off, and the sun focused into moving caustic lines by the waves, which
+    // turn into their mean brightening once a pixel spans them. Over (premultiplied) the bed.
+    let clear = (1.0 - smoothstep(0.5, 7.0, water_depth)) * (1.0 - 0.7 * surf.zone) * (1.0 - alpha_out);
+    if clear > 0.01 {
+        let bp = bed.xz;
+        let spot = smoothstep(0.55, 0.75, value_noise(vec3<f32>(bp.x / 14.0, 2.7, bp.y / 14.0)) * 0.7
+            + value_noise(vec3<f32>(bp.x / 3.5, 5.1, bp.y / 3.5)) * 0.3);
+        let k = 0.4 * spot * clear;
+        color += k * deep;
+        alpha_out += k;
+        let c1 = value_noise(vec3<f32>(bp.x * 0.7 + t * 0.25, t * 0.35, bp.y * 0.7));
+        let c2 = value_noise(vec3<f32>(bp.x * 0.5 - t * 0.2, t * 0.3 + 7.0, bp.y * 0.5));
+        let lines = (1.0 - smoothstep(0.0, 0.07, abs(c1 - 0.5))) + (1.0 - smoothstep(0.0, 0.07, abs(c2 - 0.5)));
+        let caustic = mix(lines, 0.25, smoothstep(0.08, 0.4, footprint)) * (1.0 - spot);
+        color += caustic * clear * 0.22 * vec3<f32>(0.45, 0.42, 0.33) * g.sun_light.rgb * max(l.y, 0.0) * sun_on / PI;
+    }
     // Foam: crests that fold (more and lower thresholds at higher sea states), and a band over
     // shallow beds that the swell runs up and back, broken up by noise.
     let noise = value_noise(vec3<f32>(in.uv.x * 0.9, t * 0.15, in.uv.y * 0.9)) * 0.6

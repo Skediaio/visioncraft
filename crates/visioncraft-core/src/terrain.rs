@@ -1213,9 +1213,41 @@ pub fn terrain_chunk_mesh_on(
             m.indices.extend([v00, v01, v11, v00, v11, v10]);
         }
     }
-    // Skirts: a copy of each edge vertex, lowered, joined by a strip facing outwards.
-    let drop = step as f32 * t.cell_m + 0.25;
+    // Skirts: a copy of each edge vertex, lowered, joined by a strip facing outwards. Deep enough
+    // to close the crack to a neighbour at any level: twice the most any level's edge strays
+    // from the full grid along this edge, plus a margin. (A fixed drop of a few cells hung a
+    // wall below the ground at every chunk seam on the outer border, which showed from outside
+    // as a dark or sky-blue triangle.)
+    let edge_drop = |ring: &[(usize, usize)]| {
+        let (a, b) = (ring[0], ring[ring.len() - 1]);
+        let full: Vec<f32> = if a.1 == b.1 {
+            (xs[a.0]..=xs[b.0])
+                .map(|ix| t.heights[t.at(ix, zs[a.1])])
+                .collect()
+        } else {
+            (zs[a.1]..=zs[b.1])
+                .map(|iz| t.heights[t.at(xs[a.0], iz)])
+                .collect()
+        };
+        let n = full.len() - 1;
+        let mut stray = 0.0f32;
+        for s in [1, 2, 4, 8] {
+            let mut i = 0;
+            while i < n {
+                let j = (i + s).min(n);
+                for k in i..=j {
+                    let f = (k - i) as f32 / (j - i) as f32;
+                    stray = stray.max((full[k] - (full[i] + (full[j] - full[i]) * f)).abs());
+                }
+                i = j;
+            }
+        }
+        2.0 * stray + 0.25
+    };
+    let on_border =
+        |i: usize, j: usize| xs[i] == 0 || xs[i] == t.width || zs[j] == 0 || zs[j] == t.depth;
     let edge = |m: &mut TerrainChunk, ring: Vec<(usize, usize)>, flip: bool, outer: bool| {
+        let drop = edge_drop(&ring);
         let top: Vec<u32> = ring.iter().map(|&(i, j)| at(i, j)).collect();
         // A stretch on the outer border at ground height needs no skirt.
         let flush = |m: &TerrainChunk, v: u32| {
@@ -1242,8 +1274,11 @@ pub fn terrain_chunk_mesh_on(
                     // behind everything, so a skirt hanging below it showed through as a dark
                     // or sky-blue sliver wherever an edge vertex sat a hair off the ground.
                     // Below the plane there is nothing to hide: the plane shows through.
+                    // So does the end of a seam's skirt on the outer border.
                     let bottom = match ground {
-                        Some(g) if outer => (p[1] - drop).max(g.min(p[1])),
+                        Some(g) if outer || on_border(ring[e].0, ring[e].1) => {
+                            (p[1] - drop).max(g.min(p[1]))
+                        }
                         _ => p[1] - drop,
                     };
                     m.positions.push([p[0], bottom, p[2]]);
@@ -1641,11 +1676,9 @@ mod tests {
         for (x, z) in [(32.0, 32.0), (64.0, 64.0), (32.0, 64.0)] {
             assert_eq!(corner(&a, x, z), corner(&b, x, z));
         }
-        let edge_low = a
-            .positions
-            .iter()
-            .filter(|p| p[0] == 32.0)
-            .map(|p| p[1])
+        // The lowest height of the fine surface along the edge x = 32 (grid column 64).
+        let edge_low = (64..=128)
+            .map(|iz| t.heights[t.at(64, iz)])
             .fold(f32::MAX, f32::min);
         assert!(
             b.positions
@@ -1687,6 +1720,16 @@ mod tests {
         let corner = terrain_chunk_mesh_on(&t, 3, 0, 1, Some(0.0));
         let low: Vec<_> = corner.positions.iter().filter(|p| p[1] < -0.2).collect();
         assert!(!low.is_empty() && low.iter().all(|p| p[0] == 96.0 || p[2] == 32.0));
+        // The seams' skirts end at the ground on the outer border (below it they showed from
+        // outside), and over flat ground they hang only a hand deep.
+        assert!(
+            corner
+                .positions
+                .iter()
+                .filter(|p| p[2] == 0.0 || p[0] == 100.0)
+                .all(|p| p[1] >= 0.0)
+        );
+        assert!(corner.positions.iter().all(|p| p[1] > -0.3));
         // Terrain above the ground keeps every skirt, the outer ones reaching down to the ground
         // and no further (the ground is drawn behind everything: a skirt below it shows).
         let above = terrain_chunk_mesh_on(&t, 3, 0, 1, Some(-1.0));

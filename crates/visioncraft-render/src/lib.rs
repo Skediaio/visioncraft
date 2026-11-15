@@ -2331,6 +2331,15 @@ impl Renderer {
                 slot: self.alloc_slot(mesh),
             })
             .collect();
+        // Terrain chunks cast with the level they are drawn with: a coarser level lies above the
+        // finer one wherever the ground is concave (the foot of a bank) and shadowed the beach
+        // below it in wide sawtoothed wedges.
+        let terrain = parts.iter().any(|p| {
+            self.meshes
+                .get(p.mesh.0 as usize)
+                .and_then(Option::as_ref)
+                .is_some_and(|m| m.weights.is_some())
+        });
         let id = ItemId(self.items.len() as u32);
         self.items.push(Some(Item {
             parts,
@@ -2340,7 +2349,7 @@ impl Renderer {
             bounds: None,
             clusters: Vec::new(),
             impostor: None,
-            shadow_exact: false,
+            shadow_exact: terrain,
             cull_fade: 0.0,
             follows_reach: false,
         }));
