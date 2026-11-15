@@ -85,12 +85,13 @@ pub fn plant_hz(height_m: f32, conifer: bool) -> f32 {
     (f * if conifer { 1.0 } else { 0.8 }).clamp(0.15, 3.0)
 }
 
-/// How far (m) a plant of `extent` metres can move from its rest bounds at any wind speed, so
-/// culling bounds never clip a swaying tip: the lean saturates at `LEAN_SATURATION`, doubled in
-/// a full gust, and the detail amplitude at twice its 6.5 m/s value, doubled again by a gust,
-/// times the shader's `0.02 + 0.01 min(size, 6)` (vertical bob 0.6 of that).
-pub fn bounds_pad(extent: f32) -> f32 {
-    2.0 * LEAN_SATURATION * extent + 4.0 * (0.02 + 0.01 * extent.min(6.0))
+/// How far (m) a plant of `extent` metres can move from its rest bounds at wind speed `u`, so
+/// culling bounds never clip a swaying tip: twice the mean lean (a full gust) times the extent,
+/// plus the detail amplitude doubled by a gust, times the shader's `0.02 + 0.01 min(size, 6)`.
+/// Never less than the old fixed room of 10 % of the extent and 0.1 m (still air and breezes).
+pub fn bounds_pad(extent: f32, u: f32) -> f32 {
+    let physical = 2.0 * lean(u) * extent + 2.0 * detail(u) * (0.02 + 0.01 * extent.min(6.0));
+    physical.max(0.1 * extent + 0.1)
 }
 
 /// Phases integrated on the CPU. The wind's phases advance by the frequency of the moment times

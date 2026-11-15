@@ -192,9 +192,13 @@ fn the_lean_grows_with_the_wind_up_to_saturation() {
 
 #[test]
 fn nothing_leaves_its_bounds_in_a_storm() {
-    // Every point of a plant with any bend weight, at Beaufort 10 in full gusts, for 10 minutes.
-    for extent in [0.3_f32, 1.0, 2.0, 6.0, 20.0, 40.0] {
-        let pad = wind::bounds_pad(extent);
+    // Every point of a plant with any bend weight, in full gusts, for 10 minutes per speed.
+    for (extent, force) in [0.3_f32, 1.0, 2.0, 6.0, 20.0, 40.0]
+        .into_iter()
+        .flat_map(|e| [0, 2, 5, 8, 10].map(|f| (e, f)))
+    {
+        let speed = mps(force);
+        let pad = wind::bounds_pad(extent, speed);
         let hz = wind::plant_hz(extent, false);
         let mut seed = 12345u32;
         let mut rand = || {
@@ -208,10 +212,10 @@ fn nothing_leaves_its_bounds_in_a_storm() {
             })
             .collect();
         let mut p = Phases::default();
-        let wind = wind_at(mps(10), 1.0);
+        let wind = wind_at(speed, 1.0);
         let mut worst = 0.0f32;
         for i in 1..=12_000 {
-            p.advance(f64::from(i) * 0.05, mps(10));
+            p.advance(f64::from(i) * 0.05, speed);
             let u = Uniforms::new(&wind, &p);
             for &(rel, w, phase) in &points {
                 let d = wind::sway(&u, rel, TREE_ORIGIN, w, phase, hz) - rel;
@@ -219,7 +223,9 @@ fn nothing_leaves_its_bounds_in_a_storm() {
                 assert!(d.is_finite());
             }
         }
-        println!("extent {extent:5.1} m: worst axis excursion {worst:.3} m of pad {pad:.3} m");
+        println!(
+            "extent {extent:5.1} m B{force}: worst axis excursion {worst:.3} m of pad {pad:.3} m"
+        );
         assert!(worst <= pad, "extent {extent}: {worst} over {pad}");
     }
 }

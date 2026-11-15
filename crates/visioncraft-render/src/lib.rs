@@ -1436,6 +1436,10 @@ impl Renderer {
     /// the leaves in every cascade but the cached far one, which keeps the
     /// rest pose (it is re-rendered only when the camera moves far).
     pub fn set_wind(&mut self, wind: &Wind) {
+        if self.wind.speed_mps != wind.speed_mps {
+            // The culling bounds' room for the sway follows the speed.
+            self.bounds_dirty = true;
+        }
         self.wind = *wind;
     }
 
@@ -3569,7 +3573,10 @@ impl Renderer {
             // Room for the wind's sway at any speed (the lean and the detail both saturate).
             let mesh_bounds = match (mesh_bounds, meshes.iter().any(|m| m.wind)) {
                 (Some((lo, hi)), true) => {
-                    let pad = Vec3::splat(wind::bounds_pad((hi - lo).max_element()));
+                    let pad = Vec3::splat(wind::bounds_pad(
+                        (hi - lo).max_element(),
+                        self.wind.speed_mps,
+                    ));
                     Some((lo - pad, hi + pad))
                 }
                 (b, _) => b,
