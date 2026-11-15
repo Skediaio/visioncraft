@@ -883,7 +883,7 @@ fn dab_centres(points: &[[f32; 2]], spacing: f32) -> Vec<[f32; 2]> {
 }
 
 /// Value noise in `-1..1`: hashed lattice values, smoothly interpolated.
-fn value_noise(seed: u64, x: f32, z: f32) -> f32 {
+pub(crate) fn value_noise(seed: u64, x: f32, z: f32) -> f32 {
     let (ix, iz) = (x.floor(), z.floor());
     let (fx, fz) = (smoothstep(x - ix), smoothstep(z - iz));
     let v = |dx: i64, dz: i64| {
@@ -1238,7 +1238,15 @@ pub fn terrain_chunk_mesh_on(
                         m.weights[v as usize],
                         m.uv[v as usize],
                     );
-                    m.positions.push([p[0], p[1] - drop, p[2]]);
+                    // An outer skirt above the ground plane stops at it: the plane is drawn
+                    // behind everything, so a skirt hanging below it showed through as a dark
+                    // or sky-blue sliver wherever an edge vertex sat a hair off the ground.
+                    // Below the plane there is nothing to hide: the plane shows through.
+                    let bottom = match ground {
+                        Some(g) if outer => (p[1] - drop).max(g.min(p[1])),
+                        _ => p[1] - drop,
+                    };
+                    m.positions.push([p[0], bottom, p[2]]);
                     m.normals.push(nrm);
                     m.weights.push(w);
                     m.uv.push(uv);
@@ -1679,10 +1687,15 @@ mod tests {
         let corner = terrain_chunk_mesh_on(&t, 3, 0, 1, Some(0.0));
         let low: Vec<_> = corner.positions.iter().filter(|p| p[1] < -0.2).collect();
         assert!(!low.is_empty() && low.iter().all(|p| p[0] == 96.0 || p[2] == 32.0));
-        // Terrain above the ground keeps every skirt.
-        assert_eq!(
-            terrain_chunk_mesh_on(&t, 3, 0, 1, Some(-1.0)),
-            terrain_chunk_mesh(&t, 3, 0, 1)
+        // Terrain above the ground keeps every skirt, the outer ones reaching down to the ground
+        // and no further (the ground is drawn behind everything: a skirt below it shows).
+        let above = terrain_chunk_mesh_on(&t, 3, 0, 1, Some(-1.0));
+        assert_eq!(above.indices, terrain_chunk_mesh(&t, 3, 0, 1).indices);
+        assert!(
+            above
+                .positions
+                .iter()
+                .all(|p| p[1] >= -1.0 || p[0] == 96.0 || p[2] == 32.0)
         );
     }
 

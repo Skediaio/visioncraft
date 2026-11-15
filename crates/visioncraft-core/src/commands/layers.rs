@@ -90,14 +90,14 @@ pub(super) fn register(s: &mut Session) {
         spec(
             "view.set",
             "Set View",
-            "Sets the season, snow, exposure, look, sky, clouds, years after planting, haze, wind, the ground plane, ground clutter and the view distance stored with the project; only the fields given change.",
+            "Sets the season, snow, exposure, look, sky, clouds, years after planting, haze, wind, the ground plane, the surroundings, ground clutter and the view distance stored with the project; only the fields given change.",
             vec![
                 param("season", T::String, "spring, summer, autumn or winter: the plants as they are then, and the project's date set to the season's day at the site (20 April, 21 June, 20 October, 15 January in the north; six months on in the south), the hour kept. An exact date (time.set) maps back to its season."),
                 param("snow", T::Number, "Snow cover 0..1 on the ground, lawns, roofs, terraces, hedge tops, evergreen crowns, branches, wall tops and sills, not under roofs or dense evergreens; about 0.7 for a snowy winter. 0: none.").default(json!(0)),
                 param("exposure_ev", T::Number, "Exposure offset in stops; null for automatic exposure."),
                 param("sky", T::Object, "{type: \"physical\"} or {type: \"hdri\", id: string, rotation_deg: number, intensity: number >= 0}.")
                     .default(json!({"type": "physical"})),
-                param("haze", T::Number, "Atmospheric haze (turbidity), 0 or more.").default(json!(2.5)),
+                param("haze", T::Number, "Atmospheric haze as a turbidity: 1 pure air, 2.5 a clear day (about 30 km visibility), 6 hazy (9 km), 20 misty (2.5 km); 0 turns the haze off.").default(json!(2.5)),
                 param("wind_strength", T::Number, "Wind for plants, 0 or more.").default(json!(0.3)),
                 param("wind_direction_deg", T::Number, "Direction the wind blows towards, clockwise from north seen from above.").unit("deg").default(json!(0)),
                 param("ground", T::Object, "Ground plane {height: m, color: [r, g, b] linear}; null for none.")
@@ -107,6 +107,7 @@ pub(super) fn register(s: &mut Session) {
                 param("clutter", T::Boolean, "Ground clutter: fallen leaves under deciduous trees (most in October and November), stones and twigs on soil and gravel, grass hanging over the lawn's edge. Off at LOW quality whatever this says.").default(json!(true)),
                 param("years", T::Number, "Years after planting to show the plants at (0..60): each grows from its planting age along its species' curve; null shows everything full grown.").unit("years"),
                 param("look", T::String, "neutral, natural or vivid: the picture's exposure, contrast and colour on top of the tone map.").default(json!("natural")),
+                param("surroundings", T::String, "The land round the design on the endless ground, beyond its plot: fields (farmland with hedgerows, woods and distant hills), woodland, dunes, or none (a plain plane).").default(json!("fields")),
                 param("view_distance", T::Number, "How far plants, shadows and a clear view reach, as a multiple of the default; 0.25 to 4.")
                     .unit("x")
                     .default(json!(1.0)),
@@ -228,6 +229,7 @@ fn view_set(project: &mut Project, params: &Value) -> Result<Value, CommandError
             "lights",
             "clutter",
             "snow",
+            "surroundings",
         ],
     )?;
     view.validate().map_err(|e| crate::session::bad(&e))?;

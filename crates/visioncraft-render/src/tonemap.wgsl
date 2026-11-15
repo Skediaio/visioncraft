@@ -57,6 +57,32 @@ fn srgb_encode(c: vec3<f32>) -> vec3<f32> {
 
 override LUMA_IN_ALPHA: bool = false;
 
+// Night vision: in dim light the rods take over from the cones, colour fades and what is left
+// reads blue-grey (the Purkinje shift). Krawczyk, Myszkowski & Seidel, "Perceptual Effects in
+// Real-time Tone Mapping", SCCG 2005: the rods' share sigma = 0.04 / (0.04 + Y) for the
+// luminance Y (cd/m2), scotopic luminance V = Y (1.33 (1 + (Y + Z) / X) - 1.68), shown in the
+// blue-grey (1.05, 0.97, 1.27) of their paper. Twilight (Y of a few cd/m2) keeps nearly all its
+// colour; a moonlit lawn (0.01 cd/m2) turns mostly grey-blue; lamps stay warm.
+fn night_vision(hdr: vec3<f32>) -> vec3<f32> {
+    let exposure = max(g.time.y, 1e-12);
+    let rgb = max(hdr, vec3<f32>(0.0)) / exposure;
+    // Linear Rec.709 to CIE XYZ (D65).
+    let xyz = mat3x3<f32>(
+        vec3<f32>(0.4124, 0.2126, 0.0193),
+        vec3<f32>(0.3576, 0.7152, 0.1192),
+        vec3<f32>(0.1805, 0.0722, 0.9505),
+    ) * rgb;
+    let y = xyz.y;
+    if y <= 0.0 {
+        return hdr;
+    }
+    let sigma = 0.04 / (0.04 + y);
+    // Divided by 2.58, V of a white surface, so white keeps its brightness and the auto
+    // exposure's night tuning holds; blues and greens gain on reds, as rods see them.
+    let v = max(y * (1.33 * (1.0 + (xyz.y + xyz.z) / max(xyz.x, 1e-9)) - 1.68), 0.0) / 2.58;
+    return mix(hdr, v * exposure * vec3<f32>(1.05, 0.97, 1.27), sigma);
+}
+
 @fragment
 fn fs_tonemap(in: Out) -> @location(0) vec4<f32> {
     var hdr = textureLoad(src, vec2<i32>(in.clip.xy), 0).rgb;
@@ -66,7 +92,7 @@ fn fs_tonemap(in: Out) -> @location(0) vec4<f32> {
         let bloom = textureSampleLevel(src2, smp, in.clip.xy * g.viewport.zw, 0.0).rgb * 0.25;
         hdr = mix(hdr, bloom, g.options.y);
     }
-    let c = agx(hdr);
+    let c = agx(night_vision(hdr));
     // Dither by +-0.5 LSB (interleaved gradient noise) in the encoded domain.
     let n = ign(in.clip.xy) - 0.5;
     let encoded = clamp(srgb_encode(c) + n / 255.0, vec3<f32>(0.0), vec3<f32>(1.0));

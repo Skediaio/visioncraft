@@ -163,6 +163,7 @@ pub(super) fn register(s: &mut Session) {
                 min_distance(),
                 seed(),
                 param("avoid_buildings", T::Boolean, "Leave out plants that would stand on or in a building: on a roof, under a canopy lower than the plant, inside a block.").default(json!(true)),
+                param("edge_fade_m", T::Number, "A soft edge in metres: the plants thin out over this width inside the outline along a wavering line, as wild planting ends; 0 a hard edge.").default(json!(0.0)),
                 layer(),
             ],
             "{id}",
@@ -474,6 +475,8 @@ fn add_area(project: &mut Project, params: &Value) -> Result<Value, CommandError
         layer: Option<String>,
         #[serde(default = "super::shapes::yes")]
         avoid_buildings: bool,
+        #[serde(default)]
+        edge_fade_m: f32,
     }
     let p: P = parse(params)?;
     add(project, p.layer, |id, layer, seed| {
@@ -493,6 +496,7 @@ fn add_area(project: &mut Project, params: &Value) -> Result<Value, CommandError
             seed: p.seed.unwrap_or(seed),
             layers: p.layers,
             avoid_buildings: p.avoid_buildings,
+            edge_fade_m: p.edge_fade_m,
         })
     })
 }

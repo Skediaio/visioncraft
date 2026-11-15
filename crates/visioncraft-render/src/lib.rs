@@ -108,7 +108,7 @@ const CLUSTER_CELL: f32 = 8.0;
 /// `set_time` wraps here (seconds) to keep f32 precision in the shaders.
 const TIME_WRAP: f64 = 4096.0;
 /// Byte offset of the SH in the globals (written by the GPU, see env.rs).
-const SH_OFFSET: u64 = 9 * 64 + 41 * 16;
+const SH_OFFSET: u64 = 9 * 64 + 42 * 16;
 /// The roughness up to which a metal is a mirror (`Material::mirror`, scene.wgsl `light`).
 const MIRROR_ROUGHNESS: f32 = 0.1;
 
@@ -495,6 +495,10 @@ pub struct Ground {
     pub roughness: f32,
     /// Large-scale variation, as `Material::variation`.
     pub variation: f32,
+    /// The land painted and shaped on the ground beyond `plot` (scene.wgsl `surroundings`).
+    pub surroundings: Surroundings,
+    /// The design's plot (min x, min z, max x, max z): the surroundings keep 15 m clear of it.
+    pub plot: [f32; 4],
 }
 
 impl Default for Ground {
@@ -504,8 +508,24 @@ impl Default for Ground {
             color: [0.1, 0.16, 0.05],
             roughness: 0.95,
             variation: 0.6,
+            surroundings: Surroundings::None,
+            plot: [0.0; 4],
         }
     }
+}
+
+/// The land round a design on the endless ground: procedural colour (fields with hedgerows,
+/// woods, dunes with marram grass) and relief (rolling land, a woods' canopy, hills on the
+/// horizon, dune ridges), from the world position alone. Far layers only: none of it inside the
+/// plot, none on a coast's sea side.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Surroundings {
+    /// The plain ground.
+    #[default]
+    None = 0,
+    Fields = 1,
+    Woodland = 2,
+    Dunes = 3,
 }
 
 /// Where the sky's light comes from.
@@ -911,6 +931,8 @@ pub struct Renderer {
     sun: Sun,
     sky: sky::Sky,
     ev100: f32,
+    /// The physical sky's light per unit of the sun's (`set_sky_scale`).
+    sky_scale: f32,
     shadow_distance: f32,
     /// Multiplies every level-of-detail distance (with the quality's percentage).
     view_distance: f32,
@@ -1239,6 +1261,7 @@ impl Renderer {
             sun,
             sky,
             ev100: 15.0,
+            sky_scale: 1.0,
             shadow_distance: 80.0,
             view_distance: 1.0,
             impostor_reach: 1.0,
@@ -1346,6 +1369,17 @@ impl Renderer {
     /// sunny noon 15, overcast or sun low (10 deg) 13-14, sunset 11-12,
     /// dusk (sun 2-4 deg below the horizon) 7-9, late dusk with garden
     /// lights 4-6, night lit by garden lamps 1-3, moonlight alone -2..0.
+    /// The physical sky's brightness per unit of the light set with `set_sun`: 1 for the sun;
+    /// when the moon stands in for the sun (`set_sun` given the moonlight), the moon's light as a
+    /// fraction of the sun's, so the moonlit sky is the daylight sky scaled down, as it is.
+    pub fn set_sky_scale(&mut self, scale: f32) {
+        let scale = scale.max(0.0);
+        if scale != self.sky_scale {
+            self.sky_scale = scale;
+            self.update_ambient(false);
+        }
+    }
+
     pub fn set_exposure(&mut self, ev100: f32) {
         self.ev100 = ev100;
     }
@@ -1448,6 +1482,9 @@ impl Renderer {
         if ground == self.ground {
             return;
         }
+        // The surroundings and the plot do not light the environment.
+        let lit = |g: Option<Ground>| g.map(|g| (g.height, g.color, g.roughness, g.variation));
+        let relight = lit(ground) != lit(self.ground);
         self.ground = ground;
         if let Some(g) = ground {
             let material = Material {
@@ -1465,7 +1502,9 @@ impl Renderer {
             );
             self.ground_material.cpu = material;
         }
-        self.update_ambient(true);
+        if relight {
+            self.update_ambient(true);
+        }
     }
 
     /// Draws the endless ground with `material` (its maps, scale and variation) instead of the
@@ -2452,6 +2491,47 @@ impl Renderer {
         &self.targets.output
     }
 
+    /// The sky's illuminance on an open horizontal surface (lux, linear RGB) as the last
+    /// `render` left it in the ambient SH, without the sun's direct light. Waits for the GPU:
+    /// for tests and measurements, not for a frame loop.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn sky_illuminance(&self) -> Vec3 {
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("SH readback"),
+            size: 9 * 16,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        encoder.copy_texture_to_buffer(
+            self.env.sh.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: Default::default(),
+            },
+            wgpu::Extent3d {
+                width: 9,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.queue.submit([encoder.finish()]);
+        buffer.slice(..).map_async(wgpu::MapMode::Read, |_| ());
+        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+        let Ok(view) = buffer.slice(..).get_mapped_range() else {
+            return Vec3::ZERO;
+        };
+        let f: Vec<f32> = view
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| f32::from_le_bytes(*b))
+            .collect();
+        let sh: [Vec3; 9] =
+            std::array::from_fn(|i| Vec3::new(f[4 * i], f[4 * i + 1], f[4 * i + 2]));
+        sky::sh_eval(&sh, Vec3::Y) * 1000.0
+    }
+
     /// The next `render` finishes the environment cube instead of spreading
     /// it over frames: a single-frame picture after a change of sky or sun
     /// would otherwise keep the old sky in its haze and reflections.
@@ -2961,8 +3041,8 @@ impl Renderer {
 
     /// The infinite ground (scene.wgsl `vs_ground`) with its own material.
     fn draw_ground(&self, pass: &mut wgpu::RenderPass, pipeline: &wgpu::RenderPipeline) {
-        const RINGS: u32 = 48;
-        const SEGMENTS: u32 = 64;
+        const RINGS: u32 = 80;
+        const SEGMENTS: u32 = 192;
         pass.set_pipeline(pipeline);
         // A material of the scene (the terrain's base layer) when one is set: the ground then
         // looks like it, texture, tiling phase and variation alike, so their border vanishes.
@@ -3653,7 +3733,7 @@ impl Renderer {
         b.floats(&[haze / 1000.0, 1.0 / a.haze_height_m, haze_base, a.sun_glow]);
         let (source, rotation, scale, mips) = match &self.sky_source {
             SkySource::Preetham => (0.0, 0.0, 1.0, 1.0),
-            SkySource::Physical => (1.0, 0.0, SUN_TOP_KLX, 1.0),
+            SkySource::Physical => (1.0, 0.0, SUN_TOP_KLX * self.sky_scale, 1.0),
             SkySource::Hdri {
                 rotation,
                 intensity,
@@ -3721,10 +3801,12 @@ impl Renderer {
             0
         };
         let level = self.sea().map_or(0.0, |s| s.level);
-        b.floats(&[n as f32, level, level - 20.0, 0.0]);
+        let surroundings = self.ground.map_or(0.0, |g| g.surroundings as u32 as f32);
+        b.floats(&[n as f32, level, level - 20.0, surroundings]);
         for i in 0..sea::COAST {
             b.floats(&coast.get(i).filter(|_| i < n).copied().unwrap_or([0.0; 2]));
         }
+        b.floats(&self.ground.map_or([0.0; 4], |g| g.plot));
         // Screen-space reflections: on, the step (pixels), the most steps, the thickness (m).
         let step = self.quality.screen_reflections as f32;
         b.floats(&[
@@ -3972,7 +4054,7 @@ fn snow_cover_matrix(eye: Vec3, lo: Vec3, hi: Vec3, resolution: u32) -> Mat4 {
 const SNOW_COVER_M: f32 = 160.0;
 
 fn globals_size() -> u64 {
-    // 9 matrices, 40 vec4s, the 9 SH vec4s last; see common.wgsl.
+    // 9 matrices, 42 vec4s, the 9 SH vec4s last; see common.wgsl.
     SH_OFFSET + 9 * 16
 }
 
