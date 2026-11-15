@@ -78,7 +78,7 @@ fn lobes(b: &BranchingParams, seed: u64, age: f32, h: f32, half: f32, y0: f32) -
     let excurrent = b.leader >= EXCURRENT;
     let count = l0.count as usize;
     let n = if excurrent {
-        (count / 2).clamp(5, 9)
+        (count / 2 + 3).clamp(7, 11)
     } else {
         (3 + count / 3).clamp(4, 7)
     };
@@ -105,9 +105,16 @@ fn lobes(b: &BranchingParams, seed: u64, age: f32, h: f32, half: f32, y0: f32) -
             (0.16 + 0.5 * f) * 0.6 + peak * 0.4
         };
         let env = envelope(b, t);
-        let reach = half * env * rng.range(0.62, 0.9) * (0.8 + 0.3 * spread) * young;
+        // An excurrent crown's masses hug its leader, overlapping into one narrow, ragged crown;
+        // a decurrent one's stand out on their limbs, with sky between them.
+        let outward = if excurrent {
+            rng.range(0.42, 0.72)
+        } else {
+            rng.range(0.62, 0.9) * (0.8 + 0.3 * spread)
+        };
+        let reach = half * env * outward * young;
         let r = half
-            * (if excurrent { 0.44 } else { 0.46 })
+            * (if excurrent { 0.5 } else { 0.46 })
             * young
             * rng.range(0.75, 1.2)
             * (0.6 + 0.4 * env);
