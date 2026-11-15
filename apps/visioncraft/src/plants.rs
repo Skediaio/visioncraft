@@ -549,6 +549,19 @@ impl Flora {
         self.retired.push((id.to_string(), 3));
     }
 
+    /// Frees every species at once: another project replaced the scene (which dropped its items
+    /// first). Its species are made again; the last project's stayed on the GPU otherwise, every
+    /// project opened adding its leaf atlases and impostors.
+    pub fn clear(&mut self, r: &mut Renderer) {
+        let ids: std::collections::HashSet<String> = (self.classes.keys().map(|k| k.0.clone()))
+            .chain(self.textures.keys().cloned())
+            .chain(self.queue.iter().map(|w| w.id.clone()))
+            .collect();
+        ids.iter().for_each(|id| self.retire(id));
+        self.retired.iter_mut().for_each(|e| e.1 = 1);
+        self.free_retired(r);
+    }
+
     fn free_retired(&mut self, r: &mut Renderer) {
         for e in &mut self.retired {
             e.1 = e.1.saturating_sub(1);
@@ -750,13 +763,18 @@ impl Flora {
         // The most urgent first.
         self.queue
             .sort_by(|a, b| a.urgency(eye).total_cmp(&b.urgency(eye)));
-        // Natively the pool is kept a little ahead of its threads; on the web a job runs at once
-        // on the page, so one species' meshes a frame.
+        // Natively the pool is kept a little ahead of its threads; on the web the texture
+        // workers are, one species handed over a frame (where no worker runs, the meshes are
+        // made on the page: one species a frame).
         let mut meshes_started = 0;
         let room = |extra: usize, started: usize| {
-            if cfg!(target_arch = "wasm32") {
-                started == 0
-            } else {
+            #[cfg(target_arch = "wasm32")]
+            return started == 0
+                && crate::texture_worker::meshes_waiting() + extra
+                    <= 2 * crate::texture_worker::WEB_WORKERS;
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let _ = started;
                 work_pool::backlog() + extra <= 2 * work_pool::size()
             }
         };
@@ -809,9 +827,7 @@ impl Flora {
                     .map(|v| {
                         let (name, params) = (id.clone(), params.clone());
                         // Variants of one species right after one another.
-                        work_pool::run(urgency + 1e-3 * v as f32, move || {
-                            generate_variant(&name, &params, v, month, detail)
-                        })
+                        start_variant(name, params, v, month, detail, urgency + 1e-3 * v as f32)
                     })
                     .collect();
                 self.meshing.insert(k.clone(), slots);
@@ -1009,10 +1025,42 @@ fn upload_tex(
 type Parts = Vec<(flora::Material, flora::MeshPart)>;
 
 /// One variant's meshes at every level, generated away from the renderer.
-struct Generated {
-    height: f32,
+pub(crate) struct Generated {
+    pub height: f32,
     /// (level, parts by material, foliage tint)
-    levels: Vec<(usize, Parts, [f32; 3])>,
+    pub levels: Vec<(usize, Parts, [f32; 3])>,
+}
+
+/// Starts generating a variant off the frame: natively on the pool (`priority`: smaller sooner),
+/// on the web in a texture worker (in the order handed over), on the page where none runs.
+fn start_variant(
+    name: String,
+    params: flora::PlantParams,
+    v: u32,
+    month: u8,
+    detail: bool,
+    priority: f32,
+) -> Slot<Generated> {
+    #[cfg(not(target_arch = "wasm32"))]
+    return work_pool::run(priority, move || {
+        generate_variant(&name, &params, v, month, detail)
+    });
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = priority;
+        let slot = Slot::default();
+        let out = slot.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let g = match crate::texture_worker::mesh(&params, v, month, detail).await {
+                Some((height, levels)) => Generated { height, levels },
+                None => generate_variant(&name, &params, v, month, detail),
+            };
+            if let Ok(mut s) = out.lock() {
+                *s = Some(g);
+            }
+        });
+        slot
+    }
 }
 
 /// `generate_variant_now`, natively through the disk cache (`plant_cache`).
@@ -1039,7 +1087,7 @@ fn generate_variant(
 
 /// Every level of one variant, nearest first; with `detail` (HIGH and ULTRA) trees get the
 /// leaf-level levels before the card levels.
-fn generate_variant_now(
+pub(crate) fn generate_variant_now(
     name: &str,
     params: &flora::PlantParams,
     v: u32,
@@ -1069,6 +1117,7 @@ use crate::work_pool::{self, take};
 
 /// Runs `f` off the frame (the pool; on the web, where there are no threads, at once); its
 /// result lands in the slot.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn spawn<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Slot<T> {
     work_pool::run(0.0, f)
 }

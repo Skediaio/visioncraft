@@ -6,7 +6,11 @@
 //!
 //! The workers also make a plant species' textures (`["plant", params, scale]` jobs): the leaf
 //! atlas, its normal map and the bark, generated and compressed there instead of on the page
-//! (natively `plant_compressed` runs on the work pool, see `plants`).
+//! (natively `plant_compressed` runs on the work pool, see `plants`), and a plant variant's
+//! meshes (`["mesh", params, variant, month, detail]` jobs, answered in the disk cache's layout,
+//! `plant_cache::encode_levels`): 250 to 500 ms each in wasm, which froze the page for minutes
+//! on a large garden when they ran there; and a lawn's tufts (`["lawn", job, shape]` jobs,
+//! `scene::scatter_lawn`).
 
 /// Web Workers the page starts (each its own copy of the module): plant textures of several
 /// species and maps compress side by side, while the page keeps its thread.
@@ -124,12 +128,106 @@ pub fn plant_job(params: &str, scale: usize, scans: &[u8]) -> Option<(PlantMeta,
     Some((meta, levels))
 }
 
+/// A mesh job in the worker: one variant's levels, encoded as the disk cache stores them.
+pub fn mesh_job(params: &str, variant: u32, month: u8, detail: bool) -> Option<Vec<u8>> {
+    let params: visioncraft_flora::PlantParams = serde_json::from_str(params).ok()?;
+    let g = crate::plants::generate_variant_now("", &params, variant, month, detail);
+    Some(crate::plant_cache::encode_levels(g.height, &g.levels))
+}
+
+/// A lawn job in the worker (`scene::scatter_lawn`): the tufts' matrices as floats, every
+/// variant's in turn, and how many each has.
+pub fn lawn_job(job: &str, geom: &[u8]) -> Option<(Vec<f32>, Vec<u32>)> {
+    let job: crate::scene::LawnScatter = serde_json::from_str(job).ok()?;
+    let geom = crate::import_task::decode(geom).ok()?;
+    let lists = crate::scene::scatter_lawn(&geom, &job);
+    let counts = lists.iter().map(|l| l.len() as u32).collect();
+    let floats = lists
+        .iter()
+        .flatten()
+        .flat_map(|m| m.to_cols_array())
+        .collect();
+    Some((floats, counts))
+}
+
+/// Floats as little-endian bytes (the worker's answers are byte arrays).
+pub fn bytes_of(v: &[f32]) -> Vec<u8> {
+    v.iter().flat_map(|x| x.to_le_bytes()).collect()
+}
+
+pub fn bytes_of_u32(v: &[u32]) -> Vec<u8> {
+    v.iter().flat_map(|x| x.to_le_bytes()).collect()
+}
+
+pub fn f32s(b: &[u8]) -> Vec<f32> {
+    b.as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| f32::from_le_bytes(*c))
+        .collect()
+}
+
+pub fn u32s(b: &[u8]) -> Vec<u32> {
+    b.as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| u32::from_le_bytes(*c))
+        .collect()
+}
+
+/// `lawn_job`'s answer back into one matrix list per variant.
+pub fn lawn_lists(floats: &[f32], counts: &[u32]) -> Option<Vec<Vec<glam::Mat4>>> {
+    let mut m = floats
+        .as_chunks::<16>()
+        .0
+        .iter()
+        .map(glam::Mat4::from_cols_array);
+    let lists: Vec<Vec<glam::Mat4>> = counts
+        .iter()
+        .map(|&n| m.by_ref().take(n as usize).collect())
+        .collect();
+    let complete = lists
+        .iter()
+        .zip(counts)
+        .all(|(l, &n)| l.len() == n as usize);
+    (complete && m.next().is_none()).then_some(lists)
+}
+
 /// The worker's side: one job in, its answer out.
 #[cfg(target_arch = "wasm32")]
 pub fn answer(msg: &js_sys::Array) -> wasm_bindgen::JsValue {
     use visioncraft_render::ColorSpace;
     let out = js_sys::Array::new();
     out.push(&msg.get(0));
+    if msg.get(1).as_string().as_deref() == Some("lawn") {
+        let job = msg.get(2).as_string().unwrap_or_default();
+        let geom = js_sys::Uint8Array::new(&msg.get(3)).to_vec();
+        match lawn_job(&job, &geom) {
+            Some((floats, counts)) => {
+                out.push(&"lawn".into());
+                out.push(&js_sys::Uint8Array::from(&bytes_of(&floats)[..]));
+                out.push(&js_sys::Uint8Array::from(&bytes_of_u32(&counts)[..]));
+            }
+            None => {
+                out.push(&"error: cannot scatter the lawn".into());
+            }
+        }
+        return out.into();
+    }
+    if msg.get(1).as_string().as_deref() == Some("mesh") {
+        let num = |i: u32| msg.get(i).as_f64().unwrap_or(0.0);
+        let params = msg.get(2).as_string().unwrap_or_default();
+        match mesh_job(&params, num(3) as u32, num(4) as u8, num(5) != 0.0) {
+            Some(b) => {
+                out.push(&"mesh".into());
+                out.push(&js_sys::Uint8Array::from(&b[..]));
+            }
+            None => {
+                out.push(&"error: cannot make the plant meshes".into());
+            }
+        }
+        return out.into();
+    }
     if msg.get(1).as_string().as_deref() == Some("plant") {
         let params = msg.get(2).as_string().unwrap_or_default();
         let scale = msg.get(3).as_f64().unwrap_or(1.0) as usize;
@@ -399,10 +497,64 @@ mod page {
         }
         Some((meta.leaf_mean, images))
     }
+
+    thread_local! {
+        /// Mesh jobs sent and not answered yet (`meshes_waiting`).
+        static MESHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    /// Mesh jobs on their way: the page hands over more only while this is small, so that the
+    /// most urgent plants (the camera moves) are what the workers take next.
+    pub fn meshes_waiting() -> usize {
+        MESHES.with(std::cell::Cell::get)
+    }
+
+    /// One variant's meshes made in a worker (`mesh_job`); `None` when there is no worker or
+    /// it failed: make them on the page.
+    pub async fn mesh(
+        params: &visioncraft_flora::PlantParams,
+        variant: u32,
+        month: u8,
+        detail: bool,
+    ) -> Option<(f32, crate::plant_cache::Levels)> {
+        let json = serde_json::to_string(params).ok()?;
+        let rx = post(&[
+            "mesh".into(),
+            json.into(),
+            variant.into(),
+            u32::from(month).into(),
+            u32::from(detail).into(),
+        ])?;
+        MESHES.with(|m| m.set(m.get() + 1));
+        let got = rx.await;
+        MESHES.with(|m| m.set(m.get().saturating_sub(1)));
+        let (_, levels) = got?;
+        crate::plant_cache::decode_levels(levels.first()?)
+    }
+
+    /// A lawn's tufts scattered in a worker (`lawn_job`); `None` when there is no worker or it
+    /// failed: scatter them on the page.
+    pub async fn lawn(
+        geom: &visioncraft_core::ImportedModel,
+        job: &crate::scene::LawnScatter,
+    ) -> Option<Vec<Vec<glam::Mat4>>> {
+        let json = serde_json::to_string(job).ok()?;
+        let geom = crate::import_task::encode(geom);
+        let rx = post(&[
+            "lawn".into(),
+            json.into(),
+            js_sys::Uint8Array::from(&geom[..]).into(),
+        ])?;
+        let (_, parts) = rx.await?;
+        let [floats, counts] = &parts[..] else {
+            return None;
+        };
+        super::lawn_lists(&super::f32s(floats), &super::u32s(counts))
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
-pub use page::{compress, plant};
+pub use page::{compress, lawn, mesh, meshes_waiting, plant};
 
 #[cfg(test)]
 mod tests {
@@ -424,5 +576,64 @@ mod tests {
         assert_eq!(meta.images.iter().map(|i| i.5).sum::<usize>(), levels.len());
         assert_eq!(meta.images[2].0, 3 * visioncraft_flora::BARK_SIZE);
         assert!(meta.leaf_mean.iter().all(|c| *c > 0.0));
+    }
+
+    #[test]
+    fn a_lawn_job_answers_what_the_page_would_scatter() {
+        let shape = visioncraft_core::Shape::Area(visioncraft_core::shape::Area {
+            id: "S1".into(),
+            name: "Lawn".into(),
+            layer: "l0".into(),
+            outline: vec![[0.0, 0.0], [12.0, 0.0], [12.0, 8.0], [0.0, 8.0]],
+            elevation: 0.0,
+            drape: false,
+            extensions: Default::default(),
+        });
+        let geom = visioncraft_core::shape_mesh(&shape).unwrap();
+        let lawn = visioncraft_core::material::Lawn3d {
+            density_per_m2: 40.0,
+            ..Default::default()
+        };
+        let faces: Vec<_> = (0..geom.faces.len()).map(|f| (f, lawn)).collect();
+        let job = crate::scene::LawnScatter {
+            xf: glam::Mat4::IDENTITY.to_cols_array(),
+            areas: faces
+                .iter()
+                .map(|(f, _)| visioncraft_core::lawn_area(&geom, *f))
+                .collect(),
+            faces,
+            max_density: 60.0,
+            max_tufts: 5000,
+            narrow: 1.0,
+            window: None,
+            over: Vec::new(),
+            crowns: Vec::new(),
+        };
+        let here = crate::scene::scatter_lawn(&geom, &job);
+        assert!(here.iter().map(Vec::len).sum::<usize>() > 10);
+        let (floats, counts) = super::lawn_job(
+            &serde_json::to_string(&job).unwrap(),
+            &crate::import_task::encode(&geom),
+        )
+        .unwrap();
+        let back = super::lawn_lists(
+            &super::f32s(&super::bytes_of(&floats)),
+            &super::u32s(&super::bytes_of_u32(&counts)),
+        )
+        .unwrap();
+        assert_eq!(back, here);
+    }
+
+    #[test]
+    fn a_mesh_job_answers_what_the_page_would_make() {
+        let p = &visioncraft_flora::species()[0].params;
+        let bytes = super::mesh_job(&serde_json::to_string(p).unwrap(), 1, 6, false).unwrap();
+        let here = crate::plants::generate_variant_now("", p, 1, 6, false);
+        assert_eq!(
+            bytes,
+            crate::plant_cache::encode_levels(here.height, &here.levels)
+        );
+        let (h, levels) = crate::plant_cache::decode_levels(&bytes).unwrap();
+        assert_eq!((h, levels.len()), (here.height, here.levels.len()));
     }
 }

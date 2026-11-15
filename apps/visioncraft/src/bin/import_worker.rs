@@ -1,6 +1,6 @@
 //! The web import worker (`import_task`, loaded by `index.html`): receives `[kind, bytes]`, posts
 //! back the meshed model as bytes, or an error message; or the sky visibility volume for
-//! `["sky", triangles]` (`sky_task`). Natively it does nothing.
+//! `["sky", triangles, to_sun]` (`sky_task`) with its sun bounce. Natively it does nothing.
 
 #[cfg(target_arch = "wasm32")]
 fn main() {
@@ -12,13 +12,20 @@ fn main() {
         Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |e: web_sys::MessageEvent| {
             let msg: js_sys::Array = e.data().unchecked_into();
             let bytes = msg.get(1).unchecked_into::<js_sys::Uint8Array>().to_vec();
-            // The sky visibility volume (`sky_task`): empty bytes when nothing blocks the sky.
+            // The sky visibility volume and its sun bounce (`sky_task`): empty bytes when nothing
+            // blocks the sky.
             if msg.get(0).as_string().as_deref() == Some(visioncraft::sky_task::SKY) {
                 let t = visioncraft::sky_task::decode_triangles(&bytes);
-                let v = visioncraft_core::sky_volume(&t)
-                    .map(|v| v.to_bytes())
+                let d = js_sys::Float32Array::new(&msg.get(2)).to_vec();
+                let to_sun = [0, 1, 2].map(|i| d.get(i).copied().unwrap_or(0.0));
+                let (v, bounce) = visioncraft::sky_task::make(&t, to_sun)
+                    .map(|(v, b)| (v.to_bytes(), b))
                     .unwrap_or_default();
-                let _ = reply_to.post_message(&js_sys::Uint8Array::from(&v[..]).into());
+                let reply = js_sys::Array::of2(
+                    &js_sys::Uint8Array::from(&v[..]),
+                    &js_sys::Float32Array::from(&bounce[..]),
+                );
+                let _ = reply_to.post_message(&reply);
                 return;
             }
             let reply: JsValue = match msg

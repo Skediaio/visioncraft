@@ -1,4 +1,5 @@
-//! Generated plant meshes and textures, and compressed library maps, kept on disk (native only)
+//! Generated plant meshes and textures, and compressed library maps, kept on disk (native only;
+//! on the web only the mesh layout is used, for the texture worker's answers)
 //! in the platform's cache folder (`cache_folder`): a picture rendered again, or the window
 //! started again, loads them instead of generating every species anew. A file's name is a hash
 //! of everything that made it (the parameters, variant, month or texture scale and the scans'
@@ -54,6 +55,7 @@ pub fn disk() -> Option<&'static Disk> {
     DISK.get_or_init(|| {
         let env = |k: &str| std::env::var(k).ok();
         // The cache lived in the state folder before: that copy is never read again.
+        #[cfg(not(target_arch = "wasm32"))]
         if let Some(old) = visioncraft_automation::discovery::state_folder() {
             let _ = std::fs::remove_dir_all(old.join("plants"));
         }
@@ -331,7 +333,7 @@ pub fn encode_levels(height: f32, levels: &Levels) -> Vec<u8> {
     w.0
 }
 
-fn decode_levels(b: &[u8]) -> Option<(f32, Levels)> {
+pub fn decode_levels(b: &[u8]) -> Option<(f32, Levels)> {
     let mut r = R(b);
     let height = r.f32()?;
     let n = r.u32()?;
