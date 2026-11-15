@@ -286,7 +286,13 @@ mod tests {
                 "Garden room lawn",
                 "Garden path",
                 "Beach walk",
-                "East gravel garden"
+                "East gravel garden",
+                "Garden room north bed",
+                "Garden room west bed",
+                "Garden room south bed",
+                "Court west bed",
+                "Court east bed",
+                "Court olive bed"
             ]
         );
         assert_eq!(p.assignments.len(), 46 + names.len());
