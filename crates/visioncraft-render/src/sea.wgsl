@@ -572,8 +572,11 @@ fn fs_sea_wet(in: Varying) -> @location(0) vec4<f32> {
     let z = world.y - sea.surface.x;
     let theta = sea.surf.x * g.time.x + surf_along(world.xz);
     let s = fract(theta / (2.0 * PI));
-    let reach = runup * surf_group(world.xz, theta) * select(pow(1.0 - (s - 0.3) / 0.7, 1.5), sin(s / 0.3 * 0.5 * PI), s < 0.3);
-    var sheet = (1.0 - smoothstep(reach - 0.02, reach, z)) * step(0.0, z) * wet * smoothstep(0.02, 0.6, sea.extra.z);
+    // Each bore runs up further here and less there (bars, cusps, the wave's own crest): the
+    // swash's edge wanders along the shore over 5-15 m instead of following a contour.
+    let along = value_noise(vec3<f32>(world.xz * 0.12, theta * 0.159)) * 0.6 + value_noise(vec3<f32>(world.xz * 0.4, 3.7)) * 0.4;
+    let reach = runup * (0.55 + 0.9 * along) * surf_group(world.xz, theta) * select(pow(1.0 - (s - 0.3) / 0.7, 1.5), sin(s / 0.3 * 0.5 * PI), s < 0.3);
+    var sheet = (1.0 - smoothstep(reach - 0.02, reach, z)) * smoothstep(-0.03, 0.02, z) * wet * smoothstep(0.02, 0.6, sea.extra.z);
     let noise = value_noise(vec3<f32>(world.x * 2.3, g.time.x * 0.3, world.z * 2.3));
     let front = (1.0 - smoothstep(0.0, 0.04, abs(reach - 0.015 - z))) * select(0.35, 1.0, s < 0.3);
     let lace = select(0.0, 0.35 * smoothstep(0.55, 0.8, noise), s > 0.3);
