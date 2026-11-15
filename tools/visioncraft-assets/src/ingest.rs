@@ -446,7 +446,12 @@ pub struct MaterialMaps3 {
     pub height: Option<GrayImage>,
 }
 
-pub fn material_maps(c: &Candidate, src: &Path, tier: Option<&str>, px: u32) -> Result<MaterialMaps3> {
+pub fn material_maps(
+    c: &Candidate,
+    src: &Path,
+    tier: Option<&str>,
+    px: u32,
+) -> Result<MaterialMaps3> {
     let maps = if c.source() == Some(Source::PolyHaven) {
         // Poly Haven ships four loose JPEGs (`arm` is already AO, roughness, metalness).
         let dir = tier.map_or(src.to_path_buf(), |t| src.join(t));
@@ -460,7 +465,9 @@ pub fn material_maps(c: &Candidate, src: &Path, tier: Option<&str>, px: u32) -> 
             let f = fs::read_dir(&dir)?
                 .filter_map(Result::ok)
                 .map(|e| e.path())
-                .find(|p| p.to_string_lossy().contains(key) && p.extension().is_some_and(|x| x == "jpg"));
+                .find(|p| {
+                    p.to_string_lossy().contains(key) && p.extension().is_some_and(|x| x == "jpg")
+                });
             if let Some(f) = f {
                 out.push((name.to_string(), image::open(f)?));
             }
