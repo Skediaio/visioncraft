@@ -497,7 +497,7 @@ pub struct Ground {
     pub variation: f32,
     /// The land painted and shaped on the ground beyond `plot` (scene.wgsl `surroundings`).
     pub surroundings: Surroundings,
-    /// The design's plot (min x, min z, max x, max z): the surroundings keep 40 m clear of it.
+    /// The design's plot (min x, min z, max x, max z): the surroundings keep 15 m clear of it.
     pub plot: [f32; 4],
 }
 

@@ -280,8 +280,8 @@ const NIGHT_SKY_LUX: f64 = 0.0575 + visioncraft_core::sun::STARLIGHT_LUX;
 /// night is kept darker than the meter's mid grey, more so the less light there is, as the
 /// eye's adaptation key falls with the light (Krawczyk, Myszkowski & Seidel, "Lightness
 /// Perception in Tone Reproduction for High Dynamic Range Images", Eurographics 2005; here a
-/// fit by eye): 1 stop at sunset, 2 at the end of civil twilight, 2.3 under a full moon, about
-/// 3 on a moonless night. So dusk keeps the blue hour's soft light on everything and a moonlit
+/// fit by eye): 1 stop at sunset, 2 at the end of civil twilight, 2.6 under a full moon, about
+/// 3.4 on a moonless night. So dusk keeps the blue hour's soft light on everything and a moonlit
 /// night reads blue-grey. With `lamps` the night stays a little darker (up to 0.8 EV) so garden
 /// lights glow. Never brighter than EV -2.5.
 pub fn auto_ev(elevation_deg: f32, moon_lux: f32, lamps: bool) -> f32 {
@@ -299,8 +299,8 @@ pub fn auto_ev(elevation_deg: f32, moon_lux: f32, lamps: bool) -> f32 {
     // Stops darker than the meter, by log10(lux): sun at 10 degrees (11 klx, joining the day
     // curve), sunset, sun at -4, at -6, full moon, moonless.
     const DARKER: [(f32, f32); 6] = [
-        (-1.5, 3.0),
-        (-0.5, 2.3),
+        (-1.5, 3.6),
+        (-0.5, 2.6),
         (0.48, 2.0),
         (1.39, 1.5),
         (2.88, 1.0),

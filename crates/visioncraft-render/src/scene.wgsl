@@ -1116,7 +1116,7 @@ fn fs_main(in: Varying, @builtin(front_facing) front: bool) -> @location(0) vec4
 
 // The land round the design on the endless ground (lib.rs `Surroundings`): g.coast_info.w the
 // kind (0 none, 1 fields, 2 woodland, 3 dunes), g.surround the plot's rectangle (min x, min z,
-// max x, max z). Nothing changes inside the plot; past it the land fades in over 80 m (colour)
+// max x, max z). Nothing changes inside the plot or 15 m round it; then the land fades in over 45 m (colour)
 // and rises over a few hundred metres (relief), and never on a coast's sea side. Procedural,
 // from world position only, so it costs a few noise lookups per pixel and vertex.
 
@@ -1141,14 +1141,14 @@ fn noise2(p: vec2<f32>, salt: f32) -> f32 {
 // Woods (0..1): blobs of a few hundred metres, sparse among fields, the rule in woodland.
 fn wood_mask(p: vec2<f32>, kind: u32) -> f32 {
     let n = noise2(p / 700.0, 3.1) * 0.8 + noise2(p / 140.0, 5.7) * 0.2;
-    let cut = select(0.66, 0.4, kind == 2u);
+    let cut = select(0.6, 0.4, kind == 2u);
     return smoothstep(cut, cut + 0.03, n);
 }
 
 // Height of the surroundings over the ground plane (m).
 fn surround_height(p: vec2<f32>) -> f32 {
     let kind = surround_kind(p);
-    let d = plot_distance(p) - 40.0;
+    let d = plot_distance(p) - 15.0;
     if kind == 0u || d <= 0.0 {
         return 0.0;
     }
@@ -1178,7 +1178,7 @@ fn surroundings(surf: Surface, world: vec3<f32>, fw: f32) -> Surface {
     var s = surf;
     let p = world.xz;
     let kind = surround_kind(p);
-    let fade = smoothstep(40.0, 120.0, plot_distance(p));
+    let fade = smoothstep(15.0, 60.0, plot_distance(p));
     if kind == 0u || fade <= 0.0 {
         return s;
     }
@@ -1190,23 +1190,33 @@ fn surroundings(surf: Surface, world: vec3<f32>, fw: f32) -> Surface {
     if kind == 3u {
         // Sand with marram grass, scrub and pines in patches.
         let grass = smoothstep(0.42, 0.62, noise2(p / 55.0, 6.6) * 0.7 + noise2(p / 12.0, 7.7) * 0.3);
-        let scrub = smoothstep(0.68, 0.74, noise2(p / 380.0, 8.8));
+        let scrub = smoothstep(0.66, 0.72, noise2(p / 70.0, 8.8) * 0.75 + noise2(p / 9.0, 9.9) * 0.25);
         c = mix(base * (0.9 + 0.2 * noise2(p / 30.0, 1.9)), vec3<f32>(0.11, 0.12, 0.06), grass * 0.8);
-        c = mix(c, vec3<f32>(0.035, 0.055, 0.025), scrub);
+        c = mix(c, vec3<f32>(0.05, 0.07, 0.03) * (0.8 + 0.4 * noise2(p / 4.0, 3.7)), scrub * 0.85);
     } else {
         // Fields: a grid of parcels of 160-280 m turned a little region by region; each its own
         // crop, worked in lines; hedgerows along most borders.
         let a = (noise2(p / 3500.0, 2.8) - 0.5) * 1.4;
         let q = vec2<f32>(cos(a) * p.x - sin(a) * p.y, sin(a) * p.x + cos(a) * p.y);
-        let size = vec2<f32>(260.0, 170.0);
-        let id = vec2<i32>(floor(q / size));
-        let f = fract(q / size) * size;
+        // Rows of parcels, each row shifted by its own amount, and some parcels split in two
+        // along their length: no checkerboard.
+        let size = vec2<f32>(230.0, 150.0);
+        let row = floor(q.y / size.y);
+        let shifted = vec2<f32>(q.x + hash2(vec2<i32>(i32(row), 71)) * size.x, q.y);
+        var id = vec2<i32>(floor(shifted / size));
+        var f = fract(shifted / size) * size;
+        let cut = 0.3 + 0.4 * hash2(id + vec2<i32>(5, 3));
+        if hash2(id + vec2<i32>(2, 9)) < 0.5 {
+            let second = f.x > cut * size.x;
+            f.x = select(f.x, f.x - cut * size.x, second);
+            id = id * 2 + vec2<i32>(select(0, 1, second), 0);
+        }
         let crop = hash2(id + vec2<i32>(9, 17));
         var field: vec3<f32>;
         if crop < 0.38 {
             field = vec3<f32>(0.065, 0.115, 0.035); // grass
         } else if crop < 0.58 {
-            field = vec3<f32>(0.28, 0.24, 0.12); // ripe cereal
+            field = vec3<f32>(0.22, 0.19, 0.1); // ripe cereal
         } else if crop < 0.72 {
             field = vec3<f32>(0.12, 0.085, 0.055); // ploughed
         } else if crop < 0.85 {
@@ -1218,13 +1228,13 @@ fn surroundings(surf: Surface, world: vec3<f32>, fw: f32) -> Surface {
         let drill = 1.0 + 0.1 * sin(f.x * 2.5) * (1.0 - smoothstep(0.4, 1.2, fw));
         c = field * drill;
         // Hedgerows: on the parcel's left and bottom borders when that border's hash says so.
-        let hedge_x = select(0.0, 1.0, hash2(id * 3 + vec2<i32>(1, 0)) < 0.65);
-        let hedge_z = select(0.0, 1.0, hash2(id * 3 + vec2<i32>(0, 1)) < 0.55);
+        let hedge_x = select(0.0, 1.0, hash2(id * 3 + vec2<i32>(1, 0)) < 0.45);
+        let hedge_z = select(0.0, 1.0, hash2(id * 3 + vec2<i32>(0, 1)) < 0.4);
         let along = noise2(p / 7.0, 6.1); // gaps and crowns along it
         let hw = 2.0 + 2.5 * along;
         let cover = max(
-            hedge_x * line_cover(min(f.x, size.x - f.x), hw, fw, size.x),
-            hedge_z * line_cover(min(f.y, size.y - f.y), hw, fw, size.y),
+            hedge_x * line_cover(f.x, hw, fw, size.x),
+            hedge_z * line_cover(f.y, hw, fw, size.y),
         );
         c = mix(c, canopy, cover);
         rough = mix(rough, 1.0, cover);

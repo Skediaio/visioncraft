@@ -152,7 +152,7 @@ fn cloud(dir: vec3<f32>) -> vec4<f32> {
         a = smoothstep(1.0 - cover - 0.06, 1.0 - cover + 0.22, n);
     }
     // Far clouds thin into the haze at the horizon.
-    a *= smoothstep(0.0, 0.1, dir.y);
+    a *= smoothstep(0.02, 0.15, dir.y);
     if a <= 0.0 {
         return vec4<f32>(0.0);
     }
@@ -290,14 +290,16 @@ fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
     let tint = g.sun_light.rgb / max(dot(g.sun_light.rgb, vec3<f32>(0.2126, 0.7152, 0.0722)), 1e-9);
     let behind = select(0.0, cloud(dir).a, u32(g.sky.x + 0.5) != 2u);
     color += tint * g.sun_dir.w * edge * mix(0.6, 1.0, smoothstep(g.sun_light.w, 1.0, cos_sun)) * (1.0 - behind);
-    // Haze to infinity below the horizon only (the sky there stands in for land the ground
-    // plane does not reach). Above it the sky models already carry the air's scattering, and
-    // hazing their horizon to the environment's colour put a grey band between a clear sea or
-    // land and the sky; the haze's own light shows in the land and the clouds it covers.
+    // Haze to infinity below the horizon, and above it over a band that grows with the haze:
+    // the sky models already carry clear air's scattering, so on a clear day (0.13 / km) the
+    // band is under a degree and the horizon stays a line, while a hazy day (2.5 / km and up)
+    // dissolves the horizon over 14 degrees as before. Hazing a clear sky's horizon to the
+    // environment's colour put a grey band between a clear sea or land and the sky.
     if g.fog.x > 0.0 {
         let transmit = fog_transmittance(g.camera.y, dir.y, 1e9);
         let hazed = color * transmit + fog_inscatter(dir, 1.0) * (1.0 - transmit);
-        color = mix(hazed, color, smoothstep(-0.02, 0.0, dir.y));
+        let band = 0.25 * clamp(g.fog.x * 1000.0 / 2.5, 0.0, 1.0);
+        color = mix(hazed, color, smoothstep(-0.02, band, dir.y));
     }
     return vec4<f32>(color, 1.0);
 }

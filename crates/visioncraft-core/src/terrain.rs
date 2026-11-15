@@ -1241,8 +1241,9 @@ pub fn terrain_chunk_mesh_on(
                     // An outer skirt above the ground plane stops at it: the plane is drawn
                     // behind everything, so a skirt hanging below it showed through as a dark
                     // or sky-blue sliver wherever an edge vertex sat a hair off the ground.
+                    // Below the plane there is nothing to hide: the plane shows through.
                     let bottom = match ground {
-                        Some(g) if outer && p[1] >= g => (p[1] - drop).max(g),
+                        Some(g) if outer => (p[1] - drop).max(g.min(p[1])),
                         _ => p[1] - drop,
                     };
                     m.positions.push([p[0], bottom, p[2]]);
