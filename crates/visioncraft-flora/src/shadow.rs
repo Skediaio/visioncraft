@@ -10,7 +10,7 @@ pub const BLOBS: usize = 8;
 /// Triangles of the caster at most: the blobs' octahedra and the trunk's six sides.
 pub const MAX_TRIANGLES: usize = BLOBS * 8 + 12;
 /// Smallest and largest share of a crown's shadow that is solid.
-const DENSITY: (f32, f32) = (0.2, 0.75);
+const DENSITY: (f32, f32) = (0.2, 0.6);
 
 /// The caster's mesh in the plant's own space (every vertex's `uv.x` is `density`, which the
 /// shadow shader dithers by: the share of shadow-map texels it covers).
@@ -125,13 +125,13 @@ pub fn shadow_caster(
     let base_r = (low.iter().sum::<f32>() / low.len().max(1) as f32).max(0.05);
     prism(&mut part, base_r, 0.6 * base_r, up);
     let leaf_fraction = SeasonState::new(params, season).leaf_fraction;
-    let density = ((1.0 - (-0.6 * params.leaves.density).exp()) * (0.3 + 0.7 * leaf_fraction))
+    let density = ((1.0 - (-0.5 * params.leaves.density).exp()) * (0.3 + 0.7 * leaf_fraction))
         .clamp(DENSITY.0, DENSITY.1);
     part.uvs.iter_mut().for_each(|uv| *uv = [density, 0.0]);
     Some(ShadowCaster { part, density })
 }
 
-/// An octahedron scaled to `radii` (times about 1.1: its volume is a third of the ellipsoid's;
+/// An octahedron scaled to `radii` (times about 0.95: its volume is a third of the ellipsoid's;
 /// many small ones keep the crown's area) round `centre`, appended to `part`.
 fn octahedron(part: &mut MeshPart, centre: P, radii: P, wind: [f32; 2], blob: u32) {
     const V: [P; 6] = [
@@ -152,7 +152,7 @@ fn octahedron(part: &mut MeshPart, centre: P, radii: P, wind: [f32; 2], blob: u3
         // Each tip 0.8 to 1.2 times as far out (a hash of the blob and the tip), so the
         // shadow's outline is broken and leafy, not a row of identical diamonds.
         let h = ((blob * 6 + k as u32).wrapping_mul(2_654_435_761) >> 16) & 0xff;
-        let f = 1.1 * (0.8 + 0.4 * h as f32 / 255.0);
+        let f = 0.95 * (0.8 + 0.4 * h as f32 / 255.0);
         part.positions.push([
             centre[0] + q[0] * radii[0] * f,
             (centre[1] + q[1] * radii[1] * f).max(0.0),

@@ -345,7 +345,7 @@ pub fn builtin_palette() -> Vec<Material> {
             let mut m = plain(
                 "forest-floor",
                 "Forest floor",
-                [0.85, 0.85, 0.85],
+                [1.0, 1.0, 1.0],
                 0.0,
                 1.0,
                 pbr(3.0),
