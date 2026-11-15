@@ -152,10 +152,12 @@ fn sub_lobes(lobes: &[Lobe], b: &BranchingParams, seed: u64, age: f32) -> Vec<Lo
     let mut out = Vec::with_capacity(lobes.len() * (m + 1));
     for l in lobes {
         let flat = l.ry / l.r;
+        // An excurrent crown (birch) keeps a smaller core: light and airy, sky through it.
+        let core = if b.leader >= EXCURRENT { 0.35 } else { 0.55 };
         out.push(Lobe {
             c: l.c,
-            r: l.r * 0.55,
-            ry: l.ry * 0.55,
+            r: l.r * core,
+            ry: l.ry * core,
         });
         let o = v3(l.c.x, 0.0, l.c.z);
         let o = if o.len() > 1e-3 {
@@ -865,7 +867,10 @@ fn finish(
         for (_, _, s) in &mut shoots {
             let u = (s.p - c) * inv;
             let bay: f32 = bays.iter().map(|(k, ph)| sin(u.dot(*k) + ph)).sum::<f32>() / 3.0;
-            if bay < rough - 0.95 {
+            // Only near the outline and below the crown's top: bays in the top made holes in it
+            // from above (the oak a few blobs round a black hole).
+            let outer = (u.x * u.x + u.z * u.z).sqrt();
+            if bay < rough - 0.95 && u.y < 0.2 && outer > 0.3 {
                 s.light = 0.0;
                 continue;
             }

@@ -419,7 +419,11 @@ fn stamp_leaf(cv: &mut Canvas, scan: &LeafScan, base: (f32, f32), ang: f32, len:
     let luma = |c: [f32; 3]| 0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2];
     let m = scan.mean;
     let gain: Rgb = if cv.leaf_hue && col[1] >= col[0].max(col[2]) {
-        [(luma(col) / luma(m).max(0.02)).clamp(0.4, 2.5); 3]
+        // Summer sheets are photographed against the light and read lime-yellow on a tree
+        // (the maple sheet's mean is hue 80, saturation 0.64): their hue goes 60 % of the way
+        // to the species' drawn summer green.
+        let l = (luma(col) / luma(m).max(0.02)).clamp(0.4, 2.5);
+        [0, 1, 2].map(|k| l + 0.6 * ((col[k] / m[k].max(0.02)).clamp(0.2, 4.0) - l))
     } else {
         [0, 1, 2].map(|k| (col[k] / m[k].max(0.02)).clamp(0.2, 4.0))
     };
