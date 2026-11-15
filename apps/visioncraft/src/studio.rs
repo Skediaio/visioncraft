@@ -529,7 +529,7 @@ impl Studio {
     pub fn replace_project(&mut self, project: Project) {
         self.session.replace_project(project);
         self.scene.clear(&mut self.renderer);
-        self.scene.flora.clear(&mut self.renderer);
+        self.scene.flora.sweep();
         self.loaded.clear();
         self.sources.clear();
         self.draft = None;
@@ -924,7 +924,7 @@ impl Studio {
         // another project swaps the session in for a moment (`agents`, `render`).
         if cfg!(target_arch = "wasm32") && self.synced.is_some_and(|(rev, _)| rev > key.0) {
             self.scene.clear(&mut self.renderer);
-            self.scene.flora.clear(&mut self.renderer);
+            self.scene.flora.sweep();
         }
         // An example's model travels inside the program (`example:<file>`): load it here, on the
         // web too, whoever added it.
