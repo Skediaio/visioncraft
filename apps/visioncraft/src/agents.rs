@@ -36,8 +36,12 @@ impl Default for Agents {
         Self {
             #[cfg(not(target_arch = "wasm32"))]
             control: None,
-            // The person's own files: an agent may read and write where the person can.
-            state: HostState::new(Access::any()),
+            // The person's own files: an agent may read and write where the person can. In the
+            // browser the window imports an example's model in its worker (`Studio::sync`).
+            state: HostState {
+                host_imports_examples: cfg!(target_arch = "wasm32"),
+                ..HostState::new(Access::any())
+            },
             last: None,
             error: None,
             seen_log: 0,

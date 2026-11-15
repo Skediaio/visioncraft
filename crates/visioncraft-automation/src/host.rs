@@ -187,6 +187,10 @@ pub struct HostState {
     pub client: Option<String>,
     /// What agents did, oldest first (`agent.log`); session state, not saved.
     pub log: std::collections::VecDeque<Value>,
+    /// The host imports the models examples carry itself and hands them over (the browser
+    /// window, off its page's thread): `sync_models` leaves them to it instead of importing
+    /// them here, which held the page for seconds.
+    pub host_imports_examples: bool,
 }
 
 impl HostState {
@@ -246,7 +250,9 @@ impl HostState {
         for m in &project.models {
             let have = self.models.get(&m.id).is_some_and(|l| l.source == m.source)
                 || self.missing.get(&m.id).is_some_and(|(s, _)| *s == m.source);
-            if have {
+            if have
+                || (self.host_imports_examples && visioncraft_core::is_example_source(&m.source))
+            {
                 continue;
             }
             self.models.remove(&m.id);

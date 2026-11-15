@@ -202,7 +202,9 @@ const frameTimes = async (seconds = 4) => {
   const f = await evaluate(`window.__vcFrames.filter(x => x > ${start})`);
   const dt = f.slice(1).map((x, i) => x - f[i]).sort((a, b) => a - b);
   const q = k => +(dt[Math.min(dt.length - 1, Math.floor(dt.length * k))] ?? NaN).toFixed(1);
-  return { frames: dt.length, median_ms: q(0.5), p90_ms: q(0.9), fps: +(1000 / q(0.5)).toFixed(1) };
+  // The app's CPU time per frame stage and its draw counts, averaged over its last 60 frames.
+  const cpu = await evaluate('window.__vcFrame ? JSON.parse(window.__vcFrame) : null');
+  return { frames: dt.length, median_ms: q(0.5), p90_ms: q(0.9), fps: +(1000 / q(0.5)).toFixed(1), cpu };
 };
 
 const memory = async () => {
@@ -276,13 +278,23 @@ const interact = async ex => {
   if (QUALITY !== 'auto') await rpc('ui.set', { quality: QUALITY });
   const restored = await names();
   check(`${ex}: the project survives a reload (browser storage)`, restored.includes('Smoke lawn') && restored.includes('Smoke bench'), `${out.reload_s.toFixed(1)} s`);
-  // Download (Save) and upload (Open).
+  // Download (Save) and upload (Open). After the reload the project loads again: the click waits
+  // for that (a frame seconds late is past the click's user activation), and the browser's own
+  // download events tell a click that did not save from a download that did not finish.
+  await settle(120);
   const dl = fs.mkdtempSync(path.join(OUT, 'download-'));
-  await cdp('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: dl });
-  await click(...SAVE_BUTTON);
+  await cdp('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: dl, eventsEnabled: true });
+  const downloads = [];
+  listeners.push(m => {
+    if (/^(Browser|Page)\.download(WillBegin|Progress)$/.test(m.method)) downloads.push(`${m.method.split('.')[1]} ${m.params.state ?? m.params.suggestedFilename ?? ''}`);
+  });
   let saved;
-  for (let i = 0; i < 60 && !saved; i++) { await sleep(500); saved = fs.readdirSync(dl).find(f => !f.endsWith('.crdownload')); }
-  check(`${ex}: Save downloads the project`, !!saved, saved ?? 'nothing downloaded in 30 s');
+  for (let attempt = 0; attempt < 2 && !saved; attempt++) {
+    await click(...SAVE_BUTTON);
+    for (let i = 0; i < 40 && !saved; i++) { await sleep(500); saved = fs.readdirSync(dl).find(f => !f.endsWith('.crdownload')); }
+    if (!saved) out.pictures.push(await picture(`${ex}-save-${attempt}`));
+  }
+  check(`${ex}: Save downloads the project`, !!saved, saved ?? `nothing downloaded in 2 x 20 s; download events: ${downloads.join(', ') || 'none'}`);
   if (saved) {
     out.saved_bytes = fs.statSync(path.join(dl, saved)).size;
     await exec('file.new');

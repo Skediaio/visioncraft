@@ -487,6 +487,111 @@ const LAWN_MAX_TUFTS: usize = 60_000;
 const LAWN_EYE_CELL_M: f32 = 8.0;
 /// Tufts farther than this from the window's centre are drawn in the far colour.
 const LAWN_FAR_M: f32 = 16.0;
+
+/// A lawn's tufts to scatter on its shape (`scatter_lawn`): plain data, so that on the web a
+/// texture worker scatters them (a lawn scattered round the eye again each time the eye moved
+/// a cell held the page for 50 ms a frame while walking).
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct LawnScatter {
+    /// The shape's matrix (columns).
+    pub xf: [f32; 16],
+    /// (face, its lawn) and each face's area.
+    pub faces: Vec<(usize, visioncraft_core::material::Lawn3d)>,
+    pub areas: Vec<f32>,
+    pub max_density: f32,
+    pub max_tufts: usize,
+    /// Blade width factor (dense lawns' blades are narrower).
+    pub narrow: f32,
+    /// Round the eye (`LawnWindow`: centre, radius), for a lawn over its budget.
+    pub window: Option<([f32; 2], f32)>,
+    /// Outlines without grass (terraces, paths, ponds over it), in the shape's x, z.
+    pub over: Vec<Vec<[f32; 2]>>,
+    /// Tree crowns' circles (x, z, radius), where grass thins.
+    pub crowns: Vec<[f32; 3]>,
+}
+
+/// The tufts' matrices, one list per variant (so the lawn does not repeat one tuft); a lawn
+/// scattered round the eye has a second set for its thinned, distant tufts (`LAWN_FAR_M`), drawn
+/// in a deeper green.
+pub fn scatter_lawn(geom: &ImportedModel, job: &LawnScatter) -> Vec<Vec<Mat4>> {
+    let xf = Mat4::from_cols_array(&job.xf);
+    let window = job
+        .window
+        .map(|(center, radius)| LawnWindow { center, radius });
+    let total: f32 = job.areas.iter().sum::<f32>().max(1e-6);
+    let mut by_variant: Vec<Vec<Mat4>> = vec![Vec::new(); 2 * plants::VARIANTS as usize];
+    let mut n = 0usize;
+    for ((face, lawn), area) in job.faces.iter().zip(&job.areas) {
+        let lawn = visioncraft_core::material::Lawn3d {
+            density_per_m2: lawn.density_per_m2.min(job.max_density),
+            ..*lawn
+        };
+        // The budget shared by the lawn's faces by area.
+        let max = (job.max_tufts as f32 * area / total) as usize;
+        // An area's matrix only lifts it: the outlines hold in its own x, z.
+        let holes: Vec<&[[f32; 2]]> = job.over.iter().map(Vec::as_slice).collect();
+        for t in lawn_scatter_within(geom, *face, &lawn, window, max, &holes) {
+            let p = xf.transform_point3(Vec3::from(t.position));
+            // Under a crown, three tufts in five go (shade): deterministic by place.
+            let shaded = job
+                .crowns
+                .iter()
+                .any(|c| (p.x - c[0]).powi(2) + (p.z - c[1]).powi(2) < c[2] * c[2]);
+            let hash = ((p.x * 7919.0) as i32 ^ (p.z * 104729.0) as i32) as u32;
+            if shaded && hash.wrapping_mul(2654435761) % 5 < 3 {
+                continue;
+            }
+            let s = (t.height_m / 0.08).clamp(0.3, 2.5);
+            // Mowing stripes: each band's blades lean the way the mower went.
+            let lean = if lawn.stripes_m > 0.0 {
+                let a = lawn.stripes_deg.to_radians();
+                let along = Vec3::new(a.sin(), 0.0, -a.cos());
+                let across = Vec3::new(-along.z, 0.0, along.x);
+                let band = (p.dot(across) / lawn.stripes_m).floor() as i64;
+                let sign = if band.rem_euclid(2) == 0 { 1.0 } else { -1.0 };
+                Mat4::from_axis_angle(Vec3::Y.cross(along).normalize(), 0.3 * sign)
+            } else {
+                Mat4::IDENTITY
+            };
+            let far = window.is_some_and(|w| {
+                let local = xf.inverse().transform_point3(p);
+                (local.x - w.center[0]).hypot(local.z - w.center[1]) > LAWN_FAR_M
+            });
+            let k = n % plants::VARIANTS as usize + if far { plants::VARIANTS as usize } else { 0 };
+            let narrow = job.narrow;
+            by_variant[k].push(
+                Mat4::from_translation(p)
+                    * lean
+                    * Mat4::from_rotation_y(t.rotation_y_deg.to_radians())
+                    * Mat4::from_scale(Vec3::new(s * narrow, s, s * narrow)),
+            );
+            n += 1;
+        }
+    }
+    by_variant
+}
+
+/// Scatters a lawn off the frame: natively on the work pool, on the web in a texture worker
+/// (on the page where none runs).
+fn start_lawn(geom: Arc<ImportedModel>, job: LawnScatter) -> plants::Slot<Vec<Vec<Mat4>>> {
+    #[cfg(not(target_arch = "wasm32"))]
+    return plants::spawn(move || scatter_lawn(&geom, &job));
+    #[cfg(target_arch = "wasm32")]
+    {
+        let slot = plants::Slot::default();
+        let out = slot.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let m = match crate::texture_worker::lawn(&geom, &job).await {
+                Some(m) => m,
+                None => scatter_lawn(&geom, &job),
+            };
+            if let Ok(mut s) = out.lock() {
+                *s = Some(m);
+            }
+        });
+        slot
+    }
+}
 /// Snow deeper than this (`view.snow`) covers the lawn's blades.
 const LAWN_SNOW_BURIES: f32 = 0.55;
 /// Linear mean of the grass picture a plain lawn shows from the library (grass001), so the
@@ -1316,67 +1421,20 @@ impl Scene {
                     radius: LAWN_FADE_M + LAWN_EYE_CELL_M,
                 }
             });
-            let total: f32 = areas.iter().sum::<f32>().max(1e-6);
             // shortcut: one colour per lawn (its first lawn face's), fine until lawns mix colours
             let color = faces[0].2;
-            let (geom, xf) = (o.geom.clone(), o.xf);
-            let over: Vec<Vec<[f32; 2]>> = over.iter().map(|a| a.to_vec()).collect();
-            let crowns = crowns.clone();
-            let slot = plants::spawn(move || {
-                // One matrix list per variant, so the lawn does not repeat one tuft; a lawn
-                // scattered round the eye has a second set for its thinned, distant tufts
-                // (`LAWN_FAR_M`), drawn in a deeper green.
-                let mut by_variant: Vec<Vec<Mat4>> =
-                    vec![Vec::new(); 2 * plants::VARIANTS as usize];
-                let mut n = 0usize;
-                for ((face, lawn, _), area) in faces.iter().zip(&areas) {
-                    let lawn = visioncraft_core::material::Lawn3d {
-                        density_per_m2: lawn.density_per_m2.min(max_density),
-                        ..*lawn
-                    };
-                    // The budget shared by the lawn's faces by area.
-                    let max = (max_tufts as f32 * area / total) as usize;
-                    // An area's matrix only lifts it: the outlines hold in its own x, z.
-                    let holes: Vec<&[[f32; 2]]> = over.iter().map(Vec::as_slice).collect();
-                    for t in lawn_scatter_within(&geom, *face, &lawn, window, max, &holes) {
-                        let p = xf.transform_point3(Vec3::from(t.position));
-                        // Under a crown, three tufts in five go (shade): deterministic by place.
-                        let shaded = crowns
-                            .iter()
-                            .any(|c| (p.x - c[0]).powi(2) + (p.z - c[1]).powi(2) < c[2] * c[2]);
-                        let hash = ((p.x * 7919.0) as i32 ^ (p.z * 104729.0) as i32) as u32;
-                        if shaded && hash.wrapping_mul(2654435761) % 5 < 3 {
-                            continue;
-                        }
-                        let s = (t.height_m / 0.08).clamp(0.3, 2.5);
-                        // Mowing stripes: each band's blades lean the way the mower went.
-                        let lean = if lawn.stripes_m > 0.0 {
-                            let a = lawn.stripes_deg.to_radians();
-                            let along = Vec3::new(a.sin(), 0.0, -a.cos());
-                            let across = Vec3::new(-along.z, 0.0, along.x);
-                            let band = (p.dot(across) / lawn.stripes_m).floor() as i64;
-                            let sign = if band.rem_euclid(2) == 0 { 1.0 } else { -1.0 };
-                            Mat4::from_axis_angle(Vec3::Y.cross(along).normalize(), 0.3 * sign)
-                        } else {
-                            Mat4::IDENTITY
-                        };
-                        let far = window.is_some_and(|w| {
-                            let local = xf.inverse().transform_point3(p);
-                            (local.x - w.center[0]).hypot(local.z - w.center[1]) > LAWN_FAR_M
-                        });
-                        let k = n % plants::VARIANTS as usize
-                            + if far { plants::VARIANTS as usize } else { 0 };
-                        by_variant[k].push(
-                            Mat4::from_translation(p)
-                                * lean
-                                * Mat4::from_rotation_y(t.rotation_y_deg.to_radians())
-                                * Mat4::from_scale(Vec3::new(s * narrow, s, s * narrow)),
-                        );
-                        n += 1;
-                    }
-                }
-                by_variant
-            });
+            let job = LawnScatter {
+                xf: o.xf.to_cols_array(),
+                faces: faces.iter().map(|(f, l, _)| (*f, *l)).collect(),
+                areas,
+                max_density,
+                max_tufts,
+                narrow,
+                window: window.map(|w| (w.center, w.radius)),
+                over: over.iter().map(|a| a.to_vec()).collect(),
+                crowns: crowns.clone(),
+            };
+            let slot = start_lawn(o.geom.clone(), job);
             let old = self.lawn_jobs.insert(
                 id,
                 LawnJob {

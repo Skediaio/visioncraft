@@ -1,7 +1,8 @@
 //! Background work for loading (plant meshes, plant textures, block compression): natively a
 //! pool of threads sized to the machine (its cores less two, so the frame's thread and the
 //! system keep one each; at least one), the most urgent job first. On the web there are no
-//! threads: a job runs at once (plant textures go to the texture worker instead, `plants`).
+//! threads: a job runs at once (plant textures and meshes and lawn tufts go to the texture
+//! workers instead, `plants`, `scene`).
 //!
 //! A job's result does not depend on when or where it runs: callers keep every job a pure
 //! function of its inputs, so a load comes out the same however the pool schedules it.

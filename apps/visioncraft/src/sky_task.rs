@@ -1,54 +1,67 @@
 //! The sky visibility volume (`visioncraft_core::sky_volume`) off the UI thread: seconds for a
 //! furnished house in the browser. Natively on a thread; on the web in the import worker (the
 //! same worker binary as `import_task`, a `sky` job), the volume travelling back as bytes
-//! (`SkyVolume::to_bytes`). When the worker cannot start, it is made here, blocking.
+//! (`SkyVolume::to_bytes`). The sun's bounce through its rooms for the sun at the start
+//! (`SkyVolume::sun_bounce`, seconds too) is made with it. When the worker cannot start, both are
+//! made here, blocking.
 
 use std::sync::{Arc, Mutex};
 use visioncraft_core::SkyVolume;
 
 type Triangles = Vec<[[f32; 3]; 3]>;
-type Slot = Arc<Mutex<Option<Option<SkyVolume>>>>;
+/// A volume with its sun bounce (`None`: nothing blocks the sky).
+pub type Made = Option<(SkyVolume, Vec<f32>)>;
+type Slot = Arc<Mutex<Option<Made>>>;
 
-/// One volume in the making, for the occluders hashed to `key`.
+/// One volume in the making, for the occluders hashed to `key`, its sun bounce for `to_sun`.
 pub struct SkyTask {
     pub key: u64,
+    pub to_sun: [f32; 3],
     slot: Slot,
 }
 
 impl SkyTask {
-    pub fn start(triangles: Triangles, key: u64) -> Self {
+    pub fn start(triangles: Triangles, key: u64, to_sun: [f32; 3]) -> Self {
         let slot: Slot = Arc::default();
-        run(triangles, slot.clone());
-        Self { key, slot }
+        run(triangles, to_sun, slot.clone());
+        Self { key, to_sun, slot }
     }
 
-    /// The volume once made (`Some(None)`: nothing blocks the sky), then `None` again.
-    pub fn take(&self) -> Option<Option<SkyVolume>> {
+    /// The volume once made, then `None` again.
+    pub fn take(&self) -> Option<Made> {
         self.slot.lock().ok()?.take()
     }
 }
 
-fn put(slot: &Slot, v: Option<SkyVolume>) {
+/// The volume and its sun bounce, made here.
+pub fn make(triangles: &[[[f32; 3]; 3]], to_sun: [f32; 3]) -> Made {
+    let v = visioncraft_core::sky_volume(triangles)?;
+    let bounce = v.sun_bounce(to_sun);
+    Some((v, bounce))
+}
+
+fn put(slot: &Slot, v: Made) {
     if let Ok(mut s) = slot.lock() {
         *s = Some(v);
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn run(triangles: Triangles, slot: Slot) {
-    std::thread::spawn(move || put(&slot, visioncraft_core::sky_volume(&triangles)));
+fn run(triangles: Triangles, to_sun: [f32; 3], slot: Slot) {
+    std::thread::spawn(move || put(&slot, make(&triangles, to_sun)));
 }
 
 #[cfg(target_arch = "wasm32")]
-fn run(triangles: Triangles, slot: Slot) {
+fn run(triangles: Triangles, to_sun: [f32; 3], slot: Slot) {
     use wasm_bindgen::JsCast;
     use wasm_bindgen::prelude::Closure;
     let Ok(worker) = web_sys::Worker::new("./import_worker_loader.js") else {
-        return put(&slot, visioncraft_core::sky_volume(&triangles));
+        return put(&slot, make(&triangles, to_sun));
     };
     let msg = js_sys::Array::new();
     msg.push(&SKY.into());
     msg.push(&js_sys::Uint8Array::from(&encode_triangles(&triangles)[..]));
+    msg.push(&js_sys::Float32Array::from(&to_sun[..]));
     let (w, done) = (worker.clone(), slot.clone());
     let on_message =
         Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |e: web_sys::MessageEvent| {
@@ -57,13 +70,14 @@ fn run(triangles: Triangles, slot: Slot) {
                 let _ = w.post_message(&msg);
                 return;
             }
-            // Empty bytes: nothing blocks the sky.
-            let v = data
-                .dyn_into::<js_sys::Uint8Array>()
-                .ok()
-                .map(|a| a.to_vec())
-                .filter(|b| !b.is_empty())
-                .and_then(|b| SkyVolume::from_bytes(&b).ok());
+            // [volume, sun bounce]; empty volume bytes: nothing blocks the sky.
+            let parts = data.dyn_into::<js_sys::Array>().ok();
+            let v = parts.and_then(|a| {
+                let b = a.get(0).dyn_into::<js_sys::Uint8Array>().ok()?.to_vec();
+                let bounce = a.get(1).dyn_into::<js_sys::Float32Array>().ok()?.to_vec();
+                let v = SkyVolume::from_bytes(&b).ok()?;
+                Some((v, bounce))
+            });
             put(&done, v);
             w.terminate();
         });
@@ -72,7 +86,7 @@ fn run(triangles: Triangles, slot: Slot) {
     let on_error = Closure::<dyn FnMut(wasm_bindgen::JsValue)>::new(move |_| {
         w.terminate();
         if failed.lock().is_ok_and(|s| s.is_none()) {
-            put(&failed, visioncraft_core::sky_volume(&triangles));
+            put(&failed, make(&triangles, to_sun));
         }
     });
     worker.set_onerror(Some(on_error.as_ref().unchecked_ref()));
@@ -118,13 +132,15 @@ mod tests {
     #[test]
     fn a_volume_is_made_off_the_thread() {
         let t = vec![[[0.0, 0.0, 0.0], [4.0, 0.0, 0.0], [0.0, 0.0, 4.0]]];
-        let task = SkyTask::start(t, 7);
+        let task = SkyTask::start(t, 7, [0.3, 0.8, 0.2]);
         let v = loop {
             if let Some(v) = task.take() {
                 break v;
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
         };
-        assert!(v.is_some_and(|v| !v.samples.is_empty()));
+        let (v, bounce) = v.expect("a volume");
+        assert!(!v.samples.is_empty());
+        assert_eq!(bounce, v.sun_bounce([0.3, 0.8, 0.2]));
     }
 }

@@ -307,16 +307,29 @@ pub struct Flora {
     scan_wait: Option<f64>,
     /// Nothing was pending at the last pump.
     idle: bool,
+    /// Pumps until the species nobody asked for since a project switch are freed (`sweep`).
+    sweep: u8,
+    /// Species asked for (`ready`, `parts`, `tinted`, `impostor`, `want`) while `sweep` counts.
+    asked: std::cell::RefCell<std::collections::HashSet<String>>,
 }
 
 type Answer = Slot<Option<crate::texture_worker::PlantCompressed>>;
 
 impl Flora {
     pub fn ready(&self, id: &str, class: u32) -> bool {
+        self.asked(id);
         self.classes.contains_key(&(id.to_string(), class))
     }
 
+    /// Notes that `id` is still in use while a sweep counts down.
+    fn asked(&self, id: &str) {
+        if self.sweep > 0 && !self.asked.borrow().contains(id) {
+            self.asked.borrow_mut().insert(id.to_string());
+        }
+    }
+
     fn variant(&self, id: &str, class: u32, variant: u32) -> Option<&Variant> {
+        self.asked(id);
         self.classes
             .get(&(id.to_string(), class))?
             .get((variant % VARIANTS) as usize)
@@ -338,6 +351,7 @@ impl Flora {
         variant: u32,
         rgb: [f32; 3],
     ) -> Option<Vec<Part>> {
+        self.asked(id);
         let key = (id.to_string(), class, variant, rgb.map(f32::to_bits));
         if let Some(p) = self.tinted.get(&key) {
             return Some(p.clone());
@@ -495,6 +509,7 @@ impl Flora {
         at: &[glam::Vec3],
     ) {
         self.month = month;
+        self.asked(id);
         if let Some(s) = scan_id {
             self.scans.alias(id, s);
         }
@@ -555,6 +570,32 @@ impl Flora {
         }
         self.bakes.retain(|b| b.0 != id);
         self.retired.push((id.to_string(), 3));
+    }
+
+    /// Another project replaced the scene (which dropped its items first): the species it does
+    /// not use are freed once its first sync asked for its own (the next pump but one). The last
+    /// project's stayed on the GPU otherwise, every project opened adding its leaf atlases and
+    /// impostors; those both use stay made.
+    pub fn sweep(&mut self) {
+        self.asked.get_mut().clear();
+        self.sweep = 2;
+    }
+
+    fn sweep_step(&mut self) {
+        if self.sweep == 0 {
+            return;
+        }
+        self.sweep -= 1;
+        if self.sweep > 0 {
+            return;
+        }
+        let asked = std::mem::take(self.asked.get_mut());
+        let unused: std::collections::HashSet<String> = (self.classes.keys().map(|k| k.0.clone()))
+            .chain(self.textures.keys().cloned())
+            .chain(self.queue.iter().map(|w| w.id.clone()))
+            .filter(|id| !asked.contains(id))
+            .collect();
+        unused.iter().for_each(|id| self.retire(id));
     }
 
     fn free_retired(&mut self, r: &mut Renderer) {
@@ -736,6 +777,7 @@ impl Flora {
     /// first) to the pool, uploads what has arrived (within a few milliseconds), and steps an
     /// impostor bake. True when a species became ready (the scene must sync again).
     pub fn pump(&mut self, r: &mut Renderer, eye: glam::Vec3) -> bool {
+        self.sweep_step();
         if !self.retired.is_empty() {
             self.free_retired(r);
         }
@@ -785,13 +827,18 @@ impl Flora {
         // The most urgent first.
         self.queue
             .sort_by(|a, b| a.urgency(eye).total_cmp(&b.urgency(eye)));
-        // Natively the pool is kept a little ahead of its threads; on the web a job runs at once
-        // on the page, so one species' meshes a frame.
+        // Natively the pool is kept a little ahead of its threads; on the web the texture
+        // workers are, one species handed over a frame (where no worker runs, the meshes are
+        // made on the page: one species a frame).
         let mut meshes_started = 0;
         let room = |extra: usize, started: usize| {
-            if cfg!(target_arch = "wasm32") {
-                started == 0
-            } else {
+            #[cfg(target_arch = "wasm32")]
+            return started == 0
+                && crate::texture_worker::meshes_waiting() + extra
+                    <= 2 * crate::texture_worker::WEB_WORKERS;
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let _ = started;
                 work_pool::backlog() + extra <= 2 * work_pool::size()
             }
         };
@@ -843,9 +890,7 @@ impl Flora {
                     .map(|v| {
                         let (name, params) = (id.clone(), params.clone());
                         // Variants of one species right after one another.
-                        work_pool::run(urgency + 1e-3 * v as f32, move || {
-                            generate_variant(&name, &params, v, month, detail)
-                        })
+                        start_variant(name, params, v, month, detail, urgency + 1e-3 * v as f32)
                     })
                     .collect();
                 self.meshing.insert(k.clone(), slots);
@@ -1048,12 +1093,48 @@ fn upload_tex(
 type Parts = Vec<(flora::Material, flora::MeshPart)>;
 
 /// One variant's meshes at every level, generated away from the renderer.
-struct Generated {
-    height: f32,
+pub(crate) struct Generated {
+    pub height: f32,
     /// (level, parts by material, foliage tint)
-    levels: Vec<(usize, Parts, [f32; 3])>,
+    pub levels: Vec<(usize, Parts, [f32; 3])>,
     /// Made with the detail levels of HIGH and ULTRA.
+    pub detail: bool,
+}
+
+/// Starts generating a variant off the frame: natively on the pool (`priority`: smaller sooner),
+/// on the web in a texture worker (in the order handed over), on the page where none runs.
+fn start_variant(
+    name: String,
+    params: flora::PlantParams,
+    v: u32,
+    month: u8,
     detail: bool,
+    priority: f32,
+) -> Slot<Generated> {
+    #[cfg(not(target_arch = "wasm32"))]
+    return work_pool::run(priority, move || {
+        generate_variant(&name, &params, v, month, detail)
+    });
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = priority;
+        let slot = Slot::default();
+        let out = slot.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let g = match crate::texture_worker::mesh(&params, v, month, detail).await {
+                Some((height, levels)) => Generated {
+                    height,
+                    levels,
+                    detail,
+                },
+                None => generate_variant(&name, &params, v, month, detail),
+            };
+            if let Ok(mut s) = out.lock() {
+                *s = Some(g);
+            }
+        });
+        slot
+    }
 }
 
 /// `generate_variant_now`, natively through the disk cache (`plant_cache`).
@@ -1084,7 +1165,7 @@ fn generate_variant(
 
 /// Every level of one variant, nearest first; with `detail` (HIGH and ULTRA) trees get the
 /// leaf-level levels before the card levels.
-fn generate_variant_now(
+pub(crate) fn generate_variant_now(
     name: &str,
     params: &flora::PlantParams,
     v: u32,
@@ -1118,6 +1199,7 @@ use crate::work_pool::{self, take};
 
 /// Runs `f` off the frame (the pool; on the web, where there are no threads, at once); its
 /// result lands in the slot.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn spawn<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Slot<T> {
     work_pool::run(0.0, f)
 }
@@ -1247,5 +1329,22 @@ mod tests {
         p.bloom_months = vec![5];
         assert_ne!(class(&p, 5), class(&p, 6));
         assert_eq!(class(&p, 6), class(&p, 7));
+    }
+
+    #[test]
+    fn a_project_switch_frees_only_the_species_the_new_project_does_not_ask_for() {
+        let p = flora::species()[0].params.clone();
+        let mut f = Flora::default();
+        f.want("kept", None, 0, 6, &p, &[]);
+        f.want("gone", None, 0, 6, &p, &[]);
+        f.sweep();
+        f.sweep_step(); // the pump before the new project's sync
+        f.want("kept", None, 0, 6, &p, &[]); // the sync asks for its own
+        f.sweep_step();
+        assert_eq!(f.waiting_names(5), vec!["kept".to_string()]);
+        assert_eq!(f.retired, vec![("gone".to_string(), 3)]);
+        // Without a switch nothing is freed.
+        f.sweep_step();
+        assert_eq!(f.retired.len(), 1);
     }
 }
