@@ -322,11 +322,12 @@ impl ViewState {
     /// Maps the old relative `wind_strength` (files and commands from before wind had units) to
     /// m/s, once: it then stays out of the project.
     pub fn migrate_wind(&mut self) {
-        if let Some(strength) = self.wind_strength.take() {
-            if strength.is_finite() && strength >= 0.0 {
-                self.wind_speed_mps =
-                    (strength * crate::wind::RELATIVE_MPS).min(crate::wind::MAX_SPEED_MPS);
-            }
+        if let Some(strength) = self.wind_strength.take()
+            && strength.is_finite()
+            && strength >= 0.0
+        {
+            self.wind_speed_mps =
+                (strength * crate::wind::RELATIVE_MPS).min(crate::wind::MAX_SPEED_MPS);
         }
     }
 

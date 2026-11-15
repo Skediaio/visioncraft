@@ -2490,11 +2490,11 @@ impl Renderer {
     /// An item's plants sway like conifers (stiffer: a higher natural frequency than a leafed
     /// broadleaf of the same height, `wind::plant_hz`).
     pub fn set_item_conifer(&mut self, id: ItemId, conifer: bool) {
-        if let Some(Some(item)) = self.items.get_mut(id.0 as usize) {
-            if item.conifer != conifer {
-                item.conifer = conifer;
-                self.write_instances(id);
-            }
+        if let Some(Some(item)) = self.items.get_mut(id.0 as usize)
+            && item.conifer != conifer
+        {
+            item.conifer = conifer;
+            self.write_instances(id);
         }
     }
 

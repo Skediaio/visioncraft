@@ -399,8 +399,10 @@ fn the_shader_agrees_with_the_cpu() {
             .slice(..)
             .get_mapped_range()
             .expect("mapped")
-            .chunks_exact(4)
-            .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| f32::from_le_bytes(*c))
             .collect();
         read.unmap();
         for (i, p) in points.iter().enumerate() {

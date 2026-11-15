@@ -638,18 +638,6 @@ fn view_fields(ui: &mut egui::Ui, cx: &mut Cx) {
             };
             field(ui, t::HAZE, "haze", v.haze, 0.0..=20.0);
             field(ui, t::WIND, "wind_speed_mps", v.wind_speed_mps, 0.0..=30.0);
-            // The Beaufort steps as presets (view.set wind_beaufort), named after what they do.
-            let now = visioncraft_core::wind::beaufort_of(v.wind_speed_mps);
-            egui::ComboBox::from_id_salt("wind-beaufort")
-                .selected_text(format!("{} {}", now.force, now.name))
-                .show_ui(ui, |ui| {
-                    for b in visioncraft_core::wind::BEAUFORT {
-                        let label = format!("{} {}: {}", b.force, b.name, b.on_land);
-                        if ui.selectable_label(b.force == now.force, label).clicked() {
-                            cx.run("view.set", json!({"wind_beaufort": b.force}));
-                        }
-                    }
-                });
             field(
                 ui,
                 t::WIND_GUSTINESS,
@@ -664,6 +652,18 @@ fn view_fields(ui: &mut egui::Ui, cx: &mut Cx) {
                 v.wind_direction_deg,
                 0.0..=360.0,
             );
+            // The Beaufort steps as presets (view.set wind_beaufort), named after what they do.
+            let now = visioncraft_core::wind::beaufort_of(v.wind_speed_mps);
+            egui::ComboBox::from_id_salt("wind-beaufort")
+                .selected_text(format!("{} {}", now.force, now.name))
+                .show_ui(ui, |ui| {
+                    for b in visioncraft_core::wind::BEAUFORT {
+                        let label = format!("{} {}: {}", b.force, b.name, b.on_land);
+                        if ui.selectable_label(b.force == now.force, label).clicked() {
+                            cx.run("view.set", json!({"wind_beaufort": b.force}));
+                        }
+                    }
+                });
         });
 }
 
