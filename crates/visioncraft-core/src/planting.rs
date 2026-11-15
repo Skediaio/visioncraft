@@ -1317,6 +1317,7 @@ pub fn lawn_scatter_within(
     if tris.is_empty() {
         return Vec::new();
     }
+    let edges = MowEdges::new(&tris, holes);
     let cell = LAWN_CELL_M;
     let key = |x: f32| (x / cell).floor() as i32;
     // The cells each triangle's bounding box touches, within the window.
@@ -1431,9 +1432,24 @@ pub fn lawn_scatter_within(
                     (share(d, near, w), 0.4 + 0.6 * t)
                 }
             };
-            if threshold >= keep || in_hole(x, z) {
+            if threshold >= keep {
                 continue;
             }
+            // The mowing edge, along the lawn's outline and the areas lying on it: the cut
+            // wanders by a few centimetres, the blades along it stand taller, and some reach
+            // over onto a path or border.
+            let hole = in_hole(x, z);
+            let edge = edges.distance(x, z, hole);
+            let wobble = (crate::terrain::value_noise(lawn.seed ^ 0x6D6F_7765, x * 2.5, z * 2.5)
+                + 1.0)
+                * 0.5;
+            let tall = match (hole, edge) {
+                (true, Some(d)) if d < MOW_OVER_M * wobble - 0.01 => 1.8,
+                (true, _) => continue,
+                (false, Some(d)) if d < MOW_GAP_M * wobble => continue,
+                (false, Some(d)) => 1.0 + 0.7 * wobble * (1.0 - d / MOW_EDGE_M),
+                (false, None) => 1.0,
+            };
             let Some(y) = cand
                 .iter()
                 .find_map(|&i| height_in(&tris[i as usize], x, z))
@@ -1443,7 +1459,7 @@ pub fn lawn_scatter_within(
             out.push(Tuft {
                 position: [x, y, z],
                 rotation_y_deg: 360.0 * rot,
-                height_m: lawn.blade_height_m * (0.75 + 0.5 * h) * fade,
+                height_m: lawn.blade_height_m * (0.75 + 0.5 * h) * fade * tall,
             });
             if out.len() >= max {
                 return out;
@@ -1451,6 +1467,94 @@ pub fn lawn_scatter_within(
         }
     }
     out
+}
+
+/// Tufts within this distance of a lawn's edge (its outline, or an area lying on it) make the
+/// mowing edge (m): up to `MOW_GAP_M` short of it, up to `MOW_OVER_M` over onto the area.
+const MOW_EDGE_M: f32 = 0.16;
+const MOW_GAP_M: f32 = 0.07;
+const MOW_OVER_M: f32 = 0.12;
+
+/// A lawn's edges, where its face ends and the outlines of the areas lying on it, bucketed
+/// for the distance from a tuft to the nearest.
+struct MowEdges {
+    segments: Vec<[[f32; 2]; 2]>,
+    /// The first of the areas' outlines in `segments` (the face's own come first).
+    first_hole: usize,
+    grid: HashMap<(i32, i32), Vec<u32>>,
+}
+
+impl MowEdges {
+    fn new(tris: &[[[f32; 3]; 3]], holes: &[&[[f32; 2]]]) -> Self {
+        // The face's outline: triangle sides that belong to one triangle only.
+        let key = |p: [f32; 3]| {
+            (
+                (p[0] * 1000.0).round() as i32,
+                (p[2] * 1000.0).round() as i32,
+            )
+        };
+        let mut sides: HashMap<_, ([[f32; 2]; 2], u32)> = HashMap::new();
+        for t in tris {
+            for k in 0..3 {
+                let (a, b) = (t[k], t[(k + 1) % 3]);
+                let (ka, kb) = (key(a), key(b));
+                let side = sides
+                    .entry((ka.min(kb), ka.max(kb)))
+                    .or_insert(([[a[0], a[2]], [b[0], b[2]]], 0));
+                side.1 += 1;
+            }
+        }
+        let mut segments: Vec<[[f32; 2]; 2]> = sides
+            .into_values()
+            .filter(|s| s.1 == 1)
+            .map(|s| s.0)
+            .collect();
+        let first_hole = segments.len();
+        for h in holes.iter().filter(|h| h.len() >= 3) {
+            segments.extend((0..h.len()).map(|k| [h[k], h[(k + 1) % h.len()]]));
+        }
+        let mut grid: HashMap<(i32, i32), Vec<u32>> = HashMap::new();
+        let c = |v: f32| (v / MOW_EDGE_M).floor() as i32;
+        for (i, [a, b]) in segments.iter().enumerate() {
+            for cx in c(a[0].min(b[0]) - MOW_EDGE_M)..=c(a[0].max(b[0]) + MOW_EDGE_M) {
+                for cz in c(a[1].min(b[1]) - MOW_EDGE_M)..=c(a[1].max(b[1]) + MOW_EDGE_M) {
+                    let mid = [
+                        (cx as f32 + 0.5) * MOW_EDGE_M,
+                        (cz as f32 + 0.5) * MOW_EDGE_M,
+                    ];
+                    // Only the cells the segment passes within reach of (a long diagonal side
+                    // would otherwise fill its whole bounding box).
+                    if distance_to_segment(mid, *a, *b) <= MOW_EDGE_M * 1.75 {
+                        grid.entry((cx, cz)).or_default().push(i as u32);
+                    }
+                }
+            }
+        }
+        Self {
+            segments,
+            first_hole,
+            grid,
+        }
+    }
+
+    /// The distance from (x, z) to the nearest edge (only the areas' outlines: `holes_only`),
+    /// when under `MOW_EDGE_M`.
+    fn distance(&self, x: f32, z: f32, holes_only: bool) -> Option<f32> {
+        let cell = (
+            (x / MOW_EDGE_M).floor() as i32,
+            (z / MOW_EDGE_M).floor() as i32,
+        );
+        self.grid
+            .get(&cell)?
+            .iter()
+            .filter(|&&i| !holes_only || i as usize >= self.first_hole)
+            .map(|&i| {
+                let [a, b] = self.segments[i as usize];
+                distance_to_segment([x, z], a, b)
+            })
+            .fold(None, |m: Option<f32>, d| Some(m.map_or(d, |m| m.min(d))))
+            .filter(|d| *d < MOW_EDGE_M)
+    }
 }
 
 /// The height of triangle `t` above (x, z), when the point lies inside it seen from above.
@@ -1994,7 +2098,7 @@ mod tests {
         assert!(tufts.iter().all(|t| t.position[1] == 2.0
             && (0.0..=4.0).contains(&t.position[0])
             && (0.0..=4.0).contains(&t.position[2])
-            && (0.0375..=0.0625).contains(&t.height_m)));
+            && (0.0375..=0.0625 * 1.8).contains(&t.height_m)));
         let wall = m.faces.iter().position(|f| f.name == "S2:side(0)").unwrap();
         // A wall is a face like any other for lawn_scatter; tufts lie in its plane, z = 0.
         assert!(
@@ -2025,6 +2129,56 @@ mod tests {
             q[i] += 1;
         }
         q
+    }
+
+    /// Where a lawn meets a path lying on it, its edge is not cut with a ruler: the last tufts
+    /// stop short of the line by different amounts along it, some reach over it, and those
+    /// along it stand taller than the lawn's. All of it the same on every run.
+    #[test]
+    fn a_lawn_edge_wanders_with_tall_blades_reaching_over() {
+        let lawn = Lawn3d {
+            density_per_m2: 600.0,
+            blade_height_m: 0.08,
+            seed: 3,
+            ..Default::default()
+        };
+        let m = lawn_rect(20.0, 10.0);
+        let top = m.faces.iter().position(|f| f.name == "S1:top").unwrap();
+        let path = [[10.0, -1.0], [11.0, -1.0], [11.0, 11.0], [10.0, 11.0]];
+        let t = lawn_scatter_within(&m, top, &lawn, None, 240_000, &[&path]);
+        assert_eq!(
+            t,
+            lawn_scatter_within(&m, top, &lawn, None, 240_000, &[&path])
+        );
+        // Over the path's west side (x = 10), per 0.5 m along it: how far the lawn reaches.
+        let mut reach = [f32::NEG_INFINITY; 20];
+        let (mut over, mut tall_edge, mut tall_field) = (0, (0.0, 0), (0.0, 0));
+        for t in &t {
+            let [x, _, z] = t.position;
+            if (9.0..10.5).contains(&x) && (0.0..10.0).contains(&z) {
+                let k = (z / 0.5) as usize;
+                reach[k] = reach[k].max(x - 10.0);
+            }
+            over += usize::from(x > 10.0 && x < 11.0);
+            if (9.88..10.0).contains(&x) {
+                tall_edge = (tall_edge.0 + t.height_m, tall_edge.1 + 1);
+            } else if (5.0..9.0).contains(&x) {
+                tall_field = (tall_field.0 + t.height_m, tall_field.1 + 1);
+            }
+        }
+        assert!(over > 20, "{over} tufts reach over the path");
+        assert!(reach.iter().all(|r| *r < MOW_OVER_M), "{reach:?}");
+        let (lo, hi) = reach
+            .iter()
+            .fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), r| {
+                (a.min(*r), b.max(*r))
+            });
+        assert!(hi - lo > 0.03, "the edge is straight: {lo} .. {hi}");
+        let mean = |(s, n): (f32, usize)| s / n.max(1) as f32;
+        assert!(
+            mean(tall_edge) > 1.1 * mean(tall_field),
+            "{tall_edge:?} {tall_field:?}"
+        );
     }
 
     /// Areas lying on a lawn (a pond, a terrace, a gravel path, a soil border) grow no tufts,
@@ -2059,9 +2213,16 @@ mod tests {
             let t = lawn_scatter_within(&m, top, &lawn, w, max, &holes);
             assert!(t.len() > 10_000, "{path}: {}", t.len());
             for (name, o) in &on_top {
+                // Only the mowing edge's blades reaching over its outline.
+                let edge = |p: [f32; 2]| {
+                    (0..o.len())
+                        .map(|k| distance_to_segment(p, o[k], o[(k + 1) % o.len()]))
+                        .fold(f32::INFINITY, f32::min)
+                };
                 let n = t
                     .iter()
-                    .filter(|t| point_in_polygon([t.position[0], t.position[2]], o))
+                    .map(|t| [t.position[0], t.position[2]])
+                    .filter(|&p| point_in_polygon(p, o) && edge(p) >= MOW_OVER_M)
                     .count();
                 assert_eq!(n, 0, "{path}: {n} tufts on the {name}");
             }
