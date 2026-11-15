@@ -59,8 +59,9 @@ fn impostor_views(d: vec3<f32>) -> vec4<f32> {
     return vec4<f32>(i0 % n, i1, f - i0, top);
 }
 
-// How far a dissolve from the last mesh level (0) to the impostor or to
-// nothing (1) has run: per draw, from the draw slot (lib.rs `fade_slot`).
+// How far a dissolve from the near level (0) to the far one (1: a farther
+// mesh level, the impostor or nothing) has run: per draw, from the draw slot
+// (lib.rs `fade_slot`); negated on a farther mesh level's draws.
 fn lod_fade() -> f32 {
     return bitcast<f32>(draw.mesh.z);
 }
@@ -322,17 +323,25 @@ fn vs_depth_fade(v: DepthIn) -> FadeOut {
     return FadeOut(g.view_proj * vec4<f32>(world, 1.0), v.uv, lod_fade());
 }
 
+// A mesh level's share of a hand-over: the near side keeps the pixels at or above `fade`
+// in the noise, the far side (a farther mesh level, its fade negated by lib.rs) the rest,
+// as the impostor does.
+fn fade_keeps(clip: vec2<f32>, fade: f32) -> bool {
+    return select(ign(clip) >= fade, ign(clip) < -fade, fade < 0.0);
+}
+
 @fragment
 fn fs_depth_fade(in: FadeOut) {
     let a = cutout_alpha(in.uv);
-    if (material.alpha.x > 0.0 && a < material.alpha.x) || ign(in.clip.xy) < in.fade {
+    if (material.alpha.x > 0.0 && a < material.alpha.x) || !fade_keeps(in.clip.xy, in.fade) {
         discard;
     }
 }
 
 @fragment
 fn fs_depth_fade_ms(in: FadeOut) -> @builtin(sample_mask) u32 {
-    var m = fade_split(in.clip.xy, in.fade).x;
+    let split = fade_split(in.clip.xy, abs(in.fade));
+    var m = select(split.x, split.y, in.fade < 0.0);
     if material.alpha.x > 0.0 {
         m &= alpha_mask(in.clip.xy, cutout_alpha(in.uv), material.alpha.x);
     }

@@ -605,17 +605,21 @@ struct Cluster {
     range: std::ops::Range<u32>,
     bounds: Option<Bounds>,
     /// View level of detail drawn (`lods.len()` = culled by distance;
-    /// `LOD_UNSET` before the first frame).
+    /// `LOD_UNSET` before the first frame); while a hand-over dissolves, the
+    /// nearer of its two levels.
     lod: u8,
+    /// While a hand-over dissolves: the farther of its two levels (a mesh
+    /// level, the impostor, or `lods.len()` for nothing).
+    far: u8,
     /// The level the distance asks for (with hysteresis); differs from
     /// `lod` while a hand-over dissolves.
     target: u8,
     /// Front-to-back sort keys seen from the camera and from the sun.
     key: [f32; 2],
-    /// Frames left of a dissolve between the last mesh level (`lod`) and
-    /// the impostor (or nothing, for a cull fade); 0 when settled.
+    /// Frames left of a dissolve between two levels (`lod` and `far`); 0
+    /// when settled.
     fade: u8,
-    /// The dissolve goes towards the far side (impostor or culled).
+    /// The dissolve goes towards the far side.
     to_far: bool,
     /// Dissolving this frame: both sides draw, dithered by `fade_slot`.
     fading: bool,
@@ -624,9 +628,9 @@ struct Cluster {
 }
 
 const LOD_UNSET: u8 = u8::MAX;
-/// Frames a hand-over between the last mesh level and the impostor (or a
-/// cull fade) dissolves over: the dither shows only while it runs, never
-/// as a steady stipple on a parked camera.
+/// Frames a hand-over between two levels (two mesh levels, the last mesh
+/// level and the impostor, or a cull fade) dissolves over: the dither shows
+/// only while it runs, never as a steady stipple on a parked camera.
 const FADE_FRAMES: u8 = 16;
 /// Draw slots for this frame's dissolving clusters; more dissolving at once
 /// switch without one.
@@ -2422,6 +2426,7 @@ impl Renderer {
                     range: i as u32..i as u32 + 1,
                     bounds: None,
                     lod: LOD_UNSET,
+                    far: LOD_UNSET,
                     target: LOD_UNSET,
                     key: [0.0; 2],
                     fade: 0,
@@ -3125,6 +3130,10 @@ impl Renderer {
                 far: false,
                 coarse: false,
             } => (cluster.lod + 1).min(levels - 1),
+            // A tree at its finest level stands near the eye, and so does its shadow: its
+            // impostor's two cards cast the side view's limbs metres long over the lawn there
+            // (dark arcs like tyre tracks), so the far cascades take its last mesh level.
+            Pass::Shadow { .. } if item.impostor.is_some() && levels >= 2 => levels - 2,
             Pass::Shadow { .. } => levels - 1,
         })
     }
@@ -3185,7 +3194,6 @@ impl Renderer {
                 if outside(cull, bounds, near_far) {
                     continue;
                 }
-                let levels = item.lods.len() as u8;
                 for (part_index, part) in item.parts.iter().enumerate() {
                     let Some(Some(mesh)) = self.meshes.get(part.mesh.0 as usize) else {
                         continue;
@@ -3211,15 +3219,11 @@ impl Renderer {
                         continue;
                     }
                     let weights = mesh.weights.as_ref().filter(|_| shaded);
-                    // The last mesh level of an item with an impostor (or a
-                    // cull fade) dissolves in fading clusters, through its
-                    // own pipelines, one draw and fade slot per cluster.
-                    let can_fade = fades
-                        && if item.impostor.is_some() {
-                            part.lod + 2 == levels
-                        } else {
-                            item.cull_fade > 0.0 && part.lod + 1 == levels
-                        };
+                    // Opaque and cutout mesh levels dissolve in fading
+                    // clusters (into each other, the impostor or nothing),
+                    // through their own pipelines, one draw and fade slot per
+                    // cluster.
+                    let can_fade = fades && category <= 1 && weights.is_none();
                     for fading in [false, true] {
                         if fading && !can_fade {
                             continue;
@@ -3240,8 +3244,11 @@ impl Renderer {
                             Pass::Reflection => (m.variant(), &self.pipelines.reflect[m.variant()]),
                         };
                         let keep = |c: &Cluster| {
-                            Self::cluster_lod(item, c, kind) == Some(part.lod)
-                                && (!can_fade || c.fading == fading)
+                            if can_fade && c.fading {
+                                fading && (c.lod == part.lod || c.far == part.lod)
+                            } else {
+                                !fading && Self::cluster_lod(item, c, kind) == Some(part.lod)
+                            }
                         };
                         let runs: Vec<(std::ops::Range<u32>, u32)> = if fading {
                             item.clusters
@@ -3326,11 +3333,16 @@ impl Renderer {
         let runs = Self::runs(item, order, cull, near_far, |c| {
             Self::cluster_lod(item, c, kind) == Some(level) && !(fades && c.fading)
         });
-        // Dissolving clusters draw their impostor with their own fade slot.
+        // Dissolving clusters draw their impostor with their own fade slot
+        // when it is the far side of their hand-over.
         let fading: Vec<(std::ops::Range<u32>, u32)> = if fades {
             item.clusters
                 .iter()
-                .filter(|c| c.fading && c.bounds.is_some_and(|b| !outside(cull, b, near_far)))
+                .filter(|c| {
+                    c.fading
+                        && c.far == level
+                        && c.bounds.is_some_and(|b| !outside(cull, b, near_far))
+                })
                 .map(|c| (c.range.clone(), c.fade_slot + item.parts.len() as u32))
                 .collect()
         } else {
@@ -3538,38 +3550,34 @@ impl Renderer {
                 let d = d / scale;
                 let current = (c.target != LOD_UNSET).then_some(c.target as usize);
                 let target = lod::select(d, &lods, current, lod::HYSTERESIS_M) as u8;
-                // The level next to the hand-over that dissolves: the last
-                // mesh level into the impostor, or the last level into
-                // nothing with a cull fade. None: levels switch at once.
+                // Every hand-over between two levels dissolves (mesh to
+                // mesh, the last mesh level into the impostor, the last level
+                // into nothing with a cull fade), so walking up to a tree
+                // shows no pop. Beyond the impostor, or a last level without
+                // a cull fade, it is culled at once.
                 let levels = item.lods.len() as u8;
-                let near = if ortho.is_some() {
-                    None
-                } else if item.impostor.is_some() {
-                    Some(levels - 2)
-                } else if item.cull_fade > 0.0 && item.lods[levels as usize - 1].is_finite() {
-                    Some(levels - 1)
-                } else {
-                    None
-                };
-                let far = |l: u8| near.is_some_and(|n| l > n);
-                // Beyond the impostor everything is culled at once.
-                let past = |l: u8| item.impostor.is_some() && l >= levels;
-                if let Some(n) = near
+                let cull_fades = item.impostor.is_none()
+                    && item.cull_fade > 0.0
+                    && item.lods[levels as usize - 1].is_finite();
+                let dissolves = |l: u8| l < levels || (l == levels && cull_fades);
+                if ortho.is_none()
                     && c.target != LOD_UNSET
-                    && far(c.target) != far(target)
-                    && !past(c.target)
-                    && !past(target)
+                    && target != c.target
+                    && dissolves(c.target)
+                    && dissolves(target)
                 {
-                    // Crossing the hand-over: dissolve, or turn a running
-                    // dissolve around where it is.
-                    c.fade = if c.fade > 0 {
+                    // Crossing a hand-over: dissolve, or turn a running
+                    // dissolve between the same two levels around where it is.
+                    let (a, b) = (c.target.min(target), c.target.max(target));
+                    c.fade = if c.fade > 0 && c.lod == a && c.far == b {
                         FADE_FRAMES - c.fade
                     } else {
                         FADE_FRAMES
                     };
-                    c.to_far = far(target);
-                    c.lod = n;
-                } else if near.is_none() || past(target) {
+                    c.to_far = target > c.target;
+                    c.lod = a;
+                    c.far = b;
+                } else if ortho.is_some() || !dissolves(target) {
                     c.fade = 0;
                 }
                 c.target = target;
@@ -3580,14 +3588,16 @@ impl Renderer {
                     let fade = if c.to_far { progress } else { 1.0 - progress };
                     c.fade_slot = fade_used as u32;
                     for p in &item.parts {
-                        fade_bytes.extend_from_slice(&fade_slot(p.mesh, fade));
+                        // The far mesh level keeps the samples the near one gives
+                        // up: a negative fade (impostor.wgsl `fade_keeps`).
+                        let f = if p.lod == c.far { -fade } else { fade };
+                        fade_bytes.extend_from_slice(&fade_slot(p.mesh, f));
                         fade_bytes.resize(fade_bytes.len() + SLOT as usize - 16, 0);
                     }
                     fade_bytes.extend_from_slice(&fade_slot(MeshId(u32::MAX - 2), fade));
                     fade_bytes.resize(fade_bytes.len() + SLOT as usize - 16, 0);
                     fade_used += item.parts.len() + 1;
                     c.fading = true;
-                    c.lod = near.unwrap_or(target);
                     c.fade -= 1;
                 } else {
                     c.fade = 0;
