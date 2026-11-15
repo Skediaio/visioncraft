@@ -20,23 +20,63 @@ use crate::math::{GOLDEN_ANGLE, PI, Rng, TAU, UP, V3, cos, deg, sin, v3};
 use crate::mesh::{Builder, Card, Node, Outward, rand_dir, shuffled};
 use crate::{BranchingParams, BudgetClass, Lod, Material, PlantMesh, PlantParams, SeasonState};
 
-struct Branch {
-    nodes: Vec<Node>,
-    phase: f32,
+pub(crate) struct Branch {
+    pub nodes: Vec<Node>,
+    pub phase: f32,
 }
 
-struct LeafPoint {
-    p: V3,
-    d: V3,
-    w: f32,
-    phase: f32,
+pub(crate) struct LeafPoint {
+    pub p: V3,
+    pub d: V3,
+    pub w: f32,
+    pub phase: f32,
+}
+
+/// One of the current year's shoots (`gen_tree`): where it starts, its direction and length,
+/// wind weight and phase, and the light it gets (0 deep shade to 1 open sky).
+#[derive(Clone, Copy)]
+pub(crate) struct Shoot {
+    pub p: V3,
+    pub d: V3,
+    pub len: f32,
+    pub w: f32,
+    pub phase: f32,
+    pub light: f32,
 }
 
 #[derive(Default)]
-struct Skeleton {
-    branches: Vec<Branch>,
-    levels: Vec<u8>,
-    leaves: Vec<LeafPoint>,
+pub(crate) struct Skeleton {
+    pub branches: Vec<Branch>,
+    pub levels: Vec<u8>,
+    pub leaves: Vec<LeafPoint>,
+    /// Shoots of the grown trees (`gen_tree`), most lit first; empty for the other forms.
+    pub shoots: Vec<Shoot>,
+    /// A shoot's base radius.
+    pub shoot_r: f32,
+    /// The crown's foliage masses (`gen_tree`), as ellipsoids (centre, radii); empty for the
+    /// other forms.
+    pub masses: Vec<(V3, V3)>,
+}
+
+/// The outward direction a leaf card at `p` takes its normals from: the crown's, pulled
+/// towards the foliage mass it belongs to, so each mass shades as a lump of its own (lit on its
+/// sun side, dark under it) instead of the whole crown as one smooth dome.
+pub(crate) fn mass_outward(masses: &[(V3, V3)], p: V3, centre: V3, radii: V3) -> Outward {
+    let near = masses.iter().min_by(|a, b| {
+        let d = |m: &&(V3, V3)| {
+            let q = p - m.0;
+            let r = m.1;
+            (q.x / r.x).powi(2) + (q.y / r.y).powi(2) + (q.z / r.z).powi(2)
+        };
+        d(a).total_cmp(&d(b))
+    });
+    match near {
+        Some(&(c, r)) => Outward::Crown {
+            centre: centre.lerp(c, 0.7),
+            radii: radii.lerp(r, 0.7),
+        },
+        None => Outward::Crown { centre, radii },
+    }
 }
 
 struct Ctx<'a> {
@@ -206,7 +246,15 @@ fn grow(
     sk.levels.push(level as u8);
 }
 
-fn skeleton(p: &PlantParams, b: &BranchingParams, seed: u64) -> Skeleton {
+/// Trees grow by space colonisation (`gen_tree`); shrubs, bamboo, multi-stem bushes and
+/// small trees with only two branch levels (fig: a few large leaves on stout shoots, too
+/// coarse a network for the shoot spacing) keep the recursive skeleton.
+pub(crate) fn grown(p: &PlantParams) -> bool {
+    matches!(p.budget, BudgetClass::LargeTree | BudgetClass::SmallTree)
+        && matches!(&p.form, crate::Form::Branching(b) if b.levels[2].count > 0)
+}
+
+pub(crate) fn skeleton(p: &PlantParams, b: &BranchingParams, seed: u64) -> Skeleton {
     let mut rng = Rng::new(seed, 1);
     // Age changes the form, not only the size: a young tree is slender (the crown widens later
     // than the tree rises), has a thin trunk and fewer branch orders; its leaves keep their real
@@ -221,6 +269,9 @@ fn skeleton(p: &PlantParams, b: &BranchingParams, seed: u64) -> Skeleton {
     };
     let h = p.height_m * p.age * fh;
     let w = p.width_m * p.age.powf(1.25) * fw;
+    if grown(p) {
+        return crate::gen_tree::skeleton(p, b, seed, h, w);
+    }
     let max_level = if p.age < 0.25 {
         1
     } else if p.age < 0.55 {
@@ -309,8 +360,35 @@ fn decimate(nodes: &[Node], stride: usize) -> Vec<Node> {
     out
 }
 
+/// A branch as meshed at `lod`: its nodes and sides. A grown tree's chains (`all_levels`) have
+/// a node every growth step: they keep about one per half metre (one and a half far off) and
+/// take their sides from their radius, so a bare crown's budget reaches its finer branches.
+fn shaped(br: &Branch, lvl: usize, lod: usize, all_levels: bool) -> (Vec<Node>, u32) {
+    if !all_levels {
+        return (decimate(&br.nodes, STRIDE[lod]), SIDES[lod][lvl.min(3)]);
+    }
+    let seg = (br.nodes[1].p - br.nodes[0].p).len().max(1e-3);
+    let stride = ((([0.5, 0.9, 1.5][lod] / seg) as usize).max(STRIDE[lod])).max(1);
+    let r = br.nodes[0].r;
+    let sides = if r > 0.15 {
+        [10, 8, 6][lod]
+    } else if r > 0.05 {
+        [7, 5, 4][lod]
+    } else if r > 0.015 {
+        [4, 4, 3][lod]
+    } else {
+        3
+    };
+    (decimate(&br.nodes, stride), sides)
+}
+
 /// Which branches to mesh at `lod` and what that costs.
-fn wood_plan(sk: &Skeleton, lod: usize, wood_budget: usize) -> (Vec<usize>, usize) {
+fn wood_plan(
+    sk: &Skeleton,
+    lod: usize,
+    wood_budget: usize,
+    all_levels: bool,
+) -> (Vec<usize>, usize) {
     let trunk_r = sk
         .branches
         .iter()
@@ -320,8 +398,13 @@ fn wood_plan(sk: &Skeleton, lod: usize, wood_budget: usize) -> (Vec<usize>, usiz
         .fold(0.0, f32::max);
     let mut order: Vec<usize> = (0..sk.branches.len()).collect();
     // Thickest first (trunk before limbs before twigs); index breaks ties deterministically.
+    // A grown tree's levels are chains of its network (`all_levels`): by radius alone.
     order.sort_by(|&a, &b| {
-        let (la, lb) = (sk.levels[a], sk.levels[b]);
+        let (la, lb) = if all_levels {
+            (0, 0)
+        } else {
+            (sk.levels[a], sk.levels[b])
+        };
         la.cmp(&lb)
             .then(
                 sk.branches[b].nodes[0]
@@ -335,14 +418,14 @@ fn wood_plan(sk: &Skeleton, lod: usize, wood_budget: usize) -> (Vec<usize>, usiz
     for i in order {
         let lvl = sk.levels[i] as usize;
         let br = &sk.branches[i];
-        if lvl > 0 && br.nodes[0].r < trunk_r * MIN_R_REL[lod] {
+        if lvl > 0 && br.nodes[0].r < trunk_r * MIN_R_REL[lod] && !all_levels {
             continue;
         }
-        if lod == 2 && lvl > 1 {
+        if lod == 2 && lvl > 1 && !all_levels {
             continue;
         }
-        let n = decimate(&br.nodes, STRIDE[lod]).len();
-        let cost = Builder::tube_cost(n, SIDES[lod][lvl.min(3)]);
+        let (nodes, sides) = shaped(br, lvl, lod, all_levels);
+        let cost = Builder::tube_cost(nodes.len(), sides);
         if used + cost <= wood_budget {
             used += cost;
             chosen.push(i);
@@ -381,24 +464,53 @@ pub fn generate(
     budget: usize,
 ) -> PlantMesh {
     let sk = skeleton(p, b, seed);
-    let li = lod.index();
+    let budgets = Lod::ALL.map(|l| p.budget.triangles(l));
+    cards(p, b, &sk, seed, lod.index(), st, budget, budgets)
+}
+
+/// The card levels on a skeleton: level `li` of three whose budgets are `budgets` (the card
+/// counts of every level follow from the first's, so the levels agree).
+/// Largest foliage card of a grown tree, metres.
+const MAX_CARD_M: f32 = 0.9;
+
+pub(crate) fn cards(
+    p: &PlantParams,
+    b: &BranchingParams,
+    sk: &Skeleton,
+    seed: u64,
+    li: usize,
+    st: &SeasonState,
+    budget: usize,
+    budgets: [usize; 3],
+) -> PlantMesh {
     let h = p.height_m * p.age;
-    let crown = ellipsoid(&sk, h);
+    let crown = ellipsoid(sk, h);
     // Out of leaf, more of the budget goes to wood, the rest to bare-twig cards so the far
     // winter crown still reads as a haze of twigs.
-    let wood_share =
-        |l: usize| [0.32, 0.28, 0.22][l] + [0.45, 0.25, 0.1][l] * (1.0 - st.leaf_fraction);
-    let full_budget = |l: usize| p.budget.triangles(Lod::ALL[l]);
-    let (_, wood0) = wood_plan(&sk, 0, (full_budget(0) as f32 * wood_share(0)) as usize);
+    // A grown tree's bare crown is all its own branches (no twig cards).
+    let bare = if grown(p) {
+        [0.63, 0.67, 0.73]
+    } else {
+        [0.45, 0.25, 0.1]
+    };
+    let wood_share = |l: usize| [0.32, 0.28, 0.22][l] + bare[l] * (1.0 - st.leaf_fraction);
+    let full_budget = |l: usize| budgets[l];
+    let (_, wood0) = wood_plan(
+        sk,
+        0,
+        (full_budget(0) as f32 * wood_share(0)) as usize,
+        grown(p),
+    );
     let stake = if b.stake_m > 0.0 {
         Builder::tube_cost(2, 4)
     } else {
         0
     };
     let (chosen, wood) = wood_plan(
-        &sk,
+        sk,
         li,
         ((budget as f32 * wood_share(li)) as usize).saturating_sub(stake),
+        grown(p),
     );
     let wood = wood + stake;
 
@@ -437,14 +549,25 @@ pub fn generate(
             1.0,
         )
     };
-    let ck = c0 * grow_k;
+    // A grown tree's card never exceeds `MAX_CARD_M`: wider ones read as flat slabs of foliage
+    // from 15 m and smooth lumps from 40 m. Where its card would have grown into a clump, it
+    // keeps the clump cell (many leaves at half their size, so nearly as opaque) on the smaller
+    // card: the far levels keep their cover and a ragged, leaf-scale texture.
+    let clump = c0 * grow_k / card0 >= 1.4 || (grown(p) && c0 * grow_k > MAX_CARD_M * 1.15);
+    let (c0, ck) = if grown(p) {
+        (c0.min(MAX_CARD_M), (c0 * grow_k).min(MAX_CARD_M))
+    } else {
+        (c0, c0 * grow_k)
+    };
     let flowers = p.flowers.as_ref().filter(|_| st.flowers);
     let n_flower = flowers.map_or(0, |f| ((nk as f32 * f.density).round() as usize).min(nk));
     let n_leaf = ((nk as f32 * st.leaf_fraction).round() as usize).min(nk - n_flower.min(nk));
     // Bare twigs as cards are a haze, not a crown: a few of the cards the leaves had (the
     // branches themselves carry the shape); at a third, a winter cherry read as red-brown
     // foliage. As many as before tree crowns grew denser (`cover`).
-    let n_twig = if p.deciduous {
+    // Grown trees (`gen_tree`) show their own fine branching out of leaf; twig cards on them
+    // read as dark blots at the branch tips.
+    let n_twig = if p.deciduous && !grown(p) {
         ((nk - n_leaf - n_flower) as f32 * 0.18 / cover) as usize
     } else {
         0
@@ -454,11 +577,12 @@ pub fn generate(
     for &i in &chosen {
         let lvl = sk.levels[i] as usize;
         let br = &sk.branches[i];
-        out.tube(
-            &decimate(&br.nodes, STRIDE[li]),
-            SIDES[li][lvl.min(3)],
-            br.phase,
-        );
+        let (nodes, sides) = shaped(br, lvl, li, grown(p));
+        if grown(p) && br.nodes[0].r < crate::gen_tree::FINE_M {
+            out.twig_tube(&nodes, sides, br.phase);
+        } else {
+            out.tube(&nodes, sides, br.phase);
+        }
     }
 
     if b.stake_m > 0.0 {
@@ -482,17 +606,13 @@ pub fn generate(
     let Outward::Ellipsoid { centre, radii } = crown else {
         unreachable!()
     };
-    let leaves_out = Outward::Crown { centre, radii };
+    let (crown_c, crown_r) = (centre, radii);
     let mut prng = Rng::new(seed, 2);
     let order = shuffled(npts, &mut prng);
     // A spray cell draws its leaves at their true size on a card of `card0`, a clump cell on a
     // card `CLUMP_SCALE` times that. A card enlarged past 1.4 times takes a clump, so leaves are
     // drawn at 0.7 to 1.4 times their size at every level instead of up to 2.5 times.
-    let leaf_cells: &[u8] = if ck / card0 < 1.4 {
-        &[0, 1, 2, 3]
-    } else {
-        &[4, 5, 6]
-    };
+    let leaf_cells: &[u8] = if !clump { &[0, 1, 2, 3] } else { &[4, 5, 6] };
     // Per-point random draws come from a per-point stream so every LOD sees the same card.
     let emit = |out: &mut Builder,
                 k: usize,
@@ -531,7 +651,7 @@ pub fn generate(
             segments: 1,
             outward_mix: 0.75,
         };
-        out.card(&card, &leaves_out);
+        out.card(&card, &mass_outward(&sk.masses, centre, crown_c, crown_r));
     };
     // Leaf and twig cards go through the points' order and, past its end, round it again
     // (`emit` takes the place in that sequence).

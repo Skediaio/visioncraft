@@ -826,6 +826,13 @@ fn shade(in: Varying, front: bool, screen_effects: bool) -> Shaded {
 // in a tagged face id: without it, every leaf took the full sky and crowns read pale and
 // flat from above.
 const CROWN_TAG: u32 = 0xC0000000u;
+// A thin leaf's diffuse transmittance relative to its reflectance (the albedo), and its hue:
+// the light through a leaf is greener than the light off it: chlorophyll absorbs red and blue
+// on both passes, so a green leaf's transmittance relative to its reflectance is about 1 at
+// 550 nm, a half at 670 nm and a quarter at 450 nm (Jacquemoud & Baret 1990, PROSPECT spectra).
+// The earlier yellow tint (red kept at 0.9 of green) made sunlit crowns read lime-yellow.
+const LEAF_T: f32 = 0.8;
+const LEAF_T_TINT = vec3<f32>(0.48, 0.95, 0.29);
 fn crown_sky(face: u32) -> f32 {
     if (face & 0xFFFF0000u) == CROWN_TAG {
         return f32(face & 0xFFFFu) / 65535.0;
@@ -896,6 +903,8 @@ fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, screen_effe
     let diffuse_color = base * (1.0 - s.metallic);
 
     var sun = vec3<f32>(0.0);
+    // Light through a leaf is yellower than off it; clay stays grey.
+    let t_tint = select(LEAF_T_TINT, vec3<f32>(LEAF_T), clay);
     // How much of the sun reaches the surface (1 without a sun): snow in shade turns blue-grey.
     var sunlit = 0.0;
     let nol_raw = dot(n, l);
@@ -910,19 +919,22 @@ fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, screen_effe
             diffuse = mix(nol, min(sqrt(nol) * 1.6, 1.0), snow);
         }
         if foliage {
-            // Leaves: wrapped diffuse (Green, "Real-Time Approximations to
-            // Subsurface Scattering", GPU Gems 1, ch. 16, 2004) plus light
-            // through the leaf when the sun is behind it, the view-dependent
-            // translucency term of Barré-Brisebois & Bouchard, "Approximating
-            // Translucency for a Fast, Cheap and Convincing Subsurface
-            // Scattering Look", GDC 2011 (distortion 0.3, power 4, scale 0.8).
-            let wrap = 0.5;
-            diffuse = max((nol_raw + wrap) / (1.0 + wrap), 0.0) / (1.0 + wrap);
+            // A thin leaf reflects and transmits about equally (green leaf: reflectance and
+            // transmittance both near 0.1; Jacquemoud & Baret, "PROSPECT: A model of leaf
+            // optical properties spectra", Remote Sens. Environ. 34, 1990), so the side the sun
+            // is on matters little: the side facing the viewer reflects, the other transmits
+            // (`LEAF_T`, greener). A card is a cluster of leaves facing every way, and with a
+            // spherical leaf-angle distribution half the irradiance falls on them whatever the
+            // card's bent normal (G = 0.5; J. Ross, "The Radiation Regime and Architecture of
+            // Plant Stands", 1981, ch. 2): the cosine is half the card's, half that mean.
+            diffuse = mix(abs(nol_raw), 0.5, 0.5) * mix(1.0, LEAF_T, 1.0 - smoothstep(-0.1, 0.1, nol_raw * dot(n, v)));
+            // Forward scattering through the leaf toward the viewer when looking into the sun:
+            // the translucency lobe of Barré-Brisebois & Bouchard, "Approximating Translucency
+            // for a Fast, Cheap and Convincing Subsurface Scattering Look", GDC 2011
+            // (distortion 0.3, power 4), in the transmitted hue.
             let lt = normalize(l + n * 0.3);
-            let through = pow(clamp(dot(v, -lt), 0.0, 1.0), 4.0) * 0.8 + 0.15 * max(-nol_raw, 0.0);
-            // Capped below the leaf's sunlit front (base / PI) and in the leaf's own hue, so a
-            // backlit crown glows green-yellow and never burns out to white.
-            sun += min(base * base * 2.0 * through, base * 0.25) * g.sun_light.rgb * shadow;
+            let through = pow(clamp(dot(v, -lt), 0.0, 1.0), 4.0) * 0.35;
+            sun += diffuse_color * t_tint * through * g.sun_light.rgb * shadow;
         }
         var fr = vec3<f32>(0.0);
         // No sun glints off leaves facing away from the viewer.
@@ -930,10 +942,14 @@ fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, screen_effe
             fr = specular(n, v, l, nol, nov, f0, a) * nol;
             if foliage {
                 // A waxy leaf's sheen, not a mirror: grazing Fresnel would whiten crown tops.
-                fr = min(fr, vec3<f32>(0.06));
+                // A card is many leaves facing every way, so the sun's mirror image is spread
+                // over them: kept below a third of a sunlit leaf's diffuse (about 0.1 / PI in
+                // green). At 0.06 it was twice the diffuse, and white: pale crown tops from above.
+                fr = min(fr, vec3<f32>(0.01));
             }
         }
-        sun += (diffuse_color / PI * diffuse + fr) * g.sun_light.rgb * shadow;
+        let dc = select(diffuse_color, diffuse_color * mix(vec3<f32>(1.0), t_tint / LEAF_T, 1.0 - smoothstep(-0.1, 0.1, nol_raw * dot(n, v))), foliage);
+        sun += (dc / PI * diffuse + fr) * g.sun_light.rgb * shadow;
         // Snow sparkles: a few crystals catch the sun, fixed in place.
         if snow > 0.0 {
             let cell = floor(in.world * 180.0);
@@ -943,8 +959,9 @@ fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, screen_effe
         if foliage {
             // Leaves deep in a crown are mostly in the shade of the leaves above them, finer
             // than the shadow map resolves: their place in the crown (`crown_sky`, in the
-            // surface's occlusion) dims the sun on them too.
-            sun *= mix(1.0, s.ao, 0.6);
+            // surface's occlusion) dims the sun on them a little too. Only a little: the
+            // shadow map already has the leaves above, and both together made crowns black.
+            sun *= mix(1.0, s.ao, 0.25);
         }
     }
 
@@ -957,7 +974,27 @@ fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, screen_effe
     let vis = vol.sky;
     let seen = sky_seen(vis, n);
     let bounce = room_bounce(vol.room);
-    var ambient_diffuse = diffuse_color * (sh_irradiance(n) * seen + bounce * (1.0 - seen)) / PI * ao;
+    var sky_irr = sh_irradiance(n);
+    var ambient_ao = ao;
+    var fill = vec3<f32>(0.0);
+    if foliage && !clay {
+        // A leaf is thin: of the sky light on its far side about as much comes through as its
+        // near side reflects (diffuse transmission of thin leaves, as in Habel, Kusternig &
+        // Wimmer, "Physically Based Real-Time Translucency for Leaves", EGSR 2007). Without it
+        // the leaves under a crown, facing the dark ground, read near black.
+        sky_irr = sky_irr + sh_irradiance(-n) * LEAF_T_TINT;
+        // The crown's sky view (`crown_sky`, in s.ao) already is the occlusion by the other
+        // leaves; screen-space AO of alpha-tested cards counts the same leaves again.
+        ambient_ao = s.ao * mix(1.0, screen.r, 0.3);
+        // Light scattered among the leaves (the canopy's multiple scattering, as in the
+        // two-stream model of P. J. Sellers, "Canopy reflectance, photosynthesis and
+        // transpiration", Int. J. Remote Sensing 6(8), 1985): a leaf deep in the crown sees
+        // other leaves where it does not see sky, and they pass on about R + T = 2 x albedo of
+        // the sun and sky falling on the crown, about half of them lit. Green, never black.
+        let on_crown = g.sun_light.rgb * max(l.y, 0.0) + sh_irradiance(vec3<f32>(0.0, 1.0, 0.0));
+        fill = diffuse_color * (1.0 + LEAF_T_TINT) * (diffuse_color * on_crown) * (1.0 - s.ao) / PI;
+    }
+    var ambient_diffuse = diffuse_color * (sky_irr * seen + bounce * (1.0 - seen)) / PI * ambient_ao + fill;
     // Photos from their second sample on: the diffuse light arriving from the scene itself,
     // gathered along two cosine-distributed rays per sample against the depth buffer and lit
     // by the previous sample (so bounces add up over the samples); where a ray leaves the

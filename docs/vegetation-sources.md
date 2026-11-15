@@ -115,7 +115,10 @@ first is the faster way to more silhouettes.
 1. Leaves: drawn leaf textures read as plastic. Scanned leaf cut-outs on the generated skeleton
    are being wired in; more atlases unlock more species.
 2. Bark: 19 sets, 7 used by genus (Scots pine keeps its drawn bark: the scan read salmon in a stand).
-3. Tree form: generated; a better branch solver would give more believable silhouettes.
+3. Tree form: broadleaf trees now grow by space colonisation (Runions, Lane & Prusinkiewicz
+   2007) inside their species' crown envelope, with twigs and shoots by phyllotaxis, light from
+   the shadow propagation of Palubicki et al. 2009 and pipe-model radii (`gen_tree.rs`). On HIGH
+   and ULTRA the nearest levels carry every lit shoot's leaves as clusters at true size.
 4. Variety: one form per species reads as a catalogue, several variants per species read as a
    garden. Trees take a form per seed (crown a little taller or broader, its own branching), and
    the planting tools give neighbouring plants of one species different forms.
@@ -139,8 +142,8 @@ In this order; items 1 to 3 are in progress.
 5. Reference scans: a candidate list of CC0 botanical scans (ffish.asia / floraZia, Smithsonian)
    for the species we have, to compare generated forms against real plants, and a few reduced
    hero plants where a scan is clearly better than the generator.
-6. Tree form: decide between porting a branch solver into `visioncraft-flora` and generating
-   static trees offline (see Generators).
+6. Tree form: decided for porting ideas into `visioncraft-flora` (done for broadleaf trees,
+   see item 3 above). Conifers, palms and shrubs keep their generators.
 7. User species with several models as growth stages.
 
 ## Not verified

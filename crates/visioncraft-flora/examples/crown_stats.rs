@@ -3,11 +3,15 @@
 //! leaves one card shows, how much of the crown's side and top silhouette the cards cover (alpha
 //! tested against the drawn atlas), and how large a leaf is on screen at a few distances.
 //!
+//! Levels are those of `generate_levels` with the leaf-level detail: 0 every shoot's leaves,
+//! 1 sprays at the larger budget, 2 to 4 the three card levels. `ms` is the time for all levels
+//! of one tree (skeleton once), `winter` the near level's triangles out of leaf, `verts` its
+//! vertices.
+//!
 //! `cargo run --release -p visioncraft-flora --example crown_stats -- [species ids...]`
 
 use visioncraft_flora::{
-    ATLAS_CELLS, ATLAS_SIZE, Image, Lod, Material, PlantMesh, Season, Species, generate_in_season,
-    textures,
+    ATLAS_CELLS, ATLAS_SIZE, Image, Material, PlantMesh, Season, Species, generate_levels, textures,
 };
 
 /// Years to maturity and planting age as in `visioncraft-core`'s growth table (estimated there).
@@ -141,7 +145,7 @@ fn cell_fill(atlas: &Image) -> Vec<f32> {
 fn main() {
     let ids: Vec<String> = std::env::args().skip(1).collect();
     println!(
-        "species age_y age lod tris wood cards card_m cell leaf_x leaves/card cov_side layers cov_top px@6 px@15 px@40"
+        "species age_y age lod tris wood cards card_m cell leaf_x leaves/card cov_side layers cov_top px@6 px@15 px@40 ms winter verts"
     );
     for &(id, maturity) in TREES {
         if !ids.is_empty() && !ids.iter().any(|i| i == id) {
@@ -153,8 +157,12 @@ fn main() {
         for years in [10.0, 20.0, 40.0] {
             let mut p = sp.params.clone();
             p.age = age_fraction(years, maturity);
-            for lod in Lod::ALL {
-                let m = generate_in_season(&p, 7, lod, Season { month: 7 });
+            let t0 = std::time::Instant::now();
+            let levels = generate_levels(&p, 7, Some(Season { month: 7 }), true);
+            let ms = t0.elapsed().as_secs_f32() * 1000.0;
+            let winter =
+                generate_levels(&p, 7, Some(Season { month: 1 }), true)[0].triangle_count();
+            for (li, m) in levels.iter().enumerate() {
                 let cards = m.triangles_of(Material::Foliage) / 2;
                 // The first foliage card: its side, and which atlas row its cell is in.
                 let first = m.parts.iter().find(|q| q.material == Material::Foliage);
@@ -172,25 +180,28 @@ fn main() {
                 // stands for a card 2.0 times that (texture::CLUMP_SCALE).
                 let leaf_x = if row == 1 {
                     size / (2.0 * lf.card_m)
+                } else if row == 3 {
+                    size / (2.6 * lf.leaf_m)
                 } else {
                     size / lf.card_m
                 };
                 let leaf_area = (lf.leaf_m * leaf_x).powi(2) * lf.aspect.clamp(0.2, 1.0) * 0.65;
                 let leaves = fill[cell] * size * size / leaf_area.max(1e-6);
-                let (cs, depth) = coverage(&m, &atlas, 0, 1);
-                let (ct, _) = coverage(&m, &atlas, 0, 2);
+                let (cs, depth) = coverage(m, &atlas, 0, 1);
+                let (ct, _) = coverage(m, &atlas, 0, 2);
                 // On a 1080 px tall view with a 50 degree field of view.
                 let px = |d: f32| lf.leaf_m * leaf_x / (2.0 * d * 0.4663) * 1080.0;
                 println!(
-                    "{id} {years} {:.1} {} {} {} {cards} {size:.2} {} {leaf_x:.2} {leaves:.0} {cs:.2} {depth:.1} {ct:.2} {:.1} {:.1} {:.1}",
+                    "{id} {years} {:.1} {} {} {} {cards} {size:.2} {} {leaf_x:.2} {leaves:.0} {cs:.2} {depth:.1} {ct:.2} {:.1} {:.1} {:.1} {ms:.0} {winter} {}",
                     p.age,
-                    lod.index(),
+                    li,
                     m.triangle_count(),
                     m.triangles_of(Material::Bark),
                     if row == 1 { "clump" } else { "spray" },
                     px(6.0),
                     px(15.0),
                     px(40.0),
+                    m.positions.len(),
                 );
             }
         }

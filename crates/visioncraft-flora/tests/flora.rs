@@ -2,8 +2,8 @@ use std::time::Instant;
 
 use visioncraft_flora::{
     ATLAS_SIZE, BARK_SIZE, BudgetClass, Category, ClipShape, Form, Lod, Material, PlantMesh,
-    Season, Species, generate, generate_in_season, get_param, param_schema, set_param, species,
-    textures, textures_at,
+    Season, Species, detail_triangles, generate, generate_in_season, generate_levels, get_param,
+    param_schema, set_param, species, textures, textures_at,
 };
 
 fn height(m: &PlantMesh) -> f32 {
@@ -217,7 +217,7 @@ fn golden_hashes() {
     let lib = species();
     let mut got = Vec::new();
     for (id, lod, want) in [
-        ("quercus-robur", Lod::Lod0, 0x46e6_d4a8_a2b9_4b8a_u64),
+        ("quercus-robur", Lod::Lod0, 0x58ce_d880_361b_d26c_u64),
         ("hosta", Lod::Lod1, 0xbf24_e811_9f50_ee6c),
         ("carpinus-hedge", Lod::Lod2, 0xc567_f698_a41b_6c32),
         ("picea-abies", Lod::Lod1, 0xdd72_8a9a_25eb_1bc2),
@@ -436,6 +436,35 @@ fn generation_time_report() {
     }
 }
 
+/// The leaf level of a large tree: tens of thousands of leaf clusters on the lit shoots within
+/// its budget, the spray level within its own, the card levels exactly as generated one by one;
+/// out of leaf the near level is wood down to the shoots. Plants other than trees get no detail
+/// levels.
+#[test]
+fn detail_levels_of_a_large_tree() {
+    let oak = &Species::by_id("quercus-robur").unwrap().params;
+    let summer = Season { month: 7 };
+    let t = Instant::now();
+    let levels = generate_levels(oak, 3, Some(summer), true);
+    println!("oak, all levels: {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
+    assert_eq!(levels.len(), 5);
+    let [near, sprays] = detail_triangles(oak);
+    assert!(levels[0].triangle_count() <= near && levels[1].triangle_count() <= sprays);
+    let clusters = levels[0].triangles_of(Material::Foliage) / 2;
+    assert!(clusters > 20_000, "{clusters} leaf clusters");
+    for (lod, m) in Lod::ALL.into_iter().zip(&levels[2..]) {
+        check_mesh(m, oak.budget.triangles(lod), "oak card level").unwrap();
+        assert_eq!(*m, generate_in_season(oak, 3, lod, summer));
+    }
+    check_mesh(&levels[0], near, "oak leaf level").unwrap();
+    let winter = generate_levels(oak, 3, Some(Season { month: 1 }), true);
+    assert_eq!(winter[0].triangles_of(Material::Foliage), 0);
+    assert!(winter[0].triangles_of(Material::Twigs) > 30_000);
+    let hosta = &Species::by_id("hosta").unwrap().params;
+    assert_eq!(generate_levels(hosta, 3, Some(summer), true).len(), 3);
+    assert_eq!(detail_triangles(hosta), [0, 0]);
+}
+
 /// A few hundred random but validated parameter sets (library species with schema parameters
 /// set to random values inside their ranges) must generate valid meshes at every LOD, quickly.
 #[test]
@@ -557,18 +586,29 @@ fn winter_trees_get_twig_cards_within_budget() {
         "acer-campestre",
     ] {
         let s = Species::by_id(id).unwrap();
+        // Broadleaf trees grown by space colonisation spend a bare crown's budget on their
+        // own branches, not on twig cards.
+        let grown = s.category == Category::Tree && s.params.deciduous && id != "larix-decidua";
         for lod in Lod::ALL {
             let m = generate_in_season(&s.params, 7, lod, Season { month: 1 });
-            assert!(
-                m.triangles_of(Material::Twigs) > 0,
-                "{id} {lod:?}: no twig cards"
-            );
+            if grown {
+                let wood = m.triangles_of(Material::Bark) + m.triangles_of(Material::Twigs);
+                assert!(
+                    wood * 2 > s.params.budget.triangles(lod),
+                    "{id} {lod:?}: {wood} wood triangles"
+                );
+            } else {
+                assert!(
+                    m.triangles_of(Material::Twigs) > 0,
+                    "{id} {lod:?}: no twig cards"
+                );
+            }
             assert!(m.triangle_count() <= s.params.budget.triangles(lod));
         }
+        // (A grown tree's fine twigs are tubes in the twig material all year.)
         let summer = generate_in_season(&s.params, 7, Lod::Lod1, Season { month: 7 });
-        assert_eq!(
-            summer.triangles_of(Material::Twigs),
-            0,
+        assert!(
+            grown || summer.triangles_of(Material::Twigs) == 0,
             "{id}: twigs in summer"
         );
     }
@@ -671,8 +711,11 @@ fn tree_cards_draw_leaves_at_their_own_size_at_every_level() {
             let row = (m.uvs[i[0] as usize][1] * 4.0) as u32;
             let drawn_for = s.params.leaves.card_m * if row == 1 { 2.0 } else { 1.0 };
             let x = side / drawn_for;
+            // A grown tree's far cards keep at most 0.9 m (wider ones read as slabs) and take
+            // the clump cell there: its leaves at about half their size, a finer texture.
+            let lo = if row == 1 && grown(s) { 0.4 } else { 0.65 };
             assert!(
-                (0.65..1.45).contains(&x),
+                (lo..1.45).contains(&x),
                 "{} {lod:?}: leaves drawn at {x:.2} times their size",
                 s.id
             );
@@ -723,4 +766,13 @@ fn summer_bloomers_flower_in_the_summer_picture() {
         assert!(flowers(6) > 0, "{id} without flowers in June");
         assert_eq!(flowers(1), 0, "{id} flowers in January");
     }
+}
+
+/// A broadleaf grown by space colonisation (`gen_tree`): large and small trees with three
+/// branch levels.
+fn grown(s: &visioncraft_flora::Species) -> bool {
+    matches!(
+        s.params.budget,
+        BudgetClass::LargeTree | BudgetClass::SmallTree
+    ) && matches!(&s.params.form, Form::Branching(b) if b.levels[2].count > 0)
 }

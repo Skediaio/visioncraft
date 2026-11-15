@@ -106,6 +106,28 @@ fn impostor_distances(h: f32) -> [f32; 3] {
     [4.0 + 1.0 * h, 10.0 + 2.0 * h, 25.0 + 3.0 * h]
 }
 
+/// The ends of a plant's `n` mesh levels: the three of `lod_distances` or `impostor_distances`
+/// (`baked`), or with the two leaf-level detail levels of HIGH and ULTRA (`flora::generate_levels`)
+/// before them: every leaf to 2 + h/2 m (12 m for a 20 m tree, twice that at ULTRA), the larger
+/// spray budget to about twice that, then the card levels, ending where they did.
+fn level_ends(h: f32, n: usize, baked: bool) -> Vec<f32> {
+    match (n, baked && h >= TREE_M) {
+        (5, true) => vec![
+            2.0 + 0.5 * h,
+            4.0 + 1.1 * h,
+            6.0 + 1.6 * h,
+            10.0 + 2.2 * h,
+            25.0 + 3.0 * h,
+        ],
+        (5, false) => {
+            let [a, b, c] = lod_distances(h);
+            vec![2.0 + 0.5 * h, 4.0 + 1.1 * h, a.max(6.0 + 1.6 * h), b, c]
+        }
+        (_, true) => impostor_distances(h).to_vec(),
+        _ => lod_distances(h).to_vec(),
+    }
+}
+
 /// One variant of a species in one season class.
 struct Variant {
     parts: Vec<Part>,
@@ -371,21 +393,21 @@ impl Flora {
         let far = v.parts.iter().map(|p| p.2).fold(0.0, f32::max);
         // Trees hand over early; smaller plants keep their meshes as far as before and
         // then become an impostor instead of disappearing.
-        let ends = if v.height >= TREE_M {
-            impostor_distances(v.height)
-        } else {
-            lod_distances(v.height)
-        };
         let mut levels: Vec<f32> = v.parts.iter().map(|p| p.2).collect();
         levels.sort_by(f32::total_cmp);
         levels.dedup();
+        let ends = level_ends(v.height, levels.len(), true);
         let short = v
             .parts
             .iter()
             .map(|&(m, mat, d)| {
                 let rank = levels.iter().position(|l| *l == d).unwrap_or(0);
                 // the last level is always the impostor's hand-over
-                let rank = if d == far { 2 } else { rank.min(1) };
+                let rank = if d == far {
+                    ends.len() - 1
+                } else {
+                    rank.min(ends.len() - 2)
+                };
                 (m, mat, ends[rank])
             })
             .collect();
@@ -753,7 +775,8 @@ impl Flora {
         let v = job.variants.len() as u32;
         let Some(slot) = &job.pending else {
             let params = w.params.clone();
-            job.pending = Some(spawn(move || generate_variant(&params, v, month)));
+            let detail = self.leaf_scale >= 2;
+            job.pending = Some(spawn(move || generate_variant(&params, v, month, detail)));
             return false;
         };
         let Some(generated) = slot.lock().ok().and_then(|mut g| g.take()) else {
@@ -775,8 +798,9 @@ impl Flora {
         let mut kinds = Vec::new();
         let mut mats: HashMap<usize, MaterialId> = HashMap::new();
         let height = generated.height;
+        let ends = level_ends(height, generated.levels.len(), false);
         for (li, split, tint) in generated.levels {
-            let dist = lod_distances(height)[li];
+            let dist = ends[li];
             // Crowns of plants, not lawn tufts or fallen leaves lying flat: the leaves and the
             // branches among them.
             let crown = (crowned && height >= 1.5 && !id.starts_with(CLUTTER_PREFIX))
@@ -840,32 +864,37 @@ struct Generated {
 }
 
 /// `generate_variant_now`, natively through the disk cache (`plant_cache`).
-fn generate_variant(params: &flora::PlantParams, v: u32, month: u8) -> Generated {
+fn generate_variant(params: &flora::PlantParams, v: u32, month: u8, detail: bool) -> Generated {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let json = serde_json::to_vec(params).unwrap_or_default();
-        let key = crate::plant_cache::key(&[&json, &v.to_le_bytes(), &[month]]);
+        let key = crate::plant_cache::key(&[&json, &v.to_le_bytes(), &[month, detail as u8]]);
         let (height, levels) = crate::plant_cache::meshes(key, || {
-            let g = generate_variant_now(params, v, month);
+            let g = generate_variant_now(params, v, month, detail);
             (g.height, g.levels)
         });
         Generated { height, levels }
     }
     #[cfg(target_arch = "wasm32")]
-    generate_variant_now(params, v, month)
+    generate_variant_now(params, v, month, detail)
 }
 
-fn generate_variant_now(params: &flora::PlantParams, v: u32, month: u8) -> Generated {
-    let mut height = 1.0;
-    let mut levels = Vec::new();
-    for (li, lod) in flora::Lod::ALL.into_iter().enumerate() {
-        let mesh =
-            flora::generate_in_season(params, u64::from(v) + 1, lod, flora::Season { month });
-        if li == 0 {
-            height = mesh.bounds().1[1].max(0.2);
-        }
-        levels.push((li, mesh.split_parts(), mesh.foliage_tint));
-    }
+/// Every level of one variant, nearest first; with `detail` (HIGH and ULTRA) trees get the
+/// leaf-level levels before the card levels.
+fn generate_variant_now(params: &flora::PlantParams, v: u32, month: u8, detail: bool) -> Generated {
+    let meshes = flora::generate_levels(
+        params,
+        u64::from(v) + 1,
+        Some(flora::Season { month }),
+        detail,
+    );
+    // The height of the card levels' near mesh, as before the detail levels came.
+    let height = meshes[meshes.len() - 3].bounds().1[1].max(0.2);
+    let levels = meshes
+        .iter()
+        .enumerate()
+        .map(|(li, m)| (li, m.split_parts(), m.foliage_tint))
+        .collect();
     Generated { height, levels }
 }
 

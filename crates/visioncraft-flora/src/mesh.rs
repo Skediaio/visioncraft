@@ -178,6 +178,22 @@ impl Builder {
     /// the last node. The bark V coordinate repeats about once per base circumference; each
     /// segment gets its own pair of rings so UVs stay inside [0,1] without a wrapping sampler.
     pub fn tube(&mut self, nodes: &[Node], sides: u32, phase: f32) {
+        self.tube_as(nodes, sides, phase, None);
+    }
+
+    /// A [`Builder::tube`] of fine twigs: drawn with [`Material::Twigs`], every vertex on the
+    /// solid twig-coloured atlas cell 7 of grown trees (fine twigs are darker and greyer than
+    /// the trunk's bark, a birch's most of all).
+    pub fn twig_tube(&mut self, nodes: &[Node], sides: u32, phase: f32) {
+        self.tube_as(nodes, sides, phase, Some(cell_uv(7, 0.5, 0.5)));
+    }
+
+    fn tube_as(&mut self, nodes: &[Node], sides: u32, phase: f32, solid: Option<[f32; 2]>) {
+        let material = if solid.is_some() {
+            Material::Twigs
+        } else {
+            Material::Bark
+        };
         if nodes.len() < 2 {
             return;
         }
@@ -207,7 +223,7 @@ impl Builder {
                 b.vert(
                     nodes[i].p + n * nodes[i].r,
                     n,
-                    [k as f32 / sides as f32, v],
+                    solid.unwrap_or([k as f32 / sides as f32, v]),
                     [nodes[i].w, phase],
                 );
             }
@@ -221,7 +237,7 @@ impl Builder {
             if j + 1 < last {
                 let r1 = ring(self, j + 1, 1.0 - v1);
                 for k in 0..sides {
-                    self.quad(Material::Bark, r0 + k, r0 + k + 1, r1 + k + 1, r1 + k);
+                    self.quad(material, r0 + k, r0 + k + 1, r1 + k + 1, r1 + k);
                 }
             } else {
                 // Apex: one tip vertex per facet so each keeps its own U.
@@ -230,10 +246,10 @@ impl Builder {
                     let tip = self.vert(
                         nodes[last].p,
                         d,
-                        [(k as f32 + 0.5) / sides as f32, 1.0 - v1],
+                        solid.unwrap_or([(k as f32 + 0.5) / sides as f32, 1.0 - v1]),
                         [nodes[last].w, phase],
                     );
-                    self.tri(Material::Bark, r0 + k, r0 + k + 1, tip);
+                    self.tri(material, r0 + k, r0 + k + 1, tip);
                 }
             }
         }

@@ -10,7 +10,8 @@
 //!   leaf mass for topiary cores.
 //! * row 2 (cells 8-11): flowers.
 //! * row 3: bare winter twigs (trees, cells 12-13) or a dead frond (palms, cells 12-13); cells
-//!   14-15 a fan of grass blades (grasses).
+//!   14-15 a fan of grass blades (grasses) or a leaf cluster (trees grown by `gen_tree`: one
+//!   shoot with its leaves at true size).
 //!
 //! Each cell keeps a transparent gutter of [`CELL_MARGIN`] px, and the colour of every
 //! transparent texel is bled from the nearest opaque one within its cell, so bilinear filtering
@@ -418,7 +419,11 @@ fn stamp_leaf(cv: &mut Canvas, scan: &LeafScan, base: (f32, f32), ang: f32, len:
     let luma = |c: [f32; 3]| 0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2];
     let m = scan.mean;
     let gain: Rgb = if cv.leaf_hue && col[1] >= col[0].max(col[2]) {
-        [(luma(col) / luma(m).max(0.02)).clamp(0.4, 2.5); 3]
+        // Summer sheets are photographed against the light and read lime-yellow on a tree
+        // (the maple sheet's mean is hue 80, saturation 0.64): their hue goes 60 % of the way
+        // to the species' drawn summer green.
+        let l = (luma(col) / luma(m).max(0.02)).clamp(0.4, 2.5);
+        [0, 1, 2].map(|k| l + 0.6 * ((col[k] / m[k].max(0.02)).clamp(0.2, 4.0) - l))
     } else {
         [0, 1, 2].map(|k| (col[k] / m[k].max(0.02)).clamp(0.2, 4.0))
     };
@@ -884,6 +889,62 @@ fn spray(
         0
     };
     twig(cv, p, base, ang, len, depth, leaf_px, col, rng);
+}
+
+/// A leaf cluster (cells 14 and 15): one shoot from the bottom centre of the cell with its
+/// leaves at true size on a card `gen_tree::cluster_m` wide, alternate along the shoot or in
+/// opposite pairs (Prusinkiewicz & Lindenmayer 1990, ch. 4), each on its petiole at 40 to 60
+/// degrees, and a terminal leaf.
+fn cluster(cv: &mut Canvas, p: &PlantParams, opposite: bool, rng: &mut Rng, tint: f32) {
+    let cpx = CELL_PX as f32;
+    let inner = cpx - 2.0 * CELL_MARGIN as f32;
+    let lf = &p.leaves;
+    let leaf_px = lf.leaf_m * inner / crate::gen_tree::cluster_m(p);
+    let col = mul(lf.colour, tint);
+    let twig_col = mix(p.bark.colour, [0.35, 0.3, 0.2], 0.5);
+    let base = (cpx * 0.5, cpx - CELL_MARGIN as f32 - 1.0);
+    let len = inner * 0.52;
+    let lean = 0.08 * rng.sym();
+    let at = |t: f32| (base.0 + sin(lean) * len * t, base.1 - cos(lean) * len * t);
+    cv.line(base, at(1.0), 1.4, 0.9, twig_col);
+    let nodes = if opposite { 3 } else { 4 };
+    for j in 0..nodes {
+        let q = at(0.22 + 0.7 * j as f32 / nodes as f32);
+        let sides: &[f32] = if opposite {
+            &[1.0, -1.0]
+        } else if j % 2 == 0 {
+            &[1.0]
+        } else {
+            &[-1.0]
+        };
+        for &s in sides {
+            let la = lean + s * deg_r(40.0 + 20.0 * rng.f());
+            draw_unit(
+                cv,
+                q,
+                la,
+                leaf_px * (0.82 + 0.18 * rng.f()),
+                lf.shape,
+                lf.aspect,
+                lf.serration,
+                jitter(col, lf.colour_var, rng),
+                twig_col,
+                rng,
+            );
+        }
+    }
+    draw_unit(
+        cv,
+        at(1.0),
+        lean + 0.15 * rng.sym(),
+        leaf_px * 0.92,
+        lf.shape,
+        lf.aspect,
+        lf.serration,
+        jitter(col, lf.colour_var, rng),
+        twig_col,
+        rng,
+    );
 }
 
 /// A dense, roughly round clump of foliage for the enlarged LOD1/LOD2 cards: short twigs radiating
@@ -1626,6 +1687,29 @@ pub fn generate_scanned(p: &PlantParams, scale: usize, scans: &Scans) -> PlantTe
                 );
             }
             _ => {}
+        }
+    }
+    // Cells 14 and 15 of grown trees: a shoot with its leaves at true size (`gen_tree`'s leaf
+    // clusters), stamped from the scans like the sprays.
+    if let Form::Branching(b) = &p.form
+        && crate::gen_branching::grown(p)
+    {
+        cv.scan = scans.leaf.clone();
+        // Cell 7 (no topiary on a tree): solid fine-twig colour for `Builder::twig_tube`, as
+        // the bare twig cells draw them.
+        let twig = mix(p.bark.colour, [0.24, 0.22, 0.2], 0.8);
+        let k = cv.scale;
+        let (ox, oy) = ((3 * CELL_PX) as usize * k, CELL_PX as usize * k);
+        for y in 0..(CELL_PX as usize * k) {
+            for x in 0..(CELL_PX as usize * k) {
+                cv.px[(oy + y) * cv.size + ox + x] = [twig[0], twig[1], twig[2], 1.0];
+            }
+        }
+        let opposite = b.levels[2].whorl >= 2;
+        for cell in 14..16u32 {
+            cv.select_cell(cell);
+            let tint = 1.0 + lf.colour_var * 0.2 * (cell as f32 - 14.5);
+            cluster(&mut cv, p, opposite, &mut rng, tint);
         }
     }
     // The finer atlases get a normal map: the same cost as before at scale 1.
