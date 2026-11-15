@@ -1145,9 +1145,9 @@ fn wood_mask(p: vec2<f32>, kind: u32) -> f32 {
     return smoothstep(cut, cut + 0.03, n);
 }
 
-// Height of the surroundings over the ground plane (m).
-fn surround_height(p: vec2<f32>) -> f32 {
-    let kind = surround_kind(p);
+// Height of the surroundings over the ground plane (m), for `surround_kind(p)` (taken once
+// per vertex: the coast test is the dear part).
+fn surround_height(p: vec2<f32>, kind: u32) -> f32 {
     let d = plot_distance(p) - 15.0;
     if kind == 0u || d <= 0.0 {
         return 0.0;
@@ -1186,7 +1186,8 @@ fn surroundings(surf: Surface, world: vec3<f32>, fw: f32) -> Surface {
     var c = base;
     var rough = s.roughness;
     let wood = wood_mask(p, kind);
-    let canopy = vec3<f32>(0.03, 0.05, 0.02) * (0.75 + 0.5 * noise2(p / 9.0, 4.4));
+    // The canopy's texture only where a wood or hedge needs it (noise is the cost here).
+    var canopy = vec3<f32>(0.03, 0.05, 0.02);
     if kind == 3u {
         // Sand with marram grass, scrub and pines in patches.
         let grass = smoothstep(0.42, 0.62, noise2(p / 55.0, 6.6) * 0.7 + noise2(p / 12.0, 7.7) * 0.3);
@@ -1230,14 +1231,26 @@ fn surroundings(surf: Surface, world: vec3<f32>, fw: f32) -> Surface {
         // Hedgerows: on the parcel's left and bottom borders when that border's hash says so.
         let hedge_x = select(0.0, 1.0, hash2(id * 3 + vec2<i32>(1, 0)) < 0.45);
         let hedge_z = select(0.0, 1.0, hash2(id * 3 + vec2<i32>(0, 1)) < 0.4);
-        let along = noise2(p / 7.0, 6.1); // gaps and crowns along it
-        let hw = 2.0 + 2.5 * along;
-        let cover = max(
-            hedge_x * line_cover(f.x, hw, fw, size.x),
-            hedge_z * line_cover(f.y, hw, fw, size.y),
-        );
+        var cover = 0.0;
+        if hedge_x + hedge_z > 0.0 && min(f.x, f.y) < 8.0 + fw {
+            let along = noise2(p / 7.0, 6.1); // gaps and crowns along it
+            let hw = 2.0 + 2.5 * along;
+            cover = max(
+                hedge_x * line_cover(f.x, hw, fw, size.x),
+                hedge_z * line_cover(f.y, hw, fw, size.y),
+            );
+        } else if hedge_x + hedge_z > 0.0 {
+            // Far beyond the line itself only its mean share remains (`line_cover`).
+            cover = max(hedge_x * 3.25 / size.x, hedge_z * 3.25 / size.y) * smoothstep(2.0, 20.0, fw);
+        }
+        if cover > 0.0 {
+            canopy *= 0.75 + 0.5 * noise2(p / 9.0, 4.4);
+        }
         c = mix(c, canopy, cover);
         rough = mix(rough, 1.0, cover);
+    }
+    if wood > 0.0 {
+        canopy = vec3<f32>(0.03, 0.05, 0.02) * (0.75 + 0.5 * noise2(p / 9.0, 4.4));
     }
     c = mix(c, canopy, wood);
     s.base = vec4<f32>(mix(base, c, fade), s.base.a);
@@ -1254,9 +1267,9 @@ fn surroundings(surf: Surface, world: vec3<f32>, fw: f32) -> Surface {
 // z-fight with or hide the user's own lawn, pond basin or basement. It is
 // shaded like any surface (its material is made from `Ground`), so it gets
 // sun, shadows of the near cascades, sky light, lamps and the haze.
-const GROUND_RINGS: u32 = 96u;
-const GROUND_SEGMENTS: u32 = 256u;
-const GROUND_GROWTH: f32 = 1.12617; // 0.5 m * 1.12617^95 = 40 km
+const GROUND_RINGS: u32 = 80u;
+const GROUND_SEGMENTS: u32 = 192u;
+const GROUND_GROWTH: f32 = 1.15359; // 0.5 m * 1.15359^79 = 40 km
 const GROUND_FACE: u32 = 0xfffffffeu;
 const GROUND_DEPTH: f32 = 0.999999;
 const EYE_SLOPE_NEAR: f32 = 1.7 / 40.0; // where the horizon fade begins
@@ -1274,16 +1287,18 @@ fn vs_ground(@builtin(vertex_index) vi: u32) -> Varying {
     let radius = select(0.0, 0.5 * pow(GROUND_GROWTH, f32(r) - 1.0), r > 0u);
     let angle = f32(seg + ds[k]) * 2.0 * PI / f32(GROUND_SEGMENTS);
     let xz = g.camera.xz + radius * vec2<f32>(cos(angle), sin(angle));
-    let world = vec3<f32>(xz.x, ground_height_at(xz) + surround_height(xz), xz.y);
-    // The relief's normal from its slope over about a vertex spacing.
-    let e = max(1.0, 0.06 * radius);
-    let sx = surround_height(xz + vec2<f32>(e, 0.0)) - surround_height(xz - vec2<f32>(e, 0.0));
-    let sz = surround_height(xz + vec2<f32>(0.0, e)) - surround_height(xz - vec2<f32>(0.0, e));
+    let kind = surround_kind(xz);
+    let h = surround_height(xz, kind);
+    let world = vec3<f32>(xz.x, ground_height_at(xz) + h, xz.y);
+    // The relief's normal from its slope over about a vertex spacing (forward differences).
+    let e = max(1.0, 0.12 * radius);
+    let sx = surround_height(xz + vec2<f32>(e, 0.0), kind) - h;
+    let sz = surround_height(xz + vec2<f32>(0.0, e), kind) - h;
     var out: Varying;
     out.clip = g.view_proj * vec4<f32>(world, 1.0);
     out.clip.z = out.clip.w * GROUND_DEPTH;
     out.world = world;
-    out.normal = normalize(vec3<f32>(-sx, 2.0 * e, -sz));
+    out.normal = normalize(vec3<f32>(-sx, e, -sz));
     out.face = GROUND_FACE;
     out.uv = world.xz;
     return out;

@@ -164,8 +164,8 @@ pub struct Studio {
     sun_bounce: Vec<f32>,
     sun_bounce_dir: Vec3,
     sun_lux: Vec3,
-    /// The exposure the eye has adapted to (EV) and when (`clock`); `None`: take the metered
-    /// exposure at once (the first frame, a picture).
+    /// The room shift (EV, `meter_shift`) the eye has adapted to and when (`clock`); `None`:
+    /// take the metered shift at once (the first frame, a picture).
     adapted_ev: Option<f32>,
     adapted_at: f64,
     /// Impostor atlases have been made ahead for the current quality.
@@ -1269,12 +1269,16 @@ impl Studio {
             Some((lux, enclosed)) => meter_shift(auto, lux, enclosed),
             None => 0.0,
         };
-        let target = auto - brighter - snow * SNOW_EV - room;
+        // The eye adapts to what the view takes in (`room`: walking from the garden into a room),
+        // not to the daylight itself: that changes over minutes, and a jump of the clock by
+        // command (time.set, a viewpoint's time) is met at once. Adapting it too left a scripted
+        // picture at dusk exposed for noon (black) while the clock stood still.
         let dt = (self.clock - self.adapted_at).clamp(0.0, 10.0) as f32;
-        let adapted = self.adapted_ev.map_or(target, |a| adapt_ev(a, target, dt));
+        let adapted = self.adapted_ev.map_or(room, |a| adapt_ev(a, room, dt));
         self.adapted_ev = Some(adapted);
         self.adapted_at = self.clock;
-        let ev = v.exposure_ev.unwrap_or(adapted) - self.exposure;
+        let target = auto - brighter - snow * SNOW_EV - adapted;
+        let ev = v.exposure_ev.unwrap_or(target) - self.exposure;
         self.ev_used = (ev, elevation);
         self.renderer.set_exposure(ev);
         self.renderer.set_clay(self.project().style.clay);

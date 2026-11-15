@@ -3041,8 +3041,8 @@ impl Renderer {
 
     /// The infinite ground (scene.wgsl `vs_ground`) with its own material.
     fn draw_ground(&self, pass: &mut wgpu::RenderPass, pipeline: &wgpu::RenderPipeline) {
-        const RINGS: u32 = 96;
-        const SEGMENTS: u32 = 256;
+        const RINGS: u32 = 80;
+        const SEGMENTS: u32 = 192;
         pass.set_pipeline(pipeline);
         // A material of the scene (the terrain's base layer) when one is set: the ground then
         // looks like it, texture, tiling phase and variation alike, so their border vanishes.
