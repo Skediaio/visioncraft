@@ -1103,7 +1103,9 @@ mod tests {
         let bytes = |g: &Generated| crate::plant_cache::encode_levels(g.height, &g.levels);
         let serial: Vec<Vec<u8>> = species
             .iter()
-            .flat_map(|s| (0..VARIANTS).map(|v| bytes(&generate_variant_now("t", &s.params, v, 6, false))))
+            .flat_map(|s| {
+                (0..VARIANTS).map(|v| bytes(&generate_variant_now("t", &s.params, v, 6, false)))
+            })
             .collect();
         let slots: Vec<_> = species
             .iter()
