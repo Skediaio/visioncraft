@@ -312,7 +312,10 @@ fn vs_main(v: VertexIn) -> Varying {
 
 fn d_ggx(noh: f32, a: f32) -> f32 {
     let a2 = a * a;
-    let f = (noh * a2 - noh) * noh + 1.0;
+    // 1 - noh^2 (1 - a2) is at least a2 for noh <= 1; with a glass pane's a2 (1.6e-7), rounding
+    // in noh can cancel it to zero or below: an infinite or negative lamp highlight on glass
+    // (in Chromium the estate's panes lit up with lamp glints this way).
+    let f = max((noh * a2 - noh) * noh + 1.0, a2);
     return a2 / (PI * f * f);
 }
 

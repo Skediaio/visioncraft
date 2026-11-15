@@ -31,9 +31,14 @@ fn vs_fullscreen(@builtin(vertex_index) i: u32) -> Out {
 override KARIS: bool = false;
 
 fn box4(uv: vec2<f32>, t: vec2<f32>, a: vec2<f32>, b: vec2<f32>, c: vec2<f32>, d: vec2<f32>) -> vec3<f32> {
-    let s = textureSampleLevel(src, smp, uv + a * t, 0.0).rgb + textureSampleLevel(src, smp, uv + b * t, 0.0).rgb
-        + textureSampleLevel(src, smp, uv + c * t, 0.0).rgb + textureSampleLevel(src, smp, uv + d * t, 0.0).rgb;
+    let s = tap(uv + a * t) + tap(uv + b * t) + tap(uv + c * t) + tap(uv + d * t);
     return s * 0.25;
+}
+
+// A texel, held to the largest half float: an overflowed (infinite) pixel made the Karis weight
+// inf * 0 = NaN, and the bloom chain spread it into a black square (seen in Chromium).
+fn tap(uv: vec2<f32>) -> vec3<f32> {
+    return min(textureSampleLevel(src, smp, uv, 0.0).rgb, vec3<f32>(65504.0));
 }
 
 fn karis(c: vec3<f32>, w: f32) -> vec4<f32> {
