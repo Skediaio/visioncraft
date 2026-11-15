@@ -123,9 +123,10 @@ node apps/visioncraft/browser-smoke/smoke.mjs --dist apps/visioncraft/dist --ass
 It serves the build and the library, opens the four examples from the start screen in headless
 Chromium, flies to every viewpoint (`--views`), walks, draws, plants, saves and reopens
 (`--interact`), and exits 1 on a console error, a WebGPU validation message, a panic, a black
-picture or a load that does not finish; `smoke-out/report.json` has the load times, frame times,
-long tasks, memory and download sizes. Page scripts drive the app through `window.vcRpc`, the
-JSON-lines protocol of `visioncraft-cli serve`.
+picture or a load that does not finish; `smoke-out/report.json` has the load times, frame times
+(with the app's CPU time per frame stage, its draw counts and the GPU time per pass, from
+`window.__vcFrame`), long tasks, memory and download sizes. Page scripts drive the app through
+`window.vcRpc`, the JSON-lines protocol of `visioncraft-cli serve`.
 
 ## Licence
 

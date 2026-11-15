@@ -26,7 +26,6 @@ pub mod materials;
 pub mod modelui;
 pub mod objects;
 pub mod placeholder;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod plant_cache;
 pub mod plant_scene;
 pub mod planting_panel;
@@ -177,6 +176,9 @@ pub struct App {
     stored_revision: Option<u64>,
     last_time: f64,
     fps: f64,
+    /// CPU milliseconds of the frame's stages (prepare, render, the whole `ui`) and frames,
+    /// summed for the browser measurements (`window.__vcFrame`, `publish_frame_cpu`).
+    frame_cpu: [f64; 4],
     last_title: String,
     settle: u8,
     /// A project restored at start is still settling (its undo history is cleared until then).
@@ -264,6 +266,7 @@ impl App {
             stored_revision: None,
             last_time: 0.0,
             fps: 0.0,
+            frame_cpu: [0.0; 4],
             last_title: String::new(),
             settle: 0,
             settling_restore: was_restored,
@@ -388,7 +391,11 @@ impl App {
     }
 
     fn dirty(&self) -> bool {
+        // An agent's `file.new`, `file.open` or `file.save` replaces or stores the session without
+        // this window's revision: the project it left is not unsaved work (opening a file over an
+        // empty project asked whether to discard it, and the dialog swallowed the next clicks).
         self.studio.session.revision() != self.saved_revision
+            && self.agents.state.saved.as_ref() != Some(self.studio.project())
     }
 
     // ---- files ----
@@ -1273,6 +1280,7 @@ impl eframe::App for App {
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        let cpu_start = cpu_ms();
         let rect = ctx.content_rect();
         let ppp = ctx.pixels_per_point();
         let now = ctx.input(|i| i.time);
@@ -1556,10 +1564,13 @@ impl eframe::App for App {
         if std::mem::take(&mut self.studio.compare_requested) {
             self.take_compare(ui.ctx());
         }
+        let t = cpu_ms();
         self.studio.prepare();
+        let prepare_ms = cpu_ms() - t;
         let mut encoder = self.device.create_command_encoder(&Default::default());
         let view = self.studio.renderer.render(&mut encoder);
         self.queue.submit([encoder.finish()]);
+        let render_ms = cpu_ms() - t - prepare_ms;
         let mut egui_renderer = self.egui_renderer.write();
         let id = match self.texture {
             Some(id) => {
@@ -1953,6 +1964,63 @@ impl eframe::App for App {
         if self.repainting {
             ctx.request_repaint();
         }
+        self.publish_frame_cpu(prepare_ms, render_ms, cpu_ms() - cpu_start);
+    }
+}
+
+/// Milliseconds for timing a frame's stages: `performance.now()` on the web (`now_ms` there
+/// is the whole-millisecond `Date`).
+fn cpu_ms() -> f64 {
+    #[cfg(target_arch = "wasm32")]
+    {
+        web_sys::window()
+            .and_then(|w| w.performance())
+            .map_or_else(assets::now_ms, |p| p.now())
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    assets::now_ms()
+}
+
+impl App {
+    /// Every 60 frames on the web: the frame's CPU stages averaged and the renderer's draw
+    /// counts, as JSON in `window.__vcFrame` for the browser smoke script.
+    fn publish_frame_cpu(&mut self, prepare_ms: f64, render_ms: f64, ui_ms: f64) {
+        let f = &mut self.frame_cpu;
+        for (sum, v) in f.iter_mut().zip([prepare_ms, render_ms, ui_ms, 1.0]) {
+            *sum += v;
+        }
+        if f[3] < 60.0 {
+            return;
+        }
+        let n = f[3];
+        let st = self.studio.renderer.stats();
+        let passes: Vec<String> = st
+            .pass_draws
+            .iter()
+            .map(|(k, d)| format!("\"{k}\":{d}"))
+            .collect();
+        let gpu: Vec<String> = st
+            .gpu_passes
+            .iter()
+            .map(|(k, ms)| format!("\"{k}\":{ms:.2}"))
+            .collect();
+        let json = format!(
+            "{{\"prepare_ms\":{:.2},\"render_ms\":{:.2},\"ui_ms\":{:.2},\"draws\":{},\"pass_draws\":{{{}}},\"instances\":{},\"triangles\":{},\"gpu_ms\":{},\"gpu_passes\":{{{}}}}}",
+            f[0] / n,
+            f[1] / n,
+            f[2] / n,
+            st.draw_calls,
+            passes.join(","),
+            st.instances,
+            st.triangles,
+            st.gpu_ms.map_or("null".into(), |g| format!("{g:.2}")),
+            gpu.join(",")
+        );
+        *f = [0.0; 4];
+        #[cfg(target_arch = "wasm32")]
+        let _ = js_sys::Reflect::set(&js_sys::global(), &"__vcFrame".into(), &json.into());
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = json;
     }
 }
 

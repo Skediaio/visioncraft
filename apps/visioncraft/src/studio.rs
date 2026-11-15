@@ -529,6 +529,7 @@ impl Studio {
     pub fn replace_project(&mut self, project: Project) {
         self.session.replace_project(project);
         self.scene.clear(&mut self.renderer);
+        self.scene.flora.clear(&mut self.renderer);
         self.loaded.clear();
         self.sources.clear();
         self.draft = None;
@@ -918,6 +919,13 @@ impl Studio {
         if self.synced == Some(key) {
             return;
         }
+        // A new session (an agent's `file.new` or `file.open`; a session's revision only grows):
+        // another project, as `replace_project`. Not natively, where an agent's picture of
+        // another project swaps the session in for a moment (`agents`, `render`).
+        if cfg!(target_arch = "wasm32") && self.synced.is_some_and(|(rev, _)| rev > key.0) {
+            self.scene.clear(&mut self.renderer);
+            self.scene.flora.clear(&mut self.renderer);
+        }
         // An example's model travels inside the program (`example:<file>`): load it here, on the
         // web too, whoever added it.
         let examples: Vec<(String, &'static [u8])> = self
@@ -979,16 +987,27 @@ impl Studio {
         }
         self.sky_volume_key = key;
         // The old volume stays until the new one is made (`poll_sky_volume`).
-        self.sky_task = Some(crate::sky_task::SkyTask::start(triangles, key));
+        let to_sun = self.sun_bounce_dir.to_array();
+        self.sky_task = Some(crate::sky_task::SkyTask::start(triangles, key, to_sun));
     }
 
     /// Takes the sky volume once it is made (`update_sky_volume`).
     fn poll_sky_volume(&mut self) {
-        if let Some(v) = self.sky_task.as_ref().and_then(|t| t.take()) {
+        let Some(task) = self.sky_task.as_ref() else {
+            return;
+        };
+        if let Some(made) = task.take() {
+            // The sun bounce came with it, for the sun when it started: kept if it still stands.
+            let same_sun = task.to_sun == self.sun_bounce_dir.to_array();
             self.sky_task = None;
-            self.sky_volume = v;
             self.lamp_bounce.clear();
             self.sun_bounce.clear();
+            self.sky_volume = made.map(|(v, bounce)| {
+                if same_sun {
+                    self.sun_bounce = bounce;
+                }
+                v
+            });
             self.upload_sky_volume();
         }
     }
@@ -1443,7 +1462,7 @@ impl Studio {
     /// Feeds one frame time (ms); Auto may change the quality. Down as soon as 30 frames show
     /// the budget missed (the 75th percentile over 30 fps, so hitches count too), up only after
     /// 90 frames well inside it, never while plants or textures load (those frames say nothing
-    /// about the scene) and not for 10 s after a step down (else it climbs back into the tier it
+    /// about the scene; past a grace period they can still step it down) and not for 10 s after a step down (else it climbs back into the tier it
     /// just left and settles below 30 fps).
     pub fn record_frame(&mut self, ms: f32) {
         if !self.quality_auto {
@@ -1464,7 +1483,9 @@ impl Studio {
             self.auto_loading_since = None;
         }
         self.frame_ms.push(ms);
-        let can_rise = self.clock >= self.auto_hold_until;
+        // Down while loading (past the grace), up only once it is done: a rise mid-load (fast
+        // frames before the trees arrive) took an integrated GPU to HIGH and 11 fps.
+        let can_rise = self.clock >= self.auto_hold_until && !loading;
         match auto_step(&self.frame_ms, self.auto_quality, can_rise) {
             AutoStep::Wait => {}
             AutoStep::Keep => {
