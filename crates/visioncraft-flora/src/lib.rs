@@ -248,7 +248,7 @@ fn generate_with(
         Form::Climber(c) => gen_herb::climber(params, c, seed, lod, &state, budget),
         Form::Conifer(c) => gen_conifer::generate(params, c, seed, lod, &state, budget),
     };
-    settle(&mut mesh, &state);
+    settle(&mut mesh, &state, params, seed);
     debug_assert!(
         mesh.triangle_count() <= budget,
         "budget {budget} exceeded: {}",
@@ -301,7 +301,7 @@ pub fn generate_levels(
         ));
     }
     for m in &mut out {
-        settle(m, &state);
+        settle(m, &state, params, seed);
     }
     out
 }
@@ -317,9 +317,23 @@ pub fn detail_triangles(params: &PlantParams) -> [usize; 2] {
     }
 }
 
-/// The season's foliage tint, and nothing below the ground.
-fn settle(mesh: &mut PlantMesh, state: &SeasonState) {
+/// The season's foliage tint, nothing below the ground, and a shrub's own size and shade.
+fn settle(mesh: &mut PlantMesh, state: &SeasonState, p: &PlantParams, seed: u64) {
     mesh.foliage_tint = state.tint;
+    if let Some((fh, fw, tint)) = gen_branching::shrub_variety(p, seed) {
+        // The finished mesh is scaled, every level alike, so the levels keep agreeing (the
+        // skeleton scaled before the cards were laid moved a cane shrub's far cards).
+        for q in &mut mesh.positions {
+            *q = [q[0] * fw, q[1] * fh, q[2] * fw];
+        }
+        for n in &mut mesh.normals {
+            let v = math::v3(n[0] / fw, n[1] / fh, n[2] / fw).norm();
+            *n = [v.x, v.y, v.z];
+        }
+        for k in 0..3 {
+            mesh.foliage_tint[k] *= tint[k];
+        }
+    }
     // Leaves and drooping cards near the base may dip below the ground plane: lay them on it.
     // Anything resting on the ground does not sway: the bend weight is 0 below 2 mm and fades
     // in up to 5 mm.

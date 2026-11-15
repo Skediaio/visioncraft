@@ -254,6 +254,24 @@ pub(crate) fn grown(p: &PlantParams) -> bool {
         && matches!(&p.form, crate::Form::Branching(b) if b.levels[2].count > 0)
 }
 
+/// A branched shrub's own height and width factors and foliage shade from its seed, so a
+/// border's neighbours of one species differ (`settle` applies them to the finished mesh);
+/// `None` for trees (their form varies in the skeleton) and the other forms. Own stream.
+pub(crate) fn shrub_variety(p: &PlantParams, seed: u64) -> Option<(f32, f32, [f32; 3])> {
+    let crate::Form::Branching(_) = &p.form else {
+        return None;
+    };
+    if matches!(p.budget, BudgetClass::LargeTree | BudgetClass::SmallTree) {
+        return None;
+    }
+    let mut r = Rng::new(seed, 8);
+    let (fh, fw) = (r.range(0.88, 1.1), r.range(0.87, 1.12));
+    // A little lighter or darker, a little yellower or bluer: one plant of a drift catches the
+    // eye as greener than the next, as seedlings and clones in different soil do.
+    let (light, hue) = (r.range(0.9, 1.1), r.sym() * 0.05);
+    Some((fh, fw, [light * (1.0 + hue), light, light * (1.0 - hue)]))
+}
+
 pub(crate) fn skeleton(p: &PlantParams, b: &BranchingParams, seed: u64) -> Skeleton {
     let mut rng = Rng::new(seed, 1);
     // Age changes the form, not only the size: a young tree is slender (the crown widens later
