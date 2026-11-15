@@ -422,6 +422,23 @@ fn fs_sea(in: Varying) -> @location(0) vec4<f32> {
     let deep = tint * crest * (sh_irradiance(up) + g.sun_light.rgb * max(l.y, 0.0) * sun_on) / PI;
     var color = f * reflected + glint + (1.0 - f) * (1.0 - transmit) * deep;
     var alpha_out = f + (1.0 - f) * (1.0 - transmit);
+    // The bed seen through shallow water: darker patches (weed, wet stones) of a few metres that
+    // still read from far off, and the sun focused into moving caustic lines by the waves, which
+    // turn into their mean brightening once a pixel spans them. Over (premultiplied) the bed.
+    let clear = (1.0 - smoothstep(0.5, 7.0, water_depth)) * (1.0 - 0.7 * surf.zone) * (1.0 - alpha_out);
+    if clear > 0.01 {
+        let bp = bed.xz;
+        let spot = smoothstep(0.55, 0.75, value_noise(vec3<f32>(bp.x / 14.0, 2.7, bp.y / 14.0)) * 0.7
+            + value_noise(vec3<f32>(bp.x / 3.5, 5.1, bp.y / 3.5)) * 0.3);
+        let k = 0.4 * spot * clear;
+        color += k * deep;
+        alpha_out += k;
+        let c1 = value_noise(vec3<f32>(bp.x * 0.7 + t * 0.25, t * 0.35, bp.y * 0.7));
+        let c2 = value_noise(vec3<f32>(bp.x * 0.5 - t * 0.2, t * 0.3 + 7.0, bp.y * 0.5));
+        let lines = (1.0 - smoothstep(0.0, 0.07, abs(c1 - 0.5))) + (1.0 - smoothstep(0.0, 0.07, abs(c2 - 0.5)));
+        let caustic = mix(lines, 0.25, smoothstep(0.08, 0.4, footprint)) * (1.0 - spot);
+        color += caustic * clear * 0.22 * vec3<f32>(0.45, 0.42, 0.33) * g.sun_light.rgb * max(l.y, 0.0) * sun_on / PI;
+    }
     // Foam: crests that fold (more and lower thresholds at higher sea states), and a band over
     // shallow beds that the swell runs up and back, broken up by noise.
     let noise = value_noise(vec3<f32>(in.uv.x * 0.9, t * 0.15, in.uv.y * 0.9)) * 0.6
