@@ -6,6 +6,16 @@
 // the HDR target stays well inside f16 range. Sky and environment radiance
 // is kept in kcd/m2 without exposure and scaled by `night.w` where it is
 // used, so a new exposure never re-renders the environment.
+
+// The shaders of MEDIUM and LOW (lib.rs `Quality::fast_shading` compiles them with this line
+// set to true): code only the slower presets run is left out.
+const FAST_SHADING: bool = false;
+
+// What a pipeline draws of the endless ground (lib.rs `ground_pipeline`): 0 all of it, 1 the
+// cells near the sky volume, 2 the others, which the volume leaves in the open sky: their
+// shaders are compiled without its lookup, which costs Intel's compiler its registers.
+override VOLUME_PART: u32 = 0u;
+
 struct Globals {
     view_proj: mat4x4<f32>,
     view: mat4x4<f32>,
@@ -80,22 +90,27 @@ struct Volume {
 }
 
 fn volume_at(world: vec3<f32>, n: vec3<f32>) -> Volume {
-    let near = volume_lifted(world, n, 0.5);
-    if near.valid > 1e-4 {
-        return near;
-    }
-    // Only samples inside walls or thin gaps round the point (under a vanity, in a corner):
-    // from a little further out.
-    let far = volume_lifted(world, n, 1.5);
-    if far.valid > 1e-4 {
-        return far;
+    // Half a cell out, and where only samples inside walls or thin gaps are round the point
+    // (under a vanity, in a corner), a cell further. A loop the compiler cannot unroll (its count
+    // is a uniform's; without a volume the first lookup answers): written out, the lookup was
+    // compiled twice into every shading entry point.
+    var near = Volume(vec4<f32>(1.0, 0.0, 0.0, 0.0), vec4<f32>(0.0), 1.0);
+    let lifts = select(1u, 2u, g.sky_vol_size.w >= 0.5);
+    for (var k = 0u; k < lifts; k++) {
+        let v = volume_lifted(world, n, 0.5 + f32(k));
+        if k == 0u {
+            near = v;
+        }
+        if v.valid > 1e-4 {
+            return v;
+        }
     }
     return near;
 }
 
 fn volume_lifted(world: vec3<f32>, n: vec3<f32>, lift: f32) -> Volume {
     let open = Volume(vec4<f32>(1.0, 0.0, 0.0, 0.0), vec4<f32>(0.0), 1.0);
-    if g.sky_vol_size.w < 0.5 {
+    if VOLUME_PART == 2u || g.sky_vol_size.w < 0.5 {
         return open;
     }
     let dims = vec3<i32>(textureDimensions(room_vis));
@@ -237,7 +252,11 @@ fn pcg(v: u32) -> u32 {
 }
 
 fn hash3(p: vec3<i32>) -> f32 {
-    let h = pcg(u32(p.x) + pcg(u32(p.y) + pcg(u32(p.z))));
+    return unit(pcg(u32(p.x) + pcg(u32(p.y) + pcg(u32(p.z)))));
+}
+
+// A hash's top 24 bits as [0, 1).
+fn unit(h: u32) -> f32 {
     return f32(h >> 8u) / 16777216.0;
 }
 

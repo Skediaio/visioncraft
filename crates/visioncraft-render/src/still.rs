@@ -16,7 +16,11 @@ use std::task::{Context, Poll, Waker};
 
 use glam::{Mat4, Vec3};
 
-use crate::{LOD_UNSET, Quality, Renderer, SampledPipelines, Targets};
+use crate::{LOD_UNSET, Pipelines, Quality, Renderer, SampledPipelines, Targets};
+
+/// Pipelines an offscreen frame uses instead of the live ones (none where those do): all of
+/// them for the other shading (`Quality::fast_shading`), the multisampled ones for other samples.
+type Offscreen = (Option<Pipelines>, Option<SampledPipelines>);
 
 pub const MAX_STILL: (u32, u32) = (3840, 2160);
 
@@ -124,14 +128,7 @@ impl Renderer {
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
-        let sampled = (quality.msaa != self.quality.msaa).then(|| {
-            SampledPipelines::new(
-                &self.device,
-                &self.layouts,
-                &self.modules,
-                quality.samples(),
-            )
-        });
+        let sampled = self.offscreen_pipelines(quality);
 
         let (_, _, encoder) = self.render_offscreen(
             targets,
@@ -160,23 +157,49 @@ impl Renderer {
         })
     }
 
-    /// Renders one frame into `targets` (and the multisampled pipelines `sampled` when the
-    /// quality's samples differ from the live ones) from `view`/`proj`/`eye`, copies the output
+    /// The pipelines a frame at `quality` needs where the live ones do not do (`Offscreen`).
+    fn offscreen_pipelines(&self, quality: Quality) -> Offscreen {
+        let (device, layouts) = (&self.device, &self.layouts);
+        if quality.fast_shading != self.quality.fast_shading {
+            let modules = crate::shader_modules(device, quality.fast_shading);
+            return (
+                Some(Pipelines::new(
+                    device,
+                    layouts,
+                    &modules,
+                    self.output_format,
+                )),
+                Some(SampledPipelines::new(
+                    device,
+                    layouts,
+                    &modules,
+                    quality.samples(),
+                )),
+            );
+        }
+        let sampled = (quality.msaa != self.quality.msaa)
+            .then(|| SampledPipelines::new(device, layouts, &self.modules, quality.samples()));
+        (None, sampled)
+    }
+
+    /// Renders one frame into `targets` (and with the pipelines `sampled` where the live ones
+    /// do not do, `offscreen_pipelines`) from `view`/`proj`/`eye`, copies the output
     /// into `buffer`, and puts the live state back. Returns the targets for another frame and
     /// the encoder to submit.
     #[allow(clippy::too_many_arguments)]
     fn render_offscreen(
         &mut self,
         targets: Targets,
-        sampled: Option<SampledPipelines>,
+        sampled: Offscreen,
         quality: Quality,
         (width, height): (u32, u32),
         (view, proj, eye): (Mat4, Mat4, Vec3),
         copy: Option<(&wgpu::Buffer, u32)>,
-    ) -> (Targets, Option<SampledPipelines>, wgpu::CommandEncoder) {
+    ) -> (Targets, Offscreen, wgpu::CommandEncoder) {
         // Swap the live state out, render, swap it back.
         let live_targets = std::mem::replace(&mut self.targets, targets);
-        let live_sampled = sampled.map(|s| std::mem::replace(&mut self.sampled, s));
+        let live_pipelines = sampled.0.map(|p| std::mem::replace(&mut self.pipelines, p));
+        let live_sampled = sampled.1.map(|s| std::mem::replace(&mut self.sampled, s));
         let live = (self.size, self.quality, self.view, self.proj, self.eye);
         let live_cache = self.far_cache.take();
         let live_cascades = std::mem::take(&mut self.cascade_rendered);
@@ -217,6 +240,7 @@ impl Renderer {
         }
 
         let used_targets = std::mem::replace(&mut self.targets, live_targets);
+        let used_pipelines = live_pipelines.map(|p| std::mem::replace(&mut self.pipelines, p));
         let used_sampled = live_sampled.map(|s| std::mem::replace(&mut self.sampled, s));
         (self.size, self.quality, self.view, self.proj, self.eye) = live;
         self.far_cache = live_cache;
@@ -230,7 +254,7 @@ impl Renderer {
             }
         }
 
-        (used_targets, used_sampled, encoder)
+        (used_targets, (used_pipelines, used_sampled), encoder)
     }
 }
 
@@ -267,7 +291,7 @@ fn copy_out(
 /// for a sample, so it runs on the web too: `photo_finish` gives a [`Still`] to poll.
 pub struct Photo {
     targets: Option<Targets>,
-    sampled: Option<SampledPipelines>,
+    sampled: Offscreen,
     quality: Quality,
     size: (u32, u32),
     /// Linear RGB sums (16-bit float: 64 samples of values up to 1 keep about 0.05 %).
@@ -407,14 +431,7 @@ impl Renderer {
             &self.white,
             true,
         );
-        let sampled = (quality.msaa != self.quality.msaa).then(|| {
-            SampledPipelines::new(
-                &self.device,
-                &self.layouts,
-                &self.modules,
-                quality.samples(),
-            )
-        });
+        let sampled = self.offscreen_pipelines(quality);
         let accum = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("photo sum"),
             size: wgpu::Extent3d {
@@ -548,7 +565,7 @@ impl Renderer {
         };
         // `render_offscreen` starts without cached shadows, so each sample casts its own.
         let targets = photo.targets.take().ok_or("photo targets missing")?;
-        let sampled = photo.sampled.take();
+        let sampled = std::mem::take(&mut photo.sampled);
         let (targets, sampled, mut encoder) = self.render_offscreen(
             targets,
             sampled,

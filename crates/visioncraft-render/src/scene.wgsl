@@ -425,7 +425,7 @@ fn cascade_shadow(c: u32, world: vec3<f32>, n: vec3<f32>, nol: f32) -> f32 {
         return -1.0;
     }
     var sum = 0.0;
-    if g.options.x > 4.5 {
+    if !FAST_SHADING && g.options.x > 4.5 {
         for (var y = -1; y <= 1; y++) {
             for (var x = -1; x <= 1; x++) {
                 let o = vec2<f32>(f32(x), f32(y)) * g.shadow.z * 1.5;
@@ -605,19 +605,28 @@ fn triplanar_normal(l: Lookup, n: vec3<f32>, relief: f32) -> vec3<f32> {
 }
 
 // Value noise for the weathering pattern: trilinear over hashed lattice
-// values, smoothstep-faded.
+// values, smoothstep-faded. The corners are `hash3`'s values with its nested hashes of z and of
+// (y, z) shared by the corners that have them in common: 14 hashes instead of 24, same bits.
 fn value_noise(p: vec3<f32>) -> f32 {
     let i = vec3<i32>(floor(p));
     let f = fract(p);
     let u = f * f * (3.0 - 2.0 * f);
-    let n000 = hash3(i);
-    let n100 = hash3(i + vec3<i32>(1, 0, 0));
-    let n010 = hash3(i + vec3<i32>(0, 1, 0));
-    let n110 = hash3(i + vec3<i32>(1, 1, 0));
-    let n001 = hash3(i + vec3<i32>(0, 0, 1));
-    let n101 = hash3(i + vec3<i32>(1, 0, 1));
-    let n011 = hash3(i + vec3<i32>(0, 1, 1));
-    let n111 = hash3(i + vec3<i32>(1, 1, 1));
+    let x = u32(i.x);
+    let y = u32(i.y);
+    let z0 = pcg(u32(i.z));
+    let z1 = pcg(u32(i.z) + 1u);
+    let y00 = pcg(y + z0);
+    let y10 = pcg(y + 1u + z0);
+    let y01 = pcg(y + z1);
+    let y11 = pcg(y + 1u + z1);
+    let n000 = unit(pcg(x + y00));
+    let n100 = unit(pcg(x + 1u + y00));
+    let n010 = unit(pcg(x + y10));
+    let n110 = unit(pcg(x + 1u + y10));
+    let n001 = unit(pcg(x + y01));
+    let n101 = unit(pcg(x + 1u + y01));
+    let n011 = unit(pcg(x + y11));
+    let n111 = unit(pcg(x + 1u + y11));
     let x0 = mix(mix(n000, n100, u.x), mix(n010, n110, u.x), u.y);
     let x1 = mix(mix(n001, n101, u.x), mix(n011, n111, u.x), u.y);
     return mix(x0, x1, u.z);
@@ -635,8 +644,10 @@ struct Surface {
 }
 
 // Base colour, normal and the occlusion / roughness / metallic maps, for
-// either projection. Called from uniform control flow (it takes derivatives).
-fn surface(in: Varying, front: bool) -> Surface {
+// either projection. Called from uniform control flow (it takes derivatives). `ground`: the
+// endless ground's entry points, the only ones that paint the surroundings (a constant at each
+// call, so the other entry points compile without that code).
+fn surface(in: Varying, front: bool, ground: bool) -> Surface {
     var s: Surface;
     var n = normalize(in.normal);
     // Double-sided: back faces shade with the flipped normal, except foliage,
@@ -694,7 +705,7 @@ fn surface(in: Varying, front: bool) -> Surface {
     }
     s.emissive = material.emissive.rgb;
     s = macro_variation(s, in.world, bitcast<f32>(material.flags.z));
-    if in.face == GROUND_FACE {
+    if ground && in.face == GROUND_FACE {
         s = surroundings(s, in.world, length(dwx) + length(dwy));
     }
     // Mowing stripes: the blades of each pass lean the way the mower went, so a band is lighter
@@ -811,7 +822,7 @@ struct Shaded {
 // The full opaque shading model. `screen_effects`: use the screen-space AO
 // and contact shadows (not for transparent surfaces, which are not in the
 // depth pre-pass).
-fn shade(in: Varying, front: bool, screen_effects: bool) -> Shaded {
+fn shade(in: Varying, front: bool, screen_effects: bool, ground: bool) -> Shaded {
     // Glass drawn as an opaque pane (the water's reflection): what the glass passes show, its
     // reflection over the dim room behind it, so the reflected house matches the house.
     if material.alpha.z == 1.0 && g.time.w < 0.5 {
@@ -819,7 +830,7 @@ fn shade(in: Varying, front: bool, screen_effects: bool) -> Shaded {
         let room = t.transmitted * ROOM_ALBEDO * sh_irradiance(normalize(in.normal)) / PI;
         return Shaded(apply_fog(t.reflected + room, in.world), 1.0);
     }
-    var s = surface(in, front);
+    var s = surface(in, front, ground);
     // Leaves, and the branches among them (both tagged by the app).
     s.ao *= crown_sky(in.face);
     return light(in, s, material.alpha.w > 0.0, material.emissive.w, screen_effects);
@@ -856,14 +867,16 @@ fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, screen_effe
         s.ao = 1.0;
         s.emissive = vec3<f32>(0.0);
     }
-    // Snow over the surface (`snow_on`): matt and smoother, its bumps buried; its albedo goes
+    // Snow over the surface (`snow_lying`): matt and smoother, its bumps buried; its albedo goes
     // over the surface's after weathering below.
     var snow = 0.0;
     // On leaves only where a crown carries them (a hedge, an evergreen; tagged by the app, or an
     // impostor): bare twig cards, lawn blades and fallen leaves stay as they are.
     let leafy = !foliage || (in.face & 0xFFFF0000u) == CROWN_TAG || in.face == 0xfffffffdu;
     if !clay && g.snow.x > 0.0 && leafy {
-        let lying = select(snow_on(in.world, s.geometric), snow_on_leaves(in.world, s.geometric, in.face), foliage);
+        // One `snow_lying` for both (a select of the two calls compiled both).
+        let up = select(snow_up(s.geometric), snow_up_leaves(s.geometric, in.face), foliage);
+        let lying = snow_lying(in.world, up);
         // The band under a ledge's snow is for built things: a plant's (tagged) bends and
         // leaves are no ledges.
         let plant = (in.face & 0xFFFF0000u) == CROWN_TAG;
@@ -1067,21 +1080,22 @@ fn snow_open(world: vec3<f32>) -> f32 {
 const SNOW_HAND: f32 = 0.15;
 const SNOW_CONE: f32 = 1.2;
 
-// How much snow lies on a surface: snow settles on what faces up (steeper as there is more of
-// it), not under cover, broken up at its edge by noise into drifts and bare patches.
-fn snow_on(world: vec3<f32>, n: vec3<f32>) -> f32 {
+// How much a surface facing `n` faces up for the snow (`snow_lying`): snow settles on what faces
+// up (steeper as there is more of it), not under cover, broken up at its edge by noise into
+// drifts and bare patches.
+fn snow_up(n: vec3<f32>) -> f32 {
     let a = g.snow.x;
     // Flat ground takes it first, then roofs: at 0.6 a 30 degree roof is covered, a 38 degree
     // one (n.y 0.79) mostly with its tiles showing in patches, 48 degrees and steeper shed it.
-    return snow_lying(world, smoothstep(mix(0.85, 0.55, a), mix(0.97, 0.8, a), n.y));
+    return smoothstep(mix(0.85, 0.55, a), mix(0.97, 0.8, a), n.y);
 }
 
 // Snow on a crown's leaves: a leaf card's own slope says little, so the leaves at the crown's
 // top (the sky share the app gives them, scene.rs `crown_occlusion`; an impostor's are all
 // top) that are not steep take it, where the sky above them is open.
-fn snow_on_leaves(world: vec3<f32>, n: vec3<f32>, face: u32) -> f32 {
+fn snow_up_leaves(n: vec3<f32>, face: u32) -> f32 {
     let top = select(smoothstep(0.5, 0.75, crown_sky(face)), 1.0, face == 0xfffffffdu);
-    return snow_lying(world, top * smoothstep(0.05, 0.45, abs(n.y)));
+    return top * smoothstep(0.05, 0.45, abs(n.y));
 }
 
 // Snow over a surface that faces up by `up` (0..1).
@@ -1211,7 +1225,7 @@ fn photo_bounce(p: vec3<f32>, n: vec3<f32>, pixel: vec2<f32>, ao: f32) -> vec3<f
 
 @fragment
 fn fs_main(in: Varying, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
-    return vec4<f32>(shade(in, front, true).color, 1.0);
+    return vec4<f32>(shade(in, front, true, false).color, 1.0);
 }
 
 // ---- surroundings -----------------------------------------------------------
@@ -1276,6 +1290,11 @@ fn line_cover(dist: f32, hw: f32, fw: f32, cell: f32) -> f32 {
     return mix(sharp, 2.0 * hw / cell, smoothstep(hw, 6.0 * hw, fw));
 }
 
+// A parcel of the fields (m). A module constant, not a `let` in `surroundings`: naga's override
+// processing (wgpu's, for every pipeline whose entry point reaches an override) emitted that
+// `let` twice and failed validation.
+const PARCEL_M: vec2<f32> = vec2<f32>(230.0, 150.0);
+
 fn surroundings(surf: Surface, world: vec3<f32>, fw: f32) -> Surface {
     var s = surf;
     let p = world.xz;
@@ -1303,15 +1322,14 @@ fn surroundings(surf: Surface, world: vec3<f32>, fw: f32) -> Surface {
         let q = vec2<f32>(cos(a) * p.x - sin(a) * p.y, sin(a) * p.x + cos(a) * p.y);
         // Rows of parcels, each row shifted by its own amount, and some parcels split in two
         // along their length: no checkerboard.
-        let size = vec2<f32>(230.0, 150.0);
-        let row = floor(q.y / size.y);
-        let shifted = vec2<f32>(q.x + hash2(vec2<i32>(i32(row), 71)) * size.x, q.y);
-        var id = vec2<i32>(floor(shifted / size));
-        var f = fract(shifted / size) * size;
+        let row = floor(q.y / PARCEL_M.y);
+        let shifted = vec2<f32>(q.x + hash2(vec2<i32>(i32(row), 71)) * PARCEL_M.x, q.y);
+        var id = vec2<i32>(floor(shifted / PARCEL_M));
+        var f = fract(shifted / PARCEL_M) * PARCEL_M;
         let cut = 0.3 + 0.4 * hash2(id + vec2<i32>(5, 3));
         if hash2(id + vec2<i32>(2, 9)) < 0.5 {
-            let second = f.x > cut * size.x;
-            f.x = select(f.x, f.x - cut * size.x, second);
+            let second = f.x > cut * PARCEL_M.x;
+            f.x = select(f.x, f.x - cut * PARCEL_M.x, second);
             id = id * 2 + vec2<i32>(select(0, 1, second), 0);
         }
         let crop = hash2(id + vec2<i32>(9, 17));
@@ -1338,12 +1356,12 @@ fn surroundings(surf: Surface, world: vec3<f32>, fw: f32) -> Surface {
             let along = noise2(p / 7.0, 6.1); // gaps and crowns along it
             let hw = 2.0 + 2.5 * along;
             cover = max(
-                hedge_x * line_cover(f.x, hw, fw, size.x),
-                hedge_z * line_cover(f.y, hw, fw, size.y),
+                hedge_x * line_cover(f.x, hw, fw, PARCEL_M.x),
+                hedge_z * line_cover(f.y, hw, fw, PARCEL_M.y),
             );
         } else if hedge_x + hedge_z > 0.0 {
             // Far beyond the line itself only its mean share remains (`line_cover`).
-            cover = max(hedge_x * 3.25 / size.x, hedge_z * 3.25 / size.y) * smoothstep(2.0, 20.0, fw);
+            cover = max(hedge_x * 3.25 / PARCEL_M.x, hedge_z * 3.25 / PARCEL_M.y) * smoothstep(2.0, 20.0, fw);
         }
         if cover > 0.0 {
             canopy *= 0.75 + 0.5 * noise2(p / 9.0, 4.4);
@@ -1378,6 +1396,28 @@ const GROUND_FACE: u32 = 0xfffffffeu;
 const GROUND_DEPTH: f32 = 0.9999995;
 const EYE_SLOPE_NEAR: f32 = 1.7 / 40.0; // where the horizon fade begins
 
+// Whether the ground's cell (`ring`, `seg`) may lie within reach of the sky volume's lookup
+// (`volume_lifted`: the point lifted up to one and a half cells along its normal, inside the
+// volume's box): its box (corners, plus the arc's bulge) against the volume's in x and z, two
+// cells wider. False without a volume.
+fn ground_cell_near_volume(ring: u32, seg: u32) -> bool {
+    if g.sky_vol_size.w < 0.5 {
+        return false;
+    }
+    let r0 = select(0.0, 0.5 * pow(GROUND_GROWTH, f32(ring) - 1.0), ring > 0u);
+    let r1 = 0.5 * pow(GROUND_GROWTH, f32(ring));
+    let step = 2.0 * PI / f32(GROUND_SEGMENTS);
+    let d0 = vec2<f32>(cos(f32(seg) * step), sin(f32(seg) * step));
+    let d1 = vec2<f32>(cos(f32(seg + 1u) * step), sin(f32(seg + 1u) * step));
+    let lo = g.camera.xz + min(min(d0 * r0, d1 * r0), min(d0 * r1, d1 * r1));
+    let hi = g.camera.xz + max(max(d0 * r0, d1 * r0), max(d0 * r1, d1 * r1));
+    let cell = 1.0 / g.sky_vol.w;
+    let margin = 2.0 * cell + r1 * (1.0 - cos(step * 0.5)) + 0.01;
+    let vlo = g.sky_vol.xz - margin;
+    let vhi = g.sky_vol.xz + (1.0 / g.sky_vol_size.xz - 1.0) * cell + margin;
+    return all(lo <= vhi) && all(hi >= vlo);
+}
+
 @vertex
 fn vs_ground(@builtin(vertex_index) vi: u32) -> Varying {
     let tri = vi / 3u;
@@ -1390,6 +1430,12 @@ fn vs_ground(@builtin(vertex_index) vi: u32) -> Varying {
     let r = ring + dr[k];
     let radius = select(0.0, 0.5 * pow(GROUND_GROWTH, f32(r) - 1.0), r > 0u);
     let angle = f32(seg + ds[k]) * 2.0 * PI / f32(GROUND_SEGMENTS);
+    var out: Varying;
+    if VOLUME_PART != 0u && ground_cell_near_volume(ring, seg) != (VOLUME_PART == 1u) {
+        // Another pipeline draws this cell: a point, nothing.
+        out.clip = vec4<f32>(0.0, 0.0, 0.5, 1.0);
+        return out;
+    }
     let xz = g.camera.xz + radius * vec2<f32>(cos(angle), sin(angle));
     let kind = surround_kind(xz);
     let h = surround_height(xz, kind);
@@ -1398,7 +1444,6 @@ fn vs_ground(@builtin(vertex_index) vi: u32) -> Varying {
     let e = max(1.0, 0.12 * radius);
     let sx = surround_height(xz + vec2<f32>(e, 0.0), kind) - h;
     let sz = surround_height(xz + vec2<f32>(0.0, e), kind) - h;
-    var out: Varying;
     out.clip = g.view_proj * vec4<f32>(world, 1.0);
     out.clip.z = out.clip.w * GROUND_DEPTH;
     out.world = world;
@@ -1442,7 +1487,7 @@ fn fs_ground(in_raw: Varying) -> @location(0) vec4<f32> {
             in.world = g.camera.xyz + normalize(ray) * horizon_m;
         }
     }
-    let c = shade(in, true, false).color;
+    let c = shade(in, true, false, true).color;
     if is_ortho() {
         return vec4<f32>(c, 1.0);
     }
@@ -1487,7 +1532,17 @@ fn fs_ground(in_raw: Varying) -> @location(0) vec4<f32> {
 // first and the discard last, so derivatives stay in uniform control flow.
 @fragment
 fn fs_reflect(in: Varying, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
-    let shaded = shade(in, front, false);
+    return reflected(in, front, false);
+}
+
+// The endless ground in the reflection.
+@fragment
+fn fs_reflect_ground(in: Varying, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    return reflected(in, front, true);
+}
+
+fn reflected(in: Varying, front: bool, ground: bool) -> vec4<f32> {
+    let shaded = shade(in, front, false, ground);
     let a = cutout_alpha(in.uv);
     if (g.reflection.z > 0.5 && in.world.y < g.reflection.w) || (material.alpha.x > 0.0 && a < material.alpha.x) {
         discard;
@@ -1687,7 +1742,7 @@ fn fs_glass_transmit(in: Varying) -> @location(0) vec4<f32> {
 @fragment
 fn fs_glass_reflect(in: Varying, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
     if g.time.w > 0.5 {
-        return vec4<f32>(shade(in, front, false).color * 0.35, 0.0);
+        return vec4<f32>(shade(in, front, false, false).color * 0.35, 0.0);
     }
     let t = glass_terms(in);
     let block = 1.0 - dot(t.transmitted, vec3<f32>(1.0 / 3.0));
@@ -1803,12 +1858,12 @@ fn fs_transparent(in: Varying, @builtin(front_facing) front: bool) -> @location(
     let kind = material.alpha.z;
     if g.time.w > 0.5 {
         // Clay: water as a pale matte surface (glass has its own passes).
-        return vec4<f32>(shade(in, front, false).color, 1.0);
+        return vec4<f32>(shade(in, front, false, false).color, 1.0);
     }
     if kind > 1.5 {
         return water(in);
     }
-    let shaded = shade(in, front, false);
+    let shaded = shade(in, front, false, false);
     let alpha = clamp(shaded.alpha, 0.0, 1.0);
     return vec4<f32>(shaded.color * alpha, alpha);
 }

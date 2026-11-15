@@ -387,6 +387,10 @@ pub struct Quality {
     /// Screen-space reflections in glass and mirrors: 0 off (they mirror the sky and the room
     /// estimate), else the ray's step in pixels (2: half resolution).
     pub screen_reflections: u32,
+    /// The shaders compiled for this preset's own settings (common.wgsl `FAST_SHADING`): what
+    /// the slower presets use (the 3x3 shadow filter) is left out, so integrated GPUs keep
+    /// their shading in registers. Changing it compiles the scene's pipelines again.
+    pub fast_shading: bool,
 }
 
 // `render_scale` is clamped to 0.5..=1 everywhere it is used, never NaN, so
@@ -415,6 +419,7 @@ impl Quality {
         ao_full_resolution: false,
         impostor_resolution: 256,
         screen_reflections: 0,
+        fast_shading: true,
     };
     pub const MEDIUM: Quality = Quality {
         shadow_resolution: 1024,
@@ -433,6 +438,7 @@ impl Quality {
         ao_full_resolution: false,
         impostor_resolution: 256,
         screen_reflections: 2,
+        fast_shading: true,
     };
     pub const HIGH: Quality = Quality {
         shadow_resolution: 2048,
@@ -449,6 +455,7 @@ impl Quality {
         ao_full_resolution: false,
         impostor_resolution: 256,
         screen_reflections: 1,
+        fast_shading: false,
     };
     /// For GPUs with headroom (a desktop card at 100+ fps on HIGH): 4096
     /// shadow maps, full-resolution AO with more taps and a full-resolution
@@ -471,6 +478,7 @@ impl Quality {
         ao_full_resolution: true,
         impostor_resolution: 512,
         screen_reflections: 1,
+        fast_shading: false,
     };
     pub const PRESETS: [(&'static str, Quality); 4] = [
         ("low", Quality::LOW),
@@ -684,7 +692,8 @@ struct SampledPipelines {
     transparent: [wgpu::RenderPipeline; 2],
     /// Glass: [transmission (multiplied), reflection (added)] by double-sided.
     glass: [[wgpu::RenderPipeline; 2]; 2],
-    ground: wgpu::RenderPipeline,
+    /// The endless ground near the sky volume and away from it (`ground_pipeline`).
+    ground: [wgpu::RenderPipeline; 2],
     terrain: wgpu::RenderPipeline,
     /// Impostor quads: depth pre-pass (alpha test, dither), forward (Equal).
     impostor: [wgpu::RenderPipeline; 2],
@@ -777,7 +786,12 @@ enum Pass {
     /// The mirrors (`Material::mirror`) after the opaque scene is copied for screen-space
     /// reflections; with those off they go with `Forward`.
     Mirrors,
-    Reflection,
+    /// `coarsest`: every plant at its last level (its impostor), every other item at its
+    /// coarsest mesh (a quarter-size reflection, MEDIUM: the plants' meshes cost the pass more
+    /// than its pixels).
+    Reflection {
+        coarsest: bool,
+    },
 }
 
 /// The sky source as set by `set_sky`.
@@ -804,6 +818,9 @@ struct Counters {
     /// Draws per pass group, closed by `split`.
     passes: std::cell::RefCell<Vec<(&'static str, u32)>>,
     mark: Cell<u32>,
+    /// Triangles per pass group, as `passes`.
+    pass_triangles: std::cell::RefCell<Vec<(&'static str, u64)>>,
+    triangle_mark: Cell<u64>,
 }
 
 impl Counters {
@@ -823,6 +840,12 @@ impl Counters {
         match passes.iter_mut().find(|(l, _)| *l == label) {
             Some(e) => e.1 += n,
             None => passes.push((label, n)),
+        }
+        let t = self.triangles.get() - self.triangle_mark.replace(self.triangles.get());
+        let mut triangles = self.pass_triangles.borrow_mut();
+        match triangles.iter_mut().find(|(l, _)| *l == label) {
+            Some(e) => e.1 += t,
+            None => triangles.push((label, t)),
         }
     }
 }
@@ -973,16 +996,8 @@ impl Renderer {
     /// values (the overlay blends through an sRGB view, in hardware).
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
         let layouts = Layouts::new(device);
-        let modules: Vec<_> = SHADERS
-            .iter()
-            .map(|(name, parts)| {
-                device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some(name),
-                    source: wgpu::ShaderSource::Wgsl(parts.concat().into()),
-                })
-            })
-            .collect();
         let quality = Quality::HIGH;
+        let modules = shader_modules(device, quality.fast_shading);
         let pipelines = Pipelines::new(device, &layouts, &modules, format);
         let sampled = SampledPipelines::new(device, &layouts, &modules, quality.samples());
 
@@ -1315,7 +1330,22 @@ impl Renderer {
         if quality == self.quality {
             return;
         }
-        if quality.msaa != self.quality.msaa {
+        if quality.fast_shading != self.quality.fast_shading {
+            // Other shaders: every pipeline of the scene and the sky is made again.
+            self.modules = shader_modules(&self.device, quality.fast_shading);
+            self.pipelines = Pipelines::new(
+                &self.device,
+                &self.layouts,
+                &self.modules,
+                self.output_format,
+            );
+            self.sampled = SampledPipelines::new(
+                &self.device,
+                &self.layouts,
+                &self.modules,
+                quality.samples(),
+            );
+        } else if quality.msaa != self.quality.msaa {
             self.sampled = SampledPipelines::new(
                 &self.device,
                 &self.layouts,
@@ -2828,7 +2858,13 @@ impl Renderer {
             });
             pass.set_bind_group(0, &self.reflect_globals_bind, &[]);
             pass.set_bind_group(3, &t.reflect_forward_bind, &[]);
-            self.draw_items(&mut pass, view_proj * m, true, Pass::Reflection);
+            let coarsest = self.quality.water_reflection >= 4;
+            self.draw_items(
+                &mut pass,
+                view_proj * m,
+                true,
+                Pass::Reflection { coarsest },
+            );
             // The endless ground has no hole where the terrain is dug out:
             // seen from water below its height (a pond in the lawn) it would
             // cover the sky the water mirrors.
@@ -2836,7 +2872,7 @@ impl Renderer {
                 .ground
                 .is_some_and(|g| water.is_some_and(|h| h >= g.height))
             {
-                self.draw_ground(&mut pass, &self.pipelines.reflect_ground);
+                self.draw_ground(&mut pass, &[&self.pipelines.reflect_ground]);
             }
             pass.set_pipeline(&self.pipelines.reflect_sky);
             pass.draw(0..3, 0..1);
@@ -2858,7 +2894,17 @@ impl Renderer {
             pass.set_bind_group(3, &t.forward_bind, &[]);
             self.draw_items(&mut pass, view_proj, true, Pass::Forward);
             if self.ground.is_some() {
-                self.draw_ground(&mut pass, &self.sampled.ground);
+                // The cells near the sky volume only when there is one, and after the others:
+                // all ground lies at one depth, so of two cells over the same pixel the last
+                // drawn shows, and before the split that was the cell further out (the rings
+                // are drawn inside out), which the volume's are from where hills hide them.
+                let [near, away] = &self.sampled.ground;
+                let parts: &[&wgpu::RenderPipeline] = if self.sky_volume_box[7] > 0.5 {
+                    &[away, near]
+                } else {
+                    &[away]
+                };
+                self.draw_ground(&mut pass, parts);
             }
             pass.set_pipeline(&self.sampled.sky);
             pass.draw(0..3, 0..1);
@@ -3041,6 +3087,7 @@ impl Renderer {
         self.last_stats = RenderStats {
             draw_calls: self.counters.draws.get(),
             pass_draws: self.counters.passes.take(),
+            pass_triangles: self.counters.pass_triangles.take(),
             triangles: self.counters.triangles.get(),
             instances: self.counters.instances.get(),
             visible_lights,
@@ -3053,11 +3100,11 @@ impl Renderer {
         };
     }
 
-    /// The infinite ground (scene.wgsl `vs_ground`) with its own material.
-    fn draw_ground(&self, pass: &mut wgpu::RenderPass, pipeline: &wgpu::RenderPipeline) {
+    /// The infinite ground (scene.wgsl `vs_ground`) with its own material, with each of
+    /// `pipelines` (the parts of `ground_pipeline`).
+    fn draw_ground(&self, pass: &mut wgpu::RenderPass, pipelines: &[&wgpu::RenderPipeline]) {
         const RINGS: u32 = 80;
         const SEGMENTS: u32 = 192;
-        pass.set_pipeline(pipeline);
         // A material of the scene (the terrain's base layer) when one is set: the ground then
         // looks like it, texture, tiling phase and variation alike, so their border vanishes.
         let bind = self
@@ -3070,8 +3117,11 @@ impl Renderer {
             &self.draw_bind,
             &[(self.ground_slot as u64 * SLOT) as u32],
         );
-        pass.draw(0..RINGS * SEGMENTS * 6, 0..1);
-        self.counters.add((RINGS * SEGMENTS * 2) as u64, 1, false);
+        for pipeline in pipelines {
+            pass.set_pipeline(pipeline);
+            pass.draw(0..RINGS * SEGMENTS * 6, 0..1);
+            self.counters.add((RINGS * SEGMENTS * 2) as u64, 1, false);
+        }
     }
 
     /// The height of the largest visible water surface (by the area of its
@@ -3125,7 +3175,8 @@ impl Renderer {
         }
         Some(match pass {
             Pass::Depth | Pass::Forward | Pass::Mirrors => cluster.lod,
-            Pass::Reflection
+            Pass::Reflection { coarsest: true } => levels - 1,
+            Pass::Reflection { coarsest: false }
             | Pass::Shadow {
                 far: false,
                 coarse: false,
@@ -3195,14 +3246,17 @@ impl Renderer {
     fn draw_items(&self, pass: &mut wgpu::RenderPass, cull: Mat4, near_far: bool, kind: Pass) {
         let mut current: Option<usize> = None;
         let shadow = matches!(kind, Pass::Shadow { .. });
-        let shaded = matches!(kind, Pass::Forward | Pass::Mirrors | Pass::Reflection);
+        let shaded = matches!(
+            kind,
+            Pass::Forward | Pass::Mirrors | Pass::Reflection { .. }
+        );
         let fades = matches!(kind, Pass::Depth | Pass::Forward);
         let order = shadow as usize;
         let late = self.quality.screen_reflections > 0;
         // 0 opaque, 1 cutout, 2 glass: into shadow maps, and into the water's reflection as
         // an opaque pane (without it the reflection looked through every window into the dark
         // room behind it: the dark blobs in a pond).
-        let glass = shadow || matches!(kind, Pass::Reflection);
+        let glass = shadow || matches!(kind, Pass::Reflection { .. });
         let categories = match kind {
             Pass::Mirrors => 3..4,
             _ => 0..2 + glass as usize,
@@ -3255,13 +3309,15 @@ impl Renderer {
                             Pass::Forward if fading => (2 + ds, &self.sampled.forward[2 + ds]),
                             Pass::Depth => (m.variant(), &self.sampled.depth[m.variant()]),
                             Pass::Forward if weights.is_some() => (100, &self.sampled.terrain),
-                            Pass::Reflection if weights.is_some() => {
+                            Pass::Reflection { .. } if weights.is_some() => {
                                 (100, &self.pipelines.reflect_terrain)
                             }
                             Pass::Forward | Pass::Mirrors => {
                                 (m.variant(), &self.sampled.forward[m.variant()])
                             }
-                            Pass::Reflection => (m.variant(), &self.pipelines.reflect[m.variant()]),
+                            Pass::Reflection { .. } => {
+                                (m.variant(), &self.pipelines.reflect[m.variant()])
+                            }
                         };
                         let keep = |c: &Cluster| {
                             if can_fade && c.fading {
@@ -3371,7 +3427,7 @@ impl Renderer {
         let (key, pipeline) = match kind {
             Pass::Depth => (400, &self.sampled.impostor[0]),
             Pass::Forward | Pass::Mirrors => (401, &self.sampled.impostor[1]),
-            Pass::Reflection => (402, &self.pipelines.reflect_impostor),
+            Pass::Reflection { .. } => (402, &self.pipelines.reflect_impostor),
             Pass::Shadow { .. } => (403, &self.pipelines.impostor_shadow),
         };
         if *current != Some(key) {
@@ -3789,7 +3845,11 @@ impl Renderer {
         );
         let bloom = if q.bloom { self.bloom_strength } else { 0.0 };
         b.floats(&[
-            if q.soft_shadows { 9.0 } else { 4.0 },
+            if q.soft_shadows && !q.fast_shading {
+                9.0
+            } else {
+                4.0
+            },
             bloom,
             if q.ao_full_resolution { 1.0 } else { 2.0 },
             ground_height,
@@ -4758,6 +4818,32 @@ fn depth_state(
     }
 }
 
+/// The line of common.wgsl that `Quality::fast_shading` sets to true.
+const FAST_SHADING_LINE: &str = "const FAST_SHADING: bool = false;";
+
+/// One shader module's source (`SHADERS` entry), for the fast shading of MEDIUM and LOW or the
+/// full one.
+fn shader_source(parts: &[&str], fast_shading: bool) -> String {
+    let source = parts.concat();
+    if fast_shading {
+        source.replace(FAST_SHADING_LINE, "const FAST_SHADING: bool = true;")
+    } else {
+        source
+    }
+}
+
+fn shader_modules(device: &wgpu::Device, fast_shading: bool) -> Vec<wgpu::ShaderModule> {
+    SHADERS
+        .iter()
+        .map(|(name, parts)| {
+            device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some(name),
+                source: wgpu::ShaderSource::Wgsl(shader_source(parts, fast_shading).into()),
+            })
+        })
+        .collect()
+}
+
 fn module<'a>(modules: &'a [wgpu::ShaderModule], name: &str) -> &'a wgpu::ShaderModule {
     &modules[SHADERS
         .iter()
@@ -4863,13 +4949,17 @@ fn forward_pipeline(
 }
 
 /// The infinite ground (no vertex buffers, forward layout).
+/// `part`: common.wgsl `VOLUME_PART` (0 the whole ground, 1 its cells near the sky volume, 2
+/// the others, compiled without the volume's lookup).
 fn ground_pipeline(
     device: &wgpu::Device,
     l: &Layouts,
     modules: &[wgpu::ShaderModule],
     fs: &str,
     samples: u32,
+    part: u32,
 ) -> wgpu::RenderPipeline {
+    let constants = [("VOLUME_PART", part as f64)];
     pipeline(
         device,
         PipelineDesc {
@@ -4894,7 +4984,7 @@ fn ground_pipeline(
             )),
             cull: None,
             samples,
-            constants: &[],
+            constants: &constants,
             front_cw: false,
         },
     )
@@ -5201,7 +5291,8 @@ impl SampledPipelines {
                     },
                 )
             }),
-            ground: ground_pipeline(device, l, modules, "fs_ground", samples),
+            ground: [1, 2]
+                .map(|part| ground_pipeline(device, l, modules, "fs_ground", samples, part)),
             sky: sky_pipeline(device, l, modules, samples),
             resolve,
             sea: sea::SeaPipelines::new(device, l, modules, samples),
@@ -5319,7 +5410,7 @@ impl Pipelines {
                 shadow(Some("fs_shadow_glass"), false),
             ],
             reflect,
-            reflect_ground: ground_pipeline(device, l, modules, "fs_reflect", 1),
+            reflect_ground: ground_pipeline(device, l, modules, "fs_reflect_ground", 1, 0),
             reflect_terrain: terrain::pipeline_for(device, l, modules, 1, true),
             reflect_impostor: impostor_pipeline(
                 device,
@@ -5695,8 +5786,9 @@ mod tests {
     /// Every WGSL module parses and validates with naga, without a GPU.
     #[test]
     fn shaders_validate() {
-        for (name, parts) in SHADERS {
-            let source = parts.concat();
+        assert!(COMMON.contains(FAST_SHADING_LINE));
+        for ((name, parts), fast) in SHADERS.iter().flat_map(|s| [(s, false), (s, true)]) {
+            let source = shader_source(parts, fast);
             let module = naga::front::wgsl::parse_str(&source)
                 .unwrap_or_else(|e| panic!("{name}.wgsl: {}", e.emit_to_string(&source)));
             naga::valid::Validator::new(
@@ -5705,6 +5797,39 @@ mod tests {
             )
             .validate(&module)
             .unwrap_or_else(|e| panic!("{name}.wgsl: {}", e.emit_to_string(&source)));
+        }
+    }
+
+    /// Each entry point also validates as wgpu builds its pipelines: compacted to what the entry
+    /// point reaches, the overrides replaced by their values (the defaults here).
+    #[test]
+    fn entry_points_validate_with_their_overrides() {
+        for ((name, parts), fast) in SHADERS.iter().flat_map(|s| [(s, false), (s, true)]) {
+            let source = shader_source(parts, fast);
+            let module = naga::front::wgsl::parse_str(&source).expect("parses");
+            let info = naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                naga::valid::Capabilities::default(),
+            )
+            .validate(&module)
+            .expect("validates");
+            for ep in &module.entry_points {
+                let constants = Default::default();
+                if let Err(e) = naga::back::pipeline_constants::process_overrides(
+                    &module,
+                    &info,
+                    Some((ep.stage, &ep.name)),
+                    &constants,
+                ) {
+                    let detail = match &e {
+                        naga::back::pipeline_constants::PipelineConstantError::ValidationError(
+                            v,
+                        ) => v.emit_to_string(&source),
+                        other => other.to_string(),
+                    };
+                    panic!("{name} {} (fast {fast}): {detail}", ep.name);
+                }
+            }
         }
     }
 

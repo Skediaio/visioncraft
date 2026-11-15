@@ -11,6 +11,8 @@ pub struct RenderStats {
     /// `draw_calls` per pass group: shadow (all cascades), depth,
     /// reflection, forward (with sky and transparent), post.
     pub pass_draws: Vec<(&'static str, u32)>,
+    /// Triangles submitted per pass group, as `pass_draws`.
+    pub pass_triangles: Vec<(&'static str, u64)>,
     /// Triangles submitted in all passes.
     pub triangles: u64,
     /// Instances drawn in the camera's view (after culling and LOD).

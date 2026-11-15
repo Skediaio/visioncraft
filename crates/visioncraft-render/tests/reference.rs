@@ -1796,3 +1796,73 @@ fn p_dusk_after_noon_matches_a_fresh_dusk() {
     }
     assert!(diffs.iter().all(|d| d.1 < 1.0), "{diffs:?}");
 }
+
+/// The endless ground is drawn in two parts when there is a sky volume, the cells near it with
+/// the volume's lookup and the others without (lib.rs `ground_pipeline`): together they cover
+/// the ground exactly once, and the near part does take the volume.
+#[test]
+fn endless_ground_takes_the_sky_volume_near_it() {
+    let mut r = renderer(W, H);
+    r.set_ground(Some(visioncraft_render::Ground {
+        color: [0.3, 0.3, 0.3],
+        variation: 0.0,
+        ..Default::default()
+    }));
+    let aspect = W as f32 / H as f32;
+    let cam = demo::camera(Vec3::new(-6.0, 9.0, 14.0), Vec3::ZERO, aspect);
+    setup(&mut r, cam, Sun::from_angles(160.0, 60.0), 14.0);
+    let none = capture(&mut r, W, H);
+    let dims = [8u32, 4, 8];
+    let n = (dims[0] * dims[1] * dims[2]) as usize;
+    let volume = |sky: f32, r: &mut Renderer| {
+        let samples = vec![[sky, 0.0, 0.0, 0.0]; n];
+        let room = vec![[0.0, 0.0, 0.0, sky]; n];
+        let solid = vec![0u8; 40 * 20 * 40];
+        r.set_sky_volume(Some((
+            [-4.0, -1.0, -4.0],
+            1.0,
+            dims,
+            &samples,
+            &room,
+            (&solid, [40, 20, 40]),
+        )));
+        settle(r);
+        capture(r, W, H)
+    };
+    // A volume open to the whole sky changes nothing: no cell is drawn twice or left out.
+    let open = volume(1.0, &mut r);
+    let differ = none
+        .chunks(4)
+        .zip(open.chunks(4))
+        .filter(|(a, b)| a.iter().zip(b.iter()).any(|(x, y)| x.abs_diff(*y) > 2))
+        .count();
+    assert!(
+        differ <= 4,
+        "{differ} pixels differ with an open-sky volume"
+    );
+    // A closed one darkens the ground inside it and nothing far from it.
+    let closed = volume(0.0, &mut r);
+    let at = |px: &[u8], p: Vec3| {
+        let q = r.project(p).expect("in view");
+        scene_luminance(mean(
+            px,
+            q.x as u32 - 3,
+            q.y as u32 - 3,
+            q.x as u32 + 4,
+            q.y as u32 + 4,
+        ))
+    };
+    let (inside, far) = (Vec3::ZERO, Vec3::new(14.0, 0.0, -6.0));
+    assert!(
+        at(&closed, inside) < 0.95 * at(&none, inside),
+        "the ground in a closed volume is not darker: {} vs {}",
+        at(&closed, inside),
+        at(&none, inside)
+    );
+    assert!(
+        (at(&closed, far) - at(&none, far)).abs() < 0.02 * at(&none, far) + 0.5,
+        "the ground far from the volume changed: {} vs {}",
+        at(&closed, far),
+        at(&none, far)
+    );
+}

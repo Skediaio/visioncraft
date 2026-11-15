@@ -98,23 +98,28 @@ fn terrain_normal_sample(l: Lookup, n: vec3<f32>, layer: i32, relief: f32) -> ve
 
 const HEIGHT_DEPTH: f32 = 0.2;
 
+// One layer's projection: planar from above unless the slope is steep.
+fn layer_lookup(world: vec3<f32>, dwx: vec3<f32>, dwy: vec3<f32>, n: vec3<f32>, inv_scale: f32, steep: bool) -> Lookup {
+    var l = triplanar(world, dwx, dwy, n, inv_scale);
+    if !steep {
+        l.weight = vec3<f32>(0.0, 1.0, 0.0);
+    }
+    return l;
+}
+
 fn terrain_surface(in: TerrainVarying) -> Surface {
     let n = normalize(in.normal);
     let dwx = dpdx(in.world);
     let dwy = dpdy(in.world);
     var weights = array<f32, 8>(in.w0.x, in.w0.y, in.w0.z, in.w0.w, in.w1.x, in.w1.y, in.w1.z, in.w1.w);
-    // Planar from above unless the slope is steep.
     let steep = abs(n.y) < 0.7;
-    var lookups: array<Lookup, 8>;
+    // The lookups are made again in the second loop: kept in an array of eight (over 300
+    // floats) they spilled out of registers on Intel GPUs, which cost more than the arithmetic.
     var orm: array<vec3<f32>, 8>;
     var top = 0.0;
     for (var i = 0; i < 8; i++) {
         if weights[i] > 0.004 {
-            var l = triplanar(in.world, dwx, dwy, n, terrain.layers[i].params.y);
-            if !steep {
-                l.weight = vec3<f32>(0.0, 1.0, 0.0);
-            }
-            lookups[i] = l;
+            let l = layer_lookup(in.world, dwx, dwy, n, terrain.layers[i].params.y, steep);
             orm[i] = terrain_sample(terrain_orm, l, i).rgb;
             top = max(top, orm[i].r + weights[i]);
         }
@@ -132,8 +137,9 @@ fn terrain_surface(in: TerrainVarying) -> Surface {
             let b = max(orm[i].r + weights[i] - (top - HEIGHT_DEPTH), 0.0);
             if b > 0.0 {
                 let layer = terrain.layers[i];
-                base += terrain_sample(terrain_base, lookups[i], i).rgb * layer.color.rgb * b;
-                nsum += terrain_normal_sample(lookups[i], n, i, layer.params.w) * b;
+                let l = layer_lookup(in.world, dwx, dwy, n, layer.params.y, steep);
+                base += terrain_sample(terrain_base, l, i).rgb * layer.color.rgb * b;
+                nsum += terrain_normal_sample(l, n, i, layer.params.w) * b;
                 rough += (layer.params.x * orm[i].g + layer.color.a) * b;
                 metal += orm[i].b * b;
                 ao += orm[i].r * b;
