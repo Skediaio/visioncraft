@@ -64,6 +64,7 @@ mod terrain;
 mod texture;
 mod timing;
 pub mod tonemap;
+pub mod wind;
 
 pub use atmosphere::{Atmosphere, fog_transmittance};
 pub use hardware::{GpuKind, HardwareProbe, Score, calibrate, relative_cost, starting_quality};
@@ -77,6 +78,7 @@ pub use still::Photo;
 pub use still::Still;
 pub use terrain::{TerrainChunk, TerrainLayer};
 pub use texture::{ColorSpace, TextureDesc, TextureId, mip_count};
+pub use wind::Wind;
 
 const HDR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const DEPTH: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -108,7 +110,7 @@ const CLUSTER_CELL: f32 = 8.0;
 /// `set_time` wraps here (seconds) to keep f32 precision in the shaders.
 const TIME_WRAP: f64 = 4096.0;
 /// Byte offset of the SH in the globals (written by the GPU, see env.rs).
-const SH_OFFSET: u64 = 9 * 64 + 42 * 16;
+const SH_OFFSET: u64 = 9 * 64 + 44 * 16;
 /// The roughness up to which a metal is a mirror (`Material::mirror`, scene.wgsl `light`).
 const MIRROR_ROUGHNESS: f32 = 0.1;
 
@@ -309,27 +311,6 @@ impl Material {
             self.metallic_map,
             self.occlusion_map,
         ]
-    }
-}
-
-/// Wind for the vegetation animation.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Wind {
-    /// Where the wind blows to (world; only the horizontal part is used).
-    pub direction: Vec3,
-    /// 0 calm, 1 a moderate breeze, 2 strong wind (relative, not m/s).
-    pub strength: f32,
-    /// 0..1: how much the strength varies in travelling gusts.
-    pub gustiness: f32,
-}
-
-impl Default for Wind {
-    fn default() -> Self {
-        Self {
-            direction: Vec3::X,
-            strength: 0.0,
-            gustiness: 0.5,
-        }
     }
 }
 
@@ -605,6 +586,8 @@ struct Item {
     follows_reach: bool,
     /// Casts shadows with the level it is drawn with (`set_item_shadow_exact`).
     shadow_exact: bool,
+    /// Sways like a conifer (`set_item_conifer`): the plant's natural frequency.
+    conifer: bool,
 }
 
 /// Instances in one ground cell: culled as a unit, drawn as one range, one
@@ -966,6 +949,8 @@ pub struct Renderer {
     /// Multiplies how far impostors draw (their last distance only).
     impostor_reach: f32,
     wind: Wind,
+    /// The wind's phases, integrated by `set_time` (wind.rs).
+    wind_phases: wind::Phases,
     time: f32,
     /// The clock unwrapped (`set_time`): what the clouds drift by, so they never jump.
     clock: f64,
@@ -1285,6 +1270,7 @@ impl Renderer {
             view_distance: 1.0,
             impostor_reach: 1.0,
             wind: Wind::default(),
+            wind_phases: wind::Phases::default(),
             time: 0.0,
             clock: 0.0,
             clay: false,
@@ -1453,10 +1439,12 @@ impl Renderer {
         self.wind = *wind;
     }
 
-    /// Animation time in seconds (wind, water). Wraps every 4096 s.
+    /// Animation time in seconds (wind, water). The water's clock wraps every 4096 s; the wind's
+    /// phases are integrated here with the wind of the moment (never a jump).
     pub fn set_time(&mut self, seconds: f64) {
         self.time = seconds.rem_euclid(TIME_WRAP) as f32;
         self.clock = seconds;
+        self.wind_phases.advance(seconds, self.wind.speed_mps);
     }
 
     /// Clay presentation: opaque and cutout materials draw matte white
@@ -2386,6 +2374,7 @@ impl Renderer {
             shadow_exact: terrain,
             cull_fade: 0.0,
             follows_reach: false,
+            conifer: false,
         }));
         self.set_instances(id, instances);
         id
@@ -2466,13 +2455,47 @@ impl Renderer {
                 }),
             }
         }
+        item.transforms = sorted;
+        self.write_instances(id);
+        self.bounds_dirty = true;
+    }
+
+    /// Uploads an item's instance matrices. The spare w of each matrix's first column carries
+    /// the plant's own sway frequency (Hz; `wind::plant_hz` of its height in the world), which
+    /// the vertex shaders read in every pass: no extra attribute, no per-draw uniform (the depth
+    /// and shadow passes bind none).
+    fn write_instances(&mut self, id: ItemId) {
+        let Some(Some(item)) = self.items.get(id.0 as usize) else {
+            return;
+        };
+        let height = item
+            .parts
+            .iter()
+            .filter_map(|p| self.meshes.get(p.mesh.0 as usize)?.as_ref())
+            .filter(|m| m.wind)
+            .filter_map(|m| m.bounds)
+            .map(|(_, hi)| hi.y)
+            .reduce(f32::max);
         let mut b = Bytes::default();
-        for m in &sorted {
+        for m in &item.transforms {
+            let mut m = *m;
+            if let Some(h) = height {
+                m.x_axis.w = wind::plant_hz(h * m.x_axis.truncate().length(), item.conifer);
+            }
             b.floats(&m.to_cols_array());
         }
         self.queue.write_buffer(&item.instances, 0, &b.0);
-        item.transforms = sorted;
-        self.bounds_dirty = true;
+    }
+
+    /// An item's plants sway like conifers (stiffer: a higher natural frequency than a leafed
+    /// broadleaf of the same height, `wind::plant_hz`).
+    pub fn set_item_conifer(&mut self, id: ItemId, conifer: bool) {
+        if let Some(Some(item)) = self.items.get_mut(id.0 as usize) {
+            if item.conifer != conifer {
+                item.conifer = conifer;
+                self.write_instances(id);
+            }
+        }
     }
 
     /// Items drawn (for tests that nothing is left behind).
@@ -3543,10 +3566,10 @@ impl Renderer {
                 .filter_map(|p| self.meshes.get(p.mesh.0 as usize)?.as_ref())
                 .collect();
             let mesh_bounds = meshes.iter().filter_map(|m| m.bounds).reduce(union);
-            // Room for the wind's sway (tips lean a few percent of their size).
+            // Room for the wind's sway at any speed (the lean and the detail both saturate).
             let mesh_bounds = match (mesh_bounds, meshes.iter().any(|m| m.wind)) {
                 (Some((lo, hi)), true) => {
-                    let pad = Vec3::splat(0.1 * (hi - lo).max_element() + 0.1);
+                    let pad = Vec3::splat(wind::bounds_pad((hi - lo).max_element()));
                     Some((lo - pad, hi + pad))
                 }
                 (b, _) => b,
@@ -3782,13 +3805,10 @@ impl Renderer {
         for u in [mesh, face, self.overlay_on_top, 0] {
             b.0.extend_from_slice(&u.to_le_bytes());
         }
-        let dir = Vec2::new(self.wind.direction.x, self.wind.direction.z).normalize_or(Vec2::X);
-        b.floats(&[
-            dir.x,
-            dir.y,
-            self.wind.strength.max(0.0),
-            self.wind.gustiness.clamp(0.0, 1.0),
-        ]);
+        let wind = wind::Uniforms::new(&self.wind, &self.wind_phases);
+        b.floats(&wind.wind);
+        b.floats(&wind.phase);
+        b.floats(&wind.amp);
         b.floats(&[
             self.time,
             exposure,
@@ -3870,7 +3890,7 @@ impl Renderer {
         // Clouds drift with the wind, about 3 m/s in a moderate breeze, by the unwrapped clock
         // (the shader clock wraps every 68 minutes): continuous for weeks of running.
         let wind = Vec2::new(self.wind.direction.x, self.wind.direction.z).normalize_or_zero();
-        let travelled = (1.0 + 2.0 * f64::from(self.wind.strength)) * self.clock;
+        let travelled = (1.0 + 2.0 * f64::from(self.wind.strength())) * self.clock;
         let drift = Vec2::new(
             (f64::from(wind.x) * travelled) as f32,
             (f64::from(wind.y) * travelled) as f32,
@@ -4156,7 +4176,7 @@ fn snow_cover_matrix(eye: Vec3, lo: Vec3, hi: Vec3, resolution: u32) -> Mat4 {
 const SNOW_COVER_M: f32 = 160.0;
 
 fn globals_size() -> u64 {
-    // 9 matrices, 42 vec4s, the 9 SH vec4s last; see common.wgsl.
+    // 9 matrices, 44 vec4s, the 9 SH vec4s last; see common.wgsl.
     SH_OFFSET + 9 * 16
 }
 

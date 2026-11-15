@@ -738,7 +738,7 @@ pub fn forest(r: &mut Renderer, trees: usize, understory: usize, half: f32) -> u
     add_plants_with_impostor(r, &shrub, &shrub_mats, [3.0, 8.0, 80.0], &shrub_at);
     r.set_wind(&crate::Wind {
         direction: Vec3::new(1.0, 0.0, 0.4),
-        strength: 0.6,
+        speed_mps: 0.6 * crate::wind::RELATIVE_MPS,
         gustiness: 0.5,
     });
     tree[0].triangles()
@@ -1005,7 +1005,7 @@ pub fn foliage_tree(r: &mut Renderer) {
     r.add_item(wall, white, &[Mat4::IDENTITY]);
     r.set_wind(&crate::Wind {
         direction: Vec3::new(1.0, 0.0, 0.3),
-        strength: 1.5,
+        speed_mps: 1.5 * crate::wind::RELATIVE_MPS,
         gustiness: 0.5,
     });
 }
@@ -1338,7 +1338,7 @@ pub fn budget_with(r: &mut Renderer, o: &BudgetOptions) -> (usize, usize) {
     }
     r.set_wind(&crate::Wind {
         direction: Vec3::new(1.0, 0.0, 0.4),
-        strength: if o.wind { 1.0 } else { 0.0 },
+        speed_mps: if o.wind { crate::wind::RELATIVE_MPS } else { 0.0 },
         gustiness: 0.5,
     });
     (static_tris, per * shrubs.len())
