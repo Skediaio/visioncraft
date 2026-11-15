@@ -916,7 +916,10 @@ mod tests {
         assert!(plain.iter().all(|p| p.layer < Some(3)));
         // The canopy keeps its places but is smaller at the edge; deeper in it is unchanged.
         let canopy = |v: &[crate::planting::Placement]| {
-            v.iter().filter(|p| p.layer == Some(0)).cloned().collect::<Vec<_>>()
+            v.iter()
+                .filter(|p| p.layer == Some(0))
+                .cloned()
+                .collect::<Vec<_>>()
         };
         let (a, b) = (canopy(&plain), canopy(&banded));
         assert_eq!(a.len(), b.len());
@@ -950,10 +953,14 @@ mod tests {
         for q in [[0.0, 0.0], [20.0, 0.0], [20.0, 20.0]] {
             assert!(crate::planting::point_in_polygon(q, &a.outline));
         }
-        let (lo, hi) = a.outline.iter().fold((f32::MAX, f32::MIN), |(l, h), q| {
-            (l.min(q[0]), h.max(q[0]))
-        });
-        assert!((lo + 5.0).abs() < 0.1 && (hi - 25.0).abs() < 0.1, "{lo} {hi}");
+        let (lo, hi) = a
+            .outline
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(l, h), q| (l.min(q[0]), h.max(q[0])));
+        assert!(
+            (lo + 5.0).abs() < 0.1 && (hi - 25.0).abs() < 0.1,
+            "{lo} {hi}"
+        );
         assert!(p.assignments.iter().any(|x| x.material == "forest-floor"));
         s.run(
             "planting.add_single",

@@ -1204,7 +1204,11 @@ fn evaluate_forms(generator: &Generator, ground: &dyn Fn(f32, f32) -> Option<f32
                 let depth = |p: [f32; 2]| {
                     (0..g.outline.len())
                         .map(|i| {
-                            distance_to_segment(p, g.outline[i], g.outline[(i + 1) % g.outline.len()])
+                            distance_to_segment(
+                                p,
+                                g.outline[i],
+                                g.outline[(i + 1) % g.outline.len()],
+                            )
                         })
                         .fold(f32::INFINITY, f32::min)
                 };

@@ -60,7 +60,10 @@ pub fn shadow_caster(
     }
     let pts: Vec<P> = crown.iter().map(|&i| mesh.positions[i]).collect();
     // Farthest-point seeds (the first: the highest point), then a few k-means steps.
-    let highest = pts.iter().copied().fold(pts[0], |a, p| if p[1] > a[1] { p } else { a });
+    let highest = pts
+        .iter()
+        .copied()
+        .fold(pts[0], |a, p| if p[1] > a[1] { p } else { a });
     let mut centres = vec![highest];
     while centres.len() < BLOBS {
         let near = |p: P| centres.iter().map(|&c| d2(p, c)).fold(f32::MAX, f32::min);

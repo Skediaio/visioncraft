@@ -27,8 +27,8 @@
 pub mod math;
 mod mesh;
 mod params;
-mod shadow;
 pub mod scan;
+mod shadow;
 mod species;
 mod texture;
 

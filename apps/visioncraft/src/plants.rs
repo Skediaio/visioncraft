@@ -1222,7 +1222,11 @@ pub(crate) fn generate_variant_now(
         .then(|| flora::shadow_caster(params, &meshes[meshes.len() - 1], season))
         .flatten()
     {
-        levels.push((SHADOW_LEVEL, vec![(flora::Material::Bark, c.part)], [1.0; 3]));
+        levels.push((
+            SHADOW_LEVEL,
+            vec![(flora::Material::Bark, c.part)],
+            [1.0; 3],
+        ));
     }
     crate::load_stats::add(&format!("~plant mesh {name}"), crate::assets::now_ms() - t);
     Generated {

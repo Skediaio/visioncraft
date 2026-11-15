@@ -3420,8 +3420,14 @@ impl Renderer {
                 continue;
             };
             let runs = Self::runs(item, 1, seen, |c| {
-                Self::cluster_lod(item, c, Pass::Shadow { far: false, coarse: false })
-                    == Some(SHADOW_CASTER_LEVEL)
+                Self::cluster_lod(
+                    item,
+                    c,
+                    Pass::Shadow {
+                        far: false,
+                        coarse: false,
+                    },
+                ) == Some(SHADOW_CASTER_LEVEL)
             });
             if runs.is_empty() {
                 continue;

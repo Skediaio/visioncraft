@@ -324,7 +324,10 @@ mod tests {
         };
         let (young, old) = (cover(&mut s, 0), cover(&mut s, 50));
         assert_eq!(young["area_m2"], 1600.0);
-        assert!(young["cover"].as_f64() < old["cover"].as_f64(), "{young} {old}");
+        assert!(
+            young["cover"].as_f64() < old["cover"].as_f64(),
+            "{young} {old}"
+        );
         assert!(old["cover"].as_f64().unwrap() > 0.7, "{old}");
         s.run(
             "planting.add_single",
