@@ -51,6 +51,40 @@ pub struct PlantLayer {
     pub random_rotation: bool,
     /// Drops points closer (horizontally) than this to any point of an EARLIER layer.
     pub keep_clear_m: f32,
+    /// A scatter's or brush's edge band: the layer grows only this deep (m) inside the edge (a
+    /// forest's shrub mantle, its herb fringe). 0 (not written): everywhere.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub edge_within_m: f32,
+    /// Plants shrink towards the edge over this depth (m), to `edge_scale` of their size at it
+    /// (smaller trees at a forest's edge). 0 (not written): they do not.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub edge_taper_m: f32,
+    /// The share (0..1) of their size plants have at the very edge, with `edge_taper_m`.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub edge_scale: f32,
+}
+
+/// A layer's edge band (`PlantLayer::edge_within_m`, `edge_taper_m`, `edge_scale`).
+#[derive(Clone, Copy, Default)]
+struct Edge {
+    within: f32,
+    taper: f32,
+    scale: f32,
+}
+
+impl Edge {
+    /// The size factor of a plant `depth` metres inside the edge, `None` where the layer does
+    /// not grow.
+    fn at(self, depth: f32) -> Option<f32> {
+        if self.within > 0.0 && depth > self.within {
+            return None;
+        }
+        Some(if self.taper > 0.0 && self.scale > 0.0 {
+            self.scale + (1.0 - self.scale) * (depth / self.taper).clamp(0.0, 1.0)
+        } else {
+            1.0
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -831,6 +865,109 @@ fn stroke_hits(s: &Stroke, p: [f32; 2]) -> bool {
         .any(|w| distance_to_segment(p, w[0], w[1]) <= s.radius_m)
 }
 
+/// The ground a scatter or brush plants: its bounding box `[min, max]` and whether a point is in
+/// it (a brush's strokes and erasures, clipped like [`evaluate`] does). `None` for generators
+/// without an area (lines, single plants, clusters, surface fills).
+pub fn planted_area(g: &Generator) -> Option<PlantedArea<'_>> {
+    match g {
+        Generator::AreaScatter(a) => Some((
+            bounds(a.outline.iter().copied()),
+            Box::new(move |p| point_in_polygon(p, &a.outline)),
+        )),
+        Generator::MixedBrush(m) => {
+            let b = bounds(m.strokes.iter().filter(|s| !s.erase).flat_map(|s| {
+                s.points.iter().flat_map(|p| {
+                    [
+                        [p[0] - s.radius_m, p[1] - s.radius_m],
+                        [p[0] + s.radius_m, p[1] + s.radius_m],
+                    ]
+                })
+            }));
+            let clipped = m.clip_outline.len() >= 3;
+            Some((
+                b,
+                Box::new(move |p| {
+                    (!clipped || point_in_polygon(p, &m.clip_outline))
+                        && !m
+                            .clip_holes
+                            .iter()
+                            .any(|h| h.len() >= 3 && point_in_polygon(p, h))
+                        && m.strokes
+                            .iter()
+                            .rev()
+                            .find(|s| stroke_hits(s, p))
+                            .is_some_and(|s| !s.erase)
+                }),
+            ))
+        }
+        Generator::Cluster(c) => Some((
+            [
+                [c.center[0] - c.radius_m, c.center[1] - c.radius_m],
+                [c.center[0] + c.radius_m, c.center[1] + c.radius_m],
+            ],
+            Box::new(move |p| (p[0] - c.center[0]).hypot(p[1] - c.center[1]) <= c.radius_m),
+        )),
+        _ => None,
+    }
+}
+
+/// A polygon round the ground a scatter, brush or cluster plants: a scatter's own outline, a
+/// disc for a cluster, the convex hull of a brush's stroke discs (a bent stroke's inside is
+/// filled; erasures are ignored). `None` for generators without an area.
+pub fn planted_outline(g: &Generator) -> Option<Vec<[f32; 2]>> {
+    let disc = |c: [f32; 2], r: f32, n: usize| -> Vec<[f32; 2]> {
+        (0..n)
+            .map(|i| {
+                let a = std::f32::consts::TAU * i as f32 / n as f32;
+                [c[0] + r * a.cos(), c[1] + r * a.sin()]
+            })
+            .collect()
+    };
+    match g {
+        Generator::AreaScatter(a) => Some(a.outline.clone()),
+        Generator::Cluster(c) => Some(disc(c.center, c.radius_m, 24)),
+        Generator::MixedBrush(m) => {
+            let mut pts: Vec<[f32; 2]> = m
+                .strokes
+                .iter()
+                .filter(|s| !s.erase)
+                .flat_map(|s| s.points.iter().flat_map(|p| disc(*p, s.radius_m, 16)))
+                .collect();
+            if pts.len() < 3 {
+                return None;
+            }
+            // Andrew's monotone chain, counter-clockwise.
+            pts.sort_by(|a, b| a[0].total_cmp(&b[0]).then(a[1].total_cmp(&b[1])));
+            let cross = |o: [f32; 2], a: [f32; 2], b: [f32; 2]| {
+                (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+            };
+            let mut hull: Vec<[f32; 2]> = Vec::new();
+            for pass in 0..2 {
+                let start = hull.len();
+                let it: Box<dyn Iterator<Item = &[f32; 2]>> = if pass == 0 {
+                    Box::new(pts.iter())
+                } else {
+                    Box::new(pts.iter().rev())
+                };
+                for &p in it {
+                    while hull.len() >= start + 2
+                        && cross(hull[hull.len() - 2], hull[hull.len() - 1], p) <= 0.0
+                    {
+                        hull.pop();
+                    }
+                    hull.push(p);
+                }
+                hull.pop();
+            }
+            Some(hull)
+        }
+        _ => None,
+    }
+}
+
+/// A bounding box and a point-in-area test (`planted_area`).
+pub type PlantedArea<'a> = ([[f32; 2]; 2], Box<dyn Fn([f32; 2]) -> bool + 'a>);
+
 /// What one layer of a generator needs to be evaluated; a generator without layers is one tier
 /// made of its own fields.
 struct Tier<'a> {
@@ -840,6 +977,7 @@ struct Tier<'a> {
     scale: (f32, f32),
     spin: bool,
     keep_clear: f32,
+    edge: Edge,
     seed: u64,
     /// Index of the `PlantLayer`, for plants it makes.
     layer: Option<u32>,
@@ -860,6 +998,11 @@ fn tiers<'a>(own: Tier<'a>, layers: &'a [PlantLayer], seed: u64) -> Vec<Tier<'a>
             scale: (l.scale_min, l.scale_max),
             spin: l.random_rotation,
             keep_clear: l.keep_clear_m,
+            edge: Edge {
+                within: l.edge_within_m,
+                taper: l.edge_taper_m,
+                scale: l.edge_scale,
+            },
             seed: mix(seed ^ 0x504C_414E_545F_4C59, i as i64),
             layer: Some(i as u32),
         })
@@ -1053,10 +1196,22 @@ fn evaluate_forms(generator: &Generator, ground: &dyn Fn(f32, f32) -> Option<f32
                 scale: (g.scale_min, g.scale_max),
                 spin: g.random_rotation,
                 keep_clear: 0.0,
+                edge: Edge::default(),
                 layer: None,
                 seed: g.seed,
             };
             run_tiers(tiers(own, &g.layers, g.seed), |t, keep| {
+                let depth = |p: [f32; 2]| {
+                    (0..g.outline.len())
+                        .map(|i| {
+                            distance_to_segment(
+                                p,
+                                g.outline[i],
+                                g.outline[(i + 1) % g.outline.len()],
+                            )
+                        })
+                        .fold(f32::INFINITY, f32::min)
+                };
                 let (pts, truncated) = grid_points(
                     b,
                     t.density,
@@ -1067,11 +1222,18 @@ fn evaluate_forms(generator: &Generator, ground: &dyn Fn(f32, f32) -> Option<f32
                         point_in_polygon(p, &g.outline)
                             && !keep.near([p[0], 0.0, p[1]])
                             && edge_keeps(&g.outline, g.edge_fade_m, t.seed, p)
+                            && (t.edge.within <= 0.0 || t.edge.at(depth(p)).is_some())
                     },
                 );
                 let out = pts
                     .into_iter()
-                    .map(|(p, mut rng)| make(t.palette, t.scale, t.spin, y_at(p), &mut rng))
+                    .map(|(p, mut rng)| {
+                        let mut pl = make(t.palette, t.scale, t.spin, y_at(p), &mut rng);
+                        if t.edge.taper > 0.0 {
+                            pl.scale *= t.edge.at(depth(p)).unwrap_or(1.0);
+                        }
+                        pl
+                    })
                     .collect();
                 (out, truncated)
             })
@@ -1108,17 +1270,42 @@ fn evaluate_forms(generator: &Generator, ground: &dyn Fn(f32, f32) -> Option<f32
                 scale: (g.scale_min, g.scale_max),
                 spin: true,
                 keep_clear: 0.0,
+                edge: Edge::default(),
                 layer: None,
                 seed: g.seed,
             };
             run_tiers(tiers(own, &g.layers, g.seed), |t, keep| {
+                // How far inside the painted ground a point is: the deepest of the strokes.
+                let depth = |p: [f32; 2]| {
+                    g.strokes
+                        .iter()
+                        .filter(|s| !s.erase)
+                        .map(|s| {
+                            let d = s
+                                .points
+                                .windows(2)
+                                .map(|w| distance_to_segment(p, w[0], w[1]))
+                                .chain(s.points.first().map(|&a| distance_to_segment(p, a, a)))
+                                .fold(f32::INFINITY, f32::min);
+                            s.radius_m - d
+                        })
+                        .fold(0.0, f32::max)
+                };
                 let (pts, truncated) =
                     grid_points(b, t.density, t.seed, 1.0, t.min_distance, |p| {
-                        covered(p) && !keep.near([p[0], 0.0, p[1]])
+                        covered(p)
+                            && !keep.near([p[0], 0.0, p[1]])
+                            && (t.edge.within <= 0.0 || t.edge.at(depth(p)).is_some())
                     });
                 let out = pts
                     .into_iter()
-                    .map(|(p, mut rng)| make(t.palette, t.scale, t.spin, y_at(p), &mut rng))
+                    .map(|(p, mut rng)| {
+                        let mut pl = make(t.palette, t.scale, t.spin, y_at(p), &mut rng);
+                        if t.edge.taper > 0.0 {
+                            pl.scale *= t.edge.at(depth(p)).unwrap_or(1.0);
+                        }
+                        pl
+                    })
                     .collect();
                 (out, truncated)
             })
@@ -1605,6 +1792,7 @@ pub fn evaluate_surface_fill(fill: &SurfaceFill, model: &ImportedModel) -> Surfa
         scale: (fill.scale_min, fill.scale_max),
         spin: fill.random_rotation,
         keep_clear: 0.0,
+        edge: Edge::default(),
         layer: None,
         seed: fill.seed,
     };
@@ -2426,6 +2614,9 @@ mod layer_tests {
             scale_max: seed_scale,
             random_rotation: true,
             keep_clear_m: keep,
+            edge_within_m: 0.0,
+            edge_taper_m: 0.0,
+            edge_scale: 0.0,
         }
     }
 

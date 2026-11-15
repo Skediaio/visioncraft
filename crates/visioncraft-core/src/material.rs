@@ -256,7 +256,7 @@ fn plain(
     }
 }
 
-/// The twelve plain materials a new project starts with (our own values, linear colours).
+/// The plain materials a new project starts with (our own values, linear colours).
 pub fn builtin_palette() -> Vec<Material> {
     let pbr = |scale: f32| SurfaceKind::StandardTriplanarPbr {
         map_scale_m: scale,
@@ -339,6 +339,25 @@ pub fn builtin_palette() -> Vec<Material> {
         plain("paving", "Paving", [0.35, 0.34, 0.33], 0.0, 0.80, pbr(0.6)),
         plain("metal", "Metal", [0.55, 0.56, 0.58], 1.0, 0.35, pbr(1.0)),
         plain("soil", "Soil", [0.06, 0.035, 0.02], 0.0, 1.0, pbr(1.0)),
+        // Humus and moss under woodland (`planting.add_floor`): the library's CC0 Ground 045
+        // (ambientCG, Lennart Demes), 3 m to a tile.
+        {
+            let mut m = plain(
+                "forest-floor",
+                "Forest floor",
+                [1.0, 1.0, 1.0],
+                0.0,
+                1.0,
+                pbr(3.0),
+            );
+            m.maps = MaterialMaps {
+                base_color: Some("materials/ground045/basecolor.jpg".into()),
+                normal: Some("materials/ground045/normal.jpg".into()),
+                orm: Some("materials/ground045/orm.jpg".into()),
+                ..Default::default()
+            };
+            m
+        },
         // Dry beach sand: pale, warm; darkened where wet by the sea's shore band.
         plain("sand", "Sand", [0.50, 0.42, 0.30], 0.0, 0.95, pbr(1.0)),
         // The room behind a window: dark, so glass reads as glass, lit by lamps inside.
@@ -505,10 +524,10 @@ mod tests {
     #[test]
     fn palette_is_valid_and_unique() {
         let p = builtin_palette();
-        assert_eq!(p.len(), 14);
+        assert_eq!(p.len(), 15);
         assert!(p.iter().all(|m| m.validate().is_ok()));
         let ids: std::collections::BTreeSet<_> = p.iter().map(|m| &m.id).collect();
-        assert_eq!(ids.len(), 14);
+        assert_eq!(ids.len(), 15);
     }
 
     #[test]

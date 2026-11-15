@@ -1784,6 +1784,10 @@ impl Scene {
                 // fails only for a removed impostor: the tree then stops at its far mesh
                 Some((imp, max, small)) => {
                     if r.set_item_impostor(item, imp, max).is_ok() {
+                        // A tree's shadow in the levels past its finest: a few blobs, no cards.
+                        if let Some(m) = self.shadow_for(project, asset, variant, when) {
+                            r.set_item_shadow_caster(item, m);
+                        }
                         // At eye level a shrub far away is hidden anyway: its reach follows the camera.
                         r.set_item_follows_reach(item, small);
                     }
@@ -1825,6 +1829,22 @@ impl Scene {
             .into_iter()
             .map(|(mesh, mat)| r.add_item(mesh, mat, matrices))
             .collect()
+    }
+
+    /// A generated tree's shadow caster (`Flora::shadow_caster`).
+    fn shadow_for(
+        &self,
+        project: &Project,
+        asset: &str,
+        variant: u32,
+        when: When,
+    ) -> Option<MeshId> {
+        if self.library.knows(asset) {
+            return None;
+        }
+        let res = plants::resolve(project, asset)?;
+        let (class, _) = when.class(&res.params);
+        self.flora.shadow_caster(asset, class, variant)
     }
 
     /// A plant's baked impostor and how far it draws (catalogue models: a plant's on MEDIUM and

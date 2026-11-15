@@ -29,6 +29,22 @@ pub(super) fn register(s: &mut Session) {
     );
     s.register_with_spec(
         spec(
+            "planting.canopy_cover",
+            "Canopy Cover of a Planting",
+            "How much of a planted area (an area scatter or a brush) its woody plants close from above: the share of the area under at least one crown, counted on a grid, from the placements and each plant's crown width (growth table width at its age, times its scale). Trees, conifers, palms and shrubs count. `years` after planting shows how it closes as the plants grow.",
+            vec![
+                param("id", T::String, "Planting id (an area scatter or a brush).").required(),
+                param("years", T::Number, "Years after planting (0..60).").default(json!(0)),
+                param("cell_m", T::Number, "Grid cell (m, 0.1..10).").default(json!(1)),
+            ],
+            "{id, years, area_m2, covered_m2, cover (0..1), crowns, mean_crown_width_m, cell_m}",
+            json!({"id": "g1", "years": 30}),
+        )
+        .read_only(),
+        canopy_cover,
+    );
+    s.register_with_spec(
+        spec(
             "planting.growth_conflicts",
             "Growth Conflicts",
             "Where trees (and single shrubs) will grow into a building or into each other: the first year (up to `years`) a crown reaches a block's wall or two crowns meet. Trees of lines and scatters count too, at most 400 plants.",
@@ -102,6 +118,80 @@ fn planting_growth(project: &mut Project, params: &Value) -> Result<Value, Comma
         })
         .collect();
     Ok(json!({"id": p.id, "assets": assets}))
+}
+
+/// The crowns (centre, radius) of a generator's woody plants `years` after planting: trees,
+/// conifers and palms, and with `shrubs` the shrubs too.
+pub(super) fn crowns(
+    project: &Project,
+    g: &Generator,
+    years: f32,
+    shrubs: bool,
+) -> Vec<([f32; 2], f32)> {
+    let ground = |x: f32, z: f32| {
+        project
+            .terrain
+            .as_deref()
+            .and_then(|t| t.height_at(x, z))
+            .or(Some(0.0))
+    };
+    crate::planting::evaluate(g, &ground)
+        .placements
+        .iter()
+        .filter_map(|pl| {
+            let gr = growth_of(&pl.asset, None);
+            (matches!(gr.grower, Grower::Tree | Grower::Conifer | Grower::Palm)
+                || (shrubs && gr.grower == Grower::Shrub))
+                .then(|| {
+                    let age = planted_age(g, &pl.asset) + years;
+                    let width = gr.mature_width_m * gr.size(age).width * pl.scale;
+                    ([pl.position[0], pl.position[2]], width / 2.0)
+                })
+        })
+        .collect()
+}
+
+fn canopy_cover(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct P {
+        id: String,
+        #[serde(default)]
+        years: f32,
+        #[serde(default = "one")]
+        cell_m: f32,
+    }
+    let p: P = parse(params)?;
+    if !(0.0..=YEARS_MAX).contains(&p.years) {
+        return Err(bad("years: 0..60"));
+    }
+    if !(0.1..=10.0).contains(&p.cell_m) {
+        return Err(bad("cell_m: 0.1..10"));
+    }
+    let g = project
+        .generators
+        .iter()
+        .find(|g| g.id() == p.id)
+        .ok_or_else(|| fail(format!("no planting `{}`", p.id)))?;
+    let (bounds, inside) = crate::planting::planted_area(g)
+        .ok_or_else(|| fail("canopy cover needs an area scatter or a brush"))?;
+    let crowns = crowns(project, g, p.years, true);
+    let c = crate::canopy::canopy_cover(bounds, &*inside, &crowns, p.cell_m);
+    let mean = crowns.iter().map(|c| 2.0 * c.1).sum::<f32>() / crowns.len().max(1) as f32;
+    Ok(json!({
+        "id": p.id,
+        "years": p.years,
+        "area_m2": round(c.area_m2),
+        "covered_m2": round(c.covered_m2),
+        "cover": round(c.fraction),
+        "crowns": crowns.len(),
+        "mean_crown_width_m": round(mean),
+        "cell_m": c.cell_m,
+    }))
+}
+
+fn one() -> f32 {
+    1.0
 }
 
 fn thirty() -> f32 {
@@ -226,6 +316,35 @@ fn distance_to_outline(p: [f32; 2], outline: &[[f32; 2]]) -> f32 {
 mod tests {
     use crate::{Project, Session};
     use serde_json::json;
+
+    #[test]
+    fn canopy_cover_rises_with_the_years_and_needs_an_area() {
+        let mut s = Session::new(Project::default());
+        s.run(
+            "planting.add_area",
+            json!({"name": "Wood", "outline": [[0, 0], [40, 0], [40, 40], [0, 40]], "seed": 2,
+                "asset_palette": [{"asset": "flora:fagus-sylvatica", "weight": 1}],
+                "density_per_m2": 0.02}),
+        )
+        .unwrap();
+        let cover = |s: &mut Session, years: u32| {
+            s.run("planting.canopy_cover", json!({"id": "g1", "years": years}))
+                .unwrap()
+        };
+        let (young, old) = (cover(&mut s, 0), cover(&mut s, 50));
+        assert_eq!(young["area_m2"], 1600.0);
+        assert!(
+            young["cover"].as_f64() < old["cover"].as_f64(),
+            "{young} {old}"
+        );
+        assert!(old["cover"].as_f64().unwrap() > 0.7, "{old}");
+        s.run(
+            "planting.add_single",
+            json!({"name": "Oak", "asset": "flora:quercus-robur", "position": [5, 0, 5]}),
+        )
+        .unwrap();
+        assert!(s.run("planting.canopy_cover", json!({"id": "g2"})).is_err());
+    }
 
     #[test]
     fn a_tree_grows_and_reaches_the_house() {

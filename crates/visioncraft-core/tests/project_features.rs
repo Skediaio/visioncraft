@@ -45,7 +45,7 @@ fn version_one_file_without_new_fields_loads() {
     assert_eq!(p.layers.len(), 4);
     assert_eq!(p.layers[0].name, "Model");
     assert_eq!(p.models[0].layer, "model");
-    assert_eq!(p.materials.len(), 14);
+    assert_eq!(p.materials.len(), 15);
     assert!(p.shapes.is_empty() && p.generators.is_empty() && !p.style.clay);
     assert!(p.species.is_empty() && p.view == Default::default() && p.terrain.is_none());
 }
@@ -697,7 +697,7 @@ fn layered_planting_commands_and_presets() {
     let g = id(s.run("planting.add_brush", json!({"name": "Forest", "asset_palette": [{"asset": "flora:quercus-robur", "weight": 1.0}], "density_per_m2": 0.01, "strokes": [{"points": [[0.0, 0.0], [30.0, 0.0]], "radius_m": 8.0, "erase": false}]})).unwrap());
     s.run(
         "planting.apply_preset",
-        json!({"id": g, "preset": "broadleaf-woodland"}),
+        json!({"id": g, "preset": "broadleaf-woodland", "edge_band_m": 0}),
     )
     .unwrap();
     assert!(

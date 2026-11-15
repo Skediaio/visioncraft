@@ -270,6 +270,22 @@ pub(super) fn register(s: &mut Session) {
     );
     s.register_with_spec(
         spec(
+            "planting.add_floor",
+            "Add Forest Floor",
+            "Lays an area of ground material (default `forest-floor`: dark humus with moss, from the library's CC0 Ground 045) under a woodland. Its outline follows the crowns of the planting's trees (a ray from their centre to the farthest crown, smoothed), so it is irregular and ends under the outer crowns; it is an ordinary area (the lawn does not grow under it, and the lawn's edge wanders as a mowing edge does). Trees thinned or small in an open edge band leave the lawn showing.",
+            vec![
+                param("id", T::String, "Planting id (area scatter, brush or cluster).").required(),
+                param("material", T::String, "Material id of the ground.").default(json!("forest-floor")),
+                param("years", T::Number, "Crowns as they are this many years after planting (0..60); 60 is fully grown, as pictures show them unless the view sets years.").default(json!(60)),
+                param("margin_m", T::Number, "Grow the outline outward by this much (0..20).").unit("m").default(json!(0)),
+            ],
+            "{id}",
+            json!({"id": "g1"}),
+        ),
+        add_floor,
+    );
+    s.register_with_spec(
+        spec(
             "planting.update",
             "Update Planting",
             "Changes any fields of a generator (every field of its add command except `type`, and `planted_age_years`: how old its plants are when planted, null for each species' usual age, see `planting.growth`); fields given replace the old ones whole, the result is validated.",
@@ -301,9 +317,10 @@ pub(super) fn register(s: &mut Session) {
                         "pond-margin",
                         "mediterranean",
                     ]),
+                param("edge_band_m", T::Number, "Forest-edge band (0..30): a shrub mantle this deep inside the edge, a herb fringe two fifths of it, trees shrinking towards the edge; deterministic by the planting's seed. Default 8 for the woodland presets (broadleaf, conifer, mixed, woodland-edge), 0 for the others; 0 gives the preset as it is.").unit("m"),
             ],
             "null",
-            json!({"id": "g1", "preset": "mixed-woodland"}),
+            json!({"id": "g1", "preset": "mixed-woodland", "edge_band_m": 8}),
         ),
         apply_preset,
     );
@@ -647,6 +664,57 @@ fn add_cluster(project: &mut Project, params: &Value) -> Result<Value, CommandEr
     })
 }
 
+fn add_floor(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct P {
+        id: String,
+        #[serde(default = "forest_floor")]
+        material: String,
+        #[serde(default = "full_grown")]
+        years: f32,
+        #[serde(default)]
+        margin_m: f32,
+    }
+    fn forest_floor() -> String {
+        "forest-floor".into()
+    }
+    fn full_grown() -> f32 {
+        60.0
+    }
+    let p: P = parse(params)?;
+    if !(0.0..=20.0).contains(&p.margin_m) || !(0.0..=60.0).contains(&p.years) {
+        return Err(bad("margin_m: 0..20, years: 0..60"));
+    }
+    let g = project
+        .generators
+        .iter()
+        .find(|g| g.id() == p.id)
+        .ok_or_else(|| fail(format!("no generator `{}`", p.id)))?;
+    if crate::planting::planted_area(g).is_none() {
+        return Err(fail(
+            "a forest floor needs an area scatter, a brush or a cluster",
+        ));
+    }
+    let crowns = super::growth::crowns(project, g, p.years, false);
+    let outline = crate::canopy::crown_outline(&crowns)
+        .ok_or_else(|| fail("the planting has no trees to lay a floor under"))?;
+    let outline = crate::shape::offset_outline(&outline, p.margin_m);
+    let name = format!("{} floor", g.name());
+    // A project from before the palette had it gets the library's leaf litter now.
+    if !project.materials.iter().any(|m| m.id == p.material)
+        && let Some(m) = crate::material::builtin_palette()
+            .into_iter()
+            .find(|m| m.id == p.material)
+    {
+        project.materials.push(m);
+    }
+    super::shapes::add_area(
+        project,
+        &json!({"name": name, "outline": outline, "material": p.material}),
+    )
+}
+
 fn find<'a>(project: &'a mut Project, params: &Value) -> Result<&'a mut Generator, CommandError> {
     let id = params["id"].as_str().ok_or_else(|| bad("missing id"))?;
     project
@@ -716,17 +784,31 @@ fn apply_preset(project: &mut Project, params: &Value) -> Result<Value, CommandE
         .into_iter()
         .find(|p| p.id == name)
         .ok_or_else(|| fail(format!("no preset `{name}`")))?;
-    let layers = match find(project, params)? {
-        Generator::AreaScatter(g) => &mut g.layers,
-        Generator::MixedBrush(g) => &mut g.layers,
-        Generator::SurfaceFill(g) => &mut g.layers,
+    let band = match params.get("edge_band_m") {
+        None | Some(Value::Null) => crate::presets::default_edge_band_m(name),
+        Some(v) => v
+            .as_f64()
+            .filter(|b| (0.0..=30.0).contains(b))
+            .ok_or_else(|| bad("edge_band_m: 0..30"))? as f32,
+    };
+    let preset_layers = crate::presets::with_edge_band(preset.layers, band);
+    // A woodland is a grown stand: its plants start at the preset's stand age unless the
+    // planting has an age of its own (nursery age 8 would show a young plantation).
+    let stand = crate::presets::stand_age_years(name);
+    let (layers, age) = match find(project, params)? {
+        Generator::AreaScatter(g) => (&mut g.layers, &mut g.planted_age_years),
+        Generator::MixedBrush(g) => (&mut g.layers, &mut g.planted_age_years),
+        Generator::SurfaceFill(g) => (&mut g.layers, &mut g.planted_age_years),
         _ => {
             return Err(fail(
                 "only a brush, area scatter or surface fill takes layers",
             ));
         }
     };
-    *layers = preset.layers;
+    *layers = preset_layers;
+    if age.is_none() {
+        *age = stand;
+    }
     Ok(Value::Null)
 }
 
@@ -815,4 +897,110 @@ fn duplicate(project: &mut Project, params: &Value) -> Result<Value, CommandErro
     }
     project.generators.push(copy);
     Ok(json!({ "id": id }))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{Project, Session};
+    use serde_json::json;
+
+    #[test]
+    fn woodland_presets_start_grown_and_close_from_above() {
+        for (preset, min) in [("mixed-woodland", 0.8), ("broadleaf-woodland", 0.8)] {
+            let mut s = Session::new(Project::default());
+            s.run(
+                "planting.add_area",
+                json!({"name": "Wood", "outline": [[0, 0], [100, 0], [100, 100], [0, 100]],
+                    "seed": 3, "density_per_m2": 0.01,
+                    "asset_palette": [{"asset": "flora:betula-pendula", "weight": 1}]}),
+            )
+            .unwrap();
+            s.run(
+                "planting.apply_preset",
+                json!({"id": "g1", "preset": preset, "edge_band_m": 0}),
+            )
+            .unwrap();
+            let c = s.run("planting.canopy_cover", json!({"id": "g1"})).unwrap();
+            assert!(c["cover"].as_f64().unwrap() >= min, "{preset}: {c}");
+        }
+    }
+
+    #[test]
+    fn a_forest_edge_band_puts_shrubs_and_small_trees_at_the_edge() {
+        let run = |band: Option<f64>| {
+            let mut s = Session::new(Project::default());
+            s.run(
+                "planting.add_area",
+                json!({"name": "Wood", "outline": [[0, 0], [60, 0], [60, 60], [0, 60]], "seed": 4, "density_per_m2": 0.01,
+                    "asset_palette": [{"asset": "flora:betula-pendula", "weight": 1}]}),
+            )
+            .unwrap();
+            let mut p = json!({"id": "g1", "preset": "mixed-woodland"});
+            if let Some(b) = band {
+                p["edge_band_m"] = json!(b);
+            }
+            s.run("planting.apply_preset", p).unwrap();
+            let g = &s.project().generators[0];
+            crate::planting::evaluate(g, &|_, _| Some(0.0)).placements
+        };
+        let (plain, banded) = (run(Some(0.0)), run(None));
+        let depth = |p: &crate::planting::Placement| {
+            let (x, z) = (p.position[0], p.position[2]);
+            x.min(60.0 - x).min(z).min(60.0 - z)
+        };
+        // Layer 3 and 4 are the band's: nothing deeper in than the band.
+        let band: Vec<_> = banded.iter().filter(|p| p.layer >= Some(3)).collect();
+        assert!(!band.is_empty());
+        assert!(band.iter().all(|p| depth(p) <= 8.0 + 1e-3));
+        assert!(plain.iter().all(|p| p.layer < Some(3)));
+        // The canopy keeps its places but is smaller at the edge; deeper in it is unchanged.
+        let canopy = |v: &[crate::planting::Placement]| {
+            v.iter()
+                .filter(|p| p.layer == Some(0))
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        let (a, b) = (canopy(&plain), canopy(&banded));
+        assert_eq!(a.len(), b.len());
+        for (x, y) in a.iter().zip(&b) {
+            assert_eq!(x.position, y.position);
+            if depth(x) >= 8.0 {
+                assert_eq!(x.scale, y.scale);
+            } else {
+                assert!(y.scale < x.scale + 1e-6);
+            }
+        }
+        assert!(a.iter().zip(&b).any(|(x, y)| y.scale < 0.8 * x.scale));
+        assert_eq!(banded, run(None), "deterministic");
+    }
+
+    #[test]
+    fn a_forest_floor_follows_the_planted_ground() {
+        let mut s = Session::new(Project::default());
+        s.run(
+            "planting.add_brush",
+            json!({"name": "Wood", "asset_palette": [{"asset": "flora:betula-pendula", "weight": 1}],
+                "density_per_m2": 0.02, "strokes": [{"points": [[0, 0], [20, 0], [20, 20]], "radius_m": 5, "erase": false}]}),
+        )
+        .unwrap();
+        s.run("planting.add_floor", json!({"id": "g1"})).unwrap();
+        let p = s.project();
+        let crate::shape::Shape::Area(a) = &p.shapes[0] else {
+            panic!("an area");
+        };
+        // The outline follows the crowns: a polygon of rays round their centre, ending under
+        // the outer crowns (inside the brush's reach), not a ruler-straight hull.
+        assert_eq!(a.outline.len(), 72);
+        assert!(a
+            .outline
+            .iter()
+            .all(|q| (-10.0..=30.0).contains(&q[0]) && (-10.0..=30.0).contains(&q[1])));
+        assert!(p.assignments.iter().any(|x| x.material == "forest-floor"));
+        s.run(
+            "planting.add_single",
+            json!({"name": "Oak", "asset": "flora:quercus-robur", "position": [5, 0, 5]}),
+        )
+        .unwrap();
+        assert!(s.run("planting.add_floor", json!({"id": "g2"})).is_err());
+    }
 }

@@ -356,7 +356,7 @@ fn placements_know_their_layer() {
     let mut s = example_session("x");
     s.run(
         "planting.apply_preset",
-        json!({"id": "g1", "preset": "broadleaf-woodland"}),
+        json!({"id": "g1", "preset": "broadleaf-woodland", "edge_band_m": 0}),
     )
     .unwrap();
     s.run(

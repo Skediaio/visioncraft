@@ -307,7 +307,7 @@ It replaces the project (undoable) with a 20 by 30 m plot built from commands: h
 lawn, border, path, pond, hedge, trees, lights and six viewpoints. `{"name": "estate"}` is the large one:
 a 100 by 60 m plot round an imported 3DCraft villa (its model travels inside the program as
 `example:villa.3dcraft`), two lawns over 1,000 m2, a brushed woodland, a border, a pond carved in
-the terrain, path lights, a walnut on a hidden layer and three viewpoints. `{"name":
+the terrain, path lights, a walnut on a hidden layer and four viewpoints. `{"name":
 "beach-house"}` is a furnished single-storey house imported from 3DCraft
 (`example:beach-house.3dcraft`, one body per element group, from
 `examples/models/beach-house/`), with library materials, catalogue furniture, downlights in
@@ -332,7 +332,9 @@ off (recipe 19).
 projects were before); `view.render` and viewpoints can take their own `years`. Each planting
 starts at its `planted_age_years` (default per species: a nursery tree 8, hedge whips 2,
 perennials 1). The growth data are estimates, one table per species (`planting.growth` says
-which). `visioncraft-cli export FILE --out DIR --years 0 --years 5 --years 10` renders a growth
+which). `planting.canopy_cover {id, years}` (read-only) reports how much of a scatter's or
+brush's area its crowns close from above (0..1); woodland presets should reach 0.8 to 0.95 fully
+grown. `visioncraft-cli export FILE --out DIR --years 0 --years 5 --years 10` renders a growth
 series of every viewpoint.
 
 ### 17. The four seasons, and snow

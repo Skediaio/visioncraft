@@ -254,6 +254,20 @@ fn fs_shadow_glass(in: DepthOut) {
     }
 }
 
+// A tree's shadow caster (flora's shadow.rs): covers `uv.x` of the shadow map's texels, chosen
+// by a hash of the texel (white noise: a regular pattern showed as a checkerboard), which the
+// percentage-closer filter averages to a partial shadow, darker for a denser crown.
+@fragment
+fn fs_shadow_dither(in: DepthOut) {
+    let p = vec2<u32>(in.clip.xy);
+    var h = p.x * 747796405u + p.y * 2891336453u + 1013904223u;
+    h = ((h >> ((h >> 28u) + 4u)) ^ h) * 277803737u;
+    h = (h >> 22u) ^ h;
+    if (f32(h & 1023u) + 0.5) / 1024.0 >= in.uv.x {
+        discard;
+    }
+}
+
 // ---- forward pass --------------------------------------------------------
 
 struct Varying {

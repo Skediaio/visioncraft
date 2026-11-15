@@ -33,7 +33,70 @@ fn layer(
         scale_max: 1.15,
         random_rotation: true,
         keep_clear_m,
+        edge_within_m: 0.0,
+        edge_taper_m: 0.0,
+        edge_scale: 0.0,
     }
+}
+
+/// The woodland presets' usual edge band (m): a shrub mantle this deep, a herb fringe two
+/// fifths of it, trees shrinking to about half their size at the edge. Forestry describes a
+/// mature edge as a shrub mantle of a few metres to ten with a herb fringe in front of it.
+pub fn default_edge_band_m(preset: &str) -> f32 {
+    match preset {
+        "broadleaf-woodland" | "conifer-woodland" | "mixed-woodland" | "woodland-edge" => 8.0,
+        _ => 0.0,
+    }
+}
+
+/// The age (years) the woodland presets' plants have when planted, so a stand reads as grown:
+/// the species' growth tables (`growth`) give crowns that close from above at about this age.
+pub fn stand_age_years(preset: &str) -> Option<f32> {
+    match preset {
+        "broadleaf-woodland" | "mixed-woodland" => Some(40.0),
+        "conifer-woodland" => Some(30.0),
+        _ => None,
+    }
+}
+
+/// `layers` with a forest-edge band `band_m` deep (0: unchanged): the first layer's trees
+/// taper to 55 % towards the edge, and a shrub mantle and a herb fringe are added unless the
+/// preset has its own shrubs. Evaluation is deterministic by the generator's seed.
+pub fn with_edge_band(mut layers: Vec<PlantLayer>, band_m: f32) -> Vec<PlantLayer> {
+    if band_m <= 0.0 || layers.is_empty() {
+        return layers;
+    }
+    layers[0].edge_taper_m = band_m;
+    layers[0].edge_scale = 0.55;
+    if layers.iter().all(|l| !l.name.contains("Shrub")) {
+        let mut mantle = layer(
+            "Edge shrubs",
+            &[
+                ("cornus-alba", 1.0),
+                ("viburnum-opulus", 1.0),
+                ("sambucus-nigra", 1.0),
+            ],
+            0.12,
+            1.5,
+            1.0,
+        );
+        mantle.edge_within_m = band_m;
+        layers.push(mantle);
+    }
+    let mut fringe = layer(
+        "Edge herbs",
+        &[
+            ("calamagrostis-acutiflora", 2.0),
+            ("geranium-rozanne", 1.0),
+            ("alchemilla-mollis", 1.0),
+        ],
+        1.0,
+        0.4,
+        0.8,
+    );
+    fringe.edge_within_m = 0.4 * band_m;
+    layers.push(fringe);
+    layers
 }
 
 fn preset(id: &str, name: &str, layers: Vec<PlantLayer>) -> PlantingPreset {
