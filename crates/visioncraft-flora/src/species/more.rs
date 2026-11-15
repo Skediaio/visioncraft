@@ -625,7 +625,10 @@ pub(super) fn build(v: &mut Vec<Species>) {
                 NO,
             ],
         )
-        .leaves_on(1, 0.3)
+        // Needles along the stems' upper parts too: subsp. mugo is "a low, shrubby, often
+        // multi-stemmed plant" with "dark green leaves ("needles") in pairs, 3-6 centimetres"
+        // (Wikipedia, "Pinus mugo"): a mound of shoots, not a clump of crowns on bare legs.
+        .leaves_on(0, 0.35)
         .form(),
         leaf(
             Needles {

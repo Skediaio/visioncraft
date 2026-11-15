@@ -876,6 +876,12 @@ fn spray(
         scale_spray(cv, base, ang, len, (len * 0.035).max(2.0), col, rng, 2);
         return;
     }
+    if let LeafShape::Needles { length_m, bundle } = lf.shape
+        && bundle >= 2
+    {
+        pine_spray(cv, p, base, ang, len, length_m * px_per_m, col, rng);
+        return;
+    }
     if leaf_px > len * 0.6 {
         // Leaves about the card's size (lily pads, rhubarb): one leaf fills the card.
         let twig = mix(p.bark.colour, [0.35, 0.3, 0.2], 0.5);
@@ -903,6 +909,69 @@ fn spray(
         0
     };
     twig(cv, p, base, ang, len, depth, leaf_px, col, rng);
+}
+
+/// A pine's branch end: a pine carries its needles in bundles (fascicles of two to five; two in
+/// Scots and mountain pine) round its last few years' shoots, which stand in a whorl at the
+/// branch tip, each ending in a bud (Wikipedia, "Pine", Foliage). Drawn as bottle-brush shoots
+/// (a leader and whorls of side shoots) from a short bare stem at `base`, the needles pointing
+/// forward round each shoot; those seen end-on or slanting towards the viewer come out shorter.
+/// Flat fronds of needles along branching twigs (`twig`) read as a fern or a yew.
+fn pine_spray(
+    cv: &mut Canvas,
+    p: &PlantParams,
+    base: (f32, f32),
+    ang: f32,
+    len: f32,
+    needle_px: f32,
+    col: Rgb,
+    rng: &mut Rng,
+) {
+    let twig_col = mix(p.bark.colour, [0.35, 0.3, 0.2], 0.5);
+    let nl = needle_px.min(len * 0.3);
+    let at = |q: (f32, f32), a: f32, l: f32| (q.0 + sin(a) * l, q.1 - cos(a) * l);
+    // One shoot from `q` at angle `a`, `l` long: its twig, the needles round it, its bud.
+    let shoot = |cv: &mut Canvas, q: (f32, f32), a: f32, l: f32, rng: &mut Rng| {
+        let tip = at(q, a, l);
+        cv.line(q, tip, 1.6, 1.0, twig_col);
+        let steps = (l / 1.2) as usize;
+        for i in 0..steps {
+            let t = (i as f32 + rng.f()) / steps.max(1) as f32;
+            let o = at(q, a, l * t);
+            for _ in 0..3 {
+                let side = if rng.f() < 0.5 { 1.0 } else { -1.0 };
+                // Round the shoot: a needle's angle to it in the picture, and its length shortened
+                // by how far it points at or away from the viewer. Older needles (further down)
+                // are darker.
+                let na = a + side * deg_r(20.0 + 50.0 * rng.f());
+                let ll = nl * (0.35 + 0.65 * rng.f());
+                let c = mul(jitter(col, 0.18, rng), 0.72 + 0.35 * t);
+                cv.line(o, at(o, na, ll), 1.1, 0.5, c);
+            }
+        }
+        // The terminal bud, pale brown.
+        cv.line(tip, at(tip, a, nl * 0.25), 2.2, 1.2, mix(twig_col, [0.75, 0.62, 0.45], 0.6));
+    };
+    // A leader with two whorls of side shoots along it (a year's growth apart) and a whorl at
+    // its tip, needled over its outer two thirds: the older wood further in has shed its needles.
+    let stem = len * 0.12;
+    let fork = at(base, ang, stem);
+    cv.line(base, fork, 2.2, 1.6, twig_col);
+    let lead = len - stem - nl * 0.6;
+    for (k, t) in [0.3f32, 0.62].into_iter().enumerate() {
+        let q = at(fork, ang, lead * t);
+        for s in [-1.0f32, 1.0] {
+            let a = ang + s * deg_r(38.0 + 22.0 * rng.f()) + 0.1 * rng.sym();
+            let l = lead * (1.0 - t) * rng.range(0.6, 0.8) * if k == 0 { 1.1 } else { 0.9 };
+            shoot(cv, q, a, l, rng);
+        }
+    }
+    let top = at(fork, ang, lead * 0.82);
+    for s in [-1.0f32, 1.0] {
+        shoot(cv, top, ang + s * deg_r(22.0 + 15.0 * rng.f()), lead * rng.range(0.15, 0.22), rng);
+    }
+    // The leader last, so its needles lie over the side shoots'.
+    shoot(cv, fork, ang + 0.05 * rng.sym(), lead, rng);
 }
 
 /// A leaf cluster (cells 14 and 15): one shoot from the bottom centre of the cell with its
@@ -969,7 +1038,8 @@ fn clump(cv: &mut Canvas, p: &PlantParams, rng: &mut Rng, tint: f32) {
     let px_per_m = (2.0 * r) / (p.leaves.card_m * CLUMP_SCALE);
     let leaf_px = (p.leaves.leaf_m * px_per_m).max(3.0);
     let col = tone(p.leaves.colour, tint);
-    let n = 34;
+    let pine = matches!(p.leaves.shape, LeafShape::Needles { bundle: 2.., .. });
+    let n = if pine { 22 } else { 34 };
     for k in 0..n {
         let f = (k as f32 + rng.f()) / n as f32;
         let a = rng.f() * TAU;
@@ -984,6 +1054,13 @@ fn clump(cv: &mut Canvas, p: &PlantParams, rng: &mut Rng, tint: f32) {
         // Twig and its end leaf stay inside the cell: leaves cut by the cell's edge read as a
         // straight, polygonal crown outline.
         let len = (r - rad - leaf_px).max(r * 0.2) * (0.65 + 0.35 * rng.f());
+        if pine {
+            // Brushes of needles radiating from the middle, not fronds.
+            let a = a + 0.5 * rng.sym();
+            let base = (q.0 - sin(a) * len * 0.1, q.1 + cos(a) * len * 0.1);
+            pine_spray(cv, p, base, a, len * 1.1, leaf_px, mul(col, shade), rng);
+            continue;
+        }
         let depth = if len / leaf_px > 5.0 { 1 } else { 0 };
         twig(
             cv,
@@ -1013,7 +1090,11 @@ fn clump(cv: &mut Canvas, p: &PlantParams, rng: &mut Rng, tint: f32) {
         serration: p.leaves.serration,
         veins: false,
     };
-    for _ in 0..140 {
+    // Enough leaves to cover the middle one and a half times over: 140 narrow olive leaves left
+    // half of it open, a hole that shows as a pale or dark blotch in a far crown.
+    let leaf_area = leaf_px * leaf_px * st.aspect * 0.6;
+    let fill = ((PI * (r * 0.4) * (r * 0.4) * 1.5 / leaf_area.max(1.0)) as usize).clamp(140, 600);
+    for _ in 0..fill {
         let a = rng.f() * TAU;
         let rad = r * 0.4 * rng.f().sqrt();
         let q = (c.0 + sin(a) * rad, c.1 - cos(a) * rad);
@@ -1092,6 +1173,10 @@ fn mass_tile(p: &PlantParams, rng: &mut Rng) -> Vec<[f32; 4]> {
 
 fn draw_flower(cv: &mut Canvas, p: &PlantParams, cell_var: u32, rng: &mut Rng) {
     let Some(f) = &p.flowers else { return };
+    if matches!(p.form, Form::GroundCover(_)) {
+        mat_in_flower(cv, p, rng);
+        return;
+    }
     let c = (CELL_PX as f32 * 0.5, CELL_PX as f32 * 0.5);
     let full = CELL_PX as f32 * 0.5 - CELL_MARGIN as f32 - 1.0;
     let col = jitter(f.colour, 0.12, rng);
@@ -1105,6 +1190,10 @@ fn draw_flower(cv: &mut Canvas, p: &PlantParams, cell_var: u32, rng: &mut Rng) {
     let twig = mix(p.bark.colour, [0.3, 0.25, 0.2], 0.4);
     match f.shape {
         FlowerShape::Daisy { droop } => {
+            // Ray colour varies from plant to plant, pink to purple (Friends of the Eloise
+            // Butler Wildflower Garden, "Purple Coneflower"): the four cells span a little of it.
+            let k = (cell_var % 4) as f32 / 3.0 - 0.5;
+            let col = [col[0] * (1.0 - 0.12 * k), col[1], col[2] * (1.0 + 0.12 * k)];
             let n = 14 + (cell_var as usize % 3);
             for k in 0..n {
                 let a = TAU * k as f32 / n as f32 + 0.1 * rng.sym();
@@ -1468,6 +1557,50 @@ fn plume(
     }
 }
 
+/// A flowering piece of a ground-cover mat seen from above: its small leaves, and over them
+/// clusters of small flowers on short shoots (creeping thyme's flowers come in clusters, pink
+/// or mauve, over leaves 3-8 mm long; Wikipedia, "Thymus serpyllum"). The outline is ragged and
+/// the leaves show between the clusters: a whole card of florets read as a sheet of pink paper.
+fn mat_in_flower(cv: &mut Canvas, p: &PlantParams, rng: &mut Rng) {
+    let Some(f) = &p.flowers else { return };
+    let c = (CELL_PX as f32 * 0.5, CELL_PX as f32 * 0.5);
+    let full = CELL_PX as f32 * 0.5 - CELL_MARGIN as f32 - 1.0;
+    let lf = &p.leaves;
+    // Pixels per metre of the flower card.
+    let px_m = 2.0 * full / f.card_m.max(0.01);
+    let leaf_px = (lf.leaf_m * px_m).clamp(4.0, full * 0.3);
+    let st = LeafStyle {
+        shape: lf.shape,
+        aspect: lf.aspect,
+        serration: 0.0,
+        veins: false,
+    };
+    for _ in 0..110 {
+        let a = rng.f() * TAU;
+        let rr = full * 0.85 * rng.f().sqrt();
+        let q = (c.0 + sin(a) * rr, c.1 - cos(a) * rr);
+        let col = mul(jitter(lf.colour, lf.colour_var, rng), 0.75 + 0.3 * rng.f());
+        draw_leaf(cv, q, rng.f() * TAU, leaf_px * rng.range(0.8, 1.15), st, col);
+    }
+    let heads = 13;
+    let head_r = full * 0.17;
+    for _ in 0..heads {
+        let a = rng.f() * TAU;
+        let rr = (full - head_r) * 0.9 * rng.f().sqrt();
+        let h = (c.0 + sin(a) * rr, c.1 - cos(a) * rr);
+        let base = jitter(f.colour, 0.1, rng);
+        for k in 0..11 {
+            let fa = rng.f() * TAU;
+            let fr = head_r * (0.15 + 0.85 * rng.f().sqrt());
+            let q = (h.0 + sin(fa) * fr, h.1 - cos(fa) * fr);
+            // Lower florets of a cluster in its shade, the upper lit.
+            let shade = 0.72 + 0.4 * (k as f32 / 10.0);
+            let pc = mul(mix(base, f.centre, 0.35 * rng.f()), shade);
+            cv.disc(q, head_r * rng.range(0.22, 0.32), pc);
+        }
+    }
+}
+
 /// A fan of grass blades from the bottom centre (far grass cards).
 fn blade_fan(cv: &mut Canvas, p: &PlantParams, rng: &mut Rng, droop: f32) {
     let base = (
@@ -1475,23 +1608,51 @@ fn blade_fan(cv: &mut Canvas, p: &PlantParams, rng: &mut Rng, droop: f32) {
         CELL_PX as f32 - CELL_MARGIN as f32 - 1.0,
     );
     let lpx = CELL_PX as f32 - 2.0 * CELL_MARGIN as f32 - 4.0;
-    for _ in 0..90 {
-        let a0 = deg_r(70.0) * rng.sym();
-        let l = lpx * (0.6 + 0.4 * rng.f()) * (1.0 - 0.25 * (a0 / deg_r(70.0)).abs());
-        let segs = 6;
-        let mut q = base;
-        let mut a = a0 * 0.6;
-        let col = jitter(p.leaves.colour, p.leaves.colour_var, rng);
+    let half = CELL_PX as f32 * 0.5 - CELL_MARGIN as f32 - 2.0;
+    // A clump's blades rise from a crown a few centimetres across, the inner ones upright and
+    // long, the outer ones leaning out further and arching over (a fountain, not a V from one
+    // point); older outer blades are straw-coloured. Drawn back to front: first the outer and
+    // dead ones, then the upright inner ones over them, so the middle is dense and dark at the
+    // foot. With uniform straight blades from one point, borders read as cartoon tufts at 10 m.
+    let n = 110;
+    let mut blades: Vec<(f32, f32)> = (0..n)
+        .map(|_| {
+            let s = rng.sym();
+            (s, s.abs() + 0.25 * rng.f())
+        })
+        .collect();
+    blades.sort_by(|a, b| b.1.total_cmp(&a.1));
+    for (s, _) in blades {
+        let outer = s.abs();
+        let a0 = deg_r(72.0) * s;
+        let l = lpx * (0.55 + 0.45 * rng.f()) * (1.0 - 0.3 * outer * outer);
+        let segs = 7;
+        let mut q = (base.0 + 9.0 * s + 3.0 * rng.sym(), base.1);
+        let mut a = a0 * 0.55;
+        let dead = outer > 0.5 && rng.f() < 0.12;
+        let mut col = jitter(p.leaves.colour, p.leaves.colour_var * 1.4, rng);
+        if dead {
+            col = mix(col, [0.62, 0.55, 0.36], 0.75);
+        }
+        let bend = s.signum() * (0.06 + droop * 0.3) * (0.4 + outer);
+        let w0 = 1.6 + 1.4 * rng.f();
         for k in 0..segs {
             let t = k as f32 / segs as f32;
             let e = (
                 q.0 + sin(a) * l / segs as f32,
                 q.1 - cos(a) * l / segs as f32,
             );
-            let w = 2.2 * (1.0 - t) + 0.4;
-            cv.line(q, e, w, w * 0.85, mul(col, 0.8 + 0.3 * t));
+            // A blade arching past the card's side ends there (its tip lost, not bent into a
+            // straight edge down the card).
+            if (e.0 - base.0).abs() > half {
+                break;
+            }
+            let w = w0 * (1.0 - 0.8 * t) + 0.4;
+            // Dark at the foot (in the clump's own shade), lighter towards the lit tips.
+            let shade = 0.6 + 0.55 * t * (1.0 - 0.3 * outer);
+            cv.line(q, e, w, w * 0.8, mul(col, shade));
             q = e;
-            a += a0.signum() * droop * 0.25;
+            a += bend;
         }
     }
 }
