@@ -558,3 +558,50 @@ fn a_saved_example_keeps_its_embedded_model() {
     let opened = execute(&mut h, 4, "file.open", json!({"path": "old.visioncraft"}));
     assert_eq!(opened["result"]["missingModels"], json!([]), "{opened}");
 }
+
+#[test]
+fn planting_refuses_an_unknown_asset_id_but_a_file_with_one_still_opens() {
+    let root = dir("unknown-asset");
+    let mut h = Headless::new(Access::roots(Some(root.clone()), Some(root.clone())));
+    // An app fixture (put in the catalogue by hand here) and a species are accepted.
+    let mut fixture = h.state.catalog.assets[0].clone();
+    fixture.id = "vc-path-light".into();
+    h.state.catalog.assets.push(fixture);
+    let single = |asset: &str| json!({"name": "T", "asset": asset, "position": [1, 0, 1]});
+    for asset in ["vc-path-light", "flora:quercus-robur"] {
+        let r = execute(&mut h, 1, "planting.add_single", single(asset));
+        assert_eq!(r["ok"], true, "{asset}: {r}");
+    }
+    // The wrong id is refused with the right one among the suggestions.
+    let r = execute(
+        &mut h,
+        2,
+        "planting.add_single",
+        single("flora:vc-path-light"),
+    );
+    assert_eq!(r["ok"], false, "{r}");
+    let e = r["error"].as_str().unwrap();
+    assert!(
+        e.contains("`flora:vc-path-light`") && e.contains("`vc-path-light`"),
+        "{e}"
+    );
+    // A palette is checked too; a refusal changes nothing.
+    let area = json!({"name": "A", "asset_palette": [{"asset": "nope", "weight": 1}],
+                      "outline": [[0, 0], [4, 0], [4, 4]], "density_per_m2": 1.0});
+    assert_eq!(execute(&mut h, 3, "planting.add_area", area)["ok"], false);
+    assert_eq!(h.session.project().generators.len(), 2);
+    // A saved file that names an unknown asset opens all the same.
+    execute(&mut h, 4, "file.save", json!({"path": "u.visioncraft"}));
+    let path = root.join("u.visioncraft");
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, text.replace("vc-path-light", "gone-asset")).unwrap();
+    let opened = execute(&mut h, 5, "file.open", json!({"path": "u.visioncraft"}));
+    assert_eq!(opened["ok"], true, "{opened}");
+    assert!(
+        h.session
+            .project()
+            .generators
+            .iter()
+            .any(|g| g.assets().contains(&"gone-asset"))
+    );
+}

@@ -58,5 +58,6 @@
   ["viewpoint.add", {"name": "Overview", "position": [112, 40, 88], "target": [50, 0, 30], "fov_y_deg": 50}],
   ["viewpoint.add", {"name": "Across the pond", "position": [64, 1.7, 57], "target": [47, 3, 15], "fov_y_deg": 55}],
   ["viewpoint.add", {"name": "Woodland edge", "position": [58, 1.7, 53], "target": [84, 5, 46], "fov_y_deg": 60}],
-  ["viewpoint.add", {"name": "Wood from above", "position": [88, 48, 92], "target": [88, 0, 46], "fov_y_deg": 50}]
+  ["viewpoint.add", {"name": "Wood from above", "position": [88, 48, 92], "target": [88, 0, 46], "fov_y_deg": 50}],
+  ["viewpoint.add", {"name": "Inside the wood", "position": [86, 1.7, 55], "target": [90, 3.5, 40], "fov_y_deg": 60}]
 ]

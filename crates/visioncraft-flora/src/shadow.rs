@@ -7,10 +7,10 @@ use crate::{Material, MeshPart, PlantMesh, PlantParams, Season, SeasonState};
 
 /// Blobs a crown is split into.
 pub const BLOBS: usize = 8;
-/// Triangles of the caster at most: the blobs' octahedra and the trunk's six sides.
-pub const MAX_TRIANGLES: usize = BLOBS * 8 + 12;
+/// Triangles of the caster at most: the blobs' icosahedra and the trunk's six sides.
+pub const MAX_TRIANGLES: usize = BLOBS * 20 + 12;
 /// Smallest and largest share of a crown's shadow that is solid.
-const DENSITY: (f32, f32) = (0.2, 0.6);
+const DENSITY: (f32, f32) = (0.25, 0.85);
 
 /// The caster's mesh in the plant's own space (every vertex's `uv.x` is `density`, which the
 /// shadow shader dithers by: the share of shadow-map texels it covers).
@@ -110,7 +110,7 @@ pub fn shadow_caster(
         }
         lowest = lowest.min((centre[1] - r[1]).max(0.0));
         let wind = [w / members.len() as f32, mesh.wind[crown[members[0]]][1]];
-        octahedron(&mut part, centre, r, wind, b as u32);
+        blob_mesh(&mut part, centre, r, wind, b as u32);
     }
     // Trunk: a six-sided prism to the crown's underside (at most half the tree's height), as
     // wide as the bark is in the lowest tenth of the tree.
@@ -127,39 +127,55 @@ pub fn shadow_caster(
     let leaf_fraction = SeasonState::new(params, season).leaf_fraction;
     let density = ((1.0 - (-0.5 * params.leaves.density).exp()) * (0.3 + 0.7 * leaf_fraction))
         .clamp(DENSITY.0, DENSITY.1);
-    part.uvs.iter_mut().for_each(|uv| *uv = [density, 0.0]);
+    part.uvs
+        .iter_mut()
+        .for_each(|uv| *uv = [density * uv[0], 0.0]);
     Some(ShadowCaster { part, density })
 }
 
-/// An octahedron scaled to `radii` (times about 0.95: its volume is a third of the ellipsoid's;
-/// many small ones keep the crown's area) round `centre`, appended to `part`.
-fn octahedron(part: &mut MeshPart, centre: P, radii: P, wind: [f32; 2], blob: u32) {
-    const V: [P; 6] = [
-        [1.0, 0.0, 0.0],
-        [-1.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0],
-        [0.0, -1.0, 0.0],
-        [0.0, 0.0, 1.0],
-        [0.0, 0.0, -1.0],
+/// An icosahedron (20 faces, an irregular rounded blob, no readable diamond) scaled to `radii`
+/// round `centre`, appended to `part`; each vertex sits 0.5 to 1.4 times as far out (a hash of
+/// the blob and the vertex) so the shadow's outline is broken and leafy.
+fn blob_mesh(part: &mut MeshPart, centre: P, radii: P, wind: [f32; 2], blob: u32) {
+    const T: f32 = std::f32::consts::GOLDEN_RATIO;
+    let n = (1.0 + T * T).sqrt(); // unit-length vertices
+    let v: [P; 12] = [
+        [-1.0, T, 0.0],
+        [1.0, T, 0.0],
+        [-1.0, -T, 0.0],
+        [1.0, -T, 0.0],
+        [0.0, -1.0, T],
+        [0.0, 1.0, T],
+        [0.0, -1.0, -T],
+        [0.0, 1.0, -T],
+        [T, 0.0, -1.0],
+        [T, 0.0, 1.0],
+        [-T, 0.0, -1.0],
+        [-T, 0.0, 1.0],
     ];
     #[rustfmt::skip]
-    const F: [u32; 24] = [
-        0, 2, 4, 4, 2, 1, 1, 2, 5, 5, 2, 0,
-        0, 4, 3, 4, 1, 3, 1, 5, 3, 5, 0, 3,
+    const F: [u32; 60] = [
+        0, 11, 5, 0, 5, 1, 0, 1, 7, 0, 7, 10, 0, 10, 11,
+        1, 5, 9, 5, 11, 4, 11, 10, 2, 10, 7, 6, 7, 1, 8,
+        3, 9, 4, 3, 4, 2, 3, 2, 6, 3, 6, 8, 3, 8, 9,
+        4, 9, 5, 2, 4, 11, 6, 2, 10, 8, 6, 7, 9, 8, 1,
     ];
     let first = part.positions.len() as u32;
-    for (k, q) in V.into_iter().enumerate() {
-        // Each tip 0.8 to 1.2 times as far out (a hash of the blob and the tip), so the
-        // shadow's outline is broken and leafy, not a row of identical diamonds.
-        let h = ((blob * 6 + k as u32).wrapping_mul(2_654_435_761) >> 16) & 0xff;
-        let f = 0.95 * (0.8 + 0.4 * h as f32 / 255.0);
+    // Each blob turned about the vertical by its own angle, so the blobs' corners differ.
+    let (sin, cos) = (blob as f32 * 2.399_963).sin_cos();
+    for (k, q) in v.into_iter().enumerate() {
+        let q = q.map(|c| c / n);
+        let q = [q[0] * cos + q[2] * sin, q[1], q[2] * cos - q[0] * sin];
+        let t = (((blob * 12 + k as u32).wrapping_mul(2_654_435_761) >> 16) & 0xff) as f32 / 255.0;
+        let f = 1.15 * (0.45 + 0.8 * t);
         part.positions.push([
             centre[0] + q[0] * radii[0] * f,
             (centre[1] + q[1] * radii[1] * f).max(0.0),
             centre[2] + q[2] * radii[2] * f,
         ]);
         part.normals.push(q);
-        part.uvs.push([0.0; 2]);
+        // the thin tips are the sparsest (scaled by the crown's density at the end)
+        part.uvs.push([1.0 - 0.5 * t, 0.0]);
         part.wind.push(wind);
     }
     part.indices.extend(F.iter().map(|i| first + i));
@@ -181,7 +197,7 @@ fn prism(part: &mut MeshPart, r0: f32, r1: f32, height: f32) {
         for (c, s) in HEX {
             part.positions.push([c * r, y, s * r]);
             part.normals.push([c, 0.0, s]);
-            part.uvs.push([0.0; 2]);
+            part.uvs.push([1.0, 0.0]);
             part.wind.push([0.0, 0.0]);
         }
     }
@@ -215,9 +231,9 @@ mod tests {
             };
             checked += 1;
             assert!(c.part.indices.len() / 3 <= MAX_TRIANGLES, "{}", s.id);
-            // blobs are closed: every edge of an octahedron is shared by two faces
+            // blobs are closed: every edge of an icosahedron is shared by two faces
             let mut edges: HashMap<(u32, u32), u32> = HashMap::new();
-            for t in c.part.indices[..BLOBS * 24].chunks(3) {
+            for t in c.part.indices[..BLOBS * 60].chunks(3) {
                 for k in 0..3 {
                     let (a, b) = (t[k], t[(k + 1) % 3]);
                     *edges.entry((a.min(b), a.max(b))).or_default() += 1;

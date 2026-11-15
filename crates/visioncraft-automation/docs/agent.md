@@ -23,7 +23,9 @@ same over MCP (`visioncraft-cli mcp`), JSON lines (`visioncraft-cli serve`) and 
   the owner's.
 - **Asset ids** in a palette: `flora:<species>` for a built-in procedural plant
   (`species.list {category}`), a custom species of the project (`sp1`), or a catalogue asset id
-  (`catalog.search {query}`).
+  (`catalog.search {query}`; garden lights such as `vc-path-light` have no `flora:` prefix).
+  Every `planting.*` command refuses an id that resolves to nothing, naming it and the five
+  closest valid ids; a saved file that already has one still opens (a grey cube is drawn).
 - **Sun**: `site.set {latitude, longitude, utc_offset_hours}`, `time.set {year?, month?, day?,
   hour?}` in local time; the offset is fixed, so give summer time yourself (Belgium in June: 2).
 
@@ -307,7 +309,7 @@ It replaces the project (undoable) with a 20 by 30 m plot built from commands: h
 lawn, border, path, pond, hedge, trees, lights and six viewpoints. `{"name": "estate"}` is the large one:
 a 100 by 60 m plot round an imported 3DCraft villa (its model travels inside the program as
 `example:villa.3dcraft`), two lawns over 1,000 m2, a brushed woodland, a border, a pond carved in
-the terrain, path lights, a walnut on a hidden layer and four viewpoints. `{"name":
+the terrain, path lights, a walnut on a hidden layer and five viewpoints. `{"name":
 "beach-house"}` is a furnished single-storey house imported from 3DCraft
 (`example:beach-house.3dcraft`, one body per element group, from
 `examples/models/beach-house/`), with library materials, catalogue furniture, downlights in

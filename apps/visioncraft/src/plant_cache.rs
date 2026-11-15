@@ -19,7 +19,7 @@ use visioncraft_render::bc::Compressed;
 pub const MAX_BYTES: u64 = 2 << 30;
 
 /// The layout of the files; bump it when it (or what a key covers) changes.
-const FORMAT: u32 = 3;
+const FORMAT: u32 = 4;
 const MAGIC: &[u8; 4] = b"VCC\0";
 
 /// The platform's cache folder for VisionCraft: `VISIONCRAFT_CACHE_DIR` when set, else

@@ -1821,9 +1821,21 @@ impl Scene {
                 self.proto(r, asset, || placeholder::flora_parts(asset, &res))
             }
             // A catalogue model still loading, or a plain asset: its box from the project assets.
-            None => self.proto(r, asset, || {
-                placeholder::parts(assets.iter().find(|a| a.id == asset))
-            }),
+            None => {
+                let known = assets.iter().find(|a| a.id == asset);
+                // Once the catalogue is here, an id it lacks (a saved file's) stays a cube.
+                if known.is_none()
+                    && self.library.catalog.is_some()
+                    && !self.protos.contains_key(asset)
+                {
+                    let why = format!("unknown asset `{asset}`: drawn as a placeholder cube");
+                    #[cfg(target_arch = "wasm32")]
+                    log::warn!("{why}");
+                    #[cfg(not(target_arch = "wasm32"))]
+                    eprintln!("warning: {why}");
+                }
+                self.proto(r, asset, || placeholder::parts(known))
+            }
         };
         protos
             .into_iter()
