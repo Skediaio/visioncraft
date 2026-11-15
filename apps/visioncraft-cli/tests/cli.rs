@@ -342,3 +342,130 @@ fn recipes_render_through_the_mcp_server() {
         }
     }
 }
+
+/// A red 1 m panel as a GLB (two triangles in the XY plane, no textures).
+fn red_panel_glb() -> Vec<u8> {
+    let mut bin = Vec::new();
+    for v in [
+        [-0.5f32, 0.0, 0.0],
+        [0.5, 0.0, 0.0],
+        [0.5, 1.0, 0.0],
+        [-0.5, 1.0, 0.0],
+    ] {
+        for c in v {
+            bin.extend(c.to_le_bytes());
+        }
+    }
+    for i in [0u32, 1, 2, 0, 2, 3] {
+        bin.extend(i.to_le_bytes());
+    }
+    let j = json!({
+        "asset": {"version": "2.0"}, "scene": 0, "scenes": [{"nodes": [0]}],
+        "nodes": [{"mesh": 0}],
+        "meshes": [{"primitives": [{"attributes": {"POSITION": 0}, "indices": 1, "material": 0}]}],
+        "materials": [{"doubleSided": true, "pbrMetallicRoughness":
+            {"baseColorFactor": [0.9, 0.02, 0.02, 1.0], "metallicFactor": 0.0}}],
+        "accessors": [
+            {"bufferView": 0, "componentType": 5126, "count": 4, "type": "VEC3",
+             "min": [-0.5, 0.0, 0.0], "max": [0.5, 1.0, 0.0]},
+            {"bufferView": 1, "componentType": 5125, "count": 6, "type": "SCALAR"}],
+        "bufferViews": [{"buffer": 0, "byteLength": 48},
+                        {"buffer": 0, "byteOffset": 48, "byteLength": 24}],
+        "buffers": [{"byteLength": 72}]
+    });
+    let mut j = serde_json::to_vec(&j).unwrap();
+    while !j.len().is_multiple_of(4) {
+        j.push(b' ');
+    }
+    let mut out = Vec::new();
+    out.extend(b"glTF");
+    out.extend(2u32.to_le_bytes());
+    out.extend(((12 + 8 + j.len() + 8 + bin.len()) as u32).to_le_bytes());
+    out.extend((j.len() as u32).to_le_bytes());
+    out.extend(b"JSON");
+    out.extend(&j);
+    out.extend((bin.len() as u32).to_le_bytes());
+    out.extend(b"BIN\0");
+    out.extend(&bin);
+    out
+}
+
+/// A small catalogue object at 2.4 times its size seen from 25 m, beyond its finer levels,
+/// draws its model and not the stand-in box. Its planting is built before the catalogue has
+/// arrived, and its model must still be asked for once it has.
+#[test]
+fn a_small_scaled_object_far_away_draws_its_model() {
+    let d = dir("far-object");
+    let lib = d.join("lib");
+    std::fs::create_dir_all(lib.join("models/panel")).unwrap();
+    let glb = red_panel_glb();
+    for k in 0..3 {
+        std::fs::write(lib.join(format!("models/panel/lod{k}.glb")), &glb).unwrap();
+    }
+    let lods: Vec<Value> = [0.27 * 12.0, 0.27 * 40.0, f32::MAX]
+        .iter()
+        .enumerate()
+        .map(|(k, m)| json!({"file": format!("models/panel/lod{k}.glb"), "max_distance_m": m}))
+        .collect();
+    let catalog = json!({"assets": [{"id": "panel", "name": "Panel", "category": "pot",
+        "tags": [], "license": "CC0-1.0", "origin": "BuiltIn", "author": "a", "source_url": "u",
+        "size_m": [1.0, 1.0, 0.01], "lods": lods, "thumbnail": "t.png", "plant": null,
+        "light": null}]});
+    std::fs::write(lib.join("catalog.json"), catalog.to_string()).unwrap();
+    let params =
+        json!({"name": "Panel", "asset": "panel", "position": [0.0, 0.0, 0.0], "scale": 2.4});
+    let made = cli(
+        &[
+            "run",
+            "--cmd",
+            "planting.add_single",
+            "--params",
+            &params.to_string(),
+            "--out",
+            "p.visioncraft",
+        ],
+        &d,
+    );
+    assert!(
+        made.status.success(),
+        "{}",
+        String::from_utf8_lossy(&made.stderr)
+    );
+    let out = cli(
+        &[
+            "render",
+            "p.visioncraft",
+            "--out",
+            "p.png",
+            "--size",
+            "320x180",
+            "--camera",
+            "0,1.2,25,0,1.2,0",
+            "--fov",
+            "20",
+            "--assets",
+            "lib",
+        ],
+        &d,
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let bytes = std::fs::read(d.join("p.png")).unwrap();
+    let mut reader = png::Decoder::new(std::io::Cursor::new(&bytes))
+        .read_info()
+        .unwrap();
+    let mut buf = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buf).unwrap();
+    let red = buf[..info.buffer_size()]
+        .chunks(4)
+        .filter(|p| {
+            let [r, g, b] = [p[0], p[1], p[2]].map(i32::from);
+            r > 2 * g + 30 && r > 2 * b + 30
+        })
+        .count();
+    // 2.4 m of a 8.8 m high field of view: about 2400 of the panel's pixels.
+    assert!(red > 1000, "only {red} red pixels: the model is not drawn");
+}

@@ -493,6 +493,18 @@ const SMALL_OBJECT_M: f32 = 4.0;
 const OBJECT_CULL_PER_M: f32 = 500.0;
 
 /// The largest LOD distance below `last` (0 when there is none).
+/// LOD parts with their distances times the largest instance scale (never shortened).
+fn scale_lod_distances(parts: &LodParts, matrices: &[Mat4]) -> LodParts {
+    let k = matrices
+        .iter()
+        .map(|m| m.x_axis.length().max(m.y_axis.length()))
+        .fold(1.0_f32, f32::max);
+    parts
+        .iter()
+        .map(|&(m, mat, d)| (m, mat, (d * k).min(f32::MAX)))
+        .collect()
+}
+
 fn parts_before(parts: &[(MeshId, MaterialId, f32)], last: f32) -> f32 {
     parts
         .iter()
@@ -1502,7 +1514,7 @@ impl Scene {
                 && !self.growth_stale(project, month, &o.groups)
             {
                 if o.flora_rev != self.flora.rev || o.library_rev != self.library.rev {
-                    self.upgrade(r, project, assets, month, &mut o.groups);
+                    self.upgrade(r, project, assets, month, g.id(), &mut o.groups);
                     o.flora_rev = self.flora.rev;
                     o.library_rev = self.library.rev;
                 }
@@ -1650,6 +1662,15 @@ impl Scene {
         matrices: &[Mat4],
     ) -> Vec<ItemId> {
         if let Some(parts) = src {
+            // A catalogue model's level distances are for its size in the file: a pot drawn at
+            // 2.4 times that size keeps each level 2.4 times as far.
+            let scaled;
+            let parts = if self.library.knows(asset) {
+                scaled = scale_lod_distances(parts, matrices);
+                &scaled
+            } else {
+                parts
+            };
             let item = r.add_lod_item(parts, matrices);
             // A hedge's shadow is a band, not one blob per segment.
             let clipped = asset
@@ -1717,6 +1738,7 @@ impl Scene {
         project: &Project,
         assets: &[Asset],
         month: u8,
+        generator: &str,
         groups: &mut HashMap<(String, u32), Group>,
     ) {
         for ((asset, variant), grp) in groups.iter_mut() {
@@ -1724,6 +1746,10 @@ impl Scene {
                 month,
                 age: grp.age,
             };
+            // Built before the catalogue arrived, the group's model was never asked for.
+            if self.library.knows(asset) {
+                self.library.note(generator, asset, &grp.matrices);
+            }
             let src = self.source(project, asset, *variant, when);
             let imp = self
                 .impostor_for(project, asset, *variant, when)

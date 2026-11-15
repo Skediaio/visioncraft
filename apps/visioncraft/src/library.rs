@@ -238,6 +238,8 @@ pub struct Library {
     garbage: Vec<Model>,
     /// Where each generator's library assets stand, to see how near the camera they are.
     wants: HashMap<String, Vec<(String, Vec<Vec3>)>>,
+    /// A want was noted since the last scan: its model may not be asked for yet.
+    unscanned: bool,
     pub lamps_on: bool,
     lamps_applied: Option<bool>,
     /// Bumps whenever something a scene item is built from changed.
@@ -292,6 +294,7 @@ impl Library {
             uploading: Vec::new(),
             garbage: Vec::new(),
             wants: HashMap::new(),
+            unscanned: false,
             lamps_on: false,
             lamps_applied: None,
             rev: 0,
@@ -323,6 +326,7 @@ impl Library {
     /// Records where a generator's library assets stand (for the distance priorities).
     pub fn note(&mut self, generator: &str, asset: &str, matrices: &[Mat4]) {
         let at: Vec<Vec3> = matrices.iter().map(|m| m.w_axis.truncate()).collect();
+        self.unscanned = true;
         let list = self.wants.entry(generator.to_string()).or_default();
         match list.iter_mut().find(|(a, _)| a == asset) {
             Some(e) => e.1 = at,
@@ -647,6 +651,7 @@ impl Library {
     /// Asks for the LOD each placed asset needs at its nearest instance, and for its coarsest
     /// (shown while the finer one loads), nearest first.
     fn scan(&mut self, eye: Vec3) {
+        self.unscanned = false;
         let Some(cat) = self.catalog.clone() else {
             return;
         };
@@ -955,7 +960,10 @@ impl Library {
 
     /// Everything resident or wanted has arrived (for scripts that wait for streaming).
     pub fn idle(&self) -> bool {
-        !self.store.busy() && self.uploading.is_empty() && self.awaiting.is_empty()
+        !self.store.busy()
+            && self.uploading.is_empty()
+            && self.awaiting.is_empty()
+            && !self.unscanned
     }
 }
 
