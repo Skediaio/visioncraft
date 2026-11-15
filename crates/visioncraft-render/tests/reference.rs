@@ -1411,6 +1411,64 @@ fn w_terrain_lod_seam() {
     }
 }
 
+/// A beach at the foot of a low bank, seen from just above the sand: the terrain casts with
+/// the level it is drawn with, so the coarse level (which spans the bank and lies over the
+/// beach) does not shadow the open sand in front of it.
+#[test]
+fn terrain_casts_no_shadow_on_open_beach() {
+    let mut r = renderer(W, H);
+    demo::terrain_layers(&mut r);
+    let any = r.add_material(&Material::default());
+    // Flat beach from z -4.5 seawards, a 1.5 m bank up to z -6, flat land behind it.
+    let height = |_: f32, z: f32| 1.5 * ((-4.5 - z) / 1.5).clamp(0.0, 1.0);
+    let parts: Vec<_> = [(1, 60.0), (8, f32::INFINITY)]
+        .into_iter()
+        .map(|(step, reach)| {
+            let data = demo::terrain_chunk(
+                glam::Vec2::new(-20.0, -30.0),
+                40,
+                1.0,
+                step,
+                &height,
+                &demo::hills_weights,
+            );
+            (
+                r.add_terrain_chunk(&data.chunk()).expect("chunk"),
+                any,
+                reach,
+            )
+        })
+        .collect();
+    r.add_lod_item(&parts, &[Mat4::IDENTITY]);
+    let aspect = W as f32 / H as f32;
+    let cam = demo::camera(
+        Vec3::new(0.0, 0.5, 12.0),
+        Vec3::new(0.0, 0.3, -10.0),
+        aspect,
+    );
+    setup(&mut r, cam, Sun::from_angles(180.0, 50.0), 14.7);
+    let px = capture(&mut r, W, H);
+    let lum = |z: f32| {
+        let p = r.project(Vec3::new(0.0, 0.0, z)).expect("beach in view");
+        let c = mean(
+            &px,
+            p.x as u32 - 2,
+            p.y as u32 - 1,
+            p.x as u32 + 3,
+            p.y as u32 + 2,
+        );
+        0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+    };
+    let open = lum(7.0);
+    for z in [-3.5, -2.0, 0.0, 1.5] {
+        let l = lum(z);
+        assert!(
+            l > 0.85 * open,
+            "beach at z {z}: {l} against {open} in the open: shadowed"
+        );
+    }
+}
+
 /// A pond carved into the terrain: water plane, planar reflection of the
 /// trees on the bank, and clay mode.
 #[test]
