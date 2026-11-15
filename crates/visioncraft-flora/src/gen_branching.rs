@@ -222,10 +222,12 @@ fn grow(
     sk.levels.push(level as u8);
 }
 
-/// Trees grow by space colonisation (`gen_tree`); shrubs, bamboo and multi-stem bushes keep
-/// the recursive skeleton.
+/// Trees grow by space colonisation (`gen_tree`); shrubs, bamboo, multi-stem bushes and
+/// small trees with only two branch levels (fig: a few large leaves on stout shoots, too
+/// coarse a network for the shoot spacing) keep the recursive skeleton.
 pub(crate) fn grown(p: &PlantParams) -> bool {
     matches!(p.budget, BudgetClass::LargeTree | BudgetClass::SmallTree)
+        && matches!(&p.form, crate::Form::Branching(b) if b.levels[2].count > 0)
 }
 
 pub(crate) fn skeleton(p: &PlantParams, b: &BranchingParams, seed: u64) -> Skeleton {

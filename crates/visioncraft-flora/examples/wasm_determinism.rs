@@ -29,7 +29,7 @@ fn fnv(m: &PlantMesh) -> u64 {
 fn main() {
     let lib = species();
     for (id, lod, want) in [
-        ("quercus-robur", Lod::Lod0, 0xe308_6282_a80c_ab77_u64),
+        ("quercus-robur", Lod::Lod0, 0xc6ea_6b65_30e8_de5d_u64),
         ("hosta", Lod::Lod1, 0xbf24_e811_9f50_ee6c),
         ("carpinus-hedge", Lod::Lod2, 0xc567_f698_a41b_6c32),
         ("picea-abies", Lod::Lod1, 0xdd72_8a9a_25eb_1bc2),
