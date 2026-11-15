@@ -5,7 +5,7 @@
 //! patches Vogel's sunflower model r = c * sqrt(k), theta = k * 137.5 degrees (both from
 //! Prusinkiewicz & Lindenmayer, "The Algorithmic Beauty of Plants", ch. 4).
 
-use crate::math::{GOLDEN_ANGLE, Rng, TAU, UP, V3, cos, deg, sin, v3};
+use crate::math::{GOLDEN_ANGLE, Rng, TAU, UP, V3, atan2, cos, deg, sin, v3};
 use crate::mesh::{Builder, Card, Node, Outward, cell_uv, rand_dir, shuffled};
 use crate::{
     BudgetClass, ClimberParams, FlowerShape, Form, GroundCoverParams, LeafShape, Lod, Material,
@@ -531,6 +531,15 @@ pub fn rosette(
             }
             let side = v3(-sin(az), 0.0, cos(az));
             let outd = v3(cos(az), 0.0, sin(az));
+            // A stalk from `from` m off the axis rising `rise` m leans out no further than the
+            // plant is wide: its flowers stay over its own leaves at every level, so a plant
+            // narrower than its species' mean does not carry them past its edge.
+            // Fewer stalks at the coarser levels carry larger heads, so a border keeps its
+            // colour from 8 to 15 m instead of fading to leaves.
+            let fs = f.card_m * (m0 as f32 / mk.max(1) as f32).sqrt().clamp(1.0, 1.8);
+            let head = fs * if spike { 0.3 } else { 0.5 };
+            let max_lean =
+                |from: f32, rise: f32| atan2((0.5 * w - head - from).max(0.05 * w), rise.max(1e-3));
             if dense {
                 // Stems rise from all over the leaf mound, not from one point: upright in the
                 // middle, leaning out towards its edge (a fan of stems from the centre read as
@@ -539,9 +548,10 @@ pub fn rosette(
                 let rr = (if r.shoots { 0.36 } else { 0.12 }) * w * q;
                 let y0 = hf * (0.7 - 0.45 * q * q) * if r.shoots { 1.0 } else { 0.3 };
                 let base = outd * rr + UP * y0;
-                let lean = deg(r.stalk_spread_deg) * (0.15 + 0.85 * q) * drng.range(0.7, 1.15);
-                let dir = (UP * cos(lean) + outd * sin(lean)).norm();
                 let rise = (hs - y0).max(h * 0.3);
+                let lean = (deg(r.stalk_spread_deg) * (0.15 + 0.85 * q) * drng.range(0.7, 1.15))
+                    .min(max_lean(rr, rise));
+                let dir = (UP * cos(lean) + outd * sin(lean)).norm();
                 let len = rise / cos(lean).max(0.3) - if spike { f.card_m * 0.6 } else { 0.0 };
                 let bow = outd * (len * 0.06 * drng.sym()) + side * (len * 0.05 * drng.sym());
                 let mid = base + dir * (len * 0.5) + bow;
@@ -599,6 +609,7 @@ pub fn rosette(
                 );
                 continue;
             }
+            let lean = lean.min(max_lean(0.04 * w, hs));
             let dir = v3(cos(az) * sin(lean), cos(lean), sin(az) * sin(lean));
             let base = v3(cos(az), 0.0, sin(az)) * (0.04 * w);
             let stalk_len = hs / cos(lean).max(0.3) - if spike { f.card_m * 0.6 } else { 0.0 };
@@ -620,9 +631,6 @@ pub fn rosette(
                 3,
                 ph,
             );
-            // Fewer stalks at the coarser levels carry larger heads, so a border keeps its
-            // colour from 8 to 15 m instead of fading to leaves.
-            let fs = f.card_m * (m0 as f32 / mk.max(1) as f32).sqrt().clamp(1.0, 1.8);
             flower_heads(
                 &mut out,
                 f,

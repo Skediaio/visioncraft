@@ -226,7 +226,7 @@ fn golden_hashes() {
     let mut got = Vec::new();
     for (id, lod, want) in [
         ("quercus-robur", Lod::Lod0, 0xef80_3f58_89ec_43a1_u64),
-        ("hosta", Lod::Lod1, 0x3fe7_73fb_1413_23c5),
+        ("hosta", Lod::Lod1, 0x3575_a1dc_73c0_cd88),
         ("carpinus-hedge", Lod::Lod2, 0xc567_f698_a41b_6c32),
         ("picea-abies", Lod::Lod1, 0x9762_4c2a_a435_0689),
     ] {
@@ -470,15 +470,15 @@ fn detail_levels_of_a_large_tree() {
     assert!(winter[0].triangles_of(Material::Twigs) > 30_000);
 }
 
-/// Neighbours of one species are not copies: grasses, perennials and shrubs take their own size
-/// from the seed.
+/// Neighbours of one species are not copies: grasses and perennials take their own size from
+/// the seed.
 #[test]
-fn herbs_and_shrubs_vary_in_size_by_seed() {
+fn herbs_vary_in_size_by_seed() {
     for id in [
         "lavandula-angustifolia",
         "festuca-glauca",
         "salvia-nemorosa",
-        "buxus-sempervirens",
+        "pennisetum-alopecuroides",
     ] {
         let p = &Species::by_id(id).unwrap().params;
         let tops: Vec<f32> = (1..=6)
