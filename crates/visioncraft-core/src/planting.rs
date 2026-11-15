@@ -137,6 +137,37 @@ pub struct AreaScatter {
     /// the rule existed, so they do not change by themselves.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub avoid_buildings: bool,
+    /// A soft edge (m): the plants thin out over this width inside the outline, to none at it,
+    /// along a wavering line, so a scatter ends as wild planting does and not on a ruler line.
+    /// 0 (the default, not written): a hard edge.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub edge_fade_m: f32,
+}
+
+fn is_zero_f32(v: &f32) -> bool {
+    *v == 0.0
+}
+
+/// Whether a point `p` of a scatter inside `outline` stays, with a soft edge `fade` metres wide:
+/// always deeper in than that, ever fewer towards the outline. The fade's inner line wavers by
+/// half its width (value noise over about twice the width), so the edge does not follow the
+/// outline either. Deterministic per point and seed.
+fn edge_keeps(outline: &[[f32; 2]], fade: f32, seed: u64, p: [f32; 2]) -> bool {
+    if fade <= 0.0 {
+        return true;
+    }
+    let d = (0..outline.len())
+        .map(|i| distance_to_segment(p, outline[i], outline[(i + 1) % outline.len()]))
+        .fold(f32::INFINITY, f32::min);
+    let wobble =
+        crate::terrain::value_noise(seed ^ 0x5eed, p[0] / (2.0 * fade), p[1] / (2.0 * fade));
+    let keep = (d / fade + 0.5 * wobble).clamp(0.0, 1.0);
+    let roll = Rng::new(mix(
+        mix(seed ^ 0xed6e, (p[0] * 64.0) as i64),
+        (p[1] * 64.0) as i64,
+    ))
+    .f32();
+    roll < keep * keep
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -388,6 +419,10 @@ impl Generator {
             Self::AreaScatter(g) => {
                 flat(&g.outline, 3)?;
                 unit(g.position_jitter)?;
+                ok(
+                    g.edge_fade_m.is_finite() && g.edge_fade_m >= 0.0,
+                    "edge fade must be 0 or more",
+                )?;
                 if !g.layers.is_empty() {
                     return layers(&g.layers);
                 }
@@ -1028,7 +1063,11 @@ fn evaluate_forms(generator: &Generator, ground: &dyn Fn(f32, f32) -> Option<f32
                     t.seed,
                     g.position_jitter,
                     t.min_distance,
-                    |p| point_in_polygon(p, &g.outline) && !keep.near([p[0], 0.0, p[1]]),
+                    |p| {
+                        point_in_polygon(p, &g.outline)
+                            && !keep.near([p[0], 0.0, p[1]])
+                            && edge_keeps(&g.outline, g.edge_fade_m, t.seed, p)
+                    },
                 );
                 let out = pts
                     .into_iter()
@@ -1526,6 +1565,7 @@ mod tests {
             seed: 7,
             layers: Vec::new(),
             avoid_buildings: false,
+            edge_fade_m: 0.0,
         }
     }
 
@@ -1569,6 +1609,36 @@ mod tests {
         let all = evaluate(&Generator::AreaScatter(big), &flat).placements;
         let oaks = all.iter().filter(|p| p.asset == "oak").count() as f32 / all.len() as f32;
         assert!((oaks - 0.75).abs() < 0.02, "{oaks}");
+    }
+
+    #[test]
+    fn a_soft_edge_thins_the_scatter_towards_the_outline_only() {
+        let square = vec![[0.0, 0.0], [60.0, 0.0], [60.0, 60.0], [0.0, 60.0]];
+        let hard = evaluate(&Generator::AreaScatter(area(square.clone(), 2.0)), &flat).placements;
+        let mut g = area(square, 2.0);
+        g.edge_fade_m = 10.0;
+        let soft = evaluate(&Generator::AreaScatter(g), &flat).placements;
+        let band = |ps: &[Placement], lo: f32, hi: f32| {
+            ps.iter()
+                .filter(|p| {
+                    let d = [
+                        p.position[0],
+                        60.0 - p.position[0],
+                        p.position[2],
+                        60.0 - p.position[2],
+                    ]
+                    .into_iter()
+                    .fold(f32::INFINITY, f32::min);
+                    (lo..hi).contains(&d)
+                })
+                .count() as f32
+        };
+        // The outer 2 m nearly empty, the middle untouched (the fade wavers, so 16 m in is safe).
+        assert!(band(&soft, 0.0, 2.0) < 0.15 * band(&hard, 0.0, 2.0));
+        assert_eq!(band(&soft, 16.0, 31.0), band(&hard, 16.0, 31.0));
+        // Ragged: along the edge, 4-8 m in, some stretches keep plants and others lose them.
+        assert!(band(&soft, 4.0, 8.0) > 0.1 * band(&hard, 4.0, 8.0));
+        assert!(band(&soft, 4.0, 8.0) < 0.9 * band(&hard, 4.0, 8.0));
     }
 
     #[test]
@@ -2363,6 +2433,7 @@ mod layer_tests {
             seed: 1,
             layers: forest(),
             avoid_buildings: false,
+            edge_fade_m: 0.0,
         });
         let e = evaluate(&area, &flat);
         assert!(

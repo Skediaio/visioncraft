@@ -1248,6 +1248,38 @@
       "thumbnail": "materials/ground103/thumb.jpg"
     },
     {
+      "id": "japanese_cedar_planks",
+      "name": "Japanese Cedar Planks",
+      "tags": [
+        "wood",
+        "japanese",
+        "cedar",
+        "japanses cedar",
+        "natural wood grain",
+        "vertical planks",
+        "wood planks",
+        "wooden plank",
+        "paneling",
+        "roughhewn",
+        "sawn timber"
+      ],
+      "license": "CC0-1.0",
+      "author": "Charlotte Baglioni, Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/japanese_cedar_planks",
+      "kind": "wood",
+      "size_m": [
+        1.1300001,
+        1.1300001
+      ],
+      "maps": {
+        "basecolor": "materials/japanese_cedar_planks/basecolor.jpg",
+        "normal": "materials/japanese_cedar_planks/normal.jpg",
+        "orm": "materials/japanese_cedar_planks/orm.jpg",
+        "height": "materials/japanese_cedar_planks/height.jpg"
+      },
+      "thumbnail": "materials/japanese_cedar_planks/thumb.jpg"
+    },
+    {
       "id": "metal001",
       "name": "Metal 001",
       "tags": [
@@ -2934,6 +2966,76 @@
       "thumbnail": "materials/tiles073/thumb.jpg"
     },
     {
+      "id": "weathered_plank_siding",
+      "name": "Weathered Plank Siding",
+      "tags": [
+        "outdoor",
+        "wall",
+        "wood",
+        "rough",
+        "wood",
+        "wooden planks",
+        "exterior",
+        "rustic",
+        "plank siding",
+        "weathered",
+        "weatherbeaten",
+        "horizontal planks",
+        "cladding"
+      ],
+      "license": "CC0-1.0",
+      "author": "Dimitrios Savva",
+      "source_url": "https://polyhaven.com/a/weathered_plank_siding",
+      "kind": "wood",
+      "size_m": [
+        1.57,
+        1.57
+      ],
+      "maps": {
+        "basecolor": "materials/weathered_plank_siding/basecolor.jpg",
+        "normal": "materials/weathered_plank_siding/normal.jpg",
+        "orm": "materials/weathered_plank_siding/orm.jpg",
+        "height": "materials/weathered_plank_siding/height.jpg"
+      },
+      "thumbnail": "materials/weathered_plank_siding/thumb.jpg"
+    },
+    {
+      "id": "wood_planks_grey",
+      "name": "Wood Planks Grey",
+      "tags": [
+        "floor",
+        "wall",
+        "wood",
+        "outdoor",
+        "man made",
+        "planks",
+        "worn",
+        "old",
+        "grey",
+        "flat",
+        "seaside",
+        "costal",
+        "ocean",
+        "dirty",
+        "discolored"
+      ],
+      "license": "CC0-1.0",
+      "author": "Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/wood_planks_grey",
+      "kind": "wood",
+      "size_m": [
+        1.5,
+        1.5000001
+      ],
+      "maps": {
+        "basecolor": "materials/wood_planks_grey/basecolor.jpg",
+        "normal": "materials/wood_planks_grey/normal.jpg",
+        "orm": "materials/wood_planks_grey/orm.jpg",
+        "height": "materials/wood_planks_grey/height.jpg"
+      },
+      "thumbnail": "materials/wood_planks_grey/thumb.jpg"
+    },
+    {
       "id": "woodchips003",
       "name": "Wood Chips 003",
       "tags": [
@@ -3066,6 +3168,33 @@
         "height": "materials/woodfloor035/height.jpg"
       },
       "thumbnail": "materials/woodfloor035/thumb.jpg"
+    },
+    {
+      "id": "woodsiding003",
+      "name": "Wood Siding 003",
+      "tags": [
+        "3",
+        "dark",
+        "grunge",
+        "moss",
+        "nails",
+        "planks",
+        "siding",
+        "wall",
+        "wood"
+      ],
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/WoodSiding003",
+      "kind": "wood",
+      "size_m": null,
+      "maps": {
+        "basecolor": "materials/woodsiding003/basecolor.jpg",
+        "normal": "materials/woodsiding003/normal.jpg",
+        "orm": "materials/woodsiding003/orm.jpg",
+        "height": "materials/woodsiding003/height.jpg"
+      },
+      "thumbnail": "materials/woodsiding003/thumb.jpg"
     },
     {
       "id": "woodsiding013",

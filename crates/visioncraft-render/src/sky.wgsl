@@ -152,7 +152,7 @@ fn cloud(dir: vec3<f32>) -> vec4<f32> {
         a = smoothstep(1.0 - cover - 0.06, 1.0 - cover + 0.22, n);
     }
     // Far clouds thin into the haze at the horizon.
-    a *= smoothstep(0.0, 0.1, dir.y);
+    a *= smoothstep(0.02, 0.15, dir.y);
     if a <= 0.0 {
         return vec4<f32>(0.0);
     }
@@ -206,10 +206,62 @@ fn background(dir: vec3<f32>) -> vec3<f32> {
         } else {
             c = preetham(dir) + g.night.rgb;
         }
+        // The haze between the eye and the cloud layer (1.5 km up) hides far clouds in the sky
+        // behind them, as aerial perspective does: at a clear day's 30 km visibility a cloud
+        // 3 degrees up keeps a tenth of its contrast, one 10 degrees up half.
         let cl = cloud(dir);
-        c = mix(c, cl.rgb, cl.a);
+        let through = fog_transmittance(g.camera.y, dir.y, max(1500.0 - g.camera.y, 0.0) / max(dir.y, 0.01));
+        c = mix(c + stars(dir), cl.rgb, cl.a * through);
     }
     return c * g.night.w;
+}
+
+// Stars (kcd/m2) as points of light: one per cell of an equal-area grid over the sky (4096
+// cells, so about the 4500 stars a dark sky shows to the naked eye in one hemisphere), at a
+// random spot in its cell, of magnitude 6 + 2 log10(u) for a uniform u (the number brighter
+// than m grows as 10^(0.5 m), close to the naked-eye count), illuminance 2.54e-6 lux at
+// magnitude 0 (Vega), dimmed towards the horizon by 0.25 magnitudes per air mass (a clear
+// night's extinction). Each spreads its illuminance over a cone one pixel wide, so it keeps
+// its brightness at every resolution and field of view. They are always there: the day sky
+// and the exposure hide them as a real sky does, the first ones show in nautical twilight.
+// shortcut: the star field does not turn with the sidereal time; fixed to the world axes.
+fn stars(dir: vec3<f32>) -> vec3<f32> {
+    if dir.y <= 0.0 || u32(g.sky.x + 0.5) == 2u {
+        return vec3<f32>(0.0);
+    }
+    let cells = vec2<f32>(128.0, 32.0);
+    let azimuth = atan2(dir.z, dir.x) / (2.0 * PI) + 0.5;
+    let uv = vec2<f32>(azimuth, dir.y) * cells;
+    // Angular size of one pixel (rad).
+    let pixel = 2.0 / (abs(g.proj[1][1]) * g.viewport.y);
+    var sum = vec3<f32>(0.0);
+    let base = vec2<i32>(floor(uv));
+    for (var j = -1; j <= 1; j++) {
+        for (var i = -1; i <= 1; i++) {
+            let cell = base + vec2<i32>(i, j);
+            if cell.y < 0 || cell.y >= 32 {
+                continue;
+            }
+            let wrapped = vec2<i32>((cell.x + 128) % 128, cell.y);
+            let at = (vec2<f32>(cell) + vec2<f32>(hash2(wrapped), hash2(wrapped + vec2<i32>(311, 97)))) / cells;
+            let a = (at.x - 0.5) * 2.0 * PI;
+            let y = at.y;
+            let r = sqrt(max(1.0 - y * y, 0.0));
+            let star = vec3<f32>(r * cos(a), y, r * sin(a));
+            let d = acos(clamp(dot(dir, star), -1.0, 1.0)) / pixel;
+            if d >= 1.0 {
+                continue;
+            }
+            let u = max(hash2(wrapped + vec2<i32>(17, 513)), 1e-4);
+            let magnitude = 6.0 + 2.0 * log(u) / log(10.0) + 0.25 / max(y, 0.03);
+            let lux = 2.54e-6 * pow(10.0, -0.4 * magnitude);
+            // A cone of radius one pixel holding `lux`: peak 3 E / (pi r^2).
+            let peak = 3.0 * lux / (PI * pixel * pixel) * (1.0 - d);
+            let tint = mix(vec3<f32>(1.0, 0.82, 0.66), vec3<f32>(0.8, 0.88, 1.0), hash2(wrapped + vec2<i32>(7, 1001)));
+            sum += tint * peak;
+        }
+    }
+    return sum * 0.001;
 }
 
 struct SkyOut {
@@ -238,13 +290,16 @@ fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
     let tint = g.sun_light.rgb / max(dot(g.sun_light.rgb, vec3<f32>(0.2126, 0.7152, 0.0722)), 1e-9);
     let behind = select(0.0, cloud(dir).a, u32(g.sky.x + 0.5) != 2u);
     color += tint * g.sun_dir.w * edge * mix(0.6, 1.0, smoothstep(g.sun_light.w, 1.0, cos_sun)) * (1.0 - behind);
-    // Haze to infinity, near the horizon only: the horizon (and any sky below it) dissolves
-    // into the haze the ground fades to, while the sky higher up keeps its own colour. The sky
-    // models already carry the air's scattering; hazing all of it greyed the zenith.
+    // Haze to infinity below the horizon, and above it over a band that grows with the haze:
+    // the sky models already carry clear air's scattering, so on a clear day (0.13 / km) the
+    // band is under a degree and the horizon stays a line, while a hazy day (2.5 / km and up)
+    // dissolves the horizon over 14 degrees as before. Hazing a clear sky's horizon to the
+    // environment's colour put a grey band between a clear sea or land and the sky.
     if g.fog.x > 0.0 {
         let transmit = fog_transmittance(g.camera.y, dir.y, 1e9);
         let hazed = color * transmit + fog_inscatter(dir, 1.0) * (1.0 - transmit);
-        color = mix(hazed, color, smoothstep(0.0, 0.25, dir.y));
+        let band = 0.25 * clamp(g.fog.x * 1000.0 / 2.5, 0.0, 1.0);
+        color = mix(hazed, color, smoothstep(-0.02, band, dir.y));
     }
     return vec4<f32>(color, 1.0);
 }

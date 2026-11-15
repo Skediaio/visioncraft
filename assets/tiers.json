@@ -1059,6 +1059,29 @@
         }
       }
     },
+    "japanese_cedar_planks": {
+      "license": "CC0-1.0",
+      "author": "Charlotte Baglioni, Rico Cilliers",
+      "source_url": "https://polyhaven.com/a/japanese_cedar_planks",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/japanese_cedar_planks/2k/basecolor.jpg",
+          "normal": "materials/japanese_cedar_planks/2k/normal.jpg",
+          "orm": "materials/japanese_cedar_planks/2k/orm.jpg",
+          "height": "materials/japanese_cedar_planks/2k/height.jpg",
+          "px": 2048,
+          "bytes": 5067437
+        },
+        "4k": {
+          "basecolor": "materials/japanese_cedar_planks/4k/basecolor.jpg",
+          "normal": "materials/japanese_cedar_planks/4k/normal.jpg",
+          "orm": "materials/japanese_cedar_planks/4k/orm.jpg",
+          "height": "materials/japanese_cedar_planks/4k/height.jpg",
+          "px": 4096,
+          "bytes": 22079968
+        }
+      }
+    },
     "metal001": {
       "license": "CC0-1.0",
       "author": "ambientCG (Lennart Demes)",
@@ -2508,6 +2531,52 @@
         }
       }
     },
+    "weathered_plank_siding": {
+      "license": "CC0-1.0",
+      "author": "Dimitrios Savva",
+      "source_url": "https://polyhaven.com/a/weathered_plank_siding",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/weathered_plank_siding/2k/basecolor.jpg",
+          "normal": "materials/weathered_plank_siding/2k/normal.jpg",
+          "orm": "materials/weathered_plank_siding/2k/orm.jpg",
+          "height": "materials/weathered_plank_siding/2k/height.jpg",
+          "px": 2048,
+          "bytes": 3292705
+        },
+        "4k": {
+          "basecolor": "materials/weathered_plank_siding/4k/basecolor.jpg",
+          "normal": "materials/weathered_plank_siding/4k/normal.jpg",
+          "orm": "materials/weathered_plank_siding/4k/orm.jpg",
+          "height": "materials/weathered_plank_siding/4k/height.jpg",
+          "px": 4096,
+          "bytes": 12863111
+        }
+      }
+    },
+    "wood_planks_grey": {
+      "license": "CC0-1.0",
+      "author": "Rob Tuytel",
+      "source_url": "https://polyhaven.com/a/wood_planks_grey",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/wood_planks_grey/2k/basecolor.jpg",
+          "normal": "materials/wood_planks_grey/2k/normal.jpg",
+          "orm": "materials/wood_planks_grey/2k/orm.jpg",
+          "height": "materials/wood_planks_grey/2k/height.jpg",
+          "px": 2048,
+          "bytes": 3810815
+        },
+        "4k": {
+          "basecolor": "materials/wood_planks_grey/4k/basecolor.jpg",
+          "normal": "materials/wood_planks_grey/4k/normal.jpg",
+          "orm": "materials/wood_planks_grey/4k/orm.jpg",
+          "height": "materials/wood_planks_grey/4k/height.jpg",
+          "px": 4096,
+          "bytes": 14875926
+        }
+      }
+    },
     "woodchips003": {
       "license": "CC0-1.0",
       "author": "ambientCG (Lennart Demes)",
@@ -2620,6 +2689,29 @@
           "height": "materials/woodfloor035/4k/height.jpg",
           "px": 4096,
           "bytes": 19391020
+        }
+      }
+    },
+    "woodsiding003": {
+      "license": "CC0-1.0",
+      "author": "ambientCG (Lennart Demes)",
+      "source_url": "https://ambientcg.com/a/WoodSiding003",
+      "tiers": {
+        "2k": {
+          "basecolor": "materials/woodsiding003/2k/basecolor.jpg",
+          "normal": "materials/woodsiding003/2k/normal.jpg",
+          "orm": "materials/woodsiding003/2k/orm.jpg",
+          "height": "materials/woodsiding003/2k/height.jpg",
+          "px": 2048,
+          "bytes": 5957272
+        },
+        "4k": {
+          "basecolor": "materials/woodsiding003/4k/basecolor.jpg",
+          "normal": "materials/woodsiding003/4k/normal.jpg",
+          "orm": "materials/woodsiding003/4k/orm.jpg",
+          "height": "materials/woodsiding003/4k/height.jpg",
+          "px": 4096,
+          "bytes": 21336841
         }
       }
     },

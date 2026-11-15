@@ -24,7 +24,7 @@ pub(crate) struct Env {
     faces_bind: wgpu::BindGroup,
     pipeline: wgpu::RenderPipeline,
     sh_pipeline: wgpu::RenderPipeline,
-    sh: wgpu::Texture,
+    pub sh: wgpu::Texture,
     /// Mips (bits) still showing an old sky.
     pending: u32,
     next: u32,

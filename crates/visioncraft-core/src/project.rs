@@ -148,6 +148,8 @@ pub struct ViewState {
     /// `None`: automatic exposure.
     pub exposure_ev: Option<f32>,
     pub sky: SkyChoice,
+    /// Haze as a turbidity (1 pure air, 2.5 a clear day, 20 misty; 0 off); the window turns it
+    /// into the haze's extinction (`studio::haze_extinction`).
     pub haze: f32,
     pub wind_strength: f32,
     pub wind_direction_deg: f32,
@@ -180,6 +182,33 @@ pub struct ViewState {
     /// written) to 1. The season stays the date's (`Project::season`).
     #[serde(skip_serializing_if = "is_zero")]
     pub snow: f32,
+    /// What lies round the design on the endless ground, beyond its plot. Not written while the
+    /// default (fields).
+    #[serde(skip_serializing_if = "Surroundings::is_default")]
+    pub surroundings: Surroundings,
+}
+
+/// The land round a design, painted and shaped on the endless ground beyond the plot: never
+/// inside it, never on a coast's sea side.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Surroundings {
+    /// A plain plane in the ground's colour, as before surroundings existed.
+    None,
+    /// Farmland: fields of grass, cereal and ploughed soil with hedgerows, woods here and
+    /// there, gently rolling, hills on the horizon.
+    #[default]
+    Fields,
+    /// Mostly woodland with clearings.
+    Woodland,
+    /// Sand dunes with marram grass and scrub.
+    Dunes,
+}
+
+impl Surroundings {
+    fn is_default(&self) -> bool {
+        *self == Surroundings::default()
+    }
 }
 
 fn is_zero(v: &f32) -> bool {
@@ -275,6 +304,7 @@ impl Default for ViewState {
             lights: None,
             clutter: true,
             snow: 0.0,
+            surroundings: Surroundings::default(),
         }
     }
 }

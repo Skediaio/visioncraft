@@ -37,6 +37,9 @@ data out of it) and `--delay-ms` (pause between requests, default 500).
 1. `search` for it, then `add` it to a file in `candidates/` (set `category`; materials also
    need `kind`; models may carry `tags`, plant `species`, and `exclude` for bad variants).
 2. `fetch --list candidates/*.json`, `ingest`, `catalog`, `check`.
+   Poly Haven materials work the same way (`category: material`, `kind`, `max_tier`): `fetch` takes
+   its four loose JPEGs (colour, GL normal, packed AO/roughness/metal, displacement) per tier; they
+   are listed in `candidates/polyhaven_materials.json`.
 3. Look at the thumbnail (`sheet`); drop it with a line in `candidates/removed_after_review.tsv`
    if it is broken.
 

@@ -320,7 +320,7 @@ fn fetch_tier(c: &Candidate, cache: &Path, http: &Http, tier: Option<&str>) -> R
         )?);
         Ok(())
     };
-    if c.category == "barkset" {
+    if c.category == "barkset" || c.is_material() {
         for key in ["Diffuse", "nor_gl", "arm", "Displacement"] {
             let e = &files[key][tier]["jpg"];
             let name = e["url"]
@@ -417,7 +417,7 @@ fn fetch_one(c: &Candidate, cache: &Path, http: &Http) -> Result<usize> {
         )?);
         Ok(())
     };
-    if c.category == "barkset" {
+    if c.category == "barkset" || c.is_material() {
         for key in ["Diffuse", "nor_gl", "arm", "Displacement"] {
             get(&files[key]["1k"]["jpg"], None)?;
         }

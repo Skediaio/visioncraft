@@ -1493,5 +1493,18 @@
   "species": null,
   "why": "fabric for parasols and cushions; tags: 61, fabric, rough; stated size 40x40 cm",
   "max_tier": "4k"
+ },
+ {
+  "category": "material",
+  "kind": "wood",
+  "name": "Wood Siding 003",
+  "source": "ambientCG",
+  "page_url": "https://ambientcg.com/a/WoodSiding003",
+  "licence": "CC0-1.0",
+  "author": "ambientCG (Lennart Demes)",
+  "triangles": null,
+  "species": null,
+  "max_tier": "4k",
+  "why": "weathered brown horizontal clapboard siding for timber cladding; tags: siding, wood"
  }
 ]
