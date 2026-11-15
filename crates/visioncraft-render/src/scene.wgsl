@@ -287,14 +287,16 @@ fn fs_shadow_glass(in: DepthOut) {
     }
 }
 
-// A tree's shadow caster (flora's shadow.rs): covers `uv.x` of the shadow map's texels in a
-// 4x4 Bayer pattern, which the percentage-closer filter averages to a partial shadow, darker
-// for a denser crown.
+// A tree's shadow caster (flora's shadow.rs): covers `uv.x` of the shadow map's texels, chosen
+// by a hash of the texel (white noise: a regular pattern showed as a checkerboard), which the
+// percentage-closer filter averages to a partial shadow, darker for a denser crown.
 @fragment
 fn fs_shadow_dither(in: DepthOut) {
-    var bayer = array<u32, 16>(0u, 8u, 2u, 10u, 12u, 4u, 14u, 6u, 3u, 11u, 1u, 9u, 15u, 7u, 13u, 5u);
-    let p = vec2<u32>(in.clip.xy) & vec2<u32>(3u);
-    if (f32(bayer[p.x + 4u * p.y]) + 0.5) / 16.0 >= in.uv.x {
+    let p = vec2<u32>(in.clip.xy);
+    var h = p.x * 747796405u + p.y * 2891336453u + 1013904223u;
+    h = ((h >> ((h >> 28u) + 4u)) ^ h) * 277803737u;
+    h = (h >> 22u) ^ h;
+    if (f32(h & 1023u) + 0.5) / 1024.0 >= in.uv.x {
         discard;
     }
 }

@@ -343,7 +343,7 @@ pub fn builtin_palette() -> Vec<Material> {
         plain(
             "forest-floor",
             "Forest floor",
-            [0.045, 0.034, 0.016],
+            [0.028, 0.024, 0.011],
             0.0,
             1.0,
             pbr(1.0),
