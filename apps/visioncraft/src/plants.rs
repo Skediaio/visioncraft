@@ -279,12 +279,12 @@ pub struct Flora {
     retired: Vec<(String, u8)>,
     /// Counts finished generations, so generators know to rebuild.
     pub rev: u64,
-    /// Leaf atlas texels per drawing unit for species generated from now on: 2 (512 px cells and
-    /// a leaf normal map) at HIGH and ULTRA, else 1.
-    /// shortcut: species already generated keep their atlas and their mesh levels (the detail
-    /// levels of HIGH and ULTRA) when the quality changes; regenerate on a change if Auto's
-    /// steps make the difference visible
+    /// Leaf atlas texels per drawing unit: 2 (512 px cells and a leaf normal map) at HIGH and
+    /// ULTRA, else 1. A change makes the textures again (`regenerate`) and the meshes (`pump`:
+    /// the detail levels of HIGH and ULTRA come and go with it).
     pub leaf_scale: usize,
+    /// Whether the meshes kept were made with the detail levels (`leaf_scale` 2), once any were.
+    detail_made: Option<bool>,
     /// The parameters each species' textures were made from, to make them again.
     tex_params: HashMap<String, flora::PlantParams>,
     /// Every plant material made, with what it was made from, to point it at new textures.
@@ -704,6 +704,29 @@ impl Flora {
         done
     }
 
+    /// Frees every species' meshes, impostors and materials (not their textures): the scene
+    /// asks for them again on its sync after this pump (`rev`), and they are made with the
+    /// levels the quality now draws. Runs before that sync, so nothing drawn still points at them.
+    fn remesh(&mut self, r: &mut Renderer) {
+        self.bakes.clear();
+        self.baking = None;
+        self.meshing.clear();
+        self.tinted.clear();
+        for (_, variants) in self.classes.drain() {
+            for v in variants {
+                v.parts.iter().for_each(|p| r.remove_mesh(p.0));
+                if let Some((_, imp)) = v.baked {
+                    r.remove_impostor(imp);
+                }
+            }
+        }
+        // Every plant material, the tinted copies' too, is made per species and class.
+        for (_, m, _, _) in self.plant_mats.drain(..) {
+            r.remove_material(m);
+        }
+        self.rev += 1;
+    }
+
     /// How many species (with their seasons) are generated and kept.
     pub fn kept(&self) -> usize {
         self.classes.len()
@@ -715,6 +738,10 @@ impl Flora {
     pub fn pump(&mut self, r: &mut Renderer, eye: glam::Vec3) -> bool {
         if !self.retired.is_empty() {
             self.free_retired(r);
+        }
+        let detail = self.leaf_scale >= 2;
+        if self.detail_made.replace(detail).is_some_and(|d| d != detail) {
+            self.remesh(r);
         }
         let mut finished = self.regenerate(r);
         // Textures that arrived.
@@ -768,7 +795,6 @@ impl Flora {
                 work_pool::backlog() + extra <= 2 * work_pool::size()
             }
         };
-        let detail = self.leaf_scale >= 2;
         let budget = crate::assets::Budget::new(6.0);
         let mut i = 0;
         while i < self.queue.len() {
