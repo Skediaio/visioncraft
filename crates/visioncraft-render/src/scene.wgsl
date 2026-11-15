@@ -827,9 +827,12 @@ fn shade(in: Varying, front: bool, screen_effects: bool) -> Shaded {
 // flat from above.
 const CROWN_TAG: u32 = 0xC0000000u;
 // A thin leaf's diffuse transmittance relative to its reflectance (the albedo), and its hue:
-// the light through a leaf is yellower than the light off it (Jacquemoud & Baret 1990).
+// the light through a leaf is greener than the light off it: chlorophyll absorbs red and blue
+// on both passes, so a green leaf's transmittance relative to its reflectance is about 1 at
+// 550 nm, a half at 670 nm and a quarter at 450 nm (Jacquemoud & Baret 1990, PROSPECT spectra).
+// The earlier yellow tint (red kept at 0.9 of green) made sunlit crowns read lime-yellow.
 const LEAF_T: f32 = 0.8;
-const LEAF_T_TINT = vec3<f32>(0.78, 0.85, 0.42);
+const LEAF_T_TINT = vec3<f32>(0.48, 0.95, 0.29);
 fn crown_sky(face: u32) -> f32 {
     if (face & 0xFFFF0000u) == CROWN_TAG {
         return f32(face & 0xFFFFu) / 65535.0;
@@ -916,7 +919,7 @@ fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, screen_effe
             // transmittance both near 0.1; Jacquemoud & Baret, "PROSPECT: A model of leaf
             // optical properties spectra", Remote Sens. Environ. 34, 1990), so the side the sun
             // is on matters little: the side facing the viewer reflects, the other transmits
-            // (`LEAF_T`, yellower). A card is a cluster of leaves facing every way, and with a
+            // (`LEAF_T`, greener). A card is a cluster of leaves facing every way, and with a
             // spherical leaf-angle distribution half the irradiance falls on them whatever the
             // card's bent normal (G = 0.5; J. Ross, "The Radiation Regime and Architecture of
             // Plant Stands", 1981, ch. 2): the cosine is half the card's, half that mean.
