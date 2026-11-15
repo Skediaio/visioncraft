@@ -109,7 +109,8 @@ fn impostor_distances(h: f32) -> [f32; 3] {
 /// The ends of a plant's `n` mesh levels: the three of `lod_distances` or `impostor_distances`
 /// (`baked`), or with the two leaf-level detail levels of HIGH and ULTRA (`flora::generate_levels`)
 /// before them: every leaf to 2 + h/2 m (12 m for a 20 m tree, twice that at ULTRA), the larger
-/// spray budget to about twice that, then the card levels, ending where they did.
+/// spray budget to about twice that, then the card levels, ending where they did; or a herb's
+/// one stem level (4 levels).
 fn level_ends(h: f32, n: usize, baked: bool) -> Vec<f32> {
     match (n, baked && h >= TREE_M) {
         (5, true) => vec![
@@ -122,6 +123,12 @@ fn level_ends(h: f32, n: usize, baked: bool) -> Vec<f32> {
         (5, false) => {
             let [a, b, c] = lod_distances(h);
             vec![2.0 + 0.5 * h, 4.0 + 1.1 * h, a.max(6.0 + 1.6 * h), b, c]
+        }
+        // A herb's or grass's stem level (HIGH and ULTRA) before its three: 3.1 m for a 0.6 m
+        // lavender, 5.5 m for a 1.6 m reed grass, twice that at ULTRA and in stills.
+        (4, _) => {
+            let [a, b, c] = lod_distances(h);
+            vec![1.6 + 2.4 * h, a.max(2.6 + 2.6 * h), b, c]
         }
         (_, true) => impostor_distances(h).to_vec(),
         _ => lod_distances(h).to_vec(),
@@ -274,8 +281,9 @@ pub struct Flora {
     pub rev: u64,
     /// Leaf atlas texels per drawing unit for species generated from now on: 2 (512 px cells and
     /// a leaf normal map) at HIGH and ULTRA, else 1.
-    /// shortcut: species already generated keep their atlas when the quality changes; regenerate
-    /// on a change if Auto's steps make the difference visible
+    /// shortcut: species already generated keep their atlas and their mesh levels (the detail
+    /// levels of HIGH and ULTRA) when the quality changes; regenerate on a change if Auto's
+    /// steps make the difference visible
     pub leaf_scale: usize,
     /// The parameters each species' textures were made from, to make them again.
     tex_params: HashMap<String, flora::PlantParams>,
@@ -824,6 +832,11 @@ impl Flora {
             if ready && (!finished || !budget.spent()) {
                 let slots = self.meshing.remove(&k).unwrap_or_default();
                 let generated: Vec<Generated> = slots.iter().filter_map(take).collect();
+                // Started before the quality changed (a still's quality is set as the project's
+                // plants begin): made again with the levels the quality draws now.
+                if generated.iter().any(|g| g.detail != detail) {
+                    continue;
+                }
                 i -= 1;
                 self.queue.remove(i);
                 self.finish(r, &id, class, generated);
@@ -1013,6 +1026,8 @@ struct Generated {
     height: f32,
     /// (level, parts by material, foliage tint)
     levels: Vec<(usize, Parts, [f32; 3])>,
+    /// Made with the detail levels of HIGH and ULTRA.
+    detail: bool,
 }
 
 /// `generate_variant_now`, natively through the disk cache (`plant_cache`).
@@ -1031,7 +1046,11 @@ fn generate_variant(
             let g = generate_variant_now(name, params, v, month, detail);
             (g.height, g.levels)
         });
-        Generated { height, levels }
+        Generated {
+            height,
+            levels,
+            detail,
+        }
     }
     #[cfg(target_arch = "wasm32")]
     generate_variant_now(name, params, v, month, detail)
@@ -1061,7 +1080,11 @@ fn generate_variant_now(
         .map(|(li, m)| (li, m.split_parts(), m.foliage_tint))
         .collect();
     crate::load_stats::add(&format!("~plant mesh {name}"), crate::assets::now_ms() - t);
-    Generated { height, levels }
+    Generated {
+        height,
+        levels,
+        detail,
+    }
 }
 
 pub(crate) use crate::work_pool::Slot;
@@ -1076,6 +1099,19 @@ pub(crate) fn spawn<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A herb's stem level ends before its near card level; the mid and far levels end where
+    /// they did without it.
+    #[test]
+    fn a_herbs_stem_level_comes_first() {
+        for h in [0.25, 0.6, 1.6] {
+            let four = level_ends(h, 4, false);
+            let three = level_ends(h, 3, false);
+            assert!(four.windows(2).all(|w| w[0] < w[1]), "{four:?}");
+            assert!(four[0] >= 2.0 && four[0] < three[0].max(four[1]));
+            assert_eq!(four[2..], three[1..]);
+        }
+    }
 
     #[test]
     fn summer_months_share_a_class_and_winter_differs() {

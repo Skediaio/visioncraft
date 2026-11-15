@@ -262,10 +262,11 @@ pub(crate) fn skeleton(p: &PlantParams, b: &BranchingParams, seed: u64) -> Skele
     // Each seed of a tree its own form within the species: a little taller or broader (own
     // stream, so the branching draws stay as they were).
     let mut form = Rng::new(seed, 7);
+    // Shrubs vary more: a border's neighbours of one species differ by a fifth in size.
     let (fh, fw) = if matches!(p.budget, BudgetClass::LargeTree | BudgetClass::SmallTree) {
         (form.range(0.93, 1.07), form.range(0.88, 1.12))
     } else {
-        (1.0, 1.0)
+        (form.range(0.88, 1.1), form.range(0.86, 1.12))
     };
     let h = p.height_m * p.age * fh;
     let w = p.width_m * p.age.powf(1.25) * fw;
