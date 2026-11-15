@@ -226,7 +226,7 @@ fn golden_hashes() {
     let mut got = Vec::new();
     for (id, lod, want) in [
         ("quercus-robur", Lod::Lod0, 0xef80_3f58_89ec_43a1_u64),
-        ("hosta", Lod::Lod1, 0x3fe7_73fb_1413_23c5),
+        ("hosta", Lod::Lod1, 0x3575_a1dc_73c0_cd88),
         ("carpinus-hedge", Lod::Lod2, 0xc567_f698_a41b_6c32),
         ("picea-abies", Lod::Lod1, 0x9762_4c2a_a435_0689),
     ] {
@@ -468,9 +468,70 @@ fn detail_levels_of_a_large_tree() {
     let winter = generate_levels(oak, 3, Some(Season { month: 1 }), true);
     assert_eq!(winter[0].triangles_of(Material::Foliage), 0);
     assert!(winter[0].triangles_of(Material::Twigs) > 30_000);
-    let hosta = &Species::by_id("hosta").unwrap().params;
-    assert_eq!(generate_levels(hosta, 3, Some(summer), true).len(), 3);
-    assert_eq!(detail_triangles(hosta), [0, 0]);
+}
+
+/// Neighbours of one species are not copies: grasses and perennials take their own size from
+/// the seed.
+#[test]
+fn herbs_vary_in_size_by_seed() {
+    for id in [
+        "lavandula-angustifolia",
+        "festuca-glauca",
+        "salvia-nemorosa",
+        "pennisetum-alopecuroides",
+    ] {
+        let p = &Species::by_id(id).unwrap().params;
+        let tops: Vec<f32> = (1..=6)
+            .map(|s| generate(p, s, Lod::Lod1).bounds().1[1])
+            .collect();
+        let (lo, hi) = tops
+            .iter()
+            .fold((f32::MAX, 0.0f32), |(a, b), &t| (a.min(t), b.max(t)));
+        assert!(hi > lo * 1.06, "{id}: heights {tops:?}");
+    }
+}
+
+/// Grasses and herbaceous plants get one stem level before their three card levels with detail:
+/// within its budget, every blade a strip (no fan cards), several times the flowering stems of
+/// the near card level; the card levels stay exactly as generated one by one. Ground cover and
+/// lawn tufts get none.
+#[test]
+fn stem_level_of_grasses_and_perennials() {
+    let summer = Season { month: 8 };
+    for id in [
+        "pennisetum-alopecuroides",
+        "festuca-glauca",
+        "lavandula-angustifolia",
+        "echinacea-purpurea",
+        "hosta",
+    ] {
+        let p = &Species::by_id(id).unwrap().params;
+        let levels = generate_levels(p, 3, Some(summer), true);
+        assert_eq!(levels.len(), 4, "{id}");
+        let [near, none] = detail_triangles(p);
+        assert_eq!(none, 0);
+        check_mesh(&levels[0], near, id).unwrap();
+        for (lod, m) in Lod::ALL.into_iter().zip(&levels[1..]) {
+            assert_eq!(*m, generate_in_season(p, 3, lod, summer), "{id} {lod:?}");
+        }
+        // Several times the near card level's geometry.
+        assert!(
+            levels[0].triangle_count() > 2 * levels[1].triangle_count(),
+            "{id}: {} vs {}",
+            levels[0].triangle_count(),
+            levels[1].triangle_count()
+        );
+        assert_eq!(generate_levels(p, 3, Some(summer), false).len(), 3);
+    }
+    // Lavender: its flowering stems are wood (bark-drawn tubes), three times the near level's.
+    let lav = &Species::by_id("lavandula-angustifolia").unwrap().params;
+    let levels = generate_levels(lav, 3, Some(summer), true);
+    assert!(levels[0].triangles_of(Material::Bark) >= 3 * levels[1].triangles_of(Material::Bark));
+    for id in ["thymus-serpyllum", "lawn-tuft"] {
+        let p = &Species::by_id(id).unwrap().params;
+        assert_eq!(generate_levels(p, 3, Some(summer), true).len(), 3, "{id}");
+        assert_eq!(detail_triangles(p), [0, 0]);
+    }
 }
 
 /// A few hundred random but validated parameter sets (library species with schema parameters

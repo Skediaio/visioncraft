@@ -227,8 +227,17 @@ pub fn generate_in_season(params: &PlantParams, seed: u64, lod: Lod, season: Sea
 }
 
 fn generate_in(params: &PlantParams, seed: u64, lod: Lod, season: Option<Season>) -> PlantMesh {
+    generate_with(params, seed, lod, season, params.budget.triangles(lod))
+}
+
+fn generate_with(
+    params: &PlantParams,
+    seed: u64,
+    lod: Lod,
+    season: Option<Season>,
+    budget: usize,
+) -> PlantMesh {
     let state = SeasonState::new(params, season);
-    let budget = params.budget.triangles(lod);
     let mut mesh = match &params.form {
         Form::Branching(b) => gen_branching::generate(params, b, seed, lod, &state, budget),
         Form::Palm(p) => gen_palm::generate(params, p, seed, lod, &state, budget),
@@ -251,7 +260,8 @@ fn generate_in(params: &PlantParams, seed: u64, lod: Lod, season: Option<Season>
 /// Every level a renderer draws a plant with, nearest first. With `detail`, trees (the
 /// broadleaf species grown by space colonisation) get two more levels before [`Lod::Lod0`]:
 /// first every lit shoot with its leaves at true size ([`detail_triangles`]`[0]`), then the
-/// spray cards at a larger budget (`[1]`). Otherwise the three [`Lod`]s. The skeleton is grown
+/// spray cards at a larger budget (`[1]`); grasses, perennials and herbaceous mounds one, every
+/// blade, stem and spike at true size (`[0]`). Otherwise the three [`Lod`]s. The skeleton is grown
 /// once for all of them, so this is cheaper than one [`generate_in_season`] per level.
 pub fn generate_levels(
     params: &PlantParams,
@@ -260,9 +270,15 @@ pub fn generate_levels(
     detail: bool,
 ) -> Vec<PlantMesh> {
     let Form::Branching(b) = &params.form else {
-        return Lod::ALL
-            .map(|lod| generate_in(params, seed, lod, season))
-            .to_vec();
+        let mut out = Vec::new();
+        let near = gen_herb::detail_budget(params);
+        if detail && near > 0 {
+            // Herbs and grasses: one level before Lod0 with every stem, blade and spike as
+            // its own geometry (`gen_herb`'s generators at the larger budget).
+            out.push(generate_with(params, seed, Lod::Lod0, season, near));
+        }
+        out.extend(Lod::ALL.map(|lod| generate_in(params, seed, lod, season)));
+        return out;
     };
     let state = SeasonState::new(params, season);
     let sk = gen_branching::skeleton(params, b, seed);
@@ -290,14 +306,14 @@ pub fn generate_levels(
     out
 }
 
-/// Triangle budgets of the two leaf-level detail levels of [`generate_levels`] (`[0, 0]` for
-/// plants without them).
+/// Triangle budgets of the detail levels of [`generate_levels`]: a tree's leaf and spray
+/// levels, a herb's or grass's one stem level (`[near, 0]`), `[0, 0]` for other plants.
 pub fn detail_triangles(params: &PlantParams) -> [usize; 2] {
     match &params.form {
         Form::Branching(_) if gen_branching::grown(params) => {
             gen_tree::detail_budget(params.budget)
         }
-        _ => [0, 0],
+        _ => [gen_herb::detail_budget(params), 0],
     }
 }
 

@@ -86,6 +86,12 @@ c("shape.add_area", name="Garden path", outline=rect(-21, 1.5, -1.2, 3.0), mater
 c("shape.add_area", name="Beach walk", outline=rect(6.8, 7.65, 8.8, 14), material="timber")
 # The gravel garden east of the night wing.
 c("shape.add_area", name="East gravel garden", outline=rect(25.5, -16, 44, 4.5), material="gravel")
+# The planted beds are dug and mulched soil, not the dune sand round them: between young or low
+# plants a border shows its earth, which read as bare sand.
+for name, o in [("Garden room north bed", rect(-23.8, -8.7, -9, -4.6)), ("Garden room west bed", rect(-23.8, -4.5, -19.7, 1.0)),
+                ("Garden room south bed", rect(-21, 3.1, -6, 4.5)), ("Court west bed", rect(DOOR_X - 8.5, -24, DOOR_X - 5.1, -15.2)),
+                ("Court east bed", rect(DOOR_X + 5.1, -24, DOOR_X + 8.5, -12.6)), ("Court olive bed", rect(DOOR_X - 4, -29.5, DOOR_X + 4, -25))]:
+    c("shape.add_area", name=name, outline=o, material="soil")
 
 # ---- Structure: hedges and trees -------------------------------------------------------------
 # Evergreen yew round the garden room on the land side and the west (shelter, winter structure);
@@ -130,32 +136,41 @@ def drifts_in(prefix, o, species, seed):
         else:
             a, b = z0 + (z1 - z0) * i / n, z0 + (z1 - z0) * (i + 1) / n
             r = rect(min(x0, x1), round(min(a, b), 2), max(x0, x1), round(max(a, b), 2))
-        area(f"{prefix} drift {i + 1}", r, [(sp, 1)], d, seed * 10 + i)
+        area(f"{prefix} drift {i + 1}", r, [(sp, 1)], d, seed * 10 + i, **BED)
 
 
-def border(prefix, back_outline, mid_band, front_outline, back, mid, front, seed):
-    area(f"{prefix} back", back_outline, back, 0.25, seed)
+# Planted beds: each plant near its own spot (a full cell of jitter left holes a plant wide
+# between neighbours planted their mature spread apart) and neighbours a little different in size.
+BED = dict(position_jitter=0.5, scale_min=0.85, scale_max=1.1)
+
+
+def border(prefix, back_outline, mid_band, front_outline, back, mid, front, seed, front_density=4.0):
+    area(f"{prefix} back", back_outline, back, 0.25, seed, **BED)
     drifts_in(prefix, mid_band, mid, seed + 1)
-    area(f"{prefix} front", front_outline, front, 4.0, seed + 2)
+    area(f"{prefix} front", front_outline, front, front_density, seed + 2, **BED)
 
 
+# A front of two blue fescues (0.3 m across) to one thyme or cranesbill (0.5 to 0.7 m), each
+# planted its mature spread apart: (2 * 0.3^2 + 0.5^2) / 3 = 0.14 m2 a plant, about 7 per m2
+# (at 4 the fescues stood as blue dots in sand).
+FESCUE_FRONT = 7.0
 MID = [("pennisetum-alopecuroides", 2.0), ("salvia-nemorosa", 4.0), ("echinacea-purpurea", 4.0),
        ("calamagrostis-acutiflora", 3.0), ("nepeta-faassenii", 3.5), ("lavandula-angustifolia", 3.0)]
 # Garden room: the north border (z -8.7 to -4.6) and the west border (x -23.8 to -19.7).
 border("Garden room north", rect(-23.8, -8.7, -9, -7.6), (-23.8, -7.6, -9, -5.4), rect(-23.8, -5.4, -9, -4.6),
        [("taxus-cone", 1), ("pinus-mugo", 1), ("buxus-sempervirens", 1)], MID,
-       [("festuca-glauca", 2), ("thymus-serpyllum", 1)], 200)
+       [("festuca-glauca", 2), ("thymus-serpyllum", 1)], 200, front_density=FESCUE_FRONT)
 border("Garden room west", rect(-23.8, -4.5, -22.8, 1.0), (-22.8, -4.5, -20.6, 1.0), rect(-20.6, -4.5, -19.7, 1.0),
        [("taxus-cone", 1), ("pinus-mugo", 1)], MID[::-1][:4],
-       [("festuca-glauca", 2), ("geranium-rozanne", 1)], 210)
+       [("festuca-glauca", 2), ("geranium-rozanne", 1)], 210, front_density=FESCUE_FRONT)
 # The south edge of the room stays low, so the sea is in view from the lawn.
-area("Garden room south edge", rect(-21, 3.1, -6, 4.5), [("lavandula-angustifolia", 2), ("festuca-glauca", 1)], 3.0, 220)
+area("Garden room south edge", rect(-21, 3.1, -6, 4.5), [("lavandula-angustifolia", 2), ("festuca-glauca", 1)], 3.0, 220, **BED)
 # Entrance court: borders either side of the standards, 3.4 m deep.
 border("Court west", rect(DOOR_X - 8.5, -24, DOOR_X - 7.6, -15.2), (DOOR_X - 7.6, -24, DOOR_X - 5.8, -15.2),
        rect(DOOR_X - 5.8, -24, DOOR_X - 5.1, -15.2), [("taxus-cone", 1)], MID[:4], [("buxus-ball", 1)], 230)
 border("Court east", rect(DOOR_X + 7.6, -24, DOOR_X + 8.5, -12.6), (DOOR_X + 5.8, -24, DOOR_X + 7.6, -12.6),
        rect(DOOR_X + 5.1, -24, DOOR_X + 5.8, -12.6), [("taxus-cone", 1)], MID[2:], [("buxus-ball", 1)], 240)
-area("Court olive bed", rect(DOOR_X - 4, -29.5, DOOR_X + 4, -25), [("lavandula-angustifolia", 3), ("festuca-glauca", 2)], 2.5, 250)
+area("Court olive bed", rect(DOOR_X - 4, -29.5, DOOR_X + 4, -25), [("lavandula-angustifolia", 3), ("festuca-glauca", 2)], 2.5, 250, **BED)
 drifts("Drive verge west", -10, -8.8, -70, -32, ["lavandula-angustifolia", "festuca-glauca", "pennisetum-alopecuroides", "lavandula-angustifolia", "festuca-glauca"], [1.6, 2.0, 1.2, 1.6, 2.0], 90, along="z")
 drifts("Drive verge east", -0.4, 1.0, -70, -36, ["festuca-glauca", "lavandula-angustifolia", "pennisetum-alopecuroides", "festuca-glauca", "lavandula-angustifolia"], [2.0, 1.6, 1.2, 2.0, 1.6], 100, along="z")
 # The east gravel garden: Mediterranean and South African coastal plants in loose drifts round

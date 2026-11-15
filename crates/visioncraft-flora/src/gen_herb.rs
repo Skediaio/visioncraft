@@ -5,12 +5,35 @@
 //! patches Vogel's sunflower model r = c * sqrt(k), theta = k * 137.5 degrees (both from
 //! Prusinkiewicz & Lindenmayer, "The Algorithmic Beauty of Plants", ch. 4).
 
-use crate::math::{GOLDEN_ANGLE, Rng, TAU, UP, V3, cos, deg, sin, v3};
+use crate::math::{GOLDEN_ANGLE, Rng, TAU, UP, V3, atan2, cos, deg, sin, v3};
 use crate::mesh::{Builder, Card, Node, Outward, cell_uv, rand_dir, shuffled};
 use crate::{
-    ClimberParams, FlowerShape, GroundCoverParams, LeafShape, Lod, Material, PlantMesh,
-    PlantParams, RosetteParams, SeasonState, TussockParams,
+    BudgetClass, ClimberParams, FlowerShape, Form, GroundCoverParams, LeafShape, Lod, Material,
+    PlantMesh, PlantParams, RosetteParams, SeasonState, TussockParams,
 };
+
+/// Triangles of a grass's or herbaceous plant's stem level ([`crate::generate_levels`] with
+/// detail): every blade, stem and spike its own geometry at true size. 0 for other forms and for
+/// lawn tufts.
+pub(crate) fn detail_budget(p: &PlantParams) -> usize {
+    match (&p.form, p.budget) {
+        (Form::Tussock(_) | Form::Rosette(_), BudgetClass::Herb) => 6_000,
+        (Form::Tussock(_) | Form::Rosette(_), BudgetClass::Shrub) => 9_000,
+        _ => 0,
+    }
+}
+
+/// Whether `budget` is a stem level's (above the class's near level).
+fn is_detail(p: &PlantParams, budget: usize) -> bool {
+    budget > p.budget.triangles(Lod::Lod0)
+}
+
+/// Each seed of a plant its own size within the species: a little taller or broader, so
+/// neighbours in a drift differ (own stream, the placement draws stay as they were).
+fn form_of(seed: u64) -> (f32, f32) {
+    let mut r = Rng::new(seed, 7);
+    (r.range(0.86, 1.12), r.range(0.86, 1.14))
+}
 
 fn strip(
     out: &mut Builder,
@@ -62,8 +85,14 @@ pub fn tussock(
     budget: usize,
 ) -> PlantMesh {
     let li = lod.index();
-    let h = p.height_m * p.age;
-    let w = p.width_m * p.age;
+    let dense = is_detail(p, budget);
+    let (fh, fw) = if p.budget == BudgetClass::Tuft {
+        (1.0, 1.0)
+    } else {
+        form_of(seed)
+    };
+    let h = p.height_m * p.age * fh;
+    let w = p.width_m * p.age * fw;
     let hf = h * t.foliage_height;
     let plumes_on = st.flowers && p.flowers.is_some() && t.plumes > 0;
     let n_plume = if plumes_on {
@@ -75,12 +104,30 @@ pub fn tussock(
     } else {
         0
     };
-    let plume_cost = |l: usize| [3 + 8, 3 + 4, 3 + 2][l]; // stalk + (crossed, bent at LOD0) card
+    // stalk + (crossed, bent at LOD0) card; the stem level: a bowed stalk and three bent cards
+    let plume_cost = |l: usize| {
+        if dense {
+            12 + 18
+        } else {
+            [3 + 8, 3 + 4, 3 + 2][l]
+        }
+    };
     let n_plume = n_plume.min(budget / 3 / plume_cost(li));
-    let segs = if budget < 30 { 2 } else { [4, 3, 2][li] };
-    // Tiny budgets (far lawn tufts) get fan cards only: symmetric and cheap.
+    let len0 = hf / (cos(deg(t.min_angle_deg)) - 0.45 * t.droop).max(0.35);
+    let segs = if dense {
+        // A piece every 10 cm or so: short fescue needles need three, so more of them fit.
+        ((len0 / 0.1).ceil() as usize).clamp(3, 6)
+    } else if budget < 30 {
+        2
+    } else {
+        [4, 3, 2][li]
+    };
+    // Tiny budgets (far lawn tufts) get fan cards only: symmetric and cheap. The stem level has
+    // none: its blades are all there, and a fan card's painted blades read as a flat cut-out.
     let fans_total = if budget < 12 {
         (budget / 2) as u16
+    } else if dense {
+        0
     } else {
         t.fans
     };
@@ -97,14 +144,16 @@ pub fn tussock(
     let n_fan = n_fan.min(budget / 4);
     // Low arching cards radiating from the base, so the clump also reads in plan view.
     let top_cost = if li == 0 { 4 } else { 2 };
-    let n_top = if budget < 12 || t.fans == 0 {
+    let n_top = if budget < 12 || t.fans == 0 || dense {
         0
     } else {
         [10usize, 7, 5][li]
     };
     let n_top =
         n_top.min(budget.saturating_sub(n_plume * plume_cost(li) + n_fan * 2) / 2 / top_cost);
-    let n0 = t.blades as usize;
+    // A grown clump has hundreds of leaves (Pennisetum alopecuroides: blades 10-45 cm by 3-6
+    // mm in "graceful, spreading clumps"); the near card levels stand for them with the fans.
+    let n0 = t.blades as usize * if dense { 10 } else { 1 };
     let nk = if budget < 12 {
         0
     } else {
@@ -119,7 +168,6 @@ pub fn tussock(
     let mut rng = Rng::new(seed, 1);
     let min_a = deg(t.min_angle_deg);
     let max_a = deg(t.max_angle_deg);
-    let len0 = hf / (cos(min_a) - 0.45 * t.droop).max(0.35);
     struct Blade {
         base: V3,
         az: f32,
@@ -159,7 +207,11 @@ pub fn tussock(
     };
     let mut out = Builder::default();
     let order = shuffled(n0, &mut Rng::new(seed, 2));
-    let width = if fan {
+    let width = if dense {
+        // At least 4 mm: a fescue's needles are under a pixel from 2 m, and an alpha-cut strip
+        // that thin breaks up into a haze instead of reading as a tuft.
+        t.blade_width_m.max(0.004)
+    } else if fan {
         (t.blade_width_m * ratio).min(hf * 0.7)
     } else {
         t.blade_width_m * ratio.sqrt().min(3.0)
@@ -214,7 +266,12 @@ pub fn tussock(
     for (k, &i) in order.iter().take(nk).enumerate() {
         let b = &blades[i];
         let pts = curve(b, segs);
-        let side = v3(-sin(b.az), 0.0, cos(b.az));
+        let mut side = v3(-sin(b.az), 0.0, cos(b.az));
+        if dense {
+            // Single blades turn about their length (keeled or folded leaves): edge-on to some
+            // views, so the clump is not a set of ribbons all facing out.
+            side = side.rotate((pts[segs] - pts[0]).norm(), 1.2 * (b.phase - 0.5));
+        }
         let cell = if fan {
             4 + (k % 3) as u8
         } else {
@@ -243,22 +300,39 @@ pub fn tussock(
             let total = (top_y - base.y) / cos(lean).max(0.3);
             let plume_len = t.plume_m.min(total * 0.8);
             let plume_base = base + dir * (total - plume_len);
-            out.tube(
-                &[
-                    Node {
-                        p: base,
-                        r: stalk_r,
-                        w: 0.1,
-                    },
-                    Node {
-                        p: plume_base + dir * (plume_len * 0.3),
-                        r: stalk_r * 0.6,
-                        w: 0.8,
-                    },
-                ],
-                3,
-                ph,
-            );
+            let tip = plume_base + dir * (plume_len * 0.3);
+            if dense {
+                // The stalk bows out under its plume: a midpoint pushed out, four sides.
+                let out_d = v3(cos(az), 0.0, sin(az));
+                let mid = (base + plume_base) * 0.5 + out_d * (0.04 * total);
+                let n = |p, r, w| Node { p, r, w };
+                out.tube(
+                    &[
+                        n(base, stalk_r, 0.1),
+                        n(mid, stalk_r * 0.8, 0.45),
+                        n(tip, stalk_r * 0.6, 0.8),
+                    ],
+                    4,
+                    ph,
+                );
+            } else {
+                out.tube(
+                    &[
+                        Node {
+                            p: base,
+                            r: stalk_r,
+                            w: 0.1,
+                        },
+                        Node {
+                            p: tip,
+                            r: stalk_r * 0.6,
+                            w: 0.8,
+                        },
+                    ],
+                    3,
+                    ph,
+                );
+            }
             let card = Card {
                 base: plume_base,
                 up: dir,
@@ -274,10 +348,23 @@ pub fn tussock(
                 } else {
                     0.1
                 },
-                segments: if li == 0 { 2 } else { 1 },
+                segments: if dense {
+                    3
+                } else if li == 0 {
+                    2
+                } else {
+                    1
+                },
                 outward_mix: 0.5,
             };
-            if li == 2 {
+            if dense {
+                // Three planes 60 degrees apart: from near, two crossed cards show as a flat
+                // feather edge-on.
+                for k in 0..3 {
+                    let s = card.side.rotate(dir, TAU * k as f32 / 6.0);
+                    out.card(&Card { side: s, ..card }, &flower_out);
+                }
+            } else if li == 2 {
                 out.card(&card, &flower_out)
             } else {
                 out.crossed(&card, &flower_out)
@@ -297,24 +384,32 @@ pub fn rosette(
     budget: usize,
 ) -> PlantMesh {
     let li = lod.index();
-    let h = p.height_m * p.age;
-    let w = p.width_m * p.age;
+    let dense = is_detail(p, budget);
+    let (fh, fw) = form_of(seed);
+    let h = p.height_m * p.age * fh;
+    let w = p.width_m * p.age * fw;
     let hf = h * r.foliage_height;
     let flowers = p.flowers.as_ref().filter(|_| st.flowers && r.stalks > 0);
     let per_stalk = flowers.map_or(0, |f| f.density.round().max(1.0) as usize);
-    let head_cost = |l: usize, f: FlowerShape| {
-        if matches!(
-            f,
-            FlowerShape::Spike | FlowerShape::Panicle | FlowerShape::Plume
-        ) && l < 2
-        {
-            4
+    let head_cost = |l: usize, f: FlowerShape| match (spike_like(f), dense) {
+        (false, true) => HEAD_RAYS,
+        (true, _) if l < 2 => 4,
+        _ => 2,
+    };
+    // The stem level: a bowed three-node stalk, and two stem leaves under a flower head.
+    let stalk_cost = |_: usize| {
+        if !dense {
+            3
+        } else if flowers.is_some_and(|f| spike_like(f.shape)) {
+            9
         } else {
-            2
+            9 + 8
         }
     };
-    let stalk_cost = |_: usize| 3;
-    let m0 = r.stalks as usize;
+    // A flowering plant has many more stems than the card levels draw: lavender's slender,
+    // leafless flowering stems (10-30 cm, a 2-8 cm spike on each; Wikipedia, "Lavandula
+    // angustifolia") stand in their hundreds over a mature mound.
+    let m0 = r.stalks as usize * if dense { 3 } else { 1 };
     let mk = if flowers.is_some() {
         [m0, (m0 * 3).div_ceil(5), m0.div_ceil(3)][li]
     } else {
@@ -327,8 +422,15 @@ pub fn rosette(
     let flower_tris = flowers.map_or(0, |f| {
         mk * (stalk_cost(li) + per_stalk * head_cost(li, f.shape))
     });
-    let segs = if budget < 60 { 1 } else { [3, 2, 1][li] };
-    let n0 = r.leaves as usize;
+    let segs = if dense {
+        4
+    } else if budget < 60 {
+        1
+    } else {
+        [3, 2, 1][li]
+    };
+    // The stem level closes a mound of leafy shoots with twice as many.
+    let n0 = r.leaves as usize * if dense && r.shoots { 2 } else { 1 };
     let nk = n0
         .min(budget.saturating_sub(flower_tris) / (2 * segs))
         .max(1);
@@ -353,8 +455,11 @@ pub fn rosette(
         .map(|i| {
             let q = i as f32 / n0.max(1) as f32;
             let az = i as f32 * GOLDEN_ANGLE + 0.2 * rng.sym();
+            // Leafy shoots of a mound rise from a crown as wide as a third of it: the upright
+            // inner ones (first) in the middle, the spreading outer ones round them, so the dome
+            // is closed on top instead of a star of shoots from one point with a hole there.
             let spread = if r.shoots {
-                w * 0.18 * rng.f().sqrt()
+                w * 0.32 * (q * (0.5 + 0.5 * rng.f())).sqrt()
             } else {
                 0.02 * w * rng.f()
             };
@@ -414,6 +519,8 @@ pub fn rosette(
             up: 0.8,
         };
         let stem_w = (0.002 + 0.004 * h).min(0.012);
+        let mut drng = Rng::new(seed, 6);
+        let spike = spike_like(f.shape);
         for j in 0..m0 {
             let az = j as f32 * GOLDEN_ANGLE + srng.sym();
             let lean = deg(r.stalk_spread_deg) * srng.f().sqrt();
@@ -422,14 +529,90 @@ pub fn rosette(
             if j >= mk {
                 continue;
             }
+            let side = v3(-sin(az), 0.0, cos(az));
+            let outd = v3(cos(az), 0.0, sin(az));
+            // A stalk from `from` m off the axis rising `rise` m leans out no further than the
+            // plant is wide: its flowers stay over its own leaves at every level, so a plant
+            // narrower than its species' mean does not carry them past its edge.
+            // Fewer stalks at the coarser levels carry larger heads, so a border keeps its
+            // colour from 8 to 15 m instead of fading to leaves.
+            let fs = f.card_m * (m0 as f32 / mk.max(1) as f32).sqrt().clamp(1.0, 1.8);
+            let head = fs * if spike { 0.3 } else { 0.5 };
+            let max_lean =
+                |from: f32, rise: f32| atan2((0.5 * w - head - from).max(0.05 * w), rise.max(1e-3));
+            if dense {
+                // Stems rise from all over the leaf mound, not from one point: upright in the
+                // middle, leaning out towards its edge (a fan of stems from the centre read as
+                // a shaving brush), each bowing a little.
+                let q = drng.f().sqrt();
+                let rr = (if r.shoots { 0.36 } else { 0.12 }) * w * q;
+                let y0 = hf * (0.7 - 0.45 * q * q) * if r.shoots { 1.0 } else { 0.3 };
+                let base = outd * rr + UP * y0;
+                let rise = (hs - y0).max(h * 0.3);
+                let lean = (deg(r.stalk_spread_deg) * (0.15 + 0.85 * q) * drng.range(0.7, 1.15))
+                    .min(max_lean(rr, rise));
+                let dir = (UP * cos(lean) + outd * sin(lean)).norm();
+                let len = rise / cos(lean).max(0.3) - if spike { f.card_m * 0.6 } else { 0.0 };
+                let bow = outd * (len * 0.06 * drng.sym()) + side * (len * 0.05 * drng.sym());
+                let mid = base + dir * (len * 0.5) + bow;
+                let top = base + dir * len + bow * 1.4;
+                let n = |p, r, w| Node { p, r, w };
+                out.tube(
+                    &[
+                        n(base, stem_w * 0.8, 0.05),
+                        n(mid, stem_w * 0.6, 0.5),
+                        n(top, stem_w * 0.35, 0.9),
+                    ],
+                    3,
+                    ph,
+                );
+                let tdir = (top - mid).norm();
+                if !spike && !r.shoots {
+                    // Alternate stem leaves on the lower stem (coneflower, daisies).
+                    for k in 0..2 {
+                        let a = az + 1.3 + k as f32 * 2.4;
+                        let ld = (v3(cos(a), 0.0, sin(a)) * 0.8 + UP * 0.6).norm();
+                        let at = base + (mid - base) * (0.35 + 0.5 * k as f32);
+                        let ll = p.leaves.leaf_m * drng.range(0.55, 0.8);
+                        let card = Card {
+                            base: at,
+                            up: ld,
+                            side: ld.cross(UP).norm(),
+                            length: ll,
+                            width: ll * p.leaves.aspect.max(0.25) * 1.3,
+                            cell: ((j + k) % 4) as u8,
+                            material: Material::Foliage,
+                            wind: (0.4, 0.7),
+                            phase: ph,
+                            bend: 0.5,
+                            segments: 2,
+                            outward_mix: 0.4,
+                        };
+                        out.card(&card, &out_field);
+                    }
+                }
+                flower_heads(
+                    &mut out,
+                    f,
+                    top,
+                    tdir,
+                    side,
+                    az,
+                    j,
+                    per_stalk,
+                    f.card_m,
+                    ph,
+                    li,
+                    &flower_out,
+                    &mut srng,
+                    true,
+                );
+                continue;
+            }
+            let lean = lean.min(max_lean(0.04 * w, hs));
             let dir = v3(cos(az) * sin(lean), cos(lean), sin(az) * sin(lean));
             let base = v3(cos(az), 0.0, sin(az)) * (0.04 * w);
-            let spike = matches!(
-                f.shape,
-                FlowerShape::Spike | FlowerShape::Panicle | FlowerShape::Plume
-            );
             let stalk_len = hs / cos(lean).max(0.3) - if spike { f.card_m * 0.6 } else { 0.0 };
-            let side = v3(-sin(az), 0.0, cos(az));
             // Stalk: a thin three-sided cone (bark texture = green stem).
             let top = base + dir * stalk_len;
             out.tube(
@@ -448,60 +631,158 @@ pub fn rosette(
                 3,
                 ph,
             );
-            for k in 0..per_stalk {
-                // Fewer stalks at the coarser levels carry larger heads, so a border keeps its
-                // colour from 8 to 15 m instead of fading to leaves.
-                let fs = f.card_m * (m0 as f32 / mk.max(1) as f32).sqrt().clamp(1.0, 1.8);
-                if spike {
-                    let card = Card {
-                        base: base + dir * (stalk_len - fs * 0.4 - k as f32 * fs * 0.3),
-                        up: (dir + rand_dir(&mut srng) * 0.1).norm(),
-                        side,
-                        length: fs,
-                        width: fs * 0.55,
-                        cell: 8 + ((j + k) % 4) as u8,
-                        material: Material::Flower,
-                        wind: (0.85, 1.0),
-                        phase: ph,
-                        bend: 0.0,
-                        segments: 1,
-                        outward_mix: 0.4,
-                    };
-                    if li < 2 {
-                        out.crossed(&card, &flower_out)
-                    } else {
-                        out.card(&card, &flower_out)
-                    }
-                } else {
-                    // A flower head facing up and out, on a short pedicel near the stalk top.
-                    let fa = az + k as f32 * 2.1;
-                    let outd = v3(cos(fa), 0.0, sin(fa));
-                    let centre = base
-                        + dir * (stalk_len - k as f32 * fs * 0.6)
-                        + outd * (fs * 0.35 * k.min(1) as f32);
-                    let face = (outd * 0.75 + UP * 0.66).norm();
-                    let up = (UP - face * UP.dot(face)).norm();
-                    let sd = up.cross(face).norm();
-                    let card = Card {
-                        base: centre - up * (fs * 0.5),
-                        up,
-                        side: sd,
-                        length: fs,
-                        width: fs,
-                        cell: 8 + ((j + k) % 4) as u8,
-                        material: Material::Flower,
-                        wind: (0.9, 1.0),
-                        phase: ph,
-                        bend: 0.0,
-                        segments: 1,
-                        outward_mix: 0.3,
-                    };
-                    out.card(&card, &Outward::Dir(face));
-                }
-            }
+            flower_heads(
+                &mut out,
+                f,
+                top,
+                dir,
+                side,
+                az,
+                j,
+                per_stalk,
+                fs,
+                ph,
+                li,
+                &flower_out,
+                &mut srng,
+                false,
+            );
         }
     }
     out.finish()
+}
+
+/// Triangles of a [`head`].
+const HEAD_RAYS: usize = 8;
+
+/// A flower head of the stem level: the atlas cell's flower mapped onto a shallow cone round
+/// `face` instead of a flat card, its centre (a daisy's disc) standing out and its rim (the
+/// rays) falling back; a coneflower's rays hang down further (Echinacea purpurea's reflexed
+/// ray florets).
+fn head(
+    out: &mut Builder,
+    f: &crate::FlowerParams,
+    centre: V3,
+    face: V3,
+    up: V3,
+    sd: V3,
+    r: f32,
+    cell: u8,
+    ph: f32,
+) {
+    let fall = match f.shape {
+        FlowerShape::Daisy { droop: true } => 0.55,
+        FlowerShape::Daisy { droop: false } => 0.12,
+        _ => 0.05,
+    };
+    let apex = out.vert(
+        centre + face * (r * 0.2),
+        face,
+        cell_uv(cell, 0.5, 0.5),
+        [0.9, ph],
+    );
+    let ring: Vec<u32> = (0..HEAD_RAYS)
+        .map(|m| {
+            let a = TAU * m as f32 / HEAD_RAYS as f32;
+            let d = sd * cos(a) + up * sin(a);
+            out.vert(
+                centre + d * r - face * (r * fall),
+                (face + d * (0.6 * fall)).norm(),
+                cell_uv(cell, 0.5 + 0.5 * cos(a), 0.5 + 0.5 * sin(a)),
+                [1.0, ph],
+            )
+        })
+        .collect();
+    for m in 0..HEAD_RAYS {
+        out.tri(Material::Flower, apex, ring[m], ring[(m + 1) % HEAD_RAYS]);
+    }
+}
+
+fn spike_like(f: FlowerShape) -> bool {
+    matches!(
+        f,
+        FlowerShape::Spike | FlowerShape::Panicle | FlowerShape::Plume
+    )
+}
+
+/// The `per_stalk` flower heads (`fs` across) at the top of a stalk ending at `top` along `dir`.
+fn flower_heads(
+    out: &mut Builder,
+    f: &crate::FlowerParams,
+    top: V3,
+    dir: V3,
+    side: V3,
+    az: f32,
+    j: usize,
+    per_stalk: usize,
+    fs: f32,
+    ph: f32,
+    li: usize,
+    flower_out: &Outward,
+    srng: &mut Rng,
+    dense: bool,
+) {
+    for k in 0..per_stalk {
+        if spike_like(f.shape) {
+            let card = Card {
+                base: top - dir * (fs * 0.4 + k as f32 * fs * 0.3),
+                // On the stem level the spike carries on its stalk's line (no kink at the join).
+                up: (dir + rand_dir(srng) * if dense { 0.02 } else { 0.1 }).norm(),
+                side,
+                length: fs,
+                width: fs * if dense { 0.45 } else { 0.55 },
+                cell: 8 + ((j + k) % 4) as u8,
+                material: Material::Flower,
+                wind: (0.85, 1.0),
+                phase: ph,
+                bend: 0.0,
+                segments: 1,
+                outward_mix: 0.4,
+            };
+            if li < 2 {
+                out.crossed(&card, flower_out)
+            } else {
+                out.card(&card, flower_out)
+            }
+        } else {
+            // A flower head facing up and out, on a short pedicel near the stalk top.
+            let fa = az + k as f32 * 2.1;
+            let outd = v3(cos(fa), 0.0, sin(fa));
+            let centre = top - dir * (k as f32 * fs * 0.6) + outd * (fs * 0.35 * k.min(1) as f32);
+            let face = (outd * 0.75 + UP * 0.66).norm();
+            let up = (UP - face * UP.dot(face)).norm();
+            let sd = up.cross(face).norm();
+            if dense {
+                head(
+                    out,
+                    f,
+                    centre,
+                    face,
+                    up,
+                    sd,
+                    fs * 0.5,
+                    8 + ((j + k) % 4) as u8,
+                    ph,
+                );
+                continue;
+            }
+            let card = Card {
+                base: centre - up * (fs * 0.5),
+                up,
+                side: sd,
+                length: fs,
+                width: fs,
+                cell: 8 + ((j + k) % 4) as u8,
+                material: Material::Flower,
+                wind: (0.9, 1.0),
+                phase: ph,
+                bend: 0.0,
+                segments: 1,
+                outward_mix: 0.3,
+            };
+            out.card(&card, &Outward::Dir(face));
+        }
+    }
 }
 
 pub fn ground_cover(

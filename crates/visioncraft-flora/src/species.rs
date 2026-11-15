@@ -1390,9 +1390,11 @@ fn build() -> Vec<Species> {
             0.25,
             3.0,
         ),
+        // Spikes "typically purple (lavender-coloured)" (Wikipedia, "Lavandula angustifolia"):
+        // a blue-violet, deeper than the pale "lavender" of colour charts.
         flower(
             FlowerShape::Spike,
-            [0.5, 0.42, 0.78],
+            [0.45, 0.36, 0.74],
             [0.4, 0.45, 0.35],
             0.1,
             1.0,
@@ -1808,7 +1810,8 @@ fn build() -> Vec<Species> {
         &[8, 9, 10],
         Sun,
         grass(55, 14, 0.006, 0.12, 15.0, 70.0, 0.9, 0.65, 20, 0.15, 40.0),
-        blade([0.32, 0.47, 0.18], [0.75, 0.6, 0.25]),
+        // "Medium to deep green leaves" (Wikipedia, "Cenchrus alopecuroides").
+        blade([0.27, 0.41, 0.17], [0.75, 0.6, 0.25]),
         flower(
             FlowerShape::Bottlebrush,
             [0.75, 0.66, 0.62],
@@ -1829,7 +1832,9 @@ fn build() -> Vec<Species> {
         &[],
         Sun,
         grass(70, 10, 0.0025, 0.04, 0.0, 75.0, 0.3, 1.0, 0, 0.0, 0.0),
-        blade([0.45, 0.6, 0.68], [0.45, 0.6, 0.68]),
+        // "Glaucous, finely-textured, blue-gray" (Wikipedia, "Festuca glauca"): a grey with a
+        // blue cast, not a cyan.
+        blade([0.5, 0.59, 0.62], [0.5, 0.59, 0.62]),
         None,
         stem.clone(),
     ));
@@ -1844,7 +1849,7 @@ fn build() -> Vec<Species> {
         &[6, 7, 8, 9],
         Sun,
         grass(45, 10, 0.008, 0.1, 5.0, 35.0, 0.5, 0.45, 30, 0.3, 10.0),
-        blade([0.3, 0.46, 0.18], [0.75, 0.65, 0.35]),
+        blade([0.27, 0.4, 0.17], [0.75, 0.65, 0.35]),
         flower(
             FlowerShape::Plume,
             [0.8, 0.7, 0.5],
@@ -2080,7 +2085,8 @@ fn build() -> Vec<Species> {
         ),
         flower(
             FlowerShape::Daisy { droop: true },
-            [0.85, 0.4, 0.6],
+            // Purple-pink ray florets round an orange-brown cone.
+            [0.76, 0.36, 0.62],
             [0.65, 0.35, 0.12],
             0.12,
             1.0,
