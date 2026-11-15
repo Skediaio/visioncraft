@@ -470,6 +470,9 @@ pub fn generate(
 
 /// The card levels on a skeleton: level `li` of three whose budgets are `budgets` (the card
 /// counts of every level follow from the first's, so the levels agree).
+/// Largest foliage card of a grown tree, metres.
+const MAX_CARD_M: f32 = 0.9;
+
 pub(crate) fn cards(
     p: &PlantParams,
     b: &BranchingParams,
@@ -546,7 +549,16 @@ pub(crate) fn cards(
             1.0,
         )
     };
-    let ck = c0 * grow_k;
+    // A grown tree's card never exceeds `MAX_CARD_M`: wider ones read as flat slabs of foliage
+    // from 15 m and smooth lumps from 40 m. Where its card would have grown into a clump, it
+    // keeps the clump cell (many leaves at half their size, so nearly as opaque) on the smaller
+    // card: the far levels keep their cover and a ragged, leaf-scale texture.
+    let clump = c0 * grow_k / card0 >= 1.4 || (grown(p) && c0 * grow_k > MAX_CARD_M * 1.15);
+    let (c0, ck) = if grown(p) {
+        (c0.min(MAX_CARD_M), (c0 * grow_k).min(MAX_CARD_M))
+    } else {
+        (c0, c0 * grow_k)
+    };
     let flowers = p.flowers.as_ref().filter(|_| st.flowers);
     let n_flower = flowers.map_or(0, |f| ((nk as f32 * f.density).round() as usize).min(nk));
     let n_leaf = ((nk as f32 * st.leaf_fraction).round() as usize).min(nk - n_flower.min(nk));
@@ -600,11 +612,7 @@ pub(crate) fn cards(
     // A spray cell draws its leaves at their true size on a card of `card0`, a clump cell on a
     // card `CLUMP_SCALE` times that. A card enlarged past 1.4 times takes a clump, so leaves are
     // drawn at 0.7 to 1.4 times their size at every level instead of up to 2.5 times.
-    let leaf_cells: &[u8] = if ck / card0 < 1.4 {
-        &[0, 1, 2, 3]
-    } else {
-        &[4, 5, 6]
-    };
+    let leaf_cells: &[u8] = if !clump { &[0, 1, 2, 3] } else { &[4, 5, 6] };
     // Per-point random draws come from a per-point stream so every LOD sees the same card.
     let emit = |out: &mut Builder,
                 k: usize,

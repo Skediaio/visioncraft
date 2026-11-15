@@ -217,7 +217,7 @@ fn golden_hashes() {
     let lib = species();
     let mut got = Vec::new();
     for (id, lod, want) in [
-        ("quercus-robur", Lod::Lod0, 0x708c_0c71_cd40_a6b1_u64),
+        ("quercus-robur", Lod::Lod0, 0xcab2_9d32_0d2f_d02c_u64),
         ("hosta", Lod::Lod1, 0xbf24_e811_9f50_ee6c),
         ("carpinus-hedge", Lod::Lod2, 0xc567_f698_a41b_6c32),
         ("picea-abies", Lod::Lod1, 0xdd72_8a9a_25eb_1bc2),
@@ -711,8 +711,11 @@ fn tree_cards_draw_leaves_at_their_own_size_at_every_level() {
             let row = (m.uvs[i[0] as usize][1] * 4.0) as u32;
             let drawn_for = s.params.leaves.card_m * if row == 1 { 2.0 } else { 1.0 };
             let x = side / drawn_for;
+            // A grown tree's far cards keep at most 0.9 m (wider ones read as slabs) and take
+            // the clump cell there: its leaves at about half their size, a finer texture.
+            let lo = if row == 1 && grown(s) { 0.4 } else { 0.65 };
             assert!(
-                (0.65..1.45).contains(&x),
+                (lo..1.45).contains(&x),
                 "{} {lod:?}: leaves drawn at {x:.2} times their size",
                 s.id
             );
@@ -763,4 +766,13 @@ fn summer_bloomers_flower_in_the_summer_picture() {
         assert!(flowers(6) > 0, "{id} without flowers in June");
         assert_eq!(flowers(1), 0, "{id} flowers in January");
     }
+}
+
+/// A broadleaf grown by space colonisation (`gen_tree`): large and small trees with three
+/// branch levels.
+fn grown(s: &visioncraft_flora::Species) -> bool {
+    matches!(
+        s.params.budget,
+        BudgetClass::LargeTree | BudgetClass::SmallTree
+    ) && matches!(&s.params.form, Form::Branching(b) if b.levels[2].count > 0)
 }

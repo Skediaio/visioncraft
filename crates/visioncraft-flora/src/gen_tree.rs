@@ -80,7 +80,8 @@ fn lobes(b: &BranchingParams, seed: u64, age: f32, h: f32, half: f32, y0: f32) -
     let n = if excurrent {
         (count / 2 + 3).clamp(7, 11)
     } else {
-        (3 + count / 3).clamp(4, 7)
+        // Enough limbs that the crown is not split into a few balls (walnut read as two).
+        (4 + count / 2).clamp(5, 9)
     };
     let ch = h - y0;
     let a = rng.f() * TAU;
@@ -110,7 +111,7 @@ fn lobes(b: &BranchingParams, seed: u64, age: f32, h: f32, half: f32, y0: f32) -
         let outward = if excurrent {
             rng.range(0.42, 0.72)
         } else {
-            rng.range(0.62, 0.9) * (0.8 + 0.3 * spread)
+            rng.range(0.5, 0.85) * (0.8 + 0.3 * spread)
         };
         let reach = half * env * outward * young;
         let r = half
@@ -130,11 +131,49 @@ fn lobes(b: &BranchingParams, seed: u64, age: f32, h: f32, half: f32, y0: f32) -
         c: v3(0.0, y0 + ch * tt, 0.0) + lean,
         r: half
             * envelope(b, tt)
-            * (if excurrent { 0.3 } else { 0.5 })
+            * (if excurrent { 0.3 } else { 0.62 })
             * young
             * rng.range(0.85, 1.15),
         ry: ch * 0.24,
     });
+    out
+}
+
+/// The masses within each limb's mass: a crown is a hierarchy of them (limb, its branches,
+/// their sprays), so its outline is knobbly at several scales (Livny et al. 2011 fill each lobe
+/// from its branch's own sub-branches). Each limb mass keeps a core, so the crown is not hollow,
+/// and carries sub-masses on its outer and upper side: more and smaller with age, smaller in a
+/// tortuous species (oak) than in a smooth one (birch).
+fn sub_lobes(lobes: &[Lobe], b: &BranchingParams, seed: u64, age: f32) -> Vec<Lobe> {
+    let mut rng = Rng::new(seed, 18);
+    let rough = (b.levels[0].curve_var_deg / 40.0).clamp(0.15, 0.5);
+    let m = (3.0 + 5.0 * age.clamp(0.0, 1.0)).round() as usize;
+    let size = (0.66 - 0.4 * rough) * (1.1 - 0.2 * age.clamp(0.0, 1.0));
+    let mut out = Vec::with_capacity(lobes.len() * (m + 1));
+    for l in lobes {
+        let flat = l.ry / l.r;
+        out.push(Lobe {
+            c: l.c,
+            r: l.r * 0.55,
+            ry: l.ry * 0.55,
+        });
+        let o = v3(l.c.x, 0.0, l.c.z);
+        let o = if o.len() > 1e-3 {
+            o.norm()
+        } else {
+            V3::default()
+        };
+        for _ in 0..m {
+            let dir = (crate::mesh::rand_dir(&mut rng) + o * 0.35 + UP * 0.3).norm();
+            let reach = rng.range(0.35, 0.7);
+            let r = l.r * size * rng.range(0.8, 1.2);
+            out.push(Lobe {
+                c: l.c + v3(dir.x * l.r, dir.y * l.ry, dir.z * l.r) * reach,
+                r,
+                ry: r * flat,
+            });
+        }
+    }
     out
 }
 
@@ -150,6 +189,7 @@ fn scaffold(
     seed: u64,
     step: f32,
     stems: usize,
+    y0: f32,
 ) {
     let mut rng = Rng::new(seed, 17);
     let l0 = &b.levels[0];
@@ -164,17 +204,45 @@ fn scaffold(
     let zig = deg(l0.curve_var_deg * rough * 3.0 * (0.6 + 0.4 * age.min(1.0)));
     let sag = 0.06 * sin(spread) * age.min(1.0);
     let top = trunk.len() - 1;
+    // The trunk is clear up to the crown base `y0`; above it the limbs leave one by one, each at
+    // its own node. An excurrent leader carries each limb below its mass; a decurrent trunk's
+    // limbs leave in order of their masses' height, spread over the stretch where it still runs
+    // on (from the bole's top to where it dissolves), the last mass (the top) on its end.
+    let first = trunk
+        .iter()
+        .position(|&i| sc.p[i as usize].y >= y0)
+        .unwrap_or(top);
+    let excurrent = b.leader >= EXCURRENT;
+    let side_lobes = lobes.len().saturating_sub(1).max(1);
+    let mut rank: Vec<usize> = (0..side_lobes.min(lobes.len())).collect();
+    rank.sort_by(|&a, &c| lobes[a].c.y.total_cmp(&lobes[c].c.y).then(a.cmp(&c)));
+    let mut taken = vec![false; trunk.len()];
     for (k, lobe) in lobes.iter().enumerate() {
-        // The highest trunk node below the lobe's lower part; a decurrent trunk's top few
-        // nodes share the limbs.
-        let want = lobe.c.y - lobe.ry * 0.6;
-        let mut from = trunk
-            .iter()
-            .rposition(|&i| sc.p[i as usize].y <= want)
-            .unwrap_or(0);
-        if top - from < 3 {
-            from = top - (k % 3).min(top);
+        let mut from = if k + 1 == lobes.len() && !excurrent {
+            top
+        } else if excurrent {
+            let want = (lobe.c.y - lobe.ry * 0.6).max(y0);
+            trunk
+                .iter()
+                .rposition(|&i| sc.p[i as usize].y <= want)
+                .unwrap_or(first)
+                .clamp(first, top)
+        } else {
+            let r = rank.iter().position(|&j| j == k).unwrap_or(0);
+            let f = r as f32 / side_lobes as f32;
+            first + ((top - first) as f32 * 0.9 * f) as usize
+        };
+        // Two limbs never leave from one node (that reads as a fork).
+        while taken[from] && from < top {
+            from += 1;
         }
+        taken[from] = true;
+        // The decurrent trunk runs on into its top mass.
+        let ord = if from == top && k + 1 == lobes.len() {
+            0
+        } else {
+            1
+        };
         let mut i = trunk[from];
         let start = sc.p[i as usize];
         let goal = lobe.c - (lobe.c - start).norm() * (lobe.r * 0.35);
@@ -185,7 +253,11 @@ fn scaffold(
         } else {
             UP.perp()
         };
-        let mut d = (out * sin(spread) + UP * cos(spread)).norm();
+        let mut d = if ord == 0 {
+            UP
+        } else {
+            (out * sin(spread) + UP * cos(spread)).norm()
+        };
         let side = d.cross(UP);
         let side = if side.len() > 1e-3 {
             side.norm()
@@ -212,7 +284,7 @@ fn scaffold(
             d = d
                 .rotate(d.perp(), deg(l0.curve_var_deg * 0.25) * rng.sym())
                 .norm();
-            i = sc.push(p + d * step, d, i, 1);
+            i = sc.push(p + d * step, d, i, ord);
         }
     }
 }
@@ -346,7 +418,9 @@ pub(crate) fn skeleton(
     let dk = kill_distance(p);
     let step = dk * 0.32;
     let di = dk * 4.0;
-    let y0 = (b.crown_base * h).min(h * 0.6);
+    // The clear bole: the crown base of the grown tree, lower on a young one, but not in
+    // proportion (a nursery standard already has most of its clear stem).
+    let y0 = bole_m(p, b, h);
     let half = w * 0.5;
 
     // Attraction points in the envelope. A real crown is no smooth dome: its limbs' branch
@@ -370,6 +444,7 @@ pub(crate) fn skeleton(
         w.iter().map(|(k, ph)| sin(u.dot(*k) + ph)).sum::<f32>() * 0.4
     };
     let lobes = lobes(b, seed, p.age, h, half, y0);
+    let masses = sub_lobes(&lobes, b, seed, p.age);
     let inside = |q: V3| -> bool {
         let t = (q.y - y0) / (h - y0).max(1e-3);
         if !(0.0..=1.0).contains(&t) {
@@ -377,9 +452,11 @@ pub(crate) fn skeleton(
         }
         // The species' envelope bounds the crown; the lobes, each round its limb's own branch
         // system, fill it only in part, leaving sky between them.
-        let wobble = (1.0 + rough * noise(&bulge, q)).max(0.3);
+        // Half as strong since the masses have their own sub-masses: at full strength it wiped
+        // out whole sides of a crown (oak and plane from above were two or three blobs).
+        let wobble = 1.0 + 0.5 * rough * noise(&bulge, q);
         let r = half * envelope(b, t) * wobble * 1.15;
-        q.x * q.x + q.z * q.z <= r * r && lobes.iter().any(|l| l.contains(q, wobble))
+        q.x * q.x + q.z * q.z <= r * r && masses.iter().any(|l| l.contains(q, wobble))
     };
     let vol = lobes
         .iter()
@@ -439,11 +516,14 @@ pub(crate) fn skeleton(
         };
         let mut i = sc.push(base, dir, NONE, 0);
         // An excurrent species' leader runs on up through the crown, its limbs leave it on the
-        // way; a decurrent one's trunk splits into its limbs at the crown base.
-        let top = if stems == 1 && b.leader >= EXCURRENT {
+        // way; a decurrent one's trunk runs on into the lower crown, its limbs leaving it one
+        // by one, and dissolves into them (several stems split at the crown base).
+        let top = if stems > 1 {
+            below
+        } else if b.leader >= EXCURRENT {
             y0 + (h - y0) * 0.8 * b.leader.min(1.0)
         } else {
-            below
+            y0 + (h - y0) * 0.6 * b.leader
         };
         while sc.p[i as usize].y < top {
             let wob = deg(b.trunk_wobble_deg * 0.25);
@@ -454,7 +534,7 @@ pub(crate) fn skeleton(
     }
     // Scaffold limbs, one to each lobe, chosen before the rest grows (Livny et al. 2011 grow
     // each lobe's branches from its own major branch).
-    scaffold(&mut sc, b, p.age, &lobes, seed, step, stems);
+    scaffold(&mut sc, b, p.age, &lobes, seed, step, stems, y0);
 
     // Each point's nearest node within the radius of influence; points within the kill
     // distance of a node die. Only new nodes can change either, so they are checked alone.
@@ -500,6 +580,10 @@ pub(crate) fn skeleton(
         let count = sc.p.len();
         for n in 0..count {
             if cnt[n] == 0 || sc.kids[n] >= max_kids(sc.order[n]) {
+                continue;
+            }
+            // The bole stays clear: no side branch below the crown base.
+            if sc.order[n] == 0 && sc.kids[n] > 0 && sc.p[n].y < y0 {
                 continue;
             }
             let pull = infl[n];
@@ -549,7 +633,14 @@ pub(crate) fn skeleton(
             break;
         }
     }
-    finish(p, b, seed, sc, h, y0, dk, step, &lobes)
+    finish(p, b, seed, sc, h, y0, dk, step, &masses)
+}
+
+/// Height of the clear bole, metres: the species' crown base on the grown tree; a young tree's
+/// is lower, by the square root of its age (a nursery standard already has most of its clear
+/// stem), and never above 60 % of its height.
+pub(crate) fn bole_m(p: &PlantParams, b: &BranchingParams, h: f32) -> f32 {
+    (b.crown_base * p.height_m * p.age.clamp(0.0, 1.0).sqrt()).min(h * 0.6)
 }
 
 /// From the colonised network to the shared skeleton: twigs and shoots, light, pipe-model
@@ -648,7 +739,8 @@ fn finish(
     let div_shoot = deg(l3.rotate_deg);
     let whorl3 = l3.whorl.clamp(1, 3) as usize;
     for i in 0..n {
-        if tips[i] > periph || sc.p[i].y < y0 * 0.8 {
+        let low = if sc.order[i] == 0 { y0 } else { y0 * 0.8 };
+        if tips[i] > periph || sc.p[i].y < low {
             continue;
         }
         let d = sc.d[i];
@@ -1137,4 +1229,93 @@ pub(crate) fn leaf_level(
     }
     debug_assert!(out.tris() <= budget);
     out.finish()
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::gen_branching::{Skeleton, skeleton};
+    use crate::{Form, Species};
+
+    fn grow(id: &str, age: f32, seed: u64) -> (Skeleton, f32) {
+        let mut p = Species::by_id(id).unwrap().params.clone();
+        p.age = age;
+        let Form::Branching(b) = &p.form else {
+            panic!("{id} is not a branching tree")
+        };
+        let sk = skeleton(&p, b, seed);
+        let h = sk
+            .branches
+            .iter()
+            .flat_map(|br| br.nodes.iter())
+            .fold(0.0f32, |a, n| a.max(n.p.y));
+        (sk, h)
+    }
+
+    /// Wood crossing the height `y`: how many stems a person standing there would walk round.
+    fn stems_at(sk: &Skeleton, y: f32) -> usize {
+        sk.branches
+            .iter()
+            .flat_map(|br| br.nodes.windows(2))
+            .filter(|w| (w[0].p.y - y) * (w[1].p.y - y) <= 0.0 && w[0].p.y != w[1].p.y)
+            .count()
+    }
+
+    /// The lowest point any branch leaves the trunk.
+    fn bole(sk: &Skeleton) -> f32 {
+        sk.branches
+            .iter()
+            .zip(&sk.levels)
+            .filter(|(_, l)| **l > 0)
+            .map(|(br, _)| br.nodes[0].p.y)
+            .fold(f32::MAX, f32::min)
+    }
+
+    /// Specimen trees: one trunk, a clear bole of the species' height (open-grown, from flora
+    /// descriptions), limbs above it; the grown tree and a young one, several seeds.
+    #[test]
+    fn specimen_trees_have_one_trunk_and_a_clear_bole() {
+        let cases = [
+            ("quercus-robur", 2.0, 4.0),
+            ("juglans-regia", 2.0, 3.0),
+            ("acer-campestre", 1.5, 2.5),
+            ("betula-pendula", 2.0, 6.0),
+            ("platanus-hispanica", 4.0, 8.0),
+            ("malus-domestica", 0.6, 1.8),
+        ];
+        for (id, lo, hi) in cases {
+            for seed in [1, 7, 23] {
+                let (sk, h) = grow(id, 1.0, seed);
+                let y = bole(&sk);
+                assert!(
+                    (lo..=hi).contains(&y),
+                    "{id} seed {seed}: bole {y:.2} m, want {lo}..{hi}"
+                );
+                let at = (y * 0.6).min(1.0);
+                assert_eq!(stems_at(&sk, at), 1, "{id} seed {seed}: stems at {at:.2} m");
+                assert!(sk.masses.len() >= 12, "{id}: {} masses", sk.masses.len());
+                if id == "betula-pendula" {
+                    // A single leader to the top: the trunk chain reaches 3/4 of the height.
+                    let top = sk.branches[0]
+                        .nodes
+                        .iter()
+                        .fold(0.0f32, |a, n| a.max(n.p.y));
+                    assert!(top > 0.75 * h, "birch leader {top:.1} of {h:.1} m");
+                }
+                let (young, _) = grow(id, 0.3, seed);
+                let yb = bole(&young);
+                eprintln!(
+                    "{id} seed {seed}: h {h:.1} m, bole {y:.2} m, stems at {at:.2} m {}, \
+                     masses {}; age 0.3 bole {yb:.2} m",
+                    stems_at(&sk, at),
+                    sk.masses.len()
+                );
+                assert!(yb > 0.4 && yb < y, "{id} seed {seed}: young bole {yb:.2} m");
+                assert_eq!(
+                    stems_at(&young, (yb * 0.6).min(1.0)),
+                    1,
+                    "{id}: young stems"
+                );
+            }
+        }
+    }
 }
