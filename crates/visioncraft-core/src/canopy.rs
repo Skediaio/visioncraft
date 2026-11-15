@@ -38,7 +38,8 @@ pub fn canopy_cover(
     // Crowns in buckets as wide as the widest crown, so a cell tests its neighbours only.
     let reach = crowns.iter().map(|c| c.1).fold(cell, f32::max);
     let key = |p: [f32; 2]| ((p[0] / reach).floor() as i32, (p[1] / reach).floor() as i32);
-    let mut buckets: HashMap<(i32, i32), Vec<([f32; 2], f32)>> = HashMap::new();
+    type Crown = ([f32; 2], f32);
+    let mut buckets: HashMap<(i32, i32), Vec<Crown>> = HashMap::new();
     for &(c, r) in crowns.iter().filter(|c| c.1 > 0.0) {
         buckets.entry(key(c)).or_default().push((c, r * r));
     }
