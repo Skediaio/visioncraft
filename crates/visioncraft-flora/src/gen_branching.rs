@@ -53,6 +53,30 @@ pub(crate) struct Skeleton {
     pub shoots: Vec<Shoot>,
     /// A shoot's base radius.
     pub shoot_r: f32,
+    /// The crown's foliage masses (`gen_tree`), as ellipsoids (centre, radii); empty for the
+    /// other forms.
+    pub masses: Vec<(V3, V3)>,
+}
+
+/// The outward direction a leaf card at `p` takes its normals from: the crown's, pulled
+/// towards the foliage mass it belongs to, so each mass shades as a lump of its own (lit on its
+/// sun side, dark under it) instead of the whole crown as one smooth dome.
+pub(crate) fn mass_outward(masses: &[(V3, V3)], p: V3, centre: V3, radii: V3) -> Outward {
+    let near = masses.iter().min_by(|a, b| {
+        let d = |m: &&(V3, V3)| {
+            let q = p - m.0;
+            let r = m.1;
+            (q.x / r.x).powi(2) + (q.y / r.y).powi(2) + (q.z / r.z).powi(2)
+        };
+        d(a).total_cmp(&d(b))
+    });
+    match near {
+        Some(&(c, r)) => Outward::Crown {
+            centre: centre.lerp(c, 0.7),
+            radii: radii.lerp(r, 0.7),
+        },
+        None => Outward::Crown { centre, radii },
+    }
 }
 
 struct Ctx<'a> {
@@ -570,7 +594,7 @@ pub(crate) fn cards(
     let Outward::Ellipsoid { centre, radii } = crown else {
         unreachable!()
     };
-    let leaves_out = Outward::Crown { centre, radii };
+    let (crown_c, crown_r) = (centre, radii);
     let mut prng = Rng::new(seed, 2);
     let order = shuffled(npts, &mut prng);
     // A spray cell draws its leaves at their true size on a card of `card0`, a clump cell on a
@@ -619,7 +643,7 @@ pub(crate) fn cards(
             segments: 1,
             outward_mix: 0.75,
         };
-        out.card(&card, &leaves_out);
+        out.card(&card, &mass_outward(&sk.masses, centre, crown_c, crown_r));
     };
     // Leaf and twig cards go through the points' order and, past its end, round it again
     // (`emit` takes the place in that sequence).
