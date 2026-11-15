@@ -98,7 +98,10 @@ pub(super) fn register(s: &mut Session) {
                 param("sky", T::Object, "{type: \"physical\"} or {type: \"hdri\", id: string, rotation_deg: number, intensity: number >= 0}.")
                     .default(json!({"type": "physical"})),
                 param("haze", T::Number, "Atmospheric haze as a turbidity: 1 pure air, 2.5 a clear day (about 30 km visibility), 6 hazy (9 km), 20 misty (2.5 km); 0 turns the haze off.").default(json!(2.5)),
-                param("wind_strength", T::Number, "Wind for plants, 0 or more.").default(json!(0.3)),
+                param("wind_speed_mps", T::Number, "Wind speed in m/s, 0 (perfectly still) to 60: plants lean with the drag (growing with the speed squared, saturating as crowns streamline), leaves flutter faster as it rises.").unit("m/s").default(json!(2.0)),
+                param("wind_beaufort", T::Any, "A Beaufort step as a preset for `wind_speed_mps` (v = 0.836 B^1.5 m/s): 0-10 or its name. 0 calm (smoke rises), 1 light air, 2 light breeze (leaves rustle), 3 gentle breeze (leaves and twigs in constant motion), 4 moderate breeze (small branches move), 5 fresh breeze (small trees begin to sway), 6 strong breeze (large branches move), 7 near gale (whole trees move), 8 gale (twigs break off), 9 strong gale, 10 storm. Not together with `wind_speed_mps`."),
+                param("wind_gustiness", T::Number, "How much the wind varies in gusts travelling downwind, 0 (steady) to 1.").default(json!(0.5)),
+                param("wind_strength", T::Number, "Deprecated: the relative wind of older projects (1 is 6.5 m/s); use `wind_speed_mps`."),
                 param("wind_direction_deg", T::Number, "Direction the wind blows towards, clockwise from north seen from above.").unit("deg").default(json!(0)),
                 param("ground", T::Object, "Ground plane {height: m, color: [r, g, b] linear}; null for none.")
                     .default(json!({"height": 0, "color": [0.065, 0.12, 0.035]})),
@@ -113,7 +116,7 @@ pub(super) fn register(s: &mut Session) {
                     .default(json!(1.0)),
             ],
             "null",
-            json!({"haze": 3.5, "wind_strength": 0.5, "ground": null, "view_distance": 2.0}),
+            json!({"haze": 3.5, "wind_speed_mps": 3.3, "ground": null, "view_distance": 2.0}),
         ),
         view_set,
     );
@@ -217,6 +220,32 @@ fn view_set(project: &mut Project, params: &Value) -> Result<Value, CommandError
             crate::session::bad("`season` must be spring, summer, autumn or winter")
         })?),
     };
+    // Presets and the deprecated relative strength become a speed.
+    let mut speed = None;
+    if let Some(o) = params.as_object_mut() {
+        let beaufort = o.remove("wind_beaufort");
+        let relative = o.remove("wind_strength");
+        if beaufort.is_some() && (o.contains_key("wind_speed_mps") || relative.is_some()) {
+            return Err(crate::session::bad(
+                "`wind_beaufort` sets the speed: not together with `wind_speed_mps`",
+            ));
+        }
+        if let Some(b) = beaufort {
+            let force = crate::wind::parse_beaufort(&b).ok_or_else(|| {
+                crate::session::bad("`wind_beaufort` must be 0 to 10 or a step's name (\"gale\")")
+            })?;
+            speed = Some(crate::wind::beaufort_mps(force));
+        }
+        if let Some(r) = relative {
+            let r = r.as_f64().filter(|r| *r >= 0.0).ok_or_else(|| {
+                crate::session::bad("`wind_strength` must be a number, 0 or more")
+            })?;
+            speed = Some((r as f32 * crate::wind::RELATIVE_MPS).min(crate::wind::MAX_SPEED_MPS));
+        }
+    }
+    if let (Some(v), Some(o)) = (speed, params.as_object_mut()) {
+        o.insert("wind_speed_mps".into(), json!(v));
+    }
     // `view_distance` is not written while it is 1, `look` while natural, `clouds` while default.
     let view = super::merge_update(
         &project.view,

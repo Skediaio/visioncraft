@@ -151,8 +151,15 @@ pub struct ViewState {
     /// Haze as a turbidity (1 pure air, 2.5 a clear day, 20 misty; 0 off); the window turns it
     /// into the haze's extinction (`studio::haze_extinction`).
     pub haze: f32,
-    pub wind_strength: f32,
+    /// Wind speed in m/s (0: still air; `wind::BEAUFORT` names the steps).
+    pub wind_speed_mps: f32,
+    /// 0..=1: how much the wind varies in travelling gusts.
+    pub wind_gustiness: f32,
     pub wind_direction_deg: f32,
+    /// The wind of files from before it had units: relative, 1 a moderate breeze. Read, never
+    /// written; `migrate_wind` turns it into `wind_speed_mps` on load.
+    #[serde(skip_serializing)]
+    wind_strength: Option<f32>,
     pub ground: Option<GroundPlane>,
     /// How far plants, shadows and haze reach, as a multiple of the default (0.25..=4). Not
     /// written when 1, so files from before it existed round-trip unchanged.
@@ -289,8 +296,10 @@ impl Default for ViewState {
             exposure_ev: None,
             sky: SkyChoice::Physical,
             haze: 2.5,
-            wind_strength: 0.3,
+            wind_speed_mps: 2.0,
+            wind_gustiness: 0.5,
             wind_direction_deg: 0.0,
+            wind_strength: None,
             // The library lawn's mean colour, a touch lighter: the endless ground then reads as
             // more lawn into the distance instead of an olive field round a green garden.
             ground: Some(GroundPlane {
@@ -310,13 +319,25 @@ impl Default for ViewState {
 }
 
 impl ViewState {
+    /// Maps the old relative `wind_strength` (files and commands from before wind had units) to
+    /// m/s, once: it then stays out of the project.
+    pub fn migrate_wind(&mut self) {
+        if let Some(strength) = self.wind_strength.take()
+            && strength.is_finite()
+            && strength >= 0.0
+        {
+            self.wind_speed_mps =
+                (strength * crate::wind::RELATIVE_MPS).min(crate::wind::MAX_SPEED_MPS);
+        }
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         let finite = |v: f32| v.is_finite();
         let ok = self.exposure_ev.is_none_or(finite)
             && self.haze.is_finite()
             && self.haze >= 0.0
-            && self.wind_strength.is_finite()
-            && self.wind_strength >= 0.0
+            && (0.0..=crate::wind::MAX_SPEED_MPS).contains(&self.wind_speed_mps)
+            && (0.0..=1.0).contains(&self.wind_gustiness)
             && finite(self.wind_direction_deg)
             && VIEW_DISTANCE_RANGE.contains(&self.view_distance)
             && (0.0..=1.0).contains(&self.clouds.cover)
@@ -535,7 +556,10 @@ impl Project {
                 known: FORMAT_VERSION,
             });
         }
-        serde_json::from_value(value).map_err(|e| ProjectError::Json(e.to_string()))
+        let mut project: Project =
+            serde_json::from_value(value).map_err(|e| ProjectError::Json(e.to_string()))?;
+        project.view.migrate_wind();
+        Ok(project)
     }
 }
 

@@ -96,6 +96,7 @@ impl Pictures for GpuPictures {
             // desktop GPUs).
             .unwrap_or(if request.photo.is_some() { 3 } else { 2 });
         s.resize(request.width, request.height);
+        s.clock = request.animation_s;
         s.sync();
         let (position, target, fov) = match request.camera {
             Some((p, t, fov)) => {

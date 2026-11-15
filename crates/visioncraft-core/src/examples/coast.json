@@ -20,7 +20,7 @@
   ["terrain.stroke", {"tool": "flatten", "points": [[-520, 300], [520, 300]], "radius_m": 110, "strength": 1.0, "falloff": 0.9, "target_height": -21.8}],
   ["terrain.stroke", {"tool": "flatten", "points": [[525, 80], [525, 300]], "radius_m": 110, "strength": 1.0, "falloff": 0.9, "target_height": -21.8}],
   ["terrain.stroke", {"tool": "flatten", "points": [[-525, 270], [-525, 300]], "radius_m": 110, "strength": 1.0, "falloff": 0.9, "target_height": -21.8}],
-  ["view.set", {"ground": {"height": 4.2, "color": [0.2, 0.18, 0.11]}, "wind_direction_deg": 0, "wind_strength": 0.5, "haze": 1.4, "surroundings": "dunes"}],
+  ["view.set", {"ground": {"height": 4.2, "color": [0.2, 0.18, 0.11]}, "wind_direction_deg": 0, "wind_speed_mps": 3.3, "haze": 1.4, "surroundings": "dunes"}],
   ["shape.add_area", {"name": "Drive", "outline": [[-7.5, -11.8], [-0.8, -11.8], [-0.8, -31], [-1.5, -75], [-8.5, -75], [-8, -31]], "material": "gravel"}],
   ["shape.add_area", {"name": "Entrance court", "outline": [[-0.8, -12.3], [18.3, -12.3], [18.3, -24], [8.3, -24], [8.3, -14.8], [-0.8, -14.8]], "material": "paving"}],
   ["shape.add_area", {"name": "Garden room lawn", "outline": [[-19.7, -4.6], [-8.6, -4.6], [-8.6, 1.5], [-19.7, 1.5]], "material": "lawn"}],

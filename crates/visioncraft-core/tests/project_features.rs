@@ -488,7 +488,7 @@ fn custom_species_commands_and_use_check() {
 fn view_set_takes_any_subset() {
     let mut s = Session::new(Project::default());
     let v = &s.project().view;
-    assert_eq!((v.haze, v.wind_strength, v.exposure_ev), (2.5, 0.3, None));
+    assert_eq!((v.haze, v.wind_speed_mps, v.exposure_ev), (2.5, 2.0, None));
     assert_eq!(v.ground.unwrap().height, 0.0);
     s.run(
         "view.set",

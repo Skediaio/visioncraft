@@ -121,7 +121,7 @@ Usage: visioncraft-cli render FILE --out PNG [--size WxH] [--viewpoint V]
                               [--date YYYY-MM-DD] [--time HH:MM]
                               [--season S] [--snow N]
                               [--quality low|medium|high|ultra|photo] [--samples N]
-                              [--aperture M] [--focus M]
+                              [--aperture M] [--focus M] [--animation-s S]
 
 Renders the project to a PNG with VisionCraft's renderer on the GPU, without a
 window, plants grown, and prints what it drew as one line of JSON
@@ -140,7 +140,8 @@ Options:
                   at ULTRA: soft shadows, smooth edges; slower)
   --samples N     Photo: frames averaged, 1 to 1024. Default 64
   --aperture M    Photo: lens radius in metres for depth of field (0 to 0.5)
-  --focus M       Photo: distance in focus. Default the camera target";
+  --focus M       Photo: distance in focus. Default the camera target
+  --animation-s S The animation clock in seconds (wind, water). Default 0";
 
 const HELP_EXPORT: &str = "\
 Usage: visioncraft-cli export FILE --out DIR [--preset NAME]... [--viewpoint V]... [--years Y]...
@@ -656,6 +657,7 @@ fn cmd_render(raw: &[String]) -> Res {
             "--samples",
             "--aperture",
             "--focus",
+            "--animation-s",
             "--season",
             "--snow",
         ],
@@ -717,6 +719,7 @@ fn cmd_render(raw: &[String]) -> Res {
         ("--samples", "samples"),
         ("--aperture", "aperture_m"),
         ("--focus", "focus_m"),
+        ("--animation-s", "animation_s"),
     ] {
         if let Some(v) = a.value(flag)? {
             let n: f64 = v

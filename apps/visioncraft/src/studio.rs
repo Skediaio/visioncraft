@@ -1409,8 +1409,8 @@ impl Studio {
         let d = v.wind_direction_deg.to_radians();
         self.renderer.set_wind(&visioncraft_render::Wind {
             direction: Vec3::new(d.sin(), 0.0, -d.cos()),
-            strength: v.wind_strength,
-            ..Default::default()
+            speed_mps: v.wind_speed_mps,
+            gustiness: v.wind_gustiness,
         });
         self.renderer.set_time(self.clock);
         let lights = if self.lights_on() {
@@ -1524,7 +1524,7 @@ impl Studio {
     pub fn animating(&self) -> bool {
         let p = self.project();
         // The sea's waves run all the time.
-        (p.view.wind_strength > 0.0 && !p.generators.is_empty()) || p.sea.is_some()
+        (p.view.wind_speed_mps > 0.0 && !p.generators.is_empty()) || p.sea.is_some()
     }
 
     /// Lowest point of a model in its own space, and its local bounds.

@@ -273,7 +273,7 @@ impl Renderer {
             n as f32,
         ]);
         // Wind ripples grow with the wind, and are all there is on a glassy sea.
-        let ripple = (0.4 + 0.6 * self.wind.strength.clamp(0.0, 2.0)).min(1.5);
+        let ripple = (0.4 + 0.6 * self.wind.strength().clamp(0.0, 2.0)).min(1.5);
         b.floats(&[
             f32::from(u8::from(ground_above)),
             ripple,

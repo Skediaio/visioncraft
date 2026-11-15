@@ -264,6 +264,16 @@ Lamps and lit rooms follow the sun: on after sunset at the time shown, off befor
 {"lights": true}` or `false` fixes them for the project (the window's Lights button does the same),
 `null` returns to the sun's rule; every picture, from the window, the CLI or `view.render`, uses it.
 
+Wind is in real units: `view.set {"wind_speed_mps": 6.7, "wind_gustiness": 0.5,
+"wind_direction_deg": 90}`, or a Beaufort step as a preset, `{"wind_beaufort": 4}` or
+`{"wind_beaufort": "gale"}` (0 calm to 10 storm; v = 0.836 B^1.5 m/s). At 0 the air is perfectly
+still; plants lean with the drag (growing with the speed squared, saturating as crowns streamline),
+leaves flutter faster as the wind rises, and each plant sways at its own natural frequency (tall
+trees slowly, shrubs and grasses fast). The old relative `wind_strength` (1 = 6.5 m/s) is still
+read from older projects and accepted by `view.set`, as a deprecated alias. To see motion in
+pictures, `view.render` takes `animation_s` (the animation clock in seconds; the CLI's
+`--animation-s`).
+
 Ground clutter is on by default: fallen leaves under deciduous trees (their own leaf shapes, most
 in October and November, a few in summer), small stones and twigs on soil and gravel, and grass
 blades hanging over the lawn's edge onto borders and paving. All of it fades out within about

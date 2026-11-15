@@ -1772,6 +1772,12 @@ impl Scene {
                 .and_then(flora::Species::by_id)
                 .is_some_and(|s| matches!(s.params.form, flora::Form::Clipped(_)));
             r.set_item_shadow_exact(item, clipped);
+            // Conifers sway stiffer than leafed broadleaves (wind.rs `plant_hz`).
+            let conifer = asset
+                .strip_prefix("flora:")
+                .and_then(flora::Species::by_id)
+                .is_some_and(|s| matches!(s.params.form, flora::Form::Conifer(_)));
+            r.set_item_conifer(item, conifer);
             let impostor = self.impostor_for(project, asset, variant, when);
             let last = parts.iter().map(|p| p.2).fold(0.0, f32::max);
             match impostor {
