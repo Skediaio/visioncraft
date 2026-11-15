@@ -322,7 +322,9 @@ off (recipe 19).
 projects were before); `view.render` and viewpoints can take their own `years`. Each planting
 starts at its `planted_age_years` (default per species: a nursery tree 8, hedge whips 2,
 perennials 1). The growth data are estimates, one table per species (`planting.growth` says
-which). `visioncraft-cli export FILE --out DIR --years 0 --years 5 --years 10` renders a growth
+which). `planting.canopy_cover {id, years}` (read-only) reports how much of a scatter's or
+brush's area its crowns close from above (0..1); woodland presets should reach 0.8 to 0.95 fully
+grown. `visioncraft-cli export FILE --out DIR --years 0 --years 5 --years 10` renders a growth
 series of every viewpoint.
 
 ### 17. The four seasons, and snow

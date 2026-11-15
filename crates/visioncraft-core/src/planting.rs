@@ -831,6 +831,48 @@ fn stroke_hits(s: &Stroke, p: [f32; 2]) -> bool {
         .any(|w| distance_to_segment(p, w[0], w[1]) <= s.radius_m)
 }
 
+/// The ground a scatter or brush plants: its bounding box `[min, max]` and whether a point is in
+/// it (a brush's strokes and erasures, clipped like [`evaluate`] does). `None` for generators
+/// without an area (lines, single plants, clusters, surface fills).
+pub fn planted_area(g: &Generator) -> Option<PlantedArea<'_>> {
+    match g {
+        Generator::AreaScatter(a) => Some((
+            bounds(a.outline.iter().copied()),
+            Box::new(move |p| point_in_polygon(p, &a.outline)),
+        )),
+        Generator::MixedBrush(m) => {
+            let b = bounds(m.strokes.iter().filter(|s| !s.erase).flat_map(|s| {
+                s.points.iter().flat_map(|p| {
+                    [
+                        [p[0] - s.radius_m, p[1] - s.radius_m],
+                        [p[0] + s.radius_m, p[1] + s.radius_m],
+                    ]
+                })
+            }));
+            let clipped = m.clip_outline.len() >= 3;
+            Some((
+                b,
+                Box::new(move |p| {
+                    (!clipped || point_in_polygon(p, &m.clip_outline))
+                        && !m
+                            .clip_holes
+                            .iter()
+                            .any(|h| h.len() >= 3 && point_in_polygon(p, h))
+                        && m.strokes
+                            .iter()
+                            .rev()
+                            .find(|s| stroke_hits(s, p))
+                            .is_some_and(|s| !s.erase)
+                }),
+            ))
+        }
+        _ => None,
+    }
+}
+
+/// A bounding box and a point-in-area test (`planted_area`).
+pub type PlantedArea<'a> = ([[f32; 2]; 2], Box<dyn Fn([f32; 2]) -> bool + 'a>);
+
 /// What one layer of a generator needs to be evaluated; a generator without layers is one tier
 /// made of its own fields.
 struct Tier<'a> {

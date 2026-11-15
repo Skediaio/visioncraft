@@ -130,7 +130,7 @@ pub fn shadow_caster(
 
 /// An icosahedron scaled to `radii` round `centre`, appended to `part`.
 fn icosahedron(part: &mut MeshPart, centre: P, radii: P, wind: [f32; 2]) {
-    const PHI: f32 = 1.618_034;
+    const PHI: f32 = std::f32::consts::GOLDEN_RATIO;
     let n = 1.0 / (1.0 + PHI * PHI).sqrt();
     let (a, b) = (n, PHI * n);
     #[rustfmt::skip]
@@ -241,7 +241,7 @@ mod tests {
 
     #[test]
     fn it_is_deterministic_and_denser_crowns_cast_darker() {
-        let p = &Species::by_id("beech").unwrap().params;
+        let p = &Species::by_id("fagus-sylvatica").unwrap().params;
         let far = generate_levels(p, 1, None, false).pop().unwrap();
         let a = shadow_caster(p, &far, None).unwrap();
         assert_eq!(a.part, shadow_caster(p, &far, None).unwrap().part);
