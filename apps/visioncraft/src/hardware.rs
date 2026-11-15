@@ -11,7 +11,8 @@ use serde::{Deserialize, Serialize};
 use visioncraft_render::{HardwareProbe, Quality, Score, starting_quality};
 
 /// eframe storage key: a JSON map from `key` to `Measured`.
-pub const STORAGE_KEY: &str = "visioncraft.hardware";
+/// (`2`: integrated GPUs start at MEDIUM at most; older choices are measured again.)
+pub const STORAGE_KEY: &str = "visioncraft.hardware2";
 
 /// What one device measured and the tier it chose.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -84,6 +85,25 @@ pub fn key(gpu: &str, size: (u32, u32)) -> String {
     format!("{gpu}|{}", size_class(size))
 }
 
+/// The adapter kind a browser leaves out, from its vendor and architecture ("Intel gen-12lp"):
+/// GPUs that share the CPU's memory and power. Intel's discrete Arc cards (the `-hpg`
+/// architectures) and every AMD or NVIDIA name stay unknown (APUs and laptops vary).
+pub fn kind_from_name(gpu: &str) -> Option<visioncraft_render::GpuKind> {
+    let g = gpu.to_ascii_lowercase();
+    const SHARED: [&str; 7] = [
+        "apple",
+        "qualcomm",
+        "arm",
+        "imagination",
+        "mali",
+        "adreno",
+        "powervr",
+    ];
+    let shared = (g.starts_with("intel") && !g.contains("hpg") && !g.contains("arc"))
+        || SHARED.iter().any(|v| g.starts_with(v));
+    shared.then_some(visioncraft_render::GpuKind::Integrated)
+}
+
 /// The tier for this probe, score and size, with what to show and keep.
 pub fn choose(
     probe: &HardwareProbe,
@@ -91,7 +111,13 @@ pub fn choose(
     score: Option<Score>,
     size: (u32, u32),
 ) -> Measured {
-    let q = starting_quality(probe, score, size);
+    let mut probe = probe.clone();
+    if probe.kind == visioncraft_render::GpuKind::Unknown
+        && let Some(k) = kind_from_name(gpu)
+    {
+        probe.kind = k;
+    }
+    let q = starting_quality(&probe, score, size);
     let preset = Quality::PRESETS
         .iter()
         .find(|(_, p)| {
@@ -377,6 +403,21 @@ mod tests {
             slow.line()
                 .starts_with("Intel gen-9, 10.0 ms per megapixel: ")
         );
+    }
+
+    #[test]
+    fn an_integrated_gpu_in_a_browser_starts_at_medium_at_most() {
+        // As the Iris Xe in Chromium measured: 5.5 ms per megapixel chose HIGH at 80 %.
+        let m = choose(
+            &probe(GpuKind::Unknown),
+            "Intel gen-12lp",
+            score(5.5),
+            (1600, 900),
+        );
+        assert_eq!(m.preset, "medium");
+        assert_eq!(kind_from_name("Intel xe-hpg"), None);
+        assert_eq!(kind_from_name("Nvidia ampere"), None);
+        assert_eq!(kind_from_name("Apple metal-3"), Some(GpuKind::Integrated));
     }
 
     #[test]

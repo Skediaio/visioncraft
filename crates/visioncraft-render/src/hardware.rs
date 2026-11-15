@@ -195,8 +195,12 @@ const BUDGET: f32 = 0.7;
 /// cost. The adapter kind is a prior that only shifts the prediction: an
 /// integrated GPU is assumed 15 % slower than measured (it shares power and
 /// memory with the CPU and throttles), a discrete one 10 % faster; a CPU
-/// adapter starts at LOW. Without a score the prior alone picks: MEDIUM for
-/// integrated or unknown GPUs, HIGH for discrete ones.
+/// adapter starts at LOW. An integrated GPU starts at MEDIUM at most: the
+/// calibration's short burst ran before it warmed up and throttled, and in
+/// Chromium on an Iris Xe it predicted HIGH at 80 % for a scene that drew at
+/// 11 fps there (Auto still rises once measured frames allow). Without a
+/// score the prior alone picks: MEDIUM for integrated or unknown GPUs, HIGH
+/// for discrete ones.
 pub fn starting_quality(probe: &HardwareProbe, score: Option<Score>, size: (u32, u32)) -> Quality {
     if probe.kind == GpuKind::Cpu {
         return ladder()[0];
@@ -222,9 +226,14 @@ pub fn starting_quality(probe: &HardwareProbe, score: Option<Score>, size: (u32,
         let pixels = mp * q.render_scale * q.render_scale;
         prior * (score.fixed_ms + score.ms_per_megapixel * PRESET_COST[preset] * pixels)
     };
+    let medium_or_lower = |q: &Quality| {
+        crate::stats::same_except_scale(q, &Quality::LOW)
+            || crate::stats::same_except_scale(q, &Quality::MEDIUM)
+    };
     ladder()
         .into_iter()
         .rev()
+        .filter(|q| probe.kind != GpuKind::Integrated || medium_or_lower(q))
         .find(|q| predict(q) <= BUDGET * TARGET_MS)
         .unwrap_or_else(|| ladder()[0])
 }
@@ -618,10 +627,16 @@ mod tests {
             let i = rank(starting_quality(&probe(GpuKind::Integrated), s, w));
             let d = rank(starting_quality(&probe(GpuKind::Discrete), s, w));
             assert!(d >= i);
-            assert!(d - i <= 2, "the prior moved {} rungs", d - i);
+            let capped = i == rank(Quality::MEDIUM);
+            assert!(capped || d - i <= 2, "the prior moved {} rungs", d - i);
             tipped |= d > i;
         }
         assert!(tipped);
+        // An integrated GPU, however fast its calibration, starts at MEDIUM at most.
+        assert_eq!(
+            starting_quality(&probe(GpuKind::Integrated), score(0.1), w),
+            Quality::MEDIUM
+        );
         // Without a score the prior alone decides; a CPU adapter starts low.
         assert_eq!(
             starting_quality(&probe(GpuKind::Discrete), None, w),
