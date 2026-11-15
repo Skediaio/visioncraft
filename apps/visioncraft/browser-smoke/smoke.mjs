@@ -272,6 +272,8 @@ const interact = async ex => {
   // Browser storage: a reload brings the project back.
   await cdp('Page.reload');
   out.reload_s = await appUp();
+  // The quality menu's choice is not kept across a reload.
+  if (QUALITY !== 'auto') await rpc('ui.set', { quality: QUALITY });
   const restored = await names();
   check(`${ex}: the project survives a reload (browser storage)`, restored.includes('Smoke lawn') && restored.includes('Smoke bench'), `${out.reload_s.toFixed(1)} s`);
   // Download (Save) and upload (Open).
