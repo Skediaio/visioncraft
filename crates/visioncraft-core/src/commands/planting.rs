@@ -903,8 +903,11 @@ mod tests {
                     "asset_palette": [{"asset": "flora:betula-pendula", "weight": 1}]}),
             )
             .unwrap();
-            s.run("planting.apply_preset", json!({"id": "g1", "preset": preset, "edge_band_m": 0}))
-                .unwrap();
+            s.run(
+                "planting.apply_preset",
+                json!({"id": "g1", "preset": preset, "edge_band_m": 0}),
+            )
+            .unwrap();
             let c = s.run("planting.canopy_cover", json!({"id": "g1"})).unwrap();
             assert!(c["cover"].as_f64().unwrap() >= min, "{preset}: {c}");
         }
