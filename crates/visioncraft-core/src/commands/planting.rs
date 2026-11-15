@@ -780,10 +780,13 @@ fn apply_preset(project: &mut Project, params: &Value) -> Result<Value, CommandE
             .ok_or_else(|| bad("edge_band_m: 0..30"))? as f32,
     };
     let preset_layers = crate::presets::with_edge_band(preset.layers, band);
-    let layers = match find(project, params)? {
-        Generator::AreaScatter(g) => &mut g.layers,
-        Generator::MixedBrush(g) => &mut g.layers,
-        Generator::SurfaceFill(g) => &mut g.layers,
+    // A woodland is a grown stand: its plants start at the preset's stand age unless the
+    // planting has an age of its own (nursery age 8 would show a young plantation).
+    let stand = crate::presets::stand_age_years(name);
+    let (layers, age) = match find(project, params)? {
+        Generator::AreaScatter(g) => (&mut g.layers, &mut g.planted_age_years),
+        Generator::MixedBrush(g) => (&mut g.layers, &mut g.planted_age_years),
+        Generator::SurfaceFill(g) => (&mut g.layers, &mut g.planted_age_years),
         _ => {
             return Err(fail(
                 "only a brush, area scatter or surface fill takes layers",
@@ -791,6 +794,9 @@ fn apply_preset(project: &mut Project, params: &Value) -> Result<Value, CommandE
         }
     };
     *layers = preset_layers;
+    if age.is_none() {
+        *age = stand;
+    }
     Ok(Value::Null)
 }
 
@@ -885,6 +891,24 @@ fn duplicate(project: &mut Project, params: &Value) -> Result<Value, CommandErro
 mod tests {
     use crate::{Project, Session};
     use serde_json::json;
+
+    #[test]
+    fn woodland_presets_start_grown_and_close_from_above() {
+        for (preset, min) in [("mixed-woodland", 0.8), ("broadleaf-woodland", 0.8)] {
+            let mut s = Session::new(Project::default());
+            s.run(
+                "planting.add_area",
+                json!({"name": "Wood", "outline": [[0, 0], [100, 0], [100, 100], [0, 100]],
+                    "seed": 3, "density_per_m2": 0.01,
+                    "asset_palette": [{"asset": "flora:betula-pendula", "weight": 1}]}),
+            )
+            .unwrap();
+            s.run("planting.apply_preset", json!({"id": "g1", "preset": preset, "edge_band_m": 0}))
+                .unwrap();
+            let c = s.run("planting.canopy_cover", json!({"id": "g1"})).unwrap();
+            assert!(c["cover"].as_f64().unwrap() >= min, "{preset}: {c}");
+        }
+    }
 
     #[test]
     fn a_forest_edge_band_puts_shrubs_and_small_trees_at_the_edge() {

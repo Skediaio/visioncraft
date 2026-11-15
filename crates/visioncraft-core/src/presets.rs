@@ -49,6 +49,16 @@ pub fn default_edge_band_m(preset: &str) -> f32 {
     }
 }
 
+/// The age (years) the woodland presets' plants have when planted, so a stand reads as grown:
+/// the species' growth tables (`growth`) give crowns that close from above at about this age.
+pub fn stand_age_years(preset: &str) -> Option<f32> {
+    match preset {
+        "broadleaf-woodland" | "mixed-woodland" => Some(40.0),
+        "conifer-woodland" => Some(30.0),
+        _ => None,
+    }
+}
+
 /// `layers` with a forest-edge band `band_m` deep (0: unchanged): the first layer's trees
 /// taper to 55 % towards the edge, and a shrub mantle and a herb fringe are added unless the
 /// preset has its own shrubs. Evaluation is deterministic by the generator's seed.
