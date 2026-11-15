@@ -801,12 +801,15 @@ impl Scene {
         let old = self.terrain.clone();
         self.pinned.insert(CLAY.key());
         let any = self.material(r, &CLAY); // terrain items ignore their material
-        if let Some(d) = self.terrain_gpu.sync(
-            r,
-            project.terrain.as_ref(),
-            project.view.ground.map(|g| g.height),
-            any,
-        ) {
+        let terrain = crate::load_stats::time("terrain sync (main thread)", || {
+            self.terrain_gpu.sync(
+                r,
+                project.terrain.as_ref(),
+                project.view.ground.map(|g| g.height),
+                any,
+            )
+        });
+        if let Some(d) = terrain {
             match (&old, &project.terrain) {
                 (Some(a), Some(b))
                     if a.origin == b.origin
@@ -1045,9 +1048,18 @@ impl Scene {
             }
         }
 
+        let t = crate::assets::now_ms();
         self.sync_generators(r, project, assets);
+        crate::load_stats::add(
+            "~scene sync: generators (scatter, plants)",
+            crate::assets::now_ms() - t,
+        );
+        let t = crate::assets::now_ms();
         self.sync_lawns(r, project);
+        crate::load_stats::add("~scene sync: lawns", crate::assets::now_ms() - t);
+        let t = crate::assets::now_ms();
         self.sync_clutter(r, project);
+        crate::load_stats::add("~scene sync: clutter", crate::assets::now_ms() - t);
         self.prune_materials(r);
         problems
     }
@@ -1291,7 +1303,7 @@ impl Scene {
             }
             if self.flora.parts(LAWN_SPECIES, class, 0).is_none() {
                 self.flora
-                    .want(LAWN_SPECIES, None, class, month, &res.params);
+                    .want(LAWN_SPECIES, None, class, month, &res.params, &[]);
                 continue;
             }
             // The tufts are scattered off the frame (a thread; on the web at once) and drawn
@@ -1592,7 +1604,7 @@ impl Scene {
             if let Some(res) = plants::resolve(project, asset) {
                 let (class, params) = When { month, age: want }.class(&res.params);
                 self.flora
-                    .want(asset, res.scan_id.as_deref(), class, month, &params);
+                    .want(asset, res.scan_id.as_deref(), class, month, &params, &[]);
             }
             let mut stages: Vec<Option<u8>> = (1..10).map(Some).chain([None]).collect();
             stages.sort_by(|a, b| {
@@ -1709,13 +1721,26 @@ impl Scene {
         let protos = match plant {
             Some(res) => {
                 let (class, params) = when.class(&res.params);
-                self.flora
-                    .want(asset, res.scan_id.as_deref(), class, when.month, &params);
-                let stand_in = placeholder::flora_asset(asset, &res);
-                self.proto(r, asset, Some(&stand_in))
+                // Where it stands decides how soon it is made (the nearest first).
+                let at: Vec<Vec3> = matrices
+                    .iter()
+                    .step_by(matrices.len().div_ceil(64).max(1))
+                    .map(|m| m.w_axis.truncate())
+                    .collect();
+                self.flora.want(
+                    asset,
+                    res.scan_id.as_deref(),
+                    class,
+                    when.month,
+                    &params,
+                    &at,
+                );
+                self.proto(r, asset, || placeholder::flora_parts(asset, &res))
             }
             // A catalogue model still loading, or a plain asset: its box from the project assets.
-            None => self.proto(r, asset, assets.iter().find(|a| a.id == asset)),
+            None => self.proto(r, asset, || {
+                placeholder::parts(assets.iter().find(|a| a.id == asset))
+            }),
         };
         protos
             .into_iter()
@@ -1961,7 +1986,7 @@ impl Scene {
         self.finish_lawns(r);
         let cell = [eye.x, eye.z].map(|v| (v / LAWN_EYE_CELL_M).floor() as i32);
         let moved = std::mem::replace(&mut self.lawn_eye, cell) != cell && self.lawns_follow;
-        self.flora.pump(r) | library | moved
+        self.flora.pump(r, eye) | library | moved
     }
 
     /// Screen pixels per texture repeat of each textured material at its nearest visible
@@ -2126,13 +2151,13 @@ impl Scene {
         &mut self,
         r: &mut Renderer,
         id: &str,
-        asset: Option<&Asset>,
+        parts: impl FnOnce() -> Vec<(MeshData, Look)>,
     ) -> Vec<(MeshId, MaterialId)> {
         if let Some(p) = self.protos.get(id) {
             return p.clone();
         }
         let mut out = Vec::new();
-        for (data, look) in placeholder::parts(asset) {
+        for (data, look) in parts() {
             if let Some(mesh) = upload(r, &data, false) {
                 self.pinned.insert(look.key());
                 out.push((mesh, self.material(r, &look)));

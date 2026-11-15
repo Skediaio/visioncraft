@@ -701,7 +701,12 @@ impl Studio {
         // A picture is taken with the eye adapted to it.
         self.adapted_ev = None;
         self.prepare();
-        let mut problems = picture_problems(self.plants_pending(), self.scene.library.idle());
+        let mut problems = picture_problems(
+            self.plants_pending(),
+            self.scene.library.idle(),
+            &self.scene.flora.waiting_names(5),
+            &self.scene.library.store.loading_names(5),
+        );
         problems.append(&mut lamp_problems);
         problems.append(&mut self.scene.library.messages);
         problems.append(&mut self.scene.library.store.messages);
@@ -800,8 +805,10 @@ impl Studio {
         project_dir: Option<&Path>,
         relink_dir: Option<&Path>,
     ) -> SourcesLoaded {
-        self.replace_project(project);
-        self.load_sources(project_dir, relink_dir)
+        crate::load_stats::time("~open: replace project", || self.replace_project(project));
+        crate::load_stats::time("~open: import models", || {
+            self.load_sources(project_dir, relink_dir)
+        })
     }
 
     /// Loads every model that is not loaded yet: an example's file from inside the program,
@@ -924,11 +931,14 @@ impl Studio {
         }
         self.synced = Some(key);
         let project = self.project_view().into_owned();
-        let problems = self
-            .scene
-            .sync(&mut self.renderer, &project, &self.loaded, &self.assets);
+        let problems = crate::load_stats::time("scene sync (main thread)", || {
+            self.scene
+                .sync(&mut self.renderer, &project, &self.loaded, &self.assets)
+        });
         self.problems.extend(problems);
-        self.update_sky_volume(&project);
+        crate::load_stats::time("sky volume (main thread)", || {
+            self.update_sky_volume(&project)
+        });
     }
 
     /// Remakes the sky visibility volume when the buildings that block the sky changed.
@@ -1467,6 +1477,12 @@ impl Studio {
 
     /// Sets everything the renderer needs for the next frame.
     pub fn prepare(&mut self) {
+        let t = crate::assets::now_ms();
+        self.prepare_now();
+        crate::load_stats::add("~frame prepare (main thread)", crate::assets::now_ms() - t);
+    }
+
+    fn prepare_now(&mut self) {
         self.scene.library.lamps_on = self.lights_on();
         let eye = self.camera.eye();
         let h = self.still_textures.unwrap_or(self.size[1]).max(1) as f32;
@@ -1483,7 +1499,10 @@ impl Studio {
                 h / (2.0 * d * tan)
             }
         };
-        if self.scene.pump(&mut self.renderer, eye, &px_per_m) {
+        let pumped = crate::load_stats::time("~scene pump (main thread)", || {
+            self.scene.pump(&mut self.renderer, eye, &px_per_m)
+        });
+        if pumped {
             self.draft_serial += 1;
         }
         self.scene
@@ -2194,16 +2213,31 @@ const SNOW_EV: f32 = 1.2;
 
 /// What a picture taken with `pending` plants still being made, or the library still loading,
 /// says about it.
-pub fn picture_problems(pending: usize, library_idle: bool) -> Vec<String> {
+/// `plants` and `files` name some of what was not ready (species, library paths).
+pub fn picture_problems(
+    pending: usize,
+    library_idle: bool,
+    plants: &[String],
+    files: &[String],
+) -> Vec<String> {
+    let named = |names: &[String]| {
+        if names.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", names.join(", "))
+        }
+    };
     let mut out = Vec::new();
     if pending > 0 {
         out.push(format!(
-            "{pending} plant generations were not finished after {PICTURE_WAIT_S:.0} s: those plants show as stand-ins"
+            "{pending} plant generations were not finished after {PICTURE_WAIT_S:.0} s{}: those plants show as stand-ins",
+            named(plants)
         ));
     }
     if !library_idle {
         out.push(format!(
-            "library files were still loading after {PICTURE_WAIT_S:.0} s: some materials or objects show their stand-ins"
+            "library files were still loading after {PICTURE_WAIT_S:.0} s{}: some materials or objects show their stand-ins",
+            named(files)
         ));
     }
     out
@@ -2213,11 +2247,14 @@ pub fn picture_problems(pending: usize, library_idle: bool) -> Vec<String> {
 mod picture_tests {
     #[test]
     fn a_picture_with_plants_pending_says_so() {
-        assert!(super::picture_problems(0, true).is_empty());
-        let p = super::picture_problems(7, true);
+        assert!(super::picture_problems(0, true, &[], &[]).is_empty());
+        let p = super::picture_problems(7, true, &["flora:betula-pendula".into()], &[]);
         assert_eq!(p.len(), 1);
         assert!(p[0].starts_with("7 plant generations"));
-        assert_eq!(super::picture_problems(0, false).len(), 1);
+        assert!(p[0].contains("(flora:betula-pendula)"), "{}", p[0]);
+        let f = super::picture_problems(0, false, &[], &["materials/a/basecolor.jpg".into()]);
+        assert_eq!(f.len(), 1);
+        assert!(f[0].contains("materials/a/basecolor.jpg"));
     }
 }
 

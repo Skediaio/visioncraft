@@ -440,35 +440,68 @@ export async function vc_decode(bytes) {
     }
 }
 
+/// A map's tier by its width, for the loading statistics.
+fn tier_of(w: u32) -> &'static str {
+    match w {
+        0..=1024 => "1k",
+        1025..=2048 => "2k",
+        _ => "4k",
+    }
+}
+
 /// Files that live in memory rather than under the library folder (objects a person imported,
 /// read from a bundle), by path.
 pub type MemoryFiles = Arc<Mutex<HashMap<String, Arc<[u8]>>>>;
 
-/// Compresses on one loader thread at a time: four threads compressing 4k maps at once left
-/// the frame's own thread waiting for a core (upload steps of 60-100 ms on a 4-core laptop).
+/// Compresses on the work pool (natively), so that library maps, model pictures and plants
+/// share its cores and the frame's thread keeps one: several at once, finer tiers after the
+/// 1k maps. The pixels come back with the result (kept when it cannot compress).
 #[cfg(not(target_arch = "wasm32"))]
-fn compress_one(px: &[u8], w: u32, h: u32, kind: BcKind, space: ColorSpace) -> Option<Compressed> {
-    static ONE: Mutex<()> = Mutex::new(());
-    let _turn = ONE.lock().unwrap_or_else(|e| e.into_inner());
-    visioncraft_render::bc::compress(px, w, h, kind, space)
-}
-
-/// Natively on this loader thread (one at a time); on the web in the texture worker, so the
-/// page does not freeze for the seconds a 4k map takes in wasm.
-async fn compress_any(
-    px: &[u8],
+fn compress_one(
+    px: Vec<u8>,
     w: u32,
     h: u32,
     kind: BcKind,
     space: ColorSpace,
-) -> Option<Arc<Compressed>> {
+) -> (Vec<u8>, Option<Compressed>) {
+    let t = now_ms();
+    let tier = tier_of(w);
+    let urgency = match tier {
+        "1k" => 0.0,
+        "2k" => 20.0,
+        _ => 40.0,
+    };
+    let got = crate::work_pool::run_wait(urgency, move || {
+        let c = crate::load_stats::time(&format!("BC compression (library) {tier}"), || {
+            visioncraft_render::bc::compress(&px, w, h, kind, space)
+        });
+        (px, c)
+    });
+    crate::load_stats::add(
+        "~BC compression (library) wall, waiting included",
+        now_ms() - t,
+    );
+    got.unwrap_or_default()
+}
+
+/// Natively on the work pool; on the web in the texture worker, so the page does not freeze
+/// for the seconds a 4k map takes in wasm. The pixels come back.
+async fn compress_any(
+    px: Vec<u8>,
+    w: u32,
+    h: u32,
+    kind: BcKind,
+    space: ColorSpace,
+) -> (Vec<u8>, Option<Arc<Compressed>>) {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        compress_one(px, w, h, kind, space).map(Arc::new)
+        let (px, c) = compress_one(px, w, h, kind, space);
+        (px, c.map(Arc::new))
     }
     #[cfg(target_arch = "wasm32")]
     {
-        crate::texture_worker::compress(px, w, h, kind, space).await
+        let c = crate::texture_worker::compress(&px, w, h, kind, space).await;
+        (px, c)
     }
 }
 
@@ -491,28 +524,38 @@ async fn load(
             // Natively, a map compressed before comes off the disk (`plant_cache`).
             #[cfg(not(target_arch = "wasm32"))]
             let cache_key = crate::plant_cache::key(&[
+                b"library map",
                 path.as_bytes(),
                 &[u8::from(*srgb)],
-                &(bytes.len() as u64).to_le_bytes(),
-                &bytes[..bytes.len().min(4096)],
+                &crate::plant_cache::digest(&bytes),
             ]);
             #[cfg(not(target_arch = "wasm32"))]
             if compress
                 && bc_kind_of(path).is_some()
-                && let Some(c) = crate::plant_cache::compressed(cache_key)
+                && let Some(c) = crate::load_stats::time("disk cache read (library map)", || {
+                    crate::plant_cache::compressed(cache_key)
+                })
             {
                 let mut img = Rgba::new(c.width, c.height, Vec::new());
                 img.bc = Some(c);
                 return Ok(Loaded::Image(img));
             }
+            let t = now_ms();
             let mut img = io::decode(bytes).await?;
+            crate::load_stats::add(
+                &format!("material map decode {}", tier_of(img.w)),
+                now_ms() - t,
+            );
             if compress && let Some(kind) = bc_kind_of(path) {
                 let space = if *srgb {
                     ColorSpace::Srgb
                 } else {
                     ColorSpace::Linear
                 };
-                if let Some(c) = compress_any(&img.px, img.w, img.h, kind, space).await {
+                let px = std::mem::take(&mut img.px);
+                let (px, c) = compress_any(px, img.w, img.h, kind, space).await;
+                img.px = px;
+                if let Some(c) = c {
                     #[cfg(not(target_arch = "wasm32"))]
                     crate::plant_cache::store_compressed(cache_key, &c);
                     img.bc = Some(c);
@@ -523,7 +566,7 @@ async fn load(
         }
         Key::Thumb(_) => Loaded::Image(io::decode(bytes).await?),
         Key::Glb(_) => {
-            let glb = gltf_load::parse(&bytes)?;
+            let glb = crate::load_stats::time("GLB parse", || gltf_load::parse(&bytes))?;
             let mut images = Vec::new();
             // Each picture compresses as what its material uses it for: colour BC1 (BC3 with
             // alpha), normal map BC5, occlusion-roughness-metallic BC1. One used two ways stays.
@@ -542,16 +585,46 @@ async fn load(
                     }
                 }
             }
+            #[cfg(not(target_arch = "wasm32"))]
+            let glb_digest = crate::plant_cache::digest(&bytes);
             for (i, encoded) in glb.images.iter().enumerate() {
+                let use_as = role.get(&i).copied().flatten().filter(|_| compress);
+                // Natively, a picture compressed before comes off the disk (`plant_cache`).
+                #[cfg(not(target_arch = "wasm32"))]
+                let cache_key = use_as.map(|(kind, space)| {
+                    crate::plant_cache::key(&[
+                        b"model picture",
+                        &glb_digest,
+                        &(i as u32).to_le_bytes(),
+                        crate::texture_worker::kind_name(kind).as_bytes(),
+                        &[u8::from(space == ColorSpace::Srgb)],
+                    ])
+                });
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(c) = cache_key.and_then(crate::plant_cache::compressed) {
+                    let mut img = Rgba::new(c.width, c.height, Vec::new());
+                    img.bc = Some(c);
+                    images.push(img);
+                    continue;
+                }
+                let t = now_ms();
                 let mut img = io::decode(encoded.clone()).await?;
-                if compress && let Some(Some((mut kind, space))) = role.get(&i).copied() {
+                crate::load_stats::add("GLB image decode", now_ms() - t);
+                if let Some((mut kind, space)) = use_as {
                     if kind == BcKind::Rgb
                         && space == ColorSpace::Srgb
                         && !img.px.as_chunks::<4>().0.iter().all(|p| p[3] == 255)
                     {
                         kind = BcKind::Rgba;
                     }
-                    if let Some(c) = compress_any(&img.px, img.w, img.h, kind, space).await {
+                    let px = std::mem::take(&mut img.px);
+                    let (px, c) = compress_any(px, img.w, img.h, kind, space).await;
+                    img.px = px;
+                    if let Some(c) = c {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        if let Some(k) = cache_key {
+                            crate::plant_cache::store_compressed(k, &c);
+                        }
                         img.bc = Some(c);
                         img.px = Vec::new();
                     }
@@ -669,7 +742,13 @@ impl AssetStore {
             } else {
                 1536 << 20
             },
-            max_inflight: if cfg!(target_arch = "wasm32") { 6 } else { 4 },
+            // Natively loads decode on their own threads and compress on the pool: enough at
+            // once to keep the pool busy.
+            max_inflight: if cfg!(target_arch = "wasm32") {
+                6
+            } else {
+                crate::work_pool::size().clamp(4, 16)
+            },
             stats: StoreStats::default(),
             over_cap: false,
             compress: false,
@@ -782,6 +861,17 @@ impl AssetStore {
             || self.streaming.is_some()
     }
 
+    /// Up to `n` files on their way (being read and decoded, or going up), for a message.
+    pub fn loading_names(&self, n: usize) -> Vec<String> {
+        let mut out: Vec<String> = self.inflight.iter().map(|k| k.path().to_string()).collect();
+        out.extend(self.pending_tex.iter().map(|p| p.0.path().to_string()));
+        out.extend(self.streaming.iter().map(|s| s.0.path().to_string()));
+        out.sort();
+        out.dedup();
+        out.truncate(n);
+        out
+    }
+
     pub fn queued(&self) -> usize {
         self.queue.len() + self.inflight.len() + self.pending_tex.len()
     }
@@ -812,6 +902,7 @@ impl AssetStore {
                 .ok(),
         };
         let ms = now_ms() - t;
+        crate::load_stats::add(&format!("texture upload {}", tier_of(img.w)), ms);
         self.stats.uploads += 1;
         self.stats.total_upload_ms += ms;
         if ms > self.stats.worst_upload_ms {
@@ -918,11 +1009,28 @@ impl AssetStore {
         // Nothing new goes up while over the cap and nothing could be freed: no thrashing.
         let room = over == 0 || changed || !self.evicted.is_empty();
         // A compressed picture goes up a few megabytes per frame (a 4k map in one write cost
-        // the frame up to 100 ms); only once complete does anything use it.
+        // the frame up to 100 ms); only once complete does anything use it. Several steps (and
+        // pictures) a frame while the frame's budget lasts: a 1k map is a few steps.
+        for _ in 0..64 {
+            self.stream_step(r, budget, room, &mut changed);
+            if self.streaming.is_none() || !room || budget.spent() {
+                break;
+            }
+        }
+        if changed {
+            self.rev += 1;
+        }
+        changed
+    }
+
+    /// One step of the picture going up, then the next decoded pictures (plain ones go up at
+    /// once, a compressed one starts streaming).
+    fn stream_step(&mut self, r: &mut Renderer, budget: &Budget, room: bool, changed: &mut bool) {
         if let Some((key, job, cost)) = &mut self.streaming {
             let t = now_ms();
             let done = r.upload_step(job, self.stream_bytes);
             let ms = now_ms() - t;
+            crate::load_stats::add("texture upload step (BC, streamed)", ms);
             self.stats.worst_upload_ms = self.stats.worst_upload_ms.max(ms);
             match done {
                 None => {}
@@ -935,7 +1043,7 @@ impl AssetStore {
                             self.lru.insert(key.clone(), cost, self.tick);
                             self.texture_bytes += cost;
                             self.textures.insert(key, id);
-                            changed = true;
+                            *changed = true;
                         }
                         Err(e) => self.fail_key(key, &e),
                     }
@@ -962,7 +1070,7 @@ impl AssetStore {
                     self.lru.insert(key.clone(), cost, self.tick);
                     self.texture_bytes += cost;
                     self.textures.insert(key, id);
-                    changed = true;
+                    *changed = true;
                 }
                 None => self.fail_key(key, "the GPU refused the texture"),
             }
@@ -970,10 +1078,6 @@ impl AssetStore {
                 break;
             }
         }
-        if changed {
-            self.rev += 1;
-        }
-        changed
     }
 }
 

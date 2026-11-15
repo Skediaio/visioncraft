@@ -46,7 +46,12 @@ pub(super) struct Clutter {
     waiting: bool,
     /// The stone variants, then the twig: (mesh, material), made once.
     meshes: Vec<(MeshId, MaterialId)>,
+    /// The deciduous trees the generators scatter (leaf species, params, scans, crown), with
+    /// the key of what they were evaluated from.
+    scattered: Option<(u64, Vec<ScatteredTree>)>,
 }
+
+type ScatteredTree = (String, flora::PlantParams, Option<String>, [f32; 3]);
 
 impl Clutter {
     pub(super) fn clear(&mut self, r: &mut Renderer) {
@@ -91,6 +96,7 @@ impl Scene {
     }
 
     pub(super) fn sync_clutter(&mut self, r: &mut Renderer, project: &Project) {
+        let key_t = crate::assets::now_ms();
         let month = u32::from(project.plant_month());
         // Fallen leaves, stones and edge grass lie under the snow.
         let on = project.view.clutter && !self.clutter_low && project.snow() < SNOW_BURIES;
@@ -120,29 +126,55 @@ impl Scene {
                     })
                 })
                 .collect();
-        for g in project.generators.iter().filter(|g| {
-            on && !matches!(g, visioncraft_core::Generator::Single(_))
-                && project.layer_visible(g.layer())
-                && g.assets().into_iter().any(|a| deciduous(a).is_some())
-        }) {
-            for p in self.evaluate_generator(g).placements {
-                let Some((gr, res)) = deciduous(&p.asset) else {
-                    continue;
-                };
-                let width = match project.view.years {
-                    Some(y) => {
-                        let planted = g.planted_age_years().unwrap_or(gr.planted_age_years);
-                        gr.mature_width_m * gr.size(planted + y).width
-                    }
-                    None => gr.mature_width_m,
-                };
-                trees.push((
-                    format!("{CLUTTER_PREFIX}leaves:{}", p.asset),
-                    litter(&res.params),
-                    res.scan_id,
-                    [p.position[0], p.position[2], width * p.scale * 0.5],
-                ));
+        // The scattered trees come from evaluating their generators: only again when a
+        // generator, the ground under it (its evaluation stamp), the species or the years
+        // changed, not each time another plant finished generating.
+        let gens_key = {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            (on, month, project.view.years.map(f32::to_bits)).hash(&mut h);
+            format!("{:?}", project.species).hash(&mut h);
+            self.terrain
+                .as_ref()
+                .map(|t| std::sync::Arc::as_ptr(t) as usize)
+                .hash(&mut h);
+            for g in &project.generators {
+                format!("{g:?}").hash(&mut h);
+                project.layer_visible(g.layer()).hash(&mut h);
+                self.gens.get(g.id()).map(|o| o.stamp).hash(&mut h);
             }
+            h.finish()
+        };
+        if let Some((k, scattered)) = &self.clutter.scattered
+            && *k == gens_key
+        {
+            trees.extend(scattered.iter().cloned());
+        } else {
+            let first = trees.len();
+            for g in project.generators.iter().filter(|g| {
+                on && !matches!(g, visioncraft_core::Generator::Single(_))
+                    && project.layer_visible(g.layer())
+                    && g.assets().into_iter().any(|a| deciduous(a).is_some())
+            }) {
+                for p in self.evaluate_generator(g).placements {
+                    let Some((gr, res)) = deciduous(&p.asset) else {
+                        continue;
+                    };
+                    let width = match project.view.years {
+                        Some(y) => {
+                            let planted = g.planted_age_years().unwrap_or(gr.planted_age_years);
+                            gr.mature_width_m * gr.size(planted + y).width
+                        }
+                        None => gr.mature_width_m,
+                    };
+                    trees.push((
+                        format!("{CLUTTER_PREFIX}leaves:{}", p.asset),
+                        litter(&res.params),
+                        res.scan_id,
+                        [p.position[0], p.position[2], width * p.scale * 0.5],
+                    ));
+                }
+            }
+            self.clutter.scattered = Some((gens_key, trees[first..].to_vec()));
         }
         let mut owners: Vec<&String> = self.owners.keys().collect();
         owners.sort();
@@ -200,7 +232,14 @@ impl Scene {
             self.flora.ready(LAWN_SPECIES, *class).hash(&mut h);
         }
         let key = h.finish();
+        crate::load_stats::add("~scene sync: clutter key", crate::assets::now_ms() - key_t);
         if self.clutter.key == Some(key) {
+            return;
+        }
+        // While plants are still being generated the drawn clutter stays (a rebuild costs the
+        // frame a tenth of a second, and each finished species would ask for one); it is made
+        // again once they are all there (the flora's `rev` moves on then).
+        if self.clutter.key.is_some() && self.flora.pending() > 0 {
             return;
         }
         self.clutter.clear(r);
@@ -215,13 +254,14 @@ impl Scene {
             && self.flora.parts(LAWN_SPECIES, *class, 0).is_none()
         {
             self.flora
-                .want(LAWN_SPECIES, None, *class, month as u8, params);
+                .want(LAWN_SPECIES, None, *class, month as u8, params, &[]);
             waiting = true;
         }
         for (id, p, scan, _) in &trees {
             let class = plants::class(p, month as u8);
             if self.flora.parts(id, class, 0).is_none() {
-                self.flora.want(id, scan.as_deref(), class, month as u8, p);
+                self.flora
+                    .want(id, scan.as_deref(), class, month as u8, p, &[]);
                 waiting = true;
             }
         }

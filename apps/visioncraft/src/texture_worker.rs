@@ -1,12 +1,16 @@
-//! Block compression off the page's thread on the web: one Web Worker (the `texture_worker`
-//! binary, the same crate built again, see `index.html`) compresses decoded pictures with
-//! `visioncraft_render::bc` and sends the mip levels back as bytes. Natively the loader threads
-//! compress themselves (`assets`), so this is wasm-only. When the worker cannot start, pictures
-//! stay RGBA8 as before.
+//! Block compression off the page's thread on the web: a few Web Workers (`WEB_WORKERS`, the
+//! `texture_worker` binary, the same crate built again, see `index.html`) compress decoded
+//! pictures with `visioncraft_render::bc` and send the mip levels back as bytes; a job goes to
+//! the worker with the fewest waiting. Natively the work pool compresses (`assets`,
+//! `work_pool`), so this is wasm-only. When no worker can start, pictures stay RGBA8 as before.
 //!
-//! The worker also makes a plant species' textures (`["plant", params, scale]` jobs): the leaf
+//! The workers also make a plant species' textures (`["plant", params, scale]` jobs): the leaf
 //! atlas, its normal map and the bark, generated and compressed there instead of on the page
-//! (natively `plant_compressed` runs on a thread, see `plants`).
+//! (natively `plant_compressed` runs on the work pool, see `plants`).
+
+/// Web Workers the page starts (each its own copy of the module): plant textures of several
+/// species and maps compress side by side, while the page keeps its thread.
+pub const WEB_WORKERS: usize = 3;
 
 /// What the worker posts once it can take jobs.
 pub const READY: &str = "ready";
@@ -61,7 +65,7 @@ pub struct PlantMeta {
 }
 
 /// A species' textures made and compressed: the leaf colour and each image with whether it
-/// repeats, in `plant_images` order. Natively on a thread of its own, on the web in the worker.
+/// repeats, in `plant_images` order. Natively on the work pool, on the web in the worker.
 pub type PlantCompressed = (
     [f32; 3],
     Vec<(std::sync::Arc<visioncraft_render::bc::Compressed>, bool)>,
@@ -73,17 +77,22 @@ pub fn plant_compressed(
     scans: &visioncraft_flora::scan::Scans,
 ) -> Option<PlantCompressed> {
     use visioncraft_render::ColorSpace;
-    let t = visioncraft_flora::textures_scanned(params, scale, scans);
-    let mut images = Vec::new();
-    for (img, kind, srgb, repeat) in plant_images(&t) {
+    let t = crate::load_stats::time("plant texture composition", || {
+        visioncraft_flora::textures_scanned(params, scale, scans)
+    });
+    // The images compress side by side (natively; each is the same however it is scheduled).
+    let compressed = crate::work_pool::map(&plant_images(&t), |&(img, kind, srgb, repeat)| {
         let space = if srgb {
             ColorSpace::Srgb
         } else {
             ColorSpace::Linear
         };
-        let c = visioncraft_render::bc::compress(&img.rgba, img.width, img.height, kind, space)?;
-        images.push((std::sync::Arc::new(c), repeat));
-    }
+        let c = crate::load_stats::time("BC compression (plant)", || {
+            visioncraft_render::bc::compress(&img.rgba, img.width, img.height, kind, space)
+        })?;
+        Some((std::sync::Arc::new(c), repeat))
+    });
+    let images = compressed.into_iter().collect::<Option<Vec<_>>>()?;
     Some((crate::plants::opaque_mean(&t.atlas.rgba), images))
 }
 
@@ -182,7 +191,8 @@ mod page {
     }
 
     thread_local! {
-        static WORKER: RefCell<Option<Option<Worker>>> = const { RefCell::new(None) };
+        /// The workers once started (`None` in it: one that failed).
+        static WORKERS: RefCell<Option<Vec<Option<Worker>>>> = const { RefCell::new(None) };
     }
 
     /// A tiny one-shot channel (no dependency): the answer, and the waker of whoever awaits it.
@@ -229,14 +239,16 @@ mod page {
         }
     }
 
-    fn start() -> Option<Worker> {
+    fn start(i: usize) -> Option<Worker> {
         let worker = web_sys::Worker::new("./texture_worker_loader.js").ok()?;
         let on_message =
             Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |e: web_sys::MessageEvent| {
                 let data = e.data();
-                WORKER.with(|w| {
+                WORKERS.with(|w| {
                     let mut w = w.borrow_mut();
-                    let Some(Some(w)) = w.as_mut() else { return };
+                    let Some(Some(w)) = w.as_mut().and_then(|v| v.get_mut(i)) else {
+                        return;
+                    };
                     if data.as_string().as_deref() == Some(READY) {
                         w.ready = true;
                         for m in w.queued.drain(..) {
@@ -267,16 +279,20 @@ mod page {
         worker.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
         on_message.forget(); // one worker for the page's life
         let on_error = Closure::<dyn FnMut(wasm_bindgen::JsValue)>::new(move |_| {
-            // A worker that cannot run: everything waiting stays RGBA8, and so does what comes.
-            WORKER.with(|w| {
-                if let Some(Some(w)) = w.borrow_mut().take() {
-                    for (_, tx) in w.waiting {
-                        tx.send(None);
-                    }
-                    w.worker.terminate();
-                }
+            // A worker that cannot run: what waits on it stays RGBA8 (or is made on the page),
+            // and the others take what comes.
+            let gone = WORKERS.with(|w| {
+                w.borrow_mut()
+                    .as_mut()
+                    .and_then(|v| v.get_mut(i))
+                    .and_then(Option::take)
             });
-            WORKER.with(|w| *w.borrow_mut() = Some(None));
+            if let Some(w) = gone {
+                for (_, tx) in w.waiting {
+                    tx.send(None);
+                }
+                w.worker.terminate();
+            }
         });
         worker.set_onerror(Some(on_error.as_ref().unchecked_ref()));
         on_error.forget();
@@ -289,11 +305,16 @@ mod page {
         })
     }
 
-    /// Sends a job (`[id, ...parts]`) to the worker; `None` when there is none.
+    /// Sends a job (`[id, ...parts]`) to the worker with the fewest waiting; `None` when there
+    /// is none.
     fn post(parts: &[wasm_bindgen::JsValue]) -> Option<futures_oneshot::Receiver> {
-        WORKER.with(|cell| {
+        WORKERS.with(|cell| {
             let mut cell = cell.borrow_mut();
-            let worker = cell.get_or_insert_with(start).as_mut()?;
+            let workers = cell.get_or_insert_with(|| (0..super::WEB_WORKERS).map(start).collect());
+            let worker = workers
+                .iter_mut()
+                .flatten()
+                .min_by_key(|w| w.waiting.len())?;
             let id = worker.next;
             worker.next = worker.next.wrapping_add(1);
             let msg = js_sys::Array::new();

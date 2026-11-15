@@ -160,7 +160,9 @@ fn make_tex(
     scale: usize,
     scans: &flora::scan::Scans,
 ) -> Option<Tex> {
-    let t = flora::textures_scanned(params, scale, scans);
+    let t = crate::load_stats::time("plant texture composition", || {
+        flora::textures_scanned(params, scale, scans)
+    });
     // Block-compressed where the device can (a quarter to an eighth of the memory; the
     // leaf atlas keeps its cutout coverage in every mip), else RGBA8.
     let up = |r: &mut Renderer, i: &flora::Image, srgb: bool, repeat: bool| {
@@ -177,7 +179,9 @@ fn make_tex(
         };
         if r.supports_bc()
             && !cfg!(target_arch = "wasm32")
-            && let Some(c) = compress(&i.rgba, i.width, i.height, kind, space)
+            && let Some(c) = crate::load_stats::time("BC compression (plant)", || {
+                compress(&i.rgba, i.width, i.height, kind, space)
+            })
             && let Ok(id) = r.add_compressed(std::sync::Arc::new(c), repeat)
         {
             return Some(id);
@@ -225,6 +229,33 @@ struct Want {
     class: u32,
     month: u8,
     params: flora::PlantParams,
+    /// Where it is planted (a sample of the placements): the nearest goes first.
+    at: Vec<glam::Vec3>,
+}
+
+/// Placements a want remembers for its urgency (a hedge of a thousand segments needs no more).
+const WANT_POINTS: usize = 256;
+
+impl Want {
+    /// How urgent it is from `eye` (smaller first): its distance over its height, as large on
+    /// screen comes first. Plants placed nowhere in particular (lawn tufts) come after the near.
+    fn urgency(&self, eye: glam::Vec3) -> f32 {
+        let h = (self.params.height_m * self.params.age.clamp(0.05, 1.0)).max(0.2);
+        let d = self
+            .at
+            .iter()
+            .map(|p| p.distance(eye))
+            .fold(f32::INFINITY, f32::min);
+        if d.is_finite() { d / h } else { 50.0 }
+    }
+}
+
+/// A species' textures being made off the frame (the pool, the web worker), from which scans,
+/// at which scale; the answer is `None` when they could not be made there.
+struct TexJob {
+    scan_key: String,
+    scale: usize,
+    answer: Answer,
 }
 
 #[derive(Default)]
@@ -250,12 +281,12 @@ pub struct Flora {
     tex_params: HashMap<String, flora::PlantParams>,
     /// Every plant material made, with what it was made from, to point it at new textures.
     plant_mats: Vec<(String, MaterialId, flora::Material, [f32; 3])>,
-    /// The species whose textures are being made off the frame (a thread, the web worker),
-    /// and where the answer lands: `None` inside when they could not be made there.
-    /// With the scan key they are made from.
-    from_worker: Option<(String, String, Answer)>,
-    /// The species whose meshes are being generated.
-    meshing: Option<MeshJob>,
+    /// Species whose first textures are being made off the frame.
+    tex_jobs: HashMap<String, TexJob>,
+    /// Species whose textures are being made again (`regenerate`).
+    regen_jobs: HashMap<String, TexJob>,
+    /// (species, class) whose variants' meshes are being generated, one job per variant.
+    meshing: HashMap<(String, u32), Vec<Slot<Generated>>>,
     /// The impostor being baked: (species, class, variant) and the bake.
     baking: Option<((String, u32, u32), visioncraft_render::ImpostorBake)>,
     /// The scanned leaf and bark sets.
@@ -266,10 +297,11 @@ pub struct Flora {
     stale: usize,
     /// When the first species began waiting for its scans.
     scan_wait: Option<f64>,
+    /// Nothing was pending at the last pump.
+    idle: bool,
 }
 
-type Answer =
-    std::sync::Arc<std::sync::Mutex<Option<Option<crate::texture_worker::PlantCompressed>>>>;
+type Answer = Slot<Option<crate::texture_worker::PlantCompressed>>;
 
 impl Flora {
     pub fn ready(&self, id: &str, class: u32) -> bool {
@@ -373,7 +405,10 @@ impl Flora {
         let Some((_, bake)) = self.baking.as_mut() else {
             return false;
         };
-        let Some(result) = r.impostor_bake_step(bake, BAKE_VIEWS_PER_FRAME) else {
+        let result = crate::load_stats::time("impostor bake step (main thread)", || {
+            r.impostor_bake_step(bake, BAKE_VIEWS_PER_FRAME)
+        });
+        let Some(result) = result else {
             return false;
         };
         let Some(((id, class, variant), _)) = self.baking.take() else {
@@ -390,6 +425,7 @@ impl Flora {
             r.remove_impostor(imp);
             return false;
         };
+        crate::load_stats::add("impostors baked", 0.0);
         let far = v.parts.iter().map(|p| p.2).fold(0.0, f32::max);
         // Trees hand over early; smaller plants keep their meshes as far as before and
         // then become an impostor instead of disappearing.
@@ -431,8 +467,8 @@ impl Flora {
         }
     }
 
-    /// Asks for species `id` in season `class`; `scan_id` names the built-in species whose
-    /// scans it takes (a custom species: its base).
+    /// Asks for species `id` in season `class`, planted `at` (world positions, may be empty);
+    /// `scan_id` names the built-in species whose scans it takes (a custom species: its base).
     pub fn want(
         &mut self,
         id: &str,
@@ -440,18 +476,32 @@ impl Flora {
         class: u32,
         month: u8,
         params: &flora::PlantParams,
+        at: &[glam::Vec3],
     ) {
         self.month = month;
         if let Some(s) = scan_id {
             self.scans.alias(id, s);
         }
-        if !self.ready(id, class) && !self.queue.iter().any(|w| w.id == id && w.class == class) {
-            self.queue.push(Want {
+        if self.ready(id, class) {
+            return;
+        }
+        let room = |w: &Want| WANT_POINTS.saturating_sub(w.at.len());
+        match self
+            .queue
+            .iter_mut()
+            .find(|w| w.id == id && w.class == class)
+        {
+            Some(w) => {
+                let n = room(w).min(at.len());
+                w.at.extend_from_slice(&at[..n]);
+            }
+            None => self.queue.push(Want {
                 id: id.into(),
                 class,
                 month,
                 params: params.clone(),
-            });
+                at: at[..at.len().min(WANT_POINTS)].to_vec(),
+            }),
         }
     }
 
@@ -464,14 +514,26 @@ impl Flora {
             + self.scans.loading()
     }
 
+    /// Up to `n` species still being made (for a message), most urgent first as last pumped.
+    pub fn waiting_names(&self, n: usize) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for w in &self.queue {
+            if out.len() < n && !out.contains(&w.id) {
+                out.push(w.id.clone());
+            }
+        }
+        out
+    }
+
     /// Frees species `id` (a species editor preview that changed) once nothing draws it.
     pub fn retire(&mut self, id: &str) {
         self.queue.retain(|w| w.id != id);
         // shortcut: the meshes of variants already uploaded for a retired job stay on the GPU
         // until the app closes; free them here if species previews get edited a lot
-        if self.meshing.as_ref().is_some_and(|j| j.id == id) {
-            self.meshing = None;
-        }
+        // Jobs on their way finish; their results are dropped.
+        self.meshing.retain(|k, _| k.0 != id);
+        self.tex_jobs.remove(id);
+        self.regen_jobs.remove(id);
         if self.baking.as_ref().is_some_and(|b| b.0.0 == id) {
             self.baking = None;
         }
@@ -539,10 +601,11 @@ impl Flora {
             .sum()
     }
 
-    /// Makes one species' textures again at the current `leaf_scale` when they were made at
-    /// another (the quality changed): its materials point at the new ones, the old are freed
-    /// and the impostors baked again. True when one was done.
-    fn regenerate_one(&mut self, r: &mut Renderer) -> bool {
+    /// Makes species' textures again at the current `leaf_scale` when they were made at another
+    /// (the quality changed) or from other scans (they arrived): off the frame, several at once;
+    /// each species' materials point at its new ones once there, the old are freed and the
+    /// impostors baked again. True when one was done.
+    fn regenerate(&mut self, r: &mut Renderer) -> bool {
         let scale = self.leaf_scale.max(1);
         let month = self.month;
         let mut stale = Vec::new();
@@ -556,149 +619,73 @@ impl Flora {
             }
         }
         self.stale = stale.len();
-        let Some(id) = stale.into_iter().next() else {
-            return false;
-        };
-        let Some(params) = self.tex_params.get(&id).cloned() else {
-            if let Some(t) = self.textures.get_mut(&id) {
-                t.scale = scale;
-            }
-            return false;
-        };
-        let (scans, key) = self.scans.scans(&id, month, &params);
-        // Off the frame like the first time (the worker, a thread), else here.
-        let new = if r.supports_bc() {
-            match self.worker_tex(r, &id, &params, scale, (&scans, &key)) {
-                Some(None) => return false,
-                Some(Some(t)) => Some(t),
-                None => make_tex(r, &params, scale, &scans).map(|t| Tex {
-                    scan_key: key.clone(),
-                    ..t
-                }),
-            }
-        } else {
-            make_tex(r, &params, scale, &scans).map(|t| Tex {
+        let mut done = false;
+        for id in stale {
+            let Some(params) = self.tex_params.get(&id).cloned() else {
+                if let Some(t) = self.textures.get_mut(&id) {
+                    t.scale = scale;
+                }
+                continue;
+            };
+            let (scans, key) = self.scans.scans(&id, month, &params);
+            let new = match self.regen_jobs.get(&id) {
+                // Made from what is wanted now: take it once there.
+                Some(j) if j.scale == scale && j.scan_key == key => match take(&j.answer) {
+                    None => continue,
+                    Some(got) => {
+                        self.regen_jobs.remove(&id);
+                        upload_tex(r, got, scale, key.clone())
+                            .or_else(|| make_tex(r, &params, scale, &scans))
+                    }
+                },
+                _ if r.supports_bc() => {
+                    if work_pool::backlog() < 2 * work_pool::size() {
+                        let job = start_tex(&params, scale, &scans, &key, 0.0);
+                        self.regen_jobs.insert(id, job);
+                    }
+                    continue;
+                }
+                _ => make_tex(r, &params, scale, &scans),
+            };
+            let Some(new) = new.map(|t| Tex {
                 scan_key: key.clone(),
                 ..t
-            })
-        };
-        let Some(new) = new else {
-            // Cannot make them (no parameters, or the GPU refused): keep the old ones.
-            if let Some(t) = self.textures.get_mut(&id) {
-                t.scale = scale;
-                t.scan_key = key;
-            }
-            return false;
-        };
-        for (_, m, kind, tint) in self.plant_mats.iter().filter(|e| e.0 == id) {
-            r.set_material(
-                *m,
-                &scene::plant_material_desc(
-                    *kind,
-                    (new.atlas, new.atlas_normal, new.bark, new.bark_normal),
-                    *tint,
-                ),
-            );
-        }
-        if let Some(old) = self.textures.insert(id, new) {
-            for t in [old.atlas, old.bark, old.bark_normal]
-                .into_iter()
-                .chain(old.atlas_normal)
-            {
-                r.remove_texture(t);
-            }
-        }
-        self.rebake();
-        self.rev += 1;
-        true
-    }
-
-    /// A species' textures made off the frame: `Some(None)` while that runs, `Some(Some(_))`
-    /// when they are uploaded, `None` when they must be made here.
-    fn worker_tex(
-        &mut self,
-        r: &mut Renderer,
-        id: &str,
-        params: &flora::PlantParams,
-        scale: usize,
-        (scans, scan_key): (&flora::scan::Scans, &str),
-    ) -> Option<Option<Tex>> {
-        // One species at a time: another's answer is still on its way.
-        if self
-            .from_worker
-            .as_ref()
-            .is_some_and(|(key, _, _)| key != id)
-        {
-            return Some(None);
-        }
-        if let Some((key, scan_key, slot)) = &self.from_worker
-            && key == id
-        {
-            let scan_key = scan_key.clone();
-            let Some(answer) = slot.lock().ok()?.take() else {
-                return Some(None);
+            }) else {
+                // Cannot make them (the GPU refused): keep the old ones.
+                if let Some(t) = self.textures.get_mut(&id) {
+                    t.scale = scale;
+                    t.scan_key = key;
+                }
+                continue;
             };
-            self.from_worker = None;
-            let (leaf_mean, images) = answer?;
-            let mut ids = Vec::new();
-            for (c, repeat) in images {
-                match r.add_compressed(c, repeat) {
-                    Ok(t) => ids.push(t),
-                    Err(_) => {
-                        ids.into_iter().for_each(|t| r.remove_texture(t));
-                        return None;
-                    }
+            for (_, m, kind, tint) in self.plant_mats.iter().filter(|e| e.0 == id) {
+                r.set_material(
+                    *m,
+                    &scene::plant_material_desc(
+                        *kind,
+                        (new.atlas, new.atlas_normal, new.bark, new.bark_normal),
+                        *tint,
+                    ),
+                );
+            }
+            if let Some(old) = self.textures.insert(id, new) {
+                for t in [old.atlas, old.bark, old.bark_normal]
+                    .into_iter()
+                    .chain(old.atlas_normal)
+                {
+                    r.remove_texture(t);
                 }
             }
-            let (atlas, atlas_normal, bark, bark_normal) = match ids[..] {
-                [a, n, b, bn] => (a, Some(n), b, bn),
-                [a, b, bn] => (a, None, b, bn),
-                _ => {
-                    ids.into_iter().for_each(|t| r.remove_texture(t));
-                    return None;
-                }
-            };
-            return Some(Some(Tex {
-                scale,
-                atlas,
-                atlas_normal,
-                bark,
-                bark_normal,
-                leaf_mean,
-                scan_key,
-            }));
+            done = true;
+            if !r.supports_bc() {
+                break; // made here: one a frame
+            }
         }
-        let slot = Answer::default();
-        let (answer, params, scans) = (slot.clone(), params.clone(), scans.clone());
-        #[cfg(not(target_arch = "wasm32"))]
-        let key_scans = scan_key.to_string();
-        #[cfg(target_arch = "wasm32")]
-        wasm_bindgen_futures::spawn_local(async move {
-            let got = crate::texture_worker::plant(&params, scale, &scans).await;
-            if let Ok(mut a) = answer.lock() {
-                *a = Some(got);
-            }
-        });
-        #[cfg(not(target_arch = "wasm32"))]
-        std::thread::Builder::new()
-            .name("plant textures".into())
-            .spawn(move || {
-                let json = serde_json::to_vec(&params).unwrap_or_default();
-                let key = crate::plant_cache::key(&[
-                    &json,
-                    &(scale as u32).to_le_bytes(),
-                    key_scans.as_bytes(),
-                ]);
-                let got = crate::plant_cache::textures(key, || {
-                    crate::texture_worker::plant_compressed(&params, scale, &scans)
-                });
-                if let Ok(mut a) = answer.lock() {
-                    *a = Some(got);
-                }
-            })
-            .ok()?;
-        self.from_worker = Some((id.to_string(), scan_key.to_string(), slot));
-        Some(None)
+        if done {
+            self.rebake();
+            self.rev += 1;
+        }
+        done
     }
 
     /// How many species (with their seasons) are generated and kept.
@@ -706,151 +693,308 @@ impl Flora {
         self.classes.len()
     }
 
-    /// One step: the textures of the first wanted species, or its meshes. True when something finished.
-    #[allow(clippy::map_entry)] // the textures are generated between the check and the insert
-    pub fn pump(&mut self, r: &mut Renderer) -> bool {
+    /// One frame's step: hands the most urgent waiting work (nearest and largest from `eye`
+    /// first) to the pool, uploads what has arrived (within a few milliseconds), and steps an
+    /// impostor bake. True when a species became ready (the scene must sync again).
+    pub fn pump(&mut self, r: &mut Renderer, eye: glam::Vec3) -> bool {
         if !self.retired.is_empty() {
             self.free_retired(r);
         }
-        if self.regenerate_one(r) {
-            return true;
-        }
-        let Some(w) = self.queue.first() else {
-            return self.bake_one(r);
-        };
-        let (id, class, month) = (w.id.clone(), w.class, w.month);
-        if !self.textures.contains_key(&id) {
-            let scale = self.leaf_scale.max(1);
-            let params = w.params.clone();
-            let (scans, key) = self.scans.scans(&id, month, &params);
-            // Natively the scans come off the disk in a moment: wait for them (a few seconds at
-            // most) instead of making the textures twice. On the web the drawn ones show first.
-            let since = *self.scan_wait.get_or_insert_with(crate::assets::now_ms);
-            if cfg!(not(target_arch = "wasm32"))
-                && self.scans.arriving(&id, month, &params)
-                && crate::assets::now_ms() - since < 3000.0
-            {
-                return false;
-            }
-            // A thread (on the web the worker) makes and compresses them; frames go on.
-            if r.supports_bc() {
-                match self.worker_tex(r, &id, &params, scale, (&scans, &key)) {
-                    Some(None) => return false,
-                    Some(Some(tex)) => {
-                        self.tex_params.insert(id.clone(), params);
-                        self.textures.insert(id, tex);
-                        return false;
-                    }
-                    None => {}
-                }
-            }
-            let tex = make_tex(r, &params, scale, &scans).map(|t| Tex { scan_key: key, ..t });
+        let mut finished = self.regenerate(r);
+        // Textures that arrived.
+        let arrived: Vec<String> = self
+            .tex_jobs
+            .iter()
+            .filter(|(_, j)| j.answer.lock().is_ok_and(|a| a.is_some()))
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in arrived {
+            let Some(job) = self.tex_jobs.remove(&id) else {
+                continue;
+            };
+            let Some(params) = self
+                .queue
+                .iter()
+                .find(|w| w.id == id)
+                .map(|w| w.params.clone())
+            else {
+                continue; // nobody wants it any more
+            };
+            let got = take(&job.answer).flatten();
+            let tex = upload_tex(r, got, job.scale, job.scan_key.clone()).or_else(|| {
+                // Not made off the frame (no worker, the GPU refused): here.
+                let (scans, _) = self.scans.scans(&id, self.month, &params);
+                make_tex(r, &params, job.scale, &scans)
+            });
             self.tex_params.insert(id.clone(), params);
             match tex {
-                Some(tex) => {
-                    self.textures.insert(id, tex);
+                Some(t) => {
+                    let t = Tex {
+                        scan_key: job.scan_key,
+                        ..t
+                    };
+                    self.textures.insert(id, t);
                 }
-                None => {
-                    self.queue.remove(0); // stays a placeholder
+                // stays a placeholder
+                None => self.queue.retain(|w| w.id != id),
+            }
+        }
+        // The most urgent first.
+        self.queue
+            .sort_by(|a, b| a.urgency(eye).total_cmp(&b.urgency(eye)));
+        // Natively the pool is kept a little ahead of its threads; on the web a job runs at once
+        // on the page, so one species' meshes a frame.
+        let mut meshes_started = 0;
+        let room = |extra: usize, started: usize| {
+            if cfg!(target_arch = "wasm32") {
+                started == 0
+            } else {
+                work_pool::backlog() + extra <= 2 * work_pool::size()
+            }
+        };
+        let detail = self.leaf_scale >= 2;
+        let budget = crate::assets::Budget::new(6.0);
+        let mut i = 0;
+        while i < self.queue.len() {
+            let w = &self.queue[i];
+            let (id, class, month, urgency) = (w.id.clone(), w.class, w.month, w.urgency(eye));
+            let params = w.params.clone();
+            i += 1;
+            if !self.textures.contains_key(&id) && !self.tex_jobs.contains_key(&id) {
+                let scale = self.leaf_scale.max(1);
+                let (scans, key) = self.scans.scans(&id, month, &params);
+                // Natively the scans come off the disk in a moment: wait for them (ten seconds
+                // at most, for a machine busy with other work) instead of making the textures
+                // twice, and of caching textures from a set that was only half there. On the web
+                // the drawn ones show first.
+                let since = *self.scan_wait.get_or_insert_with(crate::assets::now_ms);
+                let waiting = cfg!(not(target_arch = "wasm32"))
+                    && self.scans.arriving(&id, month, &params)
+                    && crate::assets::now_ms() - since < 10_000.0;
+                if !waiting && r.supports_bc() && (cfg!(target_arch = "wasm32") || room(1, 0)) {
+                    let job = start_tex(&params, scale, &scans, &key, urgency);
+                    self.tex_jobs.insert(id.clone(), job);
+                } else if !waiting && !r.supports_bc() && !budget.spent() {
+                    // Without block compression they are plain pictures: made here.
+                    let tex =
+                        make_tex(r, &params, scale, &scans).map(|t| Tex { scan_key: key, ..t });
+                    self.tex_params.insert(id.clone(), params.clone());
+                    match tex {
+                        Some(t) => {
+                            self.textures.insert(id.clone(), t);
+                        }
+                        None => {
+                            i -= 1;
+                            self.queue.remove(i);
+                            continue;
+                        }
+                    }
                 }
             }
-            return false;
+            let k = (id.clone(), class);
+            if !self.meshing.contains_key(&k) {
+                if !room(VARIANTS as usize, meshes_started) {
+                    continue;
+                }
+                meshes_started += 1;
+                let slots = (0..VARIANTS)
+                    .map(|v| {
+                        let (name, params) = (id.clone(), params.clone());
+                        // Variants of one species right after one another.
+                        work_pool::run(urgency + 1e-3 * v as f32, move || {
+                            generate_variant(&name, &params, v, month, detail)
+                        })
+                    })
+                    .collect();
+                self.meshing.insert(k.clone(), slots);
+            }
+            let ready = self.textures.contains_key(&id)
+                && self.meshing[&k]
+                    .iter()
+                    .all(|s| s.lock().is_ok_and(|g| g.is_some()));
+            // At least one species a frame; more while the frame's few milliseconds last.
+            if ready && (!finished || !budget.spent()) {
+                let slots = self.meshing.remove(&k).unwrap_or_default();
+                let generated: Vec<Generated> = slots.iter().filter_map(take).collect();
+                i -= 1;
+                self.queue.remove(i);
+                self.finish(r, &id, class, generated);
+                finished = true;
+            }
         }
-        // The meshes, a variant at a time, generated off the frame (a thread; on the web in
-        // turn, one variant a frame).
-        if self
-            .meshing
-            .as_ref()
-            .is_none_or(|j| j.id != id || j.class != class)
-        {
-            self.meshing = Some(MeshJob {
-                id: id.clone(),
-                class,
-                variants: Vec::new(),
-                made: Vec::new(),
-                pending: None,
-            });
+        // Bakes run beside the generation: a far tree turns into its impostor without waiting
+        // for every other species. Several steps a frame while its few milliseconds last.
+        let bake_budget = crate::assets::Budget::new(3.0);
+        let mut baked = false;
+        loop {
+            baked |= self.bake_one(r);
+            if bake_budget.spent() || (self.baking.is_none() && self.bakes.is_empty()) {
+                break;
+            }
         }
-        let job = self.meshing.as_mut().expect("set above");
-        let v = job.variants.len() as u32;
-        let Some(slot) = &job.pending else {
-            let params = w.params.clone();
-            let detail = self.leaf_scale >= 2;
-            job.pending = Some(spawn(move || generate_variant(&params, v, month, detail)));
-            return false;
-        };
-        let Some(generated) = slot.lock().ok().and_then(|mut g| g.take()) else {
-            return false;
-        };
-        job.pending = None;
+        // Everything done: once more, for what waits for the whole set (the ground clutter).
+        let idle = self.pending() == 0;
+        let settled = idle && !std::mem::replace(&mut self.idle, idle);
+        if finished || settled {
+            self.rev += 1;
+        }
+        finished || baked || settled
+    }
+
+    /// Uploads a species' generated variants in one season class and asks for their impostors.
+    fn finish(&mut self, r: &mut Renderer, id: &str, class: u32, generated: Vec<Generated>) {
+        let upload_t = crate::assets::now_ms();
         // Crowns get their depth occlusion: trees and shrubs, not clipped hedges (their outside
         // is all surface) or low plants (darkened, their impostors read as grey blobs far off).
         let crowned = !matches!(
-            self.tex_params.get(&id).map(|p| &p.form),
+            self.tex_params.get(id).map(|p| &p.form),
             Some(flora::Form::Clipped(_)) | None
         );
         let hedge = matches!(
-            self.tex_params.get(&id).map(|p| &p.form),
+            self.tex_params.get(id).map(|p| &p.form),
             Some(flora::Form::Clipped(_))
         );
-        let tex = &self.textures[&id];
-        let mut parts = Vec::new();
-        let mut kinds = Vec::new();
-        let mut mats: HashMap<usize, MaterialId> = HashMap::new();
-        let height = generated.height;
-        let ends = level_ends(height, generated.levels.len(), false);
-        for (li, split, tint) in generated.levels {
-            let dist = ends[li];
-            // Crowns of plants, not lawn tufts or fallen leaves lying flat: the leaves and the
-            // branches among them.
-            let crown = (crowned && height >= 1.5 && !id.starts_with(CLUTTER_PREFIX))
-                .then(|| split.iter().find(|(k, _)| *k == flora::Material::Foliage))
-                .flatten()
-                .map(|(_, p)| scene::part_bounds(&p.positions));
-            for (kind, part) in split {
-                let wood = kind != flora::Material::Foliage;
-                let Some(m) = scene::upload_plant_mesh(r, &part, crown, wood, hedge) else {
-                    continue;
-                };
-                let mat = *mats.entry(kind as usize).or_insert_with(|| {
-                    let m = scene::plant_material(
-                        r,
-                        kind,
-                        (tex.atlas, tex.atlas_normal, tex.bark, tex.bark_normal),
-                        tint,
-                    );
-                    job.made.push((m, kind, tint));
-                    m
-                });
-                parts.push((m, mat, dist));
-                kinds.push(kind);
+        let tex = &self.textures[id];
+        let mut variants = Vec::new();
+        let mut made = Vec::new();
+        for generated in generated {
+            let mut parts = Vec::new();
+            let mut kinds = Vec::new();
+            let mut mats: HashMap<usize, MaterialId> = HashMap::new();
+            let height = generated.height;
+            let ends = level_ends(height, generated.levels.len(), false);
+            for (li, split, tint) in generated.levels {
+                let dist = ends[li];
+                // Crowns of plants, not lawn tufts or fallen leaves lying flat: the leaves and
+                // the branches among them.
+                let crown = (crowned && height >= 1.5 && !id.starts_with(CLUTTER_PREFIX))
+                    .then(|| split.iter().find(|(k, _)| *k == flora::Material::Foliage))
+                    .flatten()
+                    .map(|(_, p)| scene::part_bounds(&p.positions));
+                for (kind, part) in split {
+                    let wood = kind != flora::Material::Foliage;
+                    let Some(m) = scene::upload_plant_mesh(r, &part, crown, wood, hedge) else {
+                        continue;
+                    };
+                    let mat = *mats.entry(kind as usize).or_insert_with(|| {
+                        let m = scene::plant_material(
+                            r,
+                            kind,
+                            (tex.atlas, tex.atlas_normal, tex.bark, tex.bark_normal),
+                            tint,
+                        );
+                        made.push((m, kind, tint));
+                        m
+                    });
+                    parts.push((m, mat, dist));
+                    kinds.push(kind);
+                }
             }
+            variants.push(Variant {
+                parts,
+                kinds,
+                baked: None,
+                height,
+            });
         }
-        job.variants.push(Variant {
-            parts,
-            kinds,
-            baked: None,
-            height,
-        });
-        if job.variants.len() < VARIANTS as usize {
-            return false;
-        }
-        let job = self.meshing.take().expect("set above");
-        self.queue.remove(0);
-        for (v, variant) in job.variants.iter().enumerate() {
+        for (v, variant) in variants.iter().enumerate() {
             // Lawn tufts and ground clutter are culled near: no impostor.
             let near_only = id == LAWN_SPECIES || id.starts_with(CLUTTER_PREFIX);
             if !near_only && (variant.height >= TREE_M || v == 0) {
-                self.bakes.push((id.clone(), class, v as u32));
+                self.bakes.push((id.to_string(), class, v as u32));
             }
         }
-        for (m, kind, tint) in job.made {
-            self.plant_mats.push((id.clone(), m, kind, tint));
+        for (m, kind, tint) in made {
+            self.plant_mats.push((id.to_string(), m, kind, tint));
         }
-        self.classes.insert((id, class), job.variants);
-        self.rev += 1;
-        true
+        self.classes.insert((id.to_string(), class), variants);
+        crate::load_stats::add(
+            "plant mesh upload (main thread)",
+            crate::assets::now_ms() - upload_t,
+        );
     }
+}
+
+/// Starts making a species' textures off the frame: natively on the pool (through the disk
+/// cache), on the web in the texture worker.
+fn start_tex(
+    params: &flora::PlantParams,
+    scale: usize,
+    scans: &flora::scan::Scans,
+    scan_key: &str,
+    urgency: f32,
+) -> TexJob {
+    let (params, scans) = (params.clone(), scans.clone());
+    #[cfg(target_arch = "wasm32")]
+    let answer = {
+        let _ = urgency;
+        let answer = Answer::default();
+        let slot = answer.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let got = crate::texture_worker::plant(&params, scale, &scans).await;
+            if let Ok(mut a) = slot.lock() {
+                *a = Some(got);
+            }
+        });
+        answer
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    let answer = work_pool::run(urgency, move || {
+        let json = serde_json::to_vec(&params).unwrap_or_default();
+        // The scans' bytes, not their names: a scan file edited in place is another key.
+        let key = crate::plant_cache::key(&[
+            b"plant textures",
+            &json,
+            &(scale as u32).to_le_bytes(),
+            &crate::plant_cache::digest(&scans.pack()),
+        ]);
+        crate::plant_cache::textures(key, || {
+            crate::texture_worker::plant_compressed(&params, scale, &scans)
+        })
+    });
+    TexJob {
+        scan_key: scan_key.to_string(),
+        scale,
+        answer,
+    }
+}
+
+/// A species' textures made off the frame, uploaded; `None` when they were not made there or
+/// the GPU refused them.
+fn upload_tex(
+    r: &mut Renderer,
+    got: Option<crate::texture_worker::PlantCompressed>,
+    scale: usize,
+    scan_key: String,
+) -> Option<Tex> {
+    let (leaf_mean, images) = got?;
+    let mut ids = Vec::new();
+    for (c, repeat) in images {
+        match r.add_compressed(c, repeat) {
+            Ok(t) => ids.push(t),
+            Err(_) => {
+                ids.into_iter().for_each(|t| r.remove_texture(t));
+                return None;
+            }
+        }
+    }
+    let (atlas, atlas_normal, bark, bark_normal) = match ids[..] {
+        [a, n, b, bn] => (a, Some(n), b, bn),
+        [a, b, bn] => (a, None, b, bn),
+        _ => {
+            ids.into_iter().for_each(|t| r.remove_texture(t));
+            return None;
+        }
+    };
+    Some(Tex {
+        scale,
+        atlas,
+        atlas_normal,
+        bark,
+        bark_normal,
+        leaf_mean,
+        scan_key,
+    })
 }
 
 /// A level's meshes, one per material.
@@ -864,24 +1008,37 @@ struct Generated {
 }
 
 /// `generate_variant_now`, natively through the disk cache (`plant_cache`).
-fn generate_variant(params: &flora::PlantParams, v: u32, month: u8, detail: bool) -> Generated {
+fn generate_variant(
+    name: &str,
+    params: &flora::PlantParams,
+    v: u32,
+    month: u8,
+    detail: bool,
+) -> Generated {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let json = serde_json::to_vec(params).unwrap_or_default();
         let key = crate::plant_cache::key(&[&json, &v.to_le_bytes(), &[month, detail as u8]]);
         let (height, levels) = crate::plant_cache::meshes(key, || {
-            let g = generate_variant_now(params, v, month, detail);
+            let g = generate_variant_now(name, params, v, month, detail);
             (g.height, g.levels)
         });
         Generated { height, levels }
     }
     #[cfg(target_arch = "wasm32")]
-    generate_variant_now(params, v, month, detail)
+    generate_variant_now(name, params, v, month, detail)
 }
 
 /// Every level of one variant, nearest first; with `detail` (HIGH and ULTRA) trees get the
 /// leaf-level levels before the card levels.
-fn generate_variant_now(params: &flora::PlantParams, v: u32, month: u8, detail: bool) -> Generated {
+fn generate_variant_now(
+    name: &str,
+    params: &flora::PlantParams,
+    v: u32,
+    month: u8,
+    detail: bool,
+) -> Generated {
+    let t = crate::assets::now_ms();
     let meshes = flora::generate_levels(
         params,
         u64::from(v) + 1,
@@ -895,37 +1052,17 @@ fn generate_variant_now(params: &flora::PlantParams, v: u32, month: u8, detail: 
         .enumerate()
         .map(|(li, m)| (li, m.split_parts(), m.foliage_tint))
         .collect();
+    crate::load_stats::add(&format!("~plant mesh {name}"), crate::assets::now_ms() - t);
     Generated { height, levels }
 }
 
-/// A species' meshes being made: the variants done, the materials made for them, and the
-/// variant on its way.
-struct MeshJob {
-    id: String,
-    class: u32,
-    variants: Vec<Variant>,
-    made: Vec<(MaterialId, flora::Material, [f32; 3])>,
-    pending: Option<Slot<Generated>>,
-}
+pub(crate) use crate::work_pool::Slot;
+use crate::work_pool::{self, take};
 
-pub(crate) type Slot<T> = std::sync::Arc<std::sync::Mutex<Option<T>>>;
-
-/// Runs `f` on a thread of its own (on the web, where there are none, at once); its result
-/// lands in the slot.
+/// Runs `f` off the frame (the pool; on the web, where there are no threads, at once); its
+/// result lands in the slot.
 pub(crate) fn spawn<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Slot<T> {
-    let slot = Slot::default();
-    let out = slot.clone();
-    let run = move || {
-        let v = f();
-        if let Ok(mut s) = out.lock() {
-            *s = Some(v);
-        }
-    };
-    #[cfg(not(target_arch = "wasm32"))]
-    std::thread::spawn(run);
-    #[cfg(target_arch = "wasm32")]
-    run();
-    slot
+    work_pool::run(0.0, f)
 }
 
 #[cfg(test)]
@@ -946,6 +1083,89 @@ mod tests {
         assert_eq!(class(&p, 6), class(&p, 7));
         assert_ne!(class(&p, 1), class(&p, 6));
         assert_eq!(class(&p, 1), class(&p, 2));
+    }
+
+    /// A load comes out the same however the pool schedules it: every variant's meshes and a
+    /// species' compressed textures, made on the pool all at once, are byte-equal to making
+    /// them one after another here.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn parallel_generation_is_byte_equal_to_serial() {
+        let species: Vec<_> = flora::species().iter().take(3).collect();
+        let bytes = |g: &Generated| crate::plant_cache::encode_levels(g.height, &g.levels);
+        let serial: Vec<Vec<u8>> = species
+            .iter()
+            .flat_map(|s| (0..VARIANTS).map(|v| bytes(&generate_variant_now("t", &s.params, v, 6, false))))
+            .collect();
+        let slots: Vec<_> = species
+            .iter()
+            .flat_map(|s| {
+                (0..VARIANTS).map(|v| {
+                    let p = s.params.clone();
+                    work_pool::run((VARIANTS - v) as f32, move || {
+                        generate_variant_now("t", &p, v, 6, false)
+                    })
+                })
+            })
+            .collect();
+        fn wait<T>(s: &Slot<T>) -> T {
+            loop {
+                if let Some(v) = take(s) {
+                    break v;
+                }
+                std::thread::yield_now();
+            }
+        }
+        let parallel: Vec<Vec<u8>> = slots.iter().map(|s| bytes(&wait(s))).collect();
+        assert!(
+            serial == parallel,
+            "parallel meshes differ from serial ones"
+        );
+
+        let p = species[0].params.clone();
+        let scans = flora::scan::Scans::default();
+        let here = crate::texture_worker::plant_compressed(&p, 1, &scans).unwrap();
+        let s2 = scans.clone();
+        let pooled = wait(&work_pool::run(0.0, move || {
+            crate::texture_worker::plant_compressed(&p, 1, &s2)
+        }))
+        .unwrap();
+        assert_eq!(here.0, pooled.0);
+        assert_eq!(here.1.len(), pooled.1.len());
+        for (a, b) in here.1.iter().zip(&pooled.1) {
+            assert!(a.0.levels == b.0.levels && a.1 == b.1, "textures differ");
+        }
+    }
+
+    #[test]
+    fn the_nearest_and_largest_come_first() {
+        let p = flora::species()[0].params.clone();
+        let want = |at: Vec<glam::Vec3>, h: f32| Want {
+            id: "x".into(),
+            class: 0,
+            month: 6,
+            params: flora::PlantParams {
+                height_m: h,
+                age: 1.0,
+                ..p.clone()
+            },
+            at,
+        };
+        let eye = glam::Vec3::ZERO;
+        let near = want(vec![glam::Vec3::new(5.0, 0.0, 0.0)], 2.0);
+        let far = want(vec![glam::Vec3::new(50.0, 0.0, 0.0)], 2.0);
+        let far_tree = want(vec![glam::Vec3::new(50.0, 0.0, 0.0)], 30.0);
+        assert!(near.urgency(eye) < far.urgency(eye));
+        assert!(far_tree.urgency(eye) < far.urgency(eye));
+        // nearest of several placements counts
+        let both = want(
+            vec![
+                glam::Vec3::new(50.0, 0.0, 0.0),
+                glam::Vec3::new(5.0, 0.0, 0.0),
+            ],
+            2.0,
+        );
+        assert_eq!(both.urgency(eye), near.urgency(eye));
     }
 
     #[test]

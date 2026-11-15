@@ -21,6 +21,7 @@ pub mod import_task;
 pub mod lamps;
 pub mod library;
 pub mod library_ui;
+pub mod load_stats;
 pub mod material_library;
 pub mod materials;
 pub mod modelui;
@@ -50,6 +51,7 @@ pub mod ui;
 pub mod user_objects;
 pub mod views;
 pub mod water_panel;
+pub mod work_pool;
 
 pub use eframe::egui;
 pub use extension::{Extension, ExtensionCx, Overlay};
