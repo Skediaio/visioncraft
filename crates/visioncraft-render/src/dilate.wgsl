@@ -2,7 +2,7 @@
 // their filled neighbours, repeatedly, so mip levels and bilinear filtering
 // at silhouettes average in plant colours and normals rather than the black
 // background (the "edge padding" every texture baker does). Albedo alpha
-// stays 0 there (the cutout); the normal target's alpha marks filled texels.
+// stays 0 there (the cutout); the normal target's alpha marks filled texels with their weight.
 
 @group(0) @binding(0) var albedo: texture_2d<f32>;
 @group(0) @binding(1) var normal: texture_2d<f32>;
@@ -33,6 +33,7 @@ fn fs_dilate(in: Out) -> Targets {
     }
     var sa = vec3<f32>(0.0);
     var sn = vec3<f32>(0.0);
+    var sw = 0.0;
     var k = 0.0;
     for (var dy = -1; dy <= 1; dy++) {
         for (var dx = -1; dx <= 1; dx++) {
@@ -41,6 +42,7 @@ fn fs_dilate(in: Out) -> Targets {
             if nq.a > 0.0 {
                 sa += textureLoad(albedo, q, 0).rgb;
                 sn += nq.rgb;
+                sw += nq.a;
                 k += 1.0;
             }
         }
@@ -48,5 +50,7 @@ fn fs_dilate(in: Out) -> Targets {
     if k == 0.0 {
         return Targets(a, n);
     }
-    return Targets(vec4<f32>(sa / k, 0.0), vec4<f32>(sn / k, 1.0));
+    // The normal's alpha is the texels' weight (1 leaves, less wood: `fs_bake`), averaged like
+    // the colour and normal it scales.
+    return Targets(vec4<f32>(sa / k, 0.0), vec4<f32>(sn / k, sw / k));
 }

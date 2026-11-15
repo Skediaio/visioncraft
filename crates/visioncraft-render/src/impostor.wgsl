@@ -168,7 +168,12 @@ fn impostor_uv(in: ImpostorVarying, tile: f32, top: bool) -> vec2<f32> {
 struct ImpostorSample {
     albedo: vec4<f32>,
     normal: vec3<f32>,
+    // Leaves (true) or wood, as baked (`fs_bake`).
+    foliage: bool,
 }
+
+// The weight wood is baked with (`fs_bake`).
+const WOOD_WEIGHT: f32 = 0.5;
 
 // Mixed sample of the two ring views and the top view. Alpha gets the
 // cutout's mip rescale (Golus 2017) as `cutout_alpha` does.
@@ -191,11 +196,14 @@ fn impostor_sample(in: ImpostorVarying) -> ImpostorSample {
     // The normal's alpha is the share of baked or dilated texels, so dividing by it gives back
     // the mean of the plant's own texels.
     let filled = max(n.a, 1e-3);
+    // Leaves fill with weight 1, wood with `WOOD_WEIGHT`: at least the baked share `a.a` of
+    // the texel is filled, so leaves give n.a >= a.a, wood half that.
+    let foliage = n.a >= mix(WOOD_WEIGHT, 1.0, 0.5) * a.a;
     a = vec4<f32>(a.rgb / filled, a.a);
     // Averaged mips of a sparse crown lose coverage faster than a leaf
     // texture: twice the cutout rescale keeps the silhouette.
     a.a *= 1.0 + lod * 0.5;
-    return ImpostorSample(a, n.xyz / filled * 2.0 - 1.0);
+    return ImpostorSample(a, n.xyz / filled * 2.0 - 1.0, foliage);
 }
 
 // Alpha only (the depth-only passes): the same mix as `impostor_sample`, or
@@ -287,7 +295,7 @@ fn impostor_shade(in: ImpostorVarying, screen_effects: bool) -> vec3<f32> {
     s.ao = sky;
     s.emissive = vec3<f32>(0.0);
     let v = Varying(in.clip, in.world, n_world, 0xfffffffdu, vec2<f32>(0.0));
-    return light(v, s, true, 0.0, screen_effects).color;
+    return light(v, s, t.foliage, 0.0, screen_effects).color;
 }
 
 // Forward: drawn with an Equal depth test, the pre-pass decided coverage.
@@ -395,5 +403,11 @@ fn fs_bake(in: BakeOut, @builtin(front_facing) front: bool) -> BakeTargets {
     if material.alpha.w > 0.0 {
         sky = crown_sky(in.face);
     }
-    return BakeTargets(vec4<f32>(base.rgb, 1.0), vec4<f32>(n * sky * 0.5 + 0.5, 1.0));
+    // Leaves and wood shade differently (`light`'s foliage path: light through the leaf, in
+    // its yellower green). Wood is baked at half weight: the normal's alpha (the share of
+    // filled texels `impostor_sample` divides by) is 1 on leaves and 0.5 on wood, and colour
+    // and normal are scaled alike, so the division still gives their mean and the alpha also
+    // tells which it is. Shaded as leaves, an impostor's trunk came out a pale yellow-green.
+    let m = select(WOOD_WEIGHT, 1.0, material.alpha.w > 0.0);
+    return BakeTargets(vec4<f32>(base.rgb * m, 1.0), vec4<f32>((n * sky * 0.5 + 0.5) * m, m));
 }
