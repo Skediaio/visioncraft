@@ -766,6 +766,10 @@ impl Flora {
             self.tex_params.get(&id).map(|p| &p.form),
             Some(flora::Form::Clipped(_)) | None
         );
+        let hedge = matches!(
+            self.tex_params.get(&id).map(|p| &p.form),
+            Some(flora::Form::Clipped(_))
+        );
         let tex = &self.textures[&id];
         let mut parts = Vec::new();
         let mut kinds = Vec::new();
@@ -781,7 +785,7 @@ impl Flora {
                 .map(|(_, p)| scene::part_bounds(&p.positions));
             for (kind, part) in split {
                 let wood = kind != flora::Material::Foliage;
-                let Some(m) = scene::upload_plant_mesh(r, &part, crown, wood) else {
+                let Some(m) = scene::upload_plant_mesh(r, &part, crown, wood, hedge) else {
                     continue;
                 };
                 let mat = *mats.entry(kind as usize).or_insert_with(|| {

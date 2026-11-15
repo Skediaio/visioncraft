@@ -227,14 +227,21 @@ fn gpu_material(look: &Look) -> visioncraft_render::Material {
 /// A plant mesh part (positions, normals, UVs, wind) into the renderer; inside a crown (the
 /// bounds of a plant's foliage) with the sky occlusion of its place there (`crown_occlusion`):
 /// the leaves, and the branches among them (`wood`), which read bright salmon in the crown's
-/// shade without it.
+/// shade without it. Outside a crown, branches and a clipped hedge's leaves (`hedge`) see the
+/// whole sky, tagged as a plant's all the same: snow settles on them as on a crown's top, and no
+/// snow band is drawn under a bend of a trunk as under a sill.
 pub fn upload_plant_mesh(
     r: &mut Renderer,
     p: &flora::MeshPart,
     crown: Option<(Vec3, Vec3)>,
     wood: bool,
+    hedge: bool,
 ) -> Option<MeshId> {
-    let occlusion = crown.map(|b| crown_occlusion(&p.positions, b, wood));
+    let occlusion = match crown {
+        Some(b) => Some(crown_occlusion(&p.positions, b, wood)),
+        None if wood || hedge => Some(vec![CROWN_TAG | 65535; p.positions.len()]),
+        None => None,
+    };
     let mesh = visioncraft_render::Mesh {
         positions: &p.positions,
         normals: &p.normals,

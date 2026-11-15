@@ -853,7 +853,11 @@ fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, screen_effe
     // impostor): bare twig cards, lawn blades and fallen leaves stay as they are.
     let leafy = !foliage || (in.face & 0xFFFF0000u) == CROWN_TAG || in.face == 0xfffffffdu;
     if !clay && g.snow.x > 0.0 && leafy {
-        snow = max(snow_on(in.world, s.geometric), snow_edge(in.world, s.geometric));
+        let lying = select(snow_on(in.world, s.geometric), snow_on_leaves(in.world, s.geometric, in.face), foliage);
+        // The band under a ledge's snow is for built things: a plant's (tagged) bends and
+        // leaves are no ledges.
+        let plant = (in.face & 0xFFFF0000u) == CROWN_TAG;
+        snow = max(lying, select(snow_edge(in.world, s.geometric), 0.0, plant));
         s.metallic = mix(s.metallic, 0.0, snow);
         s.roughness = mix(s.roughness, 0.6, snow);
         s.n = normalize(mix(s.n, s.geometric, snow * 0.8));
@@ -988,39 +992,62 @@ fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, screen_effe
 // ---- snow ------------------------------------------------------------------
 
 // Whether the sky is open straight above `world` (1) or something lies over it (0: a roof, a
-// canopy, a dense crown): the snow cover map, a depth map rendered looking straight down, with
-// a wide filter for a soft edge. Outside the map: open.
+// canopy, a dense crown): the snow cover map, a depth map rendered looking straight down.
+// Straight above decides; round it a ring of samples softens the edge of a cover inwards. A
+// ring sample only counts what rises above an upward cone (a hand plus `SNOW_CONE` per metre
+// out), so the next bump of a hedge top, the slope of a roof and the wall behind a sill do not
+// cover the surface, while an eave or a crown over it does. Outside the map: open.
 fn snow_open(world: vec3<f32>) -> f32 {
     if g.snow.z < 0.5 {
         return 1.0;
     }
-    // A hand above the surface, so the surface itself does not cover it.
-    let p = g.snow_cover * vec4<f32>(world + vec3<f32>(0.0, 0.15, 0.0), 1.0);
+    let p = g.snow_cover * vec4<f32>(world, 1.0);
     let uv = vec2<f32>(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);
     if any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0)) {
         return 1.0;
     }
-    var sum = 0.0;
-    for (var y = -1; y <= 1; y++) {
-        for (var x = -1; x <= 1; x++) {
-            let o = vec2<f32>(f32(x), f32(y)) * g.shadow.z * 2.5;
-            sum += textureSampleCompareLevel(shadow_map, shadow_sampler, uv + o, i32(g.snow.y), p.z);
-        }
+    // Depth per metre up, and metres per unit of the map's uv (orthographic: both constant).
+    let dz = (g.snow_cover * vec4<f32>(0.0, 1.0, 0.0, 0.0)).z;
+    let m_per_uv = 2.0 / max(abs(g.snow_cover[0].x), 1e-9);
+    let layer = i32(g.snow.y);
+    let above = textureSampleCompareLevel(shadow_map, shadow_sampler, uv, layer, p.z + dz * SNOW_HAND);
+    var ring = 0.0;
+    for (var k = 0; k < 8; k++) {
+        let t = f32(k) * 0.7853982;
+        let o = vec2<f32>(cos(t), sin(t)) * g.shadow.z * 2.5;
+        let lift = SNOW_HAND + length(o) * m_per_uv * SNOW_CONE;
+        ring += textureSampleCompareLevel(shadow_map, shadow_sampler, uv + o, layer, p.z + dz * lift);
     }
-    return sum / 9.0;
+    return max(above, (above + ring) / 9.0);
 }
+
+// How far above a surface the snow cover map is read, so the surface itself does not cover
+// it (m), and how steeply the cone round it rises (m per m: a 50 degree roof does not cover
+// itself).
+const SNOW_HAND: f32 = 0.15;
+const SNOW_CONE: f32 = 1.2;
 
 // How much snow lies on a surface: snow settles on what faces up (steeper as there is more of
 // it), not under cover, broken up at its edge by noise into drifts and bare patches.
 fn snow_on(world: vec3<f32>, n: vec3<f32>) -> f32 {
     let a = g.snow.x;
-    if a <= 0.0 {
-        return 0.0;
-    }
-    // Flat ground takes it first; a 38 degree roof (n.y 0.79) only patchily even at 0.7, so its
-    // tiles show at the eaves and the steep parts.
-    let up = smoothstep(mix(0.95, 0.62, a), mix(1.0, 0.9, a), n.y);
-    if up <= 0.0 {
+    // Flat ground takes it first, then roofs: at 0.6 a 30 degree roof is covered, a 38 degree
+    // one (n.y 0.79) mostly with its tiles showing in patches, 48 degrees and steeper shed it.
+    return snow_lying(world, smoothstep(mix(0.85, 0.55, a), mix(0.97, 0.8, a), n.y));
+}
+
+// Snow on a crown's leaves: a leaf card's own slope says little, so the leaves at the crown's
+// top (the sky share the app gives them, scene.rs `crown_occlusion`; an impostor's are all
+// top) that are not steep take it, where the sky above them is open.
+fn snow_on_leaves(world: vec3<f32>, n: vec3<f32>, face: u32) -> f32 {
+    let top = select(smoothstep(0.5, 0.75, crown_sky(face)), 1.0, face == 0xfffffffdu);
+    return snow_lying(world, top * smoothstep(0.05, 0.45, abs(n.y)));
+}
+
+// Snow over a surface that faces up by `up` (0..1).
+fn snow_lying(world: vec3<f32>, up: f32) -> f32 {
+    let a = g.snow.x;
+    if a <= 0.0 || up <= 0.0 {
         return 0.0;
     }
     let nz = value_noise(world * 1.7) * 0.6 + value_noise(world * 7.3 + 11.0) * 0.4;
@@ -1041,14 +1068,20 @@ fn snow_top(world: vec3<f32>) -> f32 {
     if any(uv < vec2<f32>(0.0)) || any(uv >= vec2<f32>(1.0)) || abs(p1.z - p0.z) < 1e-9 {
         return -1e9;
     }
-    let dims = vec2<f32>(textureDimensions(shadow_map));
-    let d = textureLoad(shadow_map, vec2<i32>(uv * dims), i32(g.snow.y), 0);
+    return snow_top_texel(p0.z, p1.z, uv, vec2<i32>(0));
+}
+
+// `snow_top` read from the texel `offset` away from the one under `uv`.
+fn snow_top_texel(z0: f32, z1: f32, uv: vec2<f32>, offset: vec2<i32>) -> f32 {
+    let dims = textureDimensions(shadow_map);
+    let t = clamp(vec2<i32>(uv * vec2<f32>(dims)) + offset, vec2<i32>(0), vec2<i32>(dims) - 1);
+    let d = textureLoad(shadow_map, t, i32(g.snow.y), 0);
     // Nothing drawn there (open sea beyond the terrain): unknown, not a floor at the map's far
     // plane (the sea took that for a shallow bed, a dark disc round the eye far out at sea).
     if d >= 0.99999 {
         return -1e9;
     }
-    return (d - p0.z) / (p1.z - p0.z);
+    return (d - z0) / (z1 - z0);
 }
 
 // Snow's thickness seen from the side: the band just under a snowy top edge (a roof verge, a
@@ -1058,10 +1091,34 @@ fn snow_edge(world: vec3<f32>, n: vec3<f32>) -> f32 {
     if a <= 0.0 || abs(n.y) > 0.35 {
         return 0.0;
     }
+    if g.snow.z < 0.5 {
+        return 0.0;
+    }
     let inside = world - normalize(vec3<f32>(n.x, 0.0, n.z)) * 0.04;
-    let below = snow_top(inside) - world.y;
+    let p0 = g.snow_cover * vec4<f32>(inside.x, 0.0, inside.z, 1.0);
+    let p1 = g.snow_cover * vec4<f32>(inside.x, 1.0, inside.z, 1.0);
+    let uv = vec2<f32>(p0.x * 0.5 + 0.5, 0.5 - p0.y * 0.5);
+    if any(uv < vec2<f32>(0.0)) || any(uv >= vec2<f32>(1.0)) || abs(p1.z - p0.z) < 1e-9 {
+        return 0.0;
+    }
+    // The texel under the point and its four neighbours: a sill or a wall top narrower than a
+    // texel lies in one of them, if not in the one under the point.
     let thick = 0.02 + 0.08 * a;
-    return (1.0 - smoothstep(thick * 0.6, thick, below)) * step(0.0, below) * snow_open(vec3<f32>(inside.x, world.y + below, inside.z));
+    var best = 0.0;
+    var top = 0.0;
+    var offsets = array<vec2<i32>, 5>(vec2<i32>(0), vec2<i32>(-1, 0), vec2<i32>(1, 0), vec2<i32>(0, -1), vec2<i32>(0, 1));
+    for (var k = 0; k < 5; k++) {
+        let below = snow_top_texel(p0.z, p1.z, uv, offsets[k]) - world.y;
+        let band = (1.0 - smoothstep(thick * 0.6, thick, below)) * step(0.0, below);
+        if band > best {
+            best = band;
+            top = below;
+        }
+    }
+    if best <= 0.0 {
+        return 0.0;
+    }
+    return best * snow_open(vec3<f32>(inside.x, world.y + top, inside.z));
 }
 
 // Fresh snow: a high, slightly blue-white albedo, matt with a soft sheen.
