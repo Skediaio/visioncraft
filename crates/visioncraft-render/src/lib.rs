@@ -605,6 +605,9 @@ struct Item {
     follows_reach: bool,
     /// Casts shadows with the level it is drawn with (`set_item_shadow_exact`).
     shadow_exact: bool,
+    /// Casts shadows past its finest level with this mesh (a tree's few untextured blobs,
+    /// dithered by the density in its UVs) instead of its impostor's cards.
+    shadow_caster: Option<MeshId>,
 }
 
 /// Instances in one ground cell: culled as a unit, drawn as one range, one
@@ -636,6 +639,8 @@ struct Cluster {
 }
 
 const LOD_UNSET: u8 = u8::MAX;
+/// What `cluster_lod` answers for a cluster drawn by its item's shadow caster.
+const SHADOW_CASTER_LEVEL: u8 = u8::MAX - 1;
 /// Frames a hand-over between two levels (two mesh levels, the last mesh
 /// level and the impostor, or a cull fade) dissolves over: the dither shows
 /// only while it runs, never as a steady stipple on a parked camera.
@@ -706,7 +711,7 @@ struct SampledPipelines {
 
 struct Pipelines {
     /// Opaque, cutout, glass (stippled).
-    shadow: [wgpu::RenderPipeline; 3],
+    shadow: [wgpu::RenderPipeline; 4],
     /// The mirrored scene, by `Material::variant`, then its ground and sky.
     reflect: [wgpu::RenderPipeline; 4],
     reflect_ground: wgpu::RenderPipeline,
@@ -1994,6 +1999,14 @@ impl Renderer {
         }
     }
 
+    /// A mesh that casts the item's shadow in every level past the finest (`add_mesh`, same
+    /// vertex layout, `uv.x` the share of shadow texels it covers).
+    pub fn set_item_shadow_caster(&mut self, item: ItemId, mesh: MeshId) {
+        if let Some(Some(it)) = self.items.get_mut(item.0 as usize) {
+            it.shadow_caster = Some(mesh);
+        }
+    }
+
     pub fn set_item_impostor(
         &mut self,
         item: ItemId,
@@ -2384,6 +2397,7 @@ impl Renderer {
             clusters: Vec::new(),
             impostor: None,
             shadow_exact: terrain,
+            shadow_caster: None,
             cull_fade: 0.0,
             follows_reach: false,
         }));
@@ -3169,6 +3183,9 @@ impl Renderer {
         if item.shadow_exact && matches!(pass, Pass::Shadow { .. }) {
             return Some(cluster.lod.min(levels - 1));
         }
+        if item.shadow_caster.is_some() && matches!(pass, Pass::Shadow { .. }) && cluster.lod >= 1 {
+            return Some(SHADOW_CASTER_LEVEL);
+        }
         // Plants with an impostor shadow with it beyond their finest level.
         if item.impostor.is_some() && matches!(pass, Pass::Shadow { .. }) && cluster.lod >= 1 {
             return Some(levels - 1);
@@ -3383,6 +3400,43 @@ impl Renderer {
                         self.draw_impostor(pass, item, seen, kind, &mut current);
                     }
                 }
+            }
+        }
+        if shadow {
+            self.draw_shadow_casters(pass, &visible);
+        }
+    }
+
+    /// Trees' shadow casters (`set_item_shadow_caster`): their clusters past the finest level,
+    /// depth only, no material, the density dither of `fs_shadow_dither`.
+    fn draw_shadow_casters(&self, pass: &mut wgpu::RenderPass, visible: &[Vec<bool>]) {
+        let mut set = false;
+        for (item, seen) in self.items.iter().zip(visible) {
+            let Some(item) = item else { continue };
+            let Some(Some(mesh)) = item
+                .shadow_caster
+                .and_then(|m| self.meshes.get(m.0 as usize))
+            else {
+                continue;
+            };
+            let runs = Self::runs(item, 1, seen, |c| {
+                Self::cluster_lod(item, c, Pass::Shadow { far: false, coarse: false })
+                    == Some(SHADOW_CASTER_LEVEL)
+            });
+            if runs.is_empty() {
+                continue;
+            }
+            if !set {
+                pass.set_pipeline(&self.pipelines.shadow[3]);
+                set = true;
+            }
+            pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+            pass.set_vertex_buffer(1, item.instances.slice(..));
+            pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+            for r in runs {
+                self.counters
+                    .add(mesh.index_count as u64 / 3, r.len() as u32, false);
+                pass.draw_indexed(0..mesh.index_count, 0, r);
             }
         }
     }
@@ -5408,6 +5462,7 @@ impl Pipelines {
                 shadow(None, false),
                 shadow(Some("fs_shadow_cutout"), true),
                 shadow(Some("fs_shadow_glass"), false),
+                shadow(Some("fs_shadow_dither"), false),
             ],
             reflect,
             reflect_ground: ground_pipeline(device, l, modules, "fs_reflect_ground", 1, 0),

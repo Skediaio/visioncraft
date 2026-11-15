@@ -27,6 +27,7 @@
 pub mod math;
 mod mesh;
 mod params;
+mod shadow;
 pub mod scan;
 mod species;
 mod texture;
@@ -43,6 +44,7 @@ use std::ops::Range;
 
 pub use params::*;
 pub use schema::{ParamInfo, get_param, param_schema, set_param};
+pub use shadow::{MAX_TRIANGLES as SHADOW_MAX_TRIANGLES, ShadowCaster, shadow_caster};
 pub use species::{Category, Exposure, Species, species};
 pub use texture::{ATLAS_CELLS, ATLAS_SIZE, BARK_SIZE};
 

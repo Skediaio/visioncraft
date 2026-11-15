@@ -69,6 +69,9 @@ pub(crate) const TREE_M: f32 = 3.0;
 pub const LAWN_SPECIES: &str = "flora:lawn-tuft";
 /// Species ids of ground clutter (fallen leaves of a tree species): never an impostor either.
 pub const CLUTTER_PREFIX: &str = "clutter:";
+/// The level number of a tree's shadow caster among a variant's generated levels (after the
+/// drawn ones; `Generated::levels`).
+pub(crate) const SHADOW_LEVEL: usize = 99;
 /// Views around a tree an impostor is baked from.
 pub const IMPOSTOR_VIEWS: u32 = 8;
 /// Views drawn into an impostor's atlas per frame: a bake spreads over four frames (three of
@@ -143,6 +146,8 @@ struct Variant {
     /// Trees: (mesh levels shortened for the impostor, the impostor) once baked.
     baked: Option<(Vec<Part>, ImpostorId)>,
     height: f32,
+    /// Trees: the shadow caster that stands in for the impostor's cards in shadow maps.
+    shadow: Option<MeshId>,
 }
 
 struct Tex {
@@ -399,6 +404,11 @@ impl Flora {
         Some((baked.1, impostor_max(v.height), v.height < TREE_M))
     }
 
+    /// A tree's shadow caster (`Variant::shadow`), for the levels past its finest.
+    pub fn shadow_caster(&self, id: &str, class: u32, variant: u32) -> Option<MeshId> {
+        self.variant(id, class, variant)?.shadow
+    }
+
     /// Bakes one waiting impostor (from the far mesh level). True when one was made.
     fn bake_one(&mut self, r: &mut Renderer) -> bool {
         // A bake runs over several frames, a few views a frame (`BAKE_VIEWS_PER_FRAME`).
@@ -622,6 +632,7 @@ impl Flora {
                         }
                     }
                     mats.into_iter().for_each(|m| r.remove_material(m));
+                    v.shadow.into_iter().for_each(|m| r.remove_mesh(m));
                     if let Some((_, imp)) = v.baked {
                         r.remove_impostor(imp);
                     }
@@ -756,6 +767,7 @@ impl Flora {
         for (_, variants) in self.classes.drain() {
             for v in variants {
                 v.parts.iter().for_each(|p| r.remove_mesh(p.0));
+                v.shadow.into_iter().for_each(|m| r.remove_mesh(m));
                 if let Some((_, imp)) = v.baked {
                     r.remove_impostor(imp);
                 }
@@ -958,8 +970,20 @@ impl Flora {
             let mut kinds = Vec::new();
             let mut mats: HashMap<usize, MaterialId> = HashMap::new();
             let height = generated.height;
-            let ends = level_ends(height, generated.levels.len(), false);
+            let drawn = generated
+                .levels
+                .iter()
+                .filter(|l| l.0 != SHADOW_LEVEL)
+                .count();
+            let ends = level_ends(height, drawn, false);
+            let mut shadow = None;
             for (li, split, tint) in generated.levels {
+                if li == SHADOW_LEVEL {
+                    shadow = split
+                        .first()
+                        .and_then(|(_, p)| scene::upload_plant_mesh(r, p, None, false, false));
+                    continue;
+                }
                 let dist = ends[li];
                 // Crowns of plants, not lawn tufts or fallen leaves lying flat: the leaves and
                 // the branches among them.
@@ -991,6 +1015,7 @@ impl Flora {
                 kinds,
                 baked: None,
                 height,
+                shadow,
             });
         }
         for (v, variant) in variants.iter().enumerate() {
@@ -1185,11 +1210,20 @@ pub(crate) fn generate_variant_now(
     );
     // The height of the card levels' near mesh, as before the detail levels came.
     let height = meshes[meshes.len() - 3].bounds().1[1].max(0.2);
-    let levels = meshes
+    let mut levels: Vec<_> = meshes
         .iter()
         .enumerate()
         .map(|(li, m)| (li, m.split_parts(), m.foliage_tint))
         .collect();
+    // A tree's shadow caster (one bark-kind part, its `uv.x` the dither density).
+    let tree = height >= TREE_M && !matches!(params.form, flora::Form::Clipped(_));
+    let season = Some(flora::Season { month });
+    if let Some(c) = tree
+        .then(|| flora::shadow_caster(params, &meshes[meshes.len() - 1], season))
+        .flatten()
+    {
+        levels.push((SHADOW_LEVEL, vec![(flora::Material::Bark, c.part)], [1.0; 3]));
+    }
     crate::load_stats::add(&format!("~plant mesh {name}"), crate::assets::now_ms() - t);
     Generated {
         height,
