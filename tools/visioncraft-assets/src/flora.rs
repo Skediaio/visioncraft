@@ -569,13 +569,12 @@ pub fn ingest_barkset(
         (name, author) = (info.name, info.author);
     } else {
         let side = if tier.is_some() { 2048 } else { 1024 };
-        let attr = if tier.is_some() { "2K-JPG" } else { "1K-JPG" };
         let MaterialMaps3 {
             color,
             normal,
             orm,
             height,
-        } = material_maps(&src.join(format!("{sid}_{attr}.zip")), side)?;
+        } = material_maps(c, &src, tier, side)?;
         px = color.width().max(color.height());
         write(&dir.join("basecolor.jpg"), &jpeg(&color, 90)?)?;
         write(&dir.join("normal.jpg"), &jpeg(&normal, 95)?)?;

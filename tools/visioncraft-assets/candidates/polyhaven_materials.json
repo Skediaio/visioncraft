@@ -1,0 +1,41 @@
+[
+ {
+  "author": "Charlotte Baglioni, Rico Cilliers",
+  "category": "material",
+  "licence": "CC0-1.0",
+  "name": "Japanese Cedar Planks",
+  "page_url": "https://polyhaven.com/a/japanese_cedar_planks",
+  "source": "Poly Haven",
+  "species": null,
+  "triangles": null,
+  "kind": "wood",
+  "max_tier": "4k",
+  "why": "vertical cedar boards, warm timber cladding"
+ },
+ {
+  "author": "Dimitrios Savva",
+  "category": "material",
+  "licence": "CC0-1.0",
+  "name": "Weathered Plank Siding",
+  "page_url": "https://polyhaven.com/a/weathered_plank_siding",
+  "source": "Poly Haven",
+  "species": null,
+  "triangles": null,
+  "kind": "wood",
+  "max_tier": "4k",
+  "why": "dark weathered horizontal lap siding"
+ },
+ {
+  "author": "Rob Tuytel",
+  "category": "material",
+  "licence": "CC0-1.0",
+  "name": "Wood Planks Grey",
+  "page_url": "https://polyhaven.com/a/wood_planks_grey",
+  "source": "Poly Haven",
+  "species": null,
+  "triangles": null,
+  "kind": "wood",
+  "max_tier": "4k",
+  "why": "weathered grey vertical boards, seaside"
+ }
+]

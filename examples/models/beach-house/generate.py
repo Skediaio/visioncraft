@@ -533,16 +533,17 @@ vc = []
 mat_ids = {}
 
 
-def lib_material(lib_id, gloss=0.0):
+def lib_material(lib_id, gloss=0.0, scale=None, tint=(1.0, 1.0, 1.0)):
     """A project material showing a library material, made as the app's Library tab makes one
-    (metallic 0: the maps scale the factors)."""
+    (metallic 0: the maps scale the factors). `scale`: metres per tile when the texture's own
+    size does not give the board width wanted; `tint` multiplies the colour map."""
     e = LIB[lib_id]
-    scale = max(e["size_m"]) if e.get("size_m") else 1.0
+    scale = scale or (max(e["size_m"]) if e.get("size_m") else 1.0)
     vc.append(["material.add", {
         "name": e["name"],
         "kind": {"type": "standard_triplanar_pbr", "map_scale_m": scale, "relief": 1.0, "gloss": gloss,
                  "weathering": 0.0},
-        "base_color": [1.0, 1.0, 1.0, 1.0], "metallic": 0.0, "roughness": 1.0,
+        "base_color": [*tint, 1.0], "metallic": 0.0, "roughness": 1.0,
         "maps": {"base_color": e["maps"]["basecolor"], "normal": e["maps"]["normal"], "orm": e["maps"]["orm"],
                  "height": e["maps"].get("height")},
         "variation": 0.4 if e["kind"] == "paving" else 0.25}])
@@ -563,7 +564,8 @@ SAND = lib_material("ground052")
 OAK = lib_material("woodfloor032", gloss=0.3)
 # Pale pine boards: the red-painted planks007 read pink on a ceiling.
 CEDAR = lib_material("planks021")
-CLADDING = lib_material("planks007")  # weathered boards; shingles read as brick courses from afar
+# Vertical cedar boards, 130 mm wide (13 boards in a 1.7 m tile), toned down to weathered cedar.
+CLADDING = lib_material("japanese_cedar_planks", scale=1.7, tint=(0.62, 0.56, 0.5))
 DECKING = lib_material("planks029s")
 TILE = lib_material("tiles038", gloss=0.4)
 HEX = lib_material("tiles071", gloss=0.4)

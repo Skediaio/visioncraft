@@ -101,9 +101,11 @@ for name, sp, pos, s in [
     ("Court olive", "olea-europaea", [DOOR_X, 0, -27.0], 1.1),
     ("Terrace olive", "olea-europaea", [-4.0, 0, 4.2], 1.0),
     ("Garden room olive", "olea-europaea", [-21.8, 0, -2.0], 0.9),
-    ("Fan palm east 1", "trachycarpus-fortunei", [27.5, 0, 3.0], 1.1),
-    ("Fan palm east 2", "trachycarpus-fortunei", [29.5, 0, -1.5], 0.9),
-    ("Fan palm east 3", "trachycarpus-fortunei", [26.8, 0, -4.0], 1.0),
+    # Well east of the house, in the gravel garden: nearer, their crowns showed over the roof
+    # from the entrance court, looking like pots standing on it.
+    ("Fan palm east 1", "trachycarpus-fortunei", [33.5, 0, 2.0], 1.1),
+    ("Fan palm east 2", "trachycarpus-fortunei", [36.0, 0, -1.5], 0.9),
+    ("Fan palm east 3", "trachycarpus-fortunei", [32.5, 0, -4.5], 1.0),
     ("Canary palm east", "phoenix-canariensis", [44.0, 0, 5.0], 1.0),
 ]:
     c("planting.add_single", name=name, asset=f"flora:{sp}", position=pos, scale=s)
@@ -180,13 +182,15 @@ for k, (cx, cz, n, r) in enumerate([(-55, -60, 5, 10), (-90, -95, 7, 14), (-30, 
 # ---- Objects: pots on the deck, a bench and a pot at the garden room's axes, lights -------------
 c("planting.add_single", name="Deck pot west", asset="flora:laurus-standard", position=[0.8, 0.58, 5.9], scale=0.7)
 c("planting.add_single", name="Deck pot east", asset="flora:laurus-standard", position=[24.2, 0.58, 5.9], scale=0.7)
-# The catalogue bench is 1.16 x 0.89 x 0.50 m: kept at scale 1, set into the north border facing south.
-c("planting.add_single", name="Garden bench", asset="painted_wooden_bench", position=[-15.0, 0, -5.0])
-c("planting.add_single", name="Garden room pot", asset="planter_box_03", position=[-21.6, 0, -1.5], rotation_y_deg=90)
-# A clipped bay rising from it, so the axis ends in a green sphere over the box.
-c("planting.add_single", name="Garden room pot bay", asset="flora:laurus-standard", position=[-21.6, 0.86, -1.5], scale=0.8)
-c("planting.add_spline", name="Drive lights", asset_palette=pal(("vc-path-light", 1)), points=[[-9.2, -14], [-9.6, -72]], straight=True, spacing={"count": 7})
-c("planting.add_spline", name="Garden path lights", asset_palette=pal(("vc-path-light", 1)), points=[[-18, 3.4], [-4, 3.4]], straight=True, spacing={"count": 3})
+# A concrete-topped timber bench (1.2 x 0.39 x 0.6 m, long side along z) at scale 1.15: 1.38 m
+# long, 0.45 m seat height, 0.69 m deep. Turned 90 degrees it runs along the north border.
+c("planting.add_single", name="Garden bench", asset="modern_coffee_table_01", position=[-15.0, 0, -5.0], rotation_y_deg=90, scale=1.15)
+# The clay pot is 0.27 x 0.22 x 0.26 m: at scale 2.4 a 0.64 m wide, 0.53 m high terracotta pot.
+c("planting.add_single", name="Garden room pot", asset="planter_pot_clay", position=[-21.6, 0, -1.5], scale=2.4)
+# A clipped bay rising from it, so the axis ends in a green sphere over the pot.
+c("planting.add_single", name="Garden room pot bay", asset="flora:laurus-standard", position=[-21.6, 0.5, -1.5], scale=0.8)
+c("planting.add_spline", name="Drive lights", asset_palette=[{"asset": "vc-path-light", "weight": 1}], points=[[-9.2, -14], [-9.6, -72]], straight=True, spacing={"count": 7})
+c("planting.add_spline", name="Garden path lights", asset_palette=[{"asset": "vc-path-light", "weight": 1}], points=[[-18, 3.4], [-4, 3.4]], straight=True, spacing={"count": 3})
 
 V = [
     ("Overview", [70, 30, 95], [10, -2, 0], 50, {}),

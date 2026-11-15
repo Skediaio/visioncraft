@@ -3,7 +3,7 @@
 use crate::{
     emit,
     glb::{fit, jpeg, write_glb},
-    net::{Candidate, ph_info},
+    net::{Candidate, Source, ph_info},
     raster,
     scene::{Model, pack_orm, read_gltf_variant, variant_count},
 };
@@ -446,8 +446,30 @@ pub struct MaterialMaps3 {
     pub height: Option<GrayImage>,
 }
 
-pub fn material_maps(zip: &Path, px: u32) -> Result<MaterialMaps3> {
-    let maps = zip_images(zip)?;
+pub fn material_maps(c: &Candidate, src: &Path, tier: Option<&str>, px: u32) -> Result<MaterialMaps3> {
+    let maps = if c.source() == Some(Source::PolyHaven) {
+        // Poly Haven ships four loose JPEGs (`arm` is already AO, roughness, metalness).
+        let dir = tier.map_or(src.to_path_buf(), |t| src.join(t));
+        let mut out = Vec::new();
+        for (key, name) in [
+            ("_diff_", "_Color.jpg"),
+            ("_nor_gl_", "_NormalGL.jpg"),
+            ("_arm_", "_ARM.jpg"),
+            ("_disp_", "_Displacement.jpg"),
+        ] {
+            let f = fs::read_dir(&dir)?
+                .filter_map(Result::ok)
+                .map(|e| e.path())
+                .find(|p| p.to_string_lossy().contains(key) && p.extension().is_some_and(|x| x == "jpg"));
+            if let Some(f) = f {
+                out.push((name.to_string(), image::open(f)?));
+            }
+        }
+        out
+    } else {
+        let t = tier.unwrap_or("1k").to_uppercase();
+        zip_images(&src.join(format!("{}_{t}-JPG.zip", c.source_id())))?
+    };
     let find = |suffix: &str| {
         maps.iter()
             .find(|(n, _)| n.ends_with(suffix))
@@ -457,11 +479,14 @@ pub fn material_maps(zip: &Path, px: u32) -> Result<MaterialMaps3> {
     Ok(MaterialMaps3 {
         color: fit(find("_Color.jpg").context("no colour map")?, px),
         normal: fit(find("_NormalGL.jpg").context("no GL normal map")?, px),
-        orm: pack_orm(
-            gray("_AmbientOcclusion.jpg").as_ref(),
-            gray("_Roughness.jpg").as_ref(),
-            gray("_Metalness.jpg").as_ref(),
-        ),
+        orm: match find("_ARM.jpg") {
+            Some(i) => fit(i, px).to_rgb8(),
+            None => pack_orm(
+                gray("_AmbientOcclusion.jpg").as_ref(),
+                gray("_Roughness.jpg").as_ref(),
+                gray("_Metalness.jpg").as_ref(),
+            ),
+        },
         height: gray("_Displacement.jpg"),
     })
 }
@@ -470,17 +495,14 @@ pub fn material_maps(zip: &Path, px: u32) -> Result<MaterialMaps3> {
 /// quality as in the base set (colour 90, normal 95, ORM 90, height 90), all 4:4:4, so the
 /// normal map has no chroma subsampling.
 pub fn ingest_material_tier(c: &Candidate, cache: &Path, out: &Path, tier: &str) -> Result<()> {
-    let (id, sid) = (c.id(), c.source_id());
+    let id = c.id();
     let px: u32 = if tier == "4k" { 4096 } else { 2048 };
-    let zip = c
-        .dir(cache)
-        .join(format!("{sid}_{}-JPG.zip", tier.to_uppercase()));
     let MaterialMaps3 {
         color,
         normal,
         orm,
         height,
-    } = material_maps(&zip, px)?;
+    } = material_maps(c, &c.dir(cache), Some(tier), px)?;
     let dir = out.join("materials").join(&id).join(tier);
     write(&dir.join("basecolor.jpg"), &jpeg(&color, 90)?)?;
     write(&dir.join("normal.jpg"), &jpeg(&normal, 95)?)?;
@@ -523,7 +545,7 @@ pub fn ingest_material(c: &Candidate, cache: &Path, out: &Path) -> Result<Materi
         normal,
         orm,
         height,
-    } = material_maps(&src.join(format!("{sid}_1K-JPG.zip")), 1024)?;
+    } = material_maps(c, &src, None, 1024)?;
     let dir = out.join("materials").join(&id);
     let rel = |f: &str| format!("materials/{id}/{f}");
     write(&dir.join("basecolor.jpg"), &jpeg(&color, 90)?)?;
@@ -550,22 +572,36 @@ pub fn ingest_material(c: &Candidate, cache: &Path, out: &Path) -> Result<Materi
         &jpeg(&crop.resize_exact(128, 128, FilterType::Lanczos3), 85)?,
     )?;
     let info: Value = serde_json::from_slice(&fs::read(src.join("info.json"))?)?;
-    let a = &info["assets"][0];
-    let d = &a["dimensions"];
-    let (w, h) = (
-        d["width"].as_f64().unwrap_or(0.0),
-        d["height"].as_f64().unwrap_or(0.0),
-    );
+    // ambientCG: size in cm, tags a list; Poly Haven: size in mm, categories plus tags.
+    let (name, tags, w, h) = if c.source() == Some(Source::PolyHaven) {
+        let i = ph_info(&src)?;
+        let d = &info["dimensions"];
+        (
+            i.name,
+            i.tags,
+            d[0].as_f64().unwrap_or(0.0) / 10.0,
+            d[1].as_f64().unwrap_or(0.0) / 10.0,
+        )
+    } else {
+        let a = &info["assets"][0];
+        let d = &a["dimensions"];
+        (
+            a["title"].as_str().unwrap_or(sid).to_string(),
+            a["tags"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect(),
+            d["width"].as_f64().unwrap_or(0.0),
+            d["height"].as_f64().unwrap_or(0.0),
+        )
+    };
     let entry = MaterialEntry {
         id: id.clone(),
-        name: a["title"].as_str().unwrap_or(sid).into(),
-        tags: a["tags"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .map(str::to_string)
-            .collect(),
+        name,
+        tags,
         license: "CC0-1.0".into(),
         // The ambientCG API does not state authors; the candidate list does (site-wide credit).
         author: c.author.clone(),
