@@ -124,6 +124,9 @@ enum Replace {
     New,
 }
 
+/// How long the camera rests before the compare picture is taken again.
+const COMPARE_REST_MS: f64 = 250.0;
+
 /// The compare wipe: the view as planted beside the view at the years set.
 struct Compare {
     texture: egui::TextureHandle,
@@ -131,6 +134,10 @@ struct Compare {
     wipe: f32,
     /// The years the live view showed when the picture was taken.
     years: f32,
+    /// The camera and view size the picture was taken with, and the last ones seen with the
+    /// time they were first seen: the picture is taken again once the camera rests.
+    shot: ([f32; 16], [u32; 2]),
+    seen: (([f32; 16], [u32; 2]), f64),
 }
 
 pub struct App {
@@ -572,30 +579,60 @@ impl App {
             Ok(px) => {
                 let image = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &px);
                 let texture = ctx.load_texture("compare", image, egui::TextureOptions::LINEAR);
+                let shot = self.compare_key();
                 self.compare = Some(Compare {
                     texture,
-                    wipe: 0.5,
+                    // a picture taken again after the camera moved keeps its handle
+                    wipe: self.compare.as_ref().map_or(0.5, |c| c.wipe),
                     years,
+                    shot,
+                    seen: (shot, 0.0),
                 });
             }
-            Err(e) => self.toasts.error(format!("Compare failed: {e}")),
+            Err(e) => {
+                // closed, not tried again every frame
+                self.compare = None;
+                self.toasts.error(format!("Compare failed: {e}"));
+            }
         }
     }
 
-    /// The planted picture over the left of the view up to a handle that drags.
+    /// What the compare picture depends on besides the project: the camera and the view's size.
+    fn compare_key(&self) -> ([f32; 16], [u32; 2]) {
+        let (view, proj, _) = self.studio.camera.matrices(1.0);
+        ((proj * view).to_cols_array(), self.studio.size)
+    }
+
+    /// The planted picture over the left of the view up to a handle that drags. The picture is
+    /// a still: while the camera moves the whole view is live, and once it rests for a moment
+    /// the picture is taken again from there.
     fn compare_wipe(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
         self.studio.compare_open = self.compare.is_some();
+        let key = self.compare_key();
         let Some(c) = &mut self.compare else {
             return;
         };
+        let now = crate::assets::now_ms();
+        if c.seen.0 != key {
+            c.seen = (key, now);
+        }
+        let fresh = c.shot == key;
+        if !fresh {
+            if now - c.seen.1 > COMPARE_REST_MS {
+                self.studio.compare_requested = true;
+            }
+            ui.ctx().request_repaint();
+        }
         let x = rect.left() + rect.width() * c.wipe;
         let left = egui::Rect::from_min_max(rect.min, egui::pos2(x, rect.bottom()));
-        ui.painter().with_clip_rect(left).image(
-            c.texture.id(),
-            rect,
-            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-            egui::Color32::WHITE,
-        );
+        if fresh {
+            ui.painter().with_clip_rect(left).image(
+                c.texture.id(),
+                rect,
+                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                egui::Color32::WHITE,
+            );
+        }
         let handle = egui::Rect::from_center_size(
             egui::pos2(x, rect.center().y),
             egui::vec2(16.0, rect.height()),
