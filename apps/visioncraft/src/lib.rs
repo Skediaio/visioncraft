@@ -2036,13 +2036,18 @@ impl App {
             .iter()
             .map(|(k, d)| format!("\"{k}\":{d}"))
             .collect();
+        let triangles: Vec<String> = st
+            .pass_triangles
+            .iter()
+            .map(|(k, t)| format!("\"{k}\":{t}"))
+            .collect();
         let gpu: Vec<String> = st
             .gpu_passes
             .iter()
             .map(|(k, ms)| format!("\"{k}\":{ms:.2}"))
             .collect();
         let json = format!(
-            "{{\"prepare_ms\":{:.2},\"render_ms\":{:.2},\"ui_ms\":{:.2},\"draws\":{},\"pass_draws\":{{{}}},\"instances\":{},\"triangles\":{},\"gpu_ms\":{},\"gpu_passes\":{{{}}}}}",
+            "{{\"prepare_ms\":{:.2},\"render_ms\":{:.2},\"ui_ms\":{:.2},\"draws\":{},\"pass_draws\":{{{}}},\"instances\":{},\"triangles\":{},\"pass_triangles\":{{{}}},\"gpu_ms\":{},\"gpu_passes\":{{{}}}}}",
             f[0] / n,
             f[1] / n,
             f[2] / n,
@@ -2050,6 +2055,7 @@ impl App {
             passes.join(","),
             st.instances,
             st.triangles,
+            triangles.join(","),
             st.gpu_ms.map_or("null".into(), |g| format!("{g:.2}")),
             gpu.join(",")
         );
