@@ -116,7 +116,10 @@ impl Buttress {
             return (0.0, 0.0);
         }
         let t = t.min(1.0);
-        (self.amount * t * t, -2.0 * self.amount * t / self.height.max(1e-3))
+        (
+            self.amount * t * t,
+            -2.0 * self.amount * t / self.height.max(1e-3),
+        )
     }
 }
 
@@ -433,10 +436,23 @@ mod tests {
     #[test]
     fn bark_runs_along_the_local_girth() {
         let mut b = Builder::default();
-        b.tube(&[node(0.0, 0.2), node(1.0, 0.1), node(2.0, 0.1), node(3.0, 0.05)], 8, 0.0);
+        b.tube(
+            &[
+                node(0.0, 0.2),
+                node(1.0, 0.1),
+                node(2.0, 0.1),
+                node(3.0, 0.05),
+            ],
+            8,
+            0.0,
+        );
         let m = b.finish();
         let v_at = |y: f32| {
-            let i = m.positions.iter().position(|p| (p[1] - y).abs() < 1e-4).unwrap();
+            let i = m
+                .positions
+                .iter()
+                .position(|p| (p[1] - y).abs() < 1e-4)
+                .unwrap();
             1.0 - m.uvs[i][1]
         };
         let girth = |r: f32| TAU * r;
@@ -455,7 +471,17 @@ mod tests {
             lobes: 5.0,
             phase: 0.3,
         };
-        b.trunk(&[node(0.0, 0.3), node(0.5, 0.3), node(1.0, 0.3), node(3.0, 0.2)], 24, 0.0, bt);
+        b.trunk(
+            &[
+                node(0.0, 0.3),
+                node(0.5, 0.3),
+                node(1.0, 0.3),
+                node(3.0, 0.2),
+            ],
+            24,
+            0.0,
+            bt,
+        );
         let m = b.finish();
         let radii = |y: f32| -> Vec<f32> {
             m.positions
@@ -467,7 +493,10 @@ mod tests {
         let foot = radii(0.0);
         let max = foot.iter().fold(0.0f32, |a, &r| a.max(r));
         let min = foot.iter().fold(f32::MAX, |a, &r| a.min(r));
-        assert!(max > 0.3 * 1.15 && (min - 0.3).abs() < 1e-3, "{min} .. {max}");
+        assert!(
+            max > 0.3 * 1.15 && (min - 0.3).abs() < 1e-3,
+            "{min} .. {max}"
+        );
         assert!(radii(1.0).iter().all(|r| (r - 0.3).abs() < 1e-3));
     }
 }

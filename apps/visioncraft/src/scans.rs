@@ -292,7 +292,8 @@ impl ScanLib {
                 b.1 == "genus"
                     || !matches!(
                         params.bark.pattern,
-                        visioncraft_flora::BarkPattern::Birch | visioncraft_flora::BarkPattern::Stem
+                        visioncraft_flora::BarkPattern::Birch
+                            | visioncraft_flora::BarkPattern::Stem
                     )
             }),
             listed,
