@@ -991,10 +991,11 @@ mod tests {
         // The outline follows the crowns: a polygon of rays round their centre, ending under
         // the outer crowns (inside the brush's reach), not a ruler-straight hull.
         assert_eq!(a.outline.len(), 72);
-        assert!(a
-            .outline
-            .iter()
-            .all(|q| (-10.0..=30.0).contains(&q[0]) && (-10.0..=30.0).contains(&q[1])));
+        assert!(
+            a.outline
+                .iter()
+                .all(|q| (-10.0..=30.0).contains(&q[0]) && (-10.0..=30.0).contains(&q[1]))
+        );
         assert!(p.assignments.iter().any(|x| x.material == "forest-floor"));
         s.run(
             "planting.add_single",
