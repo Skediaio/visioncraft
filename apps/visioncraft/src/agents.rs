@@ -268,8 +268,8 @@ const UI_METHODS: &[Method] = &[
     },
     Method {
         name: "ui.set",
-        params: r#"{"mode": "draw"|"materials"|"objects"|"sun"|"viewpoints"|extension id|null, "camera": {"position": [x, y, z], "target": [x, y, z], "fov_y_deg": number}, "lightsOn": boolean, "overlaysInPictures": boolean, "textures": "auto"|"1k"|"2k"|"4k", "quality": "auto"|"low"|"medium"|"high"|"ultra"}"#,
-        summary: "Switches the mode, places the camera (orbiting `target`), turns the lights on or off (the project's view.set lights), whether pictures show the editor's overlays, the texture resolution and the rendering quality (the Quality menu).",
+        params: r#"{"mode": "draw"|"materials"|"objects"|"sun"|"viewpoints"|extension id|null, "camera": {"position": [x, y, z], "target": [x, y, z], "fov_y_deg": number}, "lightsOn": boolean, "overlaysInPictures": boolean, "textures": "auto"|"1k"|"2k"|"4k", "quality": "auto"|"low"|"medium"|"high"|"ultra", "walk": boolean}"#,
+        summary: "Switches the mode, places the camera (orbiting `target`), walks (as the Walk button: on foot near the camera's target; the arrow keys or WASD move) or orbits again, turns the lights on or off (the project's view.set lights), whether pictures show the editor's overlays, the texture resolution and the rendering quality (the Quality menu).",
     },
     Method {
         name: "ui.fly",
@@ -405,6 +405,7 @@ impl Host for Bound<'_, '_> {
                 },
                 "pending": {
                     "plants": h.studio.plants_pending(),
+                    "models": h.studio.models_pending(),
                     "library": !h.studio.scene.library.idle(),
                     "skyVolume": h.studio.sky_volume_pending(),
                 },
@@ -441,6 +442,16 @@ impl Host for Bound<'_, '_> {
                     h.studio
                         .run("view.set", json!({"lights": on}))
                         .map_err(|e| e.to_string())?;
+                }
+                if let Some(on) = params.get("walk").and_then(Value::as_bool) {
+                    let walking = h.studio.camera.view == View::Walk;
+                    if on && !walking {
+                        h.studio.camera.view = View::Orbit;
+                        let target = h.studio.camera.pivot;
+                        crate::enter_walk_facing(h.studio, target);
+                    } else if !on && walking {
+                        h.studio.camera.leave_walk();
+                    }
                 }
                 if let Some(on) = params.get("overlaysInPictures").and_then(Value::as_bool) {
                     h.studio.overlays_in_pictures = on;

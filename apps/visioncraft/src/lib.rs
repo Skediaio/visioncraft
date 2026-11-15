@@ -280,7 +280,10 @@ impl App {
             }
         }
         #[cfg(target_arch = "wasm32")]
-        agents::web_rpc::install_waker(&cc.egui_ctx);
+        {
+            agents::web_rpc::install_waker(&cc.egui_ctx);
+            app.studio.wake = cc.egui_ctx.clone();
+        }
         // AI agents: the person's switch, or `--control [PORT]` for this run.
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -1997,7 +2000,7 @@ fn plan_centre(cam: &camera::Camera) -> Option<glam::Vec3> {
 }
 
 /// Walks from a free spot near `target`, on the side the camera is, facing it.
-fn enter_walk_facing(s: &mut studio::Studio, target: glam::Vec3) {
+pub(crate) fn enter_walk_facing(s: &mut studio::Studio, target: glam::Vec3) {
     let eye = s.camera.eye();
     let at = walk_spot(target, eye, &|x, z| {
         s.scene.free_to_stand(s.project(), x, z)

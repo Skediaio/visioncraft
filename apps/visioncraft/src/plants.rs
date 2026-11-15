@@ -912,11 +912,21 @@ pub(crate) type Slot<T> = std::sync::Arc<std::sync::Mutex<Option<T>>>;
 
 /// Runs `f` on a thread of its own (on the web, where there are none, at once); its result
 /// lands in the slot.
-pub(crate) fn spawn<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Slot<T> {
+pub(crate) fn spawn<F: FnOnce() -> T + Send + 'static, T: Send + 'static>(f: F) -> Slot<T> {
     let slot = Slot::default();
     let out = slot.clone();
     let run = move || {
+        let t0 = crate::assets::now_ms();
         let v = f();
+        // On the web this froze the page meanwhile: say which job, so it can be found.
+        let ms = crate::assets::now_ms() - t0;
+        if cfg!(target_arch = "wasm32") && ms > 250.0 {
+            crate::hardware::note(&format!(
+                "slow job on the page thread: {:.0} ms in {}",
+                ms,
+                std::any::type_name::<F>()
+            ));
+        }
         if let Ok(mut s) = out.lock() {
             *s = Some(v);
         }

@@ -7,6 +7,10 @@
 //   node apps/visioncraft/browser-smoke/smoke.mjs --dist apps/visioncraft/dist --assets assets \
 //     [--chrome /usr/bin/chromium-browser] [--out smoke-out] [--quality medium|auto|low|...]
 //     [--examples garden,estate,beach-house,coast] [--views] [--size 1600x900]
+//     [--interact [--model some.3dcraft] [--object library-asset-id]]
+//
+// --views flies to every viewpoint of each example; --interact walks, zooms out, draws, plants,
+// places, paints, reloads (browser storage), saves (download) and opens (upload) in the first.
 //
 // Writes <out>/<example>-<step>.png and <out>/report.json; exits 1 when a check failed.
 import { spawn } from 'node:child_process';
@@ -27,6 +31,11 @@ const OUT = path.resolve(opt('out', 'smoke-out'));
 const QUALITY = opt('quality', 'medium');
 const EXAMPLES = opt('examples', 'garden,estate,beach-house,coast').split(',').filter(Boolean);
 const VIEWS = flag('views');
+// Walk, zoom out, draw, plant, place, paint, save and reopen in the first example.
+const INTERACT = flag('interact');
+const MODEL = opt('model', '') && path.resolve(opt('model', ''));
+const OBJECT_ASSET = opt('object', 'painted_wooden_bench');
+const STEPS = opt('steps', '');
 const [W, H] = opt('size', '1600x900').split('x').map(Number);
 const LOAD_TIMEOUT_S = Number(opt('timeout', '240'));
 fs.mkdirSync(OUT, { recursive: true });
@@ -139,6 +148,14 @@ const rpc = async (method, params = {}, timeoutMs = 120000) => {
   return r.result;
 };
 const exec = (command, params = {}) => rpc('engine.execute', { command, params });
+// The start card's rows, top to bottom (lib.rs, the empty project's card), 39 px apart.
+const START_ROWS = ['draw', '3dcraft', 'garden', 'estate', 'beach-house', 'coast'];
+const click = async (x, y) => {
+  for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) {
+    await cdp('Input.dispatchMouseEvent', { type, x, y, button: 'left', clickCount: 1 });
+    await sleep(60);
+  }
+};
 const uiGet = () => rpc('ui.get');
 
 // The 3D view's brightness in the middle of the screenshot (panels sit at the edges).
@@ -163,7 +180,7 @@ const settle = async (timeoutS = LOAD_TIMEOUT_S) => {
   while ((Date.now() - start) / 1000 < timeoutS) {
     last = await uiGet();
     const p = last.pending;
-    calm = p.plants === 0 && !p.library && !p.skyVolume ? calm + 1 : 0;
+    calm = p.plants === 0 && !(p.models > 0) && !p.library && !p.skyVolume ? calm + 1 : 0;
     if (calm >= 3) return { s: (Date.now() - start) / 1000, done: true, ui: last };
     await sleep(500);
   }
@@ -196,6 +213,96 @@ const memory = async () => {
   return { long_tasks: long.length, longest_task_ms: Math.round(Math.max(0, ...long)), long_task_total_s: +(long.reduce((a, b) => a + b, 0) / 1000).toFixed(1), js_heap_mb: +(get('JSHeapUsedSize') / 1048576).toFixed(1), texture_mb: stats ? +(stats.texture_bytes / 1048576).toFixed(1) : null, peak_texture_mb: stats ? +(stats.peak_texture_bytes / 1048576).toFixed(1) : null };
 };
 
+const appUp = async () => {
+  const since = Date.now();
+  while ((Date.now() - since) / 1000 < 120) {
+    if (await evaluate(`(document.getElementById('vc-status')?.hidden ?? false) && !!window.__vcRpcWake`).catch(() => false)) return (Date.now() - since) / 1000;
+    await sleep(100);
+  }
+  throw new Error('the app did not come up within 120 s');
+};
+const names = async () => {
+  const d = await exec('document.inspect', { faces: false, measures: false, placements: true });
+  return JSON.stringify(d);
+};
+// The top bar's buttons, from the left (1:1 pixels).
+const OPEN_BUTTON = [45, 32], SAVE_BUTTON = [98, 32];
+const chooseFile = async (button, file) => {
+  await cdp('Page.setInterceptFileChooserDialog', { enabled: true });
+  const opened = new Promise(res => listeners.push(m => { if (m.method === 'Page.fileChooserOpened') res(m.params); }));
+  await click(...button);
+  const chooser = await Promise.race([opened, sleep(10000).then(() => null)]);
+  if (!chooser) throw new Error('no file chooser opened');
+  await cdp('DOM.setFileInputFiles', { files: [file], backendNodeId: chooser.backendNodeId });
+  await cdp('Page.setInterceptFileChooserDialog', { enabled: false });
+};
+
+// What a person does in a project: walk, zoom out, draw, plant, place, paint, save, reopen.
+const interact = async ex => {
+  const out = {};
+  // Walking a few metres (the W key held).
+  const before = (await uiGet()).camera.position;
+  await rpc('ui.set', { walk: true });
+  await sleep(500);
+  await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key: 'w', code: 'KeyW', windowsVirtualKeyCode: 87 });
+  out.walk_frames = await (async () => { const s = await evaluate('performance.now()'); await sleep(2500); const f = await evaluate(`window.__vcFrames.filter(x => x > ${s})`); return f.length; })();
+  await cdp('Input.dispatchKeyEvent', { type: 'keyUp', key: 'w', code: 'KeyW', windowsVirtualKeyCode: 87 });
+  const walked = (await uiGet()).camera;
+  out.walked_m = +Math.hypot(walked.position[0] - before[0], walked.position[2] - before[2]).toFixed(1);
+  out.walk_view = walked.view;
+  out.pictures = [await picture(`${ex}-walk`)];
+  check(`${ex}: walking moves`, walked.view === 'walk' && out.walk_frames > 10, `${out.walk_frames} frames in 2.5 s, ${out.walked_m} m from the orbit eye`);
+  await rpc('ui.set', { walk: false });
+  // Orbit far out.
+  await rpc('ui.set', { camera: { position: [600, 900, 1400], target: [0, 0, 0] } });
+  await settle(60);
+  out.far = await frameTimes(3);
+  out.pictures.push(await picture(`${ex}-far`));
+  check(`${ex}: far out is not black`, out.pictures.at(-1).mean > 12, JSON.stringify(out.far));
+  // Draw a lawn and a path, plant a tree, place an object, change a material.
+  const lawn = await exec('shape.add_area', { name: 'Smoke lawn', outline: [[-30, -30], [-18, -30], [-18, -20], [-30, -20]], material: 'lawn' });
+  await exec('shape.add_area', { name: 'Smoke path', outline: [[-18, -26], [-10, -26], [-10, -25], [-18, -25]], material: 'gravel' });
+  await exec('planting.add_single', { name: 'Smoke birch', asset: 'flora:betula-pendula', position: [-24, 0, -25] });
+  await exec('planting.add_single', { name: 'Smoke bench', asset: OBJECT_ASSET, position: [-20, 0, -22] });
+  await exec('material.assign', { target: { type: 'owner', owner: lawn.id }, material: 'paving' });
+  await rpc('ui.set', { camera: { position: [-14, 9, -10], target: [-22, 0, -25] } });
+  const s = await settle(120);
+  out.pictures.push(await picture(`${ex}-edited`));
+  check(`${ex}: drawn, planted and placed things arrive`, s.done, JSON.stringify(s.ui.pending));
+  // Browser storage: a reload brings the project back.
+  await cdp('Page.reload');
+  out.reload_s = await appUp();
+  const restored = await names();
+  check(`${ex}: the project survives a reload (browser storage)`, restored.includes('Smoke lawn') && restored.includes('Smoke bench'), `${out.reload_s.toFixed(1)} s`);
+  // Download (Save) and upload (Open).
+  const dl = fs.mkdtempSync(path.join(OUT, 'download-'));
+  await cdp('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: dl });
+  await click(...SAVE_BUTTON);
+  let saved;
+  for (let i = 0; i < 60 && !saved; i++) { await sleep(500); saved = fs.readdirSync(dl).find(f => !f.endsWith('.crdownload')); }
+  check(`${ex}: Save downloads the project`, !!saved, saved ?? 'nothing downloaded in 30 s');
+  if (saved) {
+    out.saved_bytes = fs.statSync(path.join(dl, saved)).size;
+    await exec('file.new');
+    await chooseFile(OPEN_BUTTON, path.join(dl, saved));
+    await sleep(3000);
+    const reopened = await names();
+    check(`${ex}: Open reads the downloaded project back`, reopened.includes('Smoke lawn'), `${saved}, ${out.saved_bytes} bytes`);
+  }
+  // A 3dcraft model file.
+  if (MODEL) {
+    await exec('file.new');
+    await sleep(500);
+    await chooseFile(OPEN_BUTTON, MODEL);
+    let models = 0;
+    for (let i = 0; i < 120 && !models; i++) { await sleep(500); models = (await exec('document.inspect', { faces: false, measures: false })).models?.length ?? 0; }
+    const ms = await settle(120);
+    out.pictures.push(await picture(`${ex}-model`));
+    check(`${ex}: a .3dcraft model opens`, models > 0 && out.pictures.at(-1).mean > 12, `${path.basename(MODEL)}: ${models} model(s), settled ${ms.done}`);
+  }
+  return out;
+};
+
 const report = { page: PAGE, quality: QUALITY, size: [W, H], examples: {}, checks, console: consoleLines, network };
 let exitCode = 0;
 try {
@@ -217,6 +324,13 @@ try {
   report.download_at_start_mb = +(network.bytes / 1048576).toFixed(1);
   if (QUALITY !== 'auto') await rpc('ui.set', { quality: QUALITY });
 
+  // --steps FILE: a module whose default export runs instead of the examples (for chasing one
+  // problem), given the helpers.
+  if (STEPS) {
+    const steps = (await import(path.resolve(STEPS))).default;
+    report.steps = await steps({ rpc, exec, uiGet, picture, settle, frameTimes, memory, sleep, cdp, evaluate, click, check, log, consoleLines });
+    EXAMPLES.length = 0;
+  }
   for (const ex of EXAMPLES) {
     const r = { pictures: [] };
     report.examples[ex] = r;
@@ -225,7 +339,15 @@ try {
       await exec('file.new');
       await evaluate('window.__vcLong.length = 0');
       const t = Date.now();
-      await exec('project.load_example', { name: ex });
+      // As a person: the start card's button (centred; one row per example, `START_ROWS`).
+      await sleep(500);
+      const row = START_ROWS.indexOf(ex);
+      await click(W / 2, H / 2 - 47 + 39 * row);
+      await sleep(1500);
+      const opened = await exec('document.inspect', { faces: false, measures: false });
+      r.opened_by_click = (opened.viewpoints ?? []).length > 0;
+      check(`${ex}: the start screen button opens it`, r.opened_by_click);
+      if (!r.opened_by_click) await exec('project.load_example', { name: ex });
       await rpc('ui.set', { mode: null });
       r.load_command_s = (Date.now() - t) / 1000;
       const s = await settle();
@@ -255,6 +377,9 @@ try {
       }
     } catch (e) {
       check(`${ex}: runs`, false, String(e.message ?? e));
+    }
+    if (INTERACT && ex === EXAMPLES[0]) {
+      try { r.interact = await interact(ex); } catch (e) { check(`${ex}: interaction`, false, String(e.message ?? e)); }
     }
     r.download_mb = +((network.bytes - bytesBefore) / 1048576).toFixed(1);
     r.console = consoleLines.slice(before).map(l => `${l.level}: ${l.text}`.slice(0, 400));

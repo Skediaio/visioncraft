@@ -112,6 +112,21 @@ cargo deny check
 
 CI runs the same ([.github/workflows/ci.yml](.github/workflows/ci.yml)).
 
+In the browser, after `trunk build --release` in `apps/visioncraft` (needs Node 22 or later and
+a Chromium with WebGPU; on Linux the flags above are passed for you):
+
+```
+node apps/visioncraft/browser-smoke/smoke.mjs --dist apps/visioncraft/dist --assets assets \
+  [--chrome /usr/bin/chromium-browser] [--quality medium|auto] [--views] [--interact]
+```
+
+It serves the build and the library, opens the four examples from the start screen in headless
+Chromium, flies to every viewpoint (`--views`), walks, draws, plants, saves and reopens
+(`--interact`), and exits 1 on a console error, a WebGPU validation message, a panic, a black
+picture or a load that does not finish; `smoke-out/report.json` has the load times, frame times,
+long tasks, memory and download sizes. Page scripts drive the app through `window.vcRpc`, the
+JSON-lines protocol of `visioncraft-cli serve`.
+
 ## Licence
 
 MIT, see [LICENSE](LICENSE). Assets carry their own licences (CC0 or CC-BY), listed in
