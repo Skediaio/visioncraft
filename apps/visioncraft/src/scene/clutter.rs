@@ -373,10 +373,7 @@ impl Scene {
                 continue;
             };
             let mut lines = polygon_edges(&a.outline, false);
-            // Not along an area with a soft edge: its edge is a band, not a line grass hangs over
-            // (`lawn_scatter_blended` carries the tufts into the band instead).
-            let blends = visioncraft_core::blends_over(&project.shapes, id);
-            for (o, _) in over.iter().zip(&blends).filter(|(_, b)| **b <= 0.0) {
+            for o in &over {
                 lines.extend(polygon_edges(o, true));
             }
             let inv = o.xf.inverse();
@@ -394,7 +391,8 @@ impl Scene {
                                 .filter_map(|m| project.materials.get(m))
                                 .any(|m| matches!(m.kind, SurfaceKind::Lawn3d(_)))
                         });
-                        Some((b.outline.as_slice(), lawn))
+                        // A soft-edged area is a band, not an edge grass hangs over.
+                        Some((b.outline.as_slice(), lawn || b.edge_blend_m > 0.0))
                     }
                     _ => None,
                 })

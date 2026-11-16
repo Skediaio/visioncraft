@@ -860,16 +860,28 @@ mod tests {
         let v = sky_volume_with_canopy(&[], &[crown]).expect("a crown makes a volume");
         assert!(v.nearest([0.0, 0.0, 0.0]).is_some());
         // Open ground in the same volume: a paving stone far off (beyond a ray's reach of the crown).
-        let stone = [[[20.0, 0.0, -1.0], [24.0, 0.0, -1.0], [22.0, 0.0, 2.0]]];
+        let stone = [[[30.0, 0.0, -1.0], [34.0, 0.0, -1.0], [32.0, 0.0, 2.0]]];
         let v = sky_volume_with_canopy(&stone, &[crown]).expect("a volume");
+        // A lone crown over the point (a cone of sky, 0.86 of the open ground's) and a stand of
+        // five round it (overlapping, a canopy: a good deal less).
+        let lone = v.facing(v.nearest([0.0, 1.0, 0.0]).unwrap(), [0.0, 1.0, 0.0]);
+        let stand: Vec<Crown> = [[0.0, 0.0], [3.0, 0.0], [-3.0, 0.0], [0.0, 3.0], [0.0, -3.0]]
+            .iter()
+            .map(|o| Crown {
+                center: [o[0], 8.0, o[1]],
+                ..crown
+            })
+            .collect();
+        let v = sky_volume_with_canopy(&stone, &stand).expect("a volume");
         let under = v.nearest([0.0, 1.0, 0.0]).unwrap();
-        let open = v.nearest([18.0, 1.0, 0.0]).unwrap();
+        let open = v.nearest([28.0, 1.0, 0.0]).unwrap();
         let (u, o) = (
             v.facing(under, [0.0, 1.0, 0.0]),
             v.facing(open, [0.0, 1.0, 0.0]),
         );
         assert!(o > 0.9, "{o}");
-        assert!(u < 0.6 * o && u > CROWN_FLOOR * 0.9, "{u} {o}");
+        assert!(lone < 0.92 * o && lone > u, "{lone} {u} {o}");
+        assert!(u < 0.7 * o && u > CROWN_FLOOR * 0.9, "{u} {o}");
         // The ellipsoid's chord: through the middle, its full height.
         assert!((crown.chord([0.0, 0.0, 0.0], [0.0, 1.0, 0.0], 20.0) - 6.0).abs() < 1e-3);
         assert_eq!(crown.chord([9.0, 0.0, 0.0], [0.0, 1.0, 0.0], 20.0), 0.0);

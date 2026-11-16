@@ -2366,6 +2366,47 @@ mod tests {
         q
     }
 
+    /// An area with a soft edge lying on the lawn: the tufts carry on into its band, fewer
+    /// towards the inside, and stop beyond it; with a hard edge they stop at the line.
+    #[test]
+    fn tufts_carry_on_into_a_soft_edge_band() {
+        let lawn = Lawn3d {
+            density_per_m2: 300.0,
+            blade_height_m: 0.05,
+            seed: 4,
+            ..Default::default()
+        };
+        let m = lawn_rect(20.0, 20.0);
+        let top = m.faces.iter().position(|f| f.name == "S1:top").unwrap();
+        let floor = [[5.0, 5.0], [15.0, 5.0], [15.0, 15.0], [5.0, 15.0]];
+        // How deep inside the floor a tuft stands (its distance to the nearest edge).
+        let depths = |blend: f32| -> Vec<f32> {
+            lawn_scatter_blended(&m, top, &lawn, None, 240_000, &[&floor], &[blend])
+                .iter()
+                .filter(|t| {
+                    (5.0..15.0).contains(&t.position[0]) && (5.0..15.0).contains(&t.position[2])
+                })
+                .map(|t| {
+                    let (x, z) = (t.position[0], t.position[2]);
+                    (x - 5.0).min(15.0 - x).min(z - 5.0).min(15.0 - z)
+                })
+                .collect()
+        };
+        let (hard, soft) = (depths(0.0), depths(2.0));
+        // Only the few that reach over the hard edge (up to MOW_OVER_M) stand inside it.
+        assert!(
+            hard.iter().all(|d| *d < 0.2),
+            "{:?}",
+            hard.iter().cloned().fold(0.0, f32::max)
+        );
+        // The band takes tufts, up to its width and no further, thinner the deeper.
+        assert!(soft.len() > 5 * hard.len().max(1));
+        assert!(soft.iter().all(|d| *d < 2.0 + 1e-3));
+        let near = soft.iter().filter(|d| **d < 0.5).count();
+        let far = soft.iter().filter(|d| **d >= 1.5).count();
+        assert!(near > 3 * far, "{near} {far}");
+    }
+
     /// Where a lawn meets a path lying on it, its edge is not cut with a ruler: the last tufts
     /// stop short of the line by different amounts along it, some reach over it, and those
     /// along it stand taller than the lawn's. All of it the same on every run.
