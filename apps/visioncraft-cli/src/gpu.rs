@@ -137,6 +137,7 @@ impl Pictures for GpuPictures {
                     .ok_or("reading the picture back from the GPU failed")?
             }
         };
+        let stats = s.renderer.stats();
         let problems = std::mem::take(&mut s.problems);
         for p in &problems {
             eprintln!("visioncraft-cli: {p}");
@@ -152,6 +153,14 @@ impl Pictures for GpuPictures {
                 "plantsPending": pending,
                 "problems": problems,
                 "lightsDropped": s.dropped_lights,
+                // Of the last frame; `gpu_ms` is null when the adapter has no timestamp queries.
+                "stats": {
+                    "triangles": stats.triangles,
+                    "draws": stats.draw_calls,
+                    "instances": stats.instances,
+                    "gpu_ms": stats.gpu_ms,
+                    "gpu_passes": stats.gpu_passes,
+                },
             }),
         })
     }

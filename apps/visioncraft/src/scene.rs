@@ -6,9 +6,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use visioncraft_core::{
     Asset, Evaluation, Generator, ImportedModel, LawnWindow, Material, ModelRef, Project, Shape,
-    SurfaceKind, Terrain, area_lifts, areas_over, blocked_by_buildings, evaluate_in_scene,
-    evaluate_surface_fill, ground_height, inside_outline, lawn_area, lawn_scatter_within,
-    placed_shape, raycast, resolve_materials, shape_mesh, shape_mesh_on_terrain, water_areas,
+    SurfaceKind, Terrain, area_lifts, areas_over, blends_over, blocked_by_buildings,
+    evaluate_in_scene, evaluate_surface_fill, ground_height, inside_outline, lawn_area,
+    lawn_scatter_blended, placed_shape, raycast, resolve_materials, shape_mesh,
+    shape_mesh_on_terrain, water_areas,
 };
 use visioncraft_flora as flora;
 use visioncraft_render::{ImpostorId, ItemId, LineVertex, Renderer};
@@ -253,6 +254,19 @@ pub fn upload_plant_mesh(
         None if wood || hedge => Some(vec![CROWN_TAG | 65535; p.positions.len()]),
         None => None,
     };
+    upload_plant_mesh_with(r, p, occlusion)
+}
+
+/// A lawn tuft (`tuft_occlusion`).
+pub fn upload_tuft_mesh(r: &mut Renderer, p: &flora::MeshPart) -> Option<MeshId> {
+    upload_plant_mesh_with(r, p, Some(tuft_occlusion(&p.positions)))
+}
+
+fn upload_plant_mesh_with(
+    r: &mut Renderer,
+    p: &flora::MeshPart,
+    occlusion: Option<Vec<u32>>,
+) -> Option<MeshId> {
     let mesh = visioncraft_render::Mesh {
         positions: &p.positions,
         normals: &p.normals,
@@ -275,6 +289,31 @@ pub fn part_bounds(positions: &[[f32; 3]]) -> (Vec3, Vec3) {
 /// Tag of a face id that carries a leaf's sky occlusion in its low 16 bits (scene.wgsl's
 /// `CROWN_TAG`); plain face ids are small numbers.
 const CROWN_TAG: u32 = 0xC000_0000;
+
+/// Tag of a lawn tuft's baked occlusion (scene.wgsl's `TUFT_TAG`): the same 16 bits as a crown's.
+const TUFT_TAG: u32 = 0x8000_0000;
+
+/// Per vertex of a grass tuft, the sky its place in the sward sees: the base is shaded by the
+/// blades round it (near two fifths of the sky), the tips see all of it. Baked ambient occlusion
+/// in the grass, as Horizon Zero Dawn's artists did (Guerrilla Games, "The Real-Time Volumetric
+/// Cloudscapes / Nubis / ... Horizon Zero Dawn" GDC talks on the ground cover: AO painted into
+/// the blades' vertices); the 0.4 floor and the rise over the lower 70 % are guesses.
+pub fn tuft_occlusion(positions: &[[f32; 3]]) -> Vec<u32> {
+    let (lo, hi) = positions
+        .iter()
+        .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), p| {
+            (lo.min(p[1]), hi.max(p[1]))
+        });
+    let span = (hi - lo).max(1e-4);
+    positions
+        .iter()
+        .map(|p| {
+            let t = ((p[1] - lo) / span / 0.7).clamp(0.0, 1.0);
+            let sky = 0.4 + 0.6 * t * t * (3.0 - 2.0 * t);
+            TUFT_TAG | (sky * 65535.0) as u32
+        })
+        .collect()
+}
 
 /// Per leaf vertex, how much sky it sees through the crown, as a tagged face id: leaves deep
 /// under the crown's top and inside it see little (an ellipsoid round the leaves' bounds; light
@@ -380,12 +419,21 @@ pub fn plant_material_desc(
 
 /// The one place a `visioncraft_render::Mesh` is built.
 fn upload(r: &mut Renderer, d: &MeshData, face_ids: bool) -> Option<MeshId> {
+    upload_uvs(r, d, face_ids, None)
+}
+
+fn upload_uvs(
+    r: &mut Renderer,
+    d: &MeshData,
+    face_ids: bool,
+    uvs: Option<&[[f32; 2]]>,
+) -> Option<MeshId> {
     let mesh = visioncraft_render::Mesh {
         positions: &d.positions,
         normals: &d.normals,
         indices: &d.indices,
         face_ids: face_ids.then_some(d.face_ids.as_slice()),
-        uvs: None,
+        uvs,
         wind: None,
     };
     r.add_mesh(&mesh).ok()
@@ -517,6 +565,10 @@ pub struct LawnScatter {
     pub window: Option<([f32; 2], f32)>,
     /// Outlines without grass (terraces, paths, ponds over it), in the shape's x, z.
     pub over: Vec<Vec<[f32; 2]>>,
+    /// The soft edge width of each of `over` (`Area::edge_blend_m`), 0 where missing: tufts
+    /// carry on into the band (`lawn_scatter_blended`).
+    #[serde(default)]
+    pub over_blend: Vec<f32>,
     /// Tree crowns' circles (x, z, radius), where grass thins.
     pub crowns: Vec<[f32; 3]>,
 }
@@ -541,7 +593,7 @@ pub fn scatter_lawn(geom: &ImportedModel, job: &LawnScatter) -> Vec<Vec<Mat4>> {
         let max = (job.max_tufts as f32 * area / total) as usize;
         // An area's matrix only lifts it: the outlines hold in its own x, z.
         let holes: Vec<&[[f32; 2]]> = job.over.iter().map(Vec::as_slice).collect();
-        for t in lawn_scatter_within(geom, *face, &lawn, window, max, &holes) {
+        for t in lawn_scatter_blended(geom, *face, &lawn, window, max, &holes, &job.over_blend) {
             let p = xf.transform_point3(Vec3::from(t.position));
             // Under a crown, three tufts in five go (shade): deterministic by place.
             let shaded = job
@@ -768,6 +820,8 @@ pub struct Scene {
     lawns: HashMap<String, LawnGpu>,
     lawn_jobs: HashMap<String, LawnJob>,
     materials: HashMap<LookKey, MaterialId>,
+    /// The same looks as cutouts, for the soft edge bands of areas (`soft_material`).
+    soft_materials: HashMap<LookKey, MaterialId>,
     /// Looks made for placeholders and the figure: never pruned.
     pinned: std::collections::HashSet<LookKey>,
     protos: HashMap<String, Vec<(MeshId, MaterialId)>>,
@@ -837,6 +891,23 @@ impl Scene {
             self.library.register_textured(id, m, look.tex as usize);
         }
         self.materials.insert(look.key(), id);
+        id
+    }
+
+    /// The material of a look in an area's soft edge band: the same, as a cutout (the depth
+    /// pre-pass dithers its coverage by the edge value in the UVs, scene.wgsl `edge_coverage`).
+    /// Few, so never pruned.
+    fn soft_material(&mut self, r: &mut Renderer, look: &Look) -> MaterialId {
+        if let Some(id) = self.soft_materials.get(&look.key()) {
+            return *id;
+        }
+        let mut m = gpu_material(look);
+        m.alpha_mode = visioncraft_render::AlphaMode::Cutout { threshold: 0.5 };
+        let id = r.add_material(&m);
+        if look.tex != 0 {
+            self.library.register_textured(id, m, look.tex as usize);
+        }
+        self.soft_materials.insert(look.key(), id);
         id
     }
 
@@ -1386,10 +1457,12 @@ impl Scene {
             // No grass under a terrace, path or pond drawn on top of this lawn.
             // Nor under a model's faces lying on the ground (`ground_faces`).
             let mut over = areas_over(&project.shapes, &id);
+            let over_blend = blends_over(&project.shapes, &id);
             over.extend(on_ground.iter().map(|f| f.as_slice()));
             let over_key: Vec<u32> = over
                 .iter()
                 .flat_map(|o| o.iter().flat_map(|p| [p[0].to_bits(), p[1].to_bits()]))
+                .chain(over_blend.iter().map(|b| b.to_bits()))
                 .chain(crowns.iter().flat_map(|c| c.map(f32::to_bits)))
                 .collect();
             let key = (
@@ -1449,6 +1522,7 @@ impl Scene {
                 narrow,
                 window: window.map(|w| (w.center, w.radius)),
                 over: over.iter().map(|a| a.to_vec()).collect(),
+                over_blend,
                 crowns: crowns.clone(),
             };
             let slot = start_lawn(o.geom.clone(), job);
@@ -1501,34 +1575,47 @@ impl Scene {
         xf: Mat4,
         problems: &mut Vec<String>,
     ) -> (Vec<Piece>, Vec<Option<usize>>) {
-        // Triangles grouped by look, in first-seen order.
-        let mut groups: Vec<(Look, MeshData)> = Vec::new();
-        let mut by_key: HashMap<LookKey, usize> = HashMap::new();
+        // Triangles grouped by look, in first-seen order; those in an area's soft edge band
+        // (`ImportedModel::edge` below 1 at a corner) in groups of their own, whose material
+        // dithers (scene.wgsl `edge_coverage`) and which carry the edge value in their UVs: only
+        // the band pays for the cutout pass.
+        let mut groups: Vec<(Look, bool, MeshData, Vec<[f32; 2]>)> = Vec::new();
+        let mut by_key: HashMap<(LookKey, bool), usize> = HashMap::new();
         let mut face_group: Vec<Option<usize>> = vec![None; model.faces.len()];
         for (t, tri) in model.triangles.iter().enumerate() {
             let face = model.triangle_faces[t] as usize;
             let look = looks[face];
-            let g = *by_key.entry(look.key()).or_insert_with(|| {
-                groups.push((look, MeshData::default()));
+            let soft = tri
+                .iter()
+                .any(|&v| model.edge.get(v as usize).is_some_and(|e| *e < 1.0));
+            let g = *by_key.entry((look.key(), soft)).or_insert_with(|| {
+                groups.push((look, soft, MeshData::default(), Vec::new()));
                 groups.len() - 1
             });
             face_group[face] = Some(g);
-            let d = &mut groups[g].1;
+            let (_, _, d, uvs) = &mut groups[g];
             for &v in tri {
                 d.indices.push(d.positions.len() as u32);
                 d.positions.push(model.positions[v as usize]);
                 d.normals.push(model.normals[v as usize]);
                 d.face_ids.push(face as u32);
+                if soft {
+                    uvs.push([model.edge[v as usize], 1.0]);
+                }
             }
         }
         let mut pieces = Vec::new();
         let mut group_piece = vec![None; groups.len()];
-        for (g, (look, data)) in groups.iter().enumerate() {
-            let Some(mesh) = upload(r, data, true) else {
+        for (g, (look, soft, data, uvs)) in groups.iter().enumerate() {
+            let Some(mesh) = upload_uvs(r, data, true, soft.then_some(uvs.as_slice())) else {
                 problems.push("a mesh was too large for the GPU and is not drawn".into());
                 continue;
             };
-            let mat = self.material(r, look);
+            let mat = if *soft {
+                self.soft_material(r, look)
+            } else {
+                self.material(r, look)
+            };
             let item = r.add_item(mesh, mat, &[xf]);
             group_piece[g] = Some(pieces.len());
             pieces.push(Piece { mesh, item });
@@ -2415,6 +2502,26 @@ impl Scene {
             }
         }
         out
+    }
+
+    /// The crowns of the trees that dim the sky (`visioncraft_core::sky_volume`): every planted
+    /// plant at least `CANOPY_MIN_HEIGHT_M` tall, as an ellipsoid over its upper three quarters.
+    // shortcut: any plant over 3 m counts as a leafy crown, in every season; the leaf-off winter
+    // and the conifers are not told apart.
+    pub fn sky_crowns(&self) -> Vec<visioncraft_core::Crown> {
+        const CANOPY_MIN_HEIGHT_M: f32 = 3.0;
+        let mut ids: Vec<&String> = self.gens.keys().collect();
+        ids.sort();
+        ids.into_iter()
+            .filter(|id| !self.gens[*id].hidden)
+            .flat_map(|id| self.gens[id].insts.iter())
+            .filter(|i| i.height >= CANOPY_MIN_HEIGHT_M && i.radius > 0.5)
+            .map(|i| visioncraft_core::Crown {
+                center: [i.pos[0], i.pos[1] + i.height * 0.625, i.pos[2]],
+                radii: [i.radius, i.height * 0.375, i.radius],
+                ground_y: i.pos[1],
+            })
+            .collect()
     }
 
     pub fn raycast(&self, origin: Vec3, dir: Vec3, shapes_only: bool) -> Option<Pick> {

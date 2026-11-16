@@ -51,7 +51,8 @@ pub use plant_ground::{
 };
 pub use planting::{
     Evaluation, Generator, LawnWindow, Placement, PlantLayer, Tuft, blocked_by_buildings, evaluate,
-    evaluate_avoiding, evaluate_surface_fill, lawn_area, lawn_scatter, lawn_scatter_within,
+    evaluate_avoiding, evaluate_surface_fill, lawn_area, lawn_scatter, lawn_scatter_blended,
+    lawn_scatter_within,
 };
 pub use presets::{PlantingPreset, planting_presets};
 pub use project::{
@@ -63,11 +64,11 @@ pub use raycast::{Hit, ground_height, raycast};
 pub use season::Season;
 pub use session::{Command, CommandError, Session};
 pub use shape::{
-    AREA_LIFT_M, GROUND_FACE_M, STACK_STEP_M, Shape, ShapeError, area_lifts, areas_over, footing,
-    ground_faces, ground_model_lift, inside_outline, offset_outline, shape_mesh, shape_mesh_on,
-    shape_mesh_on_terrain,
+    AREA_LIFT_M, GROUND_FACE_M, STACK_STEP_M, Shape, ShapeError, area_lifts, areas_over,
+    blends_over, footing, ground_faces, ground_model_lift, inside_outline, offset_outline,
+    shape_mesh, shape_mesh_on, shape_mesh_on_terrain,
 };
-pub use sky_volume::{Lamp, SkyVolume, sky_volume};
+pub use sky_volume::{Crown, Lamp, SkyVolume, sky_volume, sky_volume_with_canopy};
 pub use spec::{CommandSpec, ParamSpec, ParamType, example_project};
 pub use terrain::{
     BrushStroke, DirtyRect, Terrain, TerrainChunk, Tool, apply_stroke, ground_height_over,

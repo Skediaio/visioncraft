@@ -993,7 +993,13 @@ impl Flora {
                     .map(|(_, p)| scene::part_bounds(&p.positions));
                 for (kind, part) in split {
                     let wood = kind != flora::Material::Foliage;
-                    let Some(m) = scene::upload_plant_mesh(r, &part, crown, wood, hedge) else {
+                    // Lawn tufts: darker at the base (`scene::tuft_occlusion`).
+                    let uploaded = if id == LAWN_SPECIES {
+                        scene::upload_tuft_mesh(r, &part)
+                    } else {
+                        scene::upload_plant_mesh(r, &part, crown, wood, hedge)
+                    };
+                    let Some(m) = uploaded else {
                         continue;
                     };
                     let mat = *mats.entry(kind as usize).or_insert_with(|| {

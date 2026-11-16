@@ -6,7 +6,7 @@
 //! made here, blocking.
 
 use std::sync::{Arc, Mutex};
-use visioncraft_core::SkyVolume;
+use visioncraft_core::{Crown, SkyVolume};
 
 type Triangles = Vec<[[f32; 3]; 3]>;
 /// A volume with its sun bounce (`None`: nothing blocks the sky).
@@ -21,9 +21,9 @@ pub struct SkyTask {
 }
 
 impl SkyTask {
-    pub fn start(triangles: Triangles, key: u64, to_sun: [f32; 3]) -> Self {
+    pub fn start(triangles: Triangles, crowns: Vec<Crown>, key: u64, to_sun: [f32; 3]) -> Self {
         let slot: Slot = Arc::default();
-        run(triangles, to_sun, slot.clone());
+        run(triangles, crowns, to_sun, slot.clone());
         Self { key, to_sun, slot }
     }
 
@@ -34,8 +34,8 @@ impl SkyTask {
 }
 
 /// The volume and its sun bounce, made here.
-pub fn make(triangles: &[[[f32; 3]; 3]], to_sun: [f32; 3]) -> Made {
-    let v = visioncraft_core::sky_volume(triangles)?;
+pub fn make(triangles: &[[[f32; 3]; 3]], crowns: &[Crown], to_sun: [f32; 3]) -> Made {
+    let v = visioncraft_core::sky_volume_with_canopy(triangles, crowns)?;
     let bounce = v.sun_bounce(to_sun);
     Some((v, bounce))
 }
@@ -47,21 +47,22 @@ fn put(slot: &Slot, v: Made) {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn run(triangles: Triangles, to_sun: [f32; 3], slot: Slot) {
-    std::thread::spawn(move || put(&slot, make(&triangles, to_sun)));
+fn run(triangles: Triangles, crowns: Vec<Crown>, to_sun: [f32; 3], slot: Slot) {
+    std::thread::spawn(move || put(&slot, make(&triangles, &crowns, to_sun)));
 }
 
 #[cfg(target_arch = "wasm32")]
-fn run(triangles: Triangles, to_sun: [f32; 3], slot: Slot) {
+fn run(triangles: Triangles, crowns: Vec<Crown>, to_sun: [f32; 3], slot: Slot) {
     use wasm_bindgen::JsCast;
     use wasm_bindgen::prelude::Closure;
     let Ok(worker) = web_sys::Worker::new("./import_worker_loader.js") else {
-        return put(&slot, make(&triangles, to_sun));
+        return put(&slot, make(&triangles, &crowns, to_sun));
     };
     let msg = js_sys::Array::new();
     msg.push(&SKY.into());
     msg.push(&js_sys::Uint8Array::from(&encode_triangles(&triangles)[..]));
     msg.push(&js_sys::Float32Array::from(&to_sun[..]));
+    msg.push(&js_sys::Float32Array::from(&encode_crowns(&crowns)[..]));
     let (w, done) = (worker.clone(), slot.clone());
     let on_message =
         Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |e: web_sys::MessageEvent| {
@@ -86,7 +87,7 @@ fn run(triangles: Triangles, to_sun: [f32; 3], slot: Slot) {
     let on_error = Closure::<dyn FnMut(wasm_bindgen::JsValue)>::new(move |_| {
         w.terminate();
         if failed.lock().is_ok_and(|s| s.is_none()) {
-            put(&failed, make(&triangles, to_sun));
+            put(&failed, make(&triangles, &crowns, to_sun));
         }
     });
     worker.set_onerror(Some(on_error.as_ref().unchecked_ref()));
@@ -104,6 +105,25 @@ pub fn encode_triangles(t: &[[[f32; 3]; 3]]) -> Vec<u8> {
         .as_flattened()
         .iter()
         .flat_map(|v| v.to_le_bytes())
+        .collect()
+}
+
+/// The crowns as seven floats each: centre, radii, ground height.
+pub fn encode_crowns(c: &[Crown]) -> Vec<f32> {
+    c.iter()
+        .flat_map(|c| c.center.into_iter().chain(c.radii).chain([c.ground_y]))
+        .collect()
+}
+
+pub fn decode_crowns(f: &[f32]) -> Vec<Crown> {
+    f.as_chunks::<7>()
+        .0
+        .iter()
+        .map(|c| Crown {
+            center: [c[0], c[1], c[2]],
+            radii: [c[3], c[4], c[5]],
+            ground_y: c[6],
+        })
         .collect()
 }
 
@@ -130,9 +150,19 @@ mod tests {
     }
 
     #[test]
+    fn crowns_survive_the_trip_through_floats() {
+        let c = vec![Crown {
+            center: [1.0, 7.5, -3.0],
+            radii: [2.0, 3.0, 2.5],
+            ground_y: 0.25,
+        }];
+        assert_eq!(decode_crowns(&encode_crowns(&c)), c);
+    }
+
+    #[test]
     fn a_volume_is_made_off_the_thread() {
         let t = vec![[[0.0, 0.0, 0.0], [4.0, 0.0, 0.0], [0.0, 0.0, 4.0]]];
-        let task = SkyTask::start(t, 7, [0.3, 0.8, 0.2]);
+        let task = SkyTask::start(t, Vec::new(), 7, [0.3, 0.8, 0.2]);
         let v = loop {
             if let Some(v) = task.take() {
                 break v;

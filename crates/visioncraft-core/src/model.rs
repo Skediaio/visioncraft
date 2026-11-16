@@ -14,6 +14,9 @@ pub struct ImportedModel {
     pub triangle_faces: Vec<u32>,
     pub faces: Vec<Face>,
     pub bodies: Vec<Body>,
+    /// A drawn area's soft edge ([`crate::shape::Area::edge_blend_m`]): per position, 0 on the
+    /// outline rising to 1 across the blend band (one value per position, or empty: a hard edge).
+    pub edge: Vec<f32>,
     /// Features that failed to rebuild and bodies that could not be meshed, in plain words.
     pub warnings: Vec<String>,
 }
@@ -270,6 +273,7 @@ impl ImportedModel {
             triangle_faces,
             faces,
             bodies,
+            edge: Vec::new(),
             warnings,
         };
         if model

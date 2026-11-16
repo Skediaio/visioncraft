@@ -148,6 +148,14 @@ the carved bed is no water at all. A carve holds no water by itself: its result'
 so when no water area lies over it. A lawn drawn over the pond is cut out exactly along the
 water's edge; on a sloped bank it keeps its grass down to the water.
 
+Areas can have a soft edge: `edge_blend_m` (metres, 0..10, default 0) on `shape.add_area`, or
+`shape.set_edge_blend {id, edge_blend_m}` afterwards. Across that band along its outline the area
+dithers into whatever lies under it instead of ending on a line, and a lawn's grass carries on
+into the band, thinning towards the area's inside. `planting.add_floor` sets 1.5 m by default
+(`edge_blend_m` there too; 0 gives the hard edge back). Only the band's triangles are drawn as
+cutouts. A render's result (`view.render`, `visioncraft-cli render`) carries `stats`: the frame's
+`triangles`, `draws` and `gpu_ms` (null without GPU timestamp queries).
+
 ### 8. Lamps, and the garden at dusk
 
 Dusk is the last minutes before sunset: `query.sun` gives `sunset_hour` for the date and site.

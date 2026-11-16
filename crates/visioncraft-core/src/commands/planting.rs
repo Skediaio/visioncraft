@@ -278,6 +278,7 @@ pub(super) fn register(s: &mut Session) {
                 param("material", T::String, "Material id of the ground.").default(json!("forest-floor")),
                 param("years", T::Number, "Crowns as they are this many years after planting (0..60); 60 is fully grown, as pictures show them unless the view sets years.").default(json!(60)),
                 param("margin_m", T::Number, "Grow the outline outward by this much (0..20).").unit("m").default(json!(0)),
+                param("edge_blend_m", T::Number, "Soft edge: the floor dithers into the lawn across a band this wide along its outline instead of ending on a line (0..10; 0 is hard).").unit("m").default(json!(1.5)),
             ],
             "{id}",
             json!({"id": "g1"}),
@@ -675,6 +676,12 @@ fn add_floor(project: &mut Project, params: &Value) -> Result<Value, CommandErro
         years: f32,
         #[serde(default)]
         margin_m: f32,
+        // guess: about 1.5 m reads as a woodland edge fading out under the last crowns; no source.
+        #[serde(default = "floor_blend")]
+        edge_blend_m: f32,
+    }
+    fn floor_blend() -> f32 {
+        1.5
     }
     fn forest_floor() -> String {
         "forest-floor".into()
@@ -711,7 +718,7 @@ fn add_floor(project: &mut Project, params: &Value) -> Result<Value, CommandErro
     }
     super::shapes::add_area(
         project,
-        &json!({"name": name, "outline": outline, "material": p.material}),
+        &json!({"name": name, "outline": outline, "material": p.material, "edge_blend_m": p.edge_blend_m}),
     )
 }
 
@@ -997,6 +1004,24 @@ mod tests {
                 .all(|q| (-10.0..=30.0).contains(&q[0]) && (-10.0..=30.0).contains(&q[1]))
         );
         assert!(p.assignments.iter().any(|x| x.material == "forest-floor"));
+        // Its edge is soft by default (a guess, 1.5 m), and settable.
+        assert_eq!(a.edge_blend_m, 1.5);
+        s.run(
+            "shape.set_edge_blend",
+            json!({"id": "S1", "edge_blend_m": 0.0}),
+        )
+        .unwrap();
+        let crate::shape::Shape::Area(a) = &s.project().shapes[0] else {
+            panic!("an area");
+        };
+        assert_eq!(a.edge_blend_m, 0.0);
+        assert!(
+            s.run(
+                "shape.set_edge_blend",
+                json!({"id": "S1", "edge_blend_m": 11})
+            )
+            .is_err()
+        );
         s.run(
             "planting.add_single",
             json!({"name": "Oak", "asset": "flora:quercus-robur", "position": [5, 0, 5]}),

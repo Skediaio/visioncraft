@@ -180,7 +180,12 @@ fn edge_fade(world: vec3<f32>, dir: vec3<f32>) -> f32 {
 // sample mask turns early depth testing off on some GPUs.
 @fragment
 fn fs_depth_cutout_1x(in: DepthOut) {
-    if cutout_alpha(in.uv) * edge_fade(in.world, normalize(to_eye(in.world))) < material.alpha.x {
+    // Derivatives first, in uniform control flow (no early return before them).
+    let a = cutout_alpha(in.uv) * edge_fade(in.world, normalize(to_eye(in.world)));
+    let soft = edge_coverage(in.uv, in.world);
+    let cut = a < material.alpha.x;
+    let dither = ign(in.clip.xy) >= soft;
+    if select(cut, dither, soft >= 0.0) {
         discard;
     }
 }
@@ -188,11 +193,36 @@ fn fs_depth_cutout_1x(in: DepthOut) {
 @fragment
 fn fs_depth_cutout(in: DepthOut) -> @builtin(sample_mask) u32 {
     let a = cutout_alpha(in.uv) * edge_fade(in.world, normalize(to_eye(in.world)));
-    let n = alpha_samples(a, material.alpha.x);
+    let soft = edge_coverage(in.uv, in.world);
+    // A soft edge covers `soft` of the samples; any other cutout as alpha to coverage.
+    let n = select(
+        alpha_samples(a, material.alpha.x),
+        u32(round(soft * f32(SAMPLES))),
+        soft >= 0.0,
+    );
     if n == 0u {
         discard;
     }
     return sample_run(n, u32(ign(in.clip.xy) * f32(SAMPLES)));
+}
+
+// The soft edge of a drawn area (`Area::edge_blend_m`): the share of the surface drawn, 0..1, or
+// -1 for any other surface. Only triplanar materials carry it, in the UVs of the area's band
+// triangles: x the edge value (0 on the outline, 1 at the inner side of the band), y = 1.
+// The area gives way to what lies under it the way height-blended terrain layers do (Mishkinis,
+// "Advanced Terrain Texture Splatting", Gamasutra 2013: the blend weight is shifted by each layer's
+// height, so the transition breaks up along the surface's own relief instead of a straight
+// cross-fade): the edge value, moved by a two-octave noise standing in for the height, gives the
+// coverage; the depth pre-pass turns it into samples or discards (dithered), and the forward pass,
+// testing depth Equal, inherits it.
+// shortcut: noise, not the material's own height map (terrain.wgsl's layers have one); upgrade
+// when area materials ship height maps.
+fn edge_coverage(uv: vec2<f32>, world: vec3<f32>) -> f32 {
+    if material.alpha.y <= 0.0 || uv.y < 0.5 {
+        return -1.0;
+    }
+    let n = 0.6 * noise2(world.xz * 2.5, 7.0) + 0.4 * noise2(world.xz * 9.0, 11.0);
+    return clamp(uv.x * 1.7 - 0.35 + (n - 0.5) * 0.7, 0.0, 1.0);
 }
 
 // `n` of the pixel's SAMPLES samples: a run starting at sample `start`,
@@ -924,8 +954,11 @@ const CROWN_TAG: u32 = 0xC0000000u;
 // The earlier yellow tint (red kept at 0.9 of green) made sunlit crowns read lime-yellow.
 const LEAF_T: f32 = 0.8;
 const LEAF_T_TINT = vec3<f32>(0.48, 0.95, 0.29);
+// Lawn tufts carry the same, tagged apart (ground-level shade at their base; the app's
+// `tuft_occlusion`): snow, which settles on a crown's leaves, leaves them alone.
+const TUFT_TAG: u32 = 0x80000000u;
 fn crown_sky(face: u32) -> f32 {
-    if (face & 0xFFFF0000u) == CROWN_TAG {
+    if (face & 0xFFFF0000u) == CROWN_TAG || (face & 0xFFFF0000u) == TUFT_TAG {
         return f32(face & 0xFFFFu) / 65535.0;
     }
     return 1.0;

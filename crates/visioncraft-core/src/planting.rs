@@ -1469,10 +1469,27 @@ pub fn lawn_scatter_within(
     max: usize,
     holes: &[&[[f32; 2]]],
 ) -> Vec<Tuft> {
-    let hole_boxes: Vec<([f32; 4], &[[f32; 2]])> = holes
+    lawn_scatter_blended(model, face, lawn, window, max, holes, &[])
+}
+
+/// [`lawn_scatter_within`] where `holes[i]` has a soft edge `blends[i]` metres wide
+/// (`Area::edge_blend_m`; missing or 0: hard): the area dithers into the lawn there, so the
+/// tufts carry on into its band, thinning from all of them at its outline to none at the band's
+/// inner side by the share of the area's own coverage (`scene.wgsl`'s `edge_coverage`, its mean).
+pub fn lawn_scatter_blended(
+    model: &ImportedModel,
+    face: usize,
+    lawn: &Lawn3d,
+    window: Option<LawnWindow>,
+    max: usize,
+    holes: &[&[[f32; 2]]],
+    blends: &[f32],
+) -> Vec<Tuft> {
+    let hole_boxes: Vec<HoleBox> = holes
         .iter()
-        .filter(|h| h.len() >= 3)
-        .map(|h| {
+        .enumerate()
+        .filter(|(_, h)| h.len() >= 3)
+        .map(|(i, h)| {
             let b = h.iter().fold(
                 [
                     f32::INFINITY,
@@ -1489,11 +1506,12 @@ pub fn lawn_scatter_within(
                     ]
                 },
             );
-            (b, *h)
+            (b, *h, blends.get(i).copied().unwrap_or(0.0))
         })
         .collect();
+    // The hole holding (x, z): its outline and soft edge width.
     let in_hole = |x: f32, z: f32| {
-        hole_boxes.iter().any(|(b, h)| {
+        hole_boxes.iter().find(|(b, h, _)| {
             x >= b[0] && x <= b[2] && z >= b[1] && z <= b[3] && point_in_polygon([x, z], h)
         })
     };
@@ -1625,12 +1643,36 @@ pub fn lawn_scatter_within(
             // The mowing edge, along the lawn's outline and the areas lying on it: the cut
             // wanders by a few centimetres, the blades along it stand taller, and some reach
             // over onto a path or border.
-            let hole = in_hole(x, z);
+            let found = in_hole(x, z);
+            let hole = found.is_some();
             let edge = edges.distance(x, z, hole);
+            // Into a soft edge band: some tufts, fewer towards the area's inside (a hash of the
+            // place decides, so no tuft pops when others change).
+            let mut banded = false;
+            if let Some((_, h, blend)) = found
+                && *blend > 0.0
+            {
+                let depth = (0..h.len())
+                    .map(|k| distance_to_segment([x, z], h[k], h[(k + 1) % h.len()]))
+                    .fold(f32::INFINITY, f32::min);
+                if depth < *blend {
+                    let share = 1.0 - (1.7 * depth / blend - 0.35).clamp(0.0, 1.0);
+                    let u = Rng::new(mix(
+                        mix(lawn.seed ^ 0x626C_656E, i64::from(x.to_bits())),
+                        i64::from(z.to_bits()),
+                    ))
+                    .f32();
+                    if u >= share {
+                        continue;
+                    }
+                    banded = true;
+                }
+            }
             let wobble = (crate::terrain::value_noise(lawn.seed ^ 0x6D6F_7765, x * 2.5, z * 2.5)
                 + 1.0)
                 * 0.5;
             let tall = match (hole, edge) {
+                _ if banded => 1.0,
                 (true, Some(d)) if d < MOW_OVER_M * wobble - 0.01 => 1.8,
                 (true, _) => continue,
                 (false, Some(d)) if d < MOW_GAP_M * wobble => continue,
@@ -1655,6 +1697,9 @@ pub fn lawn_scatter_within(
     }
     out
 }
+
+/// A hole's bounding box (x0, z0, x1, z1), outline and soft edge width.
+type HoleBox<'a> = ([f32; 4], &'a [[f32; 2]], f32);
 
 /// Tufts within this distance of a lawn's edge (its outline, or an area lying on it) make the
 /// mowing edge (m): up to `MOW_GAP_M` short of it, up to `MOW_OVER_M` over onto the area.
@@ -2207,6 +2252,7 @@ mod tests {
             outline: vec![[0.0, 0.0], [6.0, 0.0], [6.0, 3.0], [0.0, 3.0]],
             elevation: 0.25,
             drape: false,
+            edge_blend_m: 0.0,
             extensions: Default::default(),
         });
         let m = shape_mesh(&s).unwrap();
@@ -2304,6 +2350,7 @@ mod tests {
             outline: vec![[0.0, 0.0], [w, 0.0], [w, d], [0.0, d]],
             elevation: 0.0,
             drape: false,
+            edge_blend_m: 0.0,
             extensions: Default::default(),
         });
         shape_mesh(&lawn).unwrap()
@@ -2317,6 +2364,47 @@ mod tests {
             q[i] += 1;
         }
         q
+    }
+
+    /// An area with a soft edge lying on the lawn: the tufts carry on into its band, fewer
+    /// towards the inside, and stop beyond it; with a hard edge they stop at the line.
+    #[test]
+    fn tufts_carry_on_into_a_soft_edge_band() {
+        let lawn = Lawn3d {
+            density_per_m2: 300.0,
+            blade_height_m: 0.05,
+            seed: 4,
+            ..Default::default()
+        };
+        let m = lawn_rect(20.0, 20.0);
+        let top = m.faces.iter().position(|f| f.name == "S1:top").unwrap();
+        let floor = [[5.0, 5.0], [15.0, 5.0], [15.0, 15.0], [5.0, 15.0]];
+        // How deep inside the floor a tuft stands (its distance to the nearest edge).
+        let depths = |blend: f32| -> Vec<f32> {
+            lawn_scatter_blended(&m, top, &lawn, None, 240_000, &[&floor], &[blend])
+                .iter()
+                .filter(|t| {
+                    (5.0..15.0).contains(&t.position[0]) && (5.0..15.0).contains(&t.position[2])
+                })
+                .map(|t| {
+                    let (x, z) = (t.position[0], t.position[2]);
+                    (x - 5.0).min(15.0 - x).min(z - 5.0).min(15.0 - z)
+                })
+                .collect()
+        };
+        let (hard, soft) = (depths(0.0), depths(2.0));
+        // Only the few that reach over the hard edge (up to MOW_OVER_M) stand inside it.
+        assert!(
+            hard.iter().all(|d| *d < 0.2),
+            "{:?}",
+            hard.iter().cloned().fold(0.0, f32::max)
+        );
+        // The band takes tufts, up to its width and no further, thinner the deeper.
+        assert!(soft.len() > 5 * hard.len().max(1));
+        assert!(soft.iter().all(|d| *d < 2.0 + 1e-3));
+        let near = soft.iter().filter(|d| **d < 0.5).count();
+        let far = soft.iter().filter(|d| **d >= 1.5).count();
+        assert!(near > 3 * far, "{near} {far}");
     }
 
     /// Where a lawn meets a path lying on it, its edge is not cut with a ruler: the last tufts
@@ -2810,6 +2898,7 @@ mod layer_tests {
             outline: vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]],
             elevation: 1.0,
             drape: false,
+            edge_blend_m: 0.0,
             extensions: Default::default(),
         }))
         .unwrap();

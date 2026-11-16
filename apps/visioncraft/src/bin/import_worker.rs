@@ -1,6 +1,6 @@
 //! The web import worker (`import_task`, loaded by `index.html`): receives `[kind, bytes]`, posts
 //! back the meshed model as bytes, or an error message; or the sky visibility volume for
-//! `["sky", triangles, to_sun]` (`sky_task`) with its sun bounce. Natively it does nothing.
+//! `["sky", triangles, to_sun, crowns]` (`sky_task`) with its sun bounce. Natively it does nothing.
 
 #[cfg(target_arch = "wasm32")]
 fn main() {
@@ -18,7 +18,10 @@ fn main() {
                 let t = visioncraft::sky_task::decode_triangles(&bytes);
                 let d = js_sys::Float32Array::new(&msg.get(2)).to_vec();
                 let to_sun = [0, 1, 2].map(|i| d.get(i).copied().unwrap_or(0.0));
-                let (v, bounce) = visioncraft::sky_task::make(&t, to_sun)
+                let crowns = visioncraft::sky_task::decode_crowns(
+                    &js_sys::Float32Array::new(&msg.get(3)).to_vec(),
+                );
+                let (v, bounce) = visioncraft::sky_task::make(&t, &crowns, to_sun)
                     .map(|(v, b)| (v.to_bytes(), b))
                     .unwrap_or_default();
                 let reply = js_sys::Array::of2(

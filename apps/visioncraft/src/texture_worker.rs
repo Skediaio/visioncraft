@@ -587,6 +587,7 @@ mod tests {
             outline: vec![[0.0, 0.0], [12.0, 0.0], [12.0, 8.0], [0.0, 8.0]],
             elevation: 0.0,
             drape: false,
+            edge_blend_m: 0.0,
             extensions: Default::default(),
         });
         let geom = visioncraft_core::shape_mesh(&shape).unwrap();
@@ -607,6 +608,7 @@ mod tests {
             narrow: 1.0,
             window: None,
             over: Vec::new(),
+            over_blend: Vec::new(),
             crowns: Vec::new(),
         };
         let here = crate::scene::scatter_lawn(&geom, &job);
