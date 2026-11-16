@@ -17,6 +17,9 @@ pub(super) fn register(s: &mut Session) {
         )
     };
     let outline = |doc: &str| param("outline", T::Outline, doc).required();
+    let edge_blend = || {
+        param("edge_blend_m", T::Number, "Soft edge: the area gives way to what lies under it across a band this wide along its outline, dithered instead of a hard line (0: hard).").unit("m").default(json!(0))
+    };
     s.register_with_spec(
         spec(
             "shape.add_area",
@@ -27,6 +30,7 @@ pub(super) fn register(s: &mut Session) {
                 outline("Polygon as [x, z] pairs in metres, either winding, not self-intersecting."),
                 param("elevation", T::Number, "Height of the surface (above the ground when `drape`).").unit("m").default(json!(0)),
                 param("drape", T::Boolean, "Lie on the ground: the surface follows the terrain, `elevation` is the height above it. False: flat at `elevation` (a raised deck, a pond's water).").default(json!(true)),
+                edge_blend(),
                 layer(),
                 material(),
             ],
@@ -163,6 +167,20 @@ pub(super) fn register(s: &mut Session) {
     );
     s.register_with_spec(
         spec(
+            "shape.set_edge_blend",
+            "Set Soft Edge",
+            "Sets the width of an area's soft edge: the band along its outline where it dithers into what lies under it (a forest floor into the lawn). 0 gives it a hard edge again.",
+            vec![
+                param("id", T::String, "Area id.").required(),
+                param("edge_blend_m", T::Number, "Band width, 0..10.").unit("m").required(),
+            ],
+            "null",
+            json!({"id": "S1", "edge_blend_m": 1.5}),
+        ),
+        set_edge_blend,
+    );
+    s.register_with_spec(
+        spec(
             "shape.rename",
             "Rename Shape",
             "Renames a shape.",
@@ -212,10 +230,13 @@ pub(super) fn add_area(project: &mut Project, params: &Value) -> Result<Value, C
         elevation: f32,
         #[serde(default = "yes")]
         drape: bool,
+        #[serde(default)]
+        edge_blend_m: f32,
         layer: Option<String>,
         material: Option<String>,
     }
     let p: P = parse(params)?;
+    check_edge_blend(p.edge_blend_m)?;
     add(project, (p.layer, p.material), |id, layer| {
         Shape::Area(Area {
             id,
@@ -224,6 +245,7 @@ pub(super) fn add_area(project: &mut Project, params: &Value) -> Result<Value, C
             outline: p.outline,
             elevation: p.elevation,
             drape: p.drape,
+            edge_blend_m: p.edge_blend_m,
             extensions: Default::default(),
         })
     })
@@ -452,6 +474,33 @@ fn set_height(project: &mut Project, params: &Value) -> Result<Value, CommandErr
             }
         }
         Ok(())
+    })?;
+    Ok(Value::Null)
+}
+
+fn check_edge_blend(m: f32) -> Result<(), CommandError> {
+    if (0.0..=crate::shape::MAX_EDGE_BLEND_M).contains(&m) {
+        Ok(())
+    } else {
+        Err(bad("edge_blend_m: 0..10"))
+    }
+}
+
+fn set_edge_blend(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct P {
+        id: String,
+        edge_blend_m: f32,
+    }
+    let p: P = parse(params)?;
+    check_edge_blend(p.edge_blend_m)?;
+    edit(project, &p.id, |s| match s {
+        Shape::Area(a) => {
+            a.edge_blend_m = p.edge_blend_m;
+            Ok(())
+        }
+        Shape::Extrusion(_) => Err(bad("only an area has a soft edge")),
     })?;
     Ok(Value::Null)
 }

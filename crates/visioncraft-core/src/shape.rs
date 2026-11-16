@@ -35,10 +35,23 @@ pub struct Area {
     /// Lie on the terrain: use [`shape_mesh_on`], with `elevation` as the height above the ground.
     #[serde(default)]
     pub drape: bool,
+    /// Width of the soft band along the outline where the area gives way to what lies under it
+    /// (metres; 0: a hard edge). The renderer dithers the band with height-ish noise instead of
+    /// drawing a line (`Builder::band`, scene.wgsl's `edge_coverage`); only the band's triangles
+    /// pay for it. Files from before it was added load as 0.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub edge_blend_m: f32,
     /// Data of other tools by namespace, kept untouched.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extensions: Extensions,
 }
+
+fn is_zero(v: &f32) -> bool {
+    *v == 0.0
+}
+
+/// The widest soft edge an area takes (metres).
+pub const MAX_EDGE_BLEND_M: f32 = 10.0;
 
 /// A closed polygon extruded up (house volume, block), or an open polyline given `thickness` and
 /// extruded (wall, fence, hedge block).
@@ -282,6 +295,10 @@ fn cross3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
 struct Builder {
     model: ImportedModel,
     triangles: Vec<Vec<[u32; 3]>>,
+    /// Per position, when the shape is an area with a soft edge (`ImportedModel::edge`).
+    edge: Vec<f32>,
+    /// Whether `edge` is kept (every triangle then goes through `tri_edge`).
+    soft: bool,
 }
 
 impl crate::house::Sink for Builder {
@@ -298,12 +315,20 @@ pub(crate) fn shoelace_f32(ring: &[P2]) -> f64 {
 impl Builder {
     /// A triangle on `face`, wound so its normal agrees with `outward`; degenerate ones are dropped.
     fn tri(&mut self, face: usize, v: [[f32; 3]; 3], outward: [f32; 3]) {
+        self.tri_edge(face, v, outward, [1.0; 3]);
+    }
+
+    /// [`Self::tri`] with each corner's soft-edge value; recorded when `self.soft`.
+    fn tri_edge(&mut self, face: usize, v: [[f32; 3]; 3], outward: [f32; 3], e: [f32; 3]) {
         let n = cross3(sub3(v[1], v[0]), sub3(v[2], v[0]));
         let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
         if len == 0.0 {
             return;
         }
         let flip = n[0] * outward[0] + n[1] * outward[1] + n[2] * outward[2] < 0.0;
+        if self.soft {
+            self.edge.extend(if flip { [e[0], e[2], e[1]] } else { e });
+        }
         let (v, n) = if flip {
             ([v[0], v[2], v[1]], n.map(|c| -c / len))
         } else {
@@ -325,12 +350,31 @@ impl Builder {
         let indices = earcutr::earcut(&flat, &[], 2).unwrap_or_default();
         for t in indices.as_chunks::<3>().0 {
             let v = [t[0], t[1], t[2]].map(|i| [ring[i][0], y, ring[i][1]]);
-            self.tri(face, v, [0.0, normal_y, 0.0]);
+            self.tri_edge(face, v, [0.0, normal_y, 0.0], [1.0; 3]);
         }
+    }
+
+    /// A soft-edged area: the band between `outer` (edge value 0) and `inner` (its inset ring,
+    /// value 1, one point per outline point), and `inner` triangulated inside it (value 1).
+    fn band(&mut self, face: usize, outer: &[P2], inner: &[P2], y: f32) {
+        let n = outer.len();
+        let at = |r: &[P2], i: usize| [r[i % n][0], y, r[i % n][1]];
+        for i in 0..n {
+            let (a, b, c, d) = (
+                at(outer, i),
+                at(outer, i + 1),
+                at(inner, i + 1),
+                at(inner, i),
+            );
+            self.tri_edge(face, [a, b, c], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]);
+            self.tri_edge(face, [a, c, d], [0.0, 1.0, 0.0], [0.0, 1.0, 1.0]);
+        }
+        self.cap(face, inner, y, 1.0);
     }
 
     fn finish(mut self, id: &str, name: &str, names: Vec<String>) -> ImportedModel {
         let mut m = std::mem::take(&mut self.model);
+        m.edge = std::mem::take(&mut self.edge);
         for (name, tris) in names.into_iter().zip(self.triangles) {
             let face = m.faces.len() as u32;
             m.triangle_faces.extend(tris.iter().map(|_| face));
@@ -357,11 +401,19 @@ pub fn shape_mesh(shape: &Shape) -> Result<ImportedModel, ShapeError> {
             if !a.elevation.is_finite() {
                 return Err(ShapeError::BadNumber("elevation"));
             }
+            let band = (a.edge_blend_m > 0.0 && a.edge_blend_m.is_finite())
+                .then(|| inset_band(&a.outline, a.edge_blend_m.min(MAX_EDGE_BLEND_M)))
+                .flatten();
             let mut b = Builder {
                 model: ImportedModel::default(),
                 triangles: vec![Vec::new()],
+                edge: Vec::new(),
+                soft: band.is_some(),
             };
-            b.cap(0, &a.outline, a.elevation, 1.0);
+            match &band {
+                Some(inner) => b.band(0, &a.outline, inner, a.elevation),
+                None => b.cap(0, &a.outline, a.elevation, 1.0),
+            }
             Ok(b.finish(id, &a.name, vec![format!("{id}:top")]))
         }
         Shape::Extrusion(e) => {
@@ -406,6 +458,8 @@ pub fn shape_mesh(shape: &Shape) -> Result<ImportedModel, ShapeError> {
             let mut b = Builder {
                 model: ImportedModel::default(),
                 triangles: vec![Vec::new(); names.len()],
+                edge: Vec::new(),
+                soft: false,
             };
             let (lo, hi) = (e.base, e.base + e.height);
             b.cap(0, &ring, hi, 1.0);
@@ -478,11 +532,19 @@ pub fn shape_mesh_on(
         })
         .fold(0.0f32, f32::max);
     let n = (longest.ceil() as usize).clamp(1, 64);
+    let soft = !flat.edge.is_empty();
     let mut b = Builder {
         model: ImportedModel::default(),
         triangles: vec![Vec::new()],
+        edge: Vec::new(),
+        soft,
     };
-    for t in &tris {
+    for (ti, t) in tris.iter().enumerate() {
+        let e = if soft {
+            flat.triangles[ti].map(|i| flat.edge[i as usize])
+        } else {
+            [1.0; 3]
+        };
         let point = |i: usize, j: usize| {
             // Barycentric grid point (i, j) of the n-step subdivision.
             let (u, v) = (i as f32 / n as f32, j as f32 / n as f32);
@@ -490,7 +552,11 @@ pub fn shape_mesh_on(
                 t[0][0] + (t[1][0] - t[0][0]) * u + (t[2][0] - t[0][0]) * v,
                 t[0][1] + (t[1][1] - t[0][1]) * u + (t[2][1] - t[0][1]) * v,
             ];
-            (p, h(p[0], p[1]))
+            (
+                p,
+                h(p[0], p[1]),
+                e[0] + (e[1] - e[0]) * u + (e[2] - e[0]) * v,
+            )
         };
         let mut push = |corners: [(usize, usize); 3]| {
             let pts = corners.map(|(i, j)| point(i, j));
@@ -500,9 +566,12 @@ pub fn shape_mesh_on(
             let order = if area < 0.0 { [0, 1, 2] } else { [0, 2, 1] };
             let base = b.model.positions.len() as u32;
             for k in order {
-                let (p, y) = pts[k];
+                let (p, y, edge) = pts[k];
                 b.model.positions.push([p[0], y, p[1]]);
                 b.model.normals.push(normal_at(p[0], p[1]));
+                if soft {
+                    b.edge.push(edge);
+                }
             }
             b.triangles[0].push([base, base + 1, base + 2]);
         };
@@ -583,12 +652,35 @@ pub fn areas_over<'a>(shapes: &'a [Shape], id: &str) -> Vec<&'a [P2]> {
         .collect()
 }
 
+/// The soft edge widths ([`Area::edge_blend_m`]) of the areas [`areas_over`] returns for `id`,
+/// in the same order.
+pub fn blends_over(shapes: &[Shape], id: &str) -> Vec<f32> {
+    let Some(i) = shapes.iter().position(|s| s.id() == id) else {
+        return Vec::new();
+    };
+    let Shape::Area(a) = &shapes[i] else {
+        return Vec::new();
+    };
+    shapes[i + 1..]
+        .iter()
+        .filter_map(|s| match s {
+            Shape::Area(b) if overlaps(&a.outline, &b.outline) => Some(b.edge_blend_m),
+            _ => None,
+        })
+        .collect()
+}
+
 /// `outline` moved `d` outward along its edges' normals (mitred corners, capped at 3 d).
 pub fn offset_outline(outline: &[[f32; 2]], d: f32) -> Vec<[f32; 2]> {
-    let n = outline.len();
-    if d <= 0.0 || n < 3 {
+    if d <= 0.0 || outline.len() < 3 {
         return outline.to_vec();
     }
+    offset_ring(outline, d)
+}
+
+/// [`offset_outline`] for a `d` of either sign (negative: inward).
+fn offset_ring(outline: &[[f32; 2]], d: f32) -> Vec<[f32; 2]> {
+    let n = outline.len();
     let area2: f32 = (0..n)
         .map(|i| {
             let (a, b) = (outline[i], outline[(i + 1) % n]);
@@ -608,10 +700,49 @@ pub fn offset_outline(outline: &[[f32; 2]], d: f32) -> Vec<[f32; 2]> {
             let n1 = normal(outline[(i + n - 1) % n], p);
             let n2 = normal(p, outline[(i + 1) % n]);
             let dot = (n1[0] * n2[0] + n1[1] * n2[1]).max(-0.9);
-            let k = (d / (1.0 + dot)).min(3.0 * d);
+            let k = (d / (1.0 + dot)).clamp(-3.0 * d.abs(), 3.0 * d.abs());
             [p[0] + (n1[0] + n2[0]) * k, p[1] + (n1[1] + n2[1]) * k]
         })
         .collect()
+}
+
+/// The inset ring of an area's soft edge: `outline` moved in by `d`, halving `d` (up to three
+/// times) while the ring folds over itself or leaves the outline; `None` when no width works (the
+/// area then keeps a hard edge).
+// shortcut: a mitred inset, not a true offset curve: a very narrow or spiky area keeps a hard edge;
+// upgrade with a polygon-offset crate when someone draws one.
+fn inset_band(outline: &[P2], d: f32) -> Option<Vec<P2>> {
+    let outer = shoelace(outline);
+    let mut d = d;
+    for _ in 0..4 {
+        let ring = offset_ring(outline, -d);
+        let inner = shoelace(&ring);
+        if check_simple(&ring, true).is_ok()
+            && inner * outer > 0.0
+            && inner.abs() < outer.abs()
+            && ring.iter().all(|p| inside_outline(*p, outline))
+        {
+            return Some(ring);
+        }
+        d /= 2.0;
+    }
+    None
+}
+
+/// The value at `q` of a quantity that is `e` at the corners of triangle `tri` (barycentric).
+fn bary(tri: &[P2], e: [f32; 3], q: P2) -> f32 {
+    let det = (tri[1][1] - tri[2][1]) * (tri[0][0] - tri[2][0])
+        + (tri[2][0] - tri[1][0]) * (tri[0][1] - tri[2][1]);
+    if det.abs() < 1e-12 {
+        return e[0];
+    }
+    let l0 = ((tri[1][1] - tri[2][1]) * (q[0] - tri[2][0])
+        + (tri[2][0] - tri[1][0]) * (q[1] - tri[2][1]))
+        / det;
+    let l1 = ((tri[2][1] - tri[0][1]) * (q[0] - tri[2][0])
+        + (tri[0][0] - tri[2][0]) * (q[1] - tri[2][1]))
+        / det;
+    (l0 * e[0] + l1 * e[1] + (1.0 - l0 - l1) * e[2]).clamp(0.0, 1.0)
 }
 
 /// How far a model lying on the ground ([`ground_faces`]) is drawn up. With a terrain the
@@ -815,6 +946,7 @@ mod tests {
             outline: square(3.0).into_iter().rev().collect(),
             elevation: 0.5,
             drape: false,
+            edge_blend_m: 0.0,
             extensions: Default::default(),
         });
         let m = shape_mesh(&a).unwrap();
@@ -859,6 +991,96 @@ mod tests {
 }
 
 #[cfg(test)]
+mod edge_tests {
+    use super::*;
+
+    fn lawn(blend: f32, drape: bool) -> Shape {
+        Shape::Area(Area {
+            id: "S1".into(),
+            name: "Floor".into(),
+            layer: "shapes".into(),
+            outline: vec![[0.0, 0.0], [10.0, 0.0], [10.0, 8.0], [0.0, 8.0]],
+            elevation: 0.0,
+            drape,
+            edge_blend_m: blend,
+            extensions: Default::default(),
+        })
+    }
+
+    #[test]
+    fn the_soft_edge_survives_a_round_trip_and_old_files_load_as_hard() {
+        let json = serde_json::to_string(&lawn(1.5, true)).unwrap();
+        assert!(json.contains("\"edge_blend_m\":1.5"));
+        assert_eq!(
+            serde_json::from_str::<Shape>(&json).unwrap(),
+            lawn(1.5, true)
+        );
+        // A hard edge writes nothing, so files stay as they were.
+        let hard = serde_json::to_string(&lawn(0.0, true)).unwrap();
+        assert!(!hard.contains("edge_blend_m"), "{hard}");
+        // A file from before the field existed.
+        let old = r#"{"type":"area","id":"S1","name":"Floor","layer":"shapes","outline":[[0,0],[10,0],[10,8],[0,8]],"elevation":0.0,"drape":true}"#;
+        let Shape::Area(a) = serde_json::from_str::<Shape>(old).unwrap() else {
+            panic!("an area");
+        };
+        assert_eq!(a.edge_blend_m, 0.0);
+    }
+
+    #[test]
+    fn a_soft_edge_is_a_band_of_values_from_0_on_the_outline_to_1_inside() {
+        let hard = shape_mesh(&lawn(0.0, false)).unwrap();
+        assert!(hard.edge.is_empty());
+        let m = shape_mesh(&lawn(1.5, false)).unwrap();
+        assert_eq!(m.edge.len(), m.positions.len());
+        assert!(m.triangles.len() > hard.triangles.len());
+        assert!(m.edge.iter().all(|e| (0.0..=1.0).contains(e)));
+        for (p, e) in m.positions.iter().zip(&m.edge) {
+            let on_outline = p[0] == 0.0 || p[0] == 10.0 || p[2] == 0.0 || p[2] == 8.0;
+            assert_eq!(*e == 0.0, on_outline, "{p:?} {e}");
+            if !on_outline {
+                assert_eq!(*e, 1.0);
+                // The inner ring is the band's width inside the outline.
+                assert!(
+                    p[0] >= 1.4 && p[0] <= 8.6 && p[2] >= 1.4 && p[2] <= 6.6,
+                    "{p:?}"
+                );
+            }
+        }
+        // Still the same surface seen from above.
+        let area = |m: &ImportedModel| -> f32 {
+            m.triangles
+                .iter()
+                .map(|t| {
+                    let [a, b, c] = t.map(|i| m.positions[i as usize]);
+                    ((b[0] - a[0]) * (c[2] - a[2]) - (c[0] - a[0]) * (b[2] - a[2])).abs() / 2.0
+                })
+                .sum()
+        };
+        assert!((area(&m) - 80.0).abs() < 1e-3 && (area(&hard) - 80.0).abs() < 1e-3);
+        // Draped on a flat flat-ground function the values go along, every vertex.
+        let d = shape_mesh_on(&lawn(1.5, true), &|_, _| Some(0.0)).unwrap();
+        assert_eq!(d.edge.len(), d.positions.len());
+        assert!(d.edge.contains(&0.0) && d.edge.contains(&1.0));
+        // A narrow strip cannot hold a band that wide: the band narrows to fit.
+        let strip = Shape::Area(Area {
+            outline: vec![[0.0, 0.0], [10.0, 0.0], [10.0, 1.0], [0.0, 1.0]],
+            ..match lawn(3.0, false) {
+                Shape::Area(a) => a,
+                _ => unreachable!(),
+            }
+        });
+        let s = shape_mesh(&strip).unwrap();
+        assert!(
+            s.edge.is_empty()
+                || s.positions
+                    .iter()
+                    .zip(&s.edge)
+                    .all(|(p, e)| *e == 0.0 || (p[2] > 0.0 && p[2] < 1.0))
+        );
+    }
+}
+
+#[cfg(test)]
 mod drape_tests {
     use super::*;
 
@@ -872,6 +1094,7 @@ mod drape_tests {
             outline,
             elevation: 0.1,
             drape: true,
+            edge_blend_m: 0.0,
             extensions: Default::default(),
         };
         let slope = |x: f32, _: f32| Some(0.5 * x);
@@ -917,6 +1140,7 @@ mod stacking_tests {
             outline,
             elevation: 0.0,
             drape: true,
+            edge_blend_m: 0.0,
             extensions: Default::default(),
         })
     }
@@ -1014,15 +1238,24 @@ pub fn shape_mesh_on_terrain(
                 .collect::<Vec<_>>()
         })
         .collect();
+    let soft = !flat.edge.is_empty();
     let mut b = Builder {
         model: ImportedModel::default(),
         triangles: vec![Vec::new()],
+        edge: Vec::new(),
+        soft,
     };
     for t in &flat.triangles {
+        let e = if soft {
+            t.map(|i| flat.edge[i as usize])
+        } else {
+            [1.0; 3]
+        };
         let tri: Vec<P2> = t
             .iter()
             .map(|&i| to_uv([flat.positions[i as usize][0], flat.positions[i as usize][2]]))
             .collect();
+        let tri_uv = tri.clone();
         let mut pieces = vec![tri];
         for dir in [[1.0, 0.0], [0.0, 1.0], [1.0, -1.0]] {
             pieces = pieces.into_iter().flat_map(|p| slice(p, dir)).collect();
@@ -1043,8 +1276,14 @@ pub fn shape_mesh_on_terrain(
                 ]
             };
             let c: Vec<[f32; 3]> = piece.iter().map(|&q| corner(q)).collect();
+            let ev: Vec<f32> = piece.iter().map(|&q| bary(&tri_uv, e, q)).collect();
             for k in 1..c.len().saturating_sub(1) {
-                b.tri(0, [c[0], c[k], c[k + 1]], [0.0, 1.0, 0.0]);
+                b.tri_edge(
+                    0,
+                    [c[0], c[k], c[k + 1]],
+                    [0.0, 1.0, 0.0],
+                    [ev[0], ev[k], ev[k + 1]],
+                );
             }
         }
     }
@@ -1169,6 +1408,7 @@ mod hill_tests {
             outline: vec![[0.3, 0.2], [19.7, 0.9], [19.1, 11.6], [0.6, 11.3]],
             elevation: AREA_LIFT_M,
             drape: true,
+            edge_blend_m: 0.0,
             extensions: Default::default(),
         };
         let m = shape_mesh_on_terrain(&Shape::Area(a.clone()), &t, &[]).unwrap();

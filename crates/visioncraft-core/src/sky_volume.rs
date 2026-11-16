@@ -21,6 +21,12 @@
 //! Physical Society of London 12, 1892; the lumen method's indirect part), with the lamp's flux
 //! `F` that meets a surface, the area `A` its rays meet and the share of them a room keeps.
 
+//!
+//! Tree crowns dim the sky too, as the same volume's partial occluders ([`Crown`]): each is an
+//! ellipsoid of leaves that a ray crosses with the Beer-Lambert transmittance of its chord, so
+//! the ground under a wood sees a fraction of the sky (the volume's visibility is what the
+//! renderer's ambient light is multiplied by).
+
 /// The occluders' voxel size, metres. Thinner than a wall, so a wall is at least one voxel.
 const VOXEL_M: f32 = 0.2;
 /// Sample spacing, metres (two voxels); grows for large sites to stay within `MAX_CELLS`.
@@ -42,6 +48,42 @@ const MIN_GAP_M: f32 = 0.3;
 const BOUNCES: usize = 3;
 /// A ray that meets no face (`SkyVolume::hits`).
 const OPEN: u32 = u32::MAX;
+/// Extinction of light per metre of a crown's leaves, and the share of the sky's light that gets
+/// through or round a crown whatever its depth (leaf scatter, gaps).
+// shortcut: both are guesses of a summer broadleaf crown (about 0.2 of the open sky's light under
+// a deep crown); leaf-off trees and conifers are told apart by nothing. Fit to hemispherical
+// photographs when someone has them.
+const CROWN_EXTINCTION: f32 = 0.45;
+const CROWN_FLOOR: f32 = 0.2;
+
+/// A tree's crown as an ellipsoid of leaves (world space, metres).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Crown {
+    pub center: [f32; 3],
+    /// Half the crown's size along x, y and z.
+    pub radii: [f32; 3],
+    /// The ground under it (y): the volume reaches down to it, so the ground the crown shades
+    /// is inside the grid.
+    pub ground_y: f32,
+}
+
+impl Crown {
+    /// The metres of the ray `p + t d` (unit `d`, `0 <= t <= metres`) inside the crown.
+    fn chord(&self, p: [f32; 3], d: [f32; 3], metres: f32) -> f32 {
+        let o: [f32; 3] = std::array::from_fn(|k| (p[k] - self.center[k]) / self.radii[k]);
+        let e: [f32; 3] = std::array::from_fn(|k| d[k] / self.radii[k]);
+        let a: f32 = e.iter().map(|v| v * v).sum();
+        let b: f32 = (0..3).map(|k| o[k] * e[k]).sum();
+        let c: f32 = o.iter().map(|v| v * v).sum::<f32>() - 1.0;
+        let disc = b * b - a * c;
+        if disc <= 0.0 || a <= 0.0 {
+            return 0.0;
+        }
+        let s = disc.sqrt();
+        let (t0, t1) = ((-b - s) / a, (-b + s) / a);
+        (t1.min(metres) - t0.max(0.0)).max(0.0)
+    }
+}
 
 /// What a ray meets: the voxel, the axis of the face it enters by and the sign of its travel
 /// along that axis (`d_k`), so the face looks along minus that sign.
@@ -557,15 +599,42 @@ impl Voxels {
 /// The sky visibility round `triangles` (world space; the surfaces that block the sky:
 /// walls, roofs, floors, not glass). `None` without triangles.
 pub fn sky_volume(triangles: &[[[f32; 3]; 3]]) -> Option<SkyVolume> {
-    let (mut lo, mut hi) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
-    for t in triangles {
-        for p in t {
-            for k in 0..3 {
-                lo[k] = lo[k].min(p[k]);
-                hi[k] = hi[k].max(p[k]);
-            }
+    sky_volume_with_canopy(triangles, &[])
+}
+
+/// [`sky_volume`] with tree `crowns` dimming the sky as well. A wood far from the buildings would
+/// coarsen the grid the rooms need, so crowns count only while the grid stays within one and a
+/// half cells (`CELL_M`) of its resolution; without triangles they alone make the volume.
+pub fn sky_volume_with_canopy(triangles: &[[[f32; 3]; 3]], crowns: &[Crown]) -> Option<SkyVolume> {
+    let grow = |(mut lo, mut hi): ([f32; 3], [f32; 3]), p: [f32; 3], r: [f32; 3]| {
+        for k in 0..3 {
+            lo[k] = lo[k].min(p[k] - r[k]);
+            hi[k] = hi[k].max(p[k] + r[k]);
         }
-    }
+        (lo, hi)
+    };
+    let empty = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
+    let solids = triangles
+        .iter()
+        .flatten()
+        .fold(empty, |b, p| grow(b, *p, [0.0; 3]));
+    let leaves = crowns.iter().fold(empty, |b, c| {
+        let b = grow(b, c.center, c.radii);
+        grow(b, [c.center[0], c.ground_y, c.center[2]], [0.0; 3])
+    });
+    let cells = |(lo, hi): ([f32; 3], [f32; 3]), c: f32| -> usize {
+        (0..3)
+            .map(|k| ((hi[k] - lo[k] + 2.0 * PAD_M) / c).ceil() as usize + 1)
+            .product()
+    };
+    let both = (
+        std::array::from_fn(|k| solids.0[k].min(leaves.0[k])),
+        std::array::from_fn(|k| solids.1[k].max(leaves.1[k])),
+    );
+    let with_crowns =
+        !crowns.is_empty() && (triangles.is_empty() || cells(both, CELL_M * 1.5) <= MAX_CELLS);
+    let (lo, hi) = if with_crowns { both } else { solids };
+    let crowns: &[Crown] = if with_crowns { crowns } else { &[] };
     if !lo[0].is_finite() {
         return None;
     }
@@ -639,14 +708,26 @@ pub fn sky_volume(triangles: &[[[f32; 3]; 3]]) -> Option<SkyVolume> {
                 let (s, c) = (h as f32 * std::f32::consts::TAU / 1024.0).sin_cos();
                 let mut sum = [0.0f32; 4];
                 let mut met = [OPEN; RAYS];
+                // The crowns within a ray's reach of this sample.
+                let near: Vec<&Crown> = crowns
+                    .iter()
+                    .filter(|c| (0..3).all(|k| (p[k] - c.center[k]).abs() <= c.radii[k] + REACH_M))
+                    .collect();
                 for (r, d) in dirs.iter().enumerate() {
                     let d = [c * d[0] - s * d[2], d[1], s * d[0] + c * d[2]];
                     met[r] = meets(p, d);
                     if met[r] == OPEN {
-                        sum[0] += 1.0;
-                        sum[1] += d[0];
-                        sum[2] += d[1];
-                        sum[3] += d[2];
+                        // Light through the crowns on the way: Beer-Lambert over the chords.
+                        let depth: f32 = near.iter().map(|c| c.chord(p, d, REACH_M)).sum();
+                        let w = if depth > 0.0 {
+                            CROWN_FLOOR + (1.0 - CROWN_FLOOR) * (-CROWN_EXTINCTION * depth).exp()
+                        } else {
+                            1.0
+                        };
+                        sum[0] += w;
+                        sum[1] += d[0] * w;
+                        sum[2] += d[1] * w;
+                        sum[3] += d[2] * w;
                     }
                 }
                 out.push((sum.map(|v| v / RAYS as f32), met));
@@ -767,6 +848,34 @@ pub fn sky_volume(triangles: &[[[f32; 3]; 3]]) -> Option<SkyVolume> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_ground_under_a_crown_sees_less_sky_than_the_open() {
+        let crown = Crown {
+            center: [0.0, 8.0, 0.0],
+            radii: [4.0, 3.0, 4.0],
+            ground_y: 0.0,
+        };
+        // Only a crown: it alone makes the volume, down to its ground.
+        let v = sky_volume_with_canopy(&[], &[crown]).expect("a crown makes a volume");
+        assert!(v.nearest([0.0, 0.0, 0.0]).is_some());
+        // Open ground in the same volume: a paving stone far off (beyond a ray's reach of the crown).
+        let stone = [[[20.0, 0.0, -1.0], [24.0, 0.0, -1.0], [22.0, 0.0, 2.0]]];
+        let v = sky_volume_with_canopy(&stone, &[crown]).expect("a volume");
+        let under = v.nearest([0.0, 1.0, 0.0]).unwrap();
+        let open = v.nearest([18.0, 1.0, 0.0]).unwrap();
+        let (u, o) = (
+            v.facing(under, [0.0, 1.0, 0.0]),
+            v.facing(open, [0.0, 1.0, 0.0]),
+        );
+        assert!(o > 0.9, "{o}");
+        assert!(u < 0.6 * o && u > CROWN_FLOOR * 0.9, "{u} {o}");
+        // The ellipsoid's chord: through the middle, its full height.
+        assert!((crown.chord([0.0, 0.0, 0.0], [0.0, 1.0, 0.0], 20.0) - 6.0).abs() < 1e-3);
+        assert_eq!(crown.chord([9.0, 0.0, 0.0], [0.0, 1.0, 0.0], 20.0), 0.0);
+        // Without crowns nothing changes: no triangles, no volume.
+        assert!(sky_volume_with_canopy(&[], &[]).is_none());
+    }
 
     /// The two triangles of an axis-aligned rectangle `lo..hi` (one axis flat).
     fn quad(lo: [f32; 3], hi: [f32; 3]) -> Vec<[[f32; 3]; 3]> {

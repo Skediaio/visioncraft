@@ -31,6 +31,15 @@ const TWIGS_ON_SOIL: f32 = 0.5;
 /// Stones per square metre on soil and on gravel (bigger ones on top of the gravel texture).
 const STONES_ON_SOIL: f32 = 6.0;
 const STONES_ON_GRAVEL: f32 = 20.0;
+/// A forest floor (humus and moss under woodland): few stones, many twigs, and leaf litter the
+/// whole year under the crowns, not only in autumn.
+// shortcut: these three densities are guesses from how woodland floors look (no source); tune
+// against photographs.
+const STONES_ON_FOREST: f32 = 1.0;
+const TWIGS_ON_FOREST: f32 = 3.0;
+const LITTER_ON_FOREST: f32 = 3.0;
+/// Stones are drawn with their 80-triangle mesh within this distance, a 20-triangle one beyond.
+const STONE_FINE_M: f32 = 6.0;
 /// Overhanging grass tufts along a lawn's edge, this far apart.
 const EDGE_SPACING_M: f32 = 0.03;
 /// At most this many instances of one kind.
@@ -67,6 +76,8 @@ enum Ground {
     Lawn([f32; 3]),
     Soil,
     Gravel,
+    /// Humus and leaf litter under woodland (`planting.add_floor`).
+    Forest,
 }
 
 fn ground_of(m: &Material, blades: impl Fn() -> [f32; 3]) -> Option<Ground> {
@@ -75,7 +86,9 @@ fn ground_of(m: &Material, blades: impl Fn() -> [f32; 3]) -> Option<Ground> {
     }
     let name = format!("{} {}", m.id, m.name).to_lowercase();
     let any = |w: &[&str]| w.iter().any(|w| name.contains(w));
-    if any(&["soil", "mulch", "earth", "bed"]) {
+    if any(&["forest", "humus", "litter"]) {
+        Some(Ground::Forest)
+    } else if any(&["soil", "mulch", "earth", "bed"]) {
         Some(Ground::Soil)
     } else if any(&["gravel", "grit", "shingle", "pebble"]) {
         Some(Ground::Gravel)
@@ -275,9 +288,24 @@ impl Scene {
         let mut edge_color = None;
         {
             let ground = self.ground_fn();
+            // The outlines of the forest floors: leaf litter lies under the crowns on them all year.
+            let floors: Vec<&[[f32; 2]]> = grounds
+                .iter()
+                .filter(|(_, faces)| faces.iter().any(|f| f.1 == Ground::Forest))
+                .filter_map(
+                    |(id, _)| match project.shapes.iter().find(|s| s.id() == id.as_str()) {
+                        Some(Shape::Area(a)) => Some(a.outline.as_slice()),
+                        _ => None,
+                    },
+                )
+                .collect();
             for (i, (_, _, _, c)) in trees.iter().enumerate() {
                 let mut by_v = vec![Vec::new(); variants];
-                for (k, s) in leaf_spots(*c, month, i as u64).into_iter().enumerate() {
+                let litter_all_year = floors.iter().any(|f| inside_outline([c[0], c[1]], f));
+                for (k, s) in leaf_spots(*c, month, i as u64, litter_all_year)
+                    .into_iter()
+                    .enumerate()
+                {
                     if let Some(y) = ground(s[0], s[1]) {
                         by_v[k % variants].push(placed(Vec3::new(s[0], y, s[1]), s[2], s[3]));
                     }
@@ -302,6 +330,7 @@ impl Scene {
                     }
                     Ground::Soil => (STONES_ON_SOIL, TWIGS_ON_SOIL),
                     Ground::Gravel => (STONES_ON_GRAVEL, 0.0),
+                    Ground::Forest => (STONES_ON_FOREST, TWIGS_ON_FOREST),
                 };
                 let scatter = |density: f32, seed: u64| {
                     lawn_scatter(
@@ -344,7 +373,10 @@ impl Scene {
                 continue;
             };
             let mut lines = polygon_edges(&a.outline, false);
-            for o in &over {
+            // Not along an area with a soft edge: its edge is a band, not a line grass hangs over
+            // (`lawn_scatter_blended` carries the tufts into the band instead).
+            let blends = visioncraft_core::blends_over(&project.shapes, id);
+            for (o, _) in over.iter().zip(&blends).filter(|(_, b)| **b <= 0.0) {
                 lines.extend(polygon_edges(o, true));
             }
             let inv = o.xf.inverse();
@@ -427,9 +459,17 @@ impl Scene {
         if self.clutter.meshes.is_empty() {
             self.clutter.meshes = make_meshes(r);
         }
+        // Stones: the fine mesh near, the coarse one beyond (the renderer's own LOD).
         for (k, list) in stones.iter().enumerate() {
-            if let Some(&(m, mat)) = self.clutter.meshes.get(k) {
-                add(r, &[(m, mat, f32::INFINITY)], list);
+            if let (Some(&(m, mat)), Some(&(coarse, _))) = (
+                self.clutter.meshes.get(k),
+                self.clutter.meshes.get(STONE_VARIANTS + 1 + k),
+            ) {
+                add(
+                    r,
+                    &[(m, mat, STONE_FINE_M), (coarse, mat, f32::INFINITY)],
+                    list,
+                );
             }
         }
         if let Some(&(m, mat)) = self.clutter.meshes.get(STONE_VARIANTS) {
@@ -529,8 +569,13 @@ fn disc_spots(c: [f32; 3], reach: f32, density: f32, seed: u64) -> Vec<[f32; 4]>
 }
 
 /// Fallen-leaf patches under crown `c` in `month`: [x, z, yaw, scale].
-fn leaf_spots(c: [f32; 3], month: u32, seed: u64) -> Vec<[f32; 4]> {
-    let density = LEAVES_BY_MONTH[(month.clamp(1, 12) - 1) as usize];
+fn leaf_spots(c: [f32; 3], month: u32, seed: u64, forest_floor: bool) -> Vec<[f32; 4]> {
+    let by_month = LEAVES_BY_MONTH[(month.clamp(1, 12) - 1) as usize];
+    let density = if forest_floor {
+        by_month.max(LITTER_ON_FOREST)
+    } else {
+        by_month
+    };
     disc_spots(c, 1.15, density, seed)
         .into_iter()
         .map(|s| [s[0], s[1], s[2], 0.6 + 0.5 * s[3]])
@@ -629,15 +674,19 @@ fn make_meshes(r: &mut Renderer) -> Vec<(MeshId, MaterialId)> {
             }
         };
     for (k, c) in colors.into_iter().enumerate() {
-        upload(r, stone(k as u64), c, 0.85);
+        upload(r, stone(k as u64, true), c, 0.85);
     }
     upload(r, twig(), [0.15, 0.1, 0.065], 0.9);
+    // The coarse stones, after the twig.
+    for (k, c) in colors.into_iter().enumerate() {
+        upload(r, stone(k as u64, false), c, 0.85);
+    }
     out
 }
 
 /// A pebble of radius about 1, flattened and sunk a little into the ground: a once-subdivided
-/// icosahedron pushed in and out by a few waves.
-fn stone(seed: u64) -> (Vec<[f32; 3]>, Vec<u32>) {
+/// icosahedron (80 triangles; `fine` false: the plain one, 20) pushed in and out by a few waves.
+fn stone(seed: u64, fine: bool) -> (Vec<[f32; 3]>, Vec<u32>) {
     let t = (1.0 + 5f32.sqrt()) / 2.0;
     let mut p: Vec<Vec3> = [
         [-1.0, t, 0.0],
@@ -680,6 +729,10 @@ fn stone(seed: u64) -> (Vec<[f32; 3]>, Vec<u32>) {
     let mut mid = std::collections::HashMap::new();
     let mut tris = Vec::new();
     for [a, b, c] in ico {
+        if !fine {
+            tris.extend([a, b, c]);
+            continue;
+        }
         let mut m = |i: u32, j: u32| {
             *mid.entry((i.min(j), i.max(j))).or_insert_with(|| {
                 p.push(((p[i as usize] + p[j as usize]) / 2.0).normalize());
@@ -764,7 +817,7 @@ mod tests {
     #[test]
     fn leaves_lie_in_autumn_a_few_in_winter_none_in_spring_and_summer() {
         let c = [3.0, -2.0, 2.5];
-        let (nov, jun) = (leaf_spots(c, 11, 1), leaf_spots(c, 6, 1));
+        let (nov, jun) = (leaf_spots(c, 11, 1, false), leaf_spots(c, 6, 1, false));
         assert!(
             nov.len() > 10 * jun.len().max(1),
             "{} vs {}",
@@ -772,12 +825,18 @@ mod tests {
             jun.len()
         );
         // None in spring and summer, a few left in winter.
-        assert!(jun.is_empty() && leaf_spots(c, 4, 1).is_empty());
-        assert!(!leaf_spots(c, 1, 1).is_empty());
+        assert!(jun.is_empty() && leaf_spots(c, 4, 1, false).is_empty());
+        assert!(!leaf_spots(c, 1, 1, false).is_empty());
+        // On a forest floor the litter lies all year.
+        assert!(!leaf_spots(c, 6, 1, true).is_empty());
         for s in &nov {
             assert!(((s[0] - c[0]).powi(2) + (s[1] - c[1]).powi(2)).sqrt() <= c[2] * 1.15 + 1e-4);
         }
-        assert_eq!(nov.len(), leaf_spots(c, 11, 1).len(), "deterministic");
+        assert_eq!(
+            nov.len(),
+            leaf_spots(c, 11, 1, false).len(),
+            "deterministic"
+        );
     }
 
     #[test]
@@ -810,8 +869,11 @@ mod tests {
 
     #[test]
     fn stone_and_twig_meshes_are_closed_enough_to_draw() {
-        let (p, i) = stone(2);
+        let (p, i) = stone(2, true);
         assert_eq!((p.len(), i.len()), (42, 240));
+        assert!(i.iter().all(|&k| (k as usize) < p.len()));
+        let (p, i) = stone(2, false);
+        assert_eq!((p.len(), i.len()), (12, 60));
         assert!(i.iter().all(|&k| (k as usize) < p.len()));
         let (p, i) = twig();
         assert!(i.iter().all(|&k| (k as usize) < p.len()));
@@ -830,6 +892,10 @@ mod tests {
         assert_eq!(ground_of(&named("soil"), blades), Some(Ground::Soil));
         assert_eq!(ground_of(&named("gravel"), blades), Some(Ground::Gravel));
         assert_eq!(ground_of(&named("paving"), blades), None);
+        assert_eq!(
+            ground_of(&named("forest-floor"), blades),
+            Some(Ground::Forest)
+        );
         assert!(matches!(
             ground_of(&named("lawn"), blades),
             Some(Ground::Lawn(_))

@@ -975,12 +975,16 @@ impl Studio {
     fn update_sky_volume(&mut self, project: &Project) {
         use std::hash::{Hash, Hasher};
         let triangles = self.scene.sky_occluders(project);
+        let crowns = self.scene.sky_crowns();
         let mut h = std::collections::hash_map::DefaultHasher::new();
         for t in &triangles {
             t.as_flattened()
                 .iter()
                 .for_each(|v| v.to_bits().hash(&mut h));
         }
+        crate::sky_task::encode_crowns(&crowns)
+            .iter()
+            .for_each(|v| v.to_bits().hash(&mut h));
         let key = h.finish() | 1;
         if key == self.sky_volume_key {
             return;
@@ -988,7 +992,9 @@ impl Studio {
         self.sky_volume_key = key;
         // The old volume stays until the new one is made (`poll_sky_volume`).
         let to_sun = self.sun_bounce_dir.to_array();
-        self.sky_task = Some(crate::sky_task::SkyTask::start(triangles, key, to_sun));
+        self.sky_task = Some(crate::sky_task::SkyTask::start(
+            triangles, crowns, key, to_sun,
+        ));
     }
 
     /// Takes the sky volume once it is made (`update_sky_volume`).

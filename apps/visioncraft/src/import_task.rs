@@ -156,6 +156,7 @@ mod tests {
                 triangles: 0..1,
                 bounds: [[0.0, -4.0, 1.0], [3.5, 1.0, 5.25]],
             }],
+            edge: Vec::new(),
             warnings: vec!["one \"quoted\" warning".into()],
         };
         assert_eq!(decode(&encode(&m)).unwrap(), m);
