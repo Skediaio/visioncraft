@@ -4,7 +4,8 @@
 // (lib.rs blits each layer's own textures in), so eight layers cost three
 // texture bindings. Mapping is planar from world XZ, switching to triplanar
 // on slopes steeper than ~45 degrees. Layers blend by weight and height
-// (the ORM map's occlusion channel as the height): Mishkinis, "Advanced
+// (the layer's height map, carried in the ORM array's alpha; the occlusion
+// stands in for a layer without one): Mishkinis, "Advanced
 // Terrain Texture Splatting" (Gamasutra, 2013) - only layers within a
 // small depth of the highest weight+height contribute, so gravel fills the
 // gaps between paving stones instead of cross-fading over them. Near the
@@ -115,13 +116,13 @@ fn terrain_surface(in: TerrainVarying) -> Surface {
     let steep = abs(n.y) < 0.7;
     // The lookups are made again in the second loop: kept in an array of eight (over 300
     // floats) they spilled out of registers on Intel GPUs, which cost more than the arithmetic.
-    var orm: array<vec3<f32>, 8>;
+    var orm: array<vec4<f32>, 8>;
     var top = 0.0;
     for (var i = 0; i < 8; i++) {
         if weights[i] > 0.004 {
             let l = layer_lookup(in.world, dwx, dwy, n, terrain.layers[i].params.y, steep);
-            orm[i] = terrain_sample(terrain_orm, l, i).rgb;
-            top = max(top, orm[i].r + weights[i]);
+            orm[i] = terrain_sample(terrain_orm, l, i);
+            top = max(top, orm[i].a + weights[i]);
         }
     }
     var s: Surface;
@@ -134,7 +135,7 @@ fn terrain_surface(in: TerrainVarying) -> Surface {
     var total = 0.0;
     for (var i = 0; i < 8; i++) {
         if weights[i] > 0.004 {
-            let b = max(orm[i].r + weights[i] - (top - HEIGHT_DEPTH), 0.0);
+            let b = max(orm[i].a + weights[i] - (top - HEIGHT_DEPTH), 0.0);
             if b > 0.0 {
                 let layer = terrain.layers[i];
                 let l = layer_lookup(in.world, dwx, dwy, n, layer.params.y, steep);

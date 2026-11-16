@@ -56,6 +56,8 @@ pub(crate) struct Mipmapper {
     pipelines: [wgpu::RenderPipeline; 3],
     /// Resampling into terrain layers: sRGB, linear.
     resample: [wgpu::RenderPipeline; 2],
+    /// Resampling a map's red into the alpha of a linear terrain layer (its height).
+    resample_alpha: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
 }
 
@@ -119,6 +121,27 @@ impl Mipmapper {
                 },
             )
         });
+        let resample_alpha = crate::pipeline(
+            device,
+            crate::PipelineDesc {
+                label: "resample alpha",
+                module,
+                vs: "vs_fullscreen",
+                fs: Some("fs_resample_alpha"),
+                groups: &[Some(&layout)],
+                buffers: &[],
+                target: Some(wgpu::ColorTargetState {
+                    format: format(ColorSpace::Linear),
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALPHA,
+                }),
+                depth: None,
+                cull: None,
+                samples: 1,
+                constants: &[("TARGET", size)],
+                front_cw: false,
+            },
+        );
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("mip"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -129,6 +152,7 @@ impl Mipmapper {
             layout,
             pipelines,
             resample,
+            resample_alpha,
             sampler,
         }
     }
@@ -163,7 +187,9 @@ impl Mipmapper {
     }
 
     /// Resamples `source` into one layer of a `LAYER_SIZE`-square array
-    /// texture and draws that layer's mip chain.
+    /// texture and draws that layer's mip chain. `alpha_from`: a linear layer's alpha is
+    /// that map's red instead (the terrain ORM's height).
+    #[allow(clippy::too_many_arguments)]
     pub fn blit_into_layer(
         &self,
         device: &wgpu::Device,
@@ -172,6 +198,7 @@ impl Mipmapper {
         target: &wgpu::Texture,
         layer: u32,
         linear: bool,
+        alpha_from: Option<&wgpu::TextureView>,
     ) {
         let view = |mip| {
             target.create_view(&wgpu::TextureViewDescriptor {
@@ -186,7 +213,8 @@ impl Mipmapper {
         let pass = |encoder: &mut wgpu::CommandEncoder,
                     pipeline: &wgpu::RenderPipeline,
                     src: &wgpu::TextureView,
-                    dst: &wgpu::TextureView| {
+                    dst: &wgpu::TextureView,
+                    load: Option<()>| {
             let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("blit"),
                 layout: &self.layout,
@@ -201,18 +229,28 @@ impl Mipmapper {
                     },
                 ],
             });
-            let mut pass = crate::color_pass(encoder, "blit", dst, None, None, None);
+            let mut pass = crate::color_pass(encoder, "blit", dst, None, load, None);
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &bind, &[]);
             pass.draw(0..3, 0..1);
         };
-        pass(encoder, &self.resample[linear as usize], source, &view(0));
+        pass(
+            encoder,
+            &self.resample[linear as usize],
+            source,
+            &view(0),
+            None,
+        );
+        if let Some(a) = alpha_from {
+            pass(encoder, &self.resample_alpha, a, &view(0), Some(()));
+        }
         for mip in 1..target.mip_level_count() {
             pass(
                 encoder,
                 &self.pipelines[linear as usize],
                 &view(mip - 1),
                 &view(mip),
+                None,
             );
         }
     }

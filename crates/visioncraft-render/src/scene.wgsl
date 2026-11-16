@@ -52,7 +52,8 @@ struct Material {
     params: vec4<f32>,     // x metallic, y perceptual roughness, z relief, w gloss
     emissive: vec4<f32>,   // rgb emitted luminance (cd/m2), w weathering
     alpha: vec4<f32>,      // x cutout threshold, y 1 / triplanar scale (0: UVs), z surface (0 standard, 1 glass, 2 water), w foliage
-    flags: vec4<u32>,      // x texture bits (1 base, 2 normal, 4 orm, 8 roughness, 16 metallic, 32 occlusion), y double-sided, z macro variation (f32 bits), w mowing stripes (cm | deg << 16)
+    flags: vec4<u32>,      // x texture bits (1 base, 2 normal, 4 orm, 8 roughness, 16 metallic, 32 occlusion, 64 height in the occlusion slot), y double-sided, z macro variation (f32 bits), w mowing stripes (cm | deg << 16)
+    relief: vec4<f32>,     // x parallax depth of the height map (m; 0 off)
 }
 @group(1) @binding(0) var<uniform> material: Material;
 // Absent maps are bound to a 1x1 white texture (a neutral factor).
@@ -90,6 +91,8 @@ override SAMPLES: u32 = 1u;
 
 const HAS_BASE: u32 = 1u;
 const HAS_NORMAL: u32 = 2u;
+// ao_tex holds the height map (white = top) instead of an occlusion map.
+const HAS_HEIGHT: u32 = 64u;
 
 // ---- wind -----------------------------------------------------------------
 
@@ -585,6 +588,93 @@ fn triplanar_normal(l: Lookup, n: vec3<f32>, relief: f32) -> vec3<f32> {
     return normalize(sum);
 }
 
+// Parallax occlusion on the Y (top) projection, which on ground up to ~20 degrees of slope is
+// the only one `triplanar` keeps. Steep parallax (McGuire & McGuire, "Steep Parallax Mapping",
+// I3D 2005 poster) with the last step interpolated between the two layers that straddle the
+// height field (the parallax occlusion mapping of Tatarchuk, "Dynamic Parallax Occlusion
+// Mapping with Approximate Soft Shadows", I3D 2006 / GDC 2006): layers along the tangent-space
+// view ray, more of them at grazing angles, the mip level computed once before the loop
+// (Tatarchuk's adaptive LOD) and the effect faded to plain normal mapping by mip level and at
+// grazing view. The height map's white is the top, and the ray is pushed down from it.
+// Shading only: no depth is written (the depth pre-pass and SSAO keep the flat surface) and
+// the shadow map is looked up at the flat point. Then a second short march from the hit
+// towards the sun (Tatarchuk's soft self-shadowing, a separate ray as in Policarpo, Oliveira
+// & Comba, "Real-Time Relief Mapping on Arbitrary Polygonal Surfaces", I3D 2005): the most
+// the relief rises above that ray, over the distance along it, shadows the sun's direct light.
+struct Parallax {
+    uv: vec2<f32>,
+    shadow: f32,
+}
+
+// Guesses, tuned on renders: the march is full strength up to mip LOD 1 of the height map and
+// gone by LOD 3, and fades out below 6 degrees of view elevation; the ray's run per unit of
+// depth is capped (Welsh's offset limiting, loosened to 3: a ratio of 1 flattened the relief
+// at a standing eye's view of the ground).
+const PARALLAX_LOD: vec2<f32> = vec2<f32>(1.0, 3.0);
+const PARALLAX_RUN: f32 = 3.0;
+
+fn parallax(l: Lookup, v: vec3<f32>, n: vec3<f32>, depth_uv: f32) -> Parallax {
+    var out = Parallax(l.uv[1], 0.0);
+    let t = l.t[1];
+    let b = l.b[1];
+    let axis = cross(t, b);
+    // Image directions: u along t, v against b (as `triplanar` maps them).
+    let vt = vec3<f32>(dot(v, t), -dot(v, b), dot(v, axis));
+    let size = vec2<f32>(textureDimensions(ao_tex));
+    let fx = l.dx[1] * size;
+    let fy = l.dy[1] * size;
+    // The finer of the two footprint axes: at a standing eye's grazing view the coarser one
+    // faded the relief out a few metres away.
+    let lod = max(0.0, 0.5 * log2(min(dot(fx, fx), dot(fy, fy))));
+    let fade = (1.0 - smoothstep(PARALLAX_LOD.x, PARALLAX_LOD.y, lod)) * smoothstep(0.05, 0.1, vt.z);
+    if fade <= 0.0 {
+        return out;
+    }
+    let run = vt.xy / vt.z;
+    let full = -run * min(1.0, PARALLAX_RUN / max(length(run), 1e-4)) * depth_uv * fade;
+    let lo = 4.0;
+    let hi = select(16.0, 8.0, FAST_SHADING);
+    let count = i32(mix(hi, lo, vt.z));
+    let dl = 1.0 / f32(count);
+    var uv = l.uv[1];
+    var depth = 0.0;
+    var field = 1.0 - textureSampleLevel(ao_tex, ao_smp, uv, lod).r;
+    var prev_uv = uv;
+    var prev_gap = field;
+    for (var i = 0; i < count; i++) {
+        if depth >= field {
+            break;
+        }
+        prev_uv = uv;
+        prev_gap = field - depth;
+        uv += full * dl;
+        depth += dl;
+        field = 1.0 - textureSampleLevel(ao_tex, ao_smp, uv, lod).r;
+    }
+    // Where the segment between the last two layers crosses the height field.
+    let gap = field - depth;
+    let k = clamp(prev_gap / max(prev_gap - gap, 1e-5), 0.0, 1.0);
+    out.uv = mix(prev_uv, uv, k);
+    let hit = clamp(mix(depth - dl, depth, k), 0.0, 1.0);
+    let sun = g.sun_dir.xyz;
+    if FAST_SHADING || dot(n, sun) <= 0.0 || sun.y <= 0.0 || hit < 0.02 {
+        return out;
+    }
+    let st = vec3<f32>(dot(sun, t), -dot(sun, b), dot(sun, axis));
+    let srun = st.xy / max(st.z, 1e-3);
+    let up = srun * min(1.0, PARALLAX_RUN / max(length(srun), 1e-4)) * depth_uv * fade * hit;
+    var block = 0.0;
+    for (var i = 1; i <= 6; i++) {
+        let f = f32(i) / 6.0;
+        let ray = hit * (1.0 - f);
+        let d = 1.0 - textureSampleLevel(ao_tex, ao_smp, out.uv + up * f, lod).r;
+        // Guess: blocked fully where the relief stands a quarter of the way along above the ray.
+        block = max(block, (ray - d) / (hit * f) * 4.0);
+    }
+    out.shadow = clamp(block, 0.0, 1.0) * fade;
+    return out;
+}
+
 // Value noise for the weathering pattern: trilinear over hashed lattice
 // values, smoothstep-faded. The corners are `hash3`'s values with its nested hashes of z and of
 // (y, z) shared by the corners that have them in common: 14 hashes instead of 24, same bits.
@@ -622,6 +712,7 @@ struct Surface {
     metallic: f32,
     ao: f32,             // from the maps only
     emissive: vec3<f32>,
+    self_shadow: f32,    // 0 lit .. 1: the sun's direct light blocked by the height map's relief
 }
 
 // Base colour, normal and the occlusion / roughness / metallic maps, for
@@ -649,6 +740,11 @@ fn surface(in: Varying, front: bool, ground: bool) -> Surface {
     }
     // Absent maps are skipped (uniform branches), not sampled as white.
     let bits = material.flags.x;
+    if (bits & HAS_HEIGHT) != 0u && material.relief.x > 0.0 && triplanar_on && l.weight.y > 0.999 {
+        let r = parallax(l, normalize(to_eye(in.world)), n, material.relief.x * material.alpha.y);
+        l.uv[1] = r.uv;
+        s.self_shadow = r.shadow;
+    }
     s.base = material.base_color;
     if (bits & HAS_BASE) != 0u {
         s.base *= sample_lookup(base_tex, base_smp, l);
@@ -907,7 +1003,7 @@ fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, screen_effe
     let nol_raw = dot(n, l);
     let nol = max(nol_raw, 0.0);
     if g.sun_light.r + g.sun_light.g + g.sun_light.b > 0.0 && (nol > 0.0 || foliage) {
-        let shadow = min(sun_shadow(in.world, s.geometric, max(dot(s.geometric, l), 0.0), depth), screen.g);
+        let shadow = min(sun_shadow(in.world, s.geometric, max(dot(s.geometric, l), 0.0), depth), screen.g) * (1.0 - s.self_shadow);
         sunlit = shadow * smoothstep(0.0, 0.15, nol);
         var diffuse = nol;
         // Snow is no Lambertian surface: its grains scatter a low sun forward and up, so a

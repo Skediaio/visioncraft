@@ -165,11 +165,12 @@ impl TerrainGpu {
                     return TerrainLayer::default();
                 };
                 let look = look(m, lib);
-                let (base, normal, orm) = lib.layer_textures(look.tex as usize);
+                let (base, normal, orm, height) = lib.layer_textures(look.tex as usize);
                 TerrainLayer {
                     base_color_map: base,
                     normal_map: normal,
                     orm_map: orm,
+                    height_map: height,
                     scale_m: look.scale_m.max(0.1),
                     base_color: look.color,
                     roughness: look.roughness,
@@ -186,7 +187,8 @@ impl TerrainGpu {
 }
 
 impl Library {
-    /// The colour, normal and packed maps of interned spec `index` once loaded (asks for them).
+    /// The colour, normal, packed and height maps of interned spec `index` once loaded (asks
+    /// for them).
     pub fn layer_textures(
         &mut self,
         index: usize,
@@ -194,12 +196,13 @@ impl Library {
         Option<visioncraft_render::TextureId>,
         Option<visioncraft_render::TextureId>,
         Option<visioncraft_render::TextureId>,
+        Option<visioncraft_render::TextureId>,
     ) {
         if index == 0 {
-            return (None, None, None);
+            return (None, None, None, None);
         }
         let Some(spec) = self.specs.get(index).cloned() else {
-            return (None, None, None);
+            return (None, None, None, None);
         };
         let mut get = |src: &Option<TexSrc>, srgb: bool| match src {
             Some(TexSrc::Lib(p)) => self.store.texture(p, srgb, true, 5.0),
@@ -209,6 +212,7 @@ impl Library {
             get(&spec.base, true),
             get(&spec.normal, false),
             get(&spec.orm, false),
+            get(&spec.height, false),
         )
     }
 }

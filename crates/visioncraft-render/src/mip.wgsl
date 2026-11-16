@@ -27,8 +27,18 @@ fn fs_main(in: Out) -> @location(0) vec4<f32> {
 // arrays): read from the source mip whose size is nearest the target.
 override TARGET: f32 = 512.0;
 
+fn resampled(clip: vec2<f32>) -> vec4<f32> {
+    let lod = max(log2(f32(textureDimensions(source).x) / TARGET), 0.0);
+    return textureSampleLevel(source, linear_sampler, clip / TARGET, lod);
+}
+
 @fragment
 fn fs_resample(in: Out) -> @location(0) vec4<f32> {
-    let lod = max(log2(f32(textureDimensions(source).x) / TARGET), 0.0);
-    return textureSampleLevel(source, linear_sampler, in.clip.xy / TARGET, lod);
+    return resampled(in.clip.xy);
+}
+
+// The same, the source's red into alpha only (the pipeline writes alpha alone).
+@fragment
+fn fs_resample_alpha(in: Out) -> @location(0) vec4<f32> {
+    return vec4<f32>(resampled(in.clip.xy).r);
 }

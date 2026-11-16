@@ -279,6 +279,16 @@ fn material_commands_and_resolution_order_on_the_plate() {
         s.run("material.update", json!({"id": "glass", "roughness": 2.0}))
             .is_err()
     );
+    // Parallax depth through the surface kind: kept, and refused out of range.
+    let pbr = |d: f64| json!({"id": "gravel", "kind": {"type": "standard_triplanar_pbr", "map_scale_m": 0.5, "relief": 1, "gloss": 0, "weathering": 0, "parallax_depth_m": d}});
+    s.run("material.update", pbr(0.03)).unwrap();
+    let gravel = s.project().materials.iter().find(|m| m.id == "gravel");
+    assert!(matches!(
+        gravel.map(|m| &m.kind),
+        Some(visioncraft_core::SurfaceKind::StandardTriplanarPbr { parallax_depth_m, .. }) if *parallax_depth_m == 0.03
+    ));
+    assert!(s.run("material.update", pbr(-0.01)).is_err());
+    assert!(s.run("material.update", pbr(0.5)).is_err());
     // Removing the model takes its assignments with it.
     s.run("model.remove", json!({"id": m})).unwrap();
     assert!(s.project().assignments.is_empty());

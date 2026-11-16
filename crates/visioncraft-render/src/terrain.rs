@@ -34,9 +34,11 @@ pub struct TerrainLayer {
     pub base_color_map: Option<TextureId>,
     /// Tangent-space normal map, OpenGL convention (absent: flat).
     pub normal_map: Option<TextureId>,
-    /// Packed occlusion (also the height for blending) / roughness /
-    /// metallic (absent: 1 / 1 / 0).
+    /// Packed occlusion / roughness / metallic (absent: 1 / 1 / 0).
     pub orm_map: Option<TextureId>,
+    /// Height (red, white = top) for the height blend, carried in the ORM layer's alpha;
+    /// absent: the occlusion stands in for it.
+    pub height_map: Option<TextureId>,
     /// One texture repeat in metres.
     pub scale_m: f32,
     /// Linear RGBA factor on the colour map.
@@ -56,6 +58,7 @@ impl Default for TerrainLayer {
             base_color_map: None,
             normal_map: None,
             orm_map: None,
+            height_map: None,
             scale_m: 2.0,
             base_color: [1.0; 4],
             roughness: 0.9,
@@ -237,7 +240,16 @@ impl TerrainGpu {
             let maps = [layer.base_color_map, layer.normal_map, layer.orm_map];
             for (i, map) in maps.into_iter().enumerate() {
                 let src = source(map).unwrap_or(&self.defaults[i]);
-                mipmapper.blit_into_layer(device, &mut encoder, src, &textures[i], k as u32, i > 0);
+                let alpha = (i == 2).then(|| source(layer.height_map).unwrap_or(src));
+                mipmapper.blit_into_layer(
+                    device,
+                    &mut encoder,
+                    src,
+                    &textures[i],
+                    k as u32,
+                    i > 0,
+                    alpha,
+                );
             }
         }
         queue.submit([encoder.finish()]);

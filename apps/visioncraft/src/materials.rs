@@ -424,6 +424,7 @@ impl MaterialsState {
             relief,
             gloss,
             weathering,
+            ..
         } = &mut m.kind
         else {
             return;
