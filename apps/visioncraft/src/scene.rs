@@ -29,7 +29,7 @@ pub struct Loaded {
     pub version: u64,
 }
 
-pub type LookKey = [u32; 14];
+pub type LookKey = [u32; 15];
 
 /// What a surface looks like to the renderer.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -50,6 +50,8 @@ pub struct Look {
     pub tex: u32,
     /// Mowing stripes, packed as the renderer takes them (0: none).
     pub stripes: u32,
+    /// Depth of the height map's relief in metres (0: off).
+    pub parallax_m: f32,
 }
 
 impl Look {
@@ -66,6 +68,7 @@ impl Look {
             scale_m: 1.0,
             tex: 0,
             stripes: 0,
+            parallax_m: 0.0,
         }
     }
 
@@ -86,6 +89,7 @@ impl Look {
             self.scale_m,
             f32::from_bits(self.tex),
             f32::from_bits(self.stripes),
+            self.parallax_m,
         ]
         .map(f32::to_bits)
     }
@@ -156,8 +160,14 @@ fn look_of(m: &Material, lib: &mut Library, month: u32) -> Look {
             relief,
             gloss,
             weathering,
+            parallax_depth_m,
         } => Look {
             relief: ov.as_ref().map_or(*relief, |o| o.relief),
+            // An overlaid palette material takes its library kind's depth unless it sets one.
+            parallax_m: match &ov {
+                Some(o) if *parallax_depth_m == 0.0 => o.parallax_m,
+                _ => *parallax_depth_m,
+            },
             gloss: ov.as_ref().map_or(*gloss, |o| o.gloss),
             weathering: *weathering,
             scale_m: ov.as_ref().map_or(*map_scale_m, |o| o.scale_m),
@@ -212,6 +222,7 @@ fn gpu_material(look: &Look) -> visioncraft_render::Material {
         weathering: look.weathering,
         variation: look.variation,
         stripes: look.stripes,
+        parallax_depth_m: look.parallax_m,
         projection: visioncraft_render::Projection::Triplanar {
             scale_m: look.scale_m.max(0.01),
         },
@@ -2584,20 +2595,20 @@ mod tests {
 
     #[test]
     fn classify_picks_the_cheapest_update() {
-        let a = key(1, vec![[0; 14]], true);
+        let a = key(1, vec![[0; 15]], true);
         let (i, t) = (Mat4::IDENTITY, Mat4::from_translation(Vec3::X));
         assert_eq!(classify(&a, &a.clone(), &i, &i), Change::Keep);
         assert_eq!(classify(&a, &a.clone(), &i, &t), Change::Transform);
         assert_eq!(
-            classify(&a, &key(2, vec![[0; 14]], true), &i, &i),
+            classify(&a, &key(2, vec![[0; 15]], true), &i, &i),
             Change::Rebuild
         );
         assert_eq!(
-            classify(&a, &key(1, vec![[1; 14]], true), &i, &i),
+            classify(&a, &key(1, vec![[1; 15]], true), &i, &i),
             Change::Rebuild
         );
         assert_eq!(
-            classify(&a, &key(1, vec![[0; 14]], false), &i, &t),
+            classify(&a, &key(1, vec![[0; 15]], false), &i, &t),
             Change::Rebuild
         );
     }

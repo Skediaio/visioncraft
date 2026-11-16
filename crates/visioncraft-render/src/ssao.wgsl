@@ -79,7 +79,7 @@ fn ambient_occlusion(p: vec2<i32>, c: vec3<f32>, n: vec3<f32>, noise: f32) -> f3
 // Contact shadows: a short ray march towards the sun through the depth
 // buffer, treating every depth sample as a slab of fixed thickness (the
 // technique as described by Panos Karabelas, "Screen space shadows", 2017
-// blog post, and documented as "contact shadows" in Unreal Engine).
+// blog post).
 fn contact_shadow(c: vec3<f32>, n: vec3<f32>, noise: f32) -> f32 {
     let l = (g.view * vec4<f32>(g.sun_dir.xyz, 0.0)).xyz;
     if g.effects.y < 0.5 || dot(n, l) <= 0.0 {

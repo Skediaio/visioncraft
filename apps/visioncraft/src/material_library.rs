@@ -19,6 +19,7 @@ pub const KINDS: [&str; 14] = [
 
 /// Which library material each plain palette material shows while the library is there
 /// (lawn: a grass ground, paving: paving stones, plaster, timber and so on).
+/// The variation is the overlay's default; its parallax depth comes from the library kind.
 const DEFAULTS: [(&str, &str, f32); 10] = [
     ("lawn", "grass001", 0.6),
     ("paving", "pavingstones005", 0.4),
@@ -37,6 +38,8 @@ pub struct Overlay {
     pub spec: TexSpec,
     pub scale_m: f32,
     pub variation: f32,
+    /// Parallax depth in metres (`parallax_of_kind`).
+    pub parallax_m: f32,
     /// Multiplies the pictures (linear): plaster's photo is a cold white that merged with snow
     /// and sky; a render's plaster is a slightly warm off-white.
     pub tint: [f32; 3],
@@ -51,7 +54,20 @@ fn spec_of_entry(m: &LibMaterial) -> TexSpec {
         base: lib(&m.maps.basecolor),
         normal: lib(&m.maps.normal),
         orm: lib(&m.maps.orm),
+        height: lib(&m.maps.height),
         ..Default::default()
+    }
+}
+
+/// Parallax depth (metres of relief) a library material of `kind` starts with: guesses, tuned
+/// on low-sun renders (gravel016 at 3 cm hardly changed; 8 cm read as stones but is more than
+/// the pebbles are); 0 for walls, roofs and the rest (the march runs on up-facing ground only).
+pub fn parallax_of_kind(kind: &str) -> f32 {
+    match kind {
+        "gravel" => 0.05,
+        "ground" | "stone" => 0.03,
+        "paving" | "tile" => 0.015,
+        _ => 0.0,
     }
 }
 
@@ -67,13 +83,24 @@ pub fn overlay(lib: &Library, m: &Material) -> Option<Overlay> {
     let builtin = builtin_palette().into_iter().find(|b| b.id == m.id)?;
     // Mowing stripes do not make a lawn another material: it keeps its library look.
     let mut unstriped = m.clone();
-    if let visioncraft_core::SurfaceKind::Lawn3d(l) = &mut unstriped.kind {
-        (l.stripes_m, l.stripes_deg) = (0.0, 0.0);
+    // Nor does a parallax depth: it is a setting of the look.
+    match &mut unstriped.kind {
+        SurfaceKind::Lawn3d(l) => (l.stripes_m, l.stripes_deg) = (0.0, 0.0),
+        SurfaceKind::StandardTriplanarPbr {
+            parallax_depth_m, ..
+        } => *parallax_depth_m = 0.0,
+        _ => {}
     }
     (builtin == unstriped).then(|| Overlay {
         spec: spec_of_entry(entry),
         scale_m: scale_of(entry),
         variation: *variation,
+        // The lawn's blades stand on it: no relief under them.
+        parallax_m: if m.id == "lawn" {
+            0.0
+        } else {
+            parallax_of_kind(&entry.kind)
+        },
         tint: match m.id.as_str() {
             "plaster" => [0.86, 0.81, 0.73],
             // Light leaving a lawn has mostly crossed a blade on its way (as the 3D blades'
@@ -131,7 +158,8 @@ pub fn material_for(s: &Studio, lib_id: &str) -> Result<Result<String, Value>, S
     Ok(Err(json!({
         "name": entry.name,
         "kind": {"type": "standard_triplanar_pbr", "map_scale_m": scale_of(&entry),
-                 "relief": 1.0, "gloss": 0.0, "weathering": 0.0},
+                 "relief": 1.0, "gloss": 0.0, "weathering": 0.0,
+                 "parallax_depth_m": if entry.maps.height.is_some() { parallax_of_kind(&entry.kind) } else { 0.0 }},
         // the maps scale the factors: 1 lets the pictures decide
         "base_color": [1.0, 1.0, 1.0, 1.0], "metallic": 1.0, "roughness": 1.0,
         "maps": {"base_color": base, "normal": entry.maps.normal, "orm": entry.maps.orm,

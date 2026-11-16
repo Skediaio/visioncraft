@@ -56,6 +56,10 @@ pub enum SurfaceKind {
         relief: f32,
         gloss: f32,
         weathering: f32,
+        /// Depth of the height map's relief in metres (parallax occlusion on up-facing ground,
+        /// 0..0.1; 0: off, not written). Only a material with a `height` map shows it.
+        #[serde(default, skip_serializing_if = "is_zero")]
+        parallax_depth_m: f32,
     },
     ArchitecturalGlass {
         /// Linear RGB.
@@ -78,6 +82,7 @@ impl Default for SurfaceKind {
             relief: 0.0,
             gloss: 0.0,
             weathering: 0.0,
+            parallax_depth_m: 0.0,
         }
     }
 }
@@ -117,7 +122,12 @@ impl Material {
                 relief,
                 gloss,
                 weathering,
-            } => *map_scale_m > 0.0 && [relief, gloss, weathering].iter().all(|v| unit(**v)),
+                parallax_depth_m,
+            } => {
+                *map_scale_m > 0.0
+                    && [relief, gloss, weathering].iter().all(|v| unit(**v))
+                    && (0.0..=0.1).contains(parallax_depth_m)
+            }
             SurfaceKind::ArchitecturalGlass { tint, roughness } => {
                 tint.iter().all(|c| unit(*c)) && unit(*roughness)
             }
@@ -263,6 +273,7 @@ pub fn builtin_palette() -> Vec<Material> {
         relief: 0.0,
         gloss: 0.0,
         weathering: 0.0,
+        parallax_depth_m: 0.0,
     };
     vec![
         plain(
@@ -340,7 +351,11 @@ pub fn builtin_palette() -> Vec<Material> {
         plain("metal", "Metal", [0.55, 0.56, 0.58], 1.0, 0.35, pbr(1.0)),
         plain("soil", "Soil", [0.06, 0.035, 0.02], 0.0, 1.0, pbr(1.0)),
         // Humus and moss under woodland (`planting.add_floor`): the library's CC0 Ground 045
-        // (ambientCG, Lennart Demes), 3 m to a tile.
+        // (ambientCG, Lennart Demes), 3 m to a tile. Variation 0.6 as the lawn's: the macro
+        // noise breaks the 3 m repeat (after the two tiling scales of J. Moore, "Terrain
+        // Rendering in Far Cry 5", GDC 2018). 3 cm of parallax relief is a guess for litter over
+        // humus; its normal map stays off (at full strength the dark floor in canopy shade read
+        // as rippled wet tar).
         {
             let mut m = plain(
                 "forest-floor",
@@ -348,14 +363,22 @@ pub fn builtin_palette() -> Vec<Material> {
                 [1.0, 1.0, 1.0],
                 0.0,
                 1.0,
-                pbr(3.0),
+                SurfaceKind::StandardTriplanarPbr {
+                    map_scale_m: 3.0,
+                    relief: 0.0,
+                    gloss: 0.0,
+                    weathering: 0.0,
+                    parallax_depth_m: 0.03,
+                },
             );
             m.maps = MaterialMaps {
                 base_color: Some("materials/ground045/basecolor.jpg".into()),
                 normal: Some("materials/ground045/normal.jpg".into()),
                 orm: Some("materials/ground045/orm.jpg".into()),
+                height: Some("materials/ground045/height.jpg".into()),
                 ..Default::default()
             };
+            m.variation = 0.6;
             m
         },
         // Dry beach sand: pale, warm; darkened where wet by the sea's shore band.
@@ -519,6 +542,35 @@ mod tests {
         };
         l.stripes_m = 12.0;
         assert!(lawn.validate().is_err());
+    }
+
+    #[test]
+    fn parallax_depth_round_trips_and_is_checked() {
+        let mut m = builtin_palette()
+            .into_iter()
+            .find(|m| m.id == "gravel")
+            .unwrap();
+        assert!(!serde_json::to_string(&m).unwrap().contains("parallax"));
+        let SurfaceKind::StandardTriplanarPbr {
+            parallax_depth_m, ..
+        } = &mut m.kind
+        else {
+            panic!()
+        };
+        *parallax_depth_m = 0.03;
+        assert!(m.validate().is_ok());
+        let back: Material = serde_json::from_str(&serde_json::to_string(&m).unwrap()).unwrap();
+        assert_eq!(back, m);
+        for bad in [-0.01, f32::NAN, 0.5] {
+            let SurfaceKind::StandardTriplanarPbr {
+                parallax_depth_m, ..
+            } = &mut m.kind
+            else {
+                panic!()
+            };
+            *parallax_depth_m = bad;
+            assert!(m.validate().is_err(), "{bad}");
+        }
     }
 
     #[test]

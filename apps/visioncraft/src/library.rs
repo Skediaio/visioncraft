@@ -100,6 +100,9 @@ pub struct TexSpec {
     pub roughness: Option<TexSrc>,
     pub metallic: Option<TexSrc>,
     pub ao: Option<TexSrc>,
+    /// Height (white = top), for parallax; shares the renderer's occlusion slot, so it is
+    /// bound only when `ao` is absent.
+    pub height: Option<TexSrc>,
 }
 
 impl TexSpec {
@@ -430,6 +433,7 @@ impl Library {
                 (&spec.roughness, false),
                 (&spec.metallic, false),
                 (&spec.ao, false),
+                (&spec.height, false),
             ] {
                 if let Some(TexSrc::Lib(p)) = src {
                     let _ = self.store.texture(p, srgb, true, 10.0);
@@ -488,6 +492,7 @@ impl Library {
             m.roughness_map = get(self, &spec.roughness, false);
             m.metallic_map = get(self, &spec.metallic, false);
             m.occlusion_map = get(self, &spec.ao, false);
+            m.height_map = get(self, &spec.height, false);
             if spec.base.is_some() && m.base_color_map.is_none() {
                 // Until the picture arrives: a mid tone instead of a white flash.
                 for c in &mut m.base_color[..3] {
@@ -1110,6 +1115,7 @@ pub fn spec_of(maps: &visioncraft_core::material::MaterialMaps) -> TexSpec {
         } else {
             src(&maps.ambient_occlusion)
         },
+        height: src(&maps.height),
     }
 }
 

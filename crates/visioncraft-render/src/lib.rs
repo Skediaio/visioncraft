@@ -88,7 +88,7 @@ const MSAA_SAMPLES: u32 = 4;
 /// Uniform slot size: WebGPU's default `minUniformBufferOffsetAlignment`.
 const SLOT: u64 = 256;
 const VERTEX_STRIDE: u64 = 44; // position, normal, face id, uv, wind
-const MATERIAL_SIZE: u64 = 80;
+const MATERIAL_SIZE: u64 = 96;
 const CASCADE_SIZE: u64 = 80;
 const AO_RADIUS: f32 = 0.6; // metres
 /// Staging chunk of the upload belt: a streamed step (256 KB a frame) with row padding fits.
@@ -223,6 +223,13 @@ pub struct Material {
     pub roughness_map: Option<TextureId>,
     pub metallic_map: Option<TextureId>,
     pub occlusion_map: Option<TextureId>,
+    /// Height map (red, white = top) for parallax occlusion and self-shadowing. It shares the
+    /// occlusion map's binding (the forward stage is at the 16 sampled textures WebGPU
+    /// guarantees), so it is used only when `occlusion_map` is absent: a packed `orm_map`
+    /// carries the occlusion then.
+    pub height_map: Option<TextureId>,
+    /// Depth of the height map's relief in metres (0: off).
+    pub parallax_depth_m: f32,
     /// Linear emissive colour, scaled by `emissive_strength` (cd/m2).
     pub emissive: [f32; 3],
     pub emissive_strength: f32,
@@ -262,6 +269,8 @@ impl Default for Material {
             roughness_map: None,
             metallic_map: None,
             occlusion_map: None,
+            height_map: None,
+            parallax_depth_m: 0.0,
             emissive: [0.0; 3],
             emissive_strength: 0.0,
             projection: Projection::Uv,
@@ -309,7 +318,7 @@ impl Material {
             self.orm_map,
             self.roughness_map,
             self.metallic_map,
-            self.occlusion_map,
+            self.occlusion_map.or(self.height_map),
         ]
     }
 }
@@ -2315,11 +2324,10 @@ impl Renderer {
             t.and_then(|t| self.textures.get(t.0 as usize)?.as_ref())
                 .is_some()
         };
-        let bits = material
-            .maps()
-            .iter()
-            .enumerate()
-            .fold(0u32, |acc, (i, t)| acc | ((present(*t) as u32) << i));
+        let bits = texture_bits(
+            material.maps().map(present),
+            material.occlusion_map.is_none(),
+        );
         self.queue
             .write_buffer(&m.buffer, 0, &material_bytes(material, bits));
         if let Some(Some(m)) = self.materials.get_mut(id.0 as usize) {
@@ -4172,6 +4180,17 @@ impl Bytes {
     }
 }
 
+/// scene.wgsl's texture bits of the six map slots; a slot 6 filled while the material has no
+/// occlusion map holds the height map (HAS_HEIGHT, 64, instead of 32).
+fn texture_bits(present: [bool; 6], no_occlusion: bool) -> u32 {
+    let bits = (0..6).fold(0u32, |acc, i| acc | ((present[i] as u32) << i));
+    if no_occlusion && bits & 32 != 0 {
+        bits ^ (32 | 64)
+    } else {
+        bits
+    }
+}
+
 /// The material uniform (scene.wgsl `Material`); `bits` flags the maps
 /// that are present.
 fn material_bytes(material: &Material, bits: u32) -> Vec<u8> {
@@ -4213,6 +4232,7 @@ fn material_bytes(material: &Material, bits: u32) -> Vec<u8> {
     ] {
         b.0.extend_from_slice(&u.to_le_bytes());
     }
+    b.floats(&[material.parallax_depth_m.clamp(0.0, 0.1), 0.0, 0.0, 0.0]);
     debug_assert_eq!(b.0.len() as u64, MATERIAL_SIZE);
     b.0
 }
@@ -5872,6 +5892,17 @@ mod tests {
     use super::*;
 
     /// Every WGSL module parses and validates with naga, without a GPU.
+    #[test]
+    fn height_takes_the_occlusion_slot_only_without_an_occlusion_map() {
+        let all = [true; 6];
+        assert_eq!(texture_bits(all, false), 63);
+        assert_eq!(texture_bits(all, true), 31 | 64);
+        assert_eq!(
+            texture_bits([true, true, true, false, false, false], true),
+            7
+        );
+    }
+
     #[test]
     fn shaders_validate() {
         assert!(COMMON.contains(FAST_SHADING_LINE));
