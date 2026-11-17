@@ -28,6 +28,7 @@ pub mod shape;
 pub mod sky_volume;
 pub mod spec;
 pub mod sun;
+pub mod sun_hours;
 pub mod terrain;
 pub mod tiers;
 pub mod viewpoint;
@@ -61,7 +62,7 @@ pub use project::{
     ProjectError, RenderStyle, Site, SkyChoice, SunTime, Surroundings, Transform, ViewState,
     YEARS_MAX,
 };
-pub use raycast::{Hit, ground_height, raycast};
+pub use raycast::{Hit, ground_height, raycast, raycast_any};
 pub use season::Season;
 pub use session::{Command, CommandError, Session};
 pub use shape::{

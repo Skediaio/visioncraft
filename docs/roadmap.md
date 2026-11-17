@@ -29,6 +29,13 @@ nothing here is a promise of a date.
 - **Coast showcase:** the `coast` example, a beachfront house low on a mainland beach with a
   coastal garden round it, on shaped terrain. Next: the same on real coastal topography once ground from
   coordinates exists.
+- **Sun hours:** `query.sun_hours` gives the hours of direct sun for a spot (with the intervals)
+  or as a grid over an area, on any date or season, with shadow from models, shapes, terrain
+  and plant crowns grown `years` (trees, palms, conifers, shrubs and hedges as ellipsoids; bare
+  deciduous crowns let 60 % through). Area results come with the share in full sun (6+ h), part
+  shade (3-6 h) and shade. Next: the map shown in the app, plants filtered by the light a spot
+  gets, and what is left out: clouds, crowns as ellipsoids only (no leaf gaps, no climbers,
+  perennials or lawn), custom species, the neighbours' volumes (see below).
 
 ## Next
 
@@ -41,8 +48,6 @@ nothing here is a promise of a date.
 - **North and site:** turning the whole drawing against north is done (`site.set north_deg`,
   applied to the sun, wind, waves, river flow and lawn stripes). Next: set the site by address
   (`site.set` already takes coordinates), so the sun is right without knowing compass directions.
-- **Sun hours:** hours of sun per day for any spot or area, as a number and as a map over the
-  garden, by season and with grown plants; plants filtered by the light a spot gets.
 - **Shade from the surroundings:** neighbouring buildings and terrain as simple volumes that cast
   shadow but are not part of the design.
 - **A plan as underlay:** a scaled image or PDF page of a floor plan or site plan under the

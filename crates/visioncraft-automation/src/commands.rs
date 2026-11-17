@@ -246,6 +246,97 @@ pub fn host_docs() -> Vec<CommandDoc> {
             false,
         ),
         host_doc(
+            "query.sun_hours",
+            "Sun Hours",
+            "Hours of direct sun on one day, for a spot (`point`) or as a grid over an area (`outline`, cell centres inside it only, at most 10,000 cells). The sun is sampled from sunrise to sunset every `step_minutes` at the project's site and north, and a spot counts a moment as sunny when nothing between it and the sun casts shadow: models, shapes and terrain on visible layers, and with `plants` the crowns of woody plants (trees, palms, conifers, shrubs and hedges as ellipsoids from the growth table, `years` after planting). Evergreens and summer crowns are opaque; a deciduous crown without leaves lets 60 % of the sun through, so it counts 0.6 in winter. Clouds are not counted. Area results classify cells by the usual plant-label thresholds: full sun 6+ hours, part shade 3 to 6, shade under 3; the histogram classes are 0-2, 2-4, 4-6 and 6+ hours. Give exactly one of `point` and `outline`.",
+            vec![
+                p(
+                    "point",
+                    "[x, z]",
+                    Some("m"),
+                    false,
+                    None,
+                    &[],
+                    "The spot; its height is the ground there plus `height_m`",
+                ),
+                p(
+                    "outline",
+                    "[[x, z], ...]",
+                    Some("m"),
+                    false,
+                    None,
+                    &[],
+                    "The area, at least 3 points; sampled on a grid of `cell_m`",
+                ),
+                p(
+                    "cell_m",
+                    "number",
+                    Some("m"),
+                    false,
+                    Some("1"),
+                    &[],
+                    "Grid cell of an outline, 0.01..1000; refused when it makes more than 10,000 cells",
+                ),
+                p(
+                    "height_m",
+                    "number",
+                    Some("m"),
+                    false,
+                    Some("0.05"),
+                    &[],
+                    "How far above the ground to measure, 0..100",
+                ),
+                p(
+                    "date",
+                    "{month, day}",
+                    None,
+                    false,
+                    Some("the project's date"),
+                    &[],
+                    "The day, in the project's year",
+                ),
+                p(
+                    "season",
+                    "string",
+                    None,
+                    false,
+                    None,
+                    &["spring", "summer", "autumn", "winter"],
+                    "Instead of `date`: 21 March, 21 June, 21 September or 21 December (six months on south of the equator)",
+                ),
+                p(
+                    "step_minutes",
+                    "number",
+                    Some("min"),
+                    false,
+                    Some("10"),
+                    &[],
+                    "Sampling step, 1..60",
+                ),
+                p(
+                    "plants",
+                    "boolean",
+                    None,
+                    false,
+                    Some("true"),
+                    &[],
+                    "Plant crowns cast shadow",
+                ),
+                p(
+                    "years",
+                    "number",
+                    Some("years"),
+                    false,
+                    Some("the view's years, else 0"),
+                    &[],
+                    "Years after planting the plants have grown, 0..60",
+                ),
+            ],
+            "point: {point, height, date: {month, day}, sunrise_hour, sunset_hour, daylight_hours, sun_hours, intervals: [[start_hour, end_hour], ...], crowns, years}; outline: {date, cell_m, origin: [x0, z0], cols, rows, hours (row-major from the lowest z, the north side, null outside the outline), min, max, mean, daylight_hours, histogram: {\"0-2\", \"2-4\", \"4-6\", \"6+\"}, full_sun_share, part_shade_share, shade_share, cells, crowns, years}. Hours are local clock hours.",
+            json!({"outline": [[0, 0], [10, 0], [10, 8], [0, 8]], "season": "summer", "cell_m": 1}),
+            false,
+        ),
+        host_doc(
             "query.ground_length",
             "Ground Length",
             "The length of a walk along path as it runs over the ground (terrain, areas and models), sampled every 0.25 m; where there is no ground it counts as height 0.",
@@ -659,6 +750,50 @@ pub fn execute(host: &mut dyn Host, id: &str, params: &Value) -> Result<Value, S
             }
             let (session, state) = host.parts();
             Ok(inspect::raycast_json(session, state, origin, dir))
+        }
+        "query.sun_hours" => {
+            Fields::new(
+                id,
+                "parameter",
+                Some(params),
+                &[
+                    "point",
+                    "outline",
+                    "cell_m",
+                    "height_m",
+                    "date",
+                    "season",
+                    "step_minutes",
+                    "plants",
+                    "years",
+                ],
+            )?;
+            #[derive(serde::Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Date {
+                month: u32,
+                day: u32,
+            }
+            let date = take::<Date>(id, params, "date")?.map(|d| (d.month, d.day));
+            let season = match take::<String>(id, params, "season")? {
+                Some(s) => Some(visioncraft_core::Season::parse(&s).ok_or_else(|| {
+                    format!("{id}: `season` must be spring, summer, autumn or winter, not `{s}`")
+                })?),
+                None => None,
+            };
+            let q = inspect::SunHoursQuery {
+                point: take(id, params, "point")?,
+                outline: take(id, params, "outline")?,
+                height_m: take(id, params, "height_m")?.unwrap_or(0.05),
+                date,
+                season,
+                step_minutes: take(id, params, "step_minutes")?.unwrap_or(10.0),
+                plants: take(id, params, "plants")?.unwrap_or(true),
+                years: take(id, params, "years")?,
+                cell_m: take(id, params, "cell_m")?.unwrap_or(1.0),
+            };
+            let (session, state) = host.parts();
+            inspect::sun_hours_json(session, state, &q)
         }
         "query.ground_length" => {
             Fields::new(id, "parameter", Some(params), &["path"])?;

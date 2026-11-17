@@ -105,6 +105,7 @@ loaded geometry or a GPU:
 | `document.inspect` | `{faces? = true, measures? = true, placements? = false, full? = false}` | below |
 | `query.ground_length` | `{path}` | `{ground_length_m}`: a walk over terrain, areas and models |
 | `query.raycast` | `{origin, direction}` | `{hit, owner, kind, face, body, point, normal, distance}` or `{hit: false}` |
+| `query.sun_hours` | `{point \| outline, season \| date?, cell_m? = 1, height_m? = 0.05, step_minutes? = 10, plants? = true, years?}` | a point: `{point, height, date, sunrise_hour, sunset_hour, daylight_hours, sun_hours, intervals}`; an outline: `{date, cell_m, origin, cols, rows, hours, min, max, mean, daylight_hours, histogram, full_sun_share, part_shade_share, shade_share}` |
 | `query.ground_height` | `{x, z}` | `{x, z, height}` (terrain, areas and models; `null` over nothing) |
 | `agent.log` | `{limit? = 50}` | `{total, entries}` (above) |
 | `catalog.search` | `{query?, category?, exposure?, max_height_m?, limit? = 50}` | `{total, assets: [{id, name, category, size_m, license, author, plant}]}` |

@@ -17,7 +17,7 @@ JSON lines (`visioncraft-cli serve`), MCP (`visioncraft-cli mcp`), the command l
 | Module | Does |
 |---|---|
 | `host` | `Host` (a core `Session`, its `HostState`: open file, file roots, model geometry, catalogue; optional pictures) and `Headless`, the CLI's host |
-| `commands` | `execute`: the core's commands plus the host's (`file.*`, `edit.*`, `document.inspect`, `query.raycast`, `query.ground_height`, `query.ground_length`, `catalog.search`, `species.list`, `planting.list_presets`, `view.render`, `agent.log`); the command list; batches as in 3DCraft, `atomic` on request; intents and the agent log |
+| `commands` | `execute`: the core's commands plus the host's (`file.*`, `edit.*`, `document.inspect`, `query.raycast`, `query.sun_hours`, `query.ground_height`, `query.ground_length`, `catalog.search`, `species.list`, `planting.list_presets`, `view.render`, `agent.log`); the command list; batches as in 3DCraft, `atomic` on request; intents and the agent log |
 | `docs` | `CommandDoc`: the core's specs and the host's commands in one shape |
 | `rpc`, `mcp` | the two line protocols: `handle_line(host, line)` and `serve(host, input, output)` |
 | `control`, `bridge`, `discovery`, `proof` | the loopback control channel (native only): server, MCP bridge client, finding a window, the HMAC challenge |

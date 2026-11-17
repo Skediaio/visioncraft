@@ -1,13 +1,19 @@
 //! The project as an agent reads it (`document.inspect`), and the queries on its geometry
-//! (`query.raycast`, `query.ground_height`, `query.ground_length`), in world space.
+//! (`query.raycast`, `query.ground_height`, `query.ground_length`, `query.sun_hours`), in world
+//! space.
 
 use crate::host::{HostState, missing_json};
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
+use visioncraft_core::sun_hours::{
+    FULL_SUN_HOURS, Occluder, PART_SHADE_HOURS, SunSample, day_sun, days_in_month, lit_intervals,
+    plant_occluder, season_date,
+};
 use visioncraft_core::{
-    Generator, ImportedModel, Project, Session, Shape, Transform, area_lifts, evaluate_in_scene,
-    evaluate_surface_fill, measure, placed_shape_mesh, plant_size, raycast, water_areas,
+    Generator, ImportedModel, Project, Season, Session, Shape, Transform, area_lifts,
+    evaluate_in_scene, evaluate_surface_fill, measure, placed_shape_mesh, plant_size, raycast,
+    raycast_any, water_areas,
 };
 
 /// A model's placement: scale, then rotation about +Y, then translation.
@@ -238,7 +244,8 @@ fn generator_assets(g: &Generator) -> Vec<String> {
     assets
 }
 
-fn bbox(mesh: &ImportedModel, xf: Option<&Transform>) -> Value {
+/// The world-space box of a mesh, `None` for an empty one.
+fn world_bounds(mesh: &ImportedModel, xf: Option<&Transform>) -> Option<[[f32; 3]; 2]> {
     let (mut lo, mut hi) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
     for b in &mesh.bodies {
         for i in 0..8 {
@@ -250,11 +257,11 @@ fn bbox(mesh: &ImportedModel, xf: Option<&Transform>) -> Value {
             }
         }
     }
-    if lo[0].is_finite() {
-        json!([lo, hi])
-    } else {
-        Value::Null
-    }
+    lo[0].is_finite().then_some([lo, hi])
+}
+
+fn bbox(mesh: &ImportedModel, xf: Option<&Transform>) -> Value {
+    world_bounds(mesh, xf).map_or(Value::Null, |b| json!(b))
 }
 
 /// What `document.inspect` returns.
@@ -476,6 +483,301 @@ pub(crate) fn ground_length_json(session: &Session, state: &HostState, path: &[[
     let p = session.project();
     let owners = owners(p, state);
     json!({"ground_length_m": measure::polyline_length_on_ground(path, &|x, z| ground_at(p, &owners, x, z, true))})
+}
+
+/// What `query.sun_hours` was asked, checked by the command.
+pub(crate) struct SunHoursQuery {
+    pub point: Option<[f32; 2]>,
+    pub outline: Option<Vec<[f32; 2]>>,
+    pub height_m: f32,
+    pub date: Option<(u32, u32)>,
+    pub season: Option<Season>,
+    pub step_minutes: f32,
+    pub plants: bool,
+    pub years: Option<f32>,
+    pub cell_m: f32,
+}
+
+/// The most cells an outline is sampled at.
+const MAX_CELLS: usize = 10_000;
+
+/// Whether the ray reaches the box: the slab test.
+fn ray_hits_box(origin: [f32; 3], dir: [f32; 3], b: &[[f32; 3]; 2]) -> bool {
+    let (mut t0, mut t1) = (0.0f32, f32::INFINITY);
+    for k in 0..3 {
+        if dir[k] == 0.0 {
+            if origin[k] < b[0][k] || origin[k] > b[1][k] {
+                return false;
+            }
+            continue;
+        }
+        let (a, c) = (
+            (b[0][k] - origin[k]) / dir[k],
+            (b[1][k] - origin[k]) / dir[k],
+        );
+        t0 = t0.max(a.min(c));
+        t1 = t1.min(a.max(c));
+    }
+    t0 <= t1
+}
+
+/// What casts shadow: the visible owners (each with its world box, to skip the ones a ray
+/// cannot reach), the terrain and the plant crowns.
+struct Shadows<'a> {
+    project: &'a Project,
+    owners: Vec<(&'a Owner, [[f32; 3]; 2])>,
+    crowns: Vec<Occluder>,
+}
+
+impl Shadows<'_> {
+    /// The share (0..=1) of the sun's light that reaches `origin` along `dir`: 0 behind a model,
+    /// shape or the terrain, else the product of what the crowns in the way let through.
+    fn light(&self, origin: [f32; 3], dir: [f32; 3]) -> f32 {
+        for (o, b) in &self.owners {
+            if !ray_hits_box(origin, dir, b) {
+                continue;
+            }
+            let (lo, ld) = match &o.xf {
+                Some(t) => (to_local(t, origin, true), to_local(t, dir, false)),
+                None => (origin, dir),
+            };
+            if raycast_any(&o.mesh, lo, ld) {
+                return 0.0;
+            }
+        }
+        if let Some(t) = &self.project.terrain
+            && t.raycast(origin, dir).is_some()
+        {
+            return 0.0;
+        }
+        self.crowns.iter().map(|c| c.pass(origin, dir)).product()
+    }
+}
+
+/// The crowns of the project's woody plants `years` after planting, as ellipsoids.
+fn plant_crowns(
+    project: &Project,
+    owners: &[Owner],
+    assets: &[visioncraft_core::Asset],
+    month: u32,
+    years: f32,
+) -> Vec<Occluder> {
+    let mut out = Vec::new();
+    for g in &project.generators {
+        if !project.layer_visible(g.layer()) {
+            continue;
+        }
+        for pl in placements(project, owners, assets, g).0 {
+            // Species of the library say whether they keep their leaves; any other asset is
+            // counted as an evergreen: opaque.
+            let evergreen = pl
+                .asset
+                .strip_prefix("flora:")
+                .and_then(visioncraft_flora::Species::by_id)
+                .is_none_or(|s| s.evergreen);
+            let age = g.planted_age_years().unwrap_or_else(|| {
+                visioncraft_core::growth::growth_of(&pl.asset, None).planted_age_years
+            }) + years;
+            out.extend(plant_occluder(
+                &pl.asset,
+                pl.position,
+                pl.scale,
+                age,
+                evergreen,
+                month,
+                project.site.latitude,
+            ));
+        }
+    }
+    out
+}
+
+fn r2(v: f64) -> f64 {
+    (v * 100.0).round() / 100.0
+}
+
+fn r3(v: f64) -> f64 {
+    (v * 1000.0).round() / 1000.0
+}
+
+/// `query.sun_hours`: hours of direct sun at a point or over an outline, on a date.
+pub(crate) fn sun_hours_json(
+    session: &Session,
+    state: &HostState,
+    q: &SunHoursQuery,
+) -> Result<Value, String> {
+    const ID: &str = "query.sun_hours";
+    let p = session.project();
+    if q.point.is_some() == q.outline.is_some() {
+        return Err(format!("{ID}: give exactly one of `point` and `outline`"));
+    }
+    if !(0.0..=100.0).contains(&q.height_m) {
+        return Err(format!("{ID}: `height_m` must be 0..100"));
+    }
+    if !(1.0..=60.0).contains(&q.step_minutes) {
+        return Err(format!("{ID}: `step_minutes` must be 1..60"));
+    }
+    if let Some(y) = q.years
+        && !(0.0..=visioncraft_core::YEARS_MAX).contains(&y)
+    {
+        return Err(format!(
+            "{ID}: `years` must be 0..{}",
+            visioncraft_core::YEARS_MAX
+        ));
+    }
+    if q.date.is_some() && q.season.is_some() {
+        return Err(format!("{ID}: give `date` or `season`, not both"));
+    }
+    let year = p.time.year;
+    let (month, day) = match (q.date, q.season) {
+        (Some((m, d)), _) => {
+            if !(1..=12).contains(&m) || d < 1 || d > days_in_month(year, m) {
+                return Err(format!(
+                    "{ID}: `date` {{month: {m}, day: {d}}} is not a day of {year}"
+                ));
+            }
+            (m, d)
+        }
+        (None, Some(s)) => season_date(s, p.site.latitude),
+        (None, None) => (p.time.month, p.time.day),
+    };
+    // A grid first: a request that is too large is refused before any ray is cast.
+    struct Grid {
+        outline: Vec<[f32; 2]>,
+        origin: [f32; 2],
+        cols: usize,
+        rows: usize,
+    }
+    let grid = match &q.outline {
+        Some(o) => {
+            if o.len() < 3 {
+                return Err(format!("{ID}: `outline` needs at least 3 points"));
+            }
+            if !(0.01..=1000.0).contains(&q.cell_m) {
+                return Err(format!("{ID}: `cell_m` must be 0.01..1000"));
+            }
+            let lo = [0, 1].map(|k| o.iter().map(|v| v[k]).fold(f32::INFINITY, f32::min));
+            let hi = [0, 1].map(|k| o.iter().map(|v| v[k]).fold(f32::NEG_INFINITY, f32::max));
+            let size = |k: usize| (((hi[k] - lo[k]) / q.cell_m).ceil() as usize).max(1);
+            let (cols, rows) = (size(0), size(1));
+            let too_many = || {
+                format!(
+                    "{ID}: the outline would need more than {MAX_CELLS} cells at `cell_m` {}; use a larger `cell_m` (about {:.1} m would do)",
+                    q.cell_m,
+                    q.cell_m * ((cols * rows) as f32 / MAX_CELLS as f32).sqrt().max(1.0) * 1.1
+                )
+            };
+            if cols.saturating_mul(rows) > 25 * MAX_CELLS {
+                return Err(too_many());
+            }
+            Some(Grid {
+                outline: o.clone(),
+                origin: lo,
+                cols,
+                rows,
+            })
+        }
+        None => None,
+    };
+    let cells: Vec<Option<[f32; 2]>> = grid.as_ref().map_or_else(Vec::new, |g| {
+        (0..g.rows * g.cols)
+            .map(|i| {
+                let c = [
+                    g.origin[0] + ((i % g.cols) as f32 + 0.5) * q.cell_m,
+                    g.origin[1] + ((i / g.cols) as f32 + 0.5) * q.cell_m,
+                ];
+                visioncraft_core::inside_outline(c, &g.outline).then_some(c)
+            })
+            .collect()
+    });
+    if cells.iter().flatten().count() > MAX_CELLS {
+        let n = cells.iter().flatten().count();
+        return Err(format!(
+            "{ID}: the outline has {n} cells at `cell_m` {}, at most {MAX_CELLS} are sampled; use a larger `cell_m` (about {:.1} m would do)",
+            q.cell_m,
+            q.cell_m * (n as f32 / MAX_CELLS as f32).sqrt() * 1.1
+        ));
+    }
+
+    let day_sun = day_sun(&p.site, year, month, day, f64::from(q.step_minutes));
+    let owners = owners(p, state);
+    let years = q.years.or(p.view.years).unwrap_or(0.0);
+    let crowns = if q.plants {
+        plant_crowns(p, &owners, &state.catalog.assets, month, years)
+    } else {
+        Vec::new()
+    };
+    let shadows = Shadows {
+        project: p,
+        owners: owners
+            .iter()
+            .filter_map(|o| Some((o, world_bounds(&o.mesh, o.xf.as_ref())?)))
+            .collect(),
+        crowns,
+    };
+    // The light at a spot for every slice of the day.
+    let lit_at = |x: f32, z: f32| -> Vec<(SunSample, f32)> {
+        let y = ground_at(p, &owners, x, z, true).unwrap_or(0.0) + q.height_m;
+        // A little above the sample so the ray does not start in its own ground.
+        let origin = [x, y + 0.01, z];
+        day_sun
+            .samples
+            .iter()
+            .map(|s| (*s, shadows.light(origin, s.direction)))
+            .collect()
+    };
+    let hours_of = |lit: &[(SunSample, f32)]| -> f64 {
+        lit.iter().map(|(s, l)| s.hours() * f64::from(*l)).sum()
+    };
+    let date = json!({"month": month, "day": day});
+    let daylight = r2(day_sun.daylight_hours);
+    match (q.point, grid) {
+        (Some([x, z]), _) => {
+            let lit = lit_at(x, z);
+            let height = ground_at(p, &owners, x, z, true).unwrap_or(0.0) + q.height_m;
+            Ok(json!({
+                "point": [x, z], "height": r3(f64::from(height)), "date": date,
+                "sunrise_hour": day_sun.sunrise.map(r2), "sunset_hour": day_sun.sunset.map(r2),
+                "daylight_hours": daylight, "sun_hours": r2(hours_of(&lit)),
+                "intervals": lit_intervals(&lit).iter().map(|i| [r2(i[0]), r2(i[1])]).collect::<Vec<_>>(),
+                "crowns": shadows.crowns.len(), "years": years,
+            }))
+        }
+        (None, Some(g)) => {
+            let hours: Vec<Option<f64>> = cells
+                .iter()
+                .map(|c| c.map(|[x, z]| hours_of(&lit_at(x, z))))
+                .collect();
+            let inside: Vec<f64> = hours.iter().flatten().copied().collect();
+            if inside.is_empty() {
+                return Err(format!(
+                    "{ID}: no cell centre lies inside the outline; use a smaller `cell_m`"
+                ));
+            }
+            let n = inside.len() as f64;
+            let share =
+                |f: &dyn Fn(f64) -> bool| r3(inside.iter().filter(|h| f(**h)).count() as f64 / n);
+            let count = |lo: f64, hi: f64| inside.iter().filter(|h| **h >= lo && **h < hi).count();
+            Ok(json!({
+                "date": date, "cell_m": q.cell_m, "origin": g.origin,
+                "cols": g.cols, "rows": g.rows,
+                "hours": hours.iter().map(|h| h.map(r2)).collect::<Vec<_>>(),
+                "min": r2(inside.iter().copied().fold(f64::INFINITY, f64::min)),
+                "max": r2(inside.iter().copied().fold(f64::NEG_INFINITY, f64::max)),
+                "mean": r2(inside.iter().sum::<f64>() / n),
+                "daylight_hours": daylight,
+                "histogram": {
+                    "0-2": count(0.0, 2.0), "2-4": count(2.0, 4.0),
+                    "4-6": count(4.0, 6.0), "6+": count(6.0, f64::INFINITY),
+                },
+                "full_sun_share": share(&|h| h >= FULL_SUN_HOURS),
+                "part_shade_share": share(&|h| (PART_SHADE_HOURS..FULL_SUN_HOURS).contains(&h)),
+                "shade_share": share(&|h| h < PART_SHADE_HOURS),
+                "cells": inside.len(), "crowns": shadows.crowns.len(), "years": years,
+            }))
+        }
+        (None, None) => unreachable!("one of point and outline was checked"),
+    }
 }
 
 #[cfg(test)]

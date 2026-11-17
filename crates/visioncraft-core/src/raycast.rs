@@ -49,6 +49,45 @@ fn hits_box(origin: [f32; 3], dir: [f32; 3], bounds: &[[f32; 3]; 2], max: f32) -
     t0 <= t1
 }
 
+/// Möller-Trumbore: the distance `t > 0` along the ray to triangle `i`, from either side.
+fn triangle_distance(
+    model: &ImportedModel,
+    i: usize,
+    origin: [f32; 3],
+    dir: [f32; 3],
+) -> Option<f32> {
+    let [a, b, c] = model.triangles[i].map(|v| model.positions[v as usize]);
+    let (e1, e2) = (sub(b, a), sub(c, a));
+    let p = cross(dir, e2);
+    let det = dot(e1, p);
+    if det.abs() < 1e-12 {
+        return None;
+    }
+    let inv = 1.0 / det;
+    let s = sub(origin, a);
+    let u = dot(s, p) * inv;
+    if !(0.0..=1.0).contains(&u) {
+        return None;
+    }
+    let q = cross(s, e1);
+    let v = dot(dir, q) * inv;
+    if v < 0.0 || u + v > 1.0 {
+        return None;
+    }
+    let t = dot(e2, q) * inv;
+    (t > 1e-6).then_some(t)
+}
+
+/// Whether the ray `origin + dir * t`, `t > 0`, hits the model at all: stops at the first
+/// triangle found, so it is the cheap test for shadows.
+pub fn raycast_any(model: &ImportedModel, origin: [f32; 3], dir: [f32; 3]) -> bool {
+    model.bodies.iter().any(|body| {
+        hits_box(origin, dir, &body.bounds, f32::INFINITY)
+            && (body.triangles.start as usize..body.triangles.end as usize)
+                .any(|i| triangle_distance(model, i, origin, dir).is_some())
+    })
+}
+
 /// The nearest hit of the ray `origin + dir * t`, `t > 0`, or `None`. Triangles are hit from both
 /// sides. Möller-Trumbore, after a per-body bounding-box reject.
 pub fn raycast(model: &ImportedModel, origin: [f32; 3], dir: [f32; 3]) -> Option<Hit> {
@@ -64,26 +103,9 @@ pub fn raycast(model: &ImportedModel, origin: [f32; 3], dir: [f32; 3]) -> Option
             continue;
         }
         for i in body.triangles.start as usize..body.triangles.end as usize {
-            let [a, b, c] = model.triangles[i].map(|v| model.positions[v as usize]);
-            let (e1, e2) = (sub(b, a), sub(c, a));
-            let p = cross(dir, e2);
-            let det = dot(e1, p);
-            if det.abs() < 1e-12 {
-                continue;
-            }
-            let inv = 1.0 / det;
-            let s = sub(origin, a);
-            let u = dot(s, p) * inv;
-            if !(0.0..=1.0).contains(&u) {
-                continue;
-            }
-            let q = cross(s, e1);
-            let v = dot(dir, q) * inv;
-            if v < 0.0 || u + v > 1.0 {
-                continue;
-            }
-            let t = dot(e2, q) * inv;
-            if t > 1e-6 && best.is_none_or(|(d, _)| t < d) {
+            if let Some(t) = triangle_distance(model, i, origin, dir)
+                && best.is_none_or(|(d, _)| t < d)
+            {
                 best = Some((t, i));
             }
         }

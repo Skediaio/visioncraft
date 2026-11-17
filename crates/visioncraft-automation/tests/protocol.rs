@@ -605,3 +605,98 @@ fn planting_refuses_an_unknown_asset_id_but_a_file_with_one_still_opens() {
             .any(|g| g.assets().contains(&"gone-asset"))
     );
 }
+
+#[test]
+fn sun_hours_of_an_empty_project_is_the_daylight() {
+    let mut h = Headless::new(Access::default());
+    let r = execute(
+        &mut h,
+        1,
+        "query.sun_hours",
+        json!({"point": [0, 0], "season": "summer"}),
+    );
+    assert_eq!(r["ok"], json!(true), "{r}");
+    let r = &r["result"];
+    // Brussels in June: a long day, all of it sunny.
+    assert!(r["daylight_hours"].as_f64().unwrap() > 15.5, "{r}");
+    assert_eq!(r["sun_hours"], r["daylight_hours"]);
+    assert_eq!(r["date"], json!({"month": 6, "day": 21}));
+    assert_eq!(r["intervals"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn a_wall_shades_the_north_side_and_not_the_south() {
+    let mut h = Headless::new(Access::default());
+    let added = execute(
+        &mut h,
+        1,
+        "shape.add_extrusion",
+        json!({"name": "Block", "outline": [[-10, -2], [10, -2], [10, 2], [-10, 2]], "height": 12}),
+    );
+    assert_eq!(added["ok"], json!(true), "{added}");
+    let hours = |h: &mut Headless, z: i32| {
+        let r = execute(
+            h,
+            2,
+            "query.sun_hours",
+            json!({"point": [0, z], "season": "winter", "step_minutes": 5}),
+        );
+        assert_eq!(r["ok"], json!(true), "{r}");
+        r["result"]["sun_hours"].as_f64().unwrap()
+    };
+    // -Z is north: the block is in the sun's way for the point just north of it.
+    let (north, south) = (hours(&mut h, -4), hours(&mut h, 4));
+    // In winter the sun stays in the south: the north side is in the block's shadow all day.
+    assert!(north < 0.5 && south > 5.0, "north {north}, south {south}");
+}
+
+#[test]
+fn sun_hours_over_an_l_shaped_outline_leaves_nulls_outside() {
+    let mut h = Headless::new(Access::default());
+    let r = execute(
+        &mut h,
+        1,
+        "query.sun_hours",
+        json!({"outline": [[0, 0], [6, 0], [6, 2], [2, 2], [2, 6], [0, 6]], "season": "summer", "cell_m": 1}),
+    );
+    assert_eq!(r["ok"], json!(true), "{r}");
+    let r = &r["result"];
+    assert_eq!((r["cols"].clone(), r["rows"].clone()), (json!(6), json!(6)));
+    let hours = r["hours"].as_array().unwrap();
+    assert_eq!(hours.len(), 36);
+    // Row 0 is z 0..1 (all six cells inside), row 5 only the first cell, (5, 5) is outside.
+    assert!(hours[0].is_f64() && hours[5].is_f64() && hours[30].is_f64());
+    assert!(hours[35].is_null() && hours[2 * 6 + 3].is_null());
+    assert_eq!(r["cells"], json!(20));
+    assert_eq!(r["full_sun_share"], json!(1.0));
+    assert_eq!(r["histogram"]["6+"], json!(20));
+}
+
+#[test]
+fn sun_hours_refuses_both_neither_and_too_many_cells() {
+    let mut h = Headless::new(Access::default());
+    let both = execute(
+        &mut h,
+        1,
+        "query.sun_hours",
+        json!({"point": [0, 0], "outline": [[0, 0], [1, 0], [1, 1]]}),
+    );
+    assert_eq!(both["ok"], json!(false));
+    assert!(
+        both["error"].as_str().unwrap().contains("exactly one"),
+        "{both}"
+    );
+    let neither = execute(&mut h, 2, "query.sun_hours", json!({}));
+    assert_eq!(neither["ok"], json!(false), "{neither}");
+    let many = execute(
+        &mut h,
+        3,
+        "query.sun_hours",
+        json!({"outline": [[0, 0], [200, 0], [200, 200], [0, 200]], "cell_m": 1}),
+    );
+    assert_eq!(many["ok"], json!(false));
+    assert!(
+        many["error"].as_str().unwrap().contains("larger `cell_m`"),
+        "{many}"
+    );
+}
