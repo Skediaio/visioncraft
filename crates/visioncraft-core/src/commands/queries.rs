@@ -43,6 +43,36 @@ pub(super) fn register(s: &mut Session) {
         .read_only(),
         measure_cmd,
     );
+    s.register_with_spec(
+        spec(
+            "query.quantities",
+            "Quantities",
+            "What the design contains as numbers: per drawn shape its plan area, perimeter or length, extrusion height and volume, mesh surface and the surface per material; per planting its counts, assets, planted area and line length; and totals per material and per asset. A planting can also place lights or objects: `count` and `placements` count everything placed, `plants` only plant species (`flora:`). Counts come from the planting evaluation on the terrain (height 0 without one), without the renderer's building rule, so plants under buildings are still counted. Linked models (3dcraft, OBJ) have no geometry in the core and are left out; lawn tufts are not counted, only placements the planting evaluation returns.",
+            vec![
+                param("ids", T::Array, "Only these shape and planting ids; an unknown id is an error."),
+                param("layer", T::String, "Only the shapes and plantings on this layer id; an unknown layer is an error."),
+            ],
+            "{shapes: [{id, name, layer, kind (area|extrusion), plan_area_m2, perimeter_m (closed) or length_m (open extrusion), height_m, volume_m3 (extrusions), surface_m2, materials: [{material (null: unassigned), name, area_m2}]}], plantings: [{id, name, layer, kind, count, plants, truncated, assets: [{asset, count}], area_m2 (area, brush, cluster), length_m (spline)}], materials: [{material, name, area_m2}], assets: [{asset, count}], totals: {plan_area_m2, surface_m2, volume_m3, plants, placements}}",
+            json!({"layer": "shapes"}),
+        )
+        .read_only(),
+        quantities_cmd,
+    );
+}
+
+fn quantities_cmd(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct P {
+        ids: Option<Vec<String>>,
+        layer: Option<String>,
+    }
+    let p: P = parse(params)?;
+    let filter = crate::quantities::Filter {
+        ids: p.ids.as_deref(),
+        layer: p.layer.as_deref(),
+    };
+    crate::quantities::quantities(project, &filter).map_err(|e| bad(&e))
 }
 
 fn sun(project: &mut Project, params: &Value) -> Result<Value, CommandError> {

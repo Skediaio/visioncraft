@@ -93,7 +93,7 @@ unknown keys are refused with the nearest name, unless `openParams` is true.
 The core's commands (`model.*`, `shape.*`, `material.*`, `planting.*`, `species.add|update|remove`,
 `light.*`, `viewpoint.*`, `layer.*`, `terrain.*`, `site.set`, `time.set`, `view.set`,
 `style.set`) change the project, each one undo step; its queries (`query.sun {time?}`,
-`query.measure {kind, points?, outline?}`) never do. The host adds what needs files, history,
+`query.measure {kind, points?, outline?}`, `query.quantities {ids?, layer?}`) never do. The host adds what needs files, history,
 loaded geometry or a GPU:
 
 | Command | Params | Result |
@@ -234,7 +234,7 @@ Only what the domain or a missing part forces:
 | `doc_inspect` takes no arguments | takes `faces`, `measures`, `placements`, `full` (all optional; none gives the defaults) | a 3dcraft house has hundreds of face names |
 | `selection_get`, resource `craft3d://selection` | none; resources `visioncraft://project`, `visioncraft://guide`; prompt `build_garden` | the core has no selection; the guide is the MCP-served agent guidance (3DCraft serves only `instructions`) |
 | `doc_render_preview {view, mode, projection, zoom, box, tolerance, max_side}` | `{viewpoint, camera, time, quality, max_side}` | viewpoints and the sun instead of views of a part |
-| `document.measure` (bodies), `view.pick`, `view.replay` | `query.measure`, `query.raycast`, `query.ground_*`, `query.sun`, `catalog.search`, `species.list`; replay is a viewpoint tour (`visioncraft-cli replay`) | the domain |
+| `document.measure` (bodies), `view.pick`, `view.replay` | `query.measure`, `query.quantities`, `query.raycast`, `query.ground_*`, `query.sun`, `catalog.search`, `species.list`; replay is a viewpoint tour (`visioncraft-cli replay`) | the domain |
 | `file.close`, tabs, several documents; `file.export` | one project per session; pictures only (`view.render`, `visioncraft-cli export`) | the app has one project; the core has no mesh exporter |
 | recovery, autosave | none | not built |
 | ports 7878–7897, roles `3dcraft window/client`, state folder `3dcraft/` | 7920–7939, `visioncraft window/client`, `visioncraft/` | both apps run side by side |

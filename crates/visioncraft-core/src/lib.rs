@@ -20,6 +20,7 @@ pub mod plant_ground;
 pub mod planting;
 pub mod presets;
 pub mod project;
+pub mod quantities;
 pub mod raycast;
 pub mod season;
 pub mod session;

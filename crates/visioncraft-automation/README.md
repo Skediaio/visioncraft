@@ -77,7 +77,7 @@ MCP tool `control_call`).
 
 Command documentation is the core's own (`Session::command_specs()`: per parameter type, unit,
 required, default, allowed values, doc; result; a tested example; `undoable`), parameters are
-checked by the core before a command runs, `query.sun` and `query.measure` are core commands, and
+checked by the core before a command runs, `query.sun`, `query.measure` and `query.quantities` are core commands, and
 atomic batches run in `Session::transaction`. This crate adds only what needs files, history,
 loaded geometry, the catalogue, the flora library or a GPU (see `commands::host_docs`).
 

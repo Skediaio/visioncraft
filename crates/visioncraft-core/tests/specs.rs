@@ -515,3 +515,115 @@ fn site_north_round_trips_and_old_projects_load() {
     let back: Project = serde_json::from_value(old).unwrap();
     assert_eq!(back.site.north_deg, 0.0);
 }
+
+fn quantities_session() -> Session {
+    let mut s = Session::new(Project::default());
+    let run = |s: &mut Session, name: &str, p: Value| s.run(name, p).unwrap();
+    run(
+        &mut s,
+        "shape.add_area",
+        json!({"name": "Lawn", "outline": [[0, 0], [10, 0], [10, 8], [0, 8]]}),
+    );
+    run(
+        &mut s,
+        "shape.add_extrusion",
+        json!({"name": "House", "outline": [[20, 0], [24, 0], [24, 5], [20, 5]], "height": 3.0}),
+    );
+    run(
+        &mut s,
+        "shape.add_extrusion",
+        json!({"name": "Wall", "outline": [[0, 20], [10, 20]], "closed": false, "height": 2.0, "thickness": 0.5}),
+    );
+    run(
+        &mut s,
+        "planting.add_spline",
+        json!({"name": "Hedge", "asset_palette": [{"asset": "flora:a", "weight": 1}], "points": [[0, 0], [6, 0]], "spacing": {"count": 4}, "seed": 1}),
+    );
+    run(
+        &mut s,
+        "planting.add_spline",
+        json!({"name": "Path lights", "asset_palette": [{"asset": "vc-path-light", "weight": 1}], "points": [[0, 2], [6, 2]], "spacing": {"count": 2}, "seed": 1}),
+    );
+    s
+}
+
+#[test]
+fn quantities_measure_shapes_materials_and_plantings() {
+    let mut s = quantities_session();
+    let q = s.run("query.quantities", json!({})).unwrap();
+    let shapes = q["shapes"].as_array().unwrap();
+    assert_eq!(shapes.len(), 3);
+    assert_eq!(shapes[0]["id"], "S1");
+    assert_eq!(shapes[0]["kind"], "area");
+    assert_eq!(shapes[0]["plan_area_m2"], 80.0);
+    assert_eq!(shapes[0]["perimeter_m"], 36.0);
+    assert!((shapes[0]["surface_m2"].as_f64().unwrap() - 80.0).abs() < 1e-3);
+    assert_eq!(shapes[1]["kind"], "extrusion");
+    assert_eq!(shapes[1]["plan_area_m2"], 20.0);
+    assert_eq!(shapes[1]["perimeter_m"], 18.0);
+    assert_eq!(shapes[1]["height_m"], 3.0);
+    assert_eq!(shapes[1]["volume_m3"], 60.0);
+    assert_eq!(shapes[2]["length_m"], 10.0);
+    assert_eq!(shapes[2]["plan_area_m2"], 5.0);
+    assert_eq!(shapes[2]["volume_m3"], 10.0);
+    assert_eq!(q["totals"]["plan_area_m2"], 105.0);
+    assert_eq!(q["totals"]["volume_m3"], 70.0);
+    // Nothing assigned: all surface is unassigned.
+    assert!(q["materials"][0]["material"].is_null());
+    let plantings = q["plantings"].as_array().unwrap();
+    assert_eq!(plantings[0]["kind"], "spline_mass");
+    assert_eq!(plantings[0]["length_m"], 6.0);
+    assert_eq!(plantings[0]["count"], 4);
+    assert_eq!(plantings[0]["plants"], 4);
+    assert_eq!(
+        plantings[0]["assets"],
+        json!([{"asset": "flora:a", "count": 4}])
+    );
+    // Lights placed by a planting are placements, not plants.
+    assert_eq!(plantings[1]["count"], 2);
+    assert_eq!(plantings[1]["plants"], 0);
+    assert_eq!(
+        q["assets"],
+        json!([{"asset": "flora:a", "count": 4}, {"asset": "vc-path-light", "count": 2}])
+    );
+    assert_eq!(q["totals"]["plants"], 4);
+    assert_eq!(q["totals"]["placements"], 6);
+
+    s.run(
+        "material.assign",
+        json!({"target": {"type": "owner", "owner": "S1"}, "material": "lawn"}),
+    )
+    .unwrap();
+    let q = s.run("query.quantities", json!({})).unwrap();
+    let lawn = q["materials"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["material"] == "lawn")
+        .unwrap();
+    assert!((lawn["area_m2"].as_f64().unwrap() - 80.0).abs() < 1e-3);
+    assert_eq!(q["shapes"][0]["materials"][0]["material"], "lawn");
+}
+
+#[test]
+fn quantities_filter_by_id_and_layer_and_name_what_is_unknown() {
+    let mut s = quantities_session();
+    let q = s
+        .run("query.quantities", json!({"ids": ["S2", "g1"]}))
+        .unwrap();
+    assert_eq!(q["shapes"].as_array().unwrap().len(), 1);
+    assert_eq!(q["plantings"].as_array().unwrap().len(), 1);
+    let q = s
+        .run("query.quantities", json!({"layer": "planting"}))
+        .unwrap();
+    assert!(q["shapes"].as_array().unwrap().is_empty());
+    assert_eq!(q["totals"]["plants"], 4);
+    let err = s
+        .run("query.quantities", json!({"ids": ["S99"]}))
+        .unwrap_err();
+    assert!(err.to_string().contains("S99"), "{err}");
+    let err = s
+        .run("query.quantities", json!({"layer": "nope"}))
+        .unwrap_err();
+    assert!(err.to_string().contains("nope"), "{err}");
+}

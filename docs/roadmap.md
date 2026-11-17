@@ -5,6 +5,9 @@ nothing here is a promise of a date.
 
 ## In progress
 
+- **Quantities:** `query.quantities` lists areas, lengths, volumes and plant counts per shape and
+  planting, and totals per material and asset. Next: linked models, per-body quantities, the
+  building rule in plant counts.
 - **Scanned leaves and bark** on the generated plants (done for the species that have a set;
   see `vegetation-sources.md` for coverage).
 - **Photo mode:** indirect light from sunlit surfaces, crowns keeping their density, a path for
@@ -57,8 +60,6 @@ nothing here is a promise of a date.
   course, a season or the years of growth changing along the way, rendered to numbered frames or
   a video file. An agent gets the garden's layout from the same queries it designs with and
   proposes the shots.
-- **Quantities:** areas, lengths, volumes and counts per object and per material as a query, so
-  tools built on top can list what a design contains.
 
 - **Curves:** outlines with arcs and smooth curves for paths, borders and lawns, with the same
   typed-size precision as straight edges.
