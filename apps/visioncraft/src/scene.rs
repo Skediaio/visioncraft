@@ -108,7 +108,7 @@ pub fn shown_variation(lib: &Library, m: &Material) -> f32 {
     material_library::overlay(lib, m).map_or(0.0, |o| o.variation)
 }
 
-fn look_of(m: &Material, lib: &mut Library, month: u32) -> Look {
+fn look_of(m: &Material, lib: &mut Library, month: u32, site: &visioncraft_core::Site) -> Look {
     let own = library::spec_of(&m.maps);
     // An unchanged palette material shows its library look while the library is there.
     let ov = if own.is_empty() {
@@ -184,10 +184,21 @@ fn look_of(m: &Material, lib: &mut Library, month: u32) -> Look {
                 scale_m: ov.as_ref().map_or(1.0, |o| o.scale_m),
                 relief: ov.as_ref().map_or(0.0, |o| o.relief),
                 gloss: ov.as_ref().map_or(0.0, |o| o.gloss),
-                stripes: stripes_packed(l),
+                stripes: stripes_packed(&turned_lawn(l, site)),
                 ..plain
             }
         }
+    }
+}
+
+/// The lawn with its stripe bearing (true, clockwise from north) turned into the drawing.
+fn turned_lawn(
+    l: &visioncraft_core::material::Lawn3d,
+    site: &visioncraft_core::Site,
+) -> visioncraft_core::material::Lawn3d {
+    visioncraft_core::material::Lawn3d {
+        stripes_deg: site.bearing_to_drawing_deg(f64::from(l.stripes_deg)) as f32,
+        ..*l
     }
 }
 
@@ -496,7 +507,7 @@ type Wanted = (String, Geom, Arc<ImportedModel>, Mat4, bool, bool, bool);
 type LawnKey = (
     Geom,
     Mat4,
-    Vec<(usize, [u32; 5], u64)>,
+    Vec<(usize, [u32; 6], u64)>,
     u64,
     u8,
     Vec<u32>,
@@ -1166,6 +1177,7 @@ impl Scene {
                                 &project.materials[i],
                                 &mut self.library,
                                 u32::from(project.plant_month()),
+                                &project.site,
                             )
                         } else if let Some(c) = model.bodies[f.body as usize].color {
                             Look {
@@ -1427,9 +1439,11 @@ impl Scene {
                 .filter_map(|(f, m)| {
                     let m = project.materials.get(m?)?;
                     match &m.kind {
-                        SurfaceKind::Lawn3d(l) => {
-                            Some((f, *l, self.blade_color(m, u32::from(project.plant_month()))))
-                        }
+                        SurfaceKind::Lawn3d(l) => Some((
+                            f,
+                            turned_lawn(l, &project.site),
+                            self.blade_color(m, u32::from(project.plant_month())),
+                        )),
                         _ => None,
                     }
                 })
@@ -1476,6 +1490,7 @@ impl Scene {
                             [
                                 l.density_per_m2.to_bits(),
                                 l.blade_height_m.to_bits(),
+                                l.stripes_deg.to_bits(),
                                 c[0].to_bits(),
                                 c[1].to_bits(),
                                 c[2].to_bits(),
@@ -2160,12 +2175,13 @@ impl Scene {
     /// The terrain's painted layers from their materials (pictures arrive over time).
     pub fn sync_terrain_layers(&mut self, r: &mut Renderer, project: &Project) {
         let month = u32::from(project.plant_month());
+        let site = project.site;
         self.terrain_gpu
             .sync_layers(r, project, &mut self.library, &mut |m, lib| {
                 // Mowing stripes belong to the drawn lawn, not the ground round it.
                 Look {
                     stripes: 0,
-                    ..look_of(m, lib, month)
+                    ..look_of(m, lib, month, &site)
                 }
             });
         // The endless ground wears the terrain's base layer, so the terrain's edge cannot be
@@ -2181,7 +2197,7 @@ impl Scene {
         let ground = base.map(|m| {
             let look = Look {
                 stripes: 0,
-                ..look_of(m, &mut self.library, month)
+                ..look_of(m, &mut self.library, month, &project.site)
             };
             self.material(r, &look)
         });

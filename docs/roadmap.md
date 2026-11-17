@@ -35,8 +35,9 @@ nothing here is a promise of a date.
 - **Weathering:** dirt, moss and wear on walls and paving, so materials stop looking new.
 - **Tree form:** a better branch solver in the plant generator, compared against reference scans
   of real plants.
-- **North and site:** turn the whole drawing against north after the fact, and set the site by
-  address or coordinates, so the sun is right without knowing compass directions.
+- **North and site:** turning the whole drawing against north is done (`site.set north_deg`,
+  applied to the sun, wind, waves, river flow and lawn stripes). Next: set the site by address
+  (`site.set` already takes coordinates), so the sun is right without knowing compass directions.
 - **Sun hours:** hours of sun per day for any spot or area, as a number and as a map over the
   garden, by season and with grown plants; plants filtered by the light a spot gets.
 - **Shade from the surroundings:** neighbouring buildings and terrain as simple volumes that cast

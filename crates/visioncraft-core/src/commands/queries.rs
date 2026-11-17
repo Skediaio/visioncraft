@@ -19,7 +19,7 @@ pub(super) fn register(s: &mut Session) {
                 T::Object,
                 "Another moment {year, month, day, hour}; parts left out are taken from the project's time.",
             )],
-            "{azimuth_deg (clockwise from north), elevation_deg, direction ([x, y, z] unit vector towards the sun, +X east, -Z north), sunrise_hour, sunset_hour (null in polar day or night), above_horizon}",
+            "{azimuth_deg (true compass bearing, clockwise from north), elevation_deg, direction ([x, y, z] unit vector towards the sun in drawing space: +X east, -Z north, turned by site.north_deg), sunrise_hour, sunset_hour (null in polar day or night), above_horizon}",
             json!({"time": {"hour": 21}}),
         )
         .read_only(),

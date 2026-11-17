@@ -477,3 +477,41 @@ fn many_lamps_make_capped_lights() {
         0
     );
 }
+
+#[test]
+fn north_deg_turns_the_sun_direction_but_not_its_azimuth() {
+    let mut s = Session::new(Project::default());
+    let site = specs().into_iter().find(|c| c.name == "site.set").unwrap();
+    let p = site.params.iter().find(|p| p.name == "north_deg").unwrap();
+    assert_eq!(p.unit.as_deref(), Some("deg"));
+    assert!(p.doc.contains("-Z"));
+    let before = s.run("query.sun", json!({})).unwrap();
+    s.run("site.set", json!({"north_deg": 90})).unwrap();
+    let after = s.run("query.sun", json!({})).unwrap();
+    assert_eq!(before["azimuth_deg"], after["azimuth_deg"]);
+    assert_eq!(before["elevation_deg"], after["elevation_deg"]);
+    let v = |x: &Value| -> Vec<f64> {
+        x["direction"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n.as_f64().unwrap())
+            .collect()
+    };
+    let (b, a) = (v(&before), v(&after));
+    // True north now points along +X: the old -Z component turns to +X, the old +X to +Z.
+    assert!((a[0] + b[2]).abs() < 1e-5 && (a[2] - b[0]).abs() < 1e-5 && (a[1] - b[1]).abs() < 1e-6);
+}
+
+#[test]
+fn site_north_round_trips_and_old_projects_load() {
+    let mut p = Project::default();
+    p.site.north_deg = 33.0;
+    let json = serde_json::to_value(&p).unwrap();
+    let back: Project = serde_json::from_value(json.clone()).unwrap();
+    assert_eq!(back.site.north_deg, 33.0);
+    let mut old = json;
+    old["site"].as_object_mut().unwrap().remove("north_deg");
+    let back: Project = serde_json::from_value(old).unwrap();
+    assert_eq!(back.site.north_deg, 0.0);
+}

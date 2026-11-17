@@ -102,7 +102,7 @@ pub(super) fn register(s: &mut Session) {
                 param("wind_beaufort", T::Any, "A Beaufort step as a preset for `wind_speed_mps` (v = 0.836 B^1.5 m/s): 0-10 or its name. 0 calm (smoke rises), 1 light air, 2 light breeze (leaves rustle), 3 gentle breeze (leaves and twigs in constant motion), 4 moderate breeze (small branches move), 5 fresh breeze (small trees begin to sway), 6 strong breeze (large branches move), 7 near gale (whole trees move), 8 gale (twigs break off), 9 strong gale, 10 storm. Not together with `wind_speed_mps`."),
                 param("wind_gustiness", T::Number, "How much the wind varies in gusts travelling downwind, 0 (steady) to 1.").default(json!(0.5)),
                 param("wind_strength", T::Number, "Deprecated: the relative wind of older projects (1 is 6.5 m/s); use `wind_speed_mps`."),
-                param("wind_direction_deg", T::Number, "Direction the wind blows towards, clockwise from north seen from above.").unit("deg").default(json!(0)),
+                param("wind_direction_deg", T::Number, "Direction the wind blows towards, true bearing clockwise from north seen from above (drawing -Z unless site.set north_deg turns it).").unit("deg").default(json!(0)),
                 param("ground", T::Object, "Ground plane {height: m, color: [r, g, b] linear}; null for none.")
                     .default(json!({"height": 0, "color": [0.065, 0.12, 0.035]})),
                 param("clouds", T::Object, "The cloud layer over the analytic sky: {kind: \"clear\" | \"cumulus\" (light fair-weather clouds) | \"overcast\", cover: 0..1}; overcast softens shadows and dims the sun.").default(json!({"kind": "cumulus", "cover": 0.35})),

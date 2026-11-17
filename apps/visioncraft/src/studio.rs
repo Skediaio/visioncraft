@@ -1217,9 +1217,13 @@ impl Studio {
         if let Some(s) = self.sky.sun_override() {
             return s;
         }
-        let pos = sun_position(&self.site(), &self.time());
+        let site = self.site();
+        let pos = sun_position(&site, &self.time());
         (
-            Sun::from_angles(pos.azimuth_deg as f32, pos.elevation_deg as f32),
+            Sun::from_angles(
+                site.bearing_to_drawing_deg(pos.azimuth_deg) as f32,
+                pos.elevation_deg as f32,
+            ),
             pos.elevation_deg as f32,
         )
     }
@@ -1244,7 +1248,10 @@ impl Studio {
         {
             return None;
         }
-        let mut light = Sun::from_angles(moon.azimuth_deg as f32, moon.elevation_deg as f32);
+        let mut light = Sun::from_angles(
+            site.bearing_to_drawing_deg(moon.azimuth_deg) as f32,
+            moon.elevation_deg as f32,
+        );
         light.illuminance *= moon.sun_ratio as f32;
         Some((light, moon.sun_ratio as f32))
     }
@@ -1410,11 +1417,18 @@ impl Studio {
         }
         let ground = v.ground.map(|g| self.render_ground(g.height, g.color));
         self.renderer.set_ground(ground);
-        self.renderer
-            .set_sea(self.project().sea.as_ref().map(|s| render_sea(s, &v)));
-        let d = v.wind_direction_deg.to_radians();
+        self.renderer.set_sea(
+            self.project()
+                .sea
+                .as_ref()
+                .map(|s| render_sea(s, &v, &self.project().site)),
+        );
         self.renderer.set_wind(&visioncraft_render::Wind {
-            direction: Vec3::new(d.sin(), 0.0, -d.cos()),
+            direction: Vec3::from(
+                self.project()
+                    .site
+                    .bearing_to_drawing(f64::from(v.wind_direction_deg)),
+            ),
             speed_mps: v.wind_speed_mps,
             gustiness: v.wind_gustiness,
         });
@@ -2412,10 +2426,11 @@ mod session_leak_tests {
 pub fn render_sea(
     s: &visioncraft_core::Sea,
     v: &visioncraft_core::ViewState,
+    site: &Site,
 ) -> visioncraft_render::Sea {
     let towards = |deg: f32| {
-        let d = deg.to_radians();
-        [d.sin(), -d.cos()]
+        let d = site.bearing_to_drawing(f64::from(deg));
+        [d[0], d[2]]
     };
     let river = s.kind == visioncraft_core::WaterKind::River;
     let flow = towards(s.flow_deg).map(|c| if river { c * s.flow_speed } else { 0.0 });
