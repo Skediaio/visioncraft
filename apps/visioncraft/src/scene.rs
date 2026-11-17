@@ -1484,7 +1484,11 @@ impl Scene {
             // Nor under a model's faces lying on the ground (`ground_faces`).
             let mut over = areas_over(&project.shapes, &id);
             let over_blend = blends_over(&project.shapes, &id);
-            over.extend(on_ground.iter().map(|f| f.as_slice()));
+            over.extend(
+                on_ground
+                    .iter()
+                    .map(|f| std::borrow::Cow::Borrowed(f.as_slice())),
+            );
             let over_key: Vec<u32> = over
                 .iter()
                 .flat_map(|o| o.iter().flat_map(|p| [p[0].to_bits(), p[1].to_bits()]))
@@ -2445,7 +2449,7 @@ impl Scene {
         }
         let water = project.shapes.iter().any(|s| {
             let Shape::Area(a) = s else { return false };
-            inside_outline([x, z], &a.outline)
+            inside_outline([x, z], &a.outline())
                 && self.owners.get(&a.id).is_some_and(|o| {
                     resolve_materials(project, &a.id, &o.geom)
                         .into_iter()

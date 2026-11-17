@@ -327,7 +327,7 @@ pub(crate) fn inspect(session: &Session, state: &HostState, v: &Verbosity) -> Va
         .map(|s| {
             let mut o = serde_json::to_value(s).unwrap_or_default();
             if v.measures {
-                let area = measure::polygon_area(s.outline());
+                let area = measure::polygon_area(&s.outline());
                 match s {
                     Shape::Area(_) => o["area_m2"] = area.into(),
                     Shape::Extrusion(e) if e.closed => o["footprint_m2"] = area.into(),

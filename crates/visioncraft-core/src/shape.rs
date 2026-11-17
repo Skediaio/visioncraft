@@ -16,9 +16,11 @@
 //!   ([`footing`]): `base` is measured from there, so a house on a slope does not float on its
 //!   low side nor sink on its high side.
 
+use crate::curve::{self, Curves, Tess};
 use crate::project::Extensions;
 use crate::{Body, Face, ImportedModel};
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -29,8 +31,20 @@ pub struct Area {
     pub id: String,
     pub name: String,
     pub layer: String,
-    /// Points `(x, z)` in metres; either winding.
-    pub outline: Vec<[f32; 2]>,
+    /// The control vertices `(x, z)` in metres; either winding. Stored as `outline`; the polygon
+    /// that is measured and meshed is [`Area::outline`], which follows `curves` and `smooth`.
+    #[serde(rename = "outline")]
+    pub points: Vec<[f32; 2]>,
+    /// Arcs on single edges (edge `i` runs from vertex `i` to `i + 1`).
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        with = "curve::keyed"
+    )]
+    pub curves: Curves,
+    /// A smooth curve through all vertices (edges with an arc keep their arc).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub smooth: bool,
     pub elevation: f32,
     /// Lie on the terrain: use [`shape_mesh_on`], with `elevation` as the height above the ground.
     #[serde(default)]
@@ -54,6 +68,10 @@ fn is_zero(v: &f32) -> bool {
     *v == 0.0
 }
 
+fn is_false(v: &bool) -> bool {
+    !*v
+}
+
 /// The widest soft edge an area takes (metres).
 pub const MAX_EDGE_BLEND_M: f32 = 10.0;
 
@@ -64,7 +82,20 @@ pub struct Extrusion {
     pub id: String,
     pub name: String,
     pub layer: String,
-    pub outline: Vec<[f32; 2]>,
+    /// The control vertices (stored as `outline`); the polygon that is measured and meshed is
+    /// [`Extrusion::outline`].
+    #[serde(rename = "outline")]
+    pub points: Vec<[f32; 2]>,
+    /// Arcs on single edges (edge `i` runs from vertex `i` to `i + 1`).
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        with = "curve::keyed"
+    )]
+    pub curves: Curves,
+    /// A smooth curve through all vertices (edges with an arc keep their arc).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub smooth: bool,
     pub closed: bool,
     pub base: f32,
     pub height: f32,
@@ -87,6 +118,29 @@ pub struct Extrusion {
     /// A closed extrusion drawn as the hollow wall ring of a raised bed (`crate::bed`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raised_bed: Option<crate::bed::RaisedBed>,
+}
+
+impl Area {
+    /// The polygon to measure and mesh: the control vertices with curved edges tessellated.
+    pub fn outline(&self) -> Cow<'_, [[f32; 2]]> {
+        if self.smooth || !self.curves.is_empty() {
+            Cow::Owned(curve::tessellate(&self.points, true, &self.curves, self.smooth).pts)
+        } else {
+            Cow::Borrowed(&self.points)
+        }
+    }
+}
+
+impl Extrusion {
+    /// The polygon (or polyline) to measure and mesh: the control vertices with curved edges
+    /// tessellated.
+    pub fn outline(&self) -> Cow<'_, [[f32; 2]]> {
+        if self.smooth || !self.curves.is_empty() {
+            Cow::Owned(curve::tessellate(&self.points, self.closed, &self.curves, self.smooth).pts)
+        } else {
+            Cow::Borrowed(&self.points)
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -132,17 +186,74 @@ impl Shape {
         }
     }
 
-    pub fn outline(&self) -> &[[f32; 2]] {
+    /// The control vertices: what editing moves and the handles sit on.
+    pub fn points(&self) -> &[[f32; 2]] {
         match self {
-            Self::Area(a) => &a.outline,
-            Self::Extrusion(e) => &e.outline,
+            Self::Area(a) => &a.points,
+            Self::Extrusion(e) => &e.points,
         }
     }
 
-    pub(crate) fn outline_mut(&mut self) -> &mut Vec<[f32; 2]> {
+    pub(crate) fn points_mut(&mut self) -> &mut Vec<[f32; 2]> {
         match self {
-            Self::Area(a) => &mut a.outline,
-            Self::Extrusion(e) => &mut e.outline,
+            Self::Area(a) => &mut a.points,
+            Self::Extrusion(e) => &mut e.points,
+        }
+    }
+
+    /// The arcs on single edges, by edge index.
+    pub fn curves(&self) -> &Curves {
+        match self {
+            Self::Area(a) => &a.curves,
+            Self::Extrusion(e) => &e.curves,
+        }
+    }
+
+    pub(crate) fn curves_mut(&mut self) -> &mut Curves {
+        match self {
+            Self::Area(a) => &mut a.curves,
+            Self::Extrusion(e) => &mut e.curves,
+        }
+    }
+
+    /// Whether the outline is a smooth curve through the vertices.
+    pub fn is_smooth(&self) -> bool {
+        match self {
+            Self::Area(a) => a.smooth,
+            Self::Extrusion(e) => e.smooth,
+        }
+    }
+
+    pub(crate) fn set_smooth(&mut self, smooth: bool) {
+        match self {
+            Self::Area(a) => a.smooth = smooth,
+            Self::Extrusion(e) => e.smooth = smooth,
+        }
+    }
+
+    /// Whether any edge is curved.
+    pub fn is_curved(&self) -> bool {
+        !self.curves().is_empty() || self.is_smooth()
+    }
+
+    /// The tessellated outline, with its ties to the control vertices.
+    pub fn tessellate(&self) -> Tess {
+        curve::tessellate(
+            self.points(),
+            self.is_closed(),
+            self.curves(),
+            self.is_smooth(),
+        )
+    }
+
+    /// The polygon (or polyline) to measure and mesh: the control vertices with the curved edges
+    /// cut into short segments (see [`crate::curve`]). Exactly the control vertices when nothing
+    /// is curved.
+    pub fn outline(&self) -> Cow<'_, [[f32; 2]]> {
+        if self.is_curved() {
+            Cow::Owned(self.tessellate().pts)
+        } else {
+            Cow::Borrowed(self.points())
         }
     }
 
@@ -170,6 +281,8 @@ pub enum ShapeError {
     BadStairs(String),
     /// A raised bed whose walls do not fit its outline.
     BadBed(String),
+    /// A curve an outline cannot have, or a shape that cannot be drawn with curves.
+    BadCurve(String),
     /// A retaining edge an area cannot have.
     BadEdge(String),
 }
@@ -183,6 +296,7 @@ impl fmt::Display for ShapeError {
             Self::BadFence(why) => write!(f, "the fence cannot be drawn: {why}"),
             Self::BadStairs(why) => write!(f, "the stairs cannot be drawn: {why}"),
             Self::BadBed(why) => write!(f, "the raised bed cannot be drawn: {why}"),
+            Self::BadCurve(why) => write!(f, "the curves cannot be drawn: {why}"),
             Self::BadEdge(why) => write!(f, "the area's edge cannot be drawn: {why}"),
         }
     }
@@ -436,7 +550,10 @@ pub fn shape_mesh(shape: &Shape) -> Result<ImportedModel, ShapeError> {
 /// [`shape_mesh`] for an area whose retaining edge ends at `floor` (the lowest ground under it,
 /// see [`footing`]); anything else is as [`shape_mesh`] makes it.
 pub fn shape_mesh_floor(shape: &Shape, floor: f32) -> Result<ImportedModel, ShapeError> {
-    check_simple(shape.outline(), shape.is_closed())?;
+    curve::check(shape.points(), shape.is_closed(), shape.curves())
+        .map_err(ShapeError::BadCurve)?;
+    let tess = shape.tessellate();
+    check_simple(&tess.pts, shape.is_closed())?;
     let id = shape.id();
     match shape {
         Shape::Area(a) => {
@@ -451,9 +568,15 @@ pub fn shape_mesh_floor(shape: &Shape, floor: f32) -> Result<ImportedModel, Shap
                     ));
                 }
                 edge.check().map_err(ShapeError::BadEdge)?;
+                if shape.is_curved() && edge.style == crate::bed::BedStyle::Sleepers {
+                    return Err(ShapeError::BadEdge(
+                        "a sleeper edge needs straight edges; use the plain, masonry or corten style on a curved area"
+                            .into(),
+                    ));
+                }
             }
             let band = (a.edge_blend_m > 0.0 && a.edge_blend_m.is_finite())
-                .then(|| inset_band(&a.outline, a.edge_blend_m.min(MAX_EDGE_BLEND_M)))
+                .then(|| inset_band(&tess.pts, a.edge_blend_m.min(MAX_EDGE_BLEND_M)))
                 .flatten();
             let skirt = a
                 .edge
@@ -470,17 +593,11 @@ pub fn shape_mesh_floor(shape: &Shape, floor: f32) -> Result<ImportedModel, Shap
                 soft: band.is_some(),
             };
             match &band {
-                Some(inner) => b.band(0, &a.outline, inner, a.elevation),
-                None => b.cap(0, &a.outline, a.elevation, 1.0),
+                Some(inner) => b.band(0, &tess.pts, inner, a.elevation),
+                None => b.cap(0, &tess.pts, a.elevation, 1.0),
             }
             if let Some(edge) = skirt {
-                crate::bed::skirt(
-                    &mut Shifted(&mut b, 1),
-                    edge,
-                    &a.outline,
-                    floor,
-                    a.elevation,
-                );
+                crate::bed::skirt(&mut Shifted(&mut b, 1), edge, &tess.pts, floor, a.elevation);
             }
             Ok(b.finish(id, &a.name, names))
         }
@@ -489,7 +606,8 @@ pub fn shape_mesh_floor(shape: &Shape, floor: f32) -> Result<ImportedModel, Shap
                 return Err(ShapeError::BadNumber("base or height"));
             }
             if let Some(f) = e.fence.as_ref().filter(|_| !e.closed) {
-                f.check(&e.outline, e.height, e.thickness)
+                let runs = tess.runs();
+                f.check(&runs, e.height, e.thickness)
                     .map_err(ShapeError::BadFence)?;
                 let names = crate::fence::FENCE_FACES
                     .iter()
@@ -501,19 +619,18 @@ pub fn shape_mesh_floor(shape: &Shape, floor: f32) -> Result<ImportedModel, Shap
                     edge: Vec::new(),
                     soft: false,
                 };
-                crate::fence::mesh(
-                    &mut b,
-                    f,
-                    &e.outline,
-                    e.thickness,
-                    e.base,
-                    e.base + e.height,
-                );
+                crate::fence::mesh(&mut b, f, &runs, e.thickness, e.base, e.base + e.height);
                 return Ok(b.finish(id, &e.name, names));
             }
             if let Some(st) = e.stairs.as_ref().filter(|_| e.closed) {
+                if shape.is_curved() {
+                    return Err(ShapeError::BadStairs(
+                        "stairs need straight edges: clear their curves (`shape.clear_curve`, `shape.set_smooth`)"
+                            .into(),
+                    ));
+                }
                 let g = st
-                    .geometry(&e.outline, e.height)
+                    .geometry(&e.points, e.height)
                     .map_err(ShapeError::BadStairs)?;
                 let names = crate::stairs::STAIR_FACES
                     .iter()
@@ -531,7 +648,13 @@ pub fn shape_mesh_floor(shape: &Shape, floor: f32) -> Result<ImportedModel, Shap
                 return Ok(m);
             }
             if let Some(bed) = e.raised_bed.as_ref().filter(|_| e.closed) {
-                let inner = bed.inner(&e.outline).map_err(ShapeError::BadBed)?;
+                if shape.is_curved() && bed.style == crate::bed::BedStyle::Sleepers {
+                    return Err(ShapeError::BadBed(
+                        "a sleeper bed needs straight edges; use the plain, masonry or corten style for a curved bed"
+                            .into(),
+                    ));
+                }
+                let inner = bed.inner(&tess.pts).map_err(ShapeError::BadBed)?;
                 let names = crate::bed::BED_FACES
                     .iter()
                     .map(|n| format!("{id}:{n}"))
@@ -542,33 +665,41 @@ pub fn shape_mesh_floor(shape: &Shape, floor: f32) -> Result<ImportedModel, Shap
                     edge: Vec::new(),
                     soft: false,
                 };
-                crate::bed::mesh(&mut b, bed, &e.outline, &inner, e.base, e.base + e.height);
+                crate::bed::mesh(&mut b, bed, &tess.pts, &inner, e.base, e.base + e.height);
                 return Ok(b.finish(id, &e.name, names));
+            }
+            if e.house.is_some() && e.closed && shape.is_curved() {
+                return Err(ShapeError::BadCurve(
+                    "a house cannot have curved walls yet: clear its curves (`shape.clear_curve`, `shape.set_smooth`)"
+                        .into(),
+                ));
             }
             let (ring, ring_face): (Vec<P2>, Vec<usize>) = if e.closed {
                 (
-                    e.outline.clone(),
-                    (0..e.outline.len()).map(|i| 2 + i).collect(),
+                    tess.pts.clone(),
+                    tess.edge_of.iter().map(|&i| 2 + i).collect(),
                 )
             } else {
                 if !(e.thickness.is_finite() && e.thickness > 0.0) {
                     return Err(ShapeError::BadNumber("thickness"));
                 }
-                let ring = thick_ring(&e.outline, e.thickness)?;
+                let ring = thick_ring(&tess.pts, e.thickness)?;
                 check_simple(&ring, true)?;
-                let edges = e.outline.len() - 1;
-                // Faces: top, bottom, side(0..edges), start, end.
-                let faces = (0..edges)
-                    .map(|i| 2 + i)
+                let edges = e.points.len() - 1;
+                // Faces: top, bottom, side(0..edges), start, end. A curved edge is many ring
+                // edges, all of its side.
+                let m = tess.pts.len() - 1;
+                let faces = (0..m)
+                    .map(|j| 2 + tess.edge_of[j])
                     .chain([2 + edges + 1])
-                    .chain((0..edges).rev().map(|i| 2 + i))
+                    .chain((0..m).rev().map(|j| 2 + tess.edge_of[j]))
                     .chain([2 + edges]);
                 (ring, faces.collect())
             };
             let sides = if e.closed {
-                e.outline.len()
+                e.points.len()
             } else {
-                e.outline.len() - 1
+                e.points.len() - 1
             };
             let mut names = vec![format!("{id}:top"), format!("{id}:bottom")];
             names.extend((0..sides).map(|n| format!("{id}:side({n})")));
@@ -631,7 +762,7 @@ pub fn shape_mesh_on(
         return shape_mesh(shape);
     };
     if !a.drape {
-        return shape_mesh_floor(shape, footing(&a.outline, ground));
+        return shape_mesh_floor(shape, footing(&shape.outline(), ground));
     }
     let flat = shape_mesh(shape)?;
     let h = |x: f32, z: f32| ground(x, z).unwrap_or(0.0) + a.elevation;
@@ -752,7 +883,7 @@ pub fn area_lifts(shapes: &[Shape]) -> Vec<(String, f32)> {
         .map(|(i, a)| {
             let under = areas[..i]
                 .iter()
-                .filter(|b| overlaps(&a.outline, &b.outline))
+                .filter(|b| overlaps(&a.outline(), &b.outline()))
                 .count();
             (a.id.clone(), AREA_LIFT_M + STACK_STEP_M * under as f32)
         })
@@ -761,7 +892,7 @@ pub fn area_lifts(shapes: &[Shape]) -> Vec<(String, f32)> {
 
 /// The outlines of the areas on top of area `id` (later in the list and overlapping it): its
 /// grass does not grow under them.
-pub fn areas_over<'a>(shapes: &'a [Shape], id: &str) -> Vec<&'a [P2]> {
+pub fn areas_over<'a>(shapes: &'a [Shape], id: &str) -> Vec<Cow<'a, [P2]>> {
     let Some(i) = shapes.iter().position(|s| s.id() == id) else {
         return Vec::new();
     };
@@ -771,7 +902,7 @@ pub fn areas_over<'a>(shapes: &'a [Shape], id: &str) -> Vec<&'a [P2]> {
     shapes[i + 1..]
         .iter()
         .filter_map(|s| match s {
-            Shape::Area(b) if overlaps(&a.outline, &b.outline) => Some(b.outline.as_slice()),
+            Shape::Area(b) if overlaps(&a.outline(), &b.outline()) => Some(b.outline()),
             _ => None,
         })
         .collect()
@@ -789,7 +920,7 @@ pub fn blends_over(shapes: &[Shape], id: &str) -> Vec<f32> {
     shapes[i + 1..]
         .iter()
         .filter_map(|s| match s {
-            Shape::Area(b) if overlaps(&a.outline, &b.outline) => Some(b.edge_blend_m),
+            Shape::Area(b) if overlaps(&a.outline(), &b.outline()) => Some(b.edge_blend_m),
             _ => None,
         })
         .collect()
@@ -977,7 +1108,9 @@ mod tests {
             id: "S1".into(),
             name: "Block".into(),
             layer: "shapes".into(),
-            outline,
+            points: outline,
+            curves: Default::default(),
+            smooth: false,
             closed: true,
             base: 1.0,
             height: 3.0,
@@ -995,7 +1128,9 @@ mod tests {
             id: "S2".into(),
             name: "Wall".into(),
             layer: "shapes".into(),
-            outline,
+            points: outline,
+            curves: Default::default(),
+            smooth: false,
             closed: false,
             base: 0.0,
             height: 2.0,
@@ -1097,7 +1232,9 @@ mod tests {
             id: "S3".into(),
             name: "Lawn".into(),
             layer: "shapes".into(),
-            outline: square(3.0).into_iter().rev().collect(),
+            points: square(3.0).into_iter().rev().collect(),
+            curves: Default::default(),
+            smooth: false,
             elevation: 0.5,
             drape: false,
             edge_blend_m: 0.0,
@@ -1154,7 +1291,9 @@ mod edge_tests {
             id: "S1".into(),
             name: "Floor".into(),
             layer: "shapes".into(),
-            outline: vec![[0.0, 0.0], [10.0, 0.0], [10.0, 8.0], [0.0, 8.0]],
+            points: vec![[0.0, 0.0], [10.0, 0.0], [10.0, 8.0], [0.0, 8.0]],
+            curves: Default::default(),
+            smooth: false,
             elevation: 0.0,
             drape,
             edge_blend_m: blend,
@@ -1219,7 +1358,9 @@ mod edge_tests {
         assert!(d.edge.contains(&0.0) && d.edge.contains(&1.0));
         // A narrow strip cannot hold a band that wide: the band narrows to fit.
         let strip = Shape::Area(Area {
-            outline: vec![[0.0, 0.0], [10.0, 0.0], [10.0, 1.0], [0.0, 1.0]],
+            points: vec![[0.0, 0.0], [10.0, 0.0], [10.0, 1.0], [0.0, 1.0]],
+            curves: Default::default(),
+            smooth: false,
             ..match lawn(3.0, false) {
                 Shape::Area(a) => a,
                 _ => unreachable!(),
@@ -1247,7 +1388,9 @@ mod drape_tests {
             id: "S1".into(),
             name: "Lawn".into(),
             layer: "shapes".into(),
-            outline,
+            points: outline,
+            curves: Default::default(),
+            smooth: false,
             elevation: 0.1,
             drape: true,
             edge_blend_m: 0.0,
@@ -1294,7 +1437,9 @@ mod stacking_tests {
             id: id.into(),
             name: id.into(),
             layer: "shapes".into(),
-            outline,
+            points: outline,
+            curves: Default::default(),
+            smooth: false,
             elevation: 0.0,
             drape: true,
             edge_blend_m: 0.0,
@@ -1326,7 +1471,7 @@ mod stacking_tests {
         assert_eq!(lifts["cross"], base + 2.0 * STACK_STEP_M, "lawn and path");
         let over = areas_over(&shapes, "lawn");
         assert_eq!(over.len(), 3, "terrace, path, cross");
-        assert!(inside_outline([6.0, 6.0], over[0]));
+        assert!(inside_outline([6.0, 6.0], &over[0]));
         assert!(areas_over(&shapes, "far").is_empty());
     }
 
@@ -1371,7 +1516,10 @@ pub fn shape_mesh_on_terrain(
         return shape_mesh(shape);
     };
     if !a.drape {
-        return shape_mesh_floor(shape, footing(&a.outline, &|x, z| terrain.height_at(x, z)));
+        return shape_mesh_floor(
+            shape,
+            footing(&shape.outline(), &|x, z| terrain.height_at(x, z)),
+        );
     }
     let flat = shape_mesh(shape)?;
     let cell = terrain.cell_m;
@@ -1563,7 +1711,9 @@ mod hill_tests {
             id: "S1".into(),
             name: "Lawn".into(),
             layer: "shapes".into(),
-            outline: vec![[0.3, 0.2], [19.7, 0.9], [19.1, 11.6], [0.6, 11.3]],
+            points: vec![[0.3, 0.2], [19.7, 0.9], [19.1, 11.6], [0.6, 11.3]],
+            curves: Default::default(),
+            smooth: false,
             elevation: AREA_LIFT_M,
             drape: true,
             edge_blend_m: 0.0,

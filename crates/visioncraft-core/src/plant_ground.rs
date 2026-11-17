@@ -52,7 +52,7 @@ pub fn placed_shape(
         }
         Shape::Extrusion(e) => {
             if let Some(t) = terrain {
-                lift = footing(&e.outline, &|x, z| t.height_at(x, z));
+                lift = footing(&e.outline(), &|x, z| t.height_at(x, z));
             }
         }
     }

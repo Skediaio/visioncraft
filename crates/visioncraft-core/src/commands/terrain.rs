@@ -324,8 +324,8 @@ fn level_under(project: &mut Project, params: &Value) -> Result<Value, CommandEr
         .find(|s| s.id() == p.shape)
         .ok_or_else(|| fail(format!("no shape `{}`", p.shape)))?;
     let (outline, height) = match shape {
-        Shape::Area(a) => (a.outline.clone(), a.elevation),
-        Shape::Extrusion(e) if e.closed => (e.outline.clone(), e.base),
+        Shape::Area(a) => (a.outline().into_owned(), a.elevation),
+        Shape::Extrusion(e) if e.closed => (e.outline().into_owned(), e.base),
         Shape::Extrusion(_) => {
             return Err(fail("only an area or a closed extrusion levels the ground"));
         }
@@ -369,7 +369,7 @@ fn carve(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
     }
     let water = crate::plant_ground::water_areas(project);
     let filled = project.shapes.iter().any(|s| match s {
-        Shape::Area(a) => water.contains(&a.id) && crate::shape::overlaps(&a.outline, &p.outline),
+        Shape::Area(a) => water.contains(&a.id) && crate::shape::overlaps(&a.outline(), &p.outline),
         Shape::Extrusion(_) => false,
     });
     if filled || p.depth_m <= 0.0 {

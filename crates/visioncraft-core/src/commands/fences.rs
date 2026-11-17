@@ -28,6 +28,8 @@ pub(super) fn register(s: &mut Session) {
     let mut add_params = vec![
         param("name", T::String, "Display name.").default(json!("Fence")),
         param("line", T::Outline, "The fence line as [x, z] pairs in metres, at least 2 points, not self-intersecting; posts stand at every point.").required(),
+        param("curves", T::Object, "Arcs on single edges of the line by edge index: {\"0\": {\"type\": \"arc\", \"sagitta_m\": 1.2}}. Posts are spread by arc length along a curve; a gate needs a straight edge."),
+        param("smooth", T::Boolean, "A smooth curve through all the line's points (centripetal Catmull-Rom).").default(json!(false)),
         param("height", T::Number, "Height of the fence, 0.3..10.").unit("m").required(),
         param("base", T::Number, "Height of its bottom (on terrain, above the lowest ground under the line).").unit("m").default(json!(0)),
         param("layer", T::String, "Layer id.").default(json!("shapes")),
@@ -196,6 +198,10 @@ fn add_fence(project: &mut Project, params: &Value) -> Result<Value, CommandErro
     struct P {
         name: Option<String>,
         line: Vec<[f32; 2]>,
+        #[serde(default)]
+        curves: crate::curve::Curves,
+        #[serde(default)]
+        smooth: bool,
         height: f32,
         #[serde(default)]
         base: f32,
@@ -213,7 +219,9 @@ fn add_fence(project: &mut Project, params: &Value) -> Result<Value, CommandErro
             id,
             name: p.name.unwrap_or_else(|| "Fence".into()),
             layer,
-            outline: p.line,
+            points: p.line,
+            curves: p.curves,
+            smooth: p.smooth,
             closed: false,
             base: p.base,
             height: p.height,
@@ -254,7 +262,7 @@ fn set_fence(project: &mut Project, params: &Value) -> Result<Value, CommandErro
             e.name = n;
         }
         if let Some(l) = p.line {
-            e.outline = l;
+            e.points = l;
         }
         if let Some(h) = p.height {
             e.height = h;

@@ -111,6 +111,22 @@ pub fn edge_hit(outline: &[P2], closed: bool, p: P2, radius: f32) -> Option<(usi
         .map(|(i, q, _)| (i, q))
 }
 
+/// A circle of `radius` round `c`, as the polygon `shape.add_circle` makes of it.
+fn circle_polygon(c: P2, radius: f32) -> Vec<P2> {
+    let r = radius.max(0.0);
+    let points = [
+        [c[0] + r, c[1]],
+        [c[0], c[1] + r],
+        [c[0] - r, c[1]],
+        [c[0], c[1] - r],
+    ];
+    let arc = visioncraft_core::curve::Curve::Arc {
+        sagitta_m: r * (1.0 - std::f32::consts::FRAC_1_SQRT_2),
+    };
+    let curves = (0..4).map(|i| (i, arc)).collect();
+    visioncraft_core::curve::tessellate(&points, true, &curves, false).pts
+}
+
 /// Whether a click at `p` closes a pending outline of `points`.
 /// The mean of a shape's corners (a centre to push labels away from).
 fn centroid(points: &[P2]) -> P2 {
@@ -246,6 +262,8 @@ pub enum Tool {
     Stairs,
     /// A closed outline drawn as a raised bed with soil (`bed.add`).
     Bed,
+    /// Two clicks, the centre and a point on the edge of a round area (`shape.add_circle`).
+    Circle,
     /// Puts a window, or a door, in the wall of a block that is clicked.
     Window,
     Door,
@@ -317,6 +335,10 @@ pub struct DrawState {
     pub points: Vec<P2>,
     pub selected: Option<String>,
     pub vertex: Option<usize>,
+    /// The edge the curve fields act on (Shift-click on an edge, or the number field).
+    pub edge: Option<usize>,
+    /// The radius typed for the next arc (0: the edge's length).
+    curve_radius: f32,
     dragging: Option<usize>,
     /// (shape id, text) of the name field while it has the keyboard.
     name_edit: Option<(String, String)>,
@@ -337,8 +359,14 @@ const ACCENT: [u8; 4] = [255, 200, 70, 255];
 fn with_vertex(shape: &Shape, i: usize, p: P2) -> Shape {
     let mut s = shape.clone();
     match &mut s {
-        Shape::Area(a) => a.outline[i] = p,
-        Shape::Extrusion(e) => e.outline[i] = p,
+        Shape::Area(a) => {
+            a.points[i] = p;
+            visioncraft_core::curve::fit(&a.points, true, &mut a.curves);
+        }
+        Shape::Extrusion(e) => {
+            e.points[i] = p;
+            visioncraft_core::curve::fit(&e.points, e.closed, &mut e.curves);
+        }
     }
     s
 }
@@ -353,7 +381,7 @@ fn all_vertices(cx: &Cx, except: Option<&str>) -> Vec<P2> {
         .shapes
         .iter()
         .filter(|s| Some(s.id()) != except)
-        .flat_map(|s| s.outline().iter().copied())
+        .flat_map(|s| s.points().iter().copied())
         .collect()
 }
 
@@ -387,14 +415,23 @@ impl DrawState {
     /// Before leaving for Walk: a shape being drawn with enough corners is kept (as Enter would),
     /// a shorter one is dropped.
     pub fn finish_for_walk(&mut self, cx: &mut Cx) {
-        let needed = if matches!(self.tool, Tool::Wall | Tool::Fence | Tool::Stairs) {
+        let needed = if matches!(
+            self.tool,
+            Tool::Wall | Tool::Fence | Tool::Stairs | Tool::Circle
+        ) {
             2
         } else {
             3
         };
         if matches!(
             self.tool,
-            Tool::Area | Tool::Block | Tool::Wall | Tool::Fence | Tool::Stairs | Tool::Bed
+            Tool::Area
+                | Tool::Block
+                | Tool::Wall
+                | Tool::Fence
+                | Tool::Stairs
+                | Tool::Bed
+                | Tool::Circle
         ) && self.points.len() >= needed
         {
             self.finish(cx);
@@ -456,7 +493,10 @@ impl DrawState {
     }
 
     fn drawing(&mut self, cx: &mut Cx, cursor: Option<P2>, radius: f32, top: &mut Vec<LineVertex>) {
-        let closed_shape = !matches!(self.tool, Tool::Wall | Tool::Fence | Tool::Stairs);
+        let closed_shape = !matches!(
+            self.tool,
+            Tool::Wall | Tool::Fence | Tool::Stairs | Tool::Circle
+        );
         let existing = all_vertices(cx, None);
         let snap = cursor.map(|c| snap_point(c, &self.points, &existing, radius, !cx.input.alt));
         if cx.input.escape && !self.points.is_empty() {
@@ -539,8 +579,8 @@ impl DrawState {
                 self.points.push(s.pos);
             }
         }
-        // Steps are two clicks: the bottom, then the top.
-        if self.tool == Tool::Stairs && self.points.len() >= 2 {
+        // Steps are two clicks: the bottom, then the top; a circle too: the centre, then the edge.
+        if matches!(self.tool, Tool::Stairs | Tool::Circle) && self.points.len() >= 2 {
             self.finish(cx);
             return;
         }
@@ -571,6 +611,17 @@ impl DrawState {
         }
         let y = 0.05;
         top.extend(outline_lines(&pts, rect, y, ACCENT, 3.0));
+        if self.tool == Tool::Circle
+            && let [c, e, ..] = pts[..]
+        {
+            top.extend(outline_lines(
+                &circle_polygon(c, dist(c, e)),
+                true,
+                y,
+                ACCENT,
+                3.0,
+            ));
+        }
         if closed_shape
             && self.points.len() >= 2
             && let Some(&last) = pts.last()
@@ -620,7 +671,17 @@ impl DrawState {
         if len < 0.05 {
             return;
         }
-        let mid = y_point([(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0], 0.05);
+        self.label_at(
+            cx,
+            [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0],
+            &format!("{len:.2} m"),
+            centre,
+        );
+    }
+
+    /// `text` at `at`, pushed outwards from `centre` like [`Self::length_label`].
+    fn label_at(&self, cx: &Cx, at: P2, text: &str, centre: P2) {
+        let mid = y_point(at, 0.05);
         let (Some(p), c) = (cx.project(mid), cx.project(y_point(centre, 0.05))) else {
             return;
         };
@@ -630,7 +691,7 @@ impl DrawState {
         } else {
             egui::Vec2::ZERO
         };
-        cx.label(p + out * 22.0, &format!("{len:.2} m"));
+        cx.label(p + out * 22.0, text);
     }
 
     fn finish(&mut self, cx: &mut Cx) {
@@ -669,6 +730,19 @@ impl DrawState {
                 "",
                 json!({"name": name(t::TOOL_STAIRS), "from": points[0], "to": points[1], "width_m": 1.2, "height": 0.5}),
             ),
+            // A round area: the centre and the radius (an exact circle of four arcs).
+            Tool::Circle => {
+                let (label, material) = self.area_kind.spec();
+                let radius = dist(points[0], points[1]);
+                if radius < 0.05 {
+                    return;
+                }
+                (
+                    "shape.add_circle",
+                    material,
+                    json!({"name": name(label), "center": points[0], "radius_m": radius, "kind": "area"}),
+                )
+            }
             // A raised bed starts 40 cm high with timber walls and soil (the command does both).
             Tool::Bed => (
                 "bed.add",
@@ -729,7 +803,7 @@ impl DrawState {
     fn editing(&mut self, cx: &mut Cx, cursor: Option<P2>, radius: f32, top: &mut Vec<LineVertex>) {
         let shape = self.shape(cx);
         if let (Some(shape), Some(c)) = (&shape, cursor) {
-            let outline = shape.outline();
+            let points = shape.points();
             if cx.input.drag_started {
                 // egui reports the start once the pointer has already moved: test where it was pressed.
                 let pressed = cx
@@ -737,7 +811,7 @@ impl DrawState {
                     .press_origin
                     .and_then(|p| Self::world_at(cx, p))
                     .unwrap_or(c);
-                self.dragging = vertex_hit(outline, pressed, radius);
+                self.dragging = vertex_hit(points, pressed, radius);
                 if self.dragging.is_some() {
                     self.vertex = self.dragging;
                 }
@@ -761,7 +835,7 @@ impl DrawState {
                 if cx.input.drag_stopped {
                     self.dragging = None;
                     let to = cx.s.draft.as_ref().and_then(|d| match d {
-                        crate::studio::Draft::Shape(s) => s.outline().get(i).copied(),
+                        crate::studio::Draft::Shape(s) => s.points().get(i).copied(),
                         _ => None,
                     });
                     cx.s.set_draft(None);
@@ -779,12 +853,18 @@ impl DrawState {
         {
             let hit_vertex = shape
                 .as_ref()
-                .and_then(|s| vertex_hit(s.outline(), c, radius));
-            let hit_edge = shape
-                .as_ref()
-                .and_then(|s| edge_hit(s.outline(), s.is_closed(), c, radius * 0.7));
+                .and_then(|s| vertex_hit(s.points(), c, radius));
+            // The edge under the pointer, along the curve: its control edge and the point on it.
+            let hit_edge = shape.as_ref().and_then(|s| {
+                let tess = s.tessellate();
+                edge_hit(&tess.pts, s.is_closed(), c, radius * 0.7)
+                    .map(|(j, q)| (tess.edge_of[j], q))
+            });
             if let Some(i) = hit_vertex {
                 self.vertex = Some(i);
+            } else if let (Some((edge, _)), true) = (hit_edge, cx.input.shift) {
+                // Shift-click picks the edge for the curve fields instead of adding a corner.
+                self.edge = Some(edge);
             } else if let (Some((edge, q)), Some(s)) = (hit_edge, &shape) {
                 let q = if cx.input.alt {
                     q
@@ -805,6 +885,7 @@ impl DrawState {
                 );
                 self.selected = pick.map(|p| p.owner);
                 self.vertex = None;
+                self.edge = None;
             }
         }
         if (cx.input.delete || cx.input.backspace)
@@ -823,14 +904,20 @@ impl DrawState {
                 Shape::Area(a) => a.elevation + 0.06,
                 Shape::Extrusion(e) => e.base + e.height + 0.06,
             };
+            // The curved outline; the handles stay on the control points.
+            let tess = shape.tessellate();
+            let runs = tess.runs();
             top.extend(outline_lines(
-                shape.outline(),
+                &tess.pts,
                 shape.is_closed(),
                 y,
                 [90, 200, 255, 255],
                 3.0,
             ));
-            for (i, p) in shape.outline().iter().enumerate() {
+            if let Some(run) = self.edge.and_then(|e| runs.get(e)) {
+                top.extend(outline_lines(run, false, y + 0.01, ACCENT, 5.0));
+            }
+            for (i, p) in shape.points().iter().enumerate() {
                 let sel = self.vertex == Some(i);
                 top.extend(dot(
                     *p,
@@ -839,14 +926,22 @@ impl DrawState {
                     if sel { 13.0 } else { 9.0 },
                 ));
             }
-            let o = shape.outline();
-            let n = o.len();
-            for i in 0..if shape.is_closed() {
-                n
-            } else {
-                n.saturating_sub(1)
-            } {
-                self.length_label(cx, o[i], o[(i + 1) % n], centroid(o));
+            let centre = centroid(&tess.pts);
+            for (i, run) in runs.iter().enumerate() {
+                let (Some(&a), Some(&b)) = (run.first(), run.last()) else {
+                    continue;
+                };
+                if run.len() <= 2 {
+                    self.length_label(cx, a, b, centre);
+                } else {
+                    // A curve: its length along the curve, and the radius of an arc.
+                    let len = outline_length(run, false);
+                    let mut text = format!("{len:.2} m");
+                    if let Some(c) = shape.curves().get(&i) {
+                        text.push_str(&format!(" R {:.2}", c.radius_m(dist(a, b))));
+                    }
+                    self.label_at(cx, run[run.len() / 2], &text, centre);
+                }
             }
         }
     }
@@ -878,7 +973,7 @@ impl DrawState {
             ui.separator();
         }
         // Above the tools, so they stay put.
-        if self.tool == Tool::Area {
+        if matches!(self.tool, Tool::Area | Tool::Circle) {
             ui.horizontal_wrapped(|ui| {
                 for kind in AreaKind::ALL {
                     if ui
@@ -899,6 +994,7 @@ impl DrawState {
                 (Tool::Fence, t::TOOL_FENCE),
                 (Tool::Stairs, t::TOOL_STAIRS),
                 (Tool::Bed, t::TOOL_BED),
+                (Tool::Circle, t::TOOL_CIRCLE),
                 (Tool::Window, t::TOOL_WINDOW),
                 (Tool::Door, t::TOOL_DOOR),
             ] {
@@ -915,9 +1011,85 @@ impl DrawState {
             Tool::Select => t::SELECT_HINT,
             Tool::Wall | Tool::Fence => t::WALL_HINT,
             Tool::Stairs => t::STAIRS_HINT,
+            Tool::Circle => t::CIRCLE_HINT,
             Tool::Window | Tool::Door => t::OPENING_HINT,
             _ => t::DRAW_HINT,
         });
+    }
+
+    /// Curves: pick an edge, type a radius, curve it to the left or the right of its direction,
+    /// straighten it; and the smooth outline. Each change one command. Stairs and houses are
+    /// straight.
+    fn curve_panel(&mut self, ui: &mut egui::Ui, cx: &mut Cx, shape: &Shape) {
+        if matches!(shape, Shape::Extrusion(x) if x.stairs.is_some() || x.house.is_some()) {
+            return;
+        }
+        let points = shape.points();
+        let edges = visioncraft_core::curve::edge_count(points.len(), shape.is_closed());
+        if edges == 0 {
+            return;
+        }
+        let edge = self.edge.unwrap_or(0).min(edges - 1);
+        let mut picked = edge;
+        ui.horizontal(|ui| {
+            ui.label(t::CURVE_EDGE);
+            ui.add(egui::DragValue::new(&mut picked).range(0..=edges - 1));
+            ui.weak(format!("/ {}", edges - 1));
+        });
+        self.edge = Some(picked);
+        let edge = picked;
+        let chord = dist(points[edge], points[(edge + 1) % points.len()]);
+        let now = shape.curves().get(&edge).copied();
+        ui.label(match now {
+            Some(c) => format!(
+                "{:.2} m, {} {:.2} m",
+                chord,
+                t::CURVE_RADIUS.to_lowercase(),
+                c.radius_m(chord)
+            ),
+            None => format!("{chord:.2} m, {}", t::CURVE_STRAIGHT),
+        });
+        let mut radius = if self.curve_radius > 0.0 {
+            self.curve_radius
+        } else {
+            now.map_or(chord, |c| c.radius_m(chord)).max(chord / 2.0)
+        };
+        if drag_field(
+            ui,
+            t::CURVE_RADIUS,
+            &mut radius,
+            0.05,
+            0.01..=10_000.0,
+            " m",
+        ) != Edit::None
+        {
+            self.curve_radius = radius;
+        }
+        ui.horizontal_wrapped(|ui| {
+            for (side, label) in [("left", t::CURVE_LEFT), ("right", t::CURVE_RIGHT)] {
+                if ui.button(label).clicked() {
+                    cx.run(
+                        "shape.set_curve",
+                        json!({"id": shape.id(), "edge": edge, "radius_m": radius, "side": side}),
+                    );
+                }
+            }
+            if now.is_some() && ui.button(t::CURVE_CLEAR).clicked() {
+                cx.run("shape.clear_curve", json!({"id": shape.id(), "edge": edge}));
+            }
+        });
+        let mut smooth = shape.is_smooth();
+        if ui
+            .checkbox(&mut smooth, t::SMOOTH)
+            .on_hover_text(t::SMOOTH_TIP)
+            .changed()
+        {
+            cx.run(
+                "shape.set_smooth",
+                json!({"id": shape.id(), "smooth": smooth}),
+            );
+        }
+        ui.weak(t::CURVE_HINT);
     }
 
     /// Sizes and frame of the windows and doors about to be placed.
@@ -970,13 +1142,14 @@ impl DrawState {
         });
         // A rectangle (at any turn) shows its width and depth to type in.
         if shape.is_closed()
-            && let Some((w0, d0)) = rect_size(shape.outline())
+            && !shape.is_curved()
+            && let Some((w0, d0)) = rect_size(shape.points())
         {
             let (mut w, mut d) = (w0, d0);
             let ew = drag_field(ui, t::WIDTH, &mut w, 0.01, 0.1..=1000.0, " m");
             let ed = drag_field(ui, t::DEPTH, &mut d, 0.01, 0.1..=1000.0, " m");
             if (ew == Edit::Done || ed == Edit::Done)
-                && let Some(outline) = resized_rect(shape.outline(), w, d)
+                && let Some(outline) = resized_rect(shape.points(), w, d)
             {
                 cx.run(
                     "shape.set_outline",
@@ -1039,7 +1212,8 @@ impl DrawState {
                     house_panel(ui, cx, x);
                     // A plain rectangular block (no roof yet) can be steps instead.
                     if x.house.is_none()
-                        && x.outline.len() == 4
+                        && x.points.len() == 4
+                        && !shape.is_curved()
                         && ui.button(t::MAKE_STAIRS).clicked()
                     {
                         cx.run("stairs.set", json!({"id": x.id, "up_edge": 0}));
@@ -1064,18 +1238,19 @@ impl DrawState {
             }
             Edit::None => {}
         }
+        self.curve_panel(ui, cx, &shape);
         let (closed, outline) = (shape.is_closed(), shape.outline());
         if closed {
             ui.label(format!(
                 "{}: {:.2} m²",
                 t::AREA,
-                measure::polygon_area(outline)
+                measure::polygon_area(&outline)
             ));
         }
         ui.label(format!(
             "{}: {:.2} m",
             if closed { t::PERIMETER } else { "Length" },
-            outline_length(outline, closed)
+            outline_length(&outline, closed)
         ));
         ui.horizontal(|ui| {
             if self.vertex.is_some()
@@ -1155,9 +1330,9 @@ fn nearest_wall(cx: &Cx, c: P2, reach: f32, w: f32) -> Option<WallSpot> {
         if !e.closed {
             continue;
         }
-        let n = e.outline.len();
+        let n = e.points.len();
         for i in 0..n {
-            let (p, q) = (e.outline[i], e.outline[(i + 1) % n]);
+            let (p, q) = (e.points[i], e.points[(i + 1) % n]);
             let len = dist(p, q);
             if len < w + 0.2 {
                 continue;
@@ -1218,7 +1393,7 @@ fn fence_panel(ui: &mut egui::Ui, cx: &mut Cx, x: &visioncraft_core::shape::Extr
     ui.horizontal_wrapped(|ui| {
         // The gate goes in the middle of the first stretch.
         if ui.button(t::ADD_GATE).clicked()
-            && let [a, b, ..] = x.outline[..]
+            && let [a, b, ..] = x.points[..]
         {
             let len = (b[0] - a[0]).hypot(b[1] - a[1]);
             cx.run(
@@ -1243,7 +1418,7 @@ fn stairs_panel(ui: &mut egui::Ui, cx: &mut Cx, x: &visioncraft_core::shape::Ext
     let Some(st) = &x.stairs else {
         return;
     };
-    if let Ok(g) = st.geometry(&x.outline, x.height) {
+    if let Ok(g) = st.geometry(&x.points, x.height) {
         ui.label(format!(
             "{} {} ({:.0} mm / {:.0} mm)",
             g.steps,

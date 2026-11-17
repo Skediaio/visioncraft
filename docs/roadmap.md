@@ -61,6 +61,18 @@ nothing here is a promise of a date.
   area, stairs that follow the terrain, landings and turns (L and U stairs), a soil
   that follows terrain edited after the bed.
 
+- **Curves:** a shape keeps its control points and draws a curved outline from them: an arc on
+  single edges typed as a radius and a side (`shape.set_curve`, `shape.clear_curve`), or a smooth
+  curve through all the points (`shape.set_smooth`), with the same typed-size precision as
+  straight edges (a circle of radius 5 measures within 0.1% of a circle). `shape.add_circle`
+  makes exact round lawns, ponds and beds; `shape.add_area`, `shape.add_extrusion`, `bed.add` and
+  `fence.add` take `curves` and `smooth`; a fence spreads its posts by arc length along a curve,
+  and a round plain, masonry or corten bed follows it with soil inside. Draw has a Circle tool, an
+  edge panel (pick an edge with Shift-click or a number, type a radius, left or right) and a Smooth
+  checkbox. Next: curved houses (walls on many short edges with openings placed by arc length),
+  curved sleeper beds and steps, an arc through three picked points, the radius shown and dragged
+  on the plan, splitting an arc in two when a corner is added, and an elliptical circle tool.
+
 ## Next
 
 - **More leaf sets:** the remaining CC0 atlases, then coverage reported again.
@@ -92,8 +104,6 @@ nothing here is a promise of a date.
   a video file. An agent gets the garden's layout from the same queries it designs with and
   proposes the shots.
 
-- **Curves:** outlines with arcs and smooth curves for paths, borders and lawns, with the same
-  typed-size precision as straight edges.
 - **Denser borders:** layered perennial plantings that close up, with flowers that read from
   eye level.
 

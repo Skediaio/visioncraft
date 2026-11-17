@@ -99,6 +99,19 @@ pub const TOOL_WALL: &str = "Wall";
 pub const TOOL_FENCE: &str = "Fence";
 pub const TOOL_STAIRS: &str = "Stairs";
 pub const TOOL_BED: &str = "Raised bed";
+pub const TOOL_CIRCLE: &str = "Circle";
+pub const CIRCLE_HINT: &str =
+    "Click the centre, then the edge of the circle. Type the radius and press Enter. Esc cancels.";
+pub const CURVE_EDGE: &str = "Edge";
+pub const CURVE_HINT: &str =
+    "Shift-click an edge to pick it; a plain click on an edge adds a corner.";
+pub const CURVE_STRAIGHT: &str = "straight";
+pub const CURVE_RADIUS: &str = "Radius";
+pub const CURVE_LEFT: &str = "Curve left";
+pub const CURVE_RIGHT: &str = "Curve right";
+pub const CURVE_CLEAR: &str = "Straighten";
+pub const SMOOTH: &str = "Smooth";
+pub const SMOOTH_TIP: &str = "A smooth curve through all the corners.";
 pub const STAIRS_HINT: &str = "Click the bottom of the steps, then the top. Change the rise, riser and tread in the panel. Esc cancels.";
 pub const MAKE_STAIRS: &str = "Make it steps";
 pub const STEPS: &str = "steps";

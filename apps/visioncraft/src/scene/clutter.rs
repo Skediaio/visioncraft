@@ -289,12 +289,12 @@ impl Scene {
         {
             let ground = self.ground_fn();
             // The outlines of the forest floors: leaf litter lies under the crowns on them all year.
-            let floors: Vec<&[[f32; 2]]> = grounds
+            let floors: Vec<std::borrow::Cow<[[f32; 2]]>> = grounds
                 .iter()
                 .filter(|(_, faces)| faces.iter().any(|f| f.1 == Ground::Forest))
                 .filter_map(
                     |(id, _)| match project.shapes.iter().find(|s| s.id() == id.as_str()) {
-                        Some(Shape::Area(a)) => Some(a.outline.as_slice()),
+                        Some(Shape::Area(a)) => Some(a.outline()),
                         _ => None,
                     },
                 )
@@ -372,14 +372,15 @@ impl Scene {
             let Some(Shape::Area(a)) = project.shapes.iter().find(|s| s.id() == id.as_str()) else {
                 continue;
             };
-            let mut lines = polygon_edges(&a.outline, false);
+            let outline = a.outline();
+            let mut lines = polygon_edges(&outline, false);
             for o in &over {
                 lines.extend(polygon_edges(o, true));
             }
             let inv = o.xf.inverse();
             // Grass hangs over paving, a border or water: another drawn area that is not a
             // lawn. Where lawn meets lawn or the bare ground round it, there is no edge to see.
-            let others: Vec<(&[[f32; 2]], bool)> = project
+            let others: Vec<(std::borrow::Cow<[[f32; 2]]>, bool)> = project
                 .shapes
                 .iter()
                 .filter_map(|s| match s {
@@ -392,7 +393,7 @@ impl Scene {
                                 .any(|m| matches!(m.kind, SurfaceKind::Lawn3d(_)))
                         });
                         // A soft-edged area is a band, not an edge grass hangs over.
-                        Some((b.outline.as_slice(), lawn || b.edge_blend_m > 0.0))
+                        Some((b.outline(), lawn || b.edge_blend_m > 0.0))
                     }
                     _ => None,
                 })
@@ -401,8 +402,7 @@ impl Scene {
                 .into_iter()
                 .enumerate()
             {
-                if !inside_outline(s.at, &a.outline) || over.iter().any(|o| inside_outline(s.at, o))
-                {
+                if !inside_outline(s.at, &outline) || over.iter().any(|o| inside_outline(s.at, o)) {
                     continue;
                 }
                 let beyond = [s.at[0] + s.out[0] * 0.1, s.at[1] + s.out[1] * 0.1];

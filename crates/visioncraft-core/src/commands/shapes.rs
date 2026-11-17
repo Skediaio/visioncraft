@@ -17,6 +17,16 @@ pub(super) fn register(s: &mut Session) {
         )
     };
     let outline = |doc: &str| param("outline", T::Outline, doc).required();
+    let curves = || {
+        param(
+            "curves",
+            T::Object,
+            "Arcs on single edges, by edge index: {\"0\": {\"type\": \"arc\", \"sagitta_m\": 0.8}}. The sagitta is the signed distance from the middle of the chord to the arc, positive to the left of the edge's direction (seen from above, +X east, -Z north), at most half the chord. See `shape.set_curve` to give a radius instead.",
+        )
+    };
+    let smooth = || {
+        param("smooth", T::Boolean, "A smooth curve through all the points (centripetal Catmull-Rom), closed or open as the shape is; edges with an arc keep it.").default(json!(false))
+    };
     let edge_blend = || {
         param("edge_blend_m", T::Number, "Soft edge: the area gives way to what lies under it across a band this wide along its outline, dithered instead of a hard line (0: hard).").unit("m").default(json!(0))
     };
@@ -27,7 +37,9 @@ pub(super) fn register(s: &mut Session) {
             "Draws a flat polygon (lawn, terrace, path, pond, bed) at a height; fails if the outline is self-intersecting or has fewer than 3 points.",
             vec![
                 param("name", T::String, "Display name.").required(),
-                outline("Polygon as [x, z] pairs in metres, either winding, not self-intersecting."),
+                outline("Control points as [x, z] pairs in metres, either winding, not self-intersecting."),
+                curves(),
+                smooth(),
                 param("elevation", T::Number, "Height of the surface (above the ground when `drape`).").unit("m").default(json!(0)),
                 param("drape", T::Boolean, "Lie on the ground: the surface follows the terrain, `elevation` is the height above it. False: flat at `elevation` (a raised deck, a pond's water). Default true, or false when `edge` is given (a draped area has no edge).").default(json!(true)),
                 edge_blend(),
@@ -48,6 +60,8 @@ pub(super) fn register(s: &mut Session) {
             vec![
                 param("name", T::String, "Display name.").required(),
                 outline("Polygon (closed) or polyline (open) as [x, z] pairs in metres; at least 3 points closed, 2 open; not self-intersecting."),
+                curves(),
+                smooth(),
                 param("closed", T::Boolean, "True: the last point joins the first. False: a polyline widened by `thickness`.").default(json!(true)),
                 param("base", T::Number, "Height of the bottom.").unit("m").default(json!(0)),
                 param("height", T::Number, "Height of the solid above `base`, above zero.").unit("m").required(),
@@ -65,7 +79,7 @@ pub(super) fn register(s: &mut Session) {
         spec(
             "shape.set_outline",
             "Set Outline",
-            "Replaces the whole outline of a shape; side materials are not renumbered (use insert/remove vertex for that).",
+            "Replaces the whole outline (the control points) of a shape; side materials are not renumbered (use insert/remove vertex for that). Arcs stay on their edge numbers where those edges still exist (eased to a semicircle where the new chord is too short for them).",
             vec![
                 param("id", T::String, "Shape id.").required(),
                 outline("New outline as [x, z] pairs in metres."),
@@ -79,7 +93,7 @@ pub(super) fn register(s: &mut Session) {
         spec(
             "shape.move_vertex",
             "Move Vertex",
-            "Moves one outline point; every face name stays.",
+            "Moves one outline point (a control point, when the shape has curves); every face name stays. An arc on an edge of the point that would then bulge more than half its chord is eased to a semicircle.",
             vec![
                 param("id", T::String, "Shape id.").required(),
                 param(
@@ -101,7 +115,7 @@ pub(super) fn register(s: &mut Session) {
         spec(
             "shape.insert_vertex",
             "Insert Vertex",
-            "Splits an edge with a new point; the new point gets index edge+1, later sides renumber and their materials follow, both halves of the split edge keep its material.",
+            "Splits an edge with a new point; the new point gets index edge+1, later sides renumber and their materials follow, both halves of the split edge keep its material. An arc on the split edge is dropped (its two halves would not be one circle); later arcs renumber with their edges.",
             vec![
                 param("id", T::String, "Shape id.").required(),
                 param("edge", T::Integer, "Index of the edge to split (edge n runs from point n to point n+1).").required(),
@@ -116,7 +130,7 @@ pub(super) fn register(s: &mut Session) {
         spec(
             "shape.remove_vertex",
             "Remove Vertex",
-            "Removes an outline point; its two edges merge into the earlier one (which keeps its material); refused if the shape would become invalid.",
+            "Removes an outline point; its two edges merge into the earlier one (which keeps its material) and lose their arcs; later arcs renumber; refused if the shape would become invalid.",
             vec![
                 param("id", T::String, "Shape id.").required(),
                 param("index", T::Integer, "Index of the point, from 0.").required(),
@@ -125,6 +139,75 @@ pub(super) fn register(s: &mut Session) {
             json!({"id": "S2", "index": 3}),
         ),
         remove_vertex,
+    );
+    s.register_with_spec(
+        spec(
+            "shape.set_curve",
+            "Curve an Edge",
+            "Makes one edge of a shape an arc, typed as a radius (or a sagitta): edge `n` runs from point `n` to point `n+1`. The radius becomes the sagitta for the edge's length; a radius under half the edge is refused. Stairs and houses take no curves; a sleeper bed neither. A fence follows the curve with posts spread by arc length.",
+            vec![
+                param("id", T::String, "Shape id.").required(),
+                param("edge", T::Integer, "Edge index, from 0 (edge n runs from point n to point n+1, wrapping when closed).").required(),
+                param("radius_m", T::Number, "Radius of the arc, at least half the edge's length.").unit("m"),
+                param("sagitta_m", T::Number, "Instead of a radius: the signed distance from the middle of the chord to the arc, positive to the left of the edge's direction (seen from above, +X east, -Z north), at most half the chord. 0 makes the edge straight.").unit("m"),
+                param("side", T::String, "Which way the arc bulges, seen along the edge from its first point: `left` (the default for a radius) or `right`. With `sagitta_m` it overrides the sign.").allowed(&["left", "right"]),
+            ],
+            "{sagitta_m, radius_m}",
+            json!({"id": "S1", "edge": 0, "radius_m": 6.0, "side": "right"}),
+        ),
+        set_curve,
+    );
+    s.register_with_spec(
+        spec(
+            "shape.clear_curve",
+            "Straighten an Edge",
+            "Makes one curved edge straight again (an edge that is straight stays so).",
+            vec![
+                param("id", T::String, "Shape id.").required(),
+                param("edge", T::Integer, "Edge index, from 0.").required(),
+            ],
+            "null",
+            json!({"id": "S1", "edge": 0}),
+        ),
+        clear_curve,
+    );
+    s.register_with_spec(
+        spec(
+            "shape.set_smooth",
+            "Smooth Outline",
+            "Turns the smooth outline of a shape on or off: a curve through all its points (centripetal Catmull-Rom, closed or open as the shape is). Edges with an arc keep their arc.",
+            vec![
+                param("id", T::String, "Shape id.").required(),
+                param("smooth", T::Boolean, "True: smooth; false: straight edges between the points.").required(),
+            ],
+            "null",
+            json!({"id": "S1", "smooth": true}),
+        ),
+        set_smooth,
+    );
+    s.register_with_spec(
+        spec(
+            "shape.add_circle",
+            "Add Circle",
+            "A round area or extrusion as 4 control points with 4 quarter arcs (an exact circle): a round lawn, pond or bed. Takes the other parameters of `shape.add_area` (kind `area`) or `shape.add_extrusion` (kind `extrusion`, with `height`).",
+            vec![
+                param("name", T::String, "Display name.").default(json!("Circle")),
+                param("center", T::Point2, "Centre [x, z].").unit("m").required(),
+                param("radius_m", T::Number, "Radius, above zero.").unit("m").required(),
+                param("kind", T::String, "`area` (flat) or `extrusion` (solid).").allowed(&["area", "extrusion"]).default(json!("area")),
+                param("elevation", T::Number, "Area: height of the surface.").unit("m"),
+                param("drape", T::Boolean, "Area: lie on the ground."),
+                edge_blend(),
+                param("edge", T::Object, "Area: a retaining edge, as in `shape.add_area`."),
+                param("base", T::Number, "Extrusion: height of the bottom.").unit("m"),
+                param("height", T::Number, "Extrusion: height above `base`.").unit("m"),
+                layer(),
+                material(),
+            ],
+            "{id}",
+            json!({"name": "Round lawn", "center": [11, 20], "radius_m": 6.0, "kind": "area", "material": "lawn"}),
+        ),
+        add_circle,
     );
     s.register_with_spec(
         spec(
@@ -228,6 +311,10 @@ pub(super) fn add_area(project: &mut Project, params: &Value) -> Result<Value, C
         name: String,
         outline: Vec<[f32; 2]>,
         #[serde(default)]
+        curves: crate::curve::Curves,
+        #[serde(default)]
+        smooth: bool,
+        #[serde(default)]
         elevation: f32,
         drape: Option<bool>,
         #[serde(default)]
@@ -246,7 +333,9 @@ pub(super) fn add_area(project: &mut Project, params: &Value) -> Result<Value, C
             id,
             name: p.name,
             layer,
-            outline: p.outline,
+            points: p.outline,
+            curves: p.curves,
+            smooth: p.smooth,
             elevation: p.elevation,
             drape,
             edge_blend_m: p.edge_blend_m,
@@ -267,6 +356,10 @@ pub(super) fn add_extrusion(project: &mut Project, params: &Value) -> Result<Val
     struct P {
         name: String,
         outline: Vec<[f32; 2]>,
+        #[serde(default)]
+        curves: crate::curve::Curves,
+        #[serde(default)]
+        smooth: bool,
         #[serde(default = "yes")]
         closed: bool,
         #[serde(default)]
@@ -300,7 +393,9 @@ pub(super) fn add_extrusion(project: &mut Project, params: &Value) -> Result<Val
             id,
             name: p.name,
             layer,
-            outline: p.outline,
+            points: p.outline,
+            curves: p.curves,
+            smooth: p.smooth,
             closed: p.closed,
             base: p.base,
             height: p.height,
@@ -345,7 +440,8 @@ fn set_outline(project: &mut Project, params: &Value) -> Result<Value, CommandEr
     }
     let p: P = parse(params)?;
     edit(project, &p.id, |s| {
-        *s.outline_mut() = p.outline;
+        *s.points_mut() = p.outline;
+        fit_curves(s);
         Ok(())
     })?;
     Ok(Value::Null)
@@ -361,9 +457,10 @@ fn move_vertex(project: &mut Project, params: &Value) -> Result<Value, CommandEr
     }
     let p: P = parse(params)?;
     edit(project, &p.id, |s| {
-        *s.outline_mut()
+        *s.points_mut()
             .get_mut(p.index)
             .ok_or_else(|| bad("no such vertex"))? = p.position;
+        fit_curves(s);
         Ok(())
     })?;
     Ok(Value::Null)
@@ -407,15 +504,13 @@ fn insert_vertex(project: &mut Project, params: &Value) -> Result<Value, Command
     }
     let p: P = parse(params)?;
     edit(project, &p.id, |s| {
-        let edges = if s.is_closed() {
-            s.outline().len()
-        } else {
-            s.outline().len().saturating_sub(1)
-        };
+        let edges = crate::curve::edge_count(s.points().len(), s.is_closed());
         if p.edge >= edges {
             return Err(bad("no such edge"));
         }
-        s.outline_mut().insert(p.edge + 1, p.position);
+        s.points_mut().insert(p.edge + 1, p.position);
+        let curves = crate::curve::after_insert(s.curves(), p.edge);
+        *s.curves_mut() = curves;
         Ok(())
     })?;
     // The split edge keeps its material on both halves.
@@ -437,12 +532,14 @@ fn remove_vertex(project: &mut Project, params: &Value) -> Result<Value, Command
     let p: P = parse(params)?;
     let mut last_of_open = false;
     edit(project, &p.id, |s| {
-        let len = s.outline().len();
+        let len = s.points().len();
         if p.index >= len {
             return Err(bad("no such vertex"));
         }
         last_of_open = !s.is_closed() && p.index == len - 1;
-        s.outline_mut().remove(p.index);
+        let curves = crate::curve::after_remove(s.curves(), p.index, len, s.is_closed());
+        s.points_mut().remove(p.index);
+        *s.curves_mut() = curves;
         Ok(())
     })?;
     // Edges `index-1` and `index` merge into one that keeps the number `index-1` and its material;
@@ -454,6 +551,149 @@ fn remove_vertex(project: &mut Project, params: &Value) -> Result<Value, Command
         std::cmp::Ordering::Greater => vec![n - 1],
     });
     Ok(Value::Null)
+}
+
+/// Keeps the arcs of `s` valid after its points changed.
+fn fit_curves(s: &mut Shape) {
+    let (points, closed) = (s.points().to_vec(), s.is_closed());
+    crate::curve::fit(&points, closed, s.curves_mut());
+}
+
+fn set_curve(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct P {
+        id: String,
+        edge: usize,
+        radius_m: Option<f32>,
+        sagitta_m: Option<f32>,
+        side: Option<String>,
+    }
+    let p: P = parse(params)?;
+    let left = match p.side.as_deref() {
+        None | Some("left") => true,
+        Some("right") => false,
+        Some(_) => return Err(bad("`side` is `left` or `right`")),
+    };
+    if p.radius_m.is_some() == p.sagitta_m.is_some() {
+        return Err(bad("give either `radius_m` or `sagitta_m`"));
+    }
+    let mut report = Value::Null;
+    edit(project, &p.id, |s| {
+        let (points, closed) = (s.points().to_vec(), s.is_closed());
+        let edges = crate::curve::edge_count(points.len(), closed);
+        if p.edge >= edges {
+            return Err(fail(format!(
+                "no edge {}: the shape has {edges} edges (0..{})",
+                p.edge,
+                edges.saturating_sub(1)
+            )));
+        }
+        let (a, b) = (points[p.edge], points[(p.edge + 1) % points.len()]);
+        let chord = (b[0] - a[0]).hypot(b[1] - a[1]);
+        let curve = match (p.radius_m, p.sagitta_m) {
+            (Some(r), _) => crate::curve::Curve::from_radius(chord, r, left).map_err(fail)?,
+            (_, Some(v)) => {
+                let v = if p.side.is_some() {
+                    v.abs() * if left { 1.0 } else { -1.0 }
+                } else {
+                    v
+                };
+                crate::curve::Curve::Arc { sagitta_m: v }
+            }
+            _ => unreachable!("one of the two is given"),
+        };
+        if !curve.sagitta_m().is_finite() {
+            return Err(bad("the sagitta is not a number"));
+        }
+        if curve.sagitta_m().abs() > chord / 2.0 * (1.0 + 1e-4) {
+            return Err(fail(format!(
+                "a sagitta of {} m is more than half the edge ({:.3} m): an arc reaches at most a semicircle",
+                curve.sagitta_m().abs(),
+                chord / 2.0
+            )));
+        }
+        if curve.sagitta_m().abs() < 1e-4 {
+            s.curves_mut().remove(&p.edge);
+        } else {
+            s.curves_mut().insert(p.edge, curve);
+            report = json!({"sagitta_m": curve.sagitta_m(), "radius_m": curve.radius_m(chord)});
+        }
+        Ok(())
+    })?;
+    Ok(report)
+}
+
+fn clear_curve(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct P {
+        id: String,
+        edge: usize,
+    }
+    let p: P = parse(params)?;
+    edit(project, &p.id, |s| {
+        s.curves_mut().remove(&p.edge);
+        Ok(())
+    })?;
+    Ok(Value::Null)
+}
+
+fn set_smooth(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct P {
+        id: String,
+        smooth: bool,
+    }
+    let p: P = parse(params)?;
+    edit(project, &p.id, |s| {
+        s.set_smooth(p.smooth);
+        Ok(())
+    })?;
+    Ok(Value::Null)
+}
+
+fn add_circle(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
+    #[derive(Deserialize)]
+    struct P {
+        center: [f32; 2],
+        radius_m: f32,
+        kind: Option<String>,
+    }
+    let p: P = parse(&json!({
+        "center": params["center"], "radius_m": params["radius_m"], "kind": params["kind"],
+    }))?;
+    if !(p.radius_m.is_finite() && p.radius_m > 0.0 && p.center.iter().all(|c| c.is_finite())) {
+        return Err(bad("`center` and a positive `radius_m` are needed"));
+    }
+    let [cx, cz] = p.center;
+    let r = p.radius_m;
+    // East, south, west, north: clockwise seen from above, so the left of every edge is outward
+    // and a positive sagitta bulges out.
+    let outline = [[cx + r, cz], [cx, cz + r], [cx - r, cz], [cx, cz - r]];
+    let sagitta = r * (1.0 - std::f32::consts::FRAC_1_SQRT_2);
+    let arc = json!({"type": "arc", "sagitta_m": sagitta});
+    let mut q = params
+        .as_object()
+        .cloned()
+        .ok_or_else(|| bad("expected an object"))?;
+    for k in ["center", "radius_m", "kind"] {
+        q.remove(k);
+    }
+    q.insert("outline".into(), json!(outline));
+    q.insert(
+        "curves".into(),
+        json!({"0": arc, "1": arc, "2": arc, "3": arc}),
+    );
+    if q.get("name").is_none_or(Value::is_null) {
+        q.insert("name".into(), "Circle".into());
+    }
+    match p.kind.as_deref() {
+        None | Some("area") => add_area(project, &Value::Object(q)),
+        Some("extrusion") => add_extrusion(project, &Value::Object(q)),
+        Some(_) => Err(bad("`kind` is `area` or `extrusion`")),
+    }
 }
 
 fn set_height(project: &mut Project, params: &Value) -> Result<Value, CommandError> {

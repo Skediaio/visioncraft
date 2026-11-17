@@ -19,7 +19,7 @@ pub fn recipes() -> Vec<Value> {
 #[test]
 fn every_recipe_of_the_guide_runs() {
     let recipes = recipes();
-    assert_eq!(recipes.len(), 22);
+    assert_eq!(recipes.len(), 23);
     for (n, recipe) in recipes.into_iter().enumerate() {
         let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("recipe-{n}"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -172,6 +172,25 @@ fn every_recipe_of_the_guide_runs() {
                     rows[1]["raised_bed"]["plate_area_m2"].as_f64().unwrap() > 3.0,
                     "{report}"
                 );
+            }
+            23 => {
+                let rows = results[7]["result"]["shapes"].as_array().unwrap();
+                let pi = std::f64::consts::PI;
+                let circle = rows.iter().find(|r| r["id"] == "S2").unwrap();
+                let area = circle["plan_area_m2"].as_f64().unwrap();
+                assert!((area / (36.0 * pi) - 1.0).abs() < 0.001, "{report}");
+                let per = circle["perimeter_m"].as_f64().unwrap();
+                assert!((per / (12.0 * pi) - 1.0).abs() < 0.001, "{report}");
+                // The border's third edge bulges outward, so it is bigger than 8 x 6.
+                let border = rows.iter().find(|r| r["id"] == "S3").unwrap();
+                assert!(border["plan_area_m2"].as_f64().unwrap() > 48.0, "{report}");
+                let shapes = results[8]["result"]["shapes"].as_array().unwrap();
+                assert_eq!(
+                    shapes[1]["curves"].as_object().unwrap().len(),
+                    4,
+                    "{report}"
+                );
+                assert_eq!(shapes[3]["smooth"], true, "{report}");
             }
             18 => {
                 // The beach 20 m out: 0.2 m above the water; the grass stops at the waterline.

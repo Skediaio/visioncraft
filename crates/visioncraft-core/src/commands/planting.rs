@@ -997,9 +997,9 @@ mod tests {
         };
         // The outline follows the crowns: a polygon of rays round their centre, ending under
         // the outer crowns (inside the brush's reach), not a ruler-straight hull.
-        assert_eq!(a.outline.len(), 72);
+        assert_eq!(a.points.len(), 72);
         assert!(
-            a.outline
+            a.points
                 .iter()
                 .all(|q| (-10.0..=30.0).contains(&q[0]) && (-10.0..=30.0).contains(&q[1]))
         );

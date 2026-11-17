@@ -4,7 +4,12 @@
 //! `<id>:infill` (slats, boards, panels, wire), `<id>:rails`, `<id>:gate`.
 //!
 //! Posts stand at every corner, at both ends and evenly between, at most `post_spacing_m` apart.
-//! The infill is laid per span between two posts and does not overlap the posts. A gate leaves
+//! The infill is laid per span between two posts and does not overlap the posts.
+//!
+//! A fence follows the curves of its line (`crate::curve`): the line comes as one polyline per
+//! control edge (`runs`), and on a curved edge the posts are spread by arc length, never at the
+//! tessellation points, with the spans between them straight (closer together where the curve is
+//! tight, so a span stays within [`CURVE_TOL_M`] of the curve). A gate needs a straight edge. A gate leaves
 //! a gap in the run, a post on each side and a leaf in it.
 //!
 //! The wire mesh is a real grid of thin wires (see through, a few hundred triangles a span), not
@@ -30,6 +35,8 @@ const RAIL_H: f32 = 0.05;
 /// Height of a picket's pointed tip.
 const TIP: f32 = 0.06;
 const EPS: f32 = 1e-3;
+/// How far a straight span between two posts may lie from the curve it stands on.
+pub const CURVE_TOL_M: f32 = 0.05;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -129,7 +136,7 @@ impl Fence {
 
     /// Whether the fence can be drawn on `line` with this `height` and `thickness`; the reason
     /// if not.
-    pub fn check(&self, line: &[P2], height: f32, thickness: f32) -> Result<(), String> {
+    pub fn check(&self, runs: &[Vec<P2>], height: f32, thickness: f32) -> Result<(), String> {
         let finite = |v: f32, what: &str, lo: f32, hi: f32| {
             if v.is_finite() && (lo..=hi).contains(&v) {
                 Ok(())
@@ -137,7 +144,7 @@ impl Fence {
                 Err(format!("`{what}` must be a number within {lo}..={hi} m"))
             }
         };
-        if line.len() < 2 {
+        if runs.is_empty() {
             return Err("a fence line needs at least 2 points".into());
         }
         finite(height, "height", 0.3, 10.0)?;
@@ -153,7 +160,7 @@ impl Fence {
             1.0,
         )?;
         let mut spans: Vec<(f32, f32)> = Vec::new();
-        let total = length(line);
+        let total: f32 = runs.iter().map(|r| length(r)).sum();
         for (i, g) in self.gates.iter().enumerate() {
             finite(g.width_m, "gate width_m", 0.3, 6.0)?;
             if !g.offset_m.is_finite() {
@@ -168,9 +175,9 @@ impl Fence {
             // The gate sits in one straight stretch, between two corners.
             let mut start = 0.0;
             let mut inside = false;
-            for w in line.windows(2) {
-                let end = start + dist(w[0], w[1]);
-                if a >= start - EPS && b <= end + EPS {
+            for run in runs {
+                let end = start + length(run);
+                if run.len() == 2 && a >= start - EPS && b <= end + EPS {
                     inside = true;
                     let post = self.post_size_m;
                     for edge in [a - start, end - b] {
@@ -184,7 +191,9 @@ impl Fence {
                 start = end;
             }
             if !inside {
-                return Err(format!("gate {i} runs round a corner; keep it on one side"));
+                return Err(format!(
+                    "gate {i} runs round a corner or along a curve; keep it on one straight edge"
+                ));
             }
             if let Some(j) = spans.iter().position(|s| a < s.1 && b > s.0) {
                 return Err(format!("gates {j} and {i} overlap"));
@@ -240,17 +249,23 @@ pub struct Layout {
     pub spans: Vec<Span>,
 }
 
-/// Lays the posts and spans out. `line` must have passed [`Fence::check`].
-pub fn layout(f: &Fence, line: &[P2]) -> Layout {
+/// Lays the posts and spans out. `runs` must have passed [`Fence::check`].
+pub fn layout(f: &Fence, runs: &[Vec<P2>]) -> Layout {
     let mut out = Layout::default();
     let mut start = 0.0;
-    for (si, w) in line.windows(2).enumerate() {
-        let len = dist(w[0], w[1]);
-        let end = start + len;
+    for (si, run) in runs.iter().enumerate() {
+        let len = length(run);
         if len < EPS {
-            start = end;
+            start += len;
             continue;
         }
+        if run.len() > 2 {
+            curved_run(f, run, si > 0, &mut out);
+            start += len;
+            continue;
+        }
+        let w = [run[0], run[1]];
+        let end = start + len;
         let dir = [(w[1][0] - w[0][0]) / len, (w[1][1] - w[0][1]) / len];
         // Positions along the segment; `true` marks the ones that must stay.
         let n = ((len / f.post_spacing_m) - 1e-4).ceil().max(1.0) as usize;
@@ -302,6 +317,97 @@ pub fn layout(f: &Fence, line: &[P2]) -> Layout {
     out
 }
 
+/// The point `s` metres along a polyline.
+fn point_along(run: &[P2], s: f32) -> P2 {
+    let mut left = s;
+    for w in run.windows(2) {
+        let l = dist(w[0], w[1]);
+        if left <= l {
+            let t = if l > 0.0 { left / l } else { 0.0 };
+            return [
+                w[0][0] + (w[1][0] - w[0][0]) * t,
+                w[0][1] + (w[1][1] - w[0][1]) * t,
+            ];
+        }
+        left -= l;
+    }
+    *run.last().expect("a run has points")
+}
+
+/// How far the straight chords between stations `0, L/n, ..` lie off the polyline `run`.
+fn chord_error(run: &[P2], n: usize) -> f32 {
+    let total = length(run);
+    let stations: Vec<f32> = (0..=n).map(|k| total * k as f32 / n as f32).collect();
+    let mut worst = 0.0f32;
+    let mut cum = 0.0;
+    let mut k = 0;
+    for w in run.windows(2) {
+        cum += dist(w[0], w[1]);
+        while k + 1 < n && stations[k + 1] < cum - EPS {
+            k += 1;
+        }
+        let (a, b) = (
+            point_along(run, stations[k]),
+            point_along(run, stations[k + 1]),
+        );
+        let d = [b[0] - a[0], b[1] - a[1]];
+        let l = d[0].hypot(d[1]).max(1e-6);
+        let off = ((w[1][0] - a[0]) * d[1] - (w[1][1] - a[1]) * d[0]).abs() / l;
+        worst = worst.max(off);
+    }
+    worst
+}
+
+/// Posts spread by arc length along a curved edge, and the straight spans between them.
+fn curved_run(f: &Fence, run: &[P2], after_corner: bool, out: &mut Layout) {
+    let total = length(run);
+    let mut n = ((total / f.post_spacing_m) - 1e-4).ceil().max(1.0) as usize;
+    while n < 400 && chord_error(run, n) > CURVE_TOL_M {
+        n += 1;
+    }
+    let at: Vec<P2> = (0..=n)
+        .map(|k| {
+            if k == 0 {
+                run[0]
+            } else if k == n {
+                run[run.len() - 1]
+            } else {
+                point_along(run, total * k as f32 / n as f32)
+            }
+        })
+        .collect();
+    let unit = |a: P2, b: P2| {
+        let l = dist(a, b).max(1e-6);
+        [(b[0] - a[0]) / l, (b[1] - a[1]) / l]
+    };
+    for k in 0..=n {
+        if k == 0 && after_corner {
+            continue;
+        }
+        let before = (k > 0).then(|| unit(at[k - 1], at[k]));
+        let after = (k < n).then(|| unit(at[k], at[k + 1]));
+        let dir = match (before, after) {
+            (Some(b), Some(a)) => {
+                let m = [a[0] + b[0], a[1] + b[1]];
+                let l = m[0].hypot(m[1]).max(1e-6);
+                [m[0] / l, m[1] / l]
+            }
+            (Some(d), None) | (None, Some(d)) => d,
+            (None, None) => [1.0, 0.0],
+        };
+        out.posts.push(Post { at: at[k], dir });
+    }
+    for k in 0..n {
+        out.spans.push(Span {
+            origin: at[k],
+            dir: unit(at[k], at[k + 1]),
+            a: 0.0,
+            b: dist(at[k], at[k + 1]),
+            gate: false,
+        });
+    }
+}
+
 /// How many pieces of a run `avail` long fit `piece` wide with `gap` between, centred.
 fn fit(avail: f32, piece: f32, gap: f32) -> usize {
     if avail < piece || piece <= 0.0 {
@@ -336,8 +442,8 @@ pub struct Counts {
 }
 
 /// Counts the parts of a fence of `height` on `line`.
-pub fn counts(f: &Fence, line: &[P2], height: f32) -> Counts {
-    let l = layout(f, line);
+pub fn counts(f: &Fence, runs: &[Vec<P2>], height: f32) -> Counts {
+    let l = layout(f, runs);
     let (y0, y1) = f.vertical(0.0, height);
     let items = l
         .spans
@@ -491,8 +597,15 @@ fn tip(
 
 /// Draws a fence of `height` on `line` from `lo` up: posts, infill, rails and gate leaves on the
 /// faces of [`FENCE_FACES`]. `line` must have passed [`Fence::check`] with `thickness`.
-pub(crate) fn mesh(s: &mut dyn Sink, f: &Fence, line: &[P2], thickness: f32, lo: f32, hi: f32) {
-    let l = layout(f, line);
+pub(crate) fn mesh(
+    s: &mut dyn Sink,
+    f: &Fence,
+    runs: &[Vec<P2>],
+    thickness: f32,
+    lo: f32,
+    hi: f32,
+) {
+    let l = layout(f, runs);
     let (y0, y1) = f.vertical(lo, hi);
     let t = thickness;
     // With rails the infill takes the front half of the depth and the rails the back half.
@@ -667,12 +780,19 @@ mod tests {
     use super::*;
     use crate::shape::{Extrusion, Shape, shape_mesh};
 
+    /// One run per segment of `line`.
+    fn straight(line: &[P2]) -> Vec<Vec<P2>> {
+        line.windows(2).map(|w| w.to_vec()).collect()
+    }
+
     fn fence_shape(f: Fence, line: Vec<P2>, height: f32) -> Shape {
         Shape::Extrusion(Extrusion {
             id: "S1".into(),
             name: "Fence".into(),
             layer: "shapes".into(),
-            outline: line,
+            points: line,
+            curves: Default::default(),
+            smooth: false,
             closed: false,
             base: 0.0,
             height,
@@ -694,8 +814,8 @@ mod tests {
         let f = Fence::new(FenceKind::Slats);
         // 4 m east, then 2 m north: a corner at (4, 0).
         let line = [[0.0, 0.0], [4.0, 0.0], [4.0, 2.0]];
-        f.check(&line, 1.8, 0.05).unwrap();
-        let l = layout(&f, &line);
+        f.check(&straight(&line), 1.8, 0.05).unwrap();
+        let l = layout(&f, &straight(&line));
         let posts = xs(&l);
         // 4 m at 1.8 -> 3 pieces; 2 m at 1.8 -> 2 pieces: 4 + 2 posts, the corner once.
         assert_eq!(posts.len(), 6, "{posts:?}");
@@ -713,6 +833,54 @@ mod tests {
     }
 
     #[test]
+    fn posts_on_an_arc_are_spread_by_arc_length_not_at_tessellation_points() {
+        use crate::curve::Curve;
+        let f = Fence::new(FenceKind::Slats);
+        // A semicircle of radius 3 over a 6 m chord: arc length 3 pi = 9.42 m.
+        let mut shape = fence_shape(f.clone(), vec![[0.0, 0.0], [6.0, 0.0]], 1.8);
+        let Shape::Extrusion(e) = &mut shape else {
+            unreachable!()
+        };
+        e.curves.insert(0, Curve::Arc { sagitta_m: 3.0 });
+        let runs = shape.tessellate().runs();
+        assert_eq!(runs.len(), 1);
+        assert!(runs[0].len() > 20, "the arc is tessellated finely");
+        f.check(&runs, 1.8, 0.05).unwrap();
+        let l = layout(&f, &runs);
+        assert!(l.posts.len() < runs[0].len() / 2, "not a post per point");
+        // Posts lie on the circle and are evenly spaced along it.
+        let angle = |p: P2| ((p[0] - 3.0) / 3.0).clamp(-1.0, 1.0).acos();
+        for p in &l.posts {
+            assert!((dist(p.at, [3.0, 0.0]) - 3.0).abs() < 1e-3);
+        }
+        let steps: Vec<f32> = l
+            .posts
+            .windows(2)
+            .map(|w| (angle(w[1].at) - angle(w[0].at)).abs() * 3.0)
+            .collect();
+        let first = steps[0];
+        assert!(steps.iter().all(|s| (s - first).abs() < 0.02), "{steps:?}");
+        assert!(first * 1.0 <= 1.8 + 1e-3);
+        assert_eq!(l.spans.len(), l.posts.len() - 1);
+        // Each straight span stays near the curve.
+        for sp in &l.spans {
+            let mid = [
+                sp.origin[0] + sp.dir[0] * (sp.b / 2.0),
+                sp.origin[1] + sp.dir[1] * (sp.b / 2.0),
+            ];
+            assert!((dist(mid, [3.0, 0.0]) - 3.0).abs() <= CURVE_TOL_M + 1e-3);
+        }
+        // It meshes, with the usual faces, and a gate on the curve is refused.
+        shape_mesh(&shape).unwrap();
+        let mut g = f;
+        g.gates.push(Gate {
+            offset_m: 4.0,
+            width_m: 1.0,
+        });
+        assert!(g.check(&runs, 1.8, 0.05).unwrap_err().contains("straight"));
+    }
+
+    #[test]
     fn a_gate_leaves_a_gap_with_a_post_on_each_side() {
         let mut f = Fence::new(FenceKind::Slats);
         f.gates.push(Gate {
@@ -720,8 +888,8 @@ mod tests {
             width_m: 1.2,
         });
         let line = [[0.0, 0.0], [10.0, 0.0]];
-        f.check(&line, 1.8, 0.05).unwrap();
-        let l = layout(&f, &line);
+        f.check(&straight(&line), 1.8, 0.05).unwrap();
+        let l = layout(&f, &straight(&line));
         let x: Vec<f32> = l.posts.iter().map(|p| p.at[0]).collect();
         assert!(x.iter().any(|v| (v - 4.4).abs() < 1e-4), "{x:?}");
         assert!(x.iter().any(|v| (v - 5.6).abs() < 1e-4), "{x:?}");
@@ -736,7 +904,7 @@ mod tests {
                 .filter(|s| !s.gate)
                 .all(|s| s.b <= 4.4 + 1e-4 || s.a >= 5.6 - 1e-4)
         );
-        assert_eq!(counts(&f, &line, 1.8).gates, 1);
+        assert_eq!(counts(&f, &straight(&line), 1.8).gates, 1);
     }
 
     #[test]
@@ -744,7 +912,7 @@ mod tests {
         let f = Fence::new(FenceKind::Slats);
         let line = [[0.0, 0.0], [2.0, 0.0]];
         // Two spans of 1.0 m; 0.9 m clear of the posts; (0.9 + 0.02) / 0.11 = 8 slats each.
-        let c = counts(&f, &line, 1.8);
+        let c = counts(&f, &straight(&line), 1.8);
         assert_eq!((c.posts, c.items), (3, 16));
     }
 
@@ -756,21 +924,29 @@ mod tests {
             offset_m: 9.0,
             width_m: 1.0,
         });
-        assert!(f.check(&line, 1.8, 0.05).unwrap_err().contains("outside"));
+        assert!(
+            f.check(&straight(&line), 1.8, 0.05)
+                .unwrap_err()
+                .contains("outside")
+        );
         f.gates[0].offset_m = 4.0;
-        assert!(f.check(&line, 1.8, 0.05).unwrap_err().contains("corner"));
+        assert!(
+            f.check(&straight(&line), 1.8, 0.05)
+                .unwrap_err()
+                .contains("corner")
+        );
         f.gates.clear();
         f.post_spacing_m = 0.1;
         assert!(
-            f.check(&line, 1.8, 0.05)
+            f.check(&straight(&line), 1.8, 0.05)
                 .unwrap_err()
                 .contains("post_spacing_m")
         );
         f.post_spacing_m = f32::NAN;
-        assert!(f.check(&line, 1.8, 0.05).is_err());
+        assert!(f.check(&straight(&line), 1.8, 0.05).is_err());
         let g = Fence::new(FenceKind::Slats);
-        assert!(g.check(&line, f32::INFINITY, 0.05).is_err());
-        assert!(g.check(&line[..1], 1.8, 0.05).is_err());
+        assert!(g.check(&straight(&line), f32::INFINITY, 0.05).is_err());
+        assert!(g.check(&straight(&line[..1]), 1.8, 0.05).is_err());
     }
 
     #[test]

@@ -2028,7 +2028,7 @@ fn lit_rooms(p: &Project) -> impl Iterator<Item = visioncraft_render::Light> + '
             visioncraft_core::Shape::Extrusion(e) if e.closed && p.layer_visible(&e.layer) => e
                 .house
                 .as_ref()
-                .map(|h| visioncraft_core::house::lit_windows(&e.outline, h, e.base)),
+                .map(|h| visioncraft_core::house::lit_windows(&e.points, h, e.base)),
             _ => None,
         })
         .flatten()

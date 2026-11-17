@@ -93,7 +93,12 @@ unknown keys are refused with the nearest name, unless `openParams` is true.
 The core's commands (`model.*`, `shape.*`, `material.*`, `planting.*`, `species.add|update|remove`,
 `fence.*`, `stairs.*`, `bed.*`, `light.*`, `viewpoint.*`, `layer.*`, `terrain.*`, `site.set`, `time.set`, `view.set`,
 `style.set`) change the project, each one undo step; its queries (`query.sun {time?}`,
-`query.measure {kind, points?, outline?}`, `query.quantities {ids?, layer?}`) never do. The host adds what needs files, history,
+`query.measure {kind, points?, outline?}`, `query.quantities {ids?, layer?}`) never do. Curves are `shape.*` commands too:
+`shape.set_curve {id, edge, radius_m?, sagitta_m?, side?}`, `shape.clear_curve {id, edge}`,
+`shape.set_smooth {id, smooth}` and `shape.add_circle {center, radius_m, kind, ...}`; `shape.add_area`,
+`shape.add_extrusion`, `bed.add` and `fence.add` take `curves` and `smooth`. A shape's `outline` in
+`document.inspect` is its control points, with `curves` and `smooth` next to it when it has them; areas,
+lengths and quantities measure the curved outline. The host adds what needs files, history,
 loaded geometry or a GPU:
 
 | Command | Params | Result |

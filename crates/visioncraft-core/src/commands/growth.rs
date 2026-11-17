@@ -260,13 +260,12 @@ fn growth_conflicts(project: &mut Project, params: &Value) -> Result<Value, Comm
             }
         }
     }
-    let blocks: Vec<(&str, &str, &[[f32; 2]])> = project
+    type Block<'a> = (&'a str, &'a str, std::borrow::Cow<'a, [[f32; 2]]>);
+    let blocks: Vec<Block> = project
         .shapes
         .iter()
         .filter_map(|s| match s {
-            Shape::Extrusion(e) if e.closed => {
-                Some((e.id.as_str(), e.name.as_str(), &e.outline[..]))
-            }
+            Shape::Extrusion(e) if e.closed => Some((e.id.as_str(), e.name.as_str(), e.outline())),
             _ => None,
         })
         .collect();

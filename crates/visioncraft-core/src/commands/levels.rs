@@ -98,6 +98,8 @@ pub(super) fn register(s: &mut Session) {
             )
             .unit("m"),
             param("wall_thickness_m", T::Number, "Thickness of the walls: plain and masonry 0.05..0.3 (default 0.2), sleepers 0.1..0.2 (default 0.15, the beam's thickness), corten 0.005..0.02 (default 0.01; drawn at least 1 cm so it reads).").unit("m"),
+            param("curves", T::Object, "Arcs on single edges of the outline by edge index: {\"0\": {\"type\": \"arc\", \"sagitta_m\": 0.8}} (see `shape.set_curve`; a round bed is four quarter arcs, as `shape.add_circle` makes). Not with the sleeper style. `bed.set` with `outline` and no `curves` clears the arcs."),
+            param("smooth", T::Boolean, "A smooth curve through all the outline's points (not with the sleeper style)."),
             param("style", T::String, "The wall: plain (a solid timber ring, the default), masonry (brick with a coping slab), sleepers (stacked timber beams 0.2 m high with joints and overlapping corners) or corten (a thin weathering-steel plate with a folded top edge). `bed.set` with a new style gives the walls that style's material and default thickness.").allowed(&["plain", "masonry", "sleepers", "corten"]),
         ]
     };
@@ -212,7 +214,7 @@ fn surface_at(project: &Project, lifts: &std::collections::HashMap<String, f32>,
         .shapes
         .iter()
         .filter_map(|s| match s {
-            Shape::Area(a) if crate::shape::inside_outline(p, &a.outline) => {
+            Shape::Area(a) if crate::shape::inside_outline(p, &a.outline()) => {
                 let ground = if a.drape { terrain.unwrap_or(0.0) } else { 0.0 };
                 Some(ground + a.elevation + lifts.get(&a.id).copied().unwrap_or(0.0))
             }
@@ -276,7 +278,7 @@ fn stairs_report(project: &Project, id: &str) -> Value {
     let (Some(st), Ok(mesh)) = (&e.stairs, shape_mesh(&Shape::Extrusion(e.clone()))) else {
         return Value::Null;
     };
-    match st.geometry(&e.outline, e.height) {
+    match st.geometry(&e.points, e.height) {
         Ok(g) => json!({
             "steps": g.steps, "riser_m": g.riser, "tread_m": g.tread,
             "height_m": e.height, "warnings": mesh.warnings,
@@ -311,7 +313,9 @@ fn add_stairs(project: &mut Project, params: &Value) -> Result<Value, CommandErr
             id,
             name: p.name.unwrap_or_else(|| "Stairs".into()),
             layer,
-            outline,
+            points: outline,
+            curves: Default::default(),
+            smooth: false,
             closed: true,
             base,
             height,
@@ -372,9 +376,7 @@ fn set_stairs(project: &mut Project, params: &Value) -> Result<Value, CommandErr
         }
         if p.from.is_some() || p.to.is_some() || p.width_m.is_some() {
             // What is not given stays as the flight is now.
-            let now = had
-                .then(|| st.geometry(&e.outline, e.height).ok())
-                .flatten();
+            let now = had.then(|| st.geometry(&e.points, e.height).ok()).flatten();
             let from = p.from.or(now.as_ref().map(|g| g.origin));
             let to = p.to.or(now.as_ref().map(|g| {
                 [
@@ -388,7 +390,7 @@ fn set_stairs(project: &mut Project, params: &Value) -> Result<Value, CommandErr
                     "`from`, `to` and `width_m` are all needed for a block that is not stairs yet",
                 ));
             };
-            e.outline = footprint(from, to, width)?;
+            e.points = footprint(from, to, width)?;
             st.up_edge = 2;
         }
         e.stairs = Some(st);
@@ -557,8 +559,9 @@ fn sync_soil(project: &mut Project, id: &str, rename: bool) -> Result<String, Co
     let Some(bed) = &e.raised_bed else {
         return Err(fail(format!("`{id}` is not a raised bed")));
     };
-    let inner = bed.inner(&e.outline).map_err(fail)?;
-    let elevation = lowest_ground(project, &e.outline) + e.base + RaisedBed::soil_top(e.height);
+    let outline = e.outline();
+    let inner = bed.inner(&outline).map_err(fail)?;
+    let elevation = lowest_ground(project, &outline) + e.base + RaisedBed::soil_top(e.height);
     let (name, layer) = (format!("{} soil", e.name), e.layer.clone());
     let existing = bed.soil.clone().filter(|s| {
         project
@@ -569,7 +572,9 @@ fn sync_soil(project: &mut Project, id: &str, rename: bool) -> Result<String, Co
     let soil = match existing {
         Some(soil) => {
             if let Some(Shape::Area(a)) = project.shapes.iter_mut().find(|s| s.id() == soil) {
-                a.outline = inner;
+                a.points = inner;
+                a.curves.clear();
+                a.smooth = false;
                 a.elevation = elevation;
                 a.drape = false;
                 if rename {
@@ -605,6 +610,10 @@ fn add_bed(project: &mut Project, params: &Value) -> Result<Value, CommandError>
     struct P {
         name: Option<String>,
         outline: Vec<P2>,
+        #[serde(default)]
+        curves: crate::curve::Curves,
+        #[serde(default)]
+        smooth: bool,
         layer: Option<String>,
         material: Option<String>,
         height: Option<f32>,
@@ -626,7 +635,9 @@ fn add_bed(project: &mut Project, params: &Value) -> Result<Value, CommandError>
             id,
             name: p.name.unwrap_or_else(|| "Raised bed".into()),
             layer,
-            outline: p.outline,
+            points: p.outline,
+            curves: p.curves,
+            smooth: p.smooth,
             closed: true,
             base: 0.0,
             height,
@@ -653,6 +664,8 @@ fn set_bed(project: &mut Project, params: &Value) -> Result<Value, CommandError>
         id: String,
         name: Option<String>,
         outline: Option<Vec<P2>>,
+        curves: Option<crate::curve::Curves>,
+        smooth: Option<bool>,
         height: Option<f32>,
         wall_thickness_m: Option<f32>,
         style: Option<BedStyle>,
@@ -682,7 +695,17 @@ fn set_bed(project: &mut Project, params: &Value) -> Result<Value, CommandError>
         e.height = h;
     }
     if let Some(o) = p.outline {
-        e.outline = o;
+        e.points = o;
+        // New vertices: the old arcs no longer belong to the same edges.
+        if p.curves.is_none() {
+            e.curves.clear();
+        }
+    }
+    if let Some(c) = p.curves {
+        e.curves = c;
+    }
+    if let Some(s) = p.smooth {
+        e.smooth = s;
     }
     let renamed = p.name.is_some();
     if let Some(n) = p.name {
@@ -816,10 +839,10 @@ mod tests {
         s.run("stairs.set", json!({"id": id, "to": [10, 11]}))
             .unwrap();
         let e = get(&s, &id);
-        assert_eq!(e.outline.len(), 4);
-        assert!(e.outline.iter().any(|p| (p[1] - 11.0).abs() < 1e-5));
-        assert!(e.outline.iter().any(|p| (p[1] - 14.0).abs() < 1e-5));
-        assert!((e.outline[1][0] - e.outline[0][0]).abs() > 1.19);
+        assert_eq!(e.points.len(), 4);
+        assert!(e.points.iter().any(|p| (p[1] - 11.0).abs() < 1e-5));
+        assert!(e.points.iter().any(|p| (p[1] - 14.0).abs() < 1e-5));
+        assert!((e.points[1][0] - e.points[0][0]).abs() > 1.19);
         // null gives the default back.
         s.run("stairs.set", json!({"id": id, "tread_m": null}))
             .unwrap();
@@ -896,7 +919,7 @@ mod tests {
         assert_eq!(a.name, "Herbs soil");
         assert!((a.elevation - 0.35).abs() < 1e-6 && !a.drape);
         // The soil is the outline moved in by the wall: 2.6 x 0.8.
-        let xs: Vec<f32> = a.outline.iter().map(|p| p[0]).collect();
+        let xs: Vec<f32> = a.points.iter().map(|p| p[0]).collect();
         assert!(
             xs.iter().any(|x| (x - 0.2).abs() < 1e-5) && xs.iter().any(|x| (x - 2.8).abs() < 1e-5)
         );
@@ -926,7 +949,7 @@ mod tests {
         let a = area(&s, &soil);
         assert!((a.elevation - 0.55).abs() < 1e-6);
         assert_eq!(a.name, "Salad soil");
-        assert!(a.outline.iter().any(|p| (p[0] - 0.1).abs() < 1e-5));
+        assert!(a.points.iter().any(|p| (p[0] - 0.1).abs() < 1e-5));
         s.run(
             "bed.set",
             json!({"id": id, "outline": [[0, 0], [4, 0], [4, 1.2], [0, 1.2]]}),
@@ -934,7 +957,7 @@ mod tests {
         .unwrap();
         assert!(
             area(&s, &soil)
-                .outline
+                .points
                 .iter()
                 .any(|p| (p[0] - 3.9).abs() < 1e-5)
         );
@@ -946,7 +969,7 @@ mod tests {
             assert!(s.run("bed.set", bad).is_err());
         }
         assert!(s.undo());
-        assert_eq!(get(&s, &id).outline[1], [3.0, 0.0]);
+        assert_eq!(get(&s, &id).points[1], [3.0, 0.0]);
         // A removed soil is made again.
         s.run("shape.remove", json!({"id": soil})).unwrap();
         let r = s.run("bed.set", json!({"id": id, "height": 0.5})).unwrap();
@@ -1078,7 +1101,7 @@ mod tests {
         let soil = get(&s, &corten).raised_bed.unwrap().soil.unwrap();
         assert!(
             area(&s, &soil)
-                .outline
+                .points
                 .iter()
                 .any(|p| (p[0] - 5.01).abs() < 1e-5)
         );

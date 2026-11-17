@@ -8,6 +8,7 @@ pub mod bed;
 pub mod canopy;
 pub mod catalog;
 mod commands;
+pub mod curve;
 pub mod export;
 pub mod fence;
 pub mod growth;

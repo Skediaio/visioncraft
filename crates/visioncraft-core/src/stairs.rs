@@ -249,7 +249,9 @@ mod tests {
             name: "Stairs".into(),
             layer: "shapes".into(),
             // Edge 2 (point 2 to 3) is the top, at z = len.
-            outline: vec![[0.0, 0.0], [width, 0.0], [width, len], [0.0, len]],
+            points: vec![[0.0, 0.0], [width, 0.0], [width, len], [0.0, len]],
+            curves: Default::default(),
+            smooth: false,
             closed: true,
             base: 0.0,
             height,

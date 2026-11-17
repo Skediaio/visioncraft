@@ -1399,7 +1399,7 @@ impl eframe::App for App {
         );
         let typing = ctx.egui_wants_keyboard_input();
         let key = |k: Key| !typing && ctx.input(|i| i.key_pressed(k));
-        let alt = ctx.input(|i| i.modifiers.alt);
+        let (alt, shift_held) = ctx.input(|i| (i.modifiers.alt, i.modifiers.shift));
         let input = Input {
             rect,
             hover: response.hovered().then(|| response.hover_pos()).flatten(),
@@ -1410,6 +1410,7 @@ impl eframe::App for App {
             dragging: response.dragged_by(PointerButton::Primary),
             drag_stopped: response.drag_stopped_by(PointerButton::Primary),
             alt,
+            shift: shift_held,
             enter: key(Key::Enter),
             escape: key(Key::Escape),
             backspace: key(Key::Backspace),

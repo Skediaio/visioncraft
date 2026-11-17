@@ -1527,7 +1527,7 @@ impl PlantingTools {
             cx.s.project()
                 .shapes
                 .iter()
-                .flat_map(|s| s.outline().iter().copied())
+                .flat_map(|s| s.points().iter().copied())
                 .collect();
         let snap =
             hover.map(|g| snap_point([g.x, g.z], &self.points, &existing, radius, !input.alt));
@@ -1705,13 +1705,13 @@ impl PlantingTools {
             .rev()
             .find_map(|s| match s {
                 visioncraft_core::Shape::Area(a)
-                    if visioncraft_core::inside_outline(p, &a.outline) =>
+                    if visioncraft_core::inside_outline(p, &a.outline()) =>
                 {
                     let holes = visioncraft_core::areas_over(shapes, &a.id)
                         .into_iter()
-                        .map(<[[f32; 2]]>::to_vec)
+                        .map(std::borrow::Cow::into_owned)
                         .collect();
-                    Some((a.outline.clone(), holes))
+                    Some((a.outline().into_owned(), holes))
                 }
                 _ => None,
             })

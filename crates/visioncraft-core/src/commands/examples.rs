@@ -142,7 +142,7 @@ mod tests {
             .iter()
             .filter_map(|s| match s {
                 crate::Shape::Area(a) if a.name.contains("lawn") => {
-                    Some(crate::shape::shoelace_f32(&a.outline).abs() as f32)
+                    Some(crate::shape::shoelace_f32(&a.points).abs() as f32)
                 }
                 _ => None,
             })
@@ -200,9 +200,9 @@ mod tests {
                 })
                 .unwrap_or_else(|| panic!("{name}: no pond"));
             assert!(!pond.drape, "{name}: the water is draped");
-            let n = pond.outline.len() as f32;
+            let n = pond.points.len() as f32;
             let c = pond
-                .outline
+                .points
                 .iter()
                 .fold([0.0, 0.0], |a, q| [a[0] + q[0] / n, a[1] + q[1] / n]);
             let bed = t.height_at(c[0], c[1]).unwrap();
@@ -355,12 +355,12 @@ mod tests {
         let crate::Shape::Area(a) = pond else {
             panic!()
         };
-        assert_eq!(a.outline.len(), 4, "the outline as drawn");
+        assert_eq!(a.points.len(), 4, "the outline as drawn");
         let edge = p.shapes.iter().find(|s| s.name() == "Pond edge").unwrap();
         let crate::Shape::Extrusion(e) = edge else {
             panic!()
         };
-        let lift = crate::footing(&e.outline, &|x, z| t.height_at(x, z));
+        let lift = crate::footing(&e.points, &|x, z| t.height_at(x, z));
         let top = lift + e.base + e.height;
         assert!((top - 0.12).abs() < 0.02, "coping top {top} (lift {lift})");
     }

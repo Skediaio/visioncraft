@@ -181,7 +181,7 @@ fn edit_house(
     if !e.closed {
         return Err(fail(format!("`{id}` is a wall, not a closed block")));
     }
-    let sides = e.outline.len();
+    let sides = e.points.len();
     let r = f(e.house.get_or_insert_with(House::default), sides)?;
     shape_mesh(&shape).map_err(|e| fail(e.to_string()))?;
     project.shapes[at] = shape;
@@ -397,7 +397,7 @@ mod tests {
         };
         let e = block(&s);
         let lamps = |e: &crate::shape::Extrusion| {
-            crate::house::lit_windows(&e.outline, e.house.as_ref().unwrap(), e.base)
+            crate::house::lit_windows(&e.points, e.house.as_ref().unwrap(), e.base)
         };
         assert!(lamps(&e).is_empty());
         s.run("shape.set_lit_rooms", json!({"id": id, "share": 1}))

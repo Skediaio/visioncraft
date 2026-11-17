@@ -473,7 +473,9 @@ mod tests {
             id: "S1".into(),
             name: "Bed".into(),
             layer: "shapes".into(),
-            outline,
+            points: outline,
+            curves: Default::default(),
+            smooth: false,
             closed: true,
             base: 0.0,
             height: 0.4,
@@ -574,7 +576,7 @@ mod tests {
         };
         let bed = e.raised_bed.as_ref().unwrap();
         // 0.4 m is two courses of 0.2 m; every course lays 3 m twice (2 beams each) and 0.9 m twice.
-        let beams = super::beams(bed, &e.outline, 0.0, 0.4);
+        let beams = super::beams(bed, &e.points, 0.0, 0.4);
         assert_eq!(beams.len(), 12);
         let total: f32 = beams.iter().map(|b| b.u.1 - b.u.0).sum();
         assert!((total - 15.6).abs() < 0.03, "{total}");
@@ -603,7 +605,7 @@ mod tests {
         assert_eq!(m.faces[hit.face].name, "S1:rim");
         // The wall is the beam's thickness: the soil's inner ring is 0.15 in.
         assert!(
-            bed.inner(&e.outline)
+            bed.inner(&e.points)
                 .unwrap()
                 .iter()
                 .any(|p| (p[0] - 0.15).abs() < 1e-5)

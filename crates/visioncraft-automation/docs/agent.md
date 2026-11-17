@@ -552,6 +552,52 @@ brick, timber, `corten`); `bed.set` with a new `style` changes both. Sleeper bed
 and `beam_length_m` in `query.quantities`, steel beds `plate_area_m2`. `fence.add` takes a
 `material` too, for one material over the whole fence (a `corten` screen).
 
+### 23. Curves: a round lawn, a curved border and a smooth path
+
+```json recipe
+{"intent": "a round lawn, a border with a curved edge, a smooth path, a round steel bed and a curved fence", "steps": [
+  {"id": "shape.add_area", "params": {"name": "Garden", "outline": [[0, 0], [24, 0], [24, 24], [0, 24]], "material": "gravel"}},
+  {"id": "shape.add_circle", "params": {"name": "Round lawn", "center": [12, 12], "radius_m": 6, "kind": "area", "material": "lawn"}},
+  {"id": "shape.add_area", "params": {"name": "Border", "outline": [[0, 0], [8, 0], [8, 6], [0, 6]], "material": "soil"}},
+  {"id": "shape.set_curve", "params": {"id": "S3", "edge": 2, "radius_m": 7, "side": "left"}},
+  {"id": "shape.add_area", "params": {"name": "Path", "outline": [[1, 21], [8, 19.5], [16, 22], [23, 20.5], [23, 22.5], [16, 24], [8, 21.5], [1, 23]], "smooth": true, "material": "gravel"}},
+  {"id": "bed.add", "params": {"name": "Round bed", "outline": [[19, 8], [17, 10], [15, 8], [17, 6]], "style": "corten", "curves": {"0": {"type": "arc", "sagitta_m": 0.5858}, "1": {"type": "arc", "sagitta_m": 0.5858}, "2": {"type": "arc", "sagitta_m": 0.5858}, "3": {"type": "arc", "sagitta_m": 0.5858}}}},
+  {"id": "fence.add", "params": {"name": "Curved fence", "line": [[2, 10], [2, 18]], "curves": {"0": {"type": "arc", "sagitta_m": -2}}, "height": 1.5, "kind": "slats"}},
+  {"id": "query.quantities", "params": {"ids": ["S2", "S3"]}},
+  {"id": "document.inspect", "params": {"faces": false}}
+]}
+```
+
+A shape stores its **control points** (`outline`, what `shape.move_vertex` and the handles move) and
+draws the polygon made from them: `curves` puts an arc on single edges, `smooth` runs a smooth
+curve (centripetal Catmull-Rom) through all the points, closed or open as the shape is. Measuring
+(`query.quantities`, `query.measure`, `document.inspect`) and drawing use the curved outline, with
+the same typed-size precision as straight edges (chords within 3 mm of the true curve, so a circle
+of radius 5 has an area within 0.1% of 25 pi).
+
+- **`shape.set_curve {id, edge, radius_m, side}`** curves edge `edge` (it runs from point `edge` to
+  point `edge + 1`, wrapping when closed). The radius is the one you type: it must be at least
+  half the edge's length, and gives the shorter arc. `side` is `left` (the default) or `right`
+  of the edge's direction, seen from above with +X east and -Z north: walking east, left is
+  north. For an outline wound clockwise from above (a positive shoelace sum in x, z), left is
+  outward. `sagitta_m` instead of `radius_m` is the signed distance from the middle of the
+  chord to the arc, positive to the left; `shape.add_area`, `shape.add_extrusion`, `bed.add` and
+  `fence.add` take it in `curves` (`{"2": {"type": "arc", "sagitta_m": 1.2}}`). `shape.clear_curve`
+  straightens an edge; `shape.set_smooth {id, smooth}` switches the smooth outline. Edges with an
+  arc keep it under `smooth`.
+- **`shape.add_circle {center, radius_m, kind}`** is an exact circle: 4 points and 4 quarter arcs. `kind`
+  `area` takes the arguments of `shape.add_area`, `extrusion` those of `shape.add_extrusion`.
+  A round raised bed is `bed.add` with such an outline and `curves` (plain, masonry and corten
+  styles; sleepers need straight edges).
+- **Editing**: `shape.insert_vertex` drops the arc of the edge it splits; `shape.remove_vertex` drops
+  the arcs of the two edges it joins; later arcs keep their edges (renumbered). Moving a vertex
+  eases an arc that would bulge more than half its new chord to a semicircle.
+- **Faces keep their meaning**: a curved edge `n` of an extrusion is many triangles, all
+  `<id>:side(n)`. Stairs and houses refuse curves (the message says so); a fence follows them:
+  its posts are spread by arc length along the curve (never at every point of it), the slats
+  between them are straight and the spans closer together where the curve is tight, and a gate
+  needs a straight edge.
+
 ## Known traps
 
 - **Ids are not names**: `S2`, not `House`; viewpoints are `v1`, lights `li1`.
