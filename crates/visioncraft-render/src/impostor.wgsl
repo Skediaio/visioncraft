@@ -264,10 +264,16 @@ fn alpha_mask(clip: vec2<f32>, a: f32, cutoff: f32) -> u32 {
     return sample_run(alpha_samples(a, cutoff), u32(ign(clip + vec2<f32>(17.0, 29.0)) * f32(SAMPLES)));
 }
 
+// The samples of the pixel at `in.clip.xy` (its centre) the impostor keeps.
+fn impostor_depth_mask(in: ImpostorVarying) -> u32 {
+    let a = impostor_alpha(in, false);
+    return fade_split(in.clip.xy, in.fade).y & alpha_mask(in.clip.xy, a, impostor.grid.w);
+}
+
+// Not on Vulkan: `coverage_per_sample.wgsl` (`coverage.rs`).
 @fragment
 fn fs_impostor_depth_ms(in: ImpostorVarying) -> @builtin(sample_mask) u32 {
-    let a = impostor_alpha(in, false);
-    let m = fade_split(in.clip.xy, in.fade).y & alpha_mask(in.clip.xy, a, impostor.grid.w);
+    let m = impostor_depth_mask(in);
     if m == 0u {
         discard;
     }
@@ -347,13 +353,20 @@ fn fs_depth_fade(in: FadeOut) {
     }
 }
 
-@fragment
-fn fs_depth_fade_ms(in: FadeOut) -> @builtin(sample_mask) u32 {
+// The samples of the pixel at `in.clip.xy` (its centre) a fading mesh level keeps.
+fn depth_fade_mask(in: FadeOut) -> u32 {
     let split = fade_split(in.clip.xy, abs(in.fade));
     var m = select(split.x, split.y, in.fade < 0.0);
     if material.alpha.x > 0.0 {
         m &= alpha_mask(in.clip.xy, cutout_alpha(in.uv), material.alpha.x);
     }
+    return m;
+}
+
+// Not on Vulkan: `coverage_per_sample.wgsl` (`coverage.rs`).
+@fragment
+fn fs_depth_fade_ms(in: FadeOut) -> @builtin(sample_mask) u32 {
+    let m = depth_fade_mask(in);
     if m == 0u {
         discard;
     }

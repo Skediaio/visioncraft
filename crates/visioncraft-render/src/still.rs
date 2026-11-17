@@ -107,7 +107,7 @@ impl Renderer {
                 MAX_STILL.0, MAX_STILL.1
             ));
         }
-        let quality = Quality::HIGH;
+        let quality = self.coverage.quality(Quality::HIGH);
         let oom = self.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
         let validation = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
         let targets = Targets::new(
@@ -161,7 +161,7 @@ impl Renderer {
     fn offscreen_pipelines(&self, quality: Quality) -> Offscreen {
         let (device, layouts) = (&self.device, &self.layouts);
         if quality.fast_shading != self.quality.fast_shading {
-            let modules = crate::shader_modules(device, quality.fast_shading);
+            let modules = crate::shader_modules(device, quality.fast_shading, self.coverage);
             return (
                 Some(Pipelines::new(
                     device,
@@ -174,11 +174,19 @@ impl Renderer {
                     layouts,
                     &modules,
                     quality.samples(),
+                    self.coverage,
                 )),
             );
         }
-        let sampled = (quality.msaa != self.quality.msaa)
-            .then(|| SampledPipelines::new(device, layouts, &self.modules, quality.samples()));
+        let sampled = (quality.msaa != self.quality.msaa).then(|| {
+            SampledPipelines::new(
+                device,
+                layouts,
+                &self.modules,
+                quality.samples(),
+                self.coverage,
+            )
+        });
         (None, sampled)
     }
 
@@ -414,6 +422,7 @@ impl Renderer {
         mut quality: Quality,
     ) -> Result<Photo, String> {
         quality.lod_distance_percent *= 2;
+        let quality = self.coverage.quality(quality);
         if width == 0 || height == 0 || width > MAX_STILL.0 || height > MAX_STILL.1 {
             return Err(format!(
                 "photo size {width}x{height} outside 1x1..={}x{}",

@@ -190,8 +190,8 @@ fn fs_depth_cutout_1x(in: DepthOut) {
     }
 }
 
-@fragment
-fn fs_depth_cutout(in: DepthOut) -> @builtin(sample_mask) u32 {
+// The samples of the pixel at `in.clip.xy` (its centre) that a cutout covers; 0 for none.
+fn depth_cutout_mask(in: DepthOut) -> u32 {
     let a = cutout_alpha(in.uv) * edge_fade(in.world, normalize(to_eye(in.world)));
     let soft = edge_coverage(in.uv, in.world);
     // A soft edge covers `soft` of the samples; any other cutout as alpha to coverage.
@@ -200,10 +200,17 @@ fn fs_depth_cutout(in: DepthOut) -> @builtin(sample_mask) u32 {
         u32(round(soft * f32(SAMPLES))),
         soft >= 0.0,
     );
-    if n == 0u {
+    return select(sample_run(n, u32(ign(in.clip.xy) * f32(SAMPLES))), 0u, n == 0u);
+}
+
+// Not on Vulkan: `coverage_per_sample.wgsl` (`coverage.rs`).
+@fragment
+fn fs_depth_cutout(in: DepthOut) -> @builtin(sample_mask) u32 {
+    let m = depth_cutout_mask(in);
+    if m == 0u {
         discard;
     }
-    return sample_run(n, u32(ign(in.clip.xy) * f32(SAMPLES)));
+    return m;
 }
 
 // The soft edge of a drawn area (`Area::edge_blend_m`): the share of the surface drawn, 0..1, or

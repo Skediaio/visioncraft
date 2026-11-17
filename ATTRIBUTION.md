@@ -9,7 +9,7 @@ written here unless the licence column says otherwise.
 
 | Where | Origin | Licence |
 |---|---|---|
-| `crates/visioncraft-core/Cargo.toml` | `craft3d-format`, `-doc`, `-regen`, `-tess`, `-topo`, `-zipstore` as git dependencies, tag `v0.1.1` | MIT |
+| `crates/visioncraft-core/Cargo.toml` | `craft3d-format`, `-doc`, `-regen`, `-tess`, `-topo`, `-zipstore` as git dependencies, tag `v0.1.3` | MIT |
 | `crates/visioncraft-automation/Cargo.toml` | `craft3d-doc` (SHA-256) as git dependency | MIT |
 | `crates/visioncraft-core/src/import.rs` | Ported in outline from `crates/engine/src/scene.rs` | MIT |
 | `crates/visioncraft-automation/src/fields.rs` | Ported from `crates/automation/src/fields.rs` | MIT |
@@ -20,6 +20,7 @@ written here unless the licence column says otherwise.
 | `crates/visioncraft-automation/src/bridge.rs` | Ported from `crates/automation/src/bridge.rs` | MIT |
 | `crates/visioncraft-automation/src/lib.rs`, `control.rs` | Modelled on `craft3d-automation` v0.1.1 and its `docs/control-protocol.md` | MIT |
 | `apps/visioncraft-cli/src/main.rs` | Shaped after `craft3d-cli` | MIT |
+| `crates/visioncraft-render/src/coverage.rs`, `coverage_per_sample.wgsl` | The finding and the remedy of 3dcraft v0.1.2 (`crates/gpu/src/variant.rs`): naga writes a sample-mask output as a scalar, which Vulkan forbids, so stages run per sample on Vulkan; written anew for this renderer's stages | MIT |
 | `crates/visioncraft-core/src/examples/villa.3dcraft` | The showcase villa, `docs/showcase/villa.3dcraft`, Johan Coppens; the estate example's house, unchanged | MIT |
 | `crates/visioncraft-core/src/examples/beach-house.3dcraft` | Made for this project: generated with `craft3d-cli` v0.1.1 from `examples/models/beach-house/generate.py`; no 3DCraft sample is reused | MIT |
 

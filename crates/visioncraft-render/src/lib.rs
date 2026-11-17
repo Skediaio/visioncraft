@@ -47,6 +47,7 @@ use glam::{Mat4, Vec2, Vec3, Vec4};
 
 mod atmosphere;
 pub mod bc;
+mod coverage;
 pub use bc::UploadJob;
 pub mod demo;
 mod env;
@@ -858,6 +859,8 @@ pub struct Renderer {
     targets: Targets,
     size: (u32, u32),
     quality: Quality,
+    /// How the MSAA depth pre-pass writes coverage on this device (`coverage.rs`).
+    coverage: coverage::Coverage,
 
     globals: wgpu::Buffer,
     globals_bind: wgpu::BindGroup,
@@ -995,10 +998,12 @@ impl Renderer {
     /// values (the overlay blends through an sRGB view, in hardware).
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
         let layouts = Layouts::new(device);
-        let quality = Quality::HIGH;
-        let modules = shader_modules(device, quality.fast_shading);
+        let coverage = coverage::Coverage::of(device);
+        let quality = coverage.quality(Quality::HIGH);
+        let modules = shader_modules(device, quality.fast_shading, coverage);
         let pipelines = Pipelines::new(device, &layouts, &modules, format);
-        let sampled = SampledPipelines::new(device, &layouts, &modules, quality.samples());
+        let sampled =
+            SampledPipelines::new(device, &layouts, &modules, quality.samples(), coverage);
 
         let uniform = |label, size| {
             device.create_buffer(&wgpu::BufferDescriptor {
@@ -1203,6 +1208,7 @@ impl Renderer {
             modules,
             pipelines,
             sampled,
+            coverage,
             targets,
             size: (1, 1),
             quality,
@@ -1316,7 +1322,9 @@ impl Renderer {
         self.quality
     }
 
+    /// On a Vulkan device that cannot shade per sample, MSAA stays off (`coverage.rs`).
     pub fn set_quality(&mut self, quality: Quality) {
+        let quality = self.coverage.quality(quality);
         let quality = Quality {
             cascades: quality.cascades.clamp(1, shadow::MAX_CASCADES as u32),
             impostor_resolution: quality.impostor_resolution.clamp(64, 1024),
@@ -1332,7 +1340,7 @@ impl Renderer {
         }
         if quality.fast_shading != self.quality.fast_shading {
             // Other shaders: every pipeline of the scene and the sky is made again.
-            self.modules = shader_modules(&self.device, quality.fast_shading);
+            self.modules = shader_modules(&self.device, quality.fast_shading, self.coverage);
             self.pipelines = Pipelines::new(
                 &self.device,
                 &self.layouts,
@@ -1344,6 +1352,7 @@ impl Renderer {
                 &self.layouts,
                 &self.modules,
                 quality.samples(),
+                self.coverage,
             );
         } else if quality.msaa != self.quality.msaa {
             self.sampled = SampledPipelines::new(
@@ -1351,6 +1360,7 @@ impl Renderer {
                 &self.layouts,
                 &self.modules,
                 quality.samples(),
+                self.coverage,
             );
         }
         self.quality = quality;
@@ -4939,13 +4949,34 @@ fn shader_source(parts: &[&str], fast_shading: bool) -> String {
     }
 }
 
-fn shader_modules(device: &wgpu::Device, fast_shading: bool) -> Vec<wgpu::ShaderModule> {
+/// The source of the `SHADERS` module `name`: on Vulkan the scene module also has the
+/// per-sample coverage stages (`coverage.rs`), elsewhere it is as written.
+fn module_source(
+    name: &str,
+    parts: &[&str],
+    fast_shading: bool,
+    coverage: coverage::Coverage,
+) -> String {
+    let mut source = shader_source(parts, fast_shading);
+    if name == "scene" && coverage == coverage::Coverage::PerSample {
+        source.push_str(coverage::PER_SAMPLE_SOURCE);
+    }
+    source
+}
+
+fn shader_modules(
+    device: &wgpu::Device,
+    fast_shading: bool,
+    coverage: coverage::Coverage,
+) -> Vec<wgpu::ShaderModule> {
     SHADERS
         .iter()
         .map(|(name, parts)| {
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some(name),
-                source: wgpu::ShaderSource::Wgsl(shader_source(parts, fast_shading).into()),
+                source: wgpu::ShaderSource::Wgsl(
+                    module_source(name, parts, fast_shading, coverage).into(),
+                ),
             })
         })
         .collect()
@@ -5107,13 +5138,9 @@ fn impostor_pipeline(
     shadow: bool,
 ) -> wgpu::RenderPipeline {
     let [_, instances] = vertex_layouts(true);
-    // With MSAA the pre-pass writes alpha-to-coverage sample masks.
-    let fs = if fs == "fs_impostor_depth" && samples > 1 {
-        "fs_impostor_depth_ms"
-    } else {
-        fs
-    };
     let samples_constant = [("SAMPLES", samples as f64)];
+    // Depth only: the pre-pass (with MSAA its alpha-to-coverage stages, `coverage.rs`) and the
+    // shadow maps.
     let depth_only = fs != "fs_impostor" && fs != "fs_impostor_reflect";
     let (compare, write) = match fs {
         "fs_impostor" => (wgpu::CompareFunction::Equal, false),
@@ -5159,7 +5186,7 @@ fn impostor_pipeline(
             depth: Some(depth_state(write, compare, bias)),
             cull: None,
             samples,
-            constants: if fs == "fs_impostor_depth_ms" {
+            constants: if depth_only && samples > 1 {
                 &samples_constant
             } else {
                 &[]
@@ -5204,6 +5231,7 @@ impl SampledPipelines {
         l: &Layouts,
         modules: &[wgpu::ShaderModule],
         samples: u32,
+        coverage: coverage::Coverage,
     ) -> Self {
         let scene = module(modules, "scene");
         let depth_buffers = vertex_layouts(true);
@@ -5218,7 +5246,7 @@ impl SampledPipelines {
                     module: scene,
                     vs: "vs_depth",
                     fs: cutout.then_some(if samples > 1 {
-                        "fs_depth_cutout"
+                        coverage.stage("fs_depth_cutout")
                     } else {
                         "fs_depth_cutout_1x"
                     }),
@@ -5368,7 +5396,18 @@ impl SampledPipelines {
             glass,
             terrain: terrain::pipeline_for(device, l, modules, samples, false),
             impostor: [
-                impostor_pipeline(device, l, modules, "fs_impostor_depth", samples, false),
+                impostor_pipeline(
+                    device,
+                    l,
+                    modules,
+                    if samples > 1 {
+                        coverage.stage("fs_impostor_depth_ms")
+                    } else {
+                        "fs_impostor_depth"
+                    },
+                    samples,
+                    false,
+                ),
                 impostor_pipeline(device, l, modules, "fs_impostor", samples, false),
             ],
             depth_fade: std::array::from_fn(|double_sided| {
@@ -5379,7 +5418,7 @@ impl SampledPipelines {
                         module: module(modules, "scene"),
                         vs: "vs_depth_fade",
                         fs: Some(if samples > 1 {
-                            "fs_depth_fade_ms"
+                            coverage.stage("fs_depth_fade_ms")
                         } else {
                             "fs_depth_fade"
                         }),
@@ -5891,6 +5930,115 @@ pub async fn headless_device() -> Result<(wgpu::Device, wgpu::Queue), String> {
 mod tests {
     use super::*;
 
+    type ShaderEntry = (&'static str, &'static [&'static str]);
+
+    /// Every module of `SHADERS`, with fast shading and without, and the scene module also in
+    /// its Vulkan form (`coverage.rs`).
+    fn shader_variants() -> Vec<(&'static ShaderEntry, bool, coverage::Coverage)> {
+        let mut all = Vec::new();
+        for shader in &SHADERS {
+            for fast in [false, true] {
+                all.push((shader, fast, coverage::Coverage::Masked));
+                if shader.0 == "scene" {
+                    all.push((shader, fast, coverage::Coverage::PerSample));
+                }
+            }
+        }
+        all
+    }
+
+    /// Whether SPIR-V `words` decorate anything `BuiltIn SampleMask`.
+    fn writes_sample_mask(words: &[u32]) -> bool {
+        const OP_DECORATE: u32 = 71;
+        const OP_MEMBER_DECORATE: u32 = 72;
+        const BUILT_IN: u32 = 11;
+        const SAMPLE_MASK: u32 = 20;
+        let mut at = 5; // the header
+        while at < words.len() {
+            let (count, op) = ((words[at] >> 16) as usize, words[at] & 0xffff);
+            let count = count.max(1);
+            let operands = &words[at + 1..(at + count).min(words.len())];
+            let decoration = match op {
+                OP_DECORATE if !operands.is_empty() => &operands[1..],
+                OP_MEMBER_DECORATE if operands.len() >= 2 => &operands[2..],
+                _ => &[][..],
+            };
+            if decoration == [BUILT_IN, SAMPLE_MASK] {
+                return true;
+            }
+            at += count;
+        }
+        false
+    }
+
+    /// No fragment stage a Vulkan pipeline takes writes `@builtin(sample_mask)`: naga 30 writes
+    /// it as a scalar, which Vulkan forbids (VUID-SampleMask-SampleMask-04359) and Intel's and
+    /// AMD's drivers on Windows crash on (`coverage.rs`). Every fragment entry point of every
+    /// module is written with naga's SPIR-V back end as wgpu does on Vulkan (overrides set, the
+    /// entry point alone); only the three masked stages carry a sample mask, and on Vulkan each
+    /// is replaced by a stage that does not.
+    #[test]
+    fn no_vulkan_stage_writes_a_sample_mask() {
+        let mut masked = std::collections::BTreeSet::new();
+        let mut written = std::collections::BTreeSet::new();
+        for ((name, parts), fast, coverage) in shader_variants() {
+            let source = module_source(name, parts, fast, coverage);
+            let module = naga::front::wgsl::parse_str(&source).expect("parses");
+            let info = naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                naga::valid::Capabilities::default(),
+            )
+            .validate(&module)
+            .expect("validates");
+            let mut constants = naga::back::PipelineConstants::default();
+            if *name == "scene" {
+                constants.insert("SAMPLES".into(), MSAA_SAMPLES as f64);
+            }
+            for ep in &module.entry_points {
+                if ep.stage != naga::ShaderStage::Fragment {
+                    continue;
+                }
+                let (module, info) = naga::back::pipeline_constants::process_overrides(
+                    &module,
+                    &info,
+                    Some((ep.stage, &ep.name)),
+                    &constants,
+                )
+                .unwrap_or_else(|e| panic!("{name} {}: {e}", ep.name));
+                let words = naga::back::spv::write_vec(
+                    &module,
+                    &info,
+                    &naga::back::spv::Options::default(),
+                    Some(&naga::back::spv::PipelineOptions {
+                        shader_stage: ep.stage,
+                        entry_point: ep.name.clone(),
+                    }),
+                )
+                .unwrap_or_else(|e| panic!("{name} {}: {e}", ep.name));
+                written.insert(ep.name.clone());
+                if writes_sample_mask(&words) {
+                    masked.insert(ep.name.clone());
+                }
+            }
+        }
+        let expected: std::collections::BTreeSet<String> = coverage::STAGES
+            .iter()
+            .map(|(m, _)| m.to_string())
+            .collect();
+        assert_eq!(
+            masked, expected,
+            "the stages with a sample mask are exactly the ones coverage.rs replaces on Vulkan"
+        );
+        for (stage, _) in coverage::STAGES {
+            let vulkan = coverage::Coverage::PerSample.stage(stage);
+            assert!(
+                written.contains(vulkan),
+                "{vulkan} is in the Vulkan scene module"
+            );
+            assert!(!masked.contains(vulkan), "{vulkan} writes no sample mask");
+        }
+    }
+
     /// Every WGSL module parses and validates with naga, without a GPU.
     #[test]
     fn height_takes_the_occlusion_slot_only_without_an_occlusion_map() {
@@ -5906,8 +6054,8 @@ mod tests {
     #[test]
     fn shaders_validate() {
         assert!(COMMON.contains(FAST_SHADING_LINE));
-        for ((name, parts), fast) in SHADERS.iter().flat_map(|s| [(s, false), (s, true)]) {
-            let source = shader_source(parts, fast);
+        for ((name, parts), fast, coverage) in shader_variants() {
+            let source = module_source(name, parts, fast, coverage);
             let module = naga::front::wgsl::parse_str(&source)
                 .unwrap_or_else(|e| panic!("{name}.wgsl: {}", e.emit_to_string(&source)));
             naga::valid::Validator::new(
@@ -5923,8 +6071,8 @@ mod tests {
     /// point reaches, the overrides replaced by their values (the defaults here).
     #[test]
     fn entry_points_validate_with_their_overrides() {
-        for ((name, parts), fast) in SHADERS.iter().flat_map(|s| [(s, false), (s, true)]) {
-            let source = shader_source(parts, fast);
+        for ((name, parts), fast, coverage) in shader_variants() {
+            let source = module_source(name, parts, fast, coverage);
             let module = naga::front::wgsl::parse_str(&source).expect("parses");
             let info = naga::valid::Validator::new(
                 naga::valid::ValidationFlags::all(),
