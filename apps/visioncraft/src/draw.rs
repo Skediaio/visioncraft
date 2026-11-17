@@ -240,6 +240,8 @@ pub enum Tool {
     Area,
     Block,
     Wall,
+    /// An open line drawn as a fence (`fence.add`).
+    Fence,
     /// Puts a window, or a door, in the wall of a block that is clicked.
     Window,
     Door,
@@ -381,8 +383,15 @@ impl DrawState {
     /// Before leaving for Walk: a shape being drawn with enough corners is kept (as Enter would),
     /// a shorter one is dropped.
     pub fn finish_for_walk(&mut self, cx: &mut Cx) {
-        let needed = if self.tool == Tool::Wall { 2 } else { 3 };
-        if matches!(self.tool, Tool::Area | Tool::Block | Tool::Wall) && self.points.len() >= needed
+        let needed = if matches!(self.tool, Tool::Wall | Tool::Fence) {
+            2
+        } else {
+            3
+        };
+        if matches!(
+            self.tool,
+            Tool::Area | Tool::Block | Tool::Wall | Tool::Fence
+        ) && self.points.len() >= needed
         {
             self.finish(cx);
         }
@@ -443,7 +452,7 @@ impl DrawState {
     }
 
     fn drawing(&mut self, cx: &mut Cx, cursor: Option<P2>, radius: f32, top: &mut Vec<LineVertex>) {
-        let closed_shape = self.tool != Tool::Wall;
+        let closed_shape = !matches!(self.tool, Tool::Wall | Tool::Fence);
         let existing = all_vertices(cx, None);
         let snap = cursor.map(|c| snap_point(c, &self.points, &existing, radius, !cx.input.alt));
         if cx.input.escape && !self.points.is_empty() {
@@ -638,10 +647,18 @@ impl DrawState {
                 "timber",
                 json!({"name": name(t::TOOL_WALL), "outline": points, "closed": false, "height": 1.8, "thickness": 0.1}),
             ),
+            // A fence starts as slats with timber posts and boards (the command assigns them).
+            Tool::Fence => (
+                "fence.add",
+                "",
+                json!({"name": name(t::TOOL_FENCE), "line": points, "height": 1.8, "kind": "slats"}),
+            ),
             Tool::Select | Tool::Window | Tool::Door => return,
         };
         let mut params = params;
-        params["material"] = json!(material); // one command: one undo step
+        if !material.is_empty() {
+            params["material"] = json!(material); // one command: one undo step
+        }
         let block = self.tool == Tool::Block;
         if let Some(r) = cx.run(cmd, params) {
             let id = r["id"].as_str().unwrap_or_default().to_string();
@@ -857,6 +874,7 @@ impl DrawState {
                 (Tool::Area, t::TOOL_AREA),
                 (Tool::Block, t::TOOL_BLOCK),
                 (Tool::Wall, t::TOOL_WALL),
+                (Tool::Fence, t::TOOL_FENCE),
                 (Tool::Window, t::TOOL_WINDOW),
                 (Tool::Door, t::TOOL_DOOR),
             ] {
@@ -871,7 +889,7 @@ impl DrawState {
         }
         ui.small(match self.tool {
             Tool::Select => t::SELECT_HINT,
-            Tool::Wall => t::WALL_HINT,
+            Tool::Wall | Tool::Fence => t::WALL_HINT,
             Tool::Window | Tool::Door => t::OPENING_HINT,
             _ => t::DRAW_HINT,
         });
@@ -992,6 +1010,7 @@ impl DrawState {
                     house_panel(ui, cx, x);
                 }
                 if !x.closed {
+                    fence_panel(ui, cx, x);
                     let e = drag_field(ui, t::THICKNESS, &mut x.thickness, 0.01, 0.02..=5.0, " m");
                     if e != Edit::None {
                         params.insert("thickness".into(), json!(x.thickness));
@@ -1130,6 +1149,57 @@ fn roof_tiles(cx: &mut Cx, id: &str) {
             json!({"target": {"type": "face", "owner": id, "face": format!("{id}:roof")}, "material": material}),
         );
     }
+}
+
+/// A wall's fence: kind, gates, and the way back to a plain wall; each change one command.
+fn fence_panel(ui: &mut egui::Ui, cx: &mut Cx, x: &visioncraft_core::shape::Extrusion) {
+    use visioncraft_core::fence::FenceKind;
+    let Some(f) = &x.fence else {
+        if ui.button(t::MAKE_FENCE).clicked() {
+            cx.run("fence.set", json!({"id": x.id, "kind": "slats"}));
+        }
+        return;
+    };
+    ui.horizontal_wrapped(|ui| {
+        ui.label(t::FENCE_KIND);
+        for (kind, key, label) in [
+            (FenceKind::Slats, "slats", t::FENCE_SLATS),
+            (
+                FenceKind::HorizontalSlats,
+                "horizontal_slats",
+                t::FENCE_HORIZONTAL,
+            ),
+            (FenceKind::Panels, "panels", t::FENCE_PANELS),
+            (FenceKind::Picket, "picket", t::FENCE_PICKET),
+            (FenceKind::Mesh, "mesh", t::FENCE_MESH),
+            (FenceKind::Screen, "screen", t::FENCE_SCREEN),
+        ] {
+            if ui.selectable_label(f.kind == kind, label).clicked() && f.kind != kind {
+                cx.run("fence.set", json!({"id": x.id, "kind": key}));
+            }
+        }
+    });
+    ui.horizontal_wrapped(|ui| {
+        // The gate goes in the middle of the first stretch.
+        if ui.button(t::ADD_GATE).clicked()
+            && let [a, b, ..] = x.outline[..]
+        {
+            let len = (b[0] - a[0]).hypot(b[1] - a[1]);
+            cx.run(
+                "fence.add_gate",
+                json!({"id": x.id, "offset_m": len / 2.0, "width_m": 1.0}),
+            );
+        }
+        if !f.gates.is_empty() && ui.button(t::REMOVE_LAST_GATE).clicked() {
+            cx.run(
+                "fence.remove_gate",
+                json!({"id": x.id, "index": f.gates.len() - 1}),
+            );
+        }
+        if ui.button(t::BACK_TO_WALL).clicked() {
+            cx.run("fence.clear", json!({"id": x.id}));
+        }
+    });
 }
 
 /// A block's roof, plinth and windows: each change one command.

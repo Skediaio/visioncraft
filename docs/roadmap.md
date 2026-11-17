@@ -37,6 +37,15 @@ nothing here is a promise of a date.
   gets, and what is left out: clouds, crowns as ellipsoids only (no leaf gaps, no climbers,
   perennials or lawn), custom species, the neighbours' volumes (see below).
 
+- **Fences and screens:** `fence.add` draws a line as posts (at every corner, both ends and
+  evenly between) with slats, horizontal boards, closed panels, pickets, a wire mesh or a solid
+  screen between them, and gates (`fence.add_gate`); faces `<id>:posts`, `:infill`, `:rails`,
+  `:gate` take materials per part, `query.quantities` counts the parts and the real volume, and
+  Draw has a Fence tool. Next: posts and boards following a slope (a fence stands on the lowest
+  ground under its line now, and `shape_mesh_on`'s ground function could set each post's foot),
+  stepped panels, a gate that swings, climbers on mesh, and a see-through board gap in
+  photo-mode shadows.
+
 ## Next
 
 - **More leaf sets:** the remaining CC0 atlases, then coverage reported again.
@@ -72,7 +81,6 @@ nothing here is a promise of a date.
   typed-size precision as straight edges.
 - **Levels:** steps and stairs, retaining walls, raised beds and terraces at different heights
   as first-class shapes.
-- **Fences and screens:** generated along a line (slats, panels, posts, gates), like hedges.
 - **Denser borders:** layered perennial plantings that close up, with flowers that read from
   eye level.
 

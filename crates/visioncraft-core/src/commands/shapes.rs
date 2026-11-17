@@ -195,7 +195,7 @@ pub(super) fn register(s: &mut Session) {
     );
 }
 
-fn add(
+pub(super) fn add(
     project: &mut Project,
     (layer, material): (Option<String>, Option<String>),
     make: impl FnOnce(String, String) -> Shape,
@@ -297,6 +297,7 @@ pub(super) fn add_extrusion(project: &mut Project, params: &Value) -> Result<Val
             thickness: p.thickness,
             extensions: Default::default(),
             house,
+            fence: None,
         })
     })?;
     if roofed && let Some(id) = r["id"].as_str() {

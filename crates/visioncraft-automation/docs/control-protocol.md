@@ -91,7 +91,7 @@ unknown keys are refused with the nearest name, unless `openParams` is true.
 ### Commands
 
 The core's commands (`model.*`, `shape.*`, `material.*`, `planting.*`, `species.add|update|remove`,
-`light.*`, `viewpoint.*`, `layer.*`, `terrain.*`, `site.set`, `time.set`, `view.set`,
+`fence.*`, `light.*`, `viewpoint.*`, `layer.*`, `terrain.*`, `site.set`, `time.set`, `view.set`,
 `style.set`) change the project, each one undo step; its queries (`query.sun {time?}`,
 `query.measure {kind, points?, outline?}`, `query.quantities {ids?, layer?}`) never do. The host adds what needs files, history,
 loaded geometry or a GPU:

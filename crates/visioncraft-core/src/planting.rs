@@ -2313,6 +2313,7 @@ mod tests {
             thickness: 0.2,
             extensions: Default::default(),
             house: None,
+            fence: None,
         });
         let m = shape_mesh(&block).unwrap();
         let names: Vec<&str> = m.faces.iter().map(|f| f.name.as_str()).collect();

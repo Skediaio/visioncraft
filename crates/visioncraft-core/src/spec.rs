@@ -357,8 +357,17 @@ pub fn example_project(command: &str) -> crate::project::Project {
             json!({"origin": [0, 0], "width_m": 40, "depth_m": 30, "base_material": "lawn"}),
         ),
         ("terrain.add_layer", json!({"material": "gravel"})),
+        // The fence commands work on S3, the wall above made into a fence with a gate at 3 m.
+        ("fence.set", json!({"id": "S3", "kind": "slats"})),
+        (
+            "fence.add_gate",
+            json!({"id": "S3", "offset_m": 3.0, "width_m": 1.0}),
+        ),
     ];
     for (name, params) in steps {
+        if name.starts_with("fence.") && !command.starts_with("fence.") {
+            continue;
+        }
         if name == "terrain.create" && command == "terrain.create" {
             break;
         }

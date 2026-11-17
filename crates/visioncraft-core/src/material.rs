@@ -302,6 +302,14 @@ pub fn builtin_palette() -> Vec<Material> {
         ),
         plain("timber", "Timber", [0.34, 0.20, 0.09], 0.0, 0.65, pbr(1.0)),
         plain(
+            "timber-dark",
+            "Dark timber",
+            [0.14, 0.09, 0.05],
+            0.0,
+            0.7,
+            pbr(1.0),
+        ),
+        plain(
             "roof",
             "Dark roof",
             [0.03, 0.03, 0.035],
@@ -576,10 +584,10 @@ mod tests {
     #[test]
     fn palette_is_valid_and_unique() {
         let p = builtin_palette();
-        assert_eq!(p.len(), 15);
+        assert_eq!(p.len(), 16);
         assert!(p.iter().all(|m| m.validate().is_ok()));
         let ids: std::collections::BTreeSet<_> = p.iter().map(|m| &m.id).collect();
-        assert_eq!(ids.len(), 15);
+        assert_eq!(ids.len(), 16);
     }
 
     #[test]

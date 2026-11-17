@@ -451,6 +451,31 @@ given, not a viewpoint, so the recipe works whatever viewpoints the project has:
 over the house's middle (a hair off vertical so the picture keeps north up), high enough for the
 whole house and its deck in a 40 degree field.
 
+### 20. A fence with a gate
+
+```json recipe
+{"intent": "a slatted fence round two sides of the plot, with a gate, and a picket fence", "steps": [
+  {"id": "fence.add", "params": {"name": "Side fence", "line": [[19.5, 1], [19.5, 29]], "height": 1.8, "kind": "slats", "gates": [{"offset_m": 10, "width_m": 1.2}]}},
+  {"id": "fence.add", "params": {"name": "Front fence", "line": [[0.5, 29.8], [19.5, 29.8]], "height": 0.9, "kind": "picket"}},
+  {"id": "fence.add_gate", "params": {"id": "S2", "offset_m": 9.5, "width_m": 1.0}},
+  {"id": "material.assign", "params": {"target": {"type": "face", "owner": "S2", "face": "S2:infill"}, "material": "plaster"}},
+  {"id": "query.quantities", "params": {}},
+  {"id": "document.inspect", "params": {"faces": false}}
+]}
+```
+
+`fence.add` draws an open line as posts and infill: `kind` is `slats`, `horizontal_slats`,
+`panels`, `picket`, `mesh` (a see-through wire grid) or `screen`, and `{kind}` alone gives a good
+fence (sizes by kind; `slat_width_m`, `gap_m`, `post_spacing_m`, `post_size_m`, `rails` and
+`thickness` change them). Posts stand at every point of the line, at both ends and evenly between;
+a gate (`fence.add_gate`, `fence.remove_gate`) leaves a gap with a post on each side and a leaf in
+it. The faces are `S1:posts`, `S1:infill`, `S1:rails` and `S1:gate`, for `material.assign`; they
+start as timber, with a dark timber for posts and rails (metal for mesh). `fence.set` changes
+any field (or turns a plain wall made with `shape.add_extrusion` into a fence), `fence.clear`
+turns it back into a wall. `query.quantities` gives a fence's posts, slats (boards, pickets,
+panels), gates, length and the real material volume. On terrain a fence stands on the lowest
+ground under its line, not following the slope.
+
 ## Known traps
 
 - **Ids are not names**: `S2`, not `House`; viewpoints are `v1`, lights `li1`.

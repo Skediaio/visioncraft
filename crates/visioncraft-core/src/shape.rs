@@ -72,6 +72,10 @@ pub struct Extrusion {
     /// A closed block's roof, windows, doors and plinth (`crate::house`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub house: Option<crate::house::House>,
+    /// An open extrusion drawn as a fence or screen along its line (`crate::fence`): the outline
+    /// is the line, `height` and `base` its height, `thickness` its depth.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fence: Option<crate::fence::Fence>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -149,6 +153,8 @@ pub enum ShapeError {
     NotSimple(String),
     /// A height, thickness, elevation or coordinate that is not a usable number.
     BadNumber(&'static str),
+    /// A fence that cannot be drawn on its line.
+    BadFence(String),
 }
 
 impl fmt::Display for ShapeError {
@@ -157,6 +163,7 @@ impl fmt::Display for ShapeError {
             Self::TooFewPoints { needed } => write!(f, "an outline needs at least {needed} points"),
             Self::NotSimple(why) => write!(f, "the outline is not a simple polygon: {why}"),
             Self::BadNumber(what) => write!(f, "{what} is not a usable number"),
+            Self::BadFence(why) => write!(f, "the fence cannot be drawn: {why}"),
         }
     }
 }
@@ -419,6 +426,29 @@ pub fn shape_mesh(shape: &Shape) -> Result<ImportedModel, ShapeError> {
         Shape::Extrusion(e) => {
             if !(e.base.is_finite() && e.height.is_finite() && e.height > 0.0) {
                 return Err(ShapeError::BadNumber("base or height"));
+            }
+            if let Some(f) = e.fence.as_ref().filter(|_| !e.closed) {
+                f.check(&e.outline, e.height, e.thickness)
+                    .map_err(ShapeError::BadFence)?;
+                let names = crate::fence::FENCE_FACES
+                    .iter()
+                    .map(|n| format!("{id}:{n}"))
+                    .collect::<Vec<_>>();
+                let mut b = Builder {
+                    model: ImportedModel::default(),
+                    triangles: vec![Vec::new(); names.len()],
+                    edge: Vec::new(),
+                    soft: false,
+                };
+                crate::fence::mesh(
+                    &mut b,
+                    f,
+                    &e.outline,
+                    e.thickness,
+                    e.base,
+                    e.base + e.height,
+                );
+                return Ok(b.finish(id, &e.name, names));
             }
             let (ring, ring_face): (Vec<P2>, Vec<usize>) = if e.closed {
                 (
@@ -836,6 +866,7 @@ mod tests {
             thickness: 0.2,
             extensions: Default::default(),
             house: None,
+            fence: None,
         })
     }
 
@@ -851,6 +882,7 @@ mod tests {
             thickness: 0.4,
             extensions: Default::default(),
             house: None,
+            fence: None,
         })
     }
 

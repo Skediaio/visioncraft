@@ -144,7 +144,21 @@ pub fn quantities(project: &Project, filter: &Filter) -> Result<Value, String> {
             Shape::Extrusion(e) => {
                 let length = path_length(&e.outline, false);
                 plan = length * f64::from(e.thickness);
-                volume = plan * f64::from(e.height);
+                // A fence is posts and boards, not a slab: its volume is the mesh's own.
+                volume = match &e.fence {
+                    Some(f) => {
+                        let c = crate::fence::counts(f, &e.outline, e.height);
+                        o.insert(
+                            "fence".into(),
+                            json!({
+                                "kind": f.kind, "posts": c.posts,
+                                f.kind.item_name(): c.items, "gates": c.gates,
+                            }),
+                        );
+                        mesh_volume(&mesh)
+                    }
+                    None => plan * f64::from(e.height),
+                };
                 o.insert("kind".into(), "extrusion".into());
                 o.insert("length_m".into(), length.into());
             }
@@ -211,4 +225,23 @@ pub fn quantities(project: &Project, filter: &Filter) -> Result<Value, String> {
             "volume_m3": total_volume, "plants": plants, "placements": placements,
         },
     }))
+}
+
+/// The volume a closed mesh with outward-facing triangles encloses (divergence theorem); parts
+/// that overlap, like a rail across a board, count twice.
+fn mesh_volume(mesh: &crate::model::ImportedModel) -> f64 {
+    let p = |i: u32| mesh.positions[i as usize].map(f64::from);
+    mesh.triangles
+        .iter()
+        .map(|t| {
+            let (a, b, c) = (p(t[0]), p(t[1]), p(t[2]));
+            let cross = [
+                b[1] * c[2] - b[2] * c[1],
+                b[2] * c[0] - b[0] * c[2],
+                b[0] * c[1] - b[1] * c[0],
+            ];
+            (a[0] * cross[0] + a[1] * cross[1] + a[2] * cross[2]) / 6.0
+        })
+        .sum::<f64>()
+        .abs()
 }

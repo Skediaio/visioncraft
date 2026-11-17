@@ -20,11 +20,12 @@ pub const KINDS: [&str; 14] = [
 /// Which library material each plain palette material shows while the library is there
 /// (lawn: a grass ground, paving: paving stones, plaster, timber and so on).
 /// The variation is the overlay's default; its parallax depth comes from the library kind.
-const DEFAULTS: [(&str, &str, f32); 10] = [
+const DEFAULTS: [(&str, &str, f32); 11] = [
     ("lawn", "grass001", 0.6),
     ("paving", "pavingstones005", 0.4),
     ("plaster", "plaster001", 0.25),
     ("timber", "planks021", 0.2),
+    ("timber-dark", "planks021", 0.2),
     ("brick", "bricks028", 0.25),
     ("roof", "roofingtiles006", 0.25),
     ("concrete", "concrete046", 0.3),
@@ -103,6 +104,8 @@ pub fn overlay(lib: &Library, m: &Material) -> Option<Overlay> {
         },
         tint: match m.id.as_str() {
             "plaster" => [0.86, 0.81, 0.73],
+            // Posts and rails: the same planks, stained dark.
+            "timber-dark" => [0.42, 0.34, 0.28],
             // Light leaving a lawn has mostly crossed a blade on its way (as the 3D blades'
             // translucency shows): the photo's green deepened by sqrt(mean / mean.g) per channel,
             // so the ground beyond the blades matches them instead of reading olive.

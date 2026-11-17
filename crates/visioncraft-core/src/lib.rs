@@ -8,6 +8,7 @@ pub mod canopy;
 pub mod catalog;
 mod commands;
 pub mod export;
+pub mod fence;
 pub mod growth;
 pub mod house;
 mod import;

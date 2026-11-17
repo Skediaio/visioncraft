@@ -118,17 +118,27 @@ pub(super) fn register(s: &mut Session) {
 /// project has the material: roof dark tiles' stand-in, glass, timber frames and doors, a dark
 /// interior, concrete plinth.
 pub(crate) fn default_materials(project: &mut Project, id: &str) {
-    for (face, material) in [
-        ("roof", "roof"),
-        ("glass", "glass"),
-        ("frame", "timber"),
-        ("door", "timber"),
-        ("interior", "interior"),
-        ("plinth", "concrete"),
-        ("parapet", "concrete"),
-        ("sill", "concrete"),
-        ("handle", "metal"),
-    ] {
+    assign_defaults(
+        project,
+        id,
+        &[
+            ("roof", "roof"),
+            ("glass", "glass"),
+            ("frame", "timber"),
+            ("door", "timber"),
+            ("interior", "interior"),
+            ("plinth", "concrete"),
+            ("parapet", "concrete"),
+            ("sill", "concrete"),
+            ("handle", "metal"),
+        ],
+    );
+}
+
+/// Gives `id`'s faces (`face`, `material` pairs) their palette material where the face has none
+/// yet; a palette material the project lacks is added.
+pub(super) fn assign_defaults(project: &mut Project, id: &str, faces: &[(&str, &str)]) {
+    for &(face, material) in faces {
         let target = Target::Face {
             owner: id.to_string(),
             face: format!("{id}:{face}"),
