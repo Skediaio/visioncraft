@@ -651,6 +651,41 @@ fn a_wall_shades_the_north_side_and_not_the_south() {
 }
 
 #[test]
+fn a_context_block_shades_like_any_other() {
+    let mut h = Headless::new(Access::default());
+    let layer = execute(
+        &mut h,
+        1,
+        "layer.add",
+        json!({"name": "Surroundings", "context": true}),
+    );
+    assert_eq!(layer["ok"], json!(true), "{layer}");
+    let l = layer["result"]["id"].as_str().unwrap().to_string();
+    let added = execute(
+        &mut h,
+        2,
+        "shape.add_extrusion",
+        json!({"name": "Neighbour", "outline": [[-10, -2], [10, -2], [10, 2], [-10, 2]], "height": 12, "layer": l}),
+    );
+    assert_eq!(added["ok"], json!(true), "{added}");
+    let r = execute(
+        &mut h,
+        3,
+        "query.sun_hours",
+        json!({"point": [0, -4], "season": "winter", "step_minutes": 5}),
+    );
+    assert_eq!(r["ok"], json!(true), "{r}");
+    assert!(r["result"]["sun_hours"].as_f64().unwrap() < 0.5, "{r}");
+    let inspect = execute(&mut h, 4, "document.inspect", json!({}));
+    let layers = inspect["result"]["layers"].as_array().unwrap();
+    assert!(
+        layers
+            .iter()
+            .any(|x| x["id"] == l && x["context"] == json!(true))
+    );
+}
+
+#[test]
 fn sun_hours_over_an_l_shaped_outline_leaves_nulls_outside() {
     let mut h = Headless::new(Access::default());
     let r = execute(

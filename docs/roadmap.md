@@ -48,8 +48,10 @@ nothing here is a promise of a date.
 - **North and site:** turning the whole drawing against north is done (`site.set north_deg`,
   applied to the sun, wind, waves, river flow and lawn stripes). Next: set the site by address
   (`site.set` already takes coordinates), so the sun is right without knowing compass directions.
-- **Shade from the surroundings:** neighbouring buildings and terrain as simple volumes that cast
-  shadow but are not part of the design.
+- **Shade from the surroundings:** done for buildings: a layer marked as surroundings
+  (`layer.set_context`) holds neighbours as plain extrusions or models that cast shadow, draw as
+  grey massing and stay out of the quantities. Next: terrain beyond the plot as a caster, and
+  neighbours from open data once "Ground from coordinates" exists.
 - **A plan as underlay:** a scaled image or PDF page of a floor plan or site plan under the
   drawing, to trace over.
 - **Photos on walls:** a facade photo as the texture of a wall, straightened and scaled.

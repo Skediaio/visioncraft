@@ -51,6 +51,31 @@ fn version_one_file_without_new_fields_loads() {
 }
 
 #[test]
+fn context_layers_default_off_stay_out_of_files_and_undo() {
+    let p = Project::from_json_bytes(
+        br#"{"format_version": 1, "layers": [{"id": "n", "name": "N", "visible": true}]}"#,
+    )
+    .unwrap();
+    assert!(!p.layers[0].context && !p.layer_is_context("n"));
+    let text = String::from_utf8(Project::default().to_json_bytes()).unwrap();
+    assert!(!text.contains("context"), "{text}");
+    let mut s = Session::new(Project::default());
+    let l = id(s
+        .run("layer.add", json!({"name": "Neighbours", "context": true}))
+        .unwrap());
+    assert!(s.project().layer_is_context(&l));
+    s.run("layer.set_context", json!({"id": l, "context": false}))
+        .unwrap();
+    assert!(!s.project().layer_is_context(&l));
+    assert!(s.undo());
+    assert!(s.project().layer_is_context(&l));
+    s.run("layer.set_context", json!({"id": "nope", "context": true}))
+        .unwrap_err();
+    let text = String::from_utf8(s.project().to_json_bytes()).unwrap();
+    assert!(text.contains("\"context\": true"), "{text}");
+}
+
+#[test]
 fn layers_hide_and_refuse_removal_while_used() {
     let mut s = Session::new(Project::default());
     let l = id(s.run("layer.add", json!({"name": "Terrace"})).unwrap());

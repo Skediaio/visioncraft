@@ -388,7 +388,7 @@ pub(crate) fn inspect(session: &Session, state: &HostState, v: &Verbosity) -> Va
                 + p.shapes.iter().filter(|s| s.layer() == l.id).count()
                 + p.generators.iter().filter(|g| g.layer() == l.id).count()
                 + p.lights.iter().filter(|x| x.layer == l.id).count();
-            json!({"id": l.id, "name": l.name, "visible": l.visible, "items": items})
+            json!({"id": l.id, "name": l.name, "visible": l.visible, "context": l.context, "items": items})
         })
         .collect();
     let species: Vec<Value> = p

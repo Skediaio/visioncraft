@@ -91,6 +91,14 @@ pub struct Layer {
     pub id: String,
     pub name: String,
     pub visible: bool,
+    /// Surroundings, not part of the design: neighbours' houses and the like. They cast and
+    /// receive shadow, draw with one neutral massing look and stay out of `query.quantities`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub context: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 fn default_layers() -> Vec<Layer> {
@@ -104,6 +112,7 @@ fn default_layers() -> Vec<Layer> {
         id: id.into(),
         name: name.into(),
         visible: true,
+        context: false,
     })
     .into()
 }
@@ -532,6 +541,33 @@ impl Project {
     /// Whether things on this layer are drawn; an unknown layer counts as visible.
     pub fn layer_visible(&self, layer: &str) -> bool {
         self.layers.iter().all(|l| l.id != layer || l.visible)
+    }
+
+    /// Whether the layer holds surroundings (see `Layer::context`); an unknown layer does not.
+    pub fn layer_is_context(&self, layer: &str) -> bool {
+        self.layers.iter().any(|l| l.id == layer && l.context)
+    }
+
+    /// The layer id of any model, shape, generator or light, by its id.
+    pub fn layer_of(&self, id: &str) -> Option<&str> {
+        if let Some(m) = self.models.iter().find(|m| m.id == id) {
+            return Some(&m.layer);
+        }
+        if let Some(s) = self.shapes.iter().find(|s| s.id() == id) {
+            return Some(s.layer());
+        }
+        if let Some(g) = self.generators.iter().find(|g| g.id() == id) {
+            return Some(g.layer());
+        }
+        self.lights
+            .iter()
+            .find(|l| l.id == id)
+            .map(|l| l.layer.as_str())
+    }
+
+    /// Whether the model, shape, generator or light sits on a context layer.
+    pub fn owner_is_context(&self, id: &str) -> bool {
+        self.layer_of(id).is_some_and(|l| self.layer_is_context(l))
     }
 
     /// The layer of any model, shape, generator or light, by its id.

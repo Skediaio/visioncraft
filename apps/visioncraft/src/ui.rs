@@ -770,6 +770,17 @@ impl Hud {
                     serde_json::json!({"id": l.id, "visible": visible}),
                 );
             }
+            let mut context = l.context;
+            if ui
+                .checkbox(&mut context, t::LAYER_SURROUNDINGS)
+                .on_hover_text(t::LAYER_SURROUNDINGS_TIP)
+                .changed()
+            {
+                cx.run(
+                    "layer.set_context",
+                    serde_json::json!({"id": l.id, "context": context}),
+                );
+            }
         }
         let models: Vec<(String, String, bool)> =
             cx.s.project()

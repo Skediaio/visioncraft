@@ -132,7 +132,7 @@ plus what is computed:
   "time": {"year": 2026, "month": 6, "day": 21, "hour": 15.0},
   "sun": {"azimuth_deg": 213.9, "elevation_deg": 59.0, "direction": [-0.29, 0.86, 0.43], "sunrise_hour": 5.50, "sunset_hour": 22.06, "above_horizon": true},
   "view": {"...": "..."}, "style": {"clay": false},
-  "layers": [{"id": "shapes", "name": "Shapes", "visible": true, "items": 2}],
+  "layers": [{"id": "shapes", "name": "Shapes", "visible": true, "context": false, "items": 2}],
   "models": [{"id": "m1", "name": "plate", "kind": "3dcraft", "source": "plate.3dcraft", "layer": "model", "transform": {"translation": [0, 0, 0], "rotation_y_deg": 0, "scale": 1},
               "loaded": true, "bodies": 1, "triangles": 12, "bbox": [[0, 0, -0.02], [0.04, 0.01, 0]],
               "faces": ["F2:side(e5)", "F2:side(e6)", "F2:side(e7)", "F2:side(e8)", "F2:startCap(e5,e6,e7,e8)", "F2:endCap(e5,e6,e7,e8)"]}],

@@ -606,6 +606,42 @@ fn quantities_measure_shapes_materials_and_plantings() {
 }
 
 #[test]
+fn quantities_skip_context_layers_unless_asked() {
+    let mut s = quantities_session();
+    let before = s.run("query.quantities", json!({})).unwrap();
+    let l = s
+        .run(
+            "layer.add",
+            json!({"name": "Surroundings", "context": true}),
+        )
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let added = s
+        .run(
+            "shape.add_extrusion",
+            json!({"name": "Neighbour", "outline": [[20, 0], [26, 0], [26, 6], [20, 6]], "height": 7, "layer": l}),
+        )
+        .unwrap();
+    let id = added["id"].as_str().unwrap().to_string();
+    assert_eq!(s.run("query.quantities", json!({})).unwrap(), before);
+    let by_layer = s.run("query.quantities", json!({"layer": l})).unwrap();
+    assert_eq!(by_layer["shapes"].as_array().unwrap().len(), 1);
+    assert_eq!(by_layer["totals"]["volume_m3"], 252.0);
+    let by_id = s.run("query.quantities", json!({"ids": [id]})).unwrap();
+    assert_eq!(by_id["shapes"].as_array().unwrap().len(), 1);
+    // Back to part of the design: counted again.
+    s.run("layer.set_context", json!({"id": l, "context": false}))
+        .unwrap();
+    let all = s.run("query.quantities", json!({})).unwrap();
+    assert_eq!(
+        all["shapes"].as_array().unwrap().len(),
+        before["shapes"].as_array().unwrap().len() + 1
+    );
+}
+
+#[test]
 fn quantities_filter_by_id_and_layer_and_name_what_is_unknown() {
     let mut s = quantities_session();
     let q = s

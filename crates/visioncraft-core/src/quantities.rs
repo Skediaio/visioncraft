@@ -91,9 +91,13 @@ pub fn quantities(project: &Project, filter: &Filter) -> Result<Value, String> {
             }
         }
     }
+    // Surroundings are not part of the design: listed only when named by id or by their layer.
     let wanted = |id: &str, layer: &str| {
-        filter.ids.is_none_or(|ids| ids.iter().any(|i| i == id))
-            && filter.layer.is_none_or(|l| l == layer)
+        let named = filter.ids.is_some_and(|ids| ids.iter().any(|i| i == id))
+            || filter.layer == Some(layer);
+        (filter.ids.is_none_or(|ids| ids.iter().any(|i| i == id))
+            && filter.layer.is_none_or(|l| l == layer))
+            && (named || !project.layer_is_context(layer))
     };
 
     let lifts: HashMap<String, f32> = area_lifts(&project.shapes).into_iter().collect();

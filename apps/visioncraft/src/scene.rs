@@ -97,7 +97,16 @@ impl Look {
 }
 
 const CLAY: Look = Look::plain(0.85, 0.85, 0.85, 0.9);
+/// The one look of surroundings (owners on a context layer): a light, slightly warm grey, like
+/// clay but per owner. Their material assignments are ignored.
+const MASSING: Look = Look::plain(0.84, 0.82, 0.78, 0.9);
 const UNASSIGNED: Look = Look::plain(0.6, 0.6, 0.6, 0.8);
+
+/// The look that replaces an owner's materials altogether: the massing look on a context layer
+/// (surroundings are not part of the design), else none. The one place this rule lives.
+fn forced_look(project: &Project, owner: &str) -> Option<Look> {
+    project.owner_is_context(owner).then_some(MASSING)
+}
 
 /// The variation a material shows: its own, else (an untouched palette material) its library
 /// look's.
@@ -1165,6 +1174,7 @@ impl Scene {
             live.push(id.clone());
             let mut owner_looks = |project: &Project| -> Vec<Look> {
                 let resolved = resolve_materials(project, &id, &model);
+                let forced = forced_look(project, &id);
                 model
                     .faces
                     .iter()
@@ -1172,6 +1182,8 @@ impl Scene {
                     .map(|(f, m)| {
                         if clay {
                             CLAY
+                        } else if let Some(l) = &forced {
+                            *l
                         } else if let Some(i) = m {
                             look_of(
                                 &project.materials[i],
@@ -2754,6 +2766,40 @@ mod tests {
         };
         let p = model_matrix(&m).transform_point3(Vec3::X);
         assert!((p - Vec3::new(1.0, 0.0, -2.0)).length() < 1e-5, "{p}");
+    }
+
+    #[test]
+    fn context_owners_get_the_massing_look_whatever_their_materials() {
+        use serde_json::json;
+        let mut s = visioncraft_core::Session::new(Project::default());
+        let r = s
+            .run(
+                "layer.add",
+                json!({"name": "Surroundings", "context": true}),
+            )
+            .unwrap();
+        let l = r["id"].as_str().unwrap().to_string();
+        let outline = json!([[0, 0], [4, 0], [4, 4], [0, 4]]);
+        s.run(
+            "shape.add_extrusion",
+            json!({"name": "Neighbour", "outline": outline, "height": 6, "material": "brick", "layer": l}),
+        )
+        .unwrap();
+        s.run(
+            "shape.add_extrusion",
+            json!({"name": "Mine", "outline": outline, "height": 3, "material": "brick"}),
+        )
+        .unwrap();
+        let (neighbour, mine) = (
+            s.project().shapes[0].id().to_string(),
+            s.project().shapes[1].id().to_string(),
+        );
+        assert_eq!(
+            forced_look(s.project(), &neighbour).map(|l| l.key()),
+            Some(MASSING.key())
+        );
+        assert!(forced_look(s.project(), &mine).is_none());
+        assert_ne!(MASSING.key(), CLAY.key());
     }
 
     #[test]

@@ -229,6 +229,15 @@ Openings are numbered `o1`, `o2` per block (`shape.update_opening`, `shape.remov
 The faces are `S1:roof`, `S1:glass`, `S1:frame`, `S1:door`, `S1:sill`, `S1:interior` and so
 on, for `material.assign`. Lit rooms show when the lamps are on.
 
+#### Neighbours and other surroundings
+
+Mark a layer as surroundings, then draw the neighbours on it: `layer.add {name: "Surroundings",
+context: true}` (or `layer.set_context {id, context: true}` on an existing layer), then closed
+`shape.add_extrusion` blocks with a `height` on that layer (or an imported model assigned to it).
+Context items cast and receive shadow, so `query.sun_hours` and renders see them, but they draw in
+one neutral grey massing look whatever their materials, and `query.quantities` leaves them out
+unless asked by `ids` or `layer`. Plantings on the layer, a neighbour's trees, draw normally.
+
 ### 12. A pond with a stone coping
 
 ```json recipe

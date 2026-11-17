@@ -10,10 +10,13 @@ pub(super) fn register(s: &mut Session) {
         spec(
             "layer.add",
             "Add Layer",
-            "Adds a visible layer that models, shapes, generators and lights can sit on.",
-            vec![param("name", T::String, "Display name.").required()],
+            "Adds a visible layer that models, shapes, generators and lights can sit on. With `context` the layer holds surroundings (a neighbour's house as a closed extrusion, an imported model): they cast and receive shadow but are not part of the design, draw in one neutral massing look and stay out of `query.quantities`.",
+            vec![
+                param("name", T::String, "Display name.").required(),
+                param("context", T::Boolean, "True for a surroundings layer.").default(json!(false)),
+            ],
             "{id}",
-            json!({"name": "Terrace"}),
+            json!({"name": "Neighbours", "context": true}),
         ),
         layer_add,
     );
@@ -44,6 +47,20 @@ pub(super) fn register(s: &mut Session) {
             json!({"id": "planting", "visible": false}),
         ),
         layer_set_visible,
+    );
+    s.register_with_spec(
+        spec(
+            "layer.set_context",
+            "Mark Layer as Surroundings",
+            "Marks a layer as surroundings (true) or as part of the design (false). Everything on a context layer, such as a neighbour's house, still casts and receives shadow but draws in one neutral massing look whatever its materials, and `query.quantities` leaves it out. Plantings on it draw normally.",
+            vec![
+                param("id", T::String, "Layer id.").required(),
+                param("context", T::Boolean, "True for surroundings.").required(),
+            ],
+            "null",
+            json!({"id": "l1", "context": true}),
+        ),
+        layer_set_context,
     );
     s.register_with_spec(
         spec(
@@ -135,6 +152,8 @@ fn layer_add(project: &mut Project, params: &Value) -> Result<Value, CommandErro
     #[serde(deny_unknown_fields)]
     struct P {
         name: String,
+        #[serde(default)]
+        context: bool,
     }
     let p: P = parse(params)?;
     let id = next_id("l", |id| project.layers.iter().any(|l| l.id == id));
@@ -142,6 +161,7 @@ fn layer_add(project: &mut Project, params: &Value) -> Result<Value, CommandErro
         id: id.clone(),
         name: p.name,
         visible: true,
+        context: p.context,
     });
     Ok(json!({ "id": id }))
 }
@@ -167,6 +187,18 @@ fn layer_set_visible(project: &mut Project, params: &Value) -> Result<Value, Com
     }
     let p: P = parse(params)?;
     layer(project, &p.id)?.visible = p.visible;
+    Ok(Value::Null)
+}
+
+fn layer_set_context(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct P {
+        id: String,
+        context: bool,
+    }
+    let p: P = parse(params)?;
+    layer(project, &p.id)?.context = p.context;
     Ok(Value::Null)
 }
 
