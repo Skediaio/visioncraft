@@ -379,6 +379,26 @@ pub struct Site {
     pub longitude: f64,
     /// Hours east of UTC that `SunTime` is expressed in.
     pub utc_offset_hours: f64,
+    /// Where true north lies in the drawing: degrees clockwise from the drawing's -Z axis, seen
+    /// from above (+X is 90). 0 is the default convention (-Z is north); 90 means true north
+    /// points along +X, so a true bearing `b` is drawing bearing `b + north_deg`.
+    #[serde(default)]
+    pub north_deg: f64,
+}
+
+impl Site {
+    /// A compass bearing (degrees clockwise from true north) as a bearing in the drawing
+    /// (degrees clockwise from -Z, in `0..360`): the one place `north_deg` is applied.
+    pub fn bearing_to_drawing_deg(&self, true_bearing_deg: f64) -> f64 {
+        (true_bearing_deg + self.north_deg).rem_euclid(360.0)
+    }
+
+    /// The horizontal unit vector `[x, 0, z]` in drawing space of a compass bearing (degrees
+    /// clockwise from true north).
+    pub fn bearing_to_drawing(&self, true_bearing_deg: f64) -> [f32; 3] {
+        let a = self.bearing_to_drawing_deg(true_bearing_deg).to_radians();
+        [a.sin() as f32, 0.0, (-a.cos()) as f32]
+    }
 }
 
 impl Default for Site {
@@ -390,6 +410,7 @@ impl Default for Site {
             latitude: 50.85,
             longitude: 4.35,
             utc_offset_hours: 2.0,
+            north_deg: 0.0,
         }
     }
 }

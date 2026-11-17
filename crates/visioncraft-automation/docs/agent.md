@@ -9,7 +9,7 @@ same over MCP (`visioncraft-cli mcp`), JSON lines (`visioncraft-cli serve`) and 
 
 ## Conventions
 
-- **Metres, Y up, +X east, -Z north** (+Z is south). A house "north of the lawn" has smaller z.
+- **Metres, Y up, +X east, -Z north** (+Z is south; `site.set north_deg` turns true north away from -Z by that many degrees clockwise seen from above, and every compass bearing is then a true bearing). A house "north of the lawn" has smaller z.
 - **Outlines and paths are `[[x, z], ...]`** on the ground; positions are `[x, y, z]`.
 - **Ids** are a prefix and the lowest free number: shapes `S1`, models `m1`, generators `g1`,
   lights `li1`, viewpoints `v1`, materials `mat1`, custom species `sp1`. Every `add` returns
@@ -90,7 +90,7 @@ The model's `bbox` in `document.inspect` is in world space, after the transform.
 
 A lawn can be mown in stripes: `material.update {"id": "lawn", "kind": {"type": "lawn3d",
 "density_per_m2": 2000, "blade_height_m": 0.04, "seed": 1, "stripes_m": 0.9, "stripes_deg": 0}}`
-(bands 0.3 to 5 m wide, their direction clockwise from north; `stripes_m: 0` for none). The bands
+(bands 0.3 to 5 m wide, their direction, a true bearing clockwise from north; `stripes_m: 0` for none). The bands
 read lighter and darker by the side they are seen from, as mown grass does.
 
 ### 4. A hedge along a boundary

@@ -15,7 +15,8 @@ pub struct SunPosition {
     pub azimuth_deg: f64,
     /// Degrees above the horizon, atmospheric refraction included.
     pub elevation_deg: f64,
-    /// Unit vector from the ground towards the sun, world axes (+X east, +Y up, -Z north).
+    /// Unit vector from the ground towards the sun in drawing space (+Y up; -Z is north unless
+    /// `Site::north_deg` turns it). `azimuth_deg` stays the true compass bearing.
     pub direction: [f32; 3],
 }
 
@@ -104,7 +105,10 @@ pub fn sun_position(site: &Site, time: &SunTime) -> SunPosition {
         }
     };
     let elevation_deg = true_elevation + refraction(true_elevation);
-    let (az, el) = (azimuth_deg.to_radians(), elevation_deg.to_radians());
+    let (az, el) = (
+        site.bearing_to_drawing_deg(azimuth_deg).to_radians(),
+        elevation_deg.to_radians(),
+    );
     SunPosition {
         azimuth_deg,
         elevation_deg,
@@ -248,7 +252,10 @@ pub fn moon_position(site: &Site, time: &SunTime) -> MoonPosition {
     } else {
         0.0
     };
-    let (az, el) = (azimuth_deg.to_radians(), elevation_deg.to_radians());
+    let (az, el) = (
+        site.bearing_to_drawing_deg(azimuth_deg).to_radians(),
+        elevation_deg.to_radians(),
+    );
     MoonPosition {
         azimuth_deg,
         elevation_deg,
@@ -297,6 +304,7 @@ mod tests {
                 latitude: lat,
                 longitude: lon,
                 utc_offset_hours: tz,
+                north_deg: 0.0,
             },
             SunTime {
                 year: y,

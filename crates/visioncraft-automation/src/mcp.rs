@@ -43,7 +43,7 @@ const INSTRUCTIONS: &str = "VisionCraft visualises houses and gardens: models, d
 seen in real time under the sun of a site and a date. Every action is a command with a stable id and JSON params. \
 Start with command_list {\"brief\": true} (then {\"id\": ...} for one command's parameter docs) and doc_inspect. \
 Build with command_batch (add atomic: true for all or nothing), check with doc_inspect and look with doc_render_preview. \
-Units are metres, Y is up, +X east, -Z north; outlines are [[x, z], ...]. Plants are flora:<species id> (species.list). \
+Units are metres, Y is up, +X east, -Z north (unless site.set north_deg turns it); outlines are [[x, z], ...]. Plants are flora:<species id> (species.list). \
 Open and save with command_run file.open / file.save; undo with edit.undo. The resource visioncraft://guide is the agent guide.";
 
 const GUIDE_URI: &str = "visioncraft://guide";
@@ -298,7 +298,7 @@ fn build_garden_prompt(description: &str) -> String {
         "Build this garden in VisionCraft:\n\n{description}\n\n\
 Work in this order, and check after each stage:\n\
 1. Read the resource visioncraft://guide once, then doc_inspect {{\"faces\": false}} to see what is there.\n\
-2. Plan in numbers first: metres, Y up, +X east, -Z north. Write down every outline as [[x, z], ...], every height, every plant species (command_run species.list with a category) and every light position.\n\
+2. Plan in numbers first: metres, Y up, +X east, -Z north (unless site.set north_deg turns it). Write down every outline as [[x, z], ...], every height, every plant species (command_run species.list with a category) and every light position.\n\
 3. Build in a few command_batch calls (all or nothing): shapes (shape.add_area for lawns, terraces and paths; shape.add_extrusion for houses, walls and hedge blocks), materials (material.assign), planting (planting.add_spline for hedges, planting.add_area for beds, planting.add_single for trees), lights (light.add), viewpoints (viewpoint.add).\n\
 4. After each batch: doc_inspect and compare areas, counts and positions with your plan; then doc_render_preview from a viewpoint and look at it.\n\
 5. Check the light: time.set to the hours that matter (morning, afternoon, dusk) and look again.\n\

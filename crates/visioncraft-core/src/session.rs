@@ -164,9 +164,15 @@ impl Session {
                         "Hours east of UTC that the project's time is given in, -14..14.",
                     )
                     .unit("h"),
+                    param(
+                        "north_deg",
+                        ParamType::Number,
+                        "Turns the drawing against north: the angle of true north measured clockwise from the drawing's -Z axis, seen from above (0: -Z is north, the default; 90: true north points along +X; any value, kept in 0..360). Every compass bearing (sun, wind_direction_deg, wave direction_deg, river flow_deg, lawn stripes_deg) is then a true bearing; the sun query's azimuth_deg stays a true bearing while its direction is in drawing space.",
+                    )
+                    .unit("deg"),
                 ],
                 "null",
-                json!({"latitude": 50.85, "longitude": 4.35, "utc_offset_hours": 1}),
+                json!({"latitude": 50.85, "longitude": 4.35, "utc_offset_hours": 1, "north_deg": 0}),
             ),
             site_set,
         );
@@ -511,17 +517,22 @@ fn site_set(project: &mut Project, params: &Value) -> Result<Value, CommandError
         latitude: Option<f64>,
         longitude: Option<f64>,
         utc_offset_hours: Option<f64>,
+        north_deg: Option<f64>,
     }
     let p: P = parse(params)?;
     let mut s = project.site;
+    s.north_deg = p.north_deg.unwrap_or(s.north_deg).rem_euclid(360.0);
     s.latitude = p.latitude.unwrap_or(s.latitude);
     s.longitude = p.longitude.unwrap_or(s.longitude);
     s.utc_offset_hours = p.utc_offset_hours.unwrap_or(s.utc_offset_hours);
     if !(-90.0..=90.0).contains(&s.latitude)
         || !(-180.0..=180.0).contains(&s.longitude)
         || !(-14.0..=14.0).contains(&s.utc_offset_hours)
+        || !s.north_deg.is_finite()
     {
-        return Err(bad("latitude, longitude or UTC offset out of range"));
+        return Err(bad(
+            "latitude, longitude, UTC offset or north_deg out of range",
+        ));
     }
     project.site = s;
     Ok(Value::Null)
