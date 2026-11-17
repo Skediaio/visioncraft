@@ -298,6 +298,8 @@ pub(super) fn add_extrusion(project: &mut Project, params: &Value) -> Result<Val
             extensions: Default::default(),
             house,
             fence: None,
+            stairs: None,
+            raised_bed: None,
         })
     })?;
     if roofed && let Some(id) = r["id"].as_str() {
@@ -509,11 +511,20 @@ fn set_edge_blend(project: &mut Project, params: &Value) -> Result<Value, Comman
 fn remove(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
     let id = params["id"].as_str().ok_or_else(|| bad("missing id"))?;
     let before = project.shapes.len();
+    // A raised bed takes its soil with it.
+    let soil = project.shapes.iter().find_map(|s| match s {
+        Shape::Extrusion(e) if e.id == id => e.raised_bed.as_ref().and_then(|b| b.soil.clone()),
+        _ => None,
+    });
     project.shapes.retain(|s| s.id() != id);
     if project.shapes.len() == before {
         return Err(fail(format!("no shape `{id}`")));
     }
     project.assignments.retain(|a| a.target.owner() != id);
+    if let Some(soil) = soil {
+        project.shapes.retain(|s| s.id() != soil);
+        project.assignments.retain(|a| a.target.owner() != soil);
+    }
     Ok(Value::Null)
 }
 

@@ -357,6 +357,15 @@ pub fn example_project(command: &str) -> crate::project::Project {
             json!({"origin": [0, 0], "width_m": 40, "depth_m": 30, "base_material": "lawn"}),
         ),
         ("terrain.add_layer", json!({"material": "gravel"})),
+        // The stairs commands work on S4, a flight; the bed commands on S4, a bed (soil S5).
+        (
+            "stairs.add",
+            json!({"name": "Steps", "from": [12, 5], "to": [12, 3.2], "width_m": 1.2, "height": 0.5}),
+        ),
+        (
+            "bed.add",
+            json!({"name": "Bed", "outline": [[12, 6], [14.4, 6], [14.4, 7.2], [12, 7.2]]}),
+        ),
         // The fence commands work on S3, the wall above made into a fence with a gate at 3 m.
         ("fence.set", json!({"id": "S3", "kind": "slats"})),
         (
@@ -366,6 +375,10 @@ pub fn example_project(command: &str) -> crate::project::Project {
     ];
     for (name, params) in steps {
         if name.starts_with("fence.") && !command.starts_with("fence.") {
+            continue;
+        }
+        let family = name.split('.').next().unwrap_or_default();
+        if matches!(family, "stairs" | "bed") && !command.starts_with(&format!("{family}.")) {
             continue;
         }
         if name == "terrain.create" && command == "terrain.create" {

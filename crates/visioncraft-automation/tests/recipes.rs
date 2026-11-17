@@ -19,7 +19,7 @@ pub fn recipes() -> Vec<Value> {
 #[test]
 fn every_recipe_of_the_guide_runs() {
     let recipes = recipes();
-    assert_eq!(recipes.len(), 20);
+    assert_eq!(recipes.len(), 22);
     for (n, recipe) in recipes.into_iter().enumerate() {
         let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("recipe-{n}"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -122,6 +122,47 @@ fn every_recipe_of_the_guide_runs() {
                 );
                 assert!(
                     shapes[1]["fence"]["pickets"].as_u64().unwrap() > 100,
+                    "{report}"
+                );
+            }
+            21 => {
+                let r = &results[2]["result"];
+                assert_eq!(r["steps"], 3, "{report}");
+                let h = r["height_m"].as_f64().unwrap();
+                assert!((0.5..0.54).contains(&h), "{report}");
+                let shapes = results[3]["result"]["shapes"].as_array().unwrap();
+                let row = shapes.iter().find(|s| s["id"] == "S3").unwrap();
+                assert_eq!(row["stairs"]["steps"], 3, "{report}");
+                assert!(row["volume_m3"].as_f64().unwrap() > 0.5, "{report}");
+            }
+            22 => {
+                assert_eq!(results[1]["result"]["soil"], "S3", "{report}");
+                // On the soil (0.35 m, its lift on top), not on the lawn.
+                let h = results[3]["result"]["height"].as_f64().unwrap();
+                assert!((0.36..0.39).contains(&h), "{report}");
+                // A ray down the middle meets the soil, not the hollow ring's walls.
+                let hit = &results[4]["result"];
+                assert_eq!(hit["owner"], "S3", "{report}");
+                let shapes = results[5]["result"]["shapes"].as_array().unwrap();
+                let row = shapes.iter().find(|s| s["id"] == "S2").unwrap();
+                assert!(
+                    row["raised_bed"]["soil_volume_m3"].as_f64().unwrap() > 0.5,
+                    "{report}"
+                );
+                assert!(
+                    results[6]["result"]["generators"][0]["count"]
+                        .as_u64()
+                        .unwrap()
+                        > 3,
+                    "{report}"
+                );
+                let rows = results[9]["result"]["shapes"].as_array().unwrap();
+                assert!(
+                    rows[0]["raised_bed"]["beams"].as_u64().unwrap() >= 18,
+                    "{report}"
+                );
+                assert!(
+                    rows[1]["raised_bed"]["plate_area_m2"].as_f64().unwrap() > 3.0,
                     "{report}"
                 );
             }

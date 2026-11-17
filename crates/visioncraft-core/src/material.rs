@@ -309,6 +309,24 @@ pub fn builtin_palette() -> Vec<Material> {
             0.7,
             pbr(1.0),
         ),
+        // Weathering steel: a rusty orange-brown, rough, a little different from plate to plate.
+        Material {
+            variation: 0.15,
+            ..plain(
+                "corten",
+                "Corten steel",
+                [0.17, 0.065, 0.025],
+                0.2,
+                0.85,
+                SurfaceKind::StandardTriplanarPbr {
+                    map_scale_m: 1.0,
+                    relief: 0.0,
+                    gloss: 0.0,
+                    weathering: 0.4,
+                    parallax_depth_m: 0.0,
+                },
+            )
+        },
         plain(
             "roof",
             "Dark roof",
@@ -584,10 +602,10 @@ mod tests {
     #[test]
     fn palette_is_valid_and_unique() {
         let p = builtin_palette();
-        assert_eq!(p.len(), 16);
+        assert_eq!(p.len(), 17);
         assert!(p.iter().all(|m| m.validate().is_ok()));
         let ids: std::collections::BTreeSet<_> = p.iter().map(|m| &m.id).collect();
-        assert_eq!(ids.len(), 16);
+        assert_eq!(ids.len(), 17);
     }
 
     #[test]

@@ -476,6 +476,72 @@ turns it back into a wall. `query.quantities` gives a fence's posts, slats (boar
 panels), gates, length and the real material volume. On terrain a fence stands on the lowest
 ground under its line, not following the slope.
 
+### 21. Steps up to a raised terrace
+
+```json recipe
+{"intent": "a terrace raised half a metre above the lawn, with steps up to it", "steps": [
+  {"id": "shape.add_area", "params": {"name": "Lawn", "outline": [[0, 0], [20, 0], [20, 20], [0, 20]], "material": "lawn"}},
+  {"id": "shape.add_area", "params": {"name": "Terrace", "outline": [[0, -4], [20, -4], [20, 0], [0, 0]], "elevation": 0.5, "material": "paving"}},
+  {"id": "stairs.add", "params": {"name": "Terrace steps", "from": [10, 1.0], "to": [10, 0], "width_m": 1.6, "tread_m": 0.33}},
+  {"id": "query.quantities", "params": {}},
+  {"id": "document.inspect", "params": {"faces": false}}
+]}
+```
+
+`stairs.add` draws a flight of solid steps on a footprint made from `from` (the bottom centre),
+`to` (the top centre, where you arrive) and `width_m`. Every step is a block from the ground up.
+`height` is the rise from the bottom to the top landing; left out it is the height of the ground
+just past `to` (terrain and raised areas such as this terrace) over the lowest ground under the
+steps, here the terrace at 0.5 m plus its lift. The step count is `round(height / riser_m)`
+(`riser_m` 0.17 unless given) and the risers share the height evenly. `tread_m` is the depth of
+a tread: a footprint longer than the steps need ends in a landing, a shorter one is warned about
+(and the treads shrink to fit); without it the treads share the footprint. The result has
+`steps`, `riser_m`, `tread_m` and `warnings`: 2 x riser + tread should lie between 0.60 and 0.65 m
+(Blondel's rule). The faces are `S3:treads`, `S3:risers` and `S3:sides`, concrete to begin with.
+`stairs.set` changes any field or moves the flight (`from`, `to`, `width_m`), or turns a closed
+rectangular block into stairs; `stairs.clear` makes it a block again. `query.quantities` gives
+`steps`, `riser_m`, `going_m`, `rise_m`, `run_m` and the real volume. A flight stands on the lowest
+ground under its footprint, like a block does.
+
+### 22. A raised bed with plants
+
+```json recipe
+{"intent": "a timber raised bed on the lawn with soil and a planting that stands on it", "steps": [
+  {"id": "shape.add_area", "params": {"name": "Lawn", "outline": [[0, 0], [20, 0], [20, 20], [0, 20]], "material": "lawn"}},
+  {"id": "bed.add", "params": {"name": "Herb bed", "outline": [[4, 4], [7, 4], [7, 5.2], [4, 5.2]], "height": 0.4, "wall_thickness_m": 0.2}},
+  {"id": "planting.add_area", "params": {"name": "Herbs", "asset_palette": [{"asset": "flora:festuca-glauca", "weight": 1}], "outline": [[4.3, 4.3], [6.7, 4.3], [6.7, 4.9], [4.3, 4.9]], "density_per_m2": 6}},
+  {"id": "query.ground_height", "params": {"x": 5.5, "z": 4.6}},
+  {"id": "query.raycast", "params": {"origin": [5.5, 3, 4.6], "direction": [0, -1, 0]}},
+  {"id": "query.quantities", "params": {}},
+  {"id": "document.inspect", "params": {"faces": false}},
+  {"id": "bed.add", "params": {"name": "Sleeper bed", "outline": [[9, 4], [12, 4], [12, 5.2], [9, 5.2]], "style": "sleepers", "height": 0.6}},
+  {"id": "bed.add", "params": {"name": "Steel bed", "outline": [[14, 4], [17, 4], [17, 5.2], [14, 5.2]], "style": "corten"}},
+  {"id": "query.quantities", "params": {"ids": ["S4", "S6"]}}
+]}
+```
+
+`bed.add` makes two shapes in one undo step: the walls (a closed extrusion drawn as a hollow ring
+with a rim, faces `S2:wall` and `S2:rim`, timber) and an area `<name> soil` inside the walls
+(`S3`, the outline moved in by `wall_thickness_m`, material `soil`) lying 5 cm below the rim. The
+result gives both ids. The soil is a real area, so plants and plantings inside the bed stand on
+it: `query.ground_height` in the middle is the soil's height, and a ray down the middle hits
+`S3:top`, not a wall. `height` is 0.1..2 (default 0.4) and `wall_thickness_m` 0.05..0.3 (default
+0.2). `bed.set` changes the height, thickness, outline or name and moves the soil with it (the
+walls keep the soil's id; a soil that was removed is made again); `shape.remove` of the bed takes
+its soil with it. `query.quantities` gives a bed's `soil_volume_m3` (inner area x soil depth),
+`wall_length_m` (along the middle of the walls) and `inner_area_m2`. The soil is flat at the height of
+the lowest ground under the bed; it does not follow terrain edited afterwards (run `bed.set`
+again).
+
+`style` gives the walls their look: `plain` (a solid timber ring, the default), `masonry` (brick with
+a coping slab), `sleepers` (stacked timber beams in 0.2 m courses, long walls laid in beams of
+at most 2.4 m with a joint, corners overlapping as in real sleeper beds; `wall_thickness_m` is the
+beam's, 0.1..0.2, default 0.15) and `corten` (a thin weathering-steel plate, 0.005..0.02, default
+0.01 and drawn at least 1 cm, with a folded top edge). Each style starts with its material (timber,
+brick, timber, `corten`); `bed.set` with a new `style` changes both. Sleeper beds report `beams`
+and `beam_length_m` in `query.quantities`, steel beds `plate_area_m2`. `fence.add` takes a
+`material` too, for one material over the whole fence (a `corten` screen).
+
 ## Known traps
 
 - **Ids are not names**: `S2`, not `House`; viewpoints are `v1`, lights `li1`.

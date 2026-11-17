@@ -46,6 +46,17 @@ nothing here is a promise of a date.
   stepped panels, a gate that swings, climbers on mesh, and a see-through board gap in
   photo-mode shadows.
 
+- **Levels:** `stairs.add` draws a flight of solid steps between a bottom and a top centre (the
+  rise from the ground when left out; steps from a riser height, Blondel's rule checked, a
+  landing when the footprint is longer than the treads need; faces `<id>:treads`, `:risers`,
+  `:sides`), and `bed.add` a raised bed: a hollow ring of walls plus a soil area inside it that
+  plants stand on, in four styles (plain, masonry with a coping, stacked timber sleepers with
+  joints and overlapping corners, a thin corten plate with a folded edge). Quantities give steps,
+  riser and going, soil volume, beam count and length, plate area; Draw has Stairs and Raised bed
+  tools. Next: retaining walls, terraces cut into the terrain (a level that moves the ground, not
+  only sits on it), stairs that follow the terrain, landings and turns (L and U stairs), a soil
+  that follows terrain edited after the bed.
+
 ## Next
 
 - **More leaf sets:** the remaining CC0 atlases, then coverage reported again.
@@ -79,8 +90,6 @@ nothing here is a promise of a date.
 
 - **Curves:** outlines with arcs and smooth curves for paths, borders and lawns, with the same
   typed-size precision as straight edges.
-- **Levels:** steps and stairs, retaining walls, raised beds and terraces at different heights
-  as first-class shapes.
 - **Denser borders:** layered perennial plantings that close up, with flowers that read from
   eye level.
 

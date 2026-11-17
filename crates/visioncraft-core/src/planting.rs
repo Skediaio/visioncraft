@@ -2314,6 +2314,8 @@ mod tests {
             extensions: Default::default(),
             house: None,
             fence: None,
+            stairs: None,
+            raised_bed: None,
         });
         let m = shape_mesh(&block).unwrap();
         let names: Vec<&str> = m.faces.iter().map(|f| f.name.as_str()).collect();

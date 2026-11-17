@@ -31,6 +31,7 @@ pub(super) fn register(s: &mut Session) {
         param("height", T::Number, "Height of the fence, 0.3..10.").unit("m").required(),
         param("base", T::Number, "Height of its bottom (on terrain, above the lowest ground under the line).").unit("m").default(json!(0)),
         param("layer", T::String, "Layer id.").default(json!("shapes")),
+        param("material", T::String, "One material for the whole fence (a screen in corten, say) instead of the usual timber; faces can still be assigned later."),
         param("gates", T::Array, "Gates: [{offset_m, width_m}], the centre along the line from its start and the gap. Each lies on one straight stretch."),
     ];
     add_params.extend(fields());
@@ -199,13 +200,15 @@ fn add_fence(project: &mut Project, params: &Value) -> Result<Value, CommandErro
         #[serde(default)]
         base: f32,
         layer: Option<String>,
+        material: Option<String>,
         #[serde(flatten)]
         fields: Fields,
     }
     let p: P = parse(params)?;
     let (fence, thickness, _) = p.fields.apply(None);
     let kind = fence.kind;
-    let r = add(project, (p.layer, None), |id, layer| {
+    let owned = p.material.is_some();
+    let r = add(project, (p.layer, p.material), |id, layer| {
         Shape::Extrusion(Extrusion {
             id,
             name: p.name.unwrap_or_else(|| "Fence".into()),
@@ -218,9 +221,11 @@ fn add_fence(project: &mut Project, params: &Value) -> Result<Value, CommandErro
             extensions: Default::default(),
             house: None,
             fence: Some(fence),
+            stairs: None,
+            raised_bed: None,
         })
     })?;
-    if let Some(id) = r["id"].as_str() {
+    if !owned && let Some(id) = r["id"].as_str() {
         default_materials(project, id, kind);
     }
     Ok(r)

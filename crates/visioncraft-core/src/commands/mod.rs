@@ -12,6 +12,7 @@ mod fences;
 mod growth;
 mod house;
 mod layers;
+mod levels;
 mod lights;
 mod materials;
 mod objects;
@@ -28,6 +29,7 @@ pub(crate) fn register(s: &mut Session) {
     examples::register(s);
     house::register(s);
     fences::register(s);
+    levels::register(s);
     shapes::register(s);
     species::register(s);
     objects::register(s);

@@ -680,6 +680,8 @@ mod tests {
             extensions: Default::default(),
             house: None,
             fence: Some(f),
+            stairs: None,
+            raised_bed: None,
         })
     }
 

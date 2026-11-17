@@ -137,7 +137,52 @@ pub fn quantities(project: &Project, filter: &Filter) -> Result<Value, String> {
             }
             Shape::Extrusion(e) if e.closed => {
                 plan = f64::from(measure::polygon_area(&e.outline));
-                volume = plan * f64::from(e.height);
+                volume = if let Some(st) = &e.stairs {
+                    if let Ok(g) = st.geometry(&e.outline, e.height) {
+                        o.insert(
+                            "stairs".into(),
+                            json!({
+                                "steps": g.steps, "riser_m": g.riser, "going_m": g.tread,
+                                "rise_m": e.height, "run_m": g.tread * g.steps as f32,
+                                "width_m": g.width,
+                            }),
+                        );
+                    }
+                    mesh_volume(&mesh)
+                } else if let Some(bed) = &e.raised_bed {
+                    if let Ok(inner) = bed.inner(&e.outline) {
+                        let inner_area = f64::from(measure::polygon_area(&inner));
+                        let depth = f64::from(crate::bed::RaisedBed::soil_top(e.height));
+                        let wall_length =
+                            (path_length(&e.outline, true) + path_length(&inner, true)) / 2.0;
+                        let mut row = json!({
+                            "style": bed.style,
+                            "wall_thickness_m": bed.wall(),
+                            "wall_length_m": wall_length,
+                            "inner_area_m2": inner_area, "soil_depth_m": depth,
+                            "soil_volume_m3": inner_area * depth,
+                        });
+                        match bed.style {
+                            crate::bed::BedStyle::Sleepers => {
+                                let beams =
+                                    crate::bed::beams(bed, &e.outline, e.base, e.base + e.height);
+                                row["beams"] = beams.len().into();
+                                row["beam_length_m"] =
+                                    f64::from(beams.iter().map(|b| b.u.1 - b.u.0).sum::<f32>())
+                                        .into();
+                            }
+                            // The sheet the wall is cut from: its length along the middle by its height.
+                            crate::bed::BedStyle::Corten => {
+                                row["plate_area_m2"] = (wall_length * f64::from(e.height)).into();
+                            }
+                            _ => {}
+                        }
+                        o.insert("raised_bed".into(), row);
+                    }
+                    mesh_volume(&mesh)
+                } else {
+                    plan * f64::from(e.height)
+                };
                 o.insert("kind".into(), "extrusion".into());
                 o.insert("perimeter_m".into(), path_length(&e.outline, true).into());
             }

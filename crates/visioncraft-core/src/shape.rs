@@ -76,6 +76,13 @@ pub struct Extrusion {
     /// is the line, `height` and `base` its height, `thickness` its depth.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fence: Option<crate::fence::Fence>,
+    /// A closed extrusion drawn as a flight of steps (`crate::stairs`): the outline is the
+    /// 4-point footprint, `base` the bottom, `base + height` the top landing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stairs: Option<crate::stairs::Stairs>,
+    /// A closed extrusion drawn as the hollow wall ring of a raised bed (`crate::bed`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raised_bed: Option<crate::bed::RaisedBed>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -155,6 +162,10 @@ pub enum ShapeError {
     BadNumber(&'static str),
     /// A fence that cannot be drawn on its line.
     BadFence(String),
+    /// Stairs that cannot be drawn on their footprint.
+    BadStairs(String),
+    /// A raised bed whose walls do not fit its outline.
+    BadBed(String),
 }
 
 impl fmt::Display for ShapeError {
@@ -164,6 +175,8 @@ impl fmt::Display for ShapeError {
             Self::NotSimple(why) => write!(f, "the outline is not a simple polygon: {why}"),
             Self::BadNumber(what) => write!(f, "{what} is not a usable number"),
             Self::BadFence(why) => write!(f, "the fence cannot be drawn: {why}"),
+            Self::BadStairs(why) => write!(f, "the stairs cannot be drawn: {why}"),
+            Self::BadBed(why) => write!(f, "the raised bed cannot be drawn: {why}"),
         }
     }
 }
@@ -448,6 +461,40 @@ pub fn shape_mesh(shape: &Shape) -> Result<ImportedModel, ShapeError> {
                     e.base,
                     e.base + e.height,
                 );
+                return Ok(b.finish(id, &e.name, names));
+            }
+            if let Some(st) = e.stairs.as_ref().filter(|_| e.closed) {
+                let g = st
+                    .geometry(&e.outline, e.height)
+                    .map_err(ShapeError::BadStairs)?;
+                let names = crate::stairs::STAIR_FACES
+                    .iter()
+                    .map(|n| format!("{id}:{n}"))
+                    .collect::<Vec<_>>();
+                let mut b = Builder {
+                    model: ImportedModel::default(),
+                    triangles: vec![Vec::new(); names.len()],
+                    edge: Vec::new(),
+                    soft: false,
+                };
+                crate::stairs::mesh(&mut b, &g, e.base);
+                let mut m = b.finish(id, &e.name, names);
+                m.warnings.extend(g.warnings);
+                return Ok(m);
+            }
+            if let Some(bed) = e.raised_bed.as_ref().filter(|_| e.closed) {
+                let inner = bed.inner(&e.outline).map_err(ShapeError::BadBed)?;
+                let names = crate::bed::BED_FACES
+                    .iter()
+                    .map(|n| format!("{id}:{n}"))
+                    .collect::<Vec<_>>();
+                let mut b = Builder {
+                    model: ImportedModel::default(),
+                    triangles: vec![Vec::new(); names.len()],
+                    edge: Vec::new(),
+                    soft: false,
+                };
+                crate::bed::mesh(&mut b, bed, &e.outline, &inner, e.base, e.base + e.height);
                 return Ok(b.finish(id, &e.name, names));
             }
             let (ring, ring_face): (Vec<P2>, Vec<usize>) = if e.closed {
@@ -736,6 +783,29 @@ fn offset_ring(outline: &[[f32; 2]], d: f32) -> Vec<[f32; 2]> {
         .collect()
 }
 
+/// `outline` moved in by `d` for a wall `d` thick: the ring inside it, which must be a simple
+/// polygon of the same winding, smaller than the outline and inside it; the reason if not.
+pub fn inner_ring(outline: &[P2], d: f32) -> Result<Vec<P2>, String> {
+    if !(d.is_finite() && (0.005..=1.0).contains(&d)) {
+        return Err("`wall_thickness_m` must be within 0.005..=1 m".into());
+    }
+    if outline.len() < 3 {
+        return Err("a bed needs an outline of at least 3 points".into());
+    }
+    let ring = offset_ring(outline, -d);
+    let (outer, inner) = (shoelace(outline), shoelace(&ring));
+    if check_simple(&ring, true).is_err()
+        || inner * outer <= 0.0
+        || inner.abs() >= outer.abs()
+        || !ring.iter().all(|p| inside_outline(*p, outline))
+    {
+        return Err(format!(
+            "walls {d} m thick do not fit inside this outline; use thinner walls or a larger bed"
+        ));
+    }
+    Ok(ring)
+}
+
 /// The inset ring of an area's soft edge: `outline` moved in by `d`, halving `d` (up to three
 /// times) while the ring folds over itself or leaves the outline; `None` when no width works (the
 /// area then keeps a hard edge).
@@ -867,6 +937,8 @@ mod tests {
             extensions: Default::default(),
             house: None,
             fence: None,
+            stairs: None,
+            raised_bed: None,
         })
     }
 
@@ -883,6 +955,8 @@ mod tests {
             extensions: Default::default(),
             house: None,
             fence: None,
+            stairs: None,
+            raised_bed: None,
         })
     }
 

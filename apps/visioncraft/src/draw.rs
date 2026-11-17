@@ -242,6 +242,10 @@ pub enum Tool {
     Wall,
     /// An open line drawn as a fence (`fence.add`).
     Fence,
+    /// Two clicks, the bottom and then the top of a flight of steps (`stairs.add`).
+    Stairs,
+    /// A closed outline drawn as a raised bed with soil (`bed.add`).
+    Bed,
     /// Puts a window, or a door, in the wall of a block that is clicked.
     Window,
     Door,
@@ -383,14 +387,14 @@ impl DrawState {
     /// Before leaving for Walk: a shape being drawn with enough corners is kept (as Enter would),
     /// a shorter one is dropped.
     pub fn finish_for_walk(&mut self, cx: &mut Cx) {
-        let needed = if matches!(self.tool, Tool::Wall | Tool::Fence) {
+        let needed = if matches!(self.tool, Tool::Wall | Tool::Fence | Tool::Stairs) {
             2
         } else {
             3
         };
         if matches!(
             self.tool,
-            Tool::Area | Tool::Block | Tool::Wall | Tool::Fence
+            Tool::Area | Tool::Block | Tool::Wall | Tool::Fence | Tool::Stairs | Tool::Bed
         ) && self.points.len() >= needed
         {
             self.finish(cx);
@@ -452,7 +456,7 @@ impl DrawState {
     }
 
     fn drawing(&mut self, cx: &mut Cx, cursor: Option<P2>, radius: f32, top: &mut Vec<LineVertex>) {
-        let closed_shape = !matches!(self.tool, Tool::Wall | Tool::Fence);
+        let closed_shape = !matches!(self.tool, Tool::Wall | Tool::Fence | Tool::Stairs);
         let existing = all_vertices(cx, None);
         let snap = cursor.map(|c| snap_point(c, &self.points, &existing, radius, !cx.input.alt));
         if cx.input.escape && !self.points.is_empty() {
@@ -534,6 +538,11 @@ impl DrawState {
             } else if self.points.last() != Some(&s.pos) {
                 self.points.push(s.pos);
             }
+        }
+        // Steps are two clicks: the bottom, then the top.
+        if self.tool == Tool::Stairs && self.points.len() >= 2 {
+            self.finish(cx);
+            return;
         }
         if cx.input.enter && typed_len.is_none() {
             let needed = if closed_shape { 3 } else { 2 };
@@ -652,6 +661,19 @@ impl DrawState {
                 "fence.add",
                 "",
                 json!({"name": name(t::TOOL_FENCE), "line": points, "height": 1.8, "kind": "slats"}),
+            ),
+            // Steps 1.2 m wide and half a metre high to start; the panel changes both (the rise
+            // can be left out of the command, to read it off the ground).
+            Tool::Stairs => (
+                "stairs.add",
+                "",
+                json!({"name": name(t::TOOL_STAIRS), "from": points[0], "to": points[1], "width_m": 1.2, "height": 0.5}),
+            ),
+            // A raised bed starts 40 cm high with timber walls and soil (the command does both).
+            Tool::Bed => (
+                "bed.add",
+                "",
+                json!({"name": name(t::TOOL_BED), "outline": points}),
             ),
             Tool::Select | Tool::Window | Tool::Door => return,
         };
@@ -868,13 +890,15 @@ impl DrawState {
                 }
             });
         }
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             for (tool, label) in [
                 (Tool::Select, t::TOOL_SELECT),
                 (Tool::Area, t::TOOL_AREA),
                 (Tool::Block, t::TOOL_BLOCK),
                 (Tool::Wall, t::TOOL_WALL),
                 (Tool::Fence, t::TOOL_FENCE),
+                (Tool::Stairs, t::TOOL_STAIRS),
+                (Tool::Bed, t::TOOL_BED),
                 (Tool::Window, t::TOOL_WINDOW),
                 (Tool::Door, t::TOOL_DOOR),
             ] {
@@ -890,6 +914,7 @@ impl DrawState {
         ui.small(match self.tool {
             Tool::Select => t::SELECT_HINT,
             Tool::Wall | Tool::Fence => t::WALL_HINT,
+            Tool::Stairs => t::STAIRS_HINT,
             Tool::Window | Tool::Door => t::OPENING_HINT,
             _ => t::DRAW_HINT,
         });
@@ -978,6 +1003,7 @@ impl DrawState {
                 }
                 edit = e;
             }
+            Shape::Extrusion(x) if x.closed && x.raised_bed.is_some() => bed_panel(ui, cx, x),
             Shape::Extrusion(x) => {
                 for (label, v, key, range) in [
                     (t::HEIGHT, &mut x.height, "height", 0.05..=100.0),
@@ -989,7 +1015,9 @@ impl DrawState {
                         edit = e;
                     }
                 }
-                if x.closed {
+                if x.closed && x.stairs.is_some() {
+                    stairs_panel(ui, cx, x);
+                } else if x.closed {
                     // Storeys of 3 m: a house is two clicks, not a typed number.
                     ui.horizontal(|ui| {
                         ui.label(t::STOREYS);
@@ -1006,8 +1034,15 @@ impl DrawState {
                         }
                     });
                 }
-                if x.closed {
+                if x.closed && x.stairs.is_none() {
                     house_panel(ui, cx, x);
+                    // A plain rectangular block (no roof yet) can be steps instead.
+                    if x.house.is_none()
+                        && x.outline.len() == 4
+                        && ui.button(t::MAKE_STAIRS).clicked()
+                    {
+                        cx.run("stairs.set", json!({"id": x.id, "up_edge": 0}));
+                    }
                 }
                 if !x.closed {
                     fence_panel(ui, cx, x);
@@ -1200,6 +1235,71 @@ fn fence_panel(ui: &mut egui::Ui, cx: &mut Cx, x: &visioncraft_core::shape::Extr
             cx.run("fence.clear", json!({"id": x.id}));
         }
     });
+}
+
+/// A flight's steps, riser and tread, and the way back to a plain block; each change one command.
+fn stairs_panel(ui: &mut egui::Ui, cx: &mut Cx, x: &visioncraft_core::shape::Extrusion) {
+    let Some(st) = &x.stairs else {
+        return;
+    };
+    if let Ok(g) = st.geometry(&x.outline, x.height) {
+        ui.label(format!(
+            "{} {} ({:.0} mm / {:.0} mm)",
+            g.steps,
+            t::STEPS,
+            g.riser * 1000.0,
+            g.tread * 1000.0
+        ));
+        let (mut riser, mut tread) = (st.riser_m.unwrap_or(g.riser), st.tread_m.unwrap_or(g.tread));
+        if drag_field(ui, t::RISER, &mut riser, 0.005, 0.05..=0.3, " m") == Edit::Done {
+            cx.run("stairs.set", json!({"id": x.id, "riser_m": riser}));
+        }
+        if drag_field(ui, t::TREAD, &mut tread, 0.005, 0.15..=0.6, " m") == Edit::Done {
+            cx.run("stairs.set", json!({"id": x.id, "tread_m": tread}));
+        }
+    }
+    if let Ok(m) = visioncraft_core::shape_mesh(&Shape::Extrusion(x.clone())) {
+        for w in &m.warnings {
+            ui.colored_label(egui::Color32::from_rgb(230, 170, 70), w);
+        }
+    }
+    ui.horizontal_wrapped(|ui| {
+        if st.tread_m.is_some() && ui.button(t::FIT_TREADS).clicked() {
+            cx.run("stairs.set", json!({"id": x.id, "tread_m": null}));
+        }
+        if ui.button(t::BACK_TO_BLOCK).clicked() {
+            cx.run("stairs.clear", json!({"id": x.id}));
+        }
+    });
+}
+
+/// A raised bed's wall height and thickness (the soil follows); each change one command.
+fn bed_panel(ui: &mut egui::Ui, cx: &mut Cx, x: &mut visioncraft_core::shape::Extrusion) {
+    let Some(bed) = &x.raised_bed else {
+        return;
+    };
+    use visioncraft_core::bed::BedStyle;
+    ui.horizontal_wrapped(|ui| {
+        for (style, key, label) in [
+            (BedStyle::Plain, "plain", t::BED_PLAIN),
+            (BedStyle::Masonry, "masonry", t::BED_MASONRY),
+            (BedStyle::Sleepers, "sleepers", t::BED_SLEEPERS),
+            (BedStyle::Corten, "corten", t::BED_CORTEN),
+        ] {
+            if ui.selectable_label(bed.style == style, label).clicked() && bed.style != style {
+                cx.run("bed.set", json!({"id": x.id, "style": key}));
+            }
+        }
+    });
+    let (mut height, mut wall) = (x.height, bed.wall_thickness_m);
+    let eh = drag_field(ui, t::HEIGHT, &mut height, 0.01, 0.1..=2.0, " m");
+    let ew = drag_field(ui, t::WALL, &mut wall, 0.01, 0.05..=0.3, " m");
+    if eh == Edit::Done || ew == Edit::Done {
+        cx.run(
+            "bed.set",
+            json!({"id": x.id, "height": height, "wall_thickness_m": wall}),
+        );
+    }
 }
 
 /// A block's roof, plinth and windows: each change one command.
