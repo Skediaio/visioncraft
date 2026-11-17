@@ -389,6 +389,14 @@ pub fn example_project(command: &str) -> crate::project::Project {
         }
         s.run(name, params).expect("the example project builds");
     }
+    // The area edge commands work on S4, a raised terrace with a plain edge.
+    if command.starts_with("area.") {
+        s.run(
+            "shape.add_area",
+            json!({"name": "Terrace", "outline": [[11, 0], [15, 0], [15, 3], [11, 3]], "elevation": 0.5, "drape": false, "edge": {"style": "plain"}}),
+        )
+        .expect("the example project builds");
+    }
     s.project().clone()
 }
 

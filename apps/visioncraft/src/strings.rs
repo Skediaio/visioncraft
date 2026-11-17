@@ -111,6 +111,10 @@ pub const BED_PLAIN: &str = "Plain";
 pub const BED_MASONRY: &str = "Masonry";
 pub const BED_SLEEPERS: &str = "Sleepers";
 pub const BED_CORTEN: &str = "Corten";
+pub const EDGE: &str = "Edge";
+pub const EDGE_NONE: &str = "None";
+pub const EDGE_NEEDS_FLAT: &str =
+    "A raised edge needs the area to stand at its own height: switch off Follow the ground first.";
 pub const MAKE_FENCE: &str = "Make it a fence";
 pub const FENCE_KIND: &str = "Fence";
 pub const FENCE_SLATS: &str = "Slats";

@@ -481,12 +481,22 @@ ground under its line, not following the slope.
 ```json recipe
 {"intent": "a terrace raised half a metre above the lawn, with steps up to it", "steps": [
   {"id": "shape.add_area", "params": {"name": "Lawn", "outline": [[0, 0], [20, 0], [20, 20], [0, 20]], "material": "lawn"}},
-  {"id": "shape.add_area", "params": {"name": "Terrace", "outline": [[0, -4], [20, -4], [20, 0], [0, 0]], "elevation": 0.5, "material": "paving"}},
+  {"id": "shape.add_area", "params": {"name": "Terrace", "outline": [[0, -4], [20, -4], [20, 0], [0, 0]], "elevation": 0.5, "drape": false, "edge": {"style": "masonry"}, "material": "paving"}},
   {"id": "stairs.add", "params": {"name": "Terrace steps", "from": [10, 1.0], "to": [10, 0], "width_m": 1.6, "tread_m": 0.33}},
   {"id": "query.quantities", "params": {}},
   {"id": "document.inspect", "params": {"faces": false}}
 ]}
 ```
+
+The terrace is raised by `elevation` and closed off by its `edge` (`area.set_edge`, `area.clear_edge`
+take it on and off): a retaining skirt in a bed style (`plain`, `masonry` with a coping, `sleepers`
+or `corten`) along the whole outline, from the top of the area down to the lowest ground under it
+(the terrain's ground there when there is one). It sits just outside the outline, so the walkable
+top keeps its size, and its top lies 2 mm under the area's so steps that arrive on it do not fight
+with the coping. The faces are `S2:edge` and `S2:edge_rim`, brick to begin with; `query.quantities`
+adds an `edge` row to the area (`length_m`, `face_area_m2`, `height_m`, and `beams` for sleepers or
+`plate_area_m2` for corten). An area that lies on the ground (`drape`, the default of
+`shape.add_area` without an `edge`) refuses an edge, so give `"drape": false`.
 
 `stairs.add` draws a flight of solid steps on a footprint made from `from` (the bottom centre),
 `to` (the top centre, where you arrive) and `width_m`. Every step is a block from the ground up.

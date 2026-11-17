@@ -29,8 +29,9 @@ pub(super) fn register(s: &mut Session) {
                 param("name", T::String, "Display name.").required(),
                 outline("Polygon as [x, z] pairs in metres, either winding, not self-intersecting."),
                 param("elevation", T::Number, "Height of the surface (above the ground when `drape`).").unit("m").default(json!(0)),
-                param("drape", T::Boolean, "Lie on the ground: the surface follows the terrain, `elevation` is the height above it. False: flat at `elevation` (a raised deck, a pond's water).").default(json!(true)),
+                param("drape", T::Boolean, "Lie on the ground: the surface follows the terrain, `elevation` is the height above it. False: flat at `elevation` (a raised deck, a pond's water). Default true, or false when `edge` is given (a draped area has no edge).").default(json!(true)),
                 edge_blend(),
+                param("edge", T::Object, "A retaining edge for a raised terrace: {style: plain|masonry|sleepers|corten, thickness_m?}. Same as `area.set_edge`."),
                 layer(),
                 material(),
             ],
@@ -228,27 +229,36 @@ pub(super) fn add_area(project: &mut Project, params: &Value) -> Result<Value, C
         outline: Vec<[f32; 2]>,
         #[serde(default)]
         elevation: f32,
-        #[serde(default = "yes")]
-        drape: bool,
+        drape: Option<bool>,
         #[serde(default)]
         edge_blend_m: f32,
+        edge: Option<crate::bed::AreaEdge>,
         layer: Option<String>,
         material: Option<String>,
     }
     let p: P = parse(params)?;
     check_edge_blend(p.edge_blend_m)?;
-    add(project, (p.layer, p.material), |id, layer| {
+    // A terrace with an edge stands at its own height; without one it lies on the ground.
+    let drape = p.drape.unwrap_or(p.edge.is_none());
+    let owned = p.material.is_some();
+    let r = add(project, (p.layer, p.material), |id, layer| {
         Shape::Area(Area {
             id,
             name: p.name,
             layer,
             outline: p.outline,
             elevation: p.elevation,
-            drape: p.drape,
+            drape,
             edge_blend_m: p.edge_blend_m,
+            edge: p.edge,
             extensions: Default::default(),
         })
-    })
+    })?;
+    if let (Some(edge), false) = (p.edge, owned) {
+        let id = r["id"].as_str().expect("add returns an id");
+        super::levels::edge_materials(project, id, edge.style, false);
+    }
+    Ok(r)
 }
 
 pub(super) fn add_extrusion(project: &mut Project, params: &Value) -> Result<Value, CommandError> {

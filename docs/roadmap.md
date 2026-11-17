@@ -53,8 +53,12 @@ nothing here is a promise of a date.
   plants stand on, in four styles (plain, masonry with a coping, stacked timber sleepers with
   joints and overlapping corners, a thin corten plate with a folded edge). Quantities give steps,
   riser and going, soil volume, beam count and length, plate area; Draw has Stairs and Raised bed
-  tools. Next: retaining walls, terraces cut into the terrain (a level that moves the ground, not
-  only sits on it), stairs that follow the terrain, landings and turns (L and U stairs), a soil
+  tools. `area.set_edge` gives a raised area a retaining edge, a skirt in the same four styles from
+  its top down to the ground (faces `<id>:edge`, `:edge_rim`; quantities give length, face area,
+  beams or plate area), so terraces at different heights no longer float; Draw has an Edge
+  selector in the area panel. Next: retaining walls that hold a slope, terraces cut into the
+  terrain (a level that moves the ground, not only sits on it), an edge that steps with a draped
+  area, stairs that follow the terrain, landings and turns (L and U stairs), a soil
   that follows terrain edited after the bed.
 
 ## Next

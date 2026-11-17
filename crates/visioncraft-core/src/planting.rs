@@ -2253,6 +2253,7 @@ mod tests {
             elevation: 0.25,
             drape: false,
             edge_blend_m: 0.0,
+            edge: None,
             extensions: Default::default(),
         });
         let m = shape_mesh(&s).unwrap();
@@ -2354,6 +2355,7 @@ mod tests {
             elevation: 0.0,
             drape: false,
             edge_blend_m: 0.0,
+            edge: None,
             extensions: Default::default(),
         });
         shape_mesh(&lawn).unwrap()
@@ -2902,6 +2904,7 @@ mod layer_tests {
             elevation: 1.0,
             drape: false,
             edge_blend_m: 0.0,
+            edge: None,
             extensions: Default::default(),
         }))
         .unwrap();

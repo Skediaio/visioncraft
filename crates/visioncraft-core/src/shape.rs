@@ -41,6 +41,10 @@ pub struct Area {
     /// pay for it. Files from before it was added load as 0.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub edge_blend_m: f32,
+    /// A retaining edge down to the ground, for a raised terrace (`crate::bed::AreaEdge`); not
+    /// with `drape`. Faces `<id>:edge` and `<id>:edge_rim` then come after `<id>:top`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edge: Option<crate::bed::AreaEdge>,
     /// Data of other tools by namespace, kept untouched.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extensions: Extensions,
@@ -166,6 +170,8 @@ pub enum ShapeError {
     BadStairs(String),
     /// A raised bed whose walls do not fit its outline.
     BadBed(String),
+    /// A retaining edge an area cannot have.
+    BadEdge(String),
 }
 
 impl fmt::Display for ShapeError {
@@ -177,6 +183,7 @@ impl fmt::Display for ShapeError {
             Self::BadFence(why) => write!(f, "the fence cannot be drawn: {why}"),
             Self::BadStairs(why) => write!(f, "the stairs cannot be drawn: {why}"),
             Self::BadBed(why) => write!(f, "the raised bed cannot be drawn: {why}"),
+            Self::BadEdge(why) => write!(f, "the area's edge cannot be drawn: {why}"),
         }
     }
 }
@@ -321,6 +328,15 @@ struct Builder {
     soft: bool,
 }
 
+/// A [`Builder`] seen from face `first` on: the faces a part draws on 0, 1, ... land there.
+struct Shifted<'a>(&'a mut Builder, usize);
+
+impl crate::house::Sink for Shifted<'_> {
+    fn tri(&mut self, face: usize, v: [[f32; 3]; 3], outward: [f32; 3]) {
+        self.0.tri(face + self.1, v, outward);
+    }
+}
+
 impl crate::house::Sink for Builder {
     fn tri(&mut self, face: usize, v: [[f32; 3]; 3], outward: [f32; 3]) {
         Builder::tri(self, face, v, outward);
@@ -414,6 +430,12 @@ impl Builder {
 /// open extrusion's edge `n` are one face holding both its left and right wall. Normals point out
 /// whichever way the outline winds. World coordinates, no transform.
 pub fn shape_mesh(shape: &Shape) -> Result<ImportedModel, ShapeError> {
+    shape_mesh_floor(shape, 0.0)
+}
+
+/// [`shape_mesh`] for an area whose retaining edge ends at `floor` (the lowest ground under it,
+/// see [`footing`]); anything else is as [`shape_mesh`] makes it.
+pub fn shape_mesh_floor(shape: &Shape, floor: f32) -> Result<ImportedModel, ShapeError> {
     check_simple(shape.outline(), shape.is_closed())?;
     let id = shape.id();
     match shape {
@@ -421,12 +443,29 @@ pub fn shape_mesh(shape: &Shape) -> Result<ImportedModel, ShapeError> {
             if !a.elevation.is_finite() {
                 return Err(ShapeError::BadNumber("elevation"));
             }
+            if let Some(edge) = &a.edge {
+                if a.drape {
+                    return Err(ShapeError::BadEdge(
+                        "an area that lies on the terrain (`drape`) has no edge; set `drape` to false"
+                            .into(),
+                    ));
+                }
+                edge.check().map_err(ShapeError::BadEdge)?;
+            }
             let band = (a.edge_blend_m > 0.0 && a.edge_blend_m.is_finite())
                 .then(|| inset_band(&a.outline, a.edge_blend_m.min(MAX_EDGE_BLEND_M)))
                 .flatten();
+            let skirt = a
+                .edge
+                .as_ref()
+                .filter(|_| a.elevation - floor >= crate::bed::MIN_EDGE_H);
+            let mut names = vec![format!("{id}:top")];
+            if a.edge.is_some() {
+                names.extend(crate::bed::EDGE_FACES.iter().map(|n| format!("{id}:{n}")));
+            }
             let mut b = Builder {
                 model: ImportedModel::default(),
-                triangles: vec![Vec::new()],
+                triangles: vec![Vec::new(); names.len()],
                 edge: Vec::new(),
                 soft: band.is_some(),
             };
@@ -434,7 +473,16 @@ pub fn shape_mesh(shape: &Shape) -> Result<ImportedModel, ShapeError> {
                 Some(inner) => b.band(0, &a.outline, inner, a.elevation),
                 None => b.cap(0, &a.outline, a.elevation, 1.0),
             }
-            Ok(b.finish(id, &a.name, vec![format!("{id}:top")]))
+            if let Some(edge) = skirt {
+                crate::bed::skirt(
+                    &mut Shifted(&mut b, 1),
+                    edge,
+                    &a.outline,
+                    floor,
+                    a.elevation,
+                );
+            }
+            Ok(b.finish(id, &a.name, names))
         }
         Shape::Extrusion(e) => {
             if !(e.base.is_finite() && e.height.is_finite() && e.height > 0.0) {
@@ -583,7 +631,7 @@ pub fn shape_mesh_on(
         return shape_mesh(shape);
     };
     if !a.drape {
-        return shape_mesh(shape);
+        return shape_mesh_floor(shape, footing(&a.outline, ground));
     }
     let flat = shape_mesh(shape)?;
     let h = |x: f32, z: f32| ground(x, z).unwrap_or(0.0) + a.elevation;
@@ -1053,6 +1101,7 @@ mod tests {
             elevation: 0.5,
             drape: false,
             edge_blend_m: 0.0,
+            edge: None,
             extensions: Default::default(),
         });
         let m = shape_mesh(&a).unwrap();
@@ -1109,6 +1158,7 @@ mod edge_tests {
             elevation: 0.0,
             drape,
             edge_blend_m: blend,
+            edge: None,
             extensions: Default::default(),
         })
     }
@@ -1201,6 +1251,7 @@ mod drape_tests {
             elevation: 0.1,
             drape: true,
             edge_blend_m: 0.0,
+            edge: None,
             extensions: Default::default(),
         };
         let slope = |x: f32, _: f32| Some(0.5 * x);
@@ -1247,6 +1298,7 @@ mod stacking_tests {
             elevation: 0.0,
             drape: true,
             edge_blend_m: 0.0,
+            edge: None,
             extensions: Default::default(),
         })
     }
@@ -1319,7 +1371,7 @@ pub fn shape_mesh_on_terrain(
         return shape_mesh(shape);
     };
     if !a.drape {
-        return shape_mesh(shape);
+        return shape_mesh_floor(shape, footing(&a.outline, &|x, z| terrain.height_at(x, z)));
     }
     let flat = shape_mesh(shape)?;
     let cell = terrain.cell_m;
@@ -1515,6 +1567,7 @@ mod hill_tests {
             elevation: AREA_LIFT_M,
             drape: true,
             edge_blend_m: 0.0,
+            edge: None,
             extensions: Default::default(),
         };
         let m = shape_mesh_on_terrain(&Shape::Area(a.clone()), &t, &[]).unwrap();

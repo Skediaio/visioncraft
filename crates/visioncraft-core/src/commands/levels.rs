@@ -140,6 +140,32 @@ pub(super) fn register(s: &mut Session) {
         ),
         set_bed,
     );
+    s.register_with_spec(
+        spec(
+            "area.set_edge",
+            "Set Area Edge",
+            "Gives a raised area a retaining edge: a skirt in a bed style along its whole outline, from the area's top down to the lowest ground under the outline (and to the terrain's ground there). It sits just outside the outline, so the walkable top keeps its size. Faces `<id>:edge` and `<id>:edge_rim` (the coping or folded rim), with the style's material (timber, brick or corten) unless the faces have one. An area on the ground (`drape`) refuses it; set `drape` false first. Changing the style gives the edge that style's material.",
+            vec![
+                id("The area."),
+                param("style", T::String, "plain (a solid timber side), masonry (brick with a coping slab), sleepers (stacked timber beams 0.2 m high) or corten (a steel plate with a folded rim).").allowed(&["plain", "masonry", "sleepers", "corten"]).required(),
+                param("thickness_m", T::Number, "Thickness of the skirt: plain and masonry 0.05..0.3 (default 0.2), sleepers 0.1..0.2 (default 0.15), corten 0.005..0.02 (default 0.01).").unit("m"),
+            ],
+            "{style, thickness_m}",
+            json!({"id": "S4", "style": "masonry"}),
+        ),
+        set_edge,
+    );
+    s.register_with_spec(
+        spec(
+            "area.clear_edge",
+            "Clear Area Edge",
+            "Takes the retaining edge off an area, and the materials of its edge faces.",
+            vec![id("The area.")],
+            "null",
+            json!({"id": "S4"}),
+        ),
+        clear_edge,
+    );
 }
 
 // --- Stairs ---------------------------------------------------------------------------------
@@ -433,14 +459,91 @@ fn check_bed(height: f32, bed: &RaisedBed) -> Result<(), CommandError> {
 /// Gives the bed's walls the default material of its style, replacing the face assignments
 /// there are when `replace`.
 fn bed_materials(project: &mut Project, id: &str, style: BedStyle, replace: bool) {
+    face_materials(project, id, ["wall", "rim"], style, replace);
+}
+
+/// The same for the two faces `faces` of shape `id`.
+fn face_materials(
+    project: &mut Project,
+    id: &str,
+    faces: [&str; 2],
+    style: BedStyle,
+    replace: bool,
+) {
     if replace {
-        project.assignments.retain(|a| {
-            !matches!(&a.target, crate::Target::Face { owner, face }
-                if owner == id && (face == &format!("{id}:wall") || face == &format!("{id}:rim")))
-        });
+        drop_face_materials(project, id, faces);
     }
     let m = style.default_material();
-    assign_defaults(project, id, &[("wall", m), ("rim", m)]);
+    assign_defaults(project, id, &[(faces[0], m), (faces[1], m)]);
+}
+
+fn drop_face_materials(project: &mut Project, id: &str, faces: [&str; 2]) {
+    project.assignments.retain(|a| {
+        !matches!(&a.target, crate::Target::Face { owner, face }
+            if owner == id && faces.iter().any(|f| face == &format!("{id}:{f}")))
+    });
+}
+
+/// Gives an area's retaining edge the default material of its style (`replace`: over what the
+/// faces have).
+pub(super) fn edge_materials(project: &mut Project, id: &str, style: BedStyle, replace: bool) {
+    face_materials(project, id, crate::bed::EDGE_FACES, style, replace);
+}
+
+// --- Terrace edges --------------------------------------------------------------------------
+
+fn set_edge(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct P {
+        id: String,
+        style: BedStyle,
+        thickness_m: Option<f32>,
+    }
+    let p: P = parse(params)?;
+    let (at, mut shape) = find_area(project, &p.id)?;
+    let Shape::Area(a) = &mut shape else {
+        unreachable!("find_area returns an area")
+    };
+    let restyled = a.edge.is_none_or(|e| e.style != p.style);
+    let edge = crate::bed::AreaEdge {
+        style: p.style,
+        thickness_m: p.thickness_m,
+    };
+    a.edge = Some(edge);
+    shape_mesh(&shape).map_err(|e| fail(e.to_string()))?;
+    project.shapes[at] = shape;
+    edge_materials(project, &p.id, p.style, restyled);
+    Ok(json!({"style": edge.style, "thickness_m": edge.wall()}))
+}
+
+fn clear_edge(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct P {
+        id: String,
+    }
+    let p: P = parse(params)?;
+    let (at, mut shape) = find_area(project, &p.id)?;
+    let Shape::Area(a) = &mut shape else {
+        unreachable!("find_area returns an area")
+    };
+    a.edge = None;
+    project.shapes[at] = shape;
+    drop_face_materials(project, &p.id, crate::bed::EDGE_FACES);
+    Ok(Value::Null)
+}
+
+fn find_area(project: &Project, id: &str) -> Result<(usize, Shape), CommandError> {
+    let at = project
+        .shapes
+        .iter()
+        .position(|s| s.id() == id)
+        .ok_or_else(|| fail(format!("no shape `{id}`")))?;
+    match &project.shapes[at] {
+        s @ Shape::Area(_) => Ok((at, s.clone())),
+        _ => Err(fail(format!("`{id}` is not an area"))),
+    }
 }
 
 /// Puts the soil of raised bed `id` where it belongs: the outline moved in by the wall, flat at
@@ -984,6 +1087,156 @@ mod tests {
             get(&s, &sleepers).raised_bed.unwrap().style,
             crate::bed::BedStyle::Masonry
         );
+    }
+
+    fn terrace(s: &mut Session, extra: serde_json::Value) -> String {
+        let mut p = json!({"name": "Terrace", "outline": [[0, 0], [4, 0], [4, 3], [0, 3]], "elevation": 0.5, "drape": false});
+        p.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        s.run("shape.add_area", p).unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    #[test]
+    fn a_raised_area_gets_a_skirt_down_to_the_ground_that_can_be_undone() {
+        let mut s = Session::new(Project::default());
+        let id = terrace(&mut s, json!({}));
+        let plain = crate::shape_mesh(&s.project().shapes[0]).unwrap();
+        assert_eq!(plain.faces.len(), 1);
+        let r = s
+            .run("area.set_edge", json!({"id": id, "style": "masonry"}))
+            .unwrap();
+        assert!((r["thickness_m"].as_f64().unwrap() - 0.2).abs() < 1e-6);
+        let m = crate::shape_mesh(&s.project().shapes[0]).unwrap();
+        let names: Vec<_> = m.faces.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, ["S1:top", "S1:edge", "S1:edge_rim"]);
+        let (lo, hi) = m
+            .positions
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(l, h), p| (l.min(p[1]), h.max(p[1])));
+        assert!(lo.abs() < 1e-5 && (hi - 0.5).abs() < 1e-5, "{lo} {hi}");
+        // The skirt is outside: the top keeps its 4 x 3 m.
+        let top = m.triangle_faces.iter().position(|f| *f == 0).unwrap();
+        for i in m.triangles[top] {
+            let p = m.positions[i as usize];
+            assert!((0.0..=4.0).contains(&p[0]) && (0.0..=3.0).contains(&p[2]));
+        }
+        assert!(m.positions.iter().any(|p| p[0] < -0.19));
+        let mats: Vec<_> = s
+            .project()
+            .assignments
+            .iter()
+            .map(|a| (a.target.owner().to_string(), a.material.as_str()))
+            .collect();
+        assert_eq!(mats.len(), 2);
+        assert!(mats.iter().all(|(o, m)| o == "S1" && *m == "brick"));
+        // Clearing takes the skirt and its materials away; the mesh is the plain one again.
+        s.run("area.clear_edge", json!({"id": id})).unwrap();
+        assert!(s.project().assignments.is_empty());
+        let after = crate::shape_mesh(&s.project().shapes[0]).unwrap();
+        assert_eq!(after.triangles.len(), plain.triangles.len());
+        assert_eq!(after.positions, plain.positions);
+        assert!(s.undo());
+        assert!(area(&s, &id).edge.is_some());
+        assert!(s.undo());
+        assert!(area(&s, &id).edge.is_none() && s.project().assignments.is_empty());
+        // No edge: not even a mention in the file.
+        let json = serde_json::to_string(&s.project().shapes[0]).unwrap();
+        assert!(!json.contains("edge\""), "{json}");
+    }
+
+    #[test]
+    fn a_draped_area_refuses_an_edge_and_every_style_draws() {
+        let mut s = Session::new(Project::default());
+        let draped = s
+            .run(
+                "shape.add_area",
+                json!({"name": "Lawn", "outline": [[0, 0], [4, 0], [4, 3], [0, 3]], "drape": true}),
+            )
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let err = s
+            .run("area.set_edge", json!({"id": draped, "style": "plain"}))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("drape"), "{err}");
+        assert!(area(&s, &draped).edge.is_none());
+        assert!(s
+            .run(
+                "shape.add_area",
+                json!({"name": "X", "outline": [[0, 0], [4, 0], [4, 3], [0, 3]], "drape": true, "edge": {"style": "plain"}}),
+            )
+            .is_err());
+        // add_area with an edge stands flat by default.
+        let id = terrace(&mut s, json!({"edge": {"style": "corten"}}));
+        let _ = id;
+        for style in ["plain", "masonry", "sleepers", "corten"] {
+            s.run("area.set_edge", json!({"id": "S2", "style": style}))
+                .unwrap();
+            let m = crate::shape_mesh(&s.project().shapes[1]).unwrap();
+            assert!(m.triangles.len() > 2, "{style}");
+        }
+        assert!(
+            s.run(
+                "area.set_edge",
+                json!({"id": "S2", "style": "corten", "thickness_m": 0.2})
+            )
+            .is_err()
+        );
+        assert!(
+            s.run("area.set_edge", json!({"id": "S9", "style": "plain"}))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn an_edged_area_reports_its_skirt_in_the_quantities() {
+        let mut s = Session::new(Project::default());
+        let a = terrace(&mut s, json!({"edge": {"style": "sleepers"}}));
+        let b = terrace(&mut s, json!({"edge": {"style": "corten"}}));
+        let c = terrace(&mut s, json!({}));
+        let q = s.run("query.quantities", json!({})).unwrap();
+        let rows = q["shapes"].as_array().unwrap();
+        let edge = |id: &str| rows.iter().find(|r| r["id"] == id).unwrap()["edge"].clone();
+        // 0.5 m of area lift sits on top: two courses of 0.2 m... 0.5 / 0.2 rounds to 3 beams high.
+        let e = edge(&a);
+        assert!((e["length_m"].as_f64().unwrap() - 14.0).abs() < 1e-4, "{e}");
+        assert!(e["beams"].as_u64().unwrap() >= 12, "{e}");
+        assert!(e["face_area_m2"].as_f64().unwrap() > 7.0, "{e}");
+        let e = edge(&b);
+        let plate = e["plate_area_m2"].as_f64().unwrap();
+        assert!(
+            (plate - 14.0 * e["height_m"].as_f64().unwrap()).abs() < 1e-3,
+            "{e}"
+        );
+        assert!(e.get("beams").is_none());
+        assert!(edge(&c).is_null());
+    }
+
+    #[test]
+    fn the_skirt_goes_down_to_the_lowest_ground_of_the_terrain() {
+        let mut t = crate::Terrain::flat([-2.0, -2.0], 10.0, 10.0, 1.0, "lawn").unwrap();
+        for (i, h) in t.heights.iter_mut().enumerate() {
+            *h = 0.05 * (i % 11) as f32;
+        }
+        let project = Project {
+            terrain: Some(std::sync::Arc::new(t)),
+            ..Default::default()
+        };
+        let mut s = Session::new(project);
+        let id = terrace(&mut s, json!({"edge": {"style": "plain"}}));
+        let p = s.project();
+        let shape = p.shapes.iter().find(|x| x.id() == id).unwrap();
+        let (m, _) =
+            crate::plant_ground::placed_shape_mesh(p, shape, &Default::default(), &[]).unwrap();
+        let lo = m.positions.iter().map(|p| p[1]).fold(f32::MAX, f32::min);
+        // The ground under the outline is lowest at x = 0: 2 cells in, 0.1 m.
+        assert!((lo - 0.1).abs() < 1e-4, "{lo}");
     }
 
     #[test]

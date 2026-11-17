@@ -588,6 +588,7 @@ mod tests {
             elevation: 0.0,
             drape: false,
             edge_blend_m: 0.0,
+            edge: None,
             extensions: Default::default(),
         });
         let geom = visioncraft_core::shape_mesh(&shape).unwrap();

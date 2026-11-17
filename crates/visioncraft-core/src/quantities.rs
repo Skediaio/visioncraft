@@ -134,6 +134,47 @@ pub fn quantities(project: &Project, filter: &Filter) -> Result<Value, String> {
                 volume = 0.0;
                 o.insert("kind".into(), "area".into());
                 o.insert("perimeter_m".into(), path_length(&a.outline, true).into());
+                if let Some(edge) = &a.edge {
+                    let names = crate::bed::EDGE_FACES.map(|n| format!("{}:{n}", a.id));
+                    let (mut face_area, mut lo, mut hi) = (0.0, f32::MAX, f32::MIN);
+                    for (t, f) in mesh.triangles.iter().zip(&mesh.triangle_faces) {
+                        if names.contains(&mesh.faces[*f as usize].name) {
+                            face_area += triangle_area(&mesh, *t);
+                            for i in t {
+                                let y = mesh.positions[*i as usize][1];
+                                lo = lo.min(y);
+                                hi = hi.max(y);
+                            }
+                        }
+                    }
+                    // An area at or below its ground has no skirt drawn.
+                    let drawn = face_area > 0.0;
+                    let mut row = json!({
+                        "style": edge.style,
+                        "thickness_m": edge.wall(),
+                        "length_m": path_length(&a.outline, true),
+                        "face_area_m2": face_area,
+                        "height_m": if drawn { f64::from(hi - lo) } else { 0.0 },
+                    });
+                    if drawn {
+                        match edge.style {
+                            crate::bed::BedStyle::Sleepers => {
+                                let beams = crate::bed::skirt_beams(edge, &a.outline, lo, hi);
+                                row["beams"] = beams.len().into();
+                                row["beam_length_m"] =
+                                    f64::from(beams.iter().map(|b| b.u.1 - b.u.0).sum::<f32>())
+                                        .into();
+                            }
+                            // The sheet: the length along the outline by the height.
+                            crate::bed::BedStyle::Corten => {
+                                row["plate_area_m2"] =
+                                    (path_length(&a.outline, true) * f64::from(hi - lo)).into();
+                            }
+                            _ => {}
+                        }
+                    }
+                    o.insert("edge".into(), row);
+                }
             }
             Shape::Extrusion(e) if e.closed => {
                 plan = f64::from(measure::polygon_area(&e.outline));

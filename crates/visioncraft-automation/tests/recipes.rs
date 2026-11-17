@@ -134,6 +134,13 @@ fn every_recipe_of_the_guide_runs() {
                 let row = shapes.iter().find(|s| s["id"] == "S3").unwrap();
                 assert_eq!(row["stairs"]["steps"], 3, "{report}");
                 assert!(row["volume_m3"].as_f64().unwrap() > 0.5, "{report}");
+                // The terrace has a masonry edge 48 m long, about half a metre high.
+                let terrace = shapes.iter().find(|s| s["id"] == "S2").unwrap();
+                let edge = &terrace["edge"];
+                assert_eq!(edge["style"], "masonry", "{report}");
+                assert!((edge["length_m"].as_f64().unwrap() - 48.0).abs() < 1e-3);
+                assert!((0.5..0.53).contains(&edge["height_m"].as_f64().unwrap()));
+                assert!(edge["face_area_m2"].as_f64().unwrap() > 20.0, "{report}");
             }
             22 => {
                 assert_eq!(results[1]["result"]["soil"], "S3", "{report}");

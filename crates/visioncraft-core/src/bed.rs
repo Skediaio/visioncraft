@@ -323,6 +323,77 @@ fn ring(s: &mut dyn Sink, outer: &[P2], inner: &[P2], (y0, y1): (f32, f32), f: F
     }
 }
 
+/// Faces a terrace's retaining edge has, in this order (`<id>:edge`, `<id>:edge_rim`).
+pub const EDGE_FACES: [&str; 2] = ["edge", "edge_rim"];
+
+/// How far a skirt's top lies below its area's top (metres).
+pub const SKIRT_SINK_M: f32 = 0.002;
+
+/// The least a raised area stands above the ground to get a retaining edge (metres).
+pub const MIN_EDGE_H: f32 = 0.05;
+
+/// The retaining edge of a raised area (`Area::edge`): a skirt in a [`BedStyle`] along its whole
+/// outline, from the area's top (less [`SKIRT_SINK_M`]) down to the ground. It sits just outside
+/// the outline, so the walkable top keeps its size.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AreaEdge {
+    pub style: BedStyle,
+    /// How thick the skirt is (a sleeper's thickness for sleepers, the plate's for corten); the
+    /// style's own when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thickness_m: Option<f32>,
+}
+
+impl AreaEdge {
+    fn bed(&self) -> RaisedBed {
+        RaisedBed {
+            wall_thickness_m: self
+                .thickness_m
+                .unwrap_or_else(|| self.style.default_wall_m()),
+            style: self.style,
+            soil: None,
+        }
+    }
+
+    /// The thickness as drawn (a steel plate is at least [`MIN_PLATE_M`]).
+    pub fn wall(&self) -> f32 {
+        self.bed().wall()
+    }
+
+    /// Whether the style takes the thickness; the reason if not.
+    pub fn check(&self) -> Result<(), String> {
+        self.bed().check()
+    }
+}
+
+/// How far a steel skirt's plate stands out from the outline, so its folded edge can lie over the
+/// gap and not on the area's top.
+fn skirt_gap(edge: &AreaEdge) -> f32 {
+    if edge.style == BedStyle::Corten {
+        FLANGE_IN
+    } else {
+        0.0
+    }
+}
+
+/// The ring the skirt's outer face follows.
+fn skirt_outer(edge: &AreaEdge, outline: &[P2]) -> Vec<P2> {
+    crate::shape::offset_outline(outline, edge.wall() + skirt_gap(edge))
+}
+
+/// The sleepers of an edged area's skirt from `lo` to `hi`.
+pub fn skirt_beams(edge: &AreaEdge, outline: &[P2], lo: f32, hi: f32) -> Vec<Beam> {
+    beams(&edge.bed(), &skirt_outer(edge, outline), lo, hi)
+}
+
+/// Draws the skirt of an area with `outline` from `lo` to `hi`: faces 0 (`edge`) and 1
+/// (`edge_rim`) of the sink.
+pub(crate) fn skirt(s: &mut dyn Sink, edge: &AreaEdge, outline: &[P2], lo: f32, hi: f32) {
+    let gap = skirt_gap(edge);
+    let inner = crate::shape::offset_outline(outline, gap);
+    mesh(s, &edge.bed(), &skirt_outer(edge, outline), &inner, lo, hi);
+}
+
 /// Draws the bed with walls between `outline` and `inner` from `lo` to `hi`.
 pub(crate) fn mesh(
     s: &mut dyn Sink,

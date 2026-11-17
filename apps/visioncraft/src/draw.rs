@@ -1002,6 +1002,7 @@ impl DrawState {
                     params.insert("elevation".into(), json!(a.elevation));
                 }
                 edit = e;
+                edge_panel(ui, cx, a);
             }
             Shape::Extrusion(x) if x.closed && x.raised_bed.is_some() => bed_panel(ui, cx, x),
             Shape::Extrusion(x) => {
@@ -1271,6 +1272,33 @@ fn stairs_panel(ui: &mut egui::Ui, cx: &mut Cx, x: &visioncraft_core::shape::Ext
             cx.run("stairs.clear", json!({"id": x.id}));
         }
     });
+}
+
+/// A raised area's retaining edge: none or a style; each change one command.
+fn edge_panel(ui: &mut egui::Ui, cx: &mut Cx, a: &visioncraft_core::shape::Area) {
+    use visioncraft_core::bed::BedStyle;
+    let now = a.edge.map(|e| e.style);
+    ui.horizontal_wrapped(|ui| {
+        ui.label(t::EDGE);
+        if ui.selectable_label(now.is_none(), t::EDGE_NONE).clicked() && now.is_some() {
+            cx.run("area.clear_edge", json!({"id": a.id}));
+        }
+        ui.add_enabled_ui(!a.drape, |ui| {
+            for (style, key, label) in [
+                (BedStyle::Plain, "plain", t::BED_PLAIN),
+                (BedStyle::Masonry, "masonry", t::BED_MASONRY),
+                (BedStyle::Sleepers, "sleepers", t::BED_SLEEPERS),
+                (BedStyle::Corten, "corten", t::BED_CORTEN),
+            ] {
+                if ui.selectable_label(now == Some(style), label).clicked() && now != Some(style) {
+                    cx.run("area.set_edge", json!({"id": a.id, "style": key}));
+                }
+            }
+        });
+    });
+    if a.drape {
+        ui.weak(t::EDGE_NEEDS_FLAT);
+    }
 }
 
 /// A raised bed's wall height and thickness (the soil follows); each change one command.
