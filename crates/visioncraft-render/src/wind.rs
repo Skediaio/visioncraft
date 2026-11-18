@@ -93,11 +93,45 @@ pub fn flutter_hz(u: f32) -> f32 {
     (0.5 * u).clamp(1.0, 6.0)
 }
 
+/// Upper bound of a plant's whole-plant sway rate (Hz). Herbaceous stems and small shrubs are
+/// strongly damped (aerodynamic drag of the foliage, internal friction): measured stems and
+/// grasses in a breeze show broad, low-frequency motion dominated by the gusts, not a ringing
+/// at the beam natural frequency (de Langre 2008; Py, de Langre & Moulia 2006 on wheat, whose
+/// natural frequencies are about 1 Hz at best). The undamped cantilever law would put a 0.7 m
+/// perennial near 2.4 Hz, which reads as a nervous shiver, so the rate saturates here.
+pub const SWAY_MAX_HZ: f32 = 1.0;
+/// Branch and detail motion runs at this multiple of the whole-plant rate ...
+pub const BRANCH_RATIO: f32 = 2.0;
+/// ... but never faster than this (Hz): small twigs are damped too, and faster motion at 60 fps
+/// reads as buzzing, not as wind.
+pub const BRANCH_MAX_HZ: f32 = 2.5;
+
 /// Natural sway frequency (Hz) of a plant `height_m` tall: 0.5 Hz for a 10 m conifer, falling
-/// with H^-0.75 (see the module docs), 20 % lower for a leafed broadleaf, within 0.15..3 Hz.
+/// with H^-0.75 (see the module docs), 20 % lower for a leafed broadleaf, within
+/// 0.15..`SWAY_MAX_HZ`. Trees (3 m and up) are below the cap and keep the cantilever law; only
+/// the damped small plants (and lawn grass) are held to a slow rate.
 pub fn plant_hz(height_m: f32, conifer: bool) -> f32 {
     let f = 0.5 * (height_m.max(0.01) / 10.0).powf(-0.75);
-    (f * if conifer { 1.0 } else { 0.8 }).clamp(0.15, 3.0)
+    (f * if conifer { 1.0 } else { 0.8 }).clamp(0.15, SWAY_MAX_HZ)
+}
+
+/// Whole cycles per `SWAY_CLOCK` of the sway (`k`) and branch (`kb`) waves of a plant with
+/// frequency `hz` (`common.wgsl` `wind_sway`).
+fn sway_cycles(hz: f32) -> (f32, f32) {
+    let clock = SWAY_CLOCK as f32;
+    let k = (hz * clock).round_ties_even().clamp(2.0, 6.0 * clock);
+    (k, (BRANCH_RATIO * k).min(BRANCH_MAX_HZ * clock))
+}
+
+/// The branch motion's rate (Hz) for a plant with sway frequency `hz`, as the shader runs it.
+pub fn branch_hz(hz: f32) -> f32 {
+    sway_cycles(hz.abs()).1 / SWAY_CLOCK as f32
+}
+
+/// Detail amplitude factor for a plant whose tip is `size` m away: 0.4 for a tiny plant up to 1
+/// from 6 m, since small stems and twigs move less in absolute terms and softer than a crown's.
+pub fn detail_size_factor(size: f32) -> f32 {
+    0.4 + 0.6 * (size / 6.0).clamp(0.0, 1.0)
 }
 
 /// How far (m) a plant of `extent` metres can move from its rest bounds at wind speed `u`, so
@@ -264,8 +298,7 @@ pub fn sway(u: &Uniforms, rel: Vec3, origin: Vec3, w: f32, phase: f32, hz_in: f3
     let clock = SWAY_CLOCK as f32;
     let dir = Vec3::new(u.wind[0], 0.0, u.wind[1]);
     let instance_phase = (origin.x * 0.754_877_7 + origin.z * 0.569_840_3).fract();
-    let k = (hz * clock).round_ties_even().clamp(2.0, 6.0 * clock);
-    let kb = (4.0 * k).min(6.0 * clock);
+    let (k, kb) = sway_cycles(hz);
     let along = origin.x * u.wind[0] + origin.z * u.wind[1];
     let wave = |x: f32| smooth_triangle(x) * 2.0 - 1.0;
     let waves = [
@@ -291,7 +324,7 @@ pub fn sway(u: &Uniforms, rel: Vec3, origin: Vec3, w: f32, phase: f32, hz_in: f3
     }
     let mut q = rel + dir * (w * w * bend * size);
     q *= size / q.length().max(1e-6);
-    let detail = u.amp[1] * gust_detail * w * (0.02 + 0.01 * size.min(6.0)) * (size * 2.0).min(1.0);
+    let detail = u.amp[1] * gust_detail * w * (0.02 + 0.01 * size.min(6.0)) * detail_size_factor(size) * (size * 2.0).min(1.0);
     q + (dir * waves[2] + Vec3::new(0.0, 0.6, 0.0) * waves[3]) * detail
 }
 
@@ -325,7 +358,27 @@ mod tests {
         assert!((plant_hz(20.0, true) - 0.5 * 2f32.powf(-0.75)).abs() < 1e-6);
         assert!(plant_hz(20.0, false) < plant_hz(20.0, true));
         assert!(plant_hz(2.0, false) > plant_hz(10.0, false));
-        assert_eq!(plant_hz(0.1, true), 3.0);
+        assert_eq!(plant_hz(0.1, true), SWAY_MAX_HZ);
+    }
+
+    #[test]
+    fn herbaceous_plants_move_slowly_and_softly() {
+        // A 0.7 m perennial in the flower bed: well under 1.2 Hz, branches at most 2.5 Hz.
+        let hz = plant_hz(0.7, false);
+        assert!(hz <= 1.2, "{hz}");
+        for h in [0.1, 0.3, 0.7, 1.0, 2.0] {
+            let hz = plant_hz(h, false);
+            assert!(hz <= 1.2, "{h}: {hz}");
+            let b = branch_hz(hz);
+            assert!(b <= 2.5 + 1e-6 && b <= 2.0 * hz + 1.0 / SWAY_CLOCK as f32, "{h}: {b}");
+        }
+        // Trees keep their rate and their branch ratio.
+        assert!((plant_hz(10.0, true) - 0.5).abs() < 1e-6);
+        assert!((branch_hz(0.5) - 1.0).abs() < 1e-6);
+        // Less detail on a small plant than on a tree, never none.
+        assert!(detail_size_factor(0.7) < detail_size_factor(6.0));
+        assert!(detail_size_factor(0.7) > 0.3);
+        assert_eq!(detail_size_factor(6.0), 1.0);
     }
 
     #[test]

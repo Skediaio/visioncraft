@@ -585,7 +585,8 @@ fn wind_sway(ws: WindState, rel: vec3<f32>, origin: vec3<f32>, w: f32, phase: f3
     let instance_phase = fract(dot(origin.xz, vec2<f32>(0.7548777, 0.5698403)));
     // Whole cycles per clock wrap, so the wrap itself is no jump.
     let k = clamp(round(hz * WIND_CLOCK), 2.0, 6.0 * WIND_CLOCK);
-    let kb = min(4.0 * k, 6.0 * WIND_CLOCK);
+    // Branches at twice the sway, never above 2.5 Hz (wind.rs `BRANCH_RATIO`, `BRANCH_MAX_HZ`).
+    let kb = min(2.0 * k, 2.5 * WIND_CLOCK);
     let waves = smooth_triangle(vec4<f32>(
         ws.phase.x - dot(origin.xz, ws.wind.xy) / GUST_WAVELENGTH, // slow gust envelope
         ws.phase.y * (k / WIND_CLOCK) + instance_phase,            // whole-plant sway
@@ -618,7 +619,7 @@ fn wind_sway(ws: WindState, rel: vec3<f32>, origin: vec3<f32>, w: f32, phase: f3
     q = q * (size / max(length(q), 1e-6));
     // Detail: branches bob along the wind and vertically, leaves flutter.
     // (no detail right at the origin: the very foot of the stem stays put whatever its weight)
-    let detail = ws.amp.y * gust_detail * w * (0.02 + 0.01 * min(size, 6.0)) * min(size * 2.0, 1.0);
+    let detail = ws.amp.y * gust_detail * w * (0.02 + 0.01 * min(size, 6.0)) * (0.4 + 0.6 * clamp(size / 6.0, 0.0, 1.0)) * min(size * 2.0, 1.0);
     q += (dir * waves.z + vec3<f32>(0.0, 0.6, 0.0) * waves.w) * detail;
     return q;
 }

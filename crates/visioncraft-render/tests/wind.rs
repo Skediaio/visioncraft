@@ -274,7 +274,7 @@ fn sway_hz_measured(h: f32, conifer: bool) -> f32 {
 }
 
 #[test]
-fn tall_trees_sway_slowly_and_small_plants_fast() {
+fn tall_trees_sway_slowly_and_small_plants_softly() {
     println!("natural sway period (s): planned, measured on the wave");
     let cases = [
         ("20 m conifer", 20.0, true),
@@ -298,7 +298,7 @@ fn tall_trees_sway_slowly_and_small_plants_fast() {
         }
         last = planned;
     }
-    assert!(last >= 2.0, "grass sways fast");
+    assert!(last <= 1.2, "grass and herbs sway softly");
     assert!(wind::plant_hz(20.0, false) < wind::plant_hz(2.0, false));
     assert!(wind::plant_hz(20.0, true) > wind::plant_hz(20.0, false));
 }
