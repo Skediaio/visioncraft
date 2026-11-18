@@ -192,6 +192,8 @@ pub struct Studio {
     underlay_quads: Vec<visioncraft_render::UnderlayQuad>,
     /// The sun-hours map on the ground (`view.set_sun_map`).
     pub sun_map: crate::sun_map::SunMapState,
+    /// The plant light check and its marks on the plan.
+    pub light: crate::light_ui::LightState,
     /// An opacity being dragged on a slider, shown before it is committed: (underlay id, value).
     pub underlay_live: Option<(String, f32)>,
     /// The plan panel asked for an image file; the window opens the picker.
@@ -421,6 +423,7 @@ impl Studio {
             extra: (Vec::new(), Vec::new()),
             underlay_quads: Vec::new(),
             sun_map: Default::default(),
+            light: crate::light_ui::LightState::new(),
             underlay_live: None,
             pick_underlay: false,
             wall_photo_for: None,

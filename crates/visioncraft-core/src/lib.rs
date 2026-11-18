@@ -23,6 +23,7 @@ pub mod measure;
 mod model;
 pub mod object;
 pub mod plant_ground;
+pub mod plant_light;
 pub mod planting;
 pub mod presets;
 pub mod project;

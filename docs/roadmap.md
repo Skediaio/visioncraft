@@ -92,7 +92,18 @@ nothing here is a promise of a date.
   it in Sun & sky (an area or the whole plot, season buttons, years, opacity) with a legend of the
   ramp, the day and the shares. It is a flat sheet at the area's height, also on terrain, and is
   worked out again when the project changes (off the UI thread; in slices a frame on the web).
-  Next: plants filtered by the light a spot gets, the map draped on terrain, and what is left out: clouds, crowns as ellipsoids only (no leaf gaps, no climbers,
+  Plants are filtered by the light a spot gets: every built-in species has an estimated light
+  range (the hours of direct sun on a summer day it thrives in: full sun 6+ h, part shade 3-6 h,
+  full shade under 3 h; the lawn wants 4+ h; a species outside the table gets a guess from its
+  grower type), `query.plants_for_light` ranks the species for a point, an outline (by its mean
+  hours) or given hours (fit `full` inside the range, `partial` within one class), `query.light_check`
+  measures the sun at every placed plant (its own planting's crowns excluded) and lists the ones in
+  too much or too little light with 2-3 species of the same grower type to swap in, and
+  `planting.add_border` takes `style: auto` (shade under 3 h, cottage up to 6 h, prairie or dry above) and
+  warns with `light_fit` when an explicit style clearly mismatches the measured light. The window
+  has "Plants for this light" and "Check plant light" under the map, with a ring on the plan for each
+  misfit. The light values are estimated and not yet checked against open data.
+  Next: the map draped on terrain, and what is left out: clouds, crowns as ellipsoids only (no leaf gaps, no climbers,
   perennials or lawn), custom species, the neighbours' volumes (see below).
 
 - **Fences and screens:** `fence.add` draws a line as posts (at every corner, both ends and
@@ -203,7 +214,8 @@ nothing here is a promise of a date.
 
 - **More leaf sets:** the remaining CC0 atlases, then coverage reported again.
 - **Growth data checked against open data,** with the source of each value recorded. The table
-  is estimated today.
+  is estimated today, and so are the light needs per species (`plant_light.rs`: the hours of direct
+  sun each plant thrives in), which are to be checked and sourced the same way.
 - **Tree form:** a better branch solver in the plant generator, compared against reference scans
   of real plants.
 - **North and site:** turning the whole drawing against north is done (`site.set north_deg`,

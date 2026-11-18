@@ -36,7 +36,7 @@ pub mod rpc;
 pub use host::{
     Access, Headless, Host, HostState, LoadedModel, PhotoRequest, Pictures, RenderRequest, Rendered,
 };
-pub use inspect::{SunGrid, SunGridJob, SunGridQuery};
+pub use inspect::{LightCheckQuery, SunGrid, SunGridJob, SunGridQuery, light_check};
 pub use lines::{Line, read_line};
 
 /// Longest request line a server reads, in bytes (as 3dcraft).

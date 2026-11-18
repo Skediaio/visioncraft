@@ -58,6 +58,85 @@ pub(super) fn register(s: &mut Session) {
         .read_only(),
         quantities_cmd,
     );
+    s.register_with_spec(
+        spec(
+            "query.plants_for_light",
+            "Plants for Light",
+            "Ranks the built-in species by how well they suit the sun a spot gets. The spot is given as the hours of direct sun a day (`hours`; the plain command), or as a `point` or an `outline` whose hours the host measures with the same sun-hours computation as `query.sun_hours` (shadow from buildings, terrain, models and plant crowns): the window, the CLI and the MCP server do; a bare session has no geometry and refuses them. The date defaults to the summer solstice (the light ranges are summer-day hours): `season` or `date` change it (they, `cell_m`, `plants` and `years` only matter with a `point` or `outline`, and are ignored with `hours`), and `query.sun_hours` with `season: summer` gives the same hours. Light needs are estimated per species (full sun 6+ h, part shade 3 to 6 h, full shade under 3 h; many plants span two classes; the lawn wants 4+ h), not yet checked against open data. Fit is `full` when the hours lie inside the species' range and `partial` when outside it but within one class; species two classes away are left out. Over an outline the ranking is for the mean hours, with min and max reported. Full fits come first, the plants that want just this light before those that take anything.",
+            vec![
+                param("hours", T::Number, "Hours of direct sun a day, 0..24 (the plain command). Give exactly one of `hours`, `point` and `outline`.").unit("h"),
+                param("point", T::Point2, "A spot [x, z] in metres; needs a host.").unit("m"),
+                param("outline", T::Outline, "An area as [x, z] pairs in metres, at least 3; its hours are the mean over the area; needs a host.").unit("m"),
+                param("season", T::String, "Which day the hours are for: 21 March, 21 June, 21 September or 21 December (six months on south of the equator).")
+                    .default(json!("summer"))
+                    .allowed(&["spring", "summer", "autumn", "winter"]),
+                param("date", T::Object, "Instead of `season`: {month, day}, in the project's year."),
+                param("grower", T::String, "Only this kind of plant.")
+                    .allowed(&["tree", "conifer", "palm", "shrub", "clipped", "grass", "perennial", "ground_cover", "climber", "lawn"]),
+                param("limit", T::Integer, "At most this many species are listed (1..200).").default(json!(25)),
+                param("cell_m", T::Number, "Grid cell of an outline in metres, as in `query.sun_hours`.").unit("m").default(json!(1)),
+                param("plants", T::Boolean, "Plant crowns cast shadow, as in `query.sun_hours`.").default(json!(true)),
+                param("years", T::Number, "Years after planting the plants have grown, 0..60, as in `query.sun_hours`.").unit("years"),
+            ],
+            "{spot: {min, mean, max (hours) and, from a host, point or outline, date, cells}, hours (what the ranking is for), grower, matches, full, species: [{species, grower, fit (full|partial), reason, light: {min_hours, max_hours}, mature_height_m, mature_width_m, from_table, estimated, name (from a host)}], note}",
+            json!({"hours": 2}),
+        )
+        .read_only(),
+        plants_for_light_cmd,
+    );
+}
+
+fn plants_for_light_cmd(_project: &mut Project, params: &Value) -> Result<Value, CommandError> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    #[allow(dead_code)]
+    struct P {
+        hours: Option<f32>,
+        point: Option<[f32; 2]>,
+        outline: Option<Vec<[f32; 2]>>,
+        season: Option<String>,
+        date: Option<Value>,
+        grower: Option<String>,
+        limit: Option<usize>,
+        cell_m: Option<f32>,
+        plants: Option<bool>,
+        years: Option<f32>,
+    }
+    let p: P = parse(params)?;
+    if p.point.is_some() || p.outline.is_some() {
+        return Err(bad(
+            "`point` and `outline` need a host that casts shadow (the window, `visioncraft-cli` or the MCP server); a bare session has no geometry: give `hours`",
+        ));
+    }
+    let hours = p
+        .hours
+        .ok_or_else(|| bad("give `hours` (or `point` or `outline` to a host)"))?;
+    if !(0.0..=24.0).contains(&hours) {
+        return Err(bad("hours: 0..24"));
+    }
+    let grower = parse_grower_param(p.grower.as_deref())?;
+    let limit = p.limit.unwrap_or(25);
+    if !(1..=200).contains(&limit) {
+        return Err(bad("limit: 1..200"));
+    }
+    Ok(crate::plant_light::plants_for_light_json(
+        json!({"min": hours, "mean": hours, "max": hours}),
+        hours,
+        grower,
+        limit,
+    ))
+}
+
+/// The grower filter of a command, refused with the names it knows.
+fn parse_grower_param(name: Option<&str>) -> Result<Option<crate::growth::Grower>, CommandError> {
+    name.map(|n| {
+        crate::plant_light::parse_grower(n).ok_or_else(|| {
+            bad(&format!(
+                "grower: `{n}` is not one of tree, conifer, palm, shrub, clipped, grass, perennial, ground_cover, climber, lawn"
+            ))
+        })
+    })
+    .transpose()
 }
 
 fn quantities_cmd(project: &mut Project, params: &Value) -> Result<Value, CommandError> {

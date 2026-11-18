@@ -180,9 +180,10 @@ pub(super) fn register(s: &mut Session) {
                 param("name", T::String, "Display name.").default(json!("Border")),
                 param("outline", T::Outline, "Polygon as [x, z] pairs in metres, at least 3. Give this or `area`."),
                 param("area", T::String, "The id of an area shape (`S1`...) to plant over its outline. Give this or `outline`."),
-                param("style", T::String, "The species list: cottage (spires, daisies and sages in the sun), prairie (grasses and late daisies), shade (hostas, astilbes, ferns, hellebores) or dry (lavender, sages, stonecrops, fine grasses).")
+                param("style", T::String, "The species list: cottage (spires, daisies and sages in the sun), prairie (grasses and late daisies), shade (hostas, astilbes, ferns, hellebores) or dry (lavender, sages, stonecrops, fine grasses). `auto` (a host only: the window, CLI or MCP server) measures the mean hours of direct sun over the outline on the summer solstice, as `query.sun_hours` does, and picks shade under 3 h, cottage from 3 to 6 h, and prairie above 6 h (dry above 6 h when `dry` is true); the answer says which and why. A host also adds a `light_fit` warning when an explicit style clearly mismatches the measured light (a shade border in 6+ h, a sun border in under 3 h).")
                     .required()
-                    .allowed(crate::border::STYLES),
+                    .allowed(&["cottage", "prairie", "shade", "dry", "auto"]),
+                param("dry", T::Boolean, "With `style: auto`: choose dry instead of prairie where the border is sunny (lean soil, little water).").default(json!(false)),
                 param("front", T::Array, "Indices of the outline's edges that face the viewer (edge `i` runs from point `i` to `i + 1`): the front is their mean outward direction."),
                 param("facing", T::Point2, "The front as a direction [x, z] from the back of the border to its front. Wins over `front`."),
                 param("height_range", T::Array, "[front, back]: the mature plant height in metres wanted at the front edge and at the back edge, e.g. [0.4, 1.6]; species are chosen by how close their mature height is. By default the style's."),
@@ -557,6 +558,9 @@ fn add_border(project: &mut Project, params: &Value) -> Result<Value, CommandErr
         outline: Option<Vec<[f32; 2]>>,
         area: Option<String>,
         style: String,
+        #[serde(default)]
+        #[allow(dead_code)]
+        dry: bool,
         front: Option<Vec<usize>>,
         facing: Option<[f32; 2]>,
         height_range: Option<[f32; 2]>,
@@ -583,6 +587,11 @@ fn add_border(project: &mut Project, params: &Value) -> Result<Value, CommandErr
     };
     if outline.len() < 3 || outline.iter().flatten().any(|c| !c.is_finite()) {
         return Err(bad("outline: at least 3 finite points"));
+    }
+    if p.style == "auto" {
+        return Err(bad(
+            "style `auto` picks a style from the sun the outline gets, which needs a host that casts shadow (the window, `visioncraft-cli` or the MCP server); a bare session has no geometry: name a style (cottage, prairie, shade, dry) or ask `query.plants_for_light` for the hours you know",
+        ));
     }
     let (mut species, default_range) =
         border::style(&p.style).ok_or_else(|| bad(&format!("no style `{}`", p.style)))?;

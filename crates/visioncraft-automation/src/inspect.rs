@@ -5,6 +5,7 @@
 use crate::host::{HostState, missing_json};
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
+use std::ops::Range;
 use std::sync::Arc;
 use visioncraft_core::sun_hours::{
     FULL_SUN_HOURS, Occluder, PART_SHADE_HOURS, SunSample, day_sun, days_in_month, lit_intervals,
@@ -659,6 +660,11 @@ impl Shadows {
         } else {
             Vec::new()
         };
+        Self::with_crowns(project, owners, crowns)
+    }
+
+    /// The shadow casters of `project` with these crowns.
+    fn with_crowns(project: &Project, owners: Vec<Owner>, crowns: Vec<Occluder>) -> Self {
         let casters = owners
             .iter()
             .enumerate()
@@ -679,8 +685,9 @@ impl Shadows {
     }
 
     /// The share (0..=1) of the sun's light that reaches `origin` along `dir`: 0 behind a model,
-    /// shape or the terrain, else the product of what the crowns in the way let through.
-    fn light(&self, origin: [f32; 3], dir: [f32; 3]) -> f32 {
+    /// shape or the terrain, else the product of what the crowns in the way let through, leaving
+    /// out the crowns whose index is in `skip`.
+    fn light_skipping(&self, origin: [f32; 3], dir: [f32; 3], skip: &Range<usize>) -> f32 {
         for (i, b) in &self.casters {
             if !ray_hits_box(origin, dir, b) {
                 continue;
@@ -699,17 +706,33 @@ impl Shadows {
         {
             return 0.0;
         }
-        self.crowns.iter().map(|c| c.pass(origin, dir)).product()
+        self.crowns
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !skip.contains(i))
+            .map(|(_, c)| c.pass(origin, dir))
+            .product()
     }
 
     /// The light at a spot `height_m` over the ground for every slice of the day.
     fn lit_at(&self, day: &DaySun, x: f32, z: f32, height_m: f32) -> Vec<(SunSample, f32)> {
+        self.lit_at_skipping(day, x, z, height_m, &(0..0))
+    }
+
+    fn lit_at_skipping(
+        &self,
+        day: &DaySun,
+        x: f32,
+        z: f32,
+        height_m: f32,
+        skip: &Range<usize>,
+    ) -> Vec<(SunSample, f32)> {
         let y = self.ground(x, z).unwrap_or(0.0) + height_m;
         // A little above the sample so the ray does not start in its own ground.
         let origin = [x, y + 0.01, z];
         day.samples
             .iter()
-            .map(|s| (*s, self.light(origin, s.direction)))
+            .map(|s| (*s, self.light_skipping(origin, s.direction, skip)))
             .collect()
     }
 }
@@ -856,20 +879,43 @@ impl SunGridJob {
     }
 }
 
-/// The crowns of the project's woody plants `years` after planting, as ellipsoids.
-fn plant_crowns(
+/// One plant of the project as the sun queries see it.
+struct PlantAt {
+    generator: String,
+    name: String,
+    /// Its index among the planting's placements.
+    index: usize,
+    asset: String,
+    position: [f32; 3],
+    scale: f32,
+    /// Its age (years) at the time looked at: the planted age plus `years`.
+    age_years: f32,
+    /// The crowns of its planting, as indexes into the crown list (the crowns of one planting
+    /// are next to each other).
+    crowns: Range<usize>,
+}
+
+/// The visible plantings' plants and the crowns of the woody ones `years` after planting, as
+/// ellipsoids.
+fn plant_entries(
     project: &Project,
     owners: &[Owner],
     assets: &[visioncraft_core::Asset],
     month: u32,
     years: f32,
-) -> Vec<Occluder> {
-    let mut out = Vec::new();
+) -> (Vec<PlantAt>, Vec<Occluder>) {
+    let (mut plants, mut crowns) = (Vec::new(), Vec::new());
     for g in &project.generators {
         if !project.layer_visible(g.layer()) {
             continue;
         }
-        for pl in placements(project, owners, assets, g).0 {
+        let first = crowns.len();
+        let mut mine = Vec::new();
+        for (index, pl) in placements(project, owners, assets, g)
+            .0
+            .into_iter()
+            .enumerate()
+        {
             // Species of the library say whether they keep their leaves; any other asset is
             // counted as an evergreen: opaque.
             let evergreen = pl
@@ -880,7 +926,7 @@ fn plant_crowns(
             let age = g.planted_age_years().unwrap_or_else(|| {
                 visioncraft_core::growth::growth_of(&pl.asset, None).planted_age_years
             }) + years;
-            out.extend(plant_occluder(
+            crowns.extend(plant_occluder(
                 &pl.asset,
                 pl.position,
                 pl.scale,
@@ -889,9 +935,35 @@ fn plant_crowns(
                 month,
                 project.site.latitude,
             ));
+            mine.push(PlantAt {
+                generator: g.id().to_string(),
+                name: g.name().to_string(),
+                index,
+                asset: pl.asset,
+                position: pl.position,
+                scale: pl.scale,
+                age_years: age,
+                crowns: 0..0,
+            });
         }
+        let range = first..crowns.len();
+        plants.extend(mine.into_iter().map(|mut p| {
+            p.crowns = range.clone();
+            p
+        }));
     }
-    out
+    (plants, crowns)
+}
+
+/// The crowns of the project's woody plants `years` after planting, as ellipsoids.
+fn plant_crowns(
+    project: &Project,
+    owners: &[Owner],
+    assets: &[visioncraft_core::Asset],
+    month: u32,
+    years: f32,
+) -> Vec<Occluder> {
+    plant_entries(project, owners, assets, month, years).1
 }
 
 fn r2(v: f64) -> f64 {
@@ -1052,6 +1124,450 @@ pub(crate) fn sun_hours_json(
         }
         (None, None) => unreachable!("one of point and outline was checked"),
     }
+}
+
+/// The day the light queries look at: the date or season given, else the summer solstice (the
+/// light ranges are summer-day hours).
+fn light_day(
+    id: &str,
+    p: &Project,
+    date: Option<(u32, u32)>,
+    season: Option<Season>,
+) -> Result<(u32, u32), String> {
+    if date.is_some() && season.is_some() {
+        return Err(format!("{id}: give `date` or `season`, not both"));
+    }
+    match date {
+        Some((m, d)) => {
+            if !(1..=12).contains(&m) || d < 1 || d > days_in_month(p.time.year, m) {
+                return Err(format!(
+                    "{id}: `date` {{month: {m}, day: {d}}} is not a day of {}",
+                    p.time.year
+                ));
+            }
+            Ok((m, d))
+        }
+        None => Ok(season_date(
+            season.unwrap_or(Season::Summer),
+            p.site.latitude,
+        )),
+    }
+}
+
+/// What `query.plants_for_light` was asked of a host, checked by the command.
+pub(crate) struct PlantsForLightQuery {
+    pub point: Option<[f32; 2]>,
+    pub outline: Option<Vec<[f32; 2]>>,
+    pub date: Option<(u32, u32)>,
+    pub season: Option<Season>,
+    pub grower: Option<visioncraft_core::growth::Grower>,
+    pub limit: usize,
+    pub cell_m: f32,
+    pub plants: bool,
+    pub years: Option<f32>,
+}
+
+/// The sun hours of a point or an outline on `date` as (min, mean, max, cells, spot JSON).
+fn spot_hours(
+    session: &Session,
+    state: &HostState,
+    id: &str,
+    query: SunHoursQuery,
+) -> Result<(f32, f32, f32, Value), String> {
+    let (point, outline) = (query.point, query.outline.clone());
+    let r = sun_hours_json(session, state, &query).map_err(|e| e.replace("query.sun_hours", id))?;
+    let f = |k: &str| r[k].as_f64().unwrap_or(0.0) as f32;
+    let mut spot = json!({
+        "date": r["date"], "daylight_hours": r["daylight_hours"],
+        "crowns": r["crowns"], "years": r["years"],
+    });
+    let (min, mean, max) = if let Some(p) = point {
+        let h = f("sun_hours");
+        spot["point"] = json!(p);
+        (h, h, h)
+    } else {
+        spot["outline"] = json!(outline);
+        spot["cells"] = r["cells"].clone();
+        (f("min"), f("mean"), f("max"))
+    };
+    spot["min"] = json!(r2(f64::from(min)));
+    spot["mean"] = json!(r2(f64::from(mean)));
+    spot["max"] = json!(r2(f64::from(max)));
+    Ok((min, mean, max, spot))
+}
+
+fn add_names(list: &mut Value) {
+    if let Some(v) = list.as_array_mut() {
+        for e in v {
+            let name = e["species"]
+                .as_str()
+                .and_then(|s| s.strip_prefix("flora:"))
+                .and_then(visioncraft_flora::Species::by_id)
+                .map(|s| s.common_name);
+            if let Some(n) = name {
+                e["name"] = json!(n);
+            }
+        }
+    }
+}
+
+/// `query.plants_for_light` for a point or an outline: the sun hours of the spot, then the
+/// ranking of `visioncraft_core::plant_light`.
+pub(crate) fn plants_for_light_json(
+    session: &Session,
+    state: &HostState,
+    q: &PlantsForLightQuery,
+) -> Result<Value, String> {
+    const ID: &str = "query.plants_for_light";
+    if q.point.is_some() == q.outline.is_some() {
+        return Err(format!(
+            "{ID}: give exactly one of `hours`, `point` and `outline`"
+        ));
+    }
+    let day = light_day(ID, session.project(), q.date, q.season)?;
+    let (_, mean, _, spot) = spot_hours(
+        session,
+        state,
+        ID,
+        SunHoursQuery {
+            point: q.point,
+            outline: q.outline.clone(),
+            height_m: 0.05,
+            date: Some(day),
+            season: None,
+            step_minutes: 10.0,
+            plants: q.plants,
+            years: q.years,
+            cell_m: q.cell_m,
+        },
+    )?;
+    let mut out =
+        visioncraft_core::plant_light::plants_for_light_json(spot, mean, q.grower, q.limit);
+    add_names(&mut out["species"]);
+    Ok(out)
+}
+
+/// The mean sun hours over a border's outline on the summer solstice, with the spot's numbers.
+pub(crate) fn border_light(
+    session: &Session,
+    state: &HostState,
+    outline: &[[f32; 2]],
+) -> Result<(f32, Value), String> {
+    let (min, max) = outline.iter().fold(
+        ([f32::INFINITY; 2], [f32::NEG_INFINITY; 2]),
+        |(lo, hi), p| {
+            (
+                [lo[0].min(p[0]), lo[1].min(p[1])],
+                [hi[0].max(p[0]), hi[1].max(p[1])],
+            )
+        },
+    );
+    // About 400 cells at most, but no finer than half a metre.
+    let area = ((max[0] - min[0]) * (max[1] - min[1])).max(0.01);
+    let mut cell_m = (area / 400.0).sqrt().max(0.5);
+    // A thin outline may have no cell centre inside: refine until one has.
+    loop {
+        match spot_hours(
+            session,
+            state,
+            "query.plants_for_light",
+            SunHoursQuery {
+                point: None,
+                outline: Some(outline.to_vec()),
+                height_m: 0.05,
+                date: Some(light_day(
+                    "query.plants_for_light",
+                    session.project(),
+                    None,
+                    None,
+                )?),
+                season: None,
+                step_minutes: 10.0,
+                plants: true,
+                years: None,
+                cell_m,
+            },
+        ) {
+            Ok((_, mean, _, spot)) => return Ok((mean, spot)),
+            Err(e) if e.contains("no cell centre") && cell_m > 0.02 => cell_m /= 2.0,
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+/// What `query.light_check` was asked, checked by the command.
+pub struct LightCheckQuery {
+    pub date: Option<(u32, u32)>,
+    pub season: Option<Season>,
+    pub years: Option<f32>,
+    pub plants: bool,
+    pub step_minutes: f32,
+    pub ids: Option<Vec<String>>,
+    pub layer: Option<String>,
+    pub suggestions: usize,
+    pub include_ok: bool,
+    pub limit: usize,
+}
+
+impl Default for LightCheckQuery {
+    /// The summer solstice, the view's years, the crowns on, 3 suggestions, 200 listed.
+    fn default() -> Self {
+        Self {
+            date: None,
+            season: None,
+            years: None,
+            plants: true,
+            step_minutes: 15.0,
+            ids: None,
+            layer: None,
+            suggestions: 3,
+            include_ok: false,
+            limit: 200,
+        }
+    }
+}
+
+/// Lawn tufts are many and alike: this many per lawn are measured.
+const LAWN_SAMPLES: usize = 25;
+/// More plants than this in one check are refused (narrow it with `ids` or `layer`).
+const MAX_CHECKED: usize = 4000;
+
+/// `query.light_check` on a host.
+pub(crate) fn light_check_json(
+    session: &Session,
+    state: &HostState,
+    q: &LightCheckQuery,
+) -> Result<Value, String> {
+    light_check(
+        session.project(),
+        &models_of(state),
+        &state.catalog.assets,
+        q,
+    )
+}
+
+/// `query.light_check`: the sun hours at every placed plant of `p`, against the species' light
+/// range. `models` gives the geometry of the project's models by id, `assets` the library's
+/// plants (for their size).
+pub fn light_check(
+    p: &Project,
+    models: &Models,
+    assets: &[visioncraft_core::Asset],
+    q: &LightCheckQuery,
+) -> Result<Value, String> {
+    use visioncraft_core::plant_light::{Verdict, light_of, suggest, verdict};
+    const ID: &str = "query.light_check";
+    if !(1.0..=60.0).contains(&q.step_minutes) {
+        return Err(format!("{ID}: `step_minutes` must be 1..60"));
+    }
+    if let Some(y) = q.years
+        && !(0.0..=visioncraft_core::YEARS_MAX).contains(&y)
+    {
+        return Err(format!(
+            "{ID}: `years` must be 0..{}",
+            visioncraft_core::YEARS_MAX
+        ));
+    }
+    if let Some(ids) = &q.ids {
+        for id in ids {
+            if !p.generators.iter().any(|g| g.id() == id) {
+                return Err(format!("{ID}: no planting `{id}`"));
+            }
+        }
+    }
+    if let Some(l) = &q.layer
+        && !p.layers.iter().any(|x| &x.id == l)
+    {
+        return Err(format!("{ID}: no layer `{l}`"));
+    }
+    let (month, day_of_month) = light_day(ID, p, q.date, q.season)?;
+    let years = q.years.or(p.view.years).unwrap_or(0.0);
+    let day = day_sun(
+        &p.site,
+        p.time.year,
+        month,
+        day_of_month,
+        f64::from(q.step_minutes),
+    );
+    let own = owners(p, models);
+    let (mut plants, crowns) = if q.plants {
+        plant_entries(p, &own, assets, month, years)
+    } else {
+        // The plants are wanted, the crowns are not.
+        let (plants, _) = plant_entries(p, &own, assets, month, years);
+        (plants, Vec::new())
+    };
+    let crown_count = crowns.len();
+    let shadows = Shadows::with_crowns(p, own, crowns);
+    // What is checked: flora plants of the planting or layer asked for; lawns sampled.
+    let wanted = |pl: &PlantAt| {
+        pl.asset.starts_with("flora:")
+            && q.ids.as_ref().is_none_or(|ids| ids.contains(&pl.generator))
+            && q.layer.as_ref().is_none_or(|l| {
+                p.generators
+                    .iter()
+                    .any(|g| g.id() == pl.generator && g.layer() == l)
+            })
+    };
+    plants.retain(|pl| wanted(pl));
+    let mut lawn_seen: HashMap<String, usize> = HashMap::new();
+    let mut lawn_total: HashMap<String, usize> = HashMap::new();
+    for pl in &plants {
+        if visioncraft_core::growth::growth_of(&pl.asset, None).grower
+            == visioncraft_core::growth::Grower::Lawn
+        {
+            *lawn_total.entry(pl.generator.clone()).or_default() += 1;
+        }
+    }
+    let mut sampled_out = 0usize;
+    plants.retain(|pl| {
+        let is_lawn = visioncraft_core::growth::growth_of(&pl.asset, None).grower
+            == visioncraft_core::growth::Grower::Lawn;
+        if !is_lawn {
+            return true;
+        }
+        let total = lawn_total[&pl.generator];
+        let stride = total.div_ceil(LAWN_SAMPLES).max(1);
+        let n = lawn_seen.entry(pl.generator.clone()).or_default();
+        let keep = n.is_multiple_of(stride);
+        *n += 1;
+        sampled_out += usize::from(!keep);
+        keep
+    });
+    if plants.len() > MAX_CHECKED {
+        return Err(format!(
+            "{ID}: {} plants to check, at most {MAX_CHECKED}; narrow it with `ids` or `layer`",
+            plants.len()
+        ));
+    }
+    let name = |asset: &str| {
+        asset
+            .strip_prefix("flora:")
+            .and_then(visioncraft_flora::Species::by_id)
+            .map(|s| s.common_name)
+    };
+    let mut counts = [0usize; 3];
+    let mut by_planting: Vec<(String, String, [usize; 3])> = Vec::new();
+    let mut by_species: HashMap<String, (usize, usize, usize, f64)> = HashMap::new();
+    let mut listed: Vec<Value> = Vec::new();
+    let mut mismatches = 0usize;
+    let mut suggestion_cache: HashMap<(String, i32), Vec<Value>> = HashMap::new();
+    for pl in &plants {
+        let need = light_of(&pl.asset, None);
+        let gr = visioncraft_core::growth::growth_of(&pl.asset, None);
+        let height = gr.mature_height_m * gr.size(pl.age_years).height * pl.scale;
+        // Mid-height of the plant, up to 2 m: a tree is judged by its middle, not its trunk's foot.
+        let at = (height * 0.5).clamp(0.05, 2.0);
+        let [x, y, z] = pl.position;
+        let _ = y;
+        let lit = shadows.lit_at_skipping(&day, x, z, at, &pl.crowns);
+        let hours = hours_of(&lit) as f32;
+        let v = verdict(&need.light(), hours);
+        let k = match v {
+            Verdict::Ok => 0,
+            Verdict::TooSunny => 1,
+            Verdict::TooShady => 2,
+        };
+        counts[k] += 1;
+        match by_planting.iter_mut().find(|b| b.0 == pl.generator) {
+            Some(b) => b.2[k] += 1,
+            None => {
+                let mut c = [0; 3];
+                c[k] = 1;
+                by_planting.push((pl.generator.clone(), pl.name.clone(), c));
+            }
+        }
+        let sp = by_species.entry(pl.asset.clone()).or_default();
+        match k {
+            0 => sp.0 += 1,
+            1 => sp.1 += 1,
+            _ => sp.2 += 1,
+        }
+        sp.3 += f64::from(hours);
+        if k == 0 && !q.include_ok {
+            continue;
+        }
+        if k != 0 {
+            mismatches += 1;
+        }
+        if listed.len() >= q.limit {
+            continue;
+        }
+        let key = (pl.asset.clone(), (hours * 2.0).round() as i32);
+        let suggestions = if k == 0 || q.suggestions == 0 {
+            Vec::new()
+        } else {
+            suggestion_cache
+                .entry(key)
+                .or_insert_with(|| {
+                    let mut v: Vec<Value> = suggest(&pl.asset, hours, q.suggestions)
+                        .iter()
+                        .map(|r| {
+                            let mut e = json!({
+                                "species": format!("flora:{}", r.id), "fit": r.fit,
+                                "light": {"min_hours": r.light.min_hours, "max_hours": r.light.max_hours},
+                            });
+                            if let Some(n) = name(&format!("flora:{}", r.id)) {
+                                e["name"] = json!(n);
+                            }
+                            e
+                        })
+                        .collect();
+                    v.shrink_to_fit();
+                    v
+                })
+                .clone()
+        };
+        let mut e = json!({
+            "id": format!("{}#{}", pl.generator, pl.index),
+            "planting": pl.generator, "species": pl.asset,
+            "position": [r2(f64::from(x)), r2(f64::from(z))],
+            "hours": r2(f64::from(hours)),
+            "light": {"min_hours": need.min_hours, "max_hours": need.max_hours},
+            "from_table": need.from_table, "estimated": need.estimated,
+            "verdict": v, "suggestions": suggestions,
+        });
+        if let Some(n) = name(&pl.asset) {
+            e["name"] = json!(n);
+        }
+        listed.push(e);
+    }
+    let mut species: Vec<Value> = by_species
+        .iter()
+        .map(|(asset, (ok, sunny, shady, total))| {
+            let n = (ok + sunny + shady) as f64;
+            let need = light_of(asset, None);
+            json!({
+                "species": asset, "name": name(asset), "count": ok + sunny + shady,
+                "ok": ok, "too_sunny": sunny, "too_shady": shady,
+                "mean_hours": r2(total / n),
+                "light": {"min_hours": need.min_hours, "max_hours": need.max_hours},
+            })
+        })
+        .collect();
+    species.sort_by(|a, b| {
+        let m =
+            |v: &Value| v["too_sunny"].as_u64().unwrap_or(0) + v["too_shady"].as_u64().unwrap_or(0);
+        m(b).cmp(&m(a))
+            .then(a["species"].as_str().cmp(&b["species"].as_str()))
+    });
+    Ok(json!({
+        "date": {"month": month, "day": day_of_month}, "years": years,
+        "daylight_hours": r2(day.daylight_hours), "crowns": crown_count,
+        "summary": {
+            "checked": plants.len(), "ok": counts[0], "too_sunny": counts[1], "too_shady": counts[2],
+            "lawn_tufts_not_measured": sampled_out,
+        },
+        "mismatches": mismatches,
+        "listed": listed.len(),
+        "truncated": mismatches + if q.include_ok { counts[0] } else { 0 } > listed.len(),
+        "plants": listed,
+        "by_planting": by_planting.iter().map(|(id, name, c)| json!({
+            "id": id, "name": name, "ok": c[0], "too_sunny": c[1], "too_shady": c[2],
+        })).collect::<Vec<_>>(),
+        "by_species": species,
+        "note": "light ranges are estimated from general horticultural knowledge, not yet checked against open data; a plant is measured at half its height (up to 2 m), the plants of its own planting do not shade it, a verdict allows 0.5 h either side of the range",
+    }))
 }
 
 #[cfg(test)]

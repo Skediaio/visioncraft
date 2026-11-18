@@ -683,6 +683,7 @@ impl DrawState {
             self.selected = None;
             self.vertex = None;
         }
+        crate::light_ui::rings(cx, &mut top);
         cx.s.extra = (depth, top);
         self.scale_bar(cx);
     }

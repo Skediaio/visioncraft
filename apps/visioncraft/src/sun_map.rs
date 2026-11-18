@@ -323,6 +323,7 @@ pub fn panel(ui: &mut egui::Ui, cx: &mut Cx) {
     if let Some(params) = run {
         cx.run("view.set_sun_map", params);
     }
+    crate::light_ui::panel(ui, cx);
 }
 
 /// `view.set_sun_map` parameters that put the map on `target`: an area, or the plot's box.

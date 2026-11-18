@@ -19,7 +19,7 @@ pub fn recipes() -> Vec<Value> {
 #[test]
 fn every_recipe_of_the_guide_runs() {
     let recipes = recipes();
-    assert_eq!(recipes.len(), 37);
+    assert_eq!(recipes.len(), 38);
     for (n, recipe) in recipes.into_iter().enumerate() {
         let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("recipe-{n}"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -277,6 +277,28 @@ fn every_recipe_of_the_guide_runs() {
                     end["sun"]["elevation_deg"].as_f64().unwrap() < 10.0,
                     "{report}"
                 );
+            }
+            38 => {
+                // The courtyard gets under 3 h: shade plants lead, the courtyard lavender is
+                // too shady and the lawn one fine; after the swap both are fine, and the
+                // automatic border is a shade border.
+                let ranked = &results[6]["result"];
+                assert!(ranked["spot"]["mean"].as_f64().unwrap() < 3.0, "{report}");
+                assert_eq!(ranked["species"][0]["fit"], "full", "{report}");
+                assert_eq!(ranked["species"][0]["grower"], "perennial", "{report}");
+                let before = &results[7]["result"]["summary"];
+                assert_eq!(
+                    (before["ok"].as_u64(), before["too_shady"].as_u64()),
+                    (Some(1), Some(1)),
+                    "{report}"
+                );
+                let after = &results[9]["result"]["summary"];
+                assert_eq!(
+                    (after["checked"].as_u64(), after["too_shady"].as_u64()),
+                    (Some(2), Some(0)),
+                    "{report}"
+                );
+                assert_eq!(results[10]["result"]["style"], "shade", "{report}");
             }
             37 => {
                 // The pavilion's front is an arc 8.46 m long: the walls add up with the three

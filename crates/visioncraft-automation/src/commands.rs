@@ -337,6 +337,106 @@ pub fn host_docs() -> Vec<CommandDoc> {
             false,
         ),
         host_doc(
+            "query.light_check",
+            "Light Check",
+            "Checks every placed plant (the `flora:` species of the plantings, single placements too) against the sun its spot gets. For each plant it computes the hours of direct sun on the day (the summer solstice unless `season` or `date` say otherwise) as `query.sun_hours` does, with shadow from models, shapes, terrain and the crowns of the other plantings' woody plants; a plant is measured at half its height (up to 2 m), and the crowns of its own planting do not shade it (a planting is judged against the light from outside it; its own crown never shades the plant). The hours are held against the species' estimated light range (full sun 6+ h, part shade 3 to 6 h, full shade under 3 h; the lawn wants 4+ h; a species outside the table gets a guess from its grower type, flagged `from_table: false`; none of it is checked against open data yet). A plant is `ok` when its hours lie inside the range give or take half an hour, `too_sunny` above it, `too_shady` below it. The answer starts with the count by verdict and lists the misfits, each with 2 or 3 better-fitting species of the same grower type to swap in (closest in mature height first). Lawn tufts are many and alike: at most 25 per lawn are measured. More than 4,000 plants are refused: narrow it with `ids` or `layer`.",
+            vec![
+                p(
+                    "season",
+                    "string",
+                    None,
+                    false,
+                    Some("summer"),
+                    &["spring", "summer", "autumn", "winter"],
+                    "Which day: 21 March, 21 June, 21 September or 21 December (six months on south of the equator)",
+                ),
+                p(
+                    "date",
+                    "{month, day}",
+                    None,
+                    false,
+                    None,
+                    &[],
+                    "Instead of `season`: a day in the project's year",
+                ),
+                p(
+                    "years",
+                    "number",
+                    Some("years"),
+                    false,
+                    Some("the view's years, else 0"),
+                    &[],
+                    "Years after planting the plants have grown, 0..60",
+                ),
+                p(
+                    "plants",
+                    "boolean",
+                    None,
+                    false,
+                    Some("true"),
+                    &[],
+                    "Plant crowns cast shadow",
+                ),
+                p(
+                    "step_minutes",
+                    "number",
+                    Some("min"),
+                    false,
+                    Some("15"),
+                    &[],
+                    "Sampling step of the day, 1..60",
+                ),
+                p(
+                    "ids",
+                    "[string]",
+                    None,
+                    false,
+                    Some("all plantings"),
+                    &[],
+                    "Only the plants of these plantings (`g1`...)",
+                ),
+                p(
+                    "layer",
+                    "string",
+                    None,
+                    false,
+                    Some("all layers"),
+                    &[],
+                    "Only the plants of the plantings on this layer",
+                ),
+                p(
+                    "suggestions",
+                    "integer",
+                    None,
+                    false,
+                    Some("3"),
+                    &[],
+                    "Better-fitting species listed for each misfit, 0..5",
+                ),
+                p(
+                    "include_ok",
+                    "boolean",
+                    None,
+                    false,
+                    Some("false"),
+                    &[],
+                    "Also list the plants that are fine",
+                ),
+                p(
+                    "limit",
+                    "integer",
+                    None,
+                    false,
+                    Some("200"),
+                    &[],
+                    "At most this many plants are listed, 1..5000 (the counts cover all)",
+                ),
+            ],
+            "{date, years, daylight_hours, crowns, summary: {checked, ok, too_sunny, too_shady, lawn_tufts_not_measured}, mismatches, listed, truncated, plants: [{id (`g1#12`: planting and placement index), planting, species, name, position: [x, z], hours, light: {min_hours, max_hours}, from_table, estimated, verdict (ok|too_sunny|too_shady), suggestions: [{species, name, fit, light}]}], by_planting: [{id, name, ok, too_sunny, too_shady}], by_species: [{species, name, count, ok, too_sunny, too_shady, mean_hours, light}], note}",
+            json!({"season": "summer"}),
+            false,
+        ),
+        host_doc(
             "query.ground_length",
             "Ground Length",
             "The length of a walk along path as it runs over the ground (terrain, areas and models), sampled every 0.25 m; where there is no ground it counts as height 0.",
@@ -922,6 +1022,100 @@ pub fn execute(host: &mut dyn Host, id: &str, params: &Value) -> Result<Value, S
             let (session, state) = host.parts();
             inspect::sun_hours_json(session, state, &q)
         }
+        "query.plants_for_light" => {
+            Fields::new(
+                id,
+                "parameter",
+                Some(params),
+                &[
+                    "hours", "point", "outline", "season", "date", "grower", "limit", "cell_m",
+                    "plants", "years",
+                ],
+            )?;
+            let point: Option<[f32; 2]> = take(id, params, "point")?;
+            let outline: Option<Vec<[f32; 2]>> = take(id, params, "outline")?;
+            let hours: Option<f32> = take(id, params, "hours")?;
+            if u8::from(point.is_some()) + u8::from(outline.is_some()) + u8::from(hours.is_some())
+                > 1
+            {
+                return Err(format!(
+                    "{id}: give exactly one of `hours`, `point` and `outline`"
+                ));
+            }
+            if point.is_none() && outline.is_none() {
+                // The plain command: the hours are given.
+                run_core(host, id, params)
+            } else {
+                let (date, season) = light_date(id, params)?;
+                let grower = take::<String>(id, params, "grower")?
+                    .map(|g| {
+                        visioncraft_core::plant_light::parse_grower(&g).ok_or_else(|| {
+                            format!("{id}: `grower` `{g}` is not one of tree, conifer, palm, shrub, clipped, grass, perennial, ground_cover, climber, lawn")
+                        })
+                    })
+                    .transpose()?;
+                let limit = take::<usize>(id, params, "limit")?.unwrap_or(25);
+                if !(1..=200).contains(&limit) {
+                    return Err(format!("{id}: `limit` must be 1..200"));
+                }
+                let q = inspect::PlantsForLightQuery {
+                    point,
+                    outline,
+                    date,
+                    season,
+                    grower,
+                    limit,
+                    cell_m: take(id, params, "cell_m")?.unwrap_or(1.0),
+                    plants: take(id, params, "plants")?.unwrap_or(true),
+                    years: take(id, params, "years")?,
+                };
+                let (session, state) = host.parts();
+                inspect::plants_for_light_json(session, state, &q)
+            }
+        }
+        "query.light_check" => {
+            Fields::new(
+                id,
+                "parameter",
+                Some(params),
+                &[
+                    "season",
+                    "date",
+                    "years",
+                    "plants",
+                    "step_minutes",
+                    "ids",
+                    "layer",
+                    "suggestions",
+                    "include_ok",
+                    "limit",
+                ],
+            )?;
+            let (date, season) = light_date(id, params)?;
+            let suggestions = take::<usize>(id, params, "suggestions")?.unwrap_or(3);
+            let limit = take::<usize>(id, params, "limit")?.unwrap_or(200);
+            if suggestions > 5 {
+                return Err(format!("{id}: `suggestions` must be 0..5"));
+            }
+            if !(1..=5000).contains(&limit) {
+                return Err(format!("{id}: `limit` must be 1..5000"));
+            }
+            let q = inspect::LightCheckQuery {
+                date,
+                season,
+                years: take(id, params, "years")?,
+                plants: take(id, params, "plants")?.unwrap_or(true),
+                step_minutes: take(id, params, "step_minutes")?.unwrap_or(15.0),
+                ids: take(id, params, "ids")?,
+                layer: take(id, params, "layer")?,
+                suggestions,
+                include_ok: take(id, params, "include_ok")?.unwrap_or(false),
+                limit,
+            };
+            let (session, state) = host.parts();
+            inspect::light_check_json(session, state, &q)
+        }
+        "planting.add_border" => add_border_host(host, params),
         "query.ground_length" => {
             Fields::new(id, "parameter", Some(params), &["path"])?;
             let path = need::<Vec<[f32; 2]>>(id, params, "path")?;
@@ -1299,6 +1493,111 @@ fn species_list(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
         .map(|s| json!({"asset": s.id, "name": s.name, "base": s.base}))
         .collect();
     Ok(json!({"species": species, "custom": custom}))
+}
+
+/// `date` and `season` of a light query.
+#[allow(clippy::type_complexity)]
+fn light_date(
+    id: &str,
+    params: &Value,
+) -> Result<(Option<(u32, u32)>, Option<visioncraft_core::Season>), String> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Date {
+        month: u32,
+        day: u32,
+    }
+    let date = take::<Date>(id, params, "date")?.map(|d| (d.month, d.day));
+    let season = match take::<String>(id, params, "season")? {
+        Some(s) => Some(visioncraft_core::Season::parse(&s).ok_or_else(|| {
+            format!("{id}: `season` must be spring, summer, autumn or winter, not `{s}`")
+        })?),
+        None => None,
+    };
+    Ok((date, season))
+}
+
+/// `planting.add_border` on a host: `style: auto` picks the style from the sun the outline gets,
+/// and an explicit style that clearly mismatches the measured light gets a `light_fit` warning.
+fn add_border_host(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
+    use visioncraft_core::sun_hours::{FULL_SUN_HOURS, PART_SHADE_HOURS};
+    let id = "planting.add_border";
+    let style = params.get("style").and_then(Value::as_str).unwrap_or("");
+    let auto = style == "auto";
+    let wants_light = auto
+        || (visioncraft_core::border::STYLES.contains(&style)
+            && params.get("species").is_none_or(Value::is_null));
+    let mut chosen = None;
+    let mut measured = None;
+    if wants_light {
+        let (session, state) = host.parts();
+        let outline = match (
+            params.get("outline"),
+            params.get("area").and_then(Value::as_str),
+        ) {
+            (Some(o), None) => serde_json::from_value::<Vec<[f32; 2]>>(o.clone()).ok(),
+            (None, Some(a)) => match session.project().shapes.iter().find(|s| s.id() == a) {
+                Some(visioncraft_core::Shape::Area(x)) => Some(x.outline().into_owned()),
+                _ => None,
+            },
+            _ => None,
+        }
+        .filter(|o| o.len() >= 3 && o.iter().flatten().all(|c| c.is_finite()));
+        match outline {
+            Some(o) => match inspect::border_light(session, state, &o) {
+                Ok(m) => measured = Some(m),
+                Err(e) if auto => return Err(e.replace("query.plants_for_light", id)),
+                Err(_) => {}
+            },
+            None if auto => {
+                return Err(format!(
+                    "{id}: style `auto` needs an `outline` (at least 3 points) or the `area` of an area shape, to measure its sun"
+                ));
+            }
+            None => {}
+        }
+    }
+    let mut params = std::borrow::Cow::Borrowed(params);
+    if auto {
+        let (mean, _) = measured.as_ref().expect("auto measured or returned");
+        let dry = params.get("dry").and_then(Value::as_bool).unwrap_or(false);
+        let picked = if f64::from(*mean) < PART_SHADE_HOURS {
+            "shade"
+        } else if f64::from(*mean) <= FULL_SUN_HOURS {
+            "cottage"
+        } else if dry {
+            "dry"
+        } else {
+            "prairie"
+        };
+        params.to_mut()["style"] = json!(picked);
+        chosen = Some(picked);
+    }
+    let mut result = run_core(host, id, &params)?;
+    if let Some((mean, spot)) = measured {
+        let style = chosen.unwrap_or(style);
+        result["light"] = spot;
+        if let Some(c) = chosen {
+            result["style"] = json!(c);
+            result["style_reason"] = json!(format!(
+                "`auto`: the outline gets {mean:.1} h of direct sun on the summer solstice (shade under {PART_SHADE_HOURS} h, cottage up to {FULL_SUN_HOURS} h, prairie or dry above)"
+            ));
+        }
+        let mismatch = match style {
+            "shade" => f64::from(mean) >= FULL_SUN_HOURS,
+            "cottage" | "prairie" | "dry" => f64::from(mean) < PART_SHADE_HOURS,
+            _ => false,
+        };
+        let mut warnings = Vec::new();
+        if mismatch {
+            warnings.push(format!(
+                "light_fit: the `{style}` style suits {} but the outline gets {mean:.1} h of direct sun on the summer solstice; try `style: auto`, or `query.plants_for_light` with this outline for species that fit",
+                if style == "shade" { "under 6 h of sun" } else { "3 h of sun and more" }
+            ));
+        }
+        result["warnings"] = json!(warnings);
+    }
+    Ok(result)
 }
 
 /// A copy of `project` with the fields of `time` changed, checked as `time.set` checks them.

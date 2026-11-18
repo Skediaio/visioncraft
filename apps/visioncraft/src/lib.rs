@@ -21,6 +21,7 @@ pub mod import_task;
 pub mod lamps;
 pub mod library;
 pub mod library_ui;
+pub mod light_ui;
 pub mod load_stats;
 pub mod material_library;
 pub mod materials;

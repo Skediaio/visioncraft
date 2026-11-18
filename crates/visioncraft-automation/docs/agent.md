@@ -42,7 +42,7 @@ same over MCP (`visioncraft-cli mcp`), JSON lines (`visioncraft-cli serve`) and 
 4. **Render.** `doc_render_preview {"viewpoint": ...}`: a PNG and what was drawn (camera, sun,
    `plantsPending`: 0 means every plant is drawn). Its `time` changes the picture only.
 5. **Verify** against the plan: `doc_inspect` (`area_m2`, `footprint_m2`, plant `count`),
-   `query.measure`, `query.quantities {ids?, layer?}` (areas, lengths, volumes and plant counts per object, per material and per asset; linked models too, per body with surface and volume (closed bodies), scale applied, in `models`; plants are counted with the renderer's building rule, `counted_with: "scene"`), `query.raycast`, `query.sun_hours {point | outline, season | date, cell_m?, years?, plants?}` (hours of direct sun at a spot or as a grid over an area, with shadow from models, shapes, terrain and plant crowns; `view.set_sun_map` draws the same grid on the ground, recipe 26), `query.ground_height`, `query.ground_length`, `query.sun`. A film of camera moves is `film.*` (recipe 27); `film.preview` reads it without drawing.
+   `query.measure`, `query.plants_for_light {point | outline | hours}` (species ranked by the light a spot gets), `query.light_check` (every placed plant against its light range), `query.quantities {ids?, layer?}` (areas, lengths, volumes and plant counts per object, per material and per asset; linked models too, per body with surface and volume (closed bodies), scale applied, in `models`; plants are counted with the renderer's building rule, `counted_with: "scene"`), `query.raycast`, `query.sun_hours {point | outline, season | date, cell_m?, years?, plants?}` (hours of direct sun at a spot or as a grid over an area, with shadow from models, shapes, terrain and plant crowns; `view.set_sun_map` draws the same grid on the ground, recipe 26), `query.ground_height`, `query.ground_length`, `query.sun`. A film of camera moves is `film.*` (recipe 27); `film.preview` reads it without drawing.
    Save with `command_run file.save {"path": ...}`.
 
 ## Recipes
@@ -1177,6 +1177,58 @@ and a `roof`), `shape.set_curve` and `shape.set_smooth` all work on one, and the
 - **Quantities.** The house's row in `query.quantities` has `house`: `wall_length_m` (a curved edge by
   its true arc length), `wall_area_gross_m2`, `openings`, `openings_area_m2` (each opening's width
   along the arc by its height) and `wall_area_m2`, the gross area less the openings.
+
+### 38. Check a planting plan against the light, and swap the misfits
+
+```json recipe
+{"intent": "a house with two wings that make a shady courtyard on its north side; two lavenders (one in the courtyard, one in the open), found by the light check and swapped for a plant that likes shade, then a shade border chosen by the sun it gets", "steps": [
+  {"id": "shape.add_area", "params": {"name": "Lawn", "outline": [[0, 0], [24, 0], [24, 26], [0, 26]], "material": "lawn"}},
+  {"id": "shape.add_extrusion", "params": {"name": "House", "outline": [[2, 12], [22, 12], [22, 16], [2, 16]], "height": 10}},
+  {"id": "shape.add_extrusion", "params": {"name": "East wing", "outline": [[16, 0], [18, 0], [18, 12], [16, 12]], "height": 10}},
+  {"id": "shape.add_extrusion", "params": {"name": "West wing", "outline": [[6, 0], [8, 0], [8, 12], [6, 12]], "height": 10}},
+  {"id": "planting.add_single", "params": {"name": "Courtyard lavender", "asset": "flora:lavandula-angustifolia", "position": [12, 0, 8]}},
+  {"id": "planting.add_single", "params": {"name": "Lawn lavender", "asset": "flora:lavandula-angustifolia", "position": [12, 0, 22]}},
+  {"id": "query.plants_for_light", "params": {"outline": [[9, 5], [15, 5], [15, 10], [9, 10]], "grower": "perennial", "limit": 5}},
+  {"id": "query.light_check", "params": {"include_ok": true}},
+  {"id": "planting.update", "params": {"id": "g1", "asset": "flora:skimmia-japonica"}},
+  {"id": "query.light_check", "params": {}},
+  {"id": "planting.add_border", "params": {"name": "Courtyard border", "outline": [[9, 6], [15, 6], [15, 10], [9, 10]], "style": "auto", "facing": [0, 1]}},
+  {"id": "view.render", "params": {"camera": {"position": [12, 14, -8], "target": [12, 0, 8]}, "width": 960, "height": 540, "path": "courtyard.png"}}
+]}
+```
+
+Plants carry an estimated light range, the hours of direct sun on a summer day they thrive in (full
+sun 6 h and more, part shade 3 to 6 h, full shade under 3 h; many plants span two classes, the
+lawn wants 4 h and more). The ranges are general horticultural knowledge, flagged `estimated` in
+every answer and not yet checked against open data; a species outside the table gets a guess from
+its grower type, flagged `from_table: false`. Three commands use them, all on the sun-hours
+computation of `query.sun_hours` (the summer solstice unless `season` or `date` say otherwise, so a
+`query.sun_hours` with `season: summer` gives the same hours):
+
+- **`query.plants_for_light {point | outline | hours, season | date, grower?, limit?}`** ranks the
+  species for a spot. Over an outline the ranking is for the mean hours, and `spot` also gives the
+  min and max. Each entry has `fit` (`full` when the hours lie inside the range, `partial` when
+  outside it but within one class; species two classes away are left out), a `reason`, the `light`
+  range, `grower`, the mature size and `estimated`. The plants that want just this light come
+  before those that take anything. Given `hours` it needs no host and runs in a bare session.
+- **`query.light_check {season | date, years?, ids?, layer?, include_ok?}`** measures the sun at every
+  placed plant (`flora:` species of plantings and single placements) and holds it against the
+  species' range: `summary` has the count by verdict (`ok`, `too_sunny`, `too_shady`; half an hour
+  either side of the range still counts as fine), `plants` lists the misfits with their `position`
+  `[x, z]`, `hours`, `light` range and `suggestions` (2 or 3 species of the same grower type that
+  fit, closest in mature height first), and `by_species` and `by_planting` count them up. A plant
+  is measured at half its height (up to 2 m), and its own planting's crowns never shade it, so a
+  tree is not judged by its own canopy; other plantings' crowns do. Swap a misfit with
+  `planting.update` (a single placement takes `asset`; a scatter takes `asset_palette`).
+- **`planting.add_border {style: "auto"}`** takes the mean sun hours over the outline: shade below
+  3 h, cottage from 3 to 6 h, prairie above 6 h (`dry: true` makes it dry instead of prairie). The
+  answer has the chosen `style` and a `style_reason`, and `light`, the measured hours. An explicit
+  style that clearly mismatches the light (shade in 6 h or more, cottage, prairie or dry in under
+  3 h) answers with a `light_fit` warning. A bare session without geometry refuses `auto`.
+
+In the window, Sun & sky under the sun-hours map has "Plants for this light" (the species for the
+area the map shows, by its mean hours) and a "Check plant light" button; the misfits are ringed on
+the plan in the Draw view, amber for too sunny and blue for too shady.
 
 ## Known traps
 
