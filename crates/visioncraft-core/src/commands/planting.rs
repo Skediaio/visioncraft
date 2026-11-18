@@ -173,6 +173,33 @@ pub(super) fn register(s: &mut Session) {
     );
     s.register_with_spec(
         spec(
+            "planting.add_border",
+            "Add Border",
+            "Plants a layered perennial border that closes up, from a curated species list per style: tall species at the back, short at the front, in drifts of a few to a dozen with a low matrix species between them, spaced from each species' mature width so the crowns touch at maturity (a young border is open, a three-year-old one closed: see `view.set years`). It is an area scatter with a `border` (change it with `planting.update`, `planting.growth` shows how its species grow). The front is the side the viewer stands: `facing` or `front` says it, else the side away from the nearest wall, building or hedge within 2.5 m of the outline, else the outward side of the outline's longest edge. Deterministic by `seed`.",
+            vec![
+                param("name", T::String, "Display name.").default(json!("Border")),
+                param("outline", T::Outline, "Polygon as [x, z] pairs in metres, at least 3. Give this or `area`."),
+                param("area", T::String, "The id of an area shape (`S1`...) to plant over its outline. Give this or `outline`."),
+                param("style", T::String, "The species list: cottage (spires, daisies and sages in the sun), prairie (grasses and late daisies), shade (hostas, astilbes, ferns, hellebores) or dry (lavender, sages, stonecrops, fine grasses).")
+                    .required()
+                    .allowed(crate::border::STYLES),
+                param("front", T::Array, "Indices of the outline's edges that face the viewer (edge `i` runs from point `i` to `i + 1`): the front is their mean outward direction."),
+                param("facing", T::Point2, "The front as a direction [x, z] from the back of the border to its front. Wins over `front`."),
+                param("height_range", T::Array, "[front, back]: the mature plant height in metres wanted at the front edge and at the back edge, e.g. [0.4, 1.6]; species are chosen by how close their mature height is. By default the style's."),
+                param("species", T::Array, "Species ids to use instead of the style's, each `flora:<id>` (built-in, see `species.list`) or a custom species id; low spreading ones (ground cover, or up to 0.5 m and wider than high) are the matrix between drifts."),
+                param("closure", T::Number, "Plants per m2 = closure / mature width squared, per species: 1 crowns just touch, more is denser.").default(json!(1.3)),
+                param("drift_m", T::Number, "Typical length of a drift along the border in metres (1..10).").unit("m").default(json!(2.4)),
+                seed(),
+                param("avoid_buildings", T::Boolean, "Leave out plants that would stand on or in a building.").default(json!(true)),
+                layer(),
+            ],
+            "{id, facing: [x, z], height_range: [front, back], species: [asset...], plants}",
+            json!({"name": "Cottage border", "outline": [[0, 0], [10, 0], [10, 2], [0, 2]], "style": "cottage", "facing": [0, 1]}),
+        ),
+        add_border,
+    );
+    s.register_with_spec(
+        spec(
             "planting.add_brush",
             "Start Brush",
             "Starts a brush generator: strokes add and erase coverage in order, plants fill the covered ground. Rotation is always random.",
@@ -515,8 +542,180 @@ fn add_area(project: &mut Project, params: &Value) -> Result<Value, CommandError
             layers: p.layers,
             avoid_buildings: p.avoid_buildings,
             edge_fade_m: p.edge_fade_m,
+            border: None,
         })
     })
+}
+
+fn add_border(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
+    use crate::border::{self, Border, BorderSpecies};
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct P {
+        #[serde(default = "border_name")]
+        name: String,
+        outline: Option<Vec<[f32; 2]>>,
+        area: Option<String>,
+        style: String,
+        front: Option<Vec<usize>>,
+        facing: Option<[f32; 2]>,
+        height_range: Option<[f32; 2]>,
+        species: Option<Vec<String>>,
+        closure: Option<f32>,
+        drift_m: Option<f32>,
+        seed: Option<u64>,
+        layer: Option<String>,
+        #[serde(default = "super::shapes::yes")]
+        avoid_buildings: bool,
+    }
+    fn border_name() -> String {
+        "Border".into()
+    }
+    let p: P = parse(params)?;
+    let outline = match (p.outline, p.area) {
+        (Some(o), None) => o,
+        (None, Some(id)) => match project.shapes.iter().find(|s| s.id() == id) {
+            Some(crate::shape::Shape::Area(a)) => a.outline().into_owned(),
+            Some(_) => return Err(fail(format!("`{id}` is not an area"))),
+            None => return Err(fail(format!("no shape `{id}`"))),
+        },
+        _ => return Err(bad("give `outline` or `area`, one of them")),
+    };
+    if outline.len() < 3 || outline.iter().flatten().any(|c| !c.is_finite()) {
+        return Err(bad("outline: at least 3 finite points"));
+    }
+    let (mut species, default_range) =
+        border::style(&p.style).ok_or_else(|| bad(&format!("no style `{}`", p.style)))?;
+    if let Some(ids) = p.species {
+        if ids.is_empty() {
+            return Err(bad("species: at least one"));
+        }
+        species = ids
+            .into_iter()
+            .map(|id| {
+                let asset = if id.starts_with("sp") || id.starts_with("flora:") {
+                    id
+                } else {
+                    format!("flora:{id}")
+                };
+                let known = asset
+                    .strip_prefix("flora:")
+                    .is_some_and(|s| crate::growth::GROWTH.iter().any(|r| r.0 == s))
+                    || project.species.iter().any(|s| s.id == asset);
+                if !known {
+                    return Err(fail(format!(
+                        "no species `{asset}`: see species.list for the built-in ones"
+                    )));
+                }
+                Ok(BorderSpecies {
+                    matrix: border::is_matrix_by_size(&asset),
+                    asset,
+                    weight: 1.0,
+                })
+            })
+            .collect::<Result<_, _>>()?;
+    }
+    let facing = if let Some(f) = p.facing {
+        let l = f[0].hypot(f[1]);
+        if !l.is_finite() || l < 1e-4 {
+            return Err(bad("facing: a direction [x, z], not zero"));
+        }
+        [f[0] / l, f[1] / l]
+    } else if let Some(edges) = &p.front {
+        if edges.iter().any(|&e| e >= outline.len()) {
+            return Err(bad("front: an edge index is past the outline's last edge"));
+        }
+        border::facing_of_edges(&outline, edges)
+            .ok_or_else(|| bad("front: the edges cancel each other out"))?
+    } else {
+        border::derive_facing(&outline, &backs(project))
+    };
+    let height_range = p.height_range.unwrap_or(default_range);
+    let b = Border {
+        style: p.style,
+        facing,
+        height_range_m: height_range,
+        species,
+        closure: p.closure.unwrap_or(1.3),
+        drift_m: p.drift_m.unwrap_or(2.4),
+    };
+    b.validate().map_err(|e| bad(&e))?;
+    let used: Vec<String> = b.species.iter().map(|s| s.asset.clone()).collect();
+    let r = add(project, p.layer, |id, layer, seed| {
+        Generator::AreaScatter(AreaScatter {
+            id,
+            name: p.name,
+            layer,
+            planted_age_years: None,
+            asset_palette: Vec::new(),
+            outline,
+            density_per_m2: 0.0,
+            position_jitter: 1.0,
+            scale_min: 1.0,
+            scale_max: 1.0,
+            random_rotation: true,
+            min_distance_m: 0.0,
+            seed: p.seed.unwrap_or(seed),
+            layers: Vec::new(),
+            avoid_buildings: p.avoid_buildings,
+            edge_fade_m: 0.0,
+            border: Some(b),
+        })
+    })?;
+    let id = r["id"].as_str().unwrap_or_default().to_string();
+    let g = project.generators.iter().find(|g| g.id() == id);
+    let ground = |x: f32, z: f32| {
+        project
+            .terrain
+            .as_deref()
+            .and_then(|t| t.height_at(x, z))
+            .or(Some(0.0))
+    };
+    let plants = g.map_or(0, |g| {
+        crate::planting::evaluate(g, &ground).placements.len()
+    });
+    Ok(json!({
+        "id": id,
+        "facing": [round2(facing[0]), round2(facing[1])],
+        "height_range": height_range,
+        "species": used,
+        "plants": plants,
+    }))
+}
+
+fn round2(v: f32) -> f32 {
+    (v * 100.0).round() / 100.0
+}
+
+/// What can stand behind a border: the segments of walls, buildings and hedges.
+fn backs(project: &Project) -> Vec<Vec<([f32; 2], [f32; 2])>> {
+    use crate::growth::{Grower, growth_of};
+    let segments = |pts: &[[f32; 2]], closed: bool| -> Vec<([f32; 2], [f32; 2])> {
+        let n = pts.len();
+        (0..if closed { n } else { n.saturating_sub(1) })
+            .map(|i| (pts[i], pts[(i + 1) % n]))
+            .collect()
+    };
+    let mut out = Vec::new();
+    for sh in &project.shapes {
+        if let crate::shape::Shape::Extrusion(e) = sh {
+            out.push(segments(&e.outline(), e.closed));
+        }
+    }
+    for g in &project.generators {
+        if let Generator::SplineMass(m) = g {
+            let hedge = m.asset_palette.iter().any(|w| {
+                matches!(
+                    growth_of(&w.asset, None).grower,
+                    Grower::Clipped | Grower::Climber
+                )
+            });
+            if hedge {
+                out.push(segments(&m.points, m.closed));
+            }
+        }
+    }
+    out
 }
 
 fn add_brush(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
@@ -768,6 +967,7 @@ fn update(project: &mut Project, params: &Value) -> Result<Value, CommandError> 
             "straight",
             "avoid_buildings",
             "planted_age_years",
+            "border",
         ],
     )?;
     updated.validate().map_err(|e| bad(&e))?;

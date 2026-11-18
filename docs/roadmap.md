@@ -5,6 +5,19 @@ nothing here is a promise of a date.
 
 ## In progress
 
+- **Denser borders:** `planting.add_border {outline | area, style: cottage | prairie | shade | dry,
+  front | facing, height_range, species, closure, drift_m, seed}` plants a layered perennial
+  border from a curated species list per style (all built-in species with growth data): short at
+  the front, tall at the back (the front is given, or is the side away from the nearest wall,
+  building or hedge), in elongated drifts of a few to a dozen plants with a low matrix species
+  between them, spaced from each species' mature width (closure / w^2 per m2) and gap-filled, so a
+  three-year-old border is closed (95 % of the ground under a crown) and a new one open (14 % at
+  planting). An area scatter with a `border`; undoable, deterministic by seed; the garden
+  example's border is made with it. Flowers already read from eye level and follow the season
+  (checked at 5 to 17 m). Recipe 29. Next: the same layout along a path or a curved bed's
+  centre line, a bloom calendar view (what flowers each month in the border), a swatch of
+  neighbouring colours, bulbs for spring between the perennials, the coast example's borders
+  moved onto it.
 - **Weathering:** `material.update {weathering: {amount, dirt, moss, wear, streaks}}` and
   `view.set {weathering}` (one slider for the whole design, kept explicit: the view's `years` does
   not drive it) age standard materials with procedural dirt (near the ground, in crevices, under
@@ -138,9 +151,6 @@ nothing here is a promise of a date.
   coordinates converted to the drawing's metres and north, the site set for the sun, and each
   source's licence and attribution shown. The model is then placed on that ground. Import from
   common geodata files and services as well.
-- **Denser borders:** layered perennial plantings that close up, with flowers that read from
-  eye level.
-
 - **Furniture and interiors library:** far more furniture than today, indoors and outdoors:
   sofas, chairs, tables, beds, storage, kitchens and appliances, bathroom fixtures, rugs,
   curtains, lamps, plants in pots, garden sets, loungers, parasols, barbecues, with variants in

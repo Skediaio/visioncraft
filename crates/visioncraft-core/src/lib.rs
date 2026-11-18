@@ -5,6 +5,7 @@
 //! World convention: metres, right-handed, **Y up**, +X east, -Z north (the glTF convention).
 
 pub mod bed;
+pub mod border;
 pub mod canopy;
 pub mod catalog;
 mod commands;

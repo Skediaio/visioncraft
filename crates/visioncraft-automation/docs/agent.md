@@ -800,6 +800,49 @@ Dirt, Moss, Wear, Streaks) for the picked material, and Sun & sky an Age slider 
 `weathering` of the older kind (`kind.weathering`, the "Grime tint" slider: one tint for occluded
 and downward faces, green on up-facing ones) still works and adds to it.
 
+### 29. A cottage border in front of the hedge
+
+```json recipe
+{"intent": "a mature perennial border along a hornbeam hedge: layered by height, in drifts, closed up after three years", "steps": [
+  {"id": "shape.add_area", "params": {"name": "Border bed", "outline": [[1, 1], [3.2, 1], [3.2, 17], [1, 17]], "material": "soil"}},
+  {"id": "planting.add_spline", "params": {"name": "Hornbeam hedge", "asset_palette": [{"asset": "flora:carpinus-hedge", "weight": 1}], "points": [[0.2, 0.2], [0.2, 17.8]], "straight": true, "spacing": {"every": 0.8}}},
+  {"id": "planting.add_border", "params": {"name": "Cottage border", "area": "S1", "style": "cottage", "seed": 3}},
+  {"id": "view.set", "params": {"years": 3}},
+  {"id": "view.render", "params": {"camera": {"position": [7, 1.6, 9], "target": [2, 0.8, 9]}, "season": "summer", "width": 960, "height": 540, "path": "border-eye-level.png"}},
+  {"id": "view.render", "params": {"camera": {"position": [6, 1.6, 17.5], "target": [2, 0.6, 3]}, "season": "summer", "width": 960, "height": 540, "path": "border-along.png"}},
+  {"id": "view.set", "params": {"years": 0}},
+  {"id": "view.render", "params": {"camera": {"position": [7, 1.6, 9], "target": [2, 0.8, 9]}, "season": "spring", "width": 960, "height": 540, "path": "border-new.png"}}
+]}
+```
+
+`planting.add_border {outline | area, style}` plants a border the way a designer does, from a
+curated list of built-in perennials, grasses and low shrubs per style (`cottage`, `prairie`,
+`shade`, `dry`; every species has growth data, `species.list` shows them and `species` swaps in
+your own):
+
+- **Layers by height.** The border has a front, the side you stand on, and a back. Each spot gets
+  a species whose mature height is near the height wanted there, from `height_range`
+  `[front, back]` (the style's own by default, e.g. 0.4 to 1.6 m for cottage), so delphiniums and
+  phlox stand at the back, coneflowers and sages in the middle, catmint and cranesbill along the
+  front. The front is `facing` (`[x, z]`, from the back to the front), or the outward side of the
+  edges named in `front` (edge `i` runs from point `i` to `i + 1`), or, when neither is given,
+  the side away from the nearest wall, building, fence block or hedge within 2.5 m of the outline
+  (here the hornbeam hedge, so the front faces +x), else the outward side of the longest edge.
+  The result's `facing` says what was used.
+- **Drifts.** Species stand in elongated groups along the border, `drift_m` (2.4 m) long, a few to
+  a dozen plants each, with a low matrix species (cranesbill, lady's mantle, catmint; grasses and
+  sedges in the other styles) between the drifts, thinner towards the back.
+- **Closes up.** Each species is planted at `closure / w^2` plants per m2 from its mature width
+  `w` (`closure` 1.3 by default: crowns touch and overlap at maturity), and any gap that is left
+  between two drifts is filled. The placements are the same at every age: the growth curves make a
+  new border open (about 15 % of the ground under a crown at planting) and a three-year-old one
+  closed (over 95 %), so `view.set years` shows the border closing up (`planting.growth` has the
+  sizes). Flowers follow the season: the picture in spring has the early ones only.
+
+The border is an area scatter with a `border` (`planting.update` changes it: `seed`, `outline`,
+or the `border` object whole; `planting.remove` takes it away; all undoable). It is deterministic
+by `seed`.
+
 ## Known traps
 
 - **Ids are not names**: `S2`, not `House`; viewpoints are `v1`, lights `li1`.

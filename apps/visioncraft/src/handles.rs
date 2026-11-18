@@ -196,6 +196,7 @@ mod tests {
             layers: vec![],
             avoid_buildings: false,
             edge_fade_m: 0.0,
+            border: None,
         })
     }
 

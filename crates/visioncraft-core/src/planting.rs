@@ -176,6 +176,10 @@ pub struct AreaScatter {
     /// 0 (the default, not written): a hard edge.
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub edge_fade_m: f32,
+    /// A layered, drifted perennial border ([`crate::border`]): when given, it places the
+    /// plants (from its own species list) and the palette, density and layers are not used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub border: Option<crate::border::Border>,
 }
 
 fn is_zero_f32(v: &f32) -> bool {
@@ -369,6 +373,16 @@ impl Generator {
         };
         add(&mut out, palette);
         layers.iter().for_each(|l| add(&mut out, &l.asset_palette));
+        if let Self::AreaScatter(AreaScatter {
+            border: Some(b), ..
+        }) = self
+        {
+            for s in &b.species {
+                if !out.contains(&s.asset.as_str()) {
+                    out.push(&s.asset);
+                }
+            }
+        }
         out
     }
 
@@ -381,7 +395,12 @@ impl Generator {
         match self {
             Self::Single(g) => g.asset == asset,
             Self::SplineMass(g) => palette(&g.asset_palette),
-            Self::AreaScatter(g) => layered(&g.asset_palette, &g.layers),
+            Self::AreaScatter(g) => {
+                layered(&g.asset_palette, &g.layers)
+                    || g.border
+                        .as_ref()
+                        .is_some_and(|b| b.species.iter().any(|s| s.asset == asset))
+            }
             Self::MixedBrush(g) => layered(&g.asset_palette, &g.layers),
             Self::SurfaceFill(g) => layered(&g.asset_palette, &g.layers),
             Self::Cluster(g) => palette(&g.asset_palette),
@@ -457,6 +476,9 @@ impl Generator {
                     g.edge_fade_m.is_finite() && g.edge_fade_m >= 0.0,
                     "edge fade must be 0 or more",
                 )?;
+                if let Some(b) = &g.border {
+                    return b.validate();
+                }
                 if !g.layers.is_empty() {
                     return layers(&g.layers);
                 }
@@ -693,7 +715,7 @@ pub(crate) fn point_in_polygon(p: [f32; 2], poly: &[[f32; 2]]) -> bool {
     inside
 }
 
-fn bounds(points: impl Iterator<Item = [f32; 2]>) -> [[f32; 2]; 2] {
+pub(crate) fn bounds(points: impl Iterator<Item = [f32; 2]>) -> [[f32; 2]; 2] {
     let mut b = [[f32::INFINITY; 2], [f32::NEG_INFINITY; 2]];
     for p in points {
         for k in 0..2 {
@@ -1187,6 +1209,11 @@ fn evaluate_forms(generator: &Generator, ground: &dyn Fn(f32, f32) -> Option<f32
             false,
         ),
         Generator::SplineMass(g) => evaluate_spline(g, ground),
+        Generator::AreaScatter(g) if g.border.is_some() => {
+            let b = g.border.as_ref().expect("checked by the guard");
+            let e = crate::border::evaluate(g, b, ground);
+            done(e.placements, e.truncated)
+        }
         Generator::AreaScatter(g) => {
             let b = bounds(g.outline.iter().copied());
             let own = Tier {
@@ -1903,6 +1930,7 @@ mod tests {
             layers: Vec::new(),
             avoid_buildings: false,
             edge_fade_m: 0.0,
+            border: None,
         }
     }
 
@@ -2885,6 +2913,7 @@ mod layer_tests {
             layers: forest(),
             avoid_buildings: false,
             edge_fade_m: 0.0,
+            border: None,
         });
         let e = evaluate(&area, &flat);
         assert!(

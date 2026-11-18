@@ -19,7 +19,7 @@ pub fn recipes() -> Vec<Value> {
 #[test]
 fn every_recipe_of_the_guide_runs() {
     let recipes = recipes();
-    assert_eq!(recipes.len(), 28);
+    assert_eq!(recipes.len(), 29);
     for (n, recipe) in recipes.into_iter().enumerate() {
         let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("recipe-{n}"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -277,6 +277,13 @@ fn every_recipe_of_the_guide_runs() {
                     end["sun"]["elevation_deg"].as_f64().unwrap() < 10.0,
                     "{report}"
                 );
+            }
+            29 => {
+                // The hedge is on the west side, so the border faces east, away from it.
+                let border = &results[2]["result"];
+                assert_eq!(border["facing"], json!([1.0, 0.0]), "{report}");
+                assert!(border["plants"].as_u64().unwrap() > 100, "{report}");
+                assert_eq!(border["species"].as_array().unwrap().len(), 13, "{report}");
             }
             18 => {
                 // The beach 20 m out: 0.2 m above the water; the grass stops at the waterline.
