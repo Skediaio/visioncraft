@@ -1469,6 +1469,74 @@ fn terrain_casts_no_shadow_on_open_beach() {
     }
 }
 
+/// Rolling terrain with a fine and a coarse level, first seen from far (coarse), then from close
+/// by after a jump of the camera, the one frame a film or a sheet of stills takes there: the
+/// hand-over between the levels must not leave the ground unshaded. The depth pre-pass used to
+/// dither both levels while the terrain's forward pass drew only the nearer one, so wherever the
+/// coarse level lies above the fine one the ground stayed black, stippled with the few pixels the
+/// dither gave back (on LOW and MEDIUM, and through alpha to coverage on HIGH).
+#[test]
+fn terrain_lod_hand_over_leaves_no_black_patches() {
+    for (name, quality) in [("low", Quality::LOW), ("high", Quality::HIGH)] {
+        let mut r = renderer(W, H);
+        r.set_quality(quality);
+        demo::terrain_layers(&mut r);
+        let any = r.add_material(&Material::default());
+        let height = |x: f32, z: f32| 1.2 * (x * 0.7).sin() * (z * 0.6).sin();
+        let parts: Vec<_> = [(1, 40.0), (8, f32::INFINITY)]
+            .into_iter()
+            .map(|(step, reach)| {
+                let data = demo::terrain_chunk(
+                    glam::Vec2::new(-32.0, -44.0),
+                    64,
+                    1.0,
+                    step,
+                    &height,
+                    &demo::hills_weights,
+                );
+                (
+                    r.add_terrain_chunk(&data.chunk()).expect("chunk"),
+                    any,
+                    reach,
+                )
+            })
+            .collect();
+        r.add_lod_item(&parts, &[Mat4::IDENTITY]);
+        let aspect = W as f32 / H as f32;
+        let far = demo::camera(
+            Vec3::new(0.0, 60.0, 90.0),
+            Vec3::new(0.0, 0.0, -10.0),
+            aspect,
+        );
+        setup(&mut r, far, demo::afternoon_sun(), 14.7);
+        settle(&mut r);
+        let near = demo::camera(
+            Vec3::new(0.0, 3.0, 20.0),
+            Vec3::new(0.0, 0.0, -10.0),
+            aspect,
+        );
+        r.set_camera(near.0, near.1, near.2);
+        let px = capture(&mut r, W, H);
+        write_png(
+            &out_dir().join(format!("terrain_hand_over_{name}.png")),
+            &px,
+            W,
+            H,
+        );
+        let mut black = 0;
+        for y in H / 2..H {
+            for x in W / 4..3 * W / 4 {
+                let i = ((y * W + x) * 4) as usize;
+                black += (px[i..i + 3].iter().max() < Some(&12)) as usize;
+            }
+        }
+        assert!(
+            black == 0,
+            "{name}: {black} black ground pixels in the frame after the jump"
+        );
+    }
+}
+
 /// A pond carved into the terrain: water plane, planar reflection of the
 /// trees on the bank, and clay mode.
 #[test]

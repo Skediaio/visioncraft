@@ -4039,8 +4039,12 @@ impl Renderer {
                     // Opaque and cutout mesh levels dissolve in fading
                     // clusters (into each other, the impostor or nothing),
                     // through their own pipelines, one draw and fade slot per
-                    // cluster.
-                    let can_fade = fades && category <= 1 && weights.is_none();
+                    // cluster. Terrain chunks never do: their forward pipeline has no dissolve,
+                    // so they draw their nearer level in every pass. Asked of the mesh, not of
+                    // `weights` (none outside the shaded passes): a depth pre-pass that dithered
+                    // both levels left the forward pass's level behind the coarser one wherever
+                    // that lies above it, unshaded (black patches on the ground after a jump).
+                    let can_fade = fades && category <= 1 && mesh.weights.is_none();
                     for fading in [false, true] {
                         if fading && !can_fade {
                             continue;
