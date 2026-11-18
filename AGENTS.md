@@ -15,6 +15,14 @@ Reads 3dcraft (`.3dcraft`) designs; other CAD sources may follow.
 - Agents working in parallel each own their directories. Only the orchestrator edits shared
   files (the root `Cargo.toml`, this file).
 
+## Build server
+
+- The default build server is `dokploy-slave` (100.64.0.7, user `edugo`, SSH alias
+  `dokploy-slave`): 32 cores, 377 GB RAM. Run heavy builds and test runs there
+  (`cargo build`, `cargo clippy`, `cargo test`, the wasm32 build) rather than on the laptop.
+- Reach it with `ssh dokploy-slave`; the `HostKeyAlias` in the SSH config means the bare IP fails
+  host key verification.
+
 ## Rules
 
 1. Own wgpu renderer. No Bevy, no game engine, no ECS crate.
