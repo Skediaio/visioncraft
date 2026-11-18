@@ -2,13 +2,14 @@
 //! and in total per material and per asset. Headless; the `query.quantities` command wraps it.
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
 use serde_json::{Value, json};
 
 use crate::measure;
 use crate::model::ImportedModel;
 use crate::plant_ground::{placed_shape_mesh, water_areas};
-use crate::planting::{Generator, evaluate, planted_outline};
+use crate::planting::{Generator, Placement, evaluate, planted_outline};
 use crate::project::Project;
 use crate::shape::{Shape, area_lifts};
 
@@ -73,10 +74,36 @@ fn asset_rows(by: &BTreeMap<String, usize>) -> Vec<Value> {
         .collect()
 }
 
-/// The quantities of the project's drawn shapes and plantings (not of linked models, which have
-/// no geometry in the core). Errors with a plain message on an unknown id or layer, or a shape
-/// that cannot be meshed.
+/// What the core cannot know alone and a host can tell: the geometry of the linked models, and a
+/// generator's placements with the renderer's building rule.
+pub struct Scene<'a> {
+    /// A model's geometry by its id; `None` when it is not loaded.
+    pub models: &'a dyn Fn(&str) -> Option<Arc<ImportedModel>>,
+    /// A generator's placements as the renderer draws them, and whether it was cut short.
+    pub placements: &'a dyn Fn(&Generator) -> (Vec<Placement>, bool),
+}
+
+/// Said in the command's description when only the core answers; a host replaces it with
+/// [`HOST_NOTE`].
+pub const CORE_NOTE: &str = "Run by the core alone, linked models (3dcraft, OBJ) are left out and plant counts are `counted_with` \"plan\": without the renderer's building rule, so plants under buildings are still counted.";
+
+/// What a host's description of the command says in place of [`CORE_NOTE`].
+pub const HOST_NOTE: &str = "Linked models (3dcraft, OBJ) are included in `models` (per body: surface, and volume when the body is closed; materials as the renderer resolves them, the transform's scale applied) and in the material totals and `totals`. Plant counts are `counted_with` \"scene\": the renderer's building rule applies, so plants under buildings are not counted (\"plan\" when the host cannot).";
+
+/// The quantities of the project's drawn shapes and plantings, without linked models and
+/// without the building rule: [`quantities_in`] with no scene.
 pub fn quantities(project: &Project, filter: &Filter) -> Result<Value, String> {
+    quantities_in(project, filter, None)
+}
+
+/// The quantities of the project's drawn shapes and plantings and, with a `scene`, of its linked
+/// models, with plants counted by the renderer's rules. Errors with a plain message on an
+/// unknown id or layer, or a shape that cannot be meshed.
+pub fn quantities_in(
+    project: &Project,
+    filter: &Filter,
+    scene: Option<&Scene>,
+) -> Result<Value, String> {
     if let Some(layer) = filter.layer
         && !project.layers.iter().any(|l| l.id == layer)
     {
@@ -85,9 +112,10 @@ pub fn quantities(project: &Project, filter: &Filter) -> Result<Value, String> {
     if let Some(ids) = filter.ids {
         for id in ids {
             let known = project.shapes.iter().any(|s| s.id() == id)
-                || project.generators.iter().any(|g| g.id() == id);
+                || project.generators.iter().any(|g| g.id() == id)
+                || project.models.iter().any(|m| m.id == *id);
             if !known {
-                return Err(format!("no shape or planting `{id}`"));
+                return Err(format!("no shape, planting or model `{id}`"));
             }
         }
     }
@@ -261,6 +289,24 @@ pub fn quantities(project: &Project, filter: &Filter) -> Result<Value, String> {
         shapes.push(row);
     }
 
+    let mut models = Vec::new();
+    let mut models_missing: Vec<&str> = Vec::new();
+    if let Some(sc) = scene {
+        for m in project.models.iter().filter(|m| wanted(&m.id, &m.layer)) {
+            let Some(mesh) = (sc.models)(&m.id) else {
+                models_missing.push(&m.id);
+                continue;
+            };
+            let (row, own, surface, volume) = model_row(project, m, &mesh);
+            for (k, a) in own {
+                *by_material.entry(k).or_default() += a;
+            }
+            total_surface += surface;
+            total_volume += volume;
+            models.push(row);
+        }
+    }
+
     let ground = |x: f32, z: f32| terrain.and_then(|t| t.height_at(x, z)).or(Some(0.0));
     let mut plantings = Vec::new();
     let mut by_asset: BTreeMap<String, usize> = BTreeMap::new();
@@ -270,7 +316,16 @@ pub fn quantities(project: &Project, filter: &Filter) -> Result<Value, String> {
         .iter()
         .filter(|g| wanted(g.id(), g.layer()))
     {
-        let e = evaluate(g, &ground);
+        let e = match scene {
+            Some(sc) => {
+                let (placements, truncated) = (sc.placements)(g);
+                crate::planting::Evaluation {
+                    placements,
+                    truncated,
+                }
+            }
+            None => evaluate(g, &ground),
+        };
         let mut own: BTreeMap<String, usize> = BTreeMap::new();
         for p in &e.placements {
             *own.entry(p.asset.clone()).or_default() += 1;
@@ -302,7 +357,8 @@ pub fn quantities(project: &Project, filter: &Filter) -> Result<Value, String> {
         plantings.push(row);
     }
 
-    Ok(json!({
+    let mut out = json!({
+        "counted_with": if scene.is_some() { "scene" } else { "plan" },
         "shapes": shapes,
         "plantings": plantings,
         "materials": material_rows(project, &by_material),
@@ -311,14 +367,106 @@ pub fn quantities(project: &Project, filter: &Filter) -> Result<Value, String> {
             "plan_area_m2": total_plan, "surface_m2": total_surface,
             "volume_m3": total_volume, "plants": plants, "placements": placements,
         },
-    }))
+    });
+    if scene.is_some() {
+        out["models"] = models.into();
+        out["models_missing"] = models_missing.into();
+    }
+    Ok(out)
+}
+
+/// One linked model: its row, its area per material (scale applied), surface and volume.
+#[allow(clippy::type_complexity)]
+fn model_row(
+    project: &Project,
+    m: &crate::project::ModelRef,
+    mesh: &ImportedModel,
+) -> (Value, BTreeMap<Option<usize>, f64>, f64, f64) {
+    let (k2, k3) = {
+        let k = f64::from(m.transform.scale);
+        (k * k, k * k * k)
+    };
+    let owners = crate::material::resolve_materials(project, &m.id, mesh);
+    let closed = closed_bodies(mesh);
+    let mut all: BTreeMap<Option<usize>, f64> = BTreeMap::new();
+    let (mut surface, mut volume) = (0.0, 0.0);
+    let mut bodies = Vec::new();
+    for (bi, b) in mesh.bodies.iter().enumerate() {
+        let range = b.triangles.start as usize..b.triangles.end as usize;
+        let mut own: BTreeMap<Option<usize>, f64> = BTreeMap::new();
+        let mut area = 0.0;
+        for i in range.clone() {
+            let a = triangle_area(mesh, mesh.triangles[i]) * k2;
+            area += a;
+            let face = mesh.triangle_faces[i] as usize;
+            *own.entry(owners.get(face).copied().flatten()).or_default() += a;
+        }
+        for (k, a) in &own {
+            *all.entry(*k).or_default() += a;
+        }
+        let vol = closed[bi].then(|| tris_volume(mesh, &mesh.triangles[range]) * k3);
+        surface += area;
+        volume += vol.unwrap_or(0.0);
+        bodies.push(json!({
+            "id": b.id, "name": b.name, "hidden": m.hides(b),
+            "surface_m2": area, "volume_m3": vol,
+            "materials": material_rows(project, &own),
+        }));
+    }
+    let row = json!({
+        "id": m.id, "name": m.name, "layer": m.layer, "source": m.source,
+        "scale": m.transform.scale,
+        "bodies": bodies, "surface_m2": surface, "volume_m3": volume,
+        "open_bodies": closed.iter().filter(|c| !**c).count(),
+        "materials": material_rows(project, &all),
+    });
+    (row, all, surface, volume)
+}
+
+/// Per body: whether its triangles close up, every edge shared by exactly two of them running
+/// in opposite directions (vertices at the same place are one, as an OBJ splits them for
+/// normals).
+fn closed_bodies(mesh: &ImportedModel) -> Vec<bool> {
+    let mut weld: HashMap<[u32; 3], u32> = HashMap::new();
+    let ids: Vec<u32> = mesh
+        .positions
+        .iter()
+        .map(|p| {
+            let n = weld.len() as u32;
+            *weld.entry(p.map(f32::to_bits)).or_insert(n)
+        })
+        .collect();
+    mesh.bodies
+        .iter()
+        .map(|b| {
+            let mut edges: HashMap<(u32, u32), i32> = HashMap::new();
+            let tris = &mesh.triangles[b.triangles.start as usize..b.triangles.end as usize];
+            for t in tris {
+                for k in 0..3 {
+                    let (a, c) = (ids[t[k] as usize], ids[t[(k + 1) % 3] as usize]);
+                    if a != c {
+                        *edges.entry((a, c)).or_default() += 1;
+                    }
+                }
+            }
+            !tris.is_empty()
+                && edges
+                    .iter()
+                    .all(|(&(a, c), &n)| n == 1 && edges.get(&(c, a)) == Some(&1))
+        })
+        .collect()
 }
 
 /// The volume a closed mesh with outward-facing triangles encloses (divergence theorem); parts
 /// that overlap, like a rail across a board, count twice.
 fn mesh_volume(mesh: &crate::model::ImportedModel) -> f64 {
+    tris_volume(mesh, &mesh.triangles)
+}
+
+/// [`mesh_volume`] of some of the mesh's triangles.
+fn tris_volume(mesh: &crate::model::ImportedModel, triangles: &[[u32; 3]]) -> f64 {
     let p = |i: u32| mesh.positions[i as usize].map(f64::from);
-    mesh.triangles
+    triangles
         .iter()
         .map(|t| {
             let (a, b, c) = (p(t[0]), p(t[1]), p(t[2]));

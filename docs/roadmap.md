@@ -22,8 +22,9 @@ nothing here is a promise of a date.
   type a region, Apply. Next: several photos on one face (a facade in tiles), removing what
   stands in front of it (trees, cars), matching the photo's colour to the sun, EXIF rotation.
 - **Quantities:** `query.quantities` lists areas, lengths, volumes and plant counts per shape and
-  planting, and totals per material and asset. Next: linked models, per-body quantities, the
-  building rule in plant counts.
+  planting, and totals per material and asset; with the host it also lists linked models per body
+  (surface, volume of closed bodies, materials, scale applied) and counts plants with the
+  renderer's building rule (`counted_with`). Next: nothing planned.
 - **Scanned leaves and bark** on the generated plants (done for the species that have a set;
   see `vegetation-sources.md` for coverage).
 - **Photo mode:** indirect light from sunlit surfaces, crowns keeping their density, a path for

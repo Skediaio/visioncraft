@@ -168,6 +168,28 @@ fn ground_at(project: &Project, owners: &[Owner], x: f32, z: f32, models: bool) 
         .reduce(f32::max)
 }
 
+/// `query.quantities` as the host answers it: the core's numbers plus the linked models, and
+/// plants counted as the renderer draws them (`placements`, the building rule).
+pub(crate) fn quantities_json(
+    session: &Session,
+    state: &HostState,
+    ids: Option<&[String]>,
+    layer: Option<&str>,
+) -> Result<Value, String> {
+    let p = session.project();
+    let owners = owners(p, &models_of(state));
+    let models = models_of(state);
+    let scene = visioncraft_core::quantities::Scene {
+        models: &models,
+        placements: &|g| placements(p, &owners, &state.catalog.assets, g),
+    };
+    visioncraft_core::quantities::quantities_in(
+        p,
+        &visioncraft_core::quantities::Filter { ids, layer },
+        Some(&scene),
+    )
+}
+
 /// The placements of a generator, in world space.
 fn placements(
     project: &Project,

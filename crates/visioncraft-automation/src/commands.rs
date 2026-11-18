@@ -634,6 +634,13 @@ pub fn host_docs() -> Vec<CommandDoc> {
 pub fn docs(session: &Session) -> Vec<CommandDoc> {
     let mut all = host_docs();
     all.extend(session.command_specs().into_iter().map(from_spec));
+    // The host runs this one with the geometry of the models and the renderer's building rule.
+    for d in all.iter_mut().filter(|d| d.id == "query.quantities") {
+        d.summary = d.summary.replace(
+            visioncraft_core::quantities::CORE_NOTE,
+            visioncraft_core::quantities::HOST_NOTE,
+        );
+    }
     all.sort_by(|a, b| a.id.cmp(&b.id));
     all
 }
@@ -750,6 +757,14 @@ pub fn execute(host: &mut dyn Host, id: &str, params: &Value) -> Result<Value, S
             }
             let (session, state) = host.parts();
             Ok(inspect::raycast_json(session, state, origin, dir))
+        }
+        "query.quantities" => {
+            Fields::new(id, "parameter", Some(params), &["ids", "layer"])?;
+            let ids: Option<Vec<String>> = take(id, params, "ids")?;
+            let layer: Option<String> = take(id, params, "layer")?;
+            let (session, state) = host.parts();
+            inspect::quantities_json(session, state, ids.as_deref(), layer.as_deref())
+                .map_err(|e| format!("{id}: {e}"))
         }
         "query.sun_hours" => {
             Fields::new(
