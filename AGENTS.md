@@ -19,7 +19,7 @@ Reads 3dcraft (`.3dcraft`) designs; other CAD sources may follow.
 
 - The default build server is `dokploy-slave` (100.64.0.7, user `edugo`, SSH alias
   `dokploy-slave`): 32 cores, 377 GB RAM. Run heavy builds and test runs there
-  (`cargo build`, `cargo clippy`, `cargo test`, the wasm32 build) rather than on the laptop.
+  (`cargo build`, `cargo clippy`, `cargo test`, the wasm32 build) rather than on `orca-server`, the local machine the agents run on (8 cores, Intel Iris Xe).
 - Reach it with `ssh dokploy-slave`; the `HostKeyAlias` in the SSH config means the bare IP fails
   host key verification.
 - Sync the working tree with `rsync -az --delete --exclude target --exclude .claude ./
@@ -27,8 +27,8 @@ Reads 3dcraft (`.3dcraft`) designs; other CAD sources may follow.
   detached (`nohup ... > ~/check.log 2>&1 &`) so a dropped connection does not kill them.
 - The server has no GPU: wgpu falls back to a software adapter there, so the pixel references in
   `crates/visioncraft-render/tests/reference.rs`, the GPU recipe renders
-  (`cargo test -p visioncraft-cli --test cli -- --ignored`) and visual check renders run on the
-  laptop. On the server, run
+  (`cargo test -p visioncraft-cli --test cli -- --ignored`) and visual check renders run on
+  `orca-server`. On the build server, run
   `cargo test --workspace --exclude visioncraft-render && cargo test -p visioncraft-render --lib`.
 
 ## Rules
