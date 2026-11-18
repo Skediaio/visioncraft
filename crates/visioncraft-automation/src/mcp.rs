@@ -44,7 +44,7 @@ seen in real time under the sun of a site and a date. Every action is a command 
 Start with command_list {\"brief\": true} (then {\"id\": ...} for one command's parameter docs) and doc_inspect. \
 Build with command_batch (add atomic: true for all or nothing), check with doc_inspect and look with doc_render_preview. \
 Units are metres, Y is up, +X east, -Z north (unless site.set north_deg turns it); outlines are [[x, z], ...]. Plants are flora:<species id> (species.list). \
-Open and save with command_run file.open / file.save; undo with edit.undo. The resource visioncraft://guide is the agent guide.";
+A film of camera moves is film.* commands (shots: walk, glide, rise, orbit, flyover, hold); check it with film.preview {id, t} and draw it with film.render. Open and save with command_run file.open / file.save; undo with edit.undo. The resource visioncraft://guide is the agent guide.";
 
 const GUIDE_URI: &str = "visioncraft://guide";
 const PROJECT_URI: &str = "visioncraft://project";

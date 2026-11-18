@@ -521,6 +521,7 @@ pub(crate) fn inspect(session: &Session, state: &HostState, v: &Verbosity) -> Va
     out.insert("underlays".into(), underlays.into());
     out.insert("wall_photos".into(), wall_photos.into());
     out.insert("viewpoints".into(), json!(p.viewpoints));
+    out.insert("films".into(), json!(p.films));
     out.insert("terrain".into(), terrain.into());
     // The sea with what it means: the waves' height and length from its sea state.
     out.insert(
@@ -569,6 +570,18 @@ pub(crate) fn raycast_json(
 pub(crate) fn ground_json(session: &Session, state: &HostState, x: f32, z: f32) -> Value {
     let p = session.project();
     json!({"x": x, "z": z, "height": ground_at(p, &owners(p, &models_of(state)), x, z, true)})
+}
+
+/// A film's cameras over the ground of the project (terrain, areas, models).
+pub(crate) fn film_timeline(
+    session: &Session,
+    state: &HostState,
+    film: &visioncraft_core::film::Film,
+) -> Result<visioncraft_core::film::Timeline, String> {
+    let p = session.project();
+    let owners = owners(p, &models_of(state));
+    let ground = |x: f32, z: f32| ground_at(p, &owners, x, z, true).unwrap_or(0.0);
+    visioncraft_core::film::Timeline::new(film, &visioncraft_core::film::Env::new(p, &ground))
 }
 
 /// `query.ground_length`: a walk over the ground.

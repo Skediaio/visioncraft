@@ -397,6 +397,21 @@ pub fn example_project(command: &str) -> crate::project::Project {
         }
         s.run(name, params).expect("the example project builds");
     }
+    // The film commands work on f1, a walk and a hold.
+    if command.starts_with("film.") && command != "film.add" {
+        s.run("film.add", json!({"name": "Tour"}))
+            .expect("the example project builds");
+        s.run(
+            "film.add_shot",
+            json!({"id": "f1", "shot": {"kind": "walk", "path": [[1, 9], [9, 9]], "speed_mps": 1.2}}),
+        )
+        .expect("the example project builds");
+        s.run(
+            "film.add_shot",
+            json!({"id": "f1", "shot": {"kind": "hold", "viewpoint": "v1", "duration_s": 3}}),
+        )
+        .expect("the example project builds");
+    }
     // The area edge commands work on S4, a raised terrace with a plain edge.
     if command.starts_with("area.") {
         s.run(

@@ -9,6 +9,7 @@ use serde_json::Value;
 
 pub(crate) mod examples;
 mod fences;
+mod films;
 mod growth;
 mod house;
 mod layers;
@@ -31,6 +32,7 @@ pub(crate) fn register(s: &mut Session) {
     examples::register(s);
     house::register(s);
     fences::register(s);
+    films::register(s);
     levels::register(s);
     shapes::register(s);
     species::register(s);

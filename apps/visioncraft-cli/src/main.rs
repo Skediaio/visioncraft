@@ -3,7 +3,7 @@
 //! result on stdout, errors as one line on stderr.
 //!
 //! Every subcommand is a thin wrapper over `visioncraft-automation`: `run`, `batch`, `info`,
-//! `render`, `export`, `replay`, `convert` and `new` run commands for a trusted local user;
+//! `render`, `export`, `replay`, `film`, `convert` and `new` run commands for a trusted local user;
 //! `serve` and `mcp` hand stdin and stdout to the servers, with file access only beneath the
 //! roots given.
 //!
@@ -39,6 +39,7 @@ Subcommands:
   render     Render a project to a PNG (on the GPU)
   export     Render the viewpoints at the export presets (Screen, HD, 4K, ...)
   replay     Render a tour through the viewpoints as numbered PNG frames
+  film       Render a film (shots of camera moves) as numbered PNG frames, or a video
   convert    Make a .visioncraft project of a .3dcraft or .obj model, or rewrite one
   new        Write an empty project
   cache      Show or clear the cache of generated plants and compressed maps
@@ -165,6 +166,27 @@ Options:
   --size WxH            Default 1280x720
   --frames-per-step N   Frames from one viewpoint to the next. Default 30
   --hold N              Extra frames at each viewpoint. Default 0";
+
+const HELP_FILM: &str = "\
+Usage: visioncraft-cli film FILE --out DIR [--film ID] [--size WxH] [--quality Q]
+                            [--from S] [--to S] [--every N] [--video OUT.mp4]
+
+Renders a film of the project (film.add, film.add_shot; the only film when --film is
+left out) as DIR/frame_00000.png and on: each frame has the film's camera, the
+animation clock at the film's time (so wind and water move) and the shot's time of day,
+date or season, years and snow, for that picture only. Prints the result as one line of
+JSON, with the ffmpeg command that makes a video of the frames.
+
+Options:
+  --film ID       The film's id (f1, ...)
+  --size WxH      Default 960x540
+  --quality Q     low, medium, high or ultra. Default high
+  --from S        First film time drawn, seconds. Default 0
+  --to S          Last film time drawn. Default the end
+  --every N       Draw every Nth frame (a film of fps / N). Default 1
+  --video OUT     Also make this video of the frames by running ffmpeg, when an
+                  `ffmpeg` program is on the PATH (no codec is built in); else
+                  the message says so and gives the command to run";
 
 const HELP_CONVERT: &str = "\
 Usage: visioncraft-cli convert IN OUT
@@ -935,6 +957,130 @@ fn cmd_replay(raw: &[String]) -> Res {
     )
 }
 
+/// The `ffmpeg` program on the PATH, if there is one.
+fn find_ffmpeg() -> Option<PathBuf> {
+    let names: &[&str] = if cfg!(windows) {
+        &["ffmpeg.exe", "ffmpeg.cmd", "ffmpeg.bat"]
+    } else {
+        &["ffmpeg"]
+    };
+    std::env::split_paths(&std::env::var_os("PATH")?)
+        .flat_map(|dir| names.iter().map(move |n| dir.join(n)))
+        .find(|p| p.is_file())
+}
+
+fn cmd_film(raw: &[String]) -> Res {
+    let a = Args::parse(
+        raw,
+        &[
+            "--out",
+            "--film",
+            "--size",
+            "--quality",
+            "--from",
+            "--to",
+            "--every",
+            "--video",
+        ],
+        &[],
+    )?;
+    if a.help() {
+        return print(HELP_FILM);
+    }
+    a.at_most(1)?;
+    let file = a
+        .positionals
+        .first()
+        .ok_or_else(|| CliError::Usage("missing FILE".into()))?;
+    let dir = a
+        .value("--out")?
+        .ok_or_else(|| CliError::Usage("missing `--out DIR`".into()))?;
+    let (w, h) = a.value("--size")?.map_or(Ok((960, 540)), parse_size)?;
+    let mut host = local_host();
+    open_or_new(&mut host, Some(file))?;
+    let films: Vec<String> = host
+        .session
+        .project()
+        .films
+        .iter()
+        .map(|f| f.id.clone())
+        .collect();
+    let id = match (a.value("--film")?, films.as_slice()) {
+        (Some(id), _) => id.to_string(),
+        (None, [only]) => only.clone(),
+        (None, []) => {
+            return Err(CliError::Failed(
+                "the project has no films (film.add, film.add_shot)".into(),
+            ));
+        }
+        (None, many) => {
+            return Err(CliError::Usage(format!(
+                "the project has several films; choose one with `--film`: {}",
+                many.join(", ")
+            )));
+        }
+    };
+    let mut params = json!({"id": id, "dir": dir, "width": w, "height": h});
+    for (flag, key) in [("--from", "from"), ("--to", "to")] {
+        if let Some(v) = a.value(flag)? {
+            params[key] = v
+                .parse::<f64>()
+                .map_err(|_| CliError::Usage(format!("`{flag}` must be seconds, got `{v}`")))?
+                .into();
+        }
+    }
+    if let Some(v) = a.value("--every")? {
+        params["every"] = v
+            .parse::<u64>()
+            .map_err(|_| CliError::Usage(format!("`--every` must be a whole number, got `{v}`")))?
+            .into();
+    }
+    if let Some(q) = a.value("--quality")? {
+        params["quality"] = q.into();
+    }
+    let result = visioncraft_automation::film::render_with_progress(
+        &mut host,
+        &params,
+        &mut |done, total| {
+            eprint!("\rframe {done}/{total}");
+            if done == total {
+                eprintln!();
+            }
+        },
+    )
+    .map_err(CliError::Failed)?;
+    print_json(&result)?;
+    let Some(video) = a.value("--video")? else {
+        return Ok(());
+    };
+    let command = format!(
+        "ffmpeg -framerate {} -i {dir}/frame_%05d.png -c:v libx264 -pix_fmt yuv420p {video}",
+        result["fps"]
+    );
+    let Some(ffmpeg) = find_ffmpeg() else {
+        return Err(CliError::Failed(format!(
+            "no video made: `ffmpeg` is not on the PATH (VisionCraft has no video codec built in). The frames are in {dir}; with ffmpeg installed run: {command}"
+        )));
+    };
+    let out = std::process::Command::new(ffmpeg)
+        .args(["-y", "-loglevel", "error", "-framerate"])
+        .arg(result["fps"].to_string())
+        .arg("-i")
+        .arg(Path::new(dir).join("frame_%05d.png"))
+        .args(["-c:v", "libx264", "-pix_fmt", "yuv420p"])
+        .arg(video)
+        .output()
+        .map_err(|e| CliError::Failed(format!("cannot run ffmpeg: {e}")))?;
+    if !out.status.success() {
+        return Err(CliError::Failed(format!(
+            "ffmpeg failed ({}): {}\nthe command was: {command}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    print_json(&json!({"video": video}))
+}
+
 fn cmd_convert(raw: &[String]) -> Res {
     let a = Args::parse(raw, &[], &[])?;
     if a.help() {
@@ -1162,6 +1308,7 @@ fn run(raw: &[String]) -> Res {
         "render" => cmd_render(rest),
         "export" => cmd_export(rest),
         "replay" => cmd_replay(rest),
+        "film" => cmd_film(rest),
         "convert" => cmd_convert(rest),
         "new" => cmd_new(rest),
         "cache" => cmd_cache(rest),

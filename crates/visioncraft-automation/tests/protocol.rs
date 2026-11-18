@@ -364,6 +364,7 @@ fn every_documented_example_runs() {
             || id.starts_with("file.")
             || id.starts_with("edit.")
             || id == "view.render"
+            || id == "film.render"
             || id == "model.add"
         {
             continue;

@@ -487,6 +487,9 @@ pub struct Project {
     /// Photos of facades on wall faces, straightened; not written while there are none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub wall_photos: Vec<crate::wall_photo::WallPhoto>,
+    /// Films: shots of camera moves rendered to frames; not written while there are none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub films: Vec<crate::film::Film>,
     #[serde(default)]
     pub view: ViewState,
     /// Behind an `Arc`: undo snapshots share it, and a command that edits it copies it once.
@@ -518,6 +521,7 @@ impl Default for Project {
             objects: Vec::new(),
             underlays: Vec::new(),
             wall_photos: Vec::new(),
+            films: Vec::new(),
             view: ViewState::default(),
             terrain: None,
             sea: None,

@@ -657,3 +657,85 @@ fn a_small_scaled_object_far_away_draws_its_model() {
     // 2.4 m of a 8.8 m high field of view: about 2400 of the panel's pixels.
     assert!(red > 1000, "only {red} red pixels: the model is not drawn");
 }
+
+/// A film of three frames: they exist, are pictures, and differ as the camera moves.
+/// Needs a GPU: `cargo test -p visioncraft-cli -- --ignored`.
+#[test]
+#[ignore]
+fn a_film_renders_numbered_frames_that_differ() {
+    let d = dir("film");
+    let made = cli(
+        &[
+            "run",
+            "--script",
+            GARDEN,
+            "--cmd",
+            "film.add",
+            "--params",
+            r#"{"name": "Tiny", "fps": 2}"#,
+            "--cmd",
+            "film.add_shot",
+            "--params",
+            r#"{"id": "f1", "shot": {"kind": "orbit", "center": [5, 0, 5], "radius_m": 8, "height_m": 3,
+                "from_deg": 0, "to_deg": 180, "duration_s": 1.5, "ease": "none", "time_of_day": [10, 18]}}"#,
+            "--out",
+            "garden.visioncraft",
+        ],
+        &d,
+    );
+    assert!(
+        made.status.success(),
+        "{}",
+        String::from_utf8_lossy(&made.stderr)
+    );
+    let out = cli(
+        &[
+            "film",
+            "garden.visioncraft",
+            "--out",
+            "frames",
+            "--size",
+            "96x54",
+            "--quality",
+            "low",
+        ],
+        &d,
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let r = &lines(&out)[0];
+    assert_eq!(r["frames"], 3);
+    assert_eq!(r["framePattern"], "frame_%05d.png");
+    let frames: Vec<Vec<u8>> = (0..3)
+        .map(|i| std::fs::read(d.join(format!("frames/frame_{i:05}.png"))).unwrap())
+        .collect();
+    for f in &frames {
+        assert!(f.starts_with(b"\x89PNG"));
+    }
+    assert!(frames[0] != frames[1] && frames[1] != frames[2] && frames[0] != frames[2]);
+    // without ffmpeg, --video says so and keeps the frames; with it, the file is made
+    let video = cli(
+        &[
+            "film",
+            "garden.visioncraft",
+            "--out",
+            "frames",
+            "--size",
+            "96x54",
+            "--every",
+            "2",
+            "--video",
+            "film.mp4",
+        ],
+        &d,
+    );
+    let err = String::from_utf8_lossy(&video.stderr);
+    if video.status.success() {
+        assert!(d.join("film.mp4").exists());
+    } else {
+        assert!(err.contains("ffmpeg"), "{err}");
+    }
+}

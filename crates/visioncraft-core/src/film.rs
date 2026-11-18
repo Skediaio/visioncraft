@@ -1,0 +1,1417 @@
+//! Films: a camera path described as shots, so a person or an agent can compose one with
+//! commands and have it rendered to numbered frames.
+//!
+//! A [`Film`] is a list of [`Shot`]s played one after the other, each with its own camera
+//! (the join between two shots is a cut). A shot moves the camera along a path (walk, glide,
+//! flyover), up (rise), round a spot (orbit) or not at all (hold). Inside a shot the camera is
+//! eased by arc length (`ease`), and the sun, the date, the years of growth and the snow can
+//! change along it. [`Timeline::camera_at`] answers where the camera is at a time, as a pure
+//! function of the film and an [`Env`] (the ground the camera walks on, the viewpoints).
+//!
+//! Conventions: metres, Y up, +X east, -Z north. An orbit's angle is measured at the centre
+//! from +X, **positive degrees counter-clockwise seen from above** (+X turns towards -Z), the
+//! same as `rotation_y_deg`.
+
+use crate::project::{Project, SunTime, YEARS_MAX};
+use crate::season::Season;
+use crate::viewpoint::Viewpoint;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_json::{Value, json};
+
+/// Longest shot, in seconds.
+pub const SHOT_MAX_S: f32 = 3600.0;
+/// Frames per second a film may have.
+pub const FPS_MAX: u32 = 120;
+const DEFAULT_FPS: u32 = 25;
+const DEFAULT_FOV: f32 = 60.0;
+const WALK_SPEED: f32 = 1.2;
+const GLIDE_SPEED: f32 = 2.0;
+const FLYOVER_SPEED: f32 = 8.0;
+const DEFAULT_DURATION: f32 = 4.0;
+/// How far ahead along the path a walking camera looks.
+const LOOK_AHEAD_M: f32 = 4.0;
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Film {
+    pub id: String,
+    pub name: String,
+    #[serde(default = "default_fps")]
+    pub fps: u32,
+    #[serde(default)]
+    pub shots: Vec<Shot>,
+}
+
+fn default_fps() -> u32 {
+    DEFAULT_FPS
+}
+
+impl Film {
+    pub fn new(id: String, name: String, fps: u32) -> Self {
+        Self {
+            id,
+            name,
+            fps,
+            shots: Vec::new(),
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.name.trim().is_empty() {
+            return Err("the film needs a name".into());
+        }
+        if !(1..=FPS_MAX).contains(&self.fps) {
+            return Err(format!("`fps` must be from 1 to {FPS_MAX}"));
+        }
+        Ok(())
+    }
+
+    /// Total length in seconds.
+    pub fn duration(&self, env: &Env) -> Result<f32, String> {
+        Ok(Timeline::new(self, env)?.duration_s)
+    }
+
+    /// Frames of the film: one per `1 / fps` s from 0, the last before the end.
+    pub fn frame_count(&self, env: &Env) -> Result<usize, String> {
+        Ok(Timeline::new(self, env)?.frame_count())
+    }
+}
+
+/// The camera at film time `t` (seconds; clamped into the film).
+pub fn camera_at(film: &Film, t: f32, env: &Env) -> Result<Frame, String> {
+    Timeline::new(film, env)?.camera_at(t)
+}
+
+// ---------------------------------------------------------------------------------- shots
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Shot {
+    #[serde(flatten)]
+    pub kind: ShotKind,
+    /// How long the shot lasts; or give `speed_mps` and the length of the path decides.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_s: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed_mps: Option<f32>,
+    #[serde(default)]
+    pub ease: Ease,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub look_at: Option<Look>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fov_y_deg: Option<f32>,
+    /// Hours of the day at the start and the end of the shot (a single number: constant).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_of_day: Option<Span<f32>>,
+    /// The date at the start and the end of the shot; the season follows it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub date: Option<Span<Date>>,
+    /// A season's own day (as `view.set season`); not together with `date`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub season: Option<Season>,
+    /// Years after planting at the start and the end of the shot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub years: Option<Span<f32>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snow: Option<Span<f32>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ShotKind {
+    /// Eye height above the ground, along a path on the ground.
+    Walk {
+        path: Vec<[f32; 2]>,
+        #[serde(default = "eye_height")]
+        eye_height_m: f32,
+    },
+    /// A smooth curve (Catmull-Rom) through points in space.
+    Glide { path: Vec<[f32; 3]> },
+    /// Straight up (or down) over a spot.
+    Rise {
+        at: [f32; 2],
+        from_height: f32,
+        to_height: f32,
+    },
+    /// Round a centre at a radius, eye `height_m` above the centre's Y.
+    Orbit {
+        center: [f32; 3],
+        radius_m: f32,
+        height_m: f32,
+        from_deg: f32,
+        to_deg: f32,
+    },
+    /// Drone-like: `height_m` above the (smoothed) ground along a path, looking ahead and down.
+    Flyover {
+        path: Vec<[f32; 2]>,
+        height_m: f32,
+        #[serde(default = "pitch")]
+        pitch_deg: f32,
+    },
+    /// A fixed camera: a viewpoint, or an eye and a target.
+    Hold {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        viewpoint: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        eye: Option<[f32; 3]>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target: Option<[f32; 3]>,
+    },
+}
+
+fn eye_height() -> f32 {
+    1.6
+}
+
+fn pitch() -> f32 {
+    35.0
+}
+
+impl ShotKind {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Walk { .. } => "walk",
+            Self::Glide { .. } => "glide",
+            Self::Rise { .. } => "rise",
+            Self::Orbit { .. } => "orbit",
+            Self::Flyover { .. } => "flyover",
+            Self::Hold { .. } => "hold",
+        }
+    }
+
+    fn fields(kind: &str) -> &'static [&'static str] {
+        match kind {
+            "walk" => &["path", "eye_height_m"],
+            "glide" => &["path"],
+            "rise" => &["at", "from_height", "to_height"],
+            "orbit" => &["center", "radius_m", "height_m", "from_deg", "to_deg"],
+            "flyover" => &["path", "height_m", "pitch_deg"],
+            "hold" => &["viewpoint", "eye", "target"],
+            _ => &[],
+        }
+    }
+}
+
+const COMMON_FIELDS: &[&str] = &[
+    "kind",
+    "duration_s",
+    "speed_mps",
+    "ease",
+    "look_at",
+    "fov_y_deg",
+    "time_of_day",
+    "date",
+    "season",
+    "years",
+    "snow",
+];
+
+pub const SHOT_KINDS: &[&str] = &["walk", "glide", "rise", "orbit", "flyover", "hold"];
+
+impl Shot {
+    /// A shot from JSON, with unknown fields refused (naming the nearest), and checked.
+    pub fn from_value(value: &Value, latitude: f64) -> Result<Shot, String> {
+        let map = value.as_object().ok_or("a shot is an object")?;
+        let kind = map
+            .get("kind")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("a shot needs `kind`: one of {}", SHOT_KINDS.join(", ")))?;
+        if !SHOT_KINDS.contains(&kind) {
+            return Err(format!(
+                "unknown shot kind `{kind}`; the kinds are {}",
+                SHOT_KINDS.join(", ")
+            ));
+        }
+        let own = ShotKind::fields(kind);
+        for key in map.keys() {
+            if !COMMON_FIELDS.contains(&key.as_str()) && !own.contains(&key.as_str()) {
+                let near =
+                    crate::spec::nearest(key, COMMON_FIELDS.iter().chain(own.iter()).copied())
+                        .map_or(String::new(), |n| format!("; did you mean `{n}`?"));
+                return Err(format!("a {kind} shot has no field `{key}`{near}"));
+            }
+        }
+        let shot: Shot = serde_json::from_value(value.clone()).map_err(|e| e.to_string())?;
+        shot.validate(latitude)?;
+        Ok(shot)
+    }
+
+    pub fn validate(&self, latitude: f64) -> Result<(), String> {
+        let finite = |vals: &[f32]| vals.iter().all(|v| v.is_finite());
+        let kind = self.kind.name();
+        let err = |m: &str| Err(format!("{kind} shot: {m}"));
+        if self.duration_s.is_some() && self.speed_mps.is_some() {
+            return err("give `duration_s` or `speed_mps`, not both");
+        }
+        if let Some(d) = self.duration_s
+            && !(d > 0.0 && d <= SHOT_MAX_S)
+        {
+            return err(&format!(
+                "`duration_s` must be above 0 and at most {SHOT_MAX_S}"
+            ));
+        }
+        if let Some(s) = self.speed_mps
+            && !(s > 0.0 && s.is_finite())
+        {
+            return err("`speed_mps` must be above 0");
+        }
+        if let Some(f) = self.fov_y_deg
+            && !(1.0..=179.0).contains(&f)
+        {
+            return err("`fov_y_deg` must be from 1 to 179");
+        }
+        if self.look_at.is_some() && matches!(self.kind, ShotKind::Hold { .. }) {
+            return err("a hold has `target` instead of `look_at`");
+        }
+        if let Some(Look::At(p)) = self.look_at
+            && !finite(&p)
+        {
+            return err("`look_at` must be finite numbers");
+        }
+        match &self.kind {
+            ShotKind::Walk { path, eye_height_m } => {
+                if path.len() < 2 || !path.iter().flatten().all(|v| v.is_finite()) {
+                    return err("`path` needs at least 2 finite [x, z] points");
+                }
+                if !(0.0..=20.0).contains(eye_height_m) || *eye_height_m <= 0.0 {
+                    return err("`eye_height_m` must be above 0 and at most 20");
+                }
+                if plan_length(path) < 0.05 {
+                    return err("`path` has no length (all points are the same)");
+                }
+            }
+            ShotKind::Glide { path } => {
+                if path.len() < 2 || !path.iter().flatten().all(|v| v.is_finite()) {
+                    return err("`path` needs at least 2 finite [x, y, z] points");
+                }
+                if path.windows(2).all(|w| dist3(w[0], w[1]) < 0.01) {
+                    return err("`path` has no length (all points are the same)");
+                }
+            }
+            ShotKind::Rise {
+                at,
+                from_height,
+                to_height,
+            } => {
+                if !finite(&[at[0], at[1], *from_height, *to_height]) {
+                    return err("`at`, `from_height` and `to_height` must be finite");
+                }
+                match self.look_at {
+                    Some(Look::At(p)) => {
+                        if (p[0] - at[0]).hypot(p[2] - at[1]) < 0.1 {
+                            return err("`look_at` must be at least 0.1 m aside from `at`");
+                        }
+                    }
+                    _ => return err("`look_at` [x, y, z] is required: what the camera looks at"),
+                }
+                if self.speed_mps.is_some() && from_height == to_height {
+                    return err("`speed_mps` needs different heights; give `duration_s`");
+                }
+            }
+            ShotKind::Orbit {
+                center,
+                radius_m,
+                height_m,
+                from_deg,
+                to_deg,
+            } => {
+                if !finite(&[
+                    center[0], center[1], center[2], *height_m, *from_deg, *to_deg,
+                ]) {
+                    return err("`center`, `height_m`, `from_deg` and `to_deg` must be finite");
+                }
+                if !(*radius_m > 0.0 && radius_m.is_finite()) {
+                    return err("`radius_m` must be above 0");
+                }
+                if from_deg == to_deg {
+                    return err("`from_deg` and `to_deg` must differ");
+                }
+            }
+            ShotKind::Flyover {
+                path,
+                height_m,
+                pitch_deg,
+            } => {
+                if path.len() < 2 || !path.iter().flatten().all(|v| v.is_finite()) {
+                    return err("`path` needs at least 2 finite [x, z] points");
+                }
+                if plan_length(path) < 0.05 {
+                    return err("`path` has no length (all points are the same)");
+                }
+                if !height_m.is_finite() || !(-1000.0..=10_000.0).contains(height_m) {
+                    return err("`height_m` must be a number of metres");
+                }
+                if !(0.0..=89.0).contains(pitch_deg) {
+                    return err("`pitch_deg` must be from 0 (level) to 89 (straight down)");
+                }
+            }
+            ShotKind::Hold {
+                viewpoint,
+                eye,
+                target,
+            } => {
+                if self.speed_mps.is_some() {
+                    return err("a hold has no speed; give `duration_s`");
+                }
+                match (viewpoint, eye, target) {
+                    (Some(_), None, None) => {}
+                    (None, Some(e), Some(t)) => {
+                        if !finite(e) || !finite(t) || e == t {
+                            return err("`eye` and `target` must be finite and differ");
+                        }
+                    }
+                    _ => return err("give a `viewpoint` id, or both `eye` and `target`"),
+                }
+            }
+        }
+        if let Some(s) = self.time_of_day
+            && (!(0.0..24.0).contains(&s.from) || !(0.0..24.0).contains(&s.to))
+        {
+            return err("`time_of_day` hours must be from 0 to 24 (24 excluded)");
+        }
+        if let Some(s) = self.years
+            && (!(0.0..=YEARS_MAX).contains(&s.from) || !(0.0..=YEARS_MAX).contains(&s.to))
+        {
+            return err(&format!("`years` must be from 0 to {YEARS_MAX}"));
+        }
+        if let Some(s) = self.snow
+            && (!(0.0..=1.0).contains(&s.from) || !(0.0..=1.0).contains(&s.to))
+        {
+            return err("`snow` must be from 0 to 1");
+        }
+        if self.date.is_some() && self.season.is_some() {
+            return err("give `date` or `season`, not both");
+        }
+        if let Some(s) = self.date
+            && (!s.from.valid() || !s.to.valid())
+        {
+            return err("`date` needs {month: 1..12, day: 1..31} that exists");
+        }
+        // Snow lies in winter only; refuse the shot that asks for both snow and another season.
+        if self.snow.is_some_and(|s| s.from > 0.0 || s.to > 0.0) {
+            let other = match (self.season, self.date) {
+                (Some(s), _) => s != Season::Winter,
+                (None, Some(d)) => [d.from, d.to]
+                    .iter()
+                    .any(|d| Season::of(d.month, latitude) != Season::Winter),
+                _ => false,
+            };
+            if other {
+                return err(
+                    "snow lies only in winter: give `season: \"winter\"` or a winter `date`",
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Ease {
+    /// Starts slowly, ends at full speed.
+    In,
+    /// Starts at full speed, ends slowly.
+    Out,
+    /// Starts and ends slowly.
+    #[default]
+    InOut,
+    /// Constant speed.
+    None,
+}
+
+impl Ease {
+    /// The share of the path covered `u` (0..1) of the way through the shot's time.
+    pub fn apply(self, u: f32) -> f32 {
+        let u = u.clamp(0.0, 1.0);
+        match self {
+            Ease::In => u * u,
+            Ease::Out => 1.0 - (1.0 - u) * (1.0 - u),
+            Ease::InOut => u * u * (3.0 - 2.0 * u),
+            Ease::None => u,
+        }
+    }
+}
+
+/// What the camera looks at: a point, or ahead along the path.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Look {
+    Ahead,
+    At([f32; 3]),
+}
+
+impl Serialize for Look {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Look::Ahead => s.serialize_str("ahead"),
+            Look::At(p) => p.serialize(s),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Look {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Word(String),
+            Point([f32; 3]),
+        }
+        match Raw::deserialize(d)? {
+            Raw::Point(p) => Ok(Look::At(p)),
+            Raw::Word(w) if w == "ahead" => Ok(Look::Ahead),
+            Raw::Word(w) => Err(serde::de::Error::custom(format!(
+                "`look_at` is [x, y, z] or \"ahead\", got \"{w}\""
+            ))),
+        }
+    }
+}
+
+/// A value at the start and the end of a shot; one number or date alone is constant.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Span<T> {
+    pub from: T,
+    pub to: T,
+}
+
+impl<T: Serialize + PartialEq + Copy> Serialize for Span<T> {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        if self.from == self.to {
+            self.from.serialize(s)
+        } else {
+            [self.from, self.to].serialize(s)
+        }
+    }
+}
+
+impl<'de, T: Deserialize<'de> + Copy> Deserialize<'de> for Span<T> {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw<T> {
+            Two([T; 2]),
+            One(T),
+        }
+        Ok(match Raw::<T>::deserialize(d)? {
+            Raw::Two([from, to]) => Span { from, to },
+            Raw::One(v) => Span { from: v, to: v },
+        })
+    }
+}
+
+impl Span<f32> {
+    pub fn at(&self, u: f32) -> f32 {
+        self.from + (self.to - self.from) * u
+    }
+}
+
+/// A day of the year (no year: the calendar of a non-leap year).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Date {
+    pub month: u32,
+    pub day: u32,
+}
+
+const MONTH_DAYS: [u32; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+impl Date {
+    pub fn valid(&self) -> bool {
+        (1..=12).contains(&self.month)
+            && (1..=MONTH_DAYS[self.month as usize - 1]).contains(&self.day)
+    }
+
+    fn day_of_year(&self) -> f32 {
+        (MONTH_DAYS[..self.month as usize - 1].iter().sum::<u32>() + self.day) as f32
+    }
+
+    fn from_day_of_year(doy: f32) -> Date {
+        let mut left = doy.round().clamp(1.0, 365.0) as u32;
+        for (m, days) in MONTH_DAYS.iter().enumerate() {
+            if left <= *days {
+                return Date {
+                    month: m as u32 + 1,
+                    day: left,
+                };
+            }
+            left -= days;
+        }
+        Date { month: 12, day: 31 }
+    }
+}
+
+impl Span<Date> {
+    pub fn at(&self, u: f32) -> Date {
+        if self.from == self.to {
+            return self.from;
+        }
+        let (a, b) = (self.from.day_of_year(), self.to.day_of_year());
+        Date::from_day_of_year(a + (b - a) * u)
+    }
+}
+
+// ------------------------------------------------------------------------------ environment
+
+/// What a film is played over: the ground the eye follows, the project's viewpoints and its
+/// latitude (the season of a date).
+pub struct Env<'a> {
+    pub ground: &'a dyn Fn(f32, f32) -> f32,
+    pub viewpoints: &'a [Viewpoint],
+    pub latitude: f64,
+}
+
+impl<'a> Env<'a> {
+    pub fn new(project: &'a Project, ground: &'a dyn Fn(f32, f32) -> f32) -> Env<'a> {
+        Env {
+            ground,
+            viewpoints: &project.viewpoints,
+            latitude: project.site.latitude,
+        }
+    }
+}
+
+/// The ground height at `(x, z)` the core knows: the terrain, else 0.
+pub fn terrain_ground(project: &Project, x: f32, z: f32) -> f32 {
+    project
+        .terrain
+        .as_ref()
+        .and_then(|t| t.height_at(x, z))
+        .unwrap_or(0.0)
+}
+
+// ---------------------------------------------------------------------------------- frames
+
+/// What changes for one picture, as `view.render` takes it. Unset: the project's own.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
+pub struct Overrides {
+    /// Local hour of the day.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_of_day: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub date: Option<Date>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub season: Option<Season>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub years: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snow: Option<f32>,
+}
+
+impl Overrides {
+    /// The `view.render` parameters (`time`, `season`, `years`, `snow`) for this frame.
+    pub fn render_params(&self) -> serde_json::Map<String, Value> {
+        let mut m = serde_json::Map::new();
+        let mut time = serde_json::Map::new();
+        if let Some(h) = self.time_of_day {
+            time.insert("hour".into(), json!(h));
+        }
+        if let Some(d) = self.date {
+            time.insert("month".into(), d.month.into());
+            time.insert("day".into(), d.day.into());
+        }
+        if !time.is_empty() {
+            m.insert("time".into(), time.into());
+        }
+        if let Some(s) = self.season {
+            m.insert("season".into(), s.name().into());
+        }
+        if let Some(y) = self.years {
+            m.insert("years".into(), json!(y));
+        }
+        if let Some(s) = self.snow {
+            m.insert("snow".into(), json!(s));
+        }
+        m
+    }
+}
+
+/// The camera and the picture's changes at a time.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Frame {
+    pub eye: [f32; 3],
+    pub target: [f32; 3],
+    pub fov_y_deg: f32,
+    pub overrides: Overrides,
+    /// Index of the shot the time falls in.
+    pub shot: usize,
+    /// How far through that shot, 0..1, by time.
+    pub progress: f32,
+}
+
+// --------------------------------------------------------------------------------- timeline
+
+/// A film with its shots' paths worked out over an [`Env`]: durations and cameras.
+pub struct Timeline {
+    shots: Vec<Built>,
+    pub duration_s: f32,
+    pub fps: u32,
+}
+
+struct Built {
+    shot: Shot,
+    start: f32,
+    duration: f32,
+    geom: Geom,
+    /// A hold on a viewpoint carries the viewpoint's own time and years.
+    base: Overrides,
+    fov: f32,
+}
+
+enum Geom {
+    /// The eye on a dense path; `pitch_deg` looks down for a flyover, `level` keeps the gaze
+    /// horizontal (a walk).
+    Path {
+        path: Path3,
+        level: bool,
+        pitch_deg: f32,
+    },
+    Rise {
+        at: [f32; 2],
+        ground: f32,
+        from: f32,
+        to: f32,
+    },
+    Orbit,
+    Hold {
+        eye: [f32; 3],
+        target: [f32; 3],
+    },
+}
+
+impl Timeline {
+    pub fn new(film: &Film, env: &Env) -> Result<Timeline, String> {
+        let mut start = 0.0;
+        let mut shots = Vec::new();
+        for (i, shot) in film.shots.iter().enumerate() {
+            let b = build(shot, start, env).map_err(|e| format!("shot {i}: {e}"))?;
+            start += b.duration;
+            shots.push(b);
+        }
+        Ok(Timeline {
+            shots,
+            duration_s: start,
+            fps: film.fps,
+        })
+    }
+
+    pub fn frame_count(&self) -> usize {
+        (self.duration_s * self.fps as f32 - 1e-3).ceil().max(0.0) as usize
+    }
+
+    /// Where each shot starts and how long it lasts: `(start_s, duration_s)`.
+    pub fn spans(&self) -> Vec<(f32, f32)> {
+        self.shots.iter().map(|b| (b.start, b.duration)).collect()
+    }
+
+    pub fn camera_at(&self, t: f32) -> Result<Frame, String> {
+        if self.shots.is_empty() {
+            return Err("the film has no shots".into());
+        }
+        let t = t.clamp(0.0, self.duration_s);
+        let i = self
+            .shots
+            .partition_point(|b| b.start + b.duration <= t)
+            .min(self.shots.len() - 1);
+        let b = &self.shots[i];
+        let u = ((t - b.start) / b.duration).clamp(0.0, 1.0);
+        let e = b.shot.ease.apply(u);
+        let (eye, target) = match (&b.geom, &b.shot.kind) {
+            (
+                Geom::Path {
+                    path,
+                    level,
+                    pitch_deg,
+                },
+                _,
+            ) => {
+                let s = e * path.len();
+                let eye = path.at(s);
+                let target = match b.shot.look_at {
+                    Some(Look::At(p)) => p,
+                    _ if *pitch_deg > 0.0 => {
+                        let a = path.ahead(s, 1.0);
+                        let h = normalize([a[0] - eye[0], 0.0, a[2] - eye[2]]);
+                        let (c, sn) = (
+                            (*pitch_deg).to_radians().cos(),
+                            (*pitch_deg).to_radians().sin(),
+                        );
+                        let d = 30.0;
+                        [
+                            eye[0] + h[0] * c * d,
+                            eye[1] - sn * d,
+                            eye[2] + h[2] * c * d,
+                        ]
+                    }
+                    _ => {
+                        let a = path.ahead(s, LOOK_AHEAD_M);
+                        [a[0], if *level { eye[1] } else { a[1] }, a[2]]
+                    }
+                };
+                (eye, target)
+            }
+            (
+                Geom::Rise {
+                    at,
+                    ground,
+                    from,
+                    to,
+                },
+                ShotKind::Rise { .. },
+            ) => {
+                let h = from + (to - from) * e;
+                let Some(Look::At(target)) = b.shot.look_at else {
+                    return Err("a rise needs `look_at`".into());
+                };
+                ([at[0], ground + h, at[1]], target)
+            }
+            (
+                Geom::Orbit,
+                ShotKind::Orbit {
+                    center,
+                    radius_m,
+                    height_m,
+                    from_deg,
+                    to_deg,
+                },
+            ) => {
+                let a = (from_deg + (to_deg - from_deg) * e).to_radians();
+                let eye = [
+                    center[0] + radius_m * a.cos(),
+                    center[1] + height_m,
+                    center[2] - radius_m * a.sin(),
+                ];
+                let target = match b.shot.look_at {
+                    Some(Look::At(p)) => p,
+                    _ => *center,
+                };
+                (eye, target)
+            }
+            (Geom::Hold { eye, target }, _) => (*eye, *target),
+            _ => return Err("the shot does not match its path".into()),
+        };
+        let eye_target = if eye == target {
+            [target[0], target[1], target[2] - 0.01]
+        } else {
+            target
+        };
+        Ok(Frame {
+            eye,
+            target: eye_target,
+            fov_y_deg: b.fov,
+            overrides: overrides_at(&b.shot, b.base, u),
+            shot: i,
+            progress: u,
+        })
+    }
+}
+
+fn overrides_at(shot: &Shot, base: Overrides, u: f32) -> Overrides {
+    let mut o = base;
+    if let Some(s) = shot.time_of_day {
+        o.time_of_day = Some(s.at(u));
+    }
+    if let Some(s) = shot.date {
+        o.date = Some(s.at(u));
+        o.season = None;
+    }
+    if let Some(s) = shot.season {
+        o.season = Some(s);
+        o.date = None;
+    }
+    if let Some(s) = shot.years {
+        o.years = Some(s.at(u));
+    }
+    if let Some(s) = shot.snow {
+        o.snow = Some(s.at(u));
+    }
+    o
+}
+
+fn build(shot: &Shot, start: f32, env: &Env) -> Result<Built, String> {
+    let mut base = Overrides::default();
+    let mut fov = shot.fov_y_deg.unwrap_or(DEFAULT_FOV);
+    let (geom, length, default_speed) = match &shot.kind {
+        ShotKind::Walk { path, eye_height_m } => {
+            let plan = densify(path, 0.25);
+            let ground: Vec<f32> = plan.iter().map(|p| (env.ground)(p[0], p[1])).collect();
+            let ground = smooth(&ground, 3);
+            let pts: Vec<[f32; 3]> = plan
+                .iter()
+                .zip(&ground)
+                .map(|(p, g)| [p[0], g + eye_height_m, p[1]])
+                .collect();
+            let path = Path3::new(pts);
+            let len = path.len();
+            (
+                Geom::Path {
+                    path,
+                    level: true,
+                    pitch_deg: 0.0,
+                },
+                Some(len),
+                WALK_SPEED,
+            )
+        }
+        ShotKind::Glide { path } => {
+            let path = Path3::new(catmull_rom(path));
+            let len = path.len();
+            (
+                Geom::Path {
+                    path,
+                    level: false,
+                    pitch_deg: 0.0,
+                },
+                Some(len),
+                GLIDE_SPEED,
+            )
+        }
+        ShotKind::Flyover {
+            path,
+            height_m,
+            pitch_deg,
+        } => {
+            let plan = densify(path, 0.5);
+            let ground: Vec<f32> = plan.iter().map(|p| (env.ground)(p[0], p[1])).collect();
+            let ground = smooth(&ground, 12);
+            let pts: Vec<[f32; 3]> = plan
+                .iter()
+                .zip(&ground)
+                .map(|(p, g)| [p[0], g + height_m, p[1]])
+                .collect();
+            let path = Path3::new(pts);
+            let len = path.len();
+            (
+                Geom::Path {
+                    path,
+                    level: false,
+                    pitch_deg: *pitch_deg,
+                },
+                Some(len),
+                FLYOVER_SPEED,
+            )
+        }
+        ShotKind::Rise {
+            at,
+            from_height,
+            to_height,
+        } => (
+            Geom::Rise {
+                at: *at,
+                ground: (env.ground)(at[0], at[1]),
+                from: *from_height,
+                to: *to_height,
+            },
+            Some((to_height - from_height).abs()),
+            1.0,
+        ),
+        ShotKind::Orbit {
+            radius_m,
+            from_deg,
+            to_deg,
+            ..
+        } => (
+            Geom::Orbit,
+            Some(radius_m * (to_deg - from_deg).abs().to_radians()),
+            2.0,
+        ),
+        ShotKind::Hold {
+            viewpoint,
+            eye,
+            target,
+        } => {
+            let (eye, target) = match (viewpoint, eye, target) {
+                (Some(id), _, _) => {
+                    let v = env
+                        .viewpoints
+                        .iter()
+                        .find(|v| v.id == *id || v.name == *id)
+                        .ok_or_else(|| format!("no viewpoint `{id}`"))?;
+                    if shot.fov_y_deg.is_none() {
+                        fov = v.fov_y_deg;
+                    }
+                    if let Some(t) = v.time {
+                        base.time_of_day = Some(t.hour);
+                        base.date = Some(Date {
+                            month: t.month,
+                            day: t.day,
+                        });
+                    }
+                    base.years = v.years;
+                    (v.position, v.target)
+                }
+                (None, Some(e), Some(t)) => (*e, *t),
+                _ => return Err("a hold needs a viewpoint or an eye and a target".into()),
+            };
+            (Geom::Hold { eye, target }, None, 1.0)
+        }
+    };
+    let duration = match (shot.duration_s, shot.speed_mps, length) {
+        (Some(d), _, _) => d,
+        (None, Some(v), Some(l)) => l / v,
+        (None, None, Some(l))
+            if !matches!(shot.kind, ShotKind::Rise { .. } | ShotKind::Orbit { .. }) =>
+        {
+            l / default_speed
+        }
+        _ => DEFAULT_DURATION,
+    };
+    if !(duration > 0.0 && duration.is_finite()) {
+        return Err("the shot has no length in time; give `duration_s`".into());
+    }
+    Ok(Built {
+        shot: shot.clone(),
+        start,
+        duration,
+        geom,
+        base,
+        fov,
+    })
+}
+
+// ---------------------------------------------------------------------------- path helpers
+
+fn dist3(a: [f32; 3], b: [f32; 3]) -> f32 {
+    ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
+}
+
+fn normalize(v: [f32; 3]) -> [f32; 3] {
+    let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    if l < 1e-9 {
+        [0.0, 0.0, -1.0]
+    } else {
+        [v[0] / l, v[1] / l, v[2] / l]
+    }
+}
+
+fn plan_length(path: &[[f32; 2]]) -> f32 {
+    path.windows(2)
+        .map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1]))
+        .sum()
+}
+
+/// The path with points added so none is further than `step` from the next.
+fn densify(path: &[[f32; 2]], step: f32) -> Vec<[f32; 2]> {
+    let mut out = vec![path[0]];
+    for w in path.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        let n = ((b[0] - a[0]).hypot(b[1] - a[1]) / step).ceil().max(1.0) as usize;
+        for i in 1..=n {
+            let t = i as f32 / n as f32;
+            out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+        }
+    }
+    out
+}
+
+/// A moving average over `radius` samples either side (fewer at the ends): steps and kerbs
+/// do not jerk the camera.
+fn smooth(values: &[f32], radius: usize) -> Vec<f32> {
+    (0..values.len())
+        .map(|i| {
+            let (lo, hi) = (i.saturating_sub(radius), (i + radius).min(values.len() - 1));
+            values[lo..=hi].iter().sum::<f32>() / (hi - lo + 1) as f32
+        })
+        .collect()
+}
+
+/// A path through points with the length so far at each, to move along by distance.
+struct Path3 {
+    pts: Vec<[f32; 3]>,
+    cum: Vec<f32>,
+}
+
+impl Path3 {
+    fn new(pts: Vec<[f32; 3]>) -> Path3 {
+        let mut cum = vec![0.0];
+        for w in pts.windows(2) {
+            cum.push(cum[cum.len() - 1] + dist3(w[0], w[1]));
+        }
+        Path3 { pts, cum }
+    }
+
+    fn len(&self) -> f32 {
+        *self.cum.last().unwrap_or(&0.0)
+    }
+
+    fn at(&self, s: f32) -> [f32; 3] {
+        let s = s.clamp(0.0, self.len());
+        let i = self
+            .cum
+            .partition_point(|&c| c <= s)
+            .saturating_sub(1)
+            .min(self.pts.len().saturating_sub(2));
+        let (a, b) = (self.pts[i], self.pts[(i + 1).min(self.pts.len() - 1)]);
+        let seg = self.cum[(i + 1).min(self.pts.len() - 1)] - self.cum[i];
+        if seg <= 1e-9 {
+            return a;
+        }
+        let t = (s - self.cum[i]) / seg;
+        std::array::from_fn(|k| a[k] + (b[k] - a[k]) * t)
+    }
+
+    /// The point `d` further along than `s`; past the end, on the line of the last stretch.
+    fn ahead(&self, s: f32, d: f32) -> [f32; 3] {
+        let target = s + d;
+        if target <= self.len() {
+            return self.at(target);
+        }
+        let end = self.at(self.len());
+        let before = self.at((self.len() - 0.3).max(0.0));
+        let dir = normalize([end[0] - before[0], end[1] - before[1], end[2] - before[2]]);
+        let extra = target - self.len();
+        std::array::from_fn(|k| end[k] + dir[k] * extra)
+    }
+}
+
+/// A centripetal Catmull-Rom curve through `points`, sampled finely.
+fn catmull_rom(points: &[[f32; 3]]) -> Vec<[f32; 3]> {
+    let mut p: Vec<[f32; 3]> = Vec::new();
+    for q in points {
+        if p.last().is_none_or(|l| dist3(*l, *q) > 1e-4) {
+            p.push(*q);
+        }
+    }
+    if p.len() < 3 {
+        return p;
+    }
+    let n = p.len();
+    let ext = |i: isize| -> [f32; 3] {
+        if i < 0 {
+            std::array::from_fn(|k| 2.0 * p[0][k] - p[1][k])
+        } else if i as usize >= n {
+            std::array::from_fn(|k| 2.0 * p[n - 1][k] - p[n - 2][k])
+        } else {
+            p[i as usize]
+        }
+    };
+    let mix = |a: [f32; 3], b: [f32; 3], wa: f32, wb: f32| -> [f32; 3] {
+        std::array::from_fn(|k| a[k] * wa + b[k] * wb)
+    };
+    let mut out = vec![p[0]];
+    for i in 0..n - 1 {
+        let (p0, p1, p2, p3) = (ext(i as isize - 1), p[i], p[i + 1], ext(i as isize + 2));
+        let t1 = dist3(p0, p1).sqrt();
+        let t2 = t1 + dist3(p1, p2).sqrt();
+        let t3 = t2 + dist3(p2, p3).sqrt();
+        let (t0, t1, t2, t3) = (0.0, t1, t2, t3);
+        let steps = ((dist3(p1, p2) / 0.25).ceil() as usize).clamp(8, 400);
+        for s in 1..=steps {
+            let t = t1 + (t2 - t1) * s as f32 / steps as f32;
+            let w = |a: f32, b: f32, x: f32| {
+                if (b - a).abs() < 1e-9 {
+                    0.5
+                } else {
+                    (x - a) / (b - a)
+                }
+            };
+            let a1 = mix(p0, p1, 1.0 - w(t0, t1, t), w(t0, t1, t));
+            let a2 = mix(p1, p2, 1.0 - w(t1, t2, t), w(t1, t2, t));
+            let a3 = mix(p2, p3, 1.0 - w(t2, t3, t), w(t2, t3, t));
+            let b1 = mix(a1, a2, 1.0 - w(t0, t2, t), w(t0, t2, t));
+            let b2 = mix(a2, a3, 1.0 - w(t1, t3, t), w(t1, t3, t));
+            out.push(mix(b1, b2, 1.0 - w(t1, t2, t), w(t1, t2, t)));
+        }
+    }
+    out
+}
+
+/// A shot's time of the sun as a project time: handy for tools that show it.
+pub fn sun_time(base: SunTime, o: &Overrides, latitude: f64) -> SunTime {
+    let mut t = base;
+    if let Some(s) = o.season {
+        t = s.time(t, latitude);
+    }
+    if let Some(d) = o.date {
+        t.month = d.month;
+        t.day = d.day;
+    }
+    if let Some(h) = o.time_of_day {
+        t.hour = h;
+    }
+    t
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn flat(_: f32, _: f32) -> f32 {
+        0.0
+    }
+
+    fn env<'a>(ground: &'a dyn Fn(f32, f32) -> f32, vps: &'a [Viewpoint]) -> Env<'a> {
+        Env {
+            ground,
+            viewpoints: vps,
+            latitude: 50.8,
+        }
+    }
+
+    fn shot(v: Value) -> Shot {
+        Shot::from_value(&v, 50.8).unwrap()
+    }
+
+    fn film(shots: Vec<Shot>) -> Film {
+        Film {
+            id: "f1".into(),
+            name: "Test".into(),
+            fps: 25,
+            shots,
+        }
+    }
+
+    #[test]
+    fn a_walk_keeps_its_eye_height_and_speed() {
+        let slope = |_: f32, z: f32| 0.05 * z;
+        let ground: &dyn Fn(f32, f32) -> f32 = &slope;
+        let f = film(vec![shot(json!({
+            "kind": "walk", "path": [[0, 0], [0, 12], [8, 12]], "speed_mps": 1.2, "ease": "none"
+        }))]);
+        let e = env(ground, &[]);
+        let tl = Timeline::new(&f, &e).unwrap();
+        // 20 m at a bit over 1.2 m/s along the slope
+        assert!(
+            (tl.duration_s - 20.0 / 1.2).abs() < 0.3,
+            "{}",
+            tl.duration_s
+        );
+        let mut prev: Option<[f32; 3]> = None;
+        let mut steps = Vec::new();
+        for i in 0..tl.frame_count() - 1 {
+            let fr = tl.camera_at(i as f32 / 25.0).unwrap();
+            let above = fr.eye[1] - slope(fr.eye[0], fr.eye[2]);
+            assert!((above - 1.6).abs() < 0.15, "frame {i}: {above}");
+            // eyes level: the gaze stays horizontal
+            assert!((fr.target[1] - fr.eye[1]).abs() < 1e-4);
+            if let Some(p) = prev {
+                steps.push(dist3(p, fr.eye));
+            }
+            prev = Some(fr.eye);
+        }
+        // equal arc length per frame, except where the path turns a corner
+        let straight = &steps[3..steps.len() / 2 - 5];
+        let first = straight[0];
+        assert!(first > 1.2 / 25.0 * 0.99, "{first}");
+        assert!(
+            straight.iter().all(|s| (s - first).abs() < 1e-3),
+            "{straight:?}"
+        );
+    }
+
+    #[test]
+    fn a_walk_looks_ahead_along_the_path() {
+        let ground: &dyn Fn(f32, f32) -> f32 = &flat;
+        let f = film(vec![shot(json!({
+            "kind": "walk", "path": [[0, 0], [0, -10]], "duration_s": 5, "ease": "none"
+        }))]);
+        let fr = camera_at(&f, 2.0, &env(ground, &[])).unwrap();
+        assert!(fr.target[2] < fr.eye[2] - 3.0 && (fr.target[0] - fr.eye[0]).abs() < 1e-4);
+        // the end of the path: still looking the way it goes
+        let end = camera_at(&f, 5.0, &env(ground, &[])).unwrap();
+        assert!(end.target[2] < end.eye[2] - 3.0);
+    }
+
+    #[test]
+    fn an_orbit_keeps_its_radius_and_turns_counter_clockwise() {
+        let ground: &dyn Fn(f32, f32) -> f32 = &flat;
+        let f = film(vec![shot(json!({
+            "kind": "orbit", "center": [10.5, 0, 22.5], "radius_m": 9, "height_m": 4,
+            "from_deg": 0, "to_deg": 720, "duration_s": 8, "ease": "none"
+        }))]);
+        let e = env(ground, &[]);
+        for i in 0..=40 {
+            let fr = camera_at(&f, i as f32 * 0.2, &e).unwrap();
+            let r = (fr.eye[0] - 10.5).hypot(fr.eye[2] - 22.5);
+            assert!((r - 9.0).abs() < 1e-3, "{r}");
+            assert_eq!(fr.eye[1], 4.0);
+            assert_eq!(fr.target, [10.5, 0.0, 22.5]);
+        }
+        // 0 degrees is east of the centre; a quarter turn counter-clockwise seen from above
+        // (+X towards -Z) is north of it, which is -Z.
+        let start = camera_at(&f, 0.0, &e).unwrap();
+        assert!((start.eye[0] - 19.5).abs() < 1e-3 && (start.eye[2] - 22.5).abs() < 1e-3);
+        let quarter = camera_at(&f, 8.0 / 8.0, &e).unwrap();
+        assert!((quarter.eye[0] - 10.5).abs() < 1e-3 && (quarter.eye[2] - 13.5).abs() < 1e-3);
+        // more than a turn is allowed: 720 degrees ends where it began
+        let end = camera_at(&f, 8.0, &e).unwrap();
+        assert!((end.eye[0] - 19.5).abs() < 1e-3);
+    }
+
+    #[test]
+    fn eases_stand_still_at_their_ends() {
+        let h = 1e-3;
+        for ease in [Ease::In, Ease::Out, Ease::InOut, Ease::None] {
+            assert_eq!(ease.apply(0.0), 0.0);
+            assert!((ease.apply(1.0) - 1.0).abs() < 1e-6);
+            let (v0, v1) = (ease.apply(h) / h, (1.0 - ease.apply(1.0 - h)) / h);
+            match ease {
+                Ease::In => assert!(v0 < 0.01 && v1 > 1.9),
+                Ease::Out => assert!(v0 > 1.9 && v1 < 0.01),
+                Ease::InOut => assert!(v0 < 0.01 && v1 < 0.01),
+                Ease::None => assert!((v0 - 1.0).abs() < 1e-3 && (v1 - 1.0).abs() < 1e-3),
+            }
+        }
+        // and the camera of an eased shot barely moves in its first frame
+        let ground: &dyn Fn(f32, f32) -> f32 = &flat;
+        let f = film(vec![shot(json!({
+            "kind": "glide", "path": [[0, 2, 0], [10, 2, 0]], "duration_s": 4
+        }))]);
+        let e = env(ground, &[]);
+        let a = camera_at(&f, 0.0, &e).unwrap().eye;
+        let b = camera_at(&f, 1.0 / 25.0, &e).unwrap().eye;
+        let mid = camera_at(&f, 2.0, &e).unwrap().eye;
+        assert!(b[0] - a[0] < 0.01 && (mid[0] - 5.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn time_of_day_season_and_years_interpolate() {
+        let ground: &dyn Fn(f32, f32) -> f32 = &flat;
+        let f = film(vec![
+            shot(
+                json!({"kind": "hold", "eye": [0, 2, 5], "target": [0, 1, 0], "duration_s": 2,
+                "time_of_day": [17, 19], "years": [0, 10], "date": [{"month": 3, "day": 1}, {"month": 9, "day": 1}]}),
+            ),
+            shot(
+                json!({"kind": "hold", "eye": [0, 2, 5], "target": [0, 1, 0], "duration_s": 2,
+                "season": "winter", "snow": 0.5}),
+            ),
+        ]);
+        let e = env(ground, &[]);
+        let mid = camera_at(&f, 1.0, &e).unwrap();
+        assert!((mid.overrides.time_of_day.unwrap() - 18.0).abs() < 1e-5);
+        assert!((mid.overrides.years.unwrap() - 5.0).abs() < 1e-5);
+        assert_eq!(mid.overrides.date, Some(Date { month: 6, day: 1 }));
+        assert_eq!(mid.shot, 0);
+        let end = camera_at(&f, 3.0, &e).unwrap();
+        assert_eq!(end.shot, 1);
+        assert_eq!(end.overrides.season, Some(Season::Winter));
+        assert_eq!(end.overrides.snow, Some(0.5));
+        assert_eq!(end.overrides.time_of_day, None);
+        let params = mid.overrides.render_params();
+        assert_eq!(params["time"], json!({"hour": 18.0, "month": 6, "day": 1}));
+    }
+
+    #[test]
+    fn durations_add_up_and_frames_are_counted() {
+        let ground: &dyn Fn(f32, f32) -> f32 = &flat;
+        let vps = [Viewpoint {
+            id: "v1".into(),
+            name: "Gate".into(),
+            position: [0.0, 1.6, 5.0],
+            target: [0.0, 1.6, 0.0],
+            fov_y_deg: 70.0,
+            time: Some(SunTime {
+                hour: 8.5,
+                ..SunTime::default()
+            }),
+            years: Some(3.0),
+        }];
+        let e = env(ground, &vps);
+        let f = film(vec![
+            shot(json!({"kind": "walk", "path": [[0, 0], [0, 12]], "speed_mps": 1.2})),
+            shot(
+                json!({"kind": "orbit", "center": [0, 0, 6], "radius_m": 5, "height_m": 3,
+                "from_deg": 0, "to_deg": 90, "duration_s": 6}),
+            ),
+            shot(
+                json!({"kind": "flyover", "path": [[0, 0], [40, 0]], "height_m": 20, "speed_mps": 10}),
+            ),
+            shot(json!({"kind": "hold", "viewpoint": "v1", "duration_s": 2})),
+        ]);
+        assert!((f.duration(&e).unwrap() - (10.0 + 6.0 + 4.0 + 2.0)).abs() < 1e-3);
+        assert_eq!(f.frame_count(&e).unwrap(), 550);
+        let last = camera_at(&f, 100.0, &e).unwrap();
+        assert_eq!((last.shot, last.fov_y_deg), (3, 70.0));
+        assert_eq!(last.overrides.time_of_day, Some(8.5));
+        assert_eq!(last.overrides.years, Some(3.0));
+        assert_eq!(last.eye, [0.0, 1.6, 5.0]);
+        // a missing viewpoint is said, with the shot
+        let gone = film(vec![shot(
+            json!({"kind": "hold", "viewpoint": "v9", "duration_s": 1}),
+        )]);
+        assert!(f.duration(&e).is_ok());
+        assert!(
+            gone.duration(&e)
+                .unwrap_err()
+                .contains("shot 0: no viewpoint `v9`")
+        );
+    }
+
+    #[test]
+    fn a_flyover_looks_ahead_and_down() {
+        let ground: &dyn Fn(f32, f32) -> f32 = &flat;
+        let f = film(vec![shot(json!({
+            "kind": "flyover", "path": [[0, 0], [30, 0]], "height_m": 15, "pitch_deg": 45, "duration_s": 6,
+            "ease": "none"
+        }))]);
+        let fr = camera_at(&f, 3.0, &env(ground, &[])).unwrap();
+        assert!((fr.eye[1] - 15.0).abs() < 1e-3);
+        let (dx, dy) = (fr.target[0] - fr.eye[0], fr.target[1] - fr.eye[1]);
+        assert!(dx > 5.0 && dy < -5.0 && (dx + dy).abs() < 1e-2, "{dx} {dy}");
+    }
+
+    #[test]
+    fn a_rise_climbs_over_the_ground_and_a_glide_goes_through_its_points() {
+        let hill = |_: f32, _: f32| 2.0;
+        let ground: &dyn Fn(f32, f32) -> f32 = &hill;
+        let e = env(ground, &[]);
+        let f = film(vec![shot(json!({
+            "kind": "rise", "at": [3, 3], "from_height": 1.6, "to_height": 11.6,
+            "look_at": [10, 0, 10], "duration_s": 4, "ease": "none"
+        }))]);
+        assert!((camera_at(&f, 0.0, &e).unwrap().eye[1] - 3.6).abs() < 1e-4);
+        assert!((camera_at(&f, 4.0, &e).unwrap().eye[1] - 13.6).abs() < 1e-4);
+        let g = film(vec![shot(json!({
+            "kind": "glide", "path": [[0, 2, 0], [5, 3, 5], [10, 2, 0]], "speed_mps": 2, "ease": "none"
+        }))]);
+        let tl = Timeline::new(&g, &e).unwrap();
+        let mid = (0..=200)
+            .map(|i| tl.camera_at(tl.duration_s * i as f32 / 200.0).unwrap().eye)
+            .map(|p| dist3(p, [5.0, 3.0, 5.0]))
+            .fold(f32::MAX, f32::min);
+        assert!(mid < 0.1, "{mid}");
+        assert!(tl.duration_s > 15.0 / 2.0 / 1.2 * 0.5);
+    }
+
+    #[test]
+    fn bad_shots_are_refused_clearly() {
+        let why = |v: Value| Shot::from_value(&v, 50.8).unwrap_err();
+        assert!(why(json!({"kind": "walk", "path": [], "speed_mps": 1})).contains("at least 2"));
+        assert!(
+            why(json!({"kind": "walk", "path": [[0, 0], [1, 1]], "speed_mps": 0}))
+                .contains("above 0")
+        );
+        assert!(
+            why(json!({"kind": "walk", "path": [[0, 0], [1, 1]], "duration_s": -2}))
+                .contains("duration_s")
+        );
+        assert!(
+            why(json!({"kind": "walk", "path": [[0, 0], [1, 1]], "duration_s": 2, "speed_mps": 1}))
+                .contains("not both")
+        );
+        assert!(
+            why(json!({"kind": "walk", "path": [[0, 0], [1, 1]], "speeed_mps": 1}))
+                .contains("did you mean `speed_mps`")
+        );
+        assert!(why(json!({"kind": "hold", "duration_s": 2})).contains("viewpoint"));
+        assert!(why(json!({"kind": "swim"})).contains("unknown shot kind"));
+        assert!(why(json!({"kind": "rise", "at": [0, 0], "from_height": 1, "to_height": 5, "duration_s": 1})).contains("look_at"));
+        assert!(
+            why(json!({"kind": "orbit", "center": [0, 0, 0], "radius_m": 0, "height_m": 3, "from_deg": 0, "to_deg": 90}))
+                .contains("radius_m")
+        );
+        assert!(
+            why(json!({"kind": "hold", "eye": [0, 1, 0], "target": [0, 1, 1], "duration_s": 1, "time_of_day": 25}))
+                .contains("time_of_day")
+        );
+        assert!(
+            why(json!({"kind": "hold", "eye": [0, 1, 0], "target": [0, 1, 1], "duration_s": 1, "season": "summer", "snow": 1}))
+                .contains("snow lies only in winter")
+        );
+    }
+
+    #[test]
+    fn a_shot_round_trips_through_json() {
+        let v = json!({"kind": "walk", "path": [[0.0, 0.0], [0.0, 5.0]], "eye_height_m": 1.5, "speed_mps": 1.25,
+            "ease": "in_out", "look_at": "ahead", "time_of_day": [17.0, 18.0], "years": 5.0});
+        let s = Shot::from_value(&v, 50.8).unwrap();
+        assert_eq!(serde_json::to_value(&s).unwrap(), v);
+    }
+}

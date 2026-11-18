@@ -21,6 +21,18 @@ nothing here is a promise of a date.
   the window: Materials, click a wall, Photo on wall…, drag four corner handles onto the facade,
   type a region, Apply. Next: several photos on one face (a facade in tiles), removing what
   stands in front of it (trees, cars), matching the photo's colour to the sun, EXIF rotation.
+- **Films from camera moves:** `film.add` and `film.add_shot` describe a film as shots: `walk`
+  (the eye follows the real ground, looks ahead), `glide` (a smooth curve through points), `rise`,
+  `orbit` (round a spot, any number of turns), `flyover` (a drone looking ahead and down) and
+  `hold` (a viewpoint or an eye and target), each with a duration or a speed, an ease for starts and
+  stops, and a sun's course, date or season, years of growth and snow that change along the shot.
+  `film.preview {id, t}` gives the camera and the changes at a time without drawing, so an agent
+  checks its shots; `film.render` and `visioncraft-cli film` write numbered PNG frames (animation
+  clock = film time, so wind and water move), and `--video` runs ffmpeg when it is installed. In the
+  window: Views mode, Film panel (shots, add from the current camera, scrubber, play). Recipe 27.
+  Next: smooth joins and fades between shots, a camera path drawn in the viewport, a spline
+  walk, rendering frames from the window, a video without ffmpeg, a shot that follows a moving
+  target.
 - **Quantities:** `query.quantities` lists areas, lengths, volumes and plant counts per shape and
   planting, and totals per material and asset; with the host it also lists linked models per body
   (surface, volume of closed bodies, materials, scale applied) and counts plants with the
@@ -116,13 +128,6 @@ nothing here is a promise of a date.
   coordinates converted to the drawing's metres and north, the site set for the sun, and each
   source's licence and attribution shown. The model is then placed on that ground. Import from
   common geodata files and services as well.
-- **Films from camera moves:** a film described as commands, so a person or an agent can compose
-  it: a camera path through points with a speed, height and look-at target per stretch (walk,
-  glide, rise, orbit round a spot, a drone-like fly-over), eased starts and stops, the sun's
-  course, a season or the years of growth changing along the way, rendered to numbered frames or
-  a video file. An agent gets the garden's layout from the same queries it designs with and
-  proposes the shots.
-
 - **Denser borders:** layered perennial plantings that close up, with flowers that read from
   eye level.
 

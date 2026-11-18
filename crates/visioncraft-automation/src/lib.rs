@@ -25,6 +25,7 @@ pub mod control;
 pub mod discovery;
 pub mod docs;
 mod fields;
+pub mod film;
 pub mod host;
 mod inspect;
 mod lines;

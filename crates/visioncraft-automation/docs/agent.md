@@ -42,7 +42,7 @@ same over MCP (`visioncraft-cli mcp`), JSON lines (`visioncraft-cli serve`) and 
 4. **Render.** `doc_render_preview {"viewpoint": ...}`: a PNG and what was drawn (camera, sun,
    `plantsPending`: 0 means every plant is drawn). Its `time` changes the picture only.
 5. **Verify** against the plan: `doc_inspect` (`area_m2`, `footprint_m2`, plant `count`),
-   `query.measure`, `query.quantities {ids?, layer?}` (areas, lengths, volumes and plant counts per object, per material and per asset; linked models too, per body with surface and volume (closed bodies), scale applied, in `models`; plants are counted with the renderer's building rule, `counted_with: "scene"`), `query.raycast`, `query.sun_hours {point | outline, season | date, cell_m?, years?, plants?}` (hours of direct sun at a spot or as a grid over an area, with shadow from models, shapes, terrain and plant crowns; `view.set_sun_map` draws the same grid on the ground, recipe 26), `query.ground_height`, `query.ground_length`, `query.sun`.
+   `query.measure`, `query.quantities {ids?, layer?}` (areas, lengths, volumes and plant counts per object, per material and per asset; linked models too, per body with surface and volume (closed bodies), scale applied, in `models`; plants are counted with the renderer's building rule, `counted_with: "scene"`), `query.raycast`, `query.sun_hours {point | outline, season | date, cell_m?, years?, plants?}` (hours of direct sun at a spot or as a grid over an area, with shadow from models, shapes, terrain and plant crowns; `view.set_sun_map` draws the same grid on the ground, recipe 26), `query.ground_height`, `query.ground_length`, `query.sun`. A film of camera moves is `film.*` (recipe 27); `film.preview` reads it without drawing.
    Save with `command_run file.save {"path": ...}`.
 
 ## Recipes
@@ -704,6 +704,63 @@ border but not the lawn; the hedge on the south side and the bare trees shade th
 of them. `view.set_sun_map` again changes only the fields you give (`{"opacity": 0.4}`, `{"season":
 "summer"}`), `view.clear_sun_map` takes the map off; both are undo steps. In the window the
 same is in Sun & sky, with a legend in the corner of the view.
+
+### 27. A 20 second film of the garden, from the terrace to golden hour
+
+```json recipe
+{"intent": "a film of the example garden: a walk from the terrace over the lawn, an orbit round the pond and a flyover at golden hour, the sun moving along", "steps": [
+  {"id": "project.load_example", "params": {"name": "garden"}},
+  {"id": "document.inspect", "params": {"faces": false}},
+  {"id": "query.quantities", "params": {}},
+  {"id": "film.add", "params": {"name": "Garden at golden hour", "fps": 25}},
+  {"id": "film.add_shot", "params": {"id": "f1", "shot": {"kind": "walk", "path": [[10, 12.5], [10, 19]], "speed_mps": 1.2, "time_of_day": [15, 16]}}},
+  {"id": "film.add_shot", "params": {"id": "f1", "shot": {"kind": "orbit", "center": [10.5, 0, 22.5], "radius_m": 9, "height_m": 4, "from_deg": 0, "to_deg": 150, "duration_s": 8, "time_of_day": [16, 19]}}},
+  {"id": "film.add_shot", "params": {"id": "f1", "shot": {"kind": "flyover", "path": [[2, 3], [10, 14], [18, 28]], "height_m": 14, "pitch_deg": 40, "duration_s": 6.5, "time_of_day": [19, 21.3]}}},
+  {"id": "film.preview", "params": {"id": "f1"}},
+  {"id": "film.preview", "params": {"id": "f1", "t": 2.5}},
+  {"id": "film.preview", "params": {"id": "f1", "t": 12}},
+  {"id": "film.preview", "params": {"id": "f1", "t": 19.5}}
+]}
+```
+
+A film is a list of **shots** played one after the other; each shot has its own camera (the join
+is a cut), and `film.add_shot` takes one `shot` object with a `kind`: `walk` (`path` `[[x, z],
+...]`, the eye `eye_height_m` = 1.6 above the real ground, which `document.inspect` and
+`query.ground_height` describe: terrain, areas and models; it looks ahead along the path), `glide`
+(`path` `[[x, y, z], ...]`, a smooth curve through the points), `rise` (`at` `[x, z]`,
+`from_height`, `to_height` above the ground, `look_at` `[x, y, z]`), `orbit` (`center` `[x, y, z]`,
+`radius_m`, `height_m` above the centre's y, `from_deg`, `to_deg`: the angle is measured from east
+of the centre, **positive counter-clockwise seen from above** like `rotation_y_deg`, and may pass
+360), `flyover` (`path` `[[x, z], ...]`, `height_m` above the smoothed ground, `pitch_deg` = 35: a
+drone looking ahead and down) and `hold` (a `viewpoint` id, or `eye` and `target`, with a
+`duration_s`). How long a shot lasts is `duration_s`, or `speed_mps` and the length of the path
+decide (a walk is 1.2 m/s, a glide 2, a flyover 8 unless told); not both. `ease` (`in`, `out`,
+`in_out` = the default, `none`) shapes the speed along the path, so a shot starts and stops
+gently; `look_at` is a point or `"ahead"`; `fov_y_deg` = 60. Along a shot the picture can change:
+`time_of_day` `[from, to]` (hours, the sun's course; one number holds it), `date` `[{month, day},
+{month, day}]` or `season` (the date's season shows, so a shot from March to September goes
+through spring and summer), `years` `[from, to]` (the garden growing) and `snow` (winter only).
+
+The plan for a garden: ask for its layout first (`document.inspect`: shapes and their outlines;
+`query.quantities`: where the plants are and how many), and choose paths from it: a walk from the
+terrace (`S2`, z 9 to 12) over the lawn (`S3`, 3 to 19 by 12 to 29) stops before the pond (`S6`,
+8 to 13 by 20 to 25, centre `[10.5, 22.5]`), an orbit round the pond, a flyover over everything.
+**Check it without drawing**: `film.preview {id}` lists the shots with their start and length (a
+walk's length in time depends on the ground), and with `t` it gives the camera (`position`,
+`target`), the changes for that picture (`overrides`) and the sun at that moment, so you can see
+that the eye is where you meant (here 20 s: the first shot lasts about 5.4 s, so t = 12 is in the
+orbit and t = 19.5 in the flyover, where the sun is low). Fix a shot with `film.update_shot {id,
+index, shot: {...fields}}`, take one out with `film.remove_shot {id, index}`. Then draw it:
+`film.render {id, dir, width, height, quality, from, to, every}` writes `frame_00000.png` and on
+into `dir` beneath the write root (the same rules as `view.render`'s `path`), with the film's time
+as the animation clock (wind and water move) and each shot's changes applied to that picture only;
+at most 10000 frames a call, so render a long film in parts, or use `every` for a quick look (a
+test of every 25th frame at 640 x 360). From a shell: `visioncraft-cli film garden.visioncraft
+--out frames --size 1280x720`; `--video film.mp4` runs `ffmpeg` on the frames when it is on the
+PATH (VisionCraft has no video codec of its own; without ffmpeg the result carries the command to
+run). In the window, Views mode has a Film panel to list shots, add a shot from the current
+camera (or a walk, an orbit, a flyover), scrub and play the film in the viewport. Not yet: smooth
+joins between shots, a film's own cuts and fades, sound.
 
 ## Known traps
 

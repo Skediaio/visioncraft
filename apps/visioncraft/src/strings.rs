@@ -602,3 +602,31 @@ pub const WALL_PHOTO_BAD_REGION: &str =
 pub const WALL_PHOTO_MISSING: &str =
     "Wall photo files not found (open the project's bundle, or put them beside the project file):";
 pub const WALL_PHOTO_UNREADABLE: &str = "the wall photo in the bundle cannot be read";
+
+pub const FILM: &str = "Film";
+pub const FILM_NEW: &str = "New film";
+pub const FILM_DELETE: &str = "Delete film";
+pub const FILM_NONE: &str = "No film yet: start one, then add shots.";
+pub const FILM_NO_SHOTS: &str = "No shots yet.";
+pub const FILM_PLAY: &str = "Play";
+pub const FILM_PAUSE: &str = "Pause";
+pub const FILM_HOLD_HERE: &str = "Add the current view as a shot";
+pub const FILM_ADD_SHOT: &str = "Add shot";
+pub const FILM_WALK: &str = "Walk";
+pub const FILM_ORBIT: &str = "Orbit";
+pub const FILM_FLYOVER: &str = "Flyover";
+pub const FILM_PATH: &str = "Path (x z, x z, …)";
+pub const FILM_SPEED: &str = "Speed";
+pub const FILM_EYE_HEIGHT: &str = "Eye height";
+pub const FILM_HEIGHT: &str = "Height";
+pub const FILM_RADIUS: &str = "Radius";
+pub const FILM_CENTER: &str = "Centre";
+pub const FILM_CENTER_HERE: &str = "Centre on the view target";
+pub const FILM_FROM_DEG: &str = "From";
+pub const FILM_TO_DEG: &str = "To";
+pub const FILM_DURATION: &str = "Duration";
+pub const FILM_PATH_BAD: &str =
+    "The path needs at least two points, each an x and a z in metres, such as `10 12.5, 10 26`.";
+pub const FILM_ORBIT_TIP: &str = "Degrees from east of the centre, counter-clockwise seen from above; more than 360 turns more than once.";
+pub const FILM_RENDER_HINT: &str =
+    "Frames: visioncraft-cli film FILE --out DIR, or the command film.render.";

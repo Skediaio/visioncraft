@@ -12,6 +12,7 @@ pub mod draw;
 pub mod example;
 pub mod extension;
 pub mod files;
+pub mod film_ui;
 pub mod fixtures;
 pub mod gltf_load;
 pub mod handles;
@@ -161,6 +162,7 @@ pub struct App {
     objects: objects::ObjectsState,
     terrain: terrain_tool::TerrainTool,
     views: views::ViewsState,
+    film: film_ui::FilmUi,
     modelui: modelui::ModelUi,
     extensions: Vec<Box<dyn Extension>>,
     loading: Option<Job>,
@@ -251,6 +253,7 @@ impl App {
             objects: Default::default(),
             terrain: Default::default(),
             views: Default::default(),
+            film: Default::default(),
             modelui: Default::default(),
             extensions,
             loading: None,
@@ -1142,7 +1145,10 @@ impl App {
             Some(Mode::Materials) => self.materials.leave(&mut cx),
             Some(Mode::Objects) => self.objects.leave(&mut cx),
             Some(Mode::Sun) => self.terrain.leave(&mut cx),
-            Some(Mode::Views) => self.views.leave(),
+            Some(Mode::Views) => {
+                self.views.leave();
+                self.film.leave(&mut cx);
+            }
             Some(Mode::Extension(id)) => {
                 cx.s.double_click_captured = false;
                 if let Some(e) = self.extensions.iter_mut().find(|e| e.id() == id) {
@@ -1814,6 +1820,7 @@ impl eframe::App for App {
                     |ui| self.views.panel(ui, &mut cx),
                 );
                 self.views.menu(&mut cx);
+                self.film.show(&mut cx);
             }
             Some(Mode::Materials) => {
                 self.materials.panel(&mut cx);

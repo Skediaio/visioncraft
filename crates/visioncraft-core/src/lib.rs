@@ -11,6 +11,7 @@ mod commands;
 pub mod curve;
 pub mod export;
 pub mod fence;
+pub mod film;
 pub mod growth;
 pub mod house;
 mod import;
@@ -45,6 +46,7 @@ pub mod wind;
 pub use catalog::{Asset, Catalog, CatalogError, attribution_markdown, validate_open_licences};
 pub use commands::examples::{EXAMPLES, example, example_file, is_example_source};
 pub use export::export_presets;
+pub use film::{Film, Shot};
 pub use import::{import_3dcraft, import_obj};
 pub use light::{
     Light, LightKind, LightSpec, kelvin_to_linear_rgb, lights_for_placement, lights_for_placements,

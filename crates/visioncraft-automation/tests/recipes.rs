@@ -19,7 +19,7 @@ pub fn recipes() -> Vec<Value> {
 #[test]
 fn every_recipe_of_the_guide_runs() {
     let recipes = recipes();
-    assert_eq!(recipes.len(), 26);
+    assert_eq!(recipes.len(), 27);
     for (n, recipe) in recipes.into_iter().enumerate() {
         let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("recipe-{n}"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -47,7 +47,7 @@ fn every_recipe_of_the_guide_runs() {
             .as_array()
             .unwrap()
             .iter()
-            .filter(|s| s["id"] != "view.render")
+            .filter(|s| s["id"] != "view.render" && s["id"] != "film.render")
             .cloned()
             .collect();
         let line = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "command_batch", "arguments": args}});
@@ -245,6 +245,38 @@ fn every_recipe_of_the_guide_runs() {
                 .unwrap();
                 assert_eq!(inspect["view"]["sun_map"]["shape"], "S3", "{report}");
                 assert_eq!(inspect["view"]["sun_map"]["season"], "winter", "{report}");
+            }
+            27 => {
+                // Three shots of about 20 s; the walk follows the ground at 1.2 m/s.
+                let all = &results[7]["result"];
+                let total = all["duration_s"].as_f64().unwrap();
+                assert!((19.0..21.0).contains(&total), "{report}");
+                assert_eq!(
+                    all["frame_count"].as_u64().unwrap(),
+                    (total * 25.0).ceil() as u64
+                );
+                assert_eq!(all["shots"].as_array().unwrap().len(), 3, "{report}");
+                let walk = all["shots"][0]["duration_s"].as_f64().unwrap();
+                assert!((5.0..6.0).contains(&walk), "{report}");
+                // On the walk the eye is 1.6 m over the lawn, looking along the path (+z).
+                let at = &results[8]["result"];
+                assert_eq!(at["shot"], 0, "{report}");
+                let eye = &at["camera"]["position"];
+                assert!((eye[1].as_f64().unwrap() - 1.6).abs() < 0.2, "{report}");
+                assert!(at["camera"]["target"][2].as_f64().unwrap() > eye[2].as_f64().unwrap());
+                // In the orbit the eye is 9 m from the pond's centre and 4 m up, the sun later.
+                let orbit = &results[9]["result"];
+                assert_eq!(orbit["shot"], 1, "{report}");
+                let p = &orbit["camera"]["position"];
+                let r = (p[0].as_f64().unwrap() - 10.5).hypot(p[2].as_f64().unwrap() - 22.5);
+                assert!((r - 9.0).abs() < 1e-3 && p[1] == 4.0, "{report}");
+                // Late in the flyover the sun is low.
+                let end = &results[10]["result"];
+                assert_eq!(end["shot"], 2, "{report}");
+                assert!(
+                    end["sun"]["elevation_deg"].as_f64().unwrap() < 10.0,
+                    "{report}"
+                );
             }
             18 => {
                 // The beach 20 m out: 0.2 m above the water; the grass stops at the waterline.

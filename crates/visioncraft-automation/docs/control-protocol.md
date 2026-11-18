@@ -91,7 +91,7 @@ unknown keys are refused with the nearest name, unless `openParams` is true.
 ### Commands
 
 The core's commands (`model.*`, `shape.*`, `material.*`, `planting.*`, `species.add|update|remove`,
-`fence.*`, `stairs.*`, `bed.*`, `underlay.*`, `wall_photo.*`, `light.*`, `viewpoint.*`, `layer.*`, `terrain.*`, `site.set`, `time.set`, `view.set`, `view.set_sun_map`,
+`fence.*`, `stairs.*`, `bed.*`, `underlay.*`, `wall_photo.*`, `light.*`, `viewpoint.*`, `film.add|update|add_shot|update_shot|remove_shot|remove`, `layer.*`, `terrain.*`, `site.set`, `time.set`, `view.set`, `view.set_sun_map`,
 `view.clear_sun_map`, `style.set`) change the project, each one undo step; its queries (`query.sun {time?}`,
 `query.measure {kind, points?, outline?}`, `query.quantities {ids?, layer?}`) never do. Curves are `shape.*` commands too:
 `shape.set_curve {id, edge, radius_m?, sagitta_m?, side?}`, `shape.clear_curve {id, edge}`,
@@ -127,7 +127,17 @@ loaded geometry or a GPU:
 | `wall_photo.add` | `{file, target, corners_px?, region?, name?, size_px?}` | `{id}`; a photo of a facade on one wall face (`target` `{type: "face", owner, face}`), straightened by `corners_px` (the facade's four corners in the photo, bottom-left, bottom-right, top-right, top-left as seen from outside; default: the photo's own corners) to fill `region` `{u0, v0, u1, v1}` metres on the face (default: the whole face); the host reads the PNG or JPEG as for `underlay.add` and fills `size_px` |
 | `wall_photo.set` | `{id, name?, file?, target?, corners_px?, region?, size_px?}` | `null`; `region: null` is the whole face again |
 | `wall_photo.remove` | `{id}` | `null` |
+| `film.preview` | `{id, t?}` | `{id, name, fps, duration_s, frame_count, shots: [{index, kind, start_s, duration_s}]}` and, with `t` (seconds, clamped into the film), `{t, shot, progress, camera: {position, target, fov_y_deg}, overrides: {time_of_day?, date?, season?, years?, snow?}, time, sun}`: read-only, no picture; a walk follows the project's real ground (terrain, areas, models) |
+| `film.render` | `{id, dir, width? = 960, height? = 540, quality? = "high", from?, to?, every? = 1}` | `{dir, frames, framePattern: "frame_%05d.png", fps, width, height, duration_s, first_t, last_t, renderer, ffmpeg}`; one `view.render` per frame into `dir` (beneath the write root, as `view.render`'s `path`): the film's camera, `animation_s` = the film time, and the shot's time of day, date or season, years and snow for that picture only; frames are numbered from 0 in what is drawn, `every` N makes a film of fps / N; at most 10000 frames a call; `ffmpeg` is the command that makes a video of them (VisionCraft has no codec; `visioncraft-cli film --video` runs ffmpeg when it is on the PATH) |
 | `view.render` | `{path?, width? = 800, height? = 600, viewpoint?, camera?, time?, years?, quality? = "high", samples? = 64, aperture_m? = 0, focus_m?}`; quality `"photo"` averages `samples` frames at ULTRA (soft shadows, smooth edges; `aperture_m`/`focus_m` for depth of field) | a PNG: to `path`, else `{mime: "image/png", base64}`; with `camera`, `sun`, `time`, `plantsPending`, `renderer` |
+
+The film commands (`film.add {name, fps? = 25}`, `film.update {id, name?, fps?}`,
+`film.add_shot {id, shot, index?}`, `film.update_shot {id, index, shot}`, `film.remove_shot {id, index}`,
+`film.remove {id}`; `shot` is `{kind: walk | glide | rise | orbit | flyover | hold, ...}` with
+`duration_s` or `speed_mps`, `ease`, `look_at`, `fov_y_deg` and `time_of_day`, `date`, `season`,
+`years`, `snow` along the shot, all in `command_list {"id": "film.add_shot"}`) change the project,
+each one undo step; the films are in `document.inspect`'s `films`. The orbit's angle is from east of
+the centre, positive counter-clockwise seen from above (like `rotation_y_deg`).
 
 `view.render` draws with the app's own renderer (the window-free studio) on a headless GPU
 device made at the first picture; plants are grown before the picture is taken. The camera is
