@@ -602,7 +602,7 @@ of radius 5 has an area within 0.1% of 25 pi).
   bulge more than half its new chord to a semicircle. Draw shows the radius of every arc and a
   green handle in the middle of it: drag it to bend the arc (one `shape.set_curve` on release).
 - **Faces keep their meaning**: a curved edge `n` of an extrusion is many triangles, all
-  `<id>:side(n)`. Houses refuse curves (the message says so), and stairs take an arc on their bottom
+  `<id>:side(n)`. Houses take curves (recipe 37), and stairs take an arc on their bottom
   edge only (recipe 35); a fence follows them:
   its posts are spread by arc length along the curve (never at every point of it), the slats
   between them are straight and the spans closer together where the curve is tight, and a gate
@@ -1135,6 +1135,48 @@ and a film shot takes `wetness` and `rain` as `[from, to]` (or one number), as i
   to a grey overcast layer (from a drizzle of about 0.1, fully at 0.6) and the sun weakens. A plan or
   elevation view (orthographic) shows the wet surfaces, not the streaks. Snow and rain can be set
   together; snow stays dry.
+
+### 37. A garden pavilion with a curved glass front, and a round tower room
+
+```json recipe
+{"intent": "a garden pavilion whose front wall is an arc carrying four windows and a door, and a small round tower room with a window and a door", "steps": [
+  {"id": "shape.add_area", "params": {"name": "Lawn", "outline": [[0, 0], [24, 0], [24, 18], [0, 18]], "material": "lawn"}},
+  {"id": "shape.add_extrusion", "params": {"name": "Pavilion", "outline": [[6, 4], [14, 4], [14, 10], [6, 10]], "curves": {"0": {"type": "arc", "sagitta_m": 1.2}}, "height": 3, "material": "plaster", "roof": {"kind": "flat", "parapet_m": 0.3}}},
+  {"id": "shape.add_opening", "params": {"id": "S2", "side": 0, "offset_m": 1.5, "width_m": 1.2, "height_m": 2.2, "sill_m": 0.3, "frame": "split"}},
+  {"id": "shape.add_opening", "params": {"id": "S2", "side": 0, "offset_m": 3.0, "width_m": 1.2, "height_m": 2.2, "sill_m": 0.3, "frame": "split"}},
+  {"id": "shape.add_opening", "params": {"id": "S2", "side": 0, "offset_m": 4.23, "kind": "door"}},
+  {"id": "shape.add_opening", "params": {"id": "S2", "side": 0, "offset_m": 5.5, "width_m": 1.2, "height_m": 2.2, "sill_m": 0.3, "frame": "split"}},
+  {"id": "shape.add_opening", "params": {"id": "S2", "side": 0, "offset_m": 7.0, "width_m": 1.2, "height_m": 2.2, "sill_m": 0.3, "frame": "split"}},
+  {"id": "shape.add_circle", "params": {"name": "Tower room", "center": [19, 13], "radius_m": 2.5, "kind": "extrusion", "height": 3.2, "material": "plaster", "roof": {"kind": "flat"}}},
+  {"id": "shape.add_opening", "params": {"id": "S3", "side": 0, "offset_m": 2.0, "width_m": 1.0}},
+  {"id": "shape.add_opening", "params": {"id": "S3", "side": 2, "offset_m": 2.0, "kind": "door"}},
+  {"id": "query.quantities", "params": {}},
+  {"id": "view.render", "params": {"camera": {"position": [3, 4, -3], "target": [12, 1.5, 6]}, "width": 960, "height": 540, "path": "curved-pavilion.png"}}
+]}
+```
+
+A house takes curves like any block: `shape.add_extrusion`, `shape.add_circle` (with `kind: extrusion`
+and a `roof`), `shape.set_curve` and `shape.set_smooth` all work on one, and the house is rebuilt.
+
+- **Walls.** A curved edge is the tessellated outline, many short straight wall pieces of one solid:
+  the faces stay continuous round the curve and every piece is still `<id>:side(n)` for its control
+  edge `n`. The parapet of a flat roof is the outline offset by 20 cm and mitred at every vertex, so
+  it has the same width all round; the roof deck and the floor follow the curve.
+- **Openings.** `side` is the control edge, as on a straight wall. On a curved edge `offset_m` and
+  `width_m` are lengths along the arc, from the edge's first corner, so an opening keeps its place
+  when the curve changes. The window or door is a straight unit set on the chord of its arc span, as a
+  facade takes flat window units: the wall is cut with planar reveals square to the chord, the frame
+  and glass stand in the reveal and the sill is flush with the surface. A span whose chord would leave
+  the 0.3 m wall (a sagitta over 0.18 m: for example 1.6 m of arc on a 1.5 m radius) is narrowed
+  about its centre until it fits, and `shape.add_opening`, `shape.update_opening` and `shape.set_roof`
+  answer with a `warnings` note saying so; an opening that no longer fits after a curve change is
+  narrowed or left out the same way (with a note in the shape's mesh warnings).
+- **Roofs.** Only a flat roof follows a curve. A gable, hip or lean-to needs a rectangular or
+  L-shaped outline with straight walls: on a curved one the roof is drawn flat, with a note that
+  says to use a flat roof.
+- **Quantities.** The house's row in `query.quantities` has `house`: `wall_length_m` (a curved edge by
+  its true arc length), `wall_area_gross_m2`, `openings`, `openings_area_m2` (each opening's width
+  along the arc by its height) and `wall_area_m2`, the gross area less the openings.
 
 ## Known traps
 

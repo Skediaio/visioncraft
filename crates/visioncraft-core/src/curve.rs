@@ -276,6 +276,11 @@ fn arc_circle(a: P2, b: P2, s: f32) -> Option<(P2, f32, P2, f32)> {
     Some((centre, r, e, half))
 }
 
+/// The true length of the arc over chord `a`..`b` with signed sagitta `s` (the chord when straight).
+pub fn arc_length(a: P2, b: P2, s: f32) -> f32 {
+    arc_circle(a, b, s).map_or_else(|| dist(a, b), |(_, r, _, half)| 2.0 * r * half)
+}
+
 /// The signed sagitta of the arc from `a` to `b` that passes through `p`: positive when `p` lies
 /// to the left of the edge's direction. `p` must lie between the ends (its foot on the chord
 /// strictly inside it) and off the chord line, and the arc must not run past a semicircle.

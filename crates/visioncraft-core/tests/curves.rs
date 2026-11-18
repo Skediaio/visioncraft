@@ -328,7 +328,7 @@ fn a_curved_wall_keeps_its_sides_per_control_edge() {
 }
 
 #[test]
-fn stairs_take_an_arc_on_the_bottom_edge_only_and_houses_refuse_curves() {
+fn stairs_take_an_arc_on_the_bottom_edge_only_and_houses_take_curves() {
     let mut s = session();
     let st = id(s
         .run(
@@ -354,13 +354,12 @@ fn stairs_take_an_arc_on_the_bottom_edge_only_and_houses_refuse_curves() {
             json!({"name": "House", "outline": [[2, 2], [8, 2], [8, 6], [2, 6]], "height": 3.0, "roof": {"kind": "gable"}}),
         )
         .unwrap());
-    let e = s
-        .run(
-            "shape.set_curve",
-            json!({"id": h, "edge": 0, "radius_m": 9.0}),
-        )
-        .unwrap_err();
-    assert!(e.to_string().contains("house"), "{e}");
+    s.run(
+        "shape.set_curve",
+        json!({"id": h, "edge": 0, "radius_m": 9.0}),
+    )
+    .unwrap();
+    assert_eq!(shape(&s, &h).curves().len(), 1);
     // Sleeper beds take curves, laid as chords.
     let b = id(s
         .run(

@@ -303,6 +303,9 @@ pub fn quantities_in(
                     }
                     mesh_volume(&mesh)
                 } else {
+                    if e.house.is_some() {
+                        o.insert("house".into(), house_row(e));
+                    }
                     plan * f64::from(e.height)
                 };
                 o.insert("kind".into(), "extrusion".into());
@@ -537,4 +540,45 @@ fn tris_volume(mesh: &crate::model::ImportedModel, triangles: &[[u32; 3]]) -> f6
         })
         .sum::<f64>()
         .abs()
+}
+
+/// A house's walls: their length along the outline (a curved edge by its true arc length), the
+/// gross wall area, the openings (cut to what the wall holds, measured along the arc) and the net
+/// area.
+fn house_row(e: &crate::shape::Extrusion) -> Value {
+    let tess = crate::curve::tessellate(&e.points, true, &e.curves, e.smooth);
+    let n = e.points.len();
+    let length: f64 =
+        tess.runs()
+            .iter()
+            .enumerate()
+            .map(|(i, run)| match e.curves.get(&i) {
+                Some(crate::curve::Curve::Arc { sagitta_m }) => f64::from(
+                    crate::curve::arc_length(e.points[i], e.points[(i + 1) % n], *sagitta_m),
+                ),
+                _ => path_length(run, false),
+            })
+            .sum();
+    let Some(house) = &e.house else {
+        return Value::Null;
+    };
+    let sign = if crate::shape::shoelace_f32(&tess.pts) > 0.0 {
+        1.0
+    } else {
+        -1.0
+    };
+    let (placed, _) = crate::house::place(house, &tess, sign, (e.base, e.base + e.height));
+    let holes: f64 = placed
+        .iter()
+        .map(|p| f64::from((p.s1 - p.s0) * (p.v1 - p.v0)))
+        .sum();
+    let gross = length * f64::from(e.height);
+    json!({
+        "wall_length_m": length,
+        "wall_height_m": e.height,
+        "wall_area_gross_m2": gross,
+        "openings": placed.len(),
+        "openings_area_m2": holes,
+        "wall_area_m2": gross - holes,
+    })
 }

@@ -144,7 +144,7 @@ pub(super) fn register(s: &mut Session) {
         spec(
             "shape.set_curve",
             "Curve an Edge",
-            "Makes one edge of a shape an arc, typed as a radius (or a sagitta): edge `n` runs from point `n` to point `n+1`. The radius becomes the sagitta for the edge's length; a radius under half the edge is refused. Give the size as a radius, a sagitta or a point the arc passes through (`through`). Houses take no curves, and stairs only a curved front or back (`stairs.add` with arcs on the bottom or top edge). A fence follows the curve with posts spread by arc length.",
+            "Makes one edge of a shape an arc, typed as a radius (or a sagitta): edge `n` runs from point `n` to point `n+1`. The radius becomes the sagitta for the edge's length; a radius under half the edge is refused. Give the size as a radius, a sagitta or a point the arc passes through (`through`). A house takes curves: its walls follow them and its openings are placed by arc length (a pitched roof needs straight walls). Stairs take only a curved front or back (`stairs.add` with arcs on the bottom or top edge). A fence follows the curve with posts spread by arc length.",
             vec![
                 param("id", T::String, "Shape id.").required(),
                 param("edge", T::Integer, "Edge index, from 0 (edge n runs from point n to point n+1, wrapping when closed).").required(),
@@ -202,6 +202,7 @@ pub(super) fn register(s: &mut Session) {
                 param("edge", T::Object, "Area: a retaining edge, as in `shape.add_area`."),
                 param("base", T::Number, "Extrusion: height of the bottom.").unit("m"),
                 param("height", T::Number, "Extrusion: height above `base`.").unit("m"),
+                param("roof", T::Object, "Extrusion: a roof, making it a round house (a flat roof; see `shape.add_extrusion`)."),
                 layer(),
                 material(),
             ],

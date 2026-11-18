@@ -1050,16 +1050,19 @@ impl DrawState {
         } else {
             self.opening.window
         };
-        let Some((id, side, offset, (p, d))) = nearest_wall(cx, c, radius * 2.0, w) else {
+        let Some((id, side, offset, run)) = nearest_wall(cx, c, radius * 2.0, w) else {
             return;
         };
-        let at = |u: f32| [p[0] + d[0] * u, p[1] + d[1] * u];
-        top.extend(line(
-            y_point(at(offset - w / 2.0), 0.08),
-            y_point(at(offset + w / 2.0), 0.08),
-            if door { [120, 190, 255, 255] } else { ACCENT },
-            6.0,
-        ));
+        // The span follows the wall's curve: pieces of the control edge's polyline.
+        let span = arc_span(&run, offset - w / 2.0, offset + w / 2.0);
+        for pair in span.windows(2) {
+            top.extend(line(
+                y_point(pair[0], 0.08),
+                y_point(pair[1], 0.08),
+                if door { [120, 190, 255, 255] } else { ACCENT },
+                6.0,
+            ));
+        }
         if cx.input.clicked {
             cx.run(
                 "shape.add_opening",
@@ -1847,10 +1850,10 @@ pub fn resized_rect(outline: &[P2], width: f32, depth: f32) -> Option<Vec<P2>> {
     Some(vec![a, p(width, 0.0), p(width, depth), p(0.0, depth)])
 }
 
-/// The wall of a block nearest `c` within `reach`: (block id, edge, offset of an opening of
-/// width `w` centred at the pointer, kept inside the wall, (edge start, unit direction)).
-/// Where an opening goes: (block id, wall index, offset along it, (wall start, direction)).
-type WallSpot = (String, usize, f32, (P2, P2));
+/// The wall of a block nearest `c` within `reach`: (block id, control edge, offset of an opening
+/// of width `w` centred at the pointer, kept inside the wall, the edge's polyline). Offsets are
+/// lengths along the edge, along the arc on a curved one.
+type WallSpot = (String, usize, f32, Vec<P2>);
 
 fn nearest_wall(cx: &Cx, c: P2, reach: f32, w: f32) -> Option<WallSpot> {
     let mut best: Option<(f32, WallSpot)> = None;
@@ -1859,24 +1862,59 @@ fn nearest_wall(cx: &Cx, c: P2, reach: f32, w: f32) -> Option<WallSpot> {
         if !e.closed {
             continue;
         }
-        let n = e.points.len();
-        for i in 0..n {
-            let (p, q) = (e.points[i], e.points[(i + 1) % n]);
-            let len = dist(p, q);
+        for (i, run) in s.tessellate().runs().into_iter().enumerate() {
+            let len: f32 = run.windows(2).map(|q| dist(q[0], q[1])).sum();
             if len < w + 0.2 {
                 continue;
             }
-            let d = [(q[0] - p[0]) / len, (q[1] - p[1]) / len];
-            let u = ((c[0] - p[0]) * d[0] + (c[1] - p[1]) * d[1]).clamp(0.0, len);
-            let foot = [p[0] + d[0] * u, p[1] + d[1] * u];
-            let gap = dist(foot, c);
+            // The nearest point of the polyline and its arc length from the start.
+            let (mut gap, mut u, mut acc) = (f32::MAX, 0.0, 0.0);
+            for q in run.windows(2) {
+                let l = dist(q[0], q[1]).max(1e-6);
+                let d = [(q[1][0] - q[0][0]) / l, (q[1][1] - q[0][1]) / l];
+                let t = ((c[0] - q[0][0]) * d[0] + (c[1] - q[0][1]) * d[1]).clamp(0.0, l);
+                let g = dist([q[0][0] + d[0] * t, q[0][1] + d[1] * t], c);
+                if g < gap {
+                    (gap, u) = (g, acc + t);
+                }
+                acc += l;
+            }
             if gap <= reach && best.as_ref().is_none_or(|b| gap < b.0) {
                 let offset = u.clamp(w / 2.0 + 0.1, len - w / 2.0 - 0.1);
-                best = Some((gap, (e.id.clone(), i, offset, (p, d))));
+                best = Some((gap, (e.id.clone(), i, offset, run)));
             }
         }
     }
     best.map(|b| b.1)
+}
+
+/// The part of polyline `run` between arc lengths `s0` and `s1`.
+fn arc_span(run: &[P2], s0: f32, s1: f32) -> Vec<P2> {
+    let at = |s: f32| {
+        let mut acc = 0.0;
+        for q in run.windows(2) {
+            let l = dist(q[0], q[1]).max(1e-6);
+            if s <= acc + l {
+                let t = ((s - acc) / l).clamp(0.0, 1.0);
+                return [
+                    q[0][0] + (q[1][0] - q[0][0]) * t,
+                    q[0][1] + (q[1][1] - q[0][1]) * t,
+                ];
+            }
+            acc += l;
+        }
+        run[run.len() - 1]
+    };
+    let mut out = vec![at(s0)];
+    let mut acc = 0.0;
+    for q in run.windows(2) {
+        acc += dist(q[0], q[1]);
+        if acc > s0 && acc < s1 {
+            out.push(q[1]);
+        }
+    }
+    out.push(at(s1));
+    out
 }
 
 /// A new block's roof in the library's roof tiles, when the library has them (else the

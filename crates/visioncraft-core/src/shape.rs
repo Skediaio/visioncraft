@@ -792,12 +792,6 @@ fn shape_mesh_with(
                 crate::furniture::mesh(&mut b, fu, &fr, e.base);
                 return Ok(b.finish(id, &e.name, names));
             }
-            if e.house.is_some() && e.closed && shape.is_curved() {
-                return Err(ShapeError::BadCurve(
-                    "a house cannot have curved walls yet: clear its curves (`shape.clear_curve`, `shape.set_smooth`)"
-                        .into(),
-                ));
-            }
             let (ring, ring_face): (Vec<P2>, Vec<usize>) = if e.closed {
                 (
                     tess.pts.clone(),
@@ -848,17 +842,18 @@ fn shape_mesh_with(
             // `d` faces along `(dz, -dx)`; for a negative one the other way.
             let sign = if shoelace(&ring) > 0.0 { 1.0 } else { -1.0 };
             if let Some(h) = house {
-                crate::house::walls(
+                let notes = crate::house::walls(
                     &mut b,
                     h,
-                    &ring,
+                    &tess,
                     sign,
                     (lo, hi),
-                    &|i| ring_face[i],
+                    &|edge| 2 + edge,
                     first_house,
                 );
                 let note = crate::house::roof(&mut b, h, &ring, hi, first_house);
                 let mut m = b.finish(id, &e.name, names);
+                m.warnings.extend(notes);
                 m.warnings.extend(note);
                 return Ok(m);
             }

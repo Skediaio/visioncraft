@@ -16,7 +16,7 @@ pub(super) fn register(s: &mut Session) {
         spec(
             "shape.set_roof",
             "Set Roof",
-            "Gives a block a roof, or changes it: flat (with a parapet), gable, hip or lean_to. Pitched roofs need a rectangular or L-shaped outline; others are drawn flat with a note. The roof face is `<id>:roof`, the wall above the eaves `<id>:gable`.",
+            "Gives a block a roof, or changes it: flat (with a parapet), gable, hip or lean_to. Pitched roofs need a rectangular or L-shaped outline with straight walls; others, a curved outline included, are drawn flat with a note (use `flat` there). The roof face is `<id>:roof`, the wall above the eaves `<id>:gable`. The answer has `warnings`.",
             vec![
                 id(),
                 param("kind", T::String, "flat, gable, hip or lean_to.").default(json!("gable")),
@@ -24,7 +24,7 @@ pub(super) fn register(s: &mut Session) {
                 param("overhang_m", T::Number, "How far the roof reaches past the walls, 0..2.").unit("m").default(json!(0.4)),
                 param("parapet_m", T::Number, "Height of a flat roof's parapet, 0 for none.").unit("m").default(json!(0.4)),
             ],
-            "null",
+            "{warnings}",
             json!({"id": "S2", "kind": "gable", "pitch_deg": 40}),
         ),
         set_roof,
@@ -33,18 +33,18 @@ pub(super) fn register(s: &mut Session) {
         spec(
             "shape.add_opening",
             "Add Window or Door",
-            "Puts a window or door in one wall of a block (its outline edge `side`, as in `<id>:side(n)`). Glass is `<id>:glass`, frames `<id>:frame`, doors `<id>:door`, the dark room behind a window `<id>:interior`.",
+            "Puts a window or door in one wall of a block (its outline edge `side`, as in `<id>:side(n)`). Glass is `<id>:glass`, frames `<id>:frame`, doors `<id>:door`, the dark room behind a window `<id>:interior`. On a curved edge (an arc or a smooth curve) `offset_m` and `width_m` are lengths along the arc, and the unit is a flat window or door set on the chord of its span, cut into the wall with planar reveals; a span so curved that its chord would leave the 0.3 m wall (a sagitta over 0.18 m) is narrowed about its centre until it fits, with a note in `warnings`.",
             vec![
                 id(),
                 param("side", T::Integer, "The wall: index of the outline edge.").required(),
-                param("offset_m", T::Number, "From the wall's first corner to the opening's centre.").unit("m").required(),
+                param("offset_m", T::Number, "From the wall's first corner to the opening's centre, along the wall (along the arc on a curved edge).").unit("m").required(),
                 param("kind", T::String, "window or door.").default(json!("window")),
                 param("width_m", T::Number, "Width, above zero.").unit("m").default(json!(1.2)),
                 param("height_m", T::Number, "Height, above zero.").unit("m").default(json!(1.4)),
                 param("sill_m", T::Number, "Bottom above the block's base (a door's is 0).").unit("m").default(json!(0.9)),
                 param("frame", T::String, "slim, wide, split (two panes) or none.").default(json!("slim")),
             ],
-            "{opening} (o1, o2...)",
+            "{opening (o1, o2...), warnings}",
             json!({"id": "S2", "side": 0, "offset_m": 3.0, "kind": "window"}),
         ),
         add_opening,
@@ -53,7 +53,7 @@ pub(super) fn register(s: &mut Session) {
         spec(
             "shape.update_opening",
             "Update Window or Door",
-            "Changes fields of a window or door.",
+            "Changes fields of a window or door. The answer has `warnings` as shape.add_opening.",
             vec![
                 id(),
                 param("opening", T::String, "The opening's id.").required(),
@@ -65,7 +65,7 @@ pub(super) fn register(s: &mut Session) {
                 param("sill_m", T::Number, "Bottom above the base.").unit("m"),
                 param("frame", T::String, "slim, wide, split or none."),
             ],
-            "null",
+            "{warnings}",
             json!({"id": "S2", "opening": "o1", "width_m": 1.8}),
         ),
         update_opening,
@@ -183,10 +183,17 @@ fn edit_house(
     }
     let sides = e.points.len();
     let r = f(e.house.get_or_insert_with(House::default), sides)?;
-    shape_mesh(&shape).map_err(|e| fail(e.to_string()))?;
+    let mesh = shape_mesh(&shape).map_err(|e| fail(e.to_string()))?;
     project.shapes[at] = shape;
     default_materials(project, id);
-    Ok(r)
+    // The block's own notes (a roof drawn flat, an opening cut down) go with the answer.
+    Ok(match r {
+        Value::Object(mut m) => {
+            m.insert("warnings".into(), json!(mesh.warnings));
+            Value::Object(m)
+        }
+        _ => json!({ "warnings": mesh.warnings }),
+    })
 }
 
 fn number(v: f32, what: &str, lo: f32, hi: f32) -> Result<f32, CommandError> {
@@ -396,9 +403,7 @@ mod tests {
             _ => unreachable!(),
         };
         let e = block(&s);
-        let lamps = |e: &crate::shape::Extrusion| {
-            crate::house::lit_windows(&e.points, e.house.as_ref().unwrap(), e.base)
-        };
+        let lamps = |e: &crate::shape::Extrusion| crate::house::lit_windows(e);
         assert!(lamps(&e).is_empty());
         s.run("shape.set_lit_rooms", json!({"id": id, "share": 1}))
             .unwrap();
@@ -449,5 +454,295 @@ mod tests {
         );
         assert!(s.undo());
         assert_eq!(s.project().shapes.len(), 1);
+    }
+
+    // ---- curved houses ----
+
+    type Mesh = crate::ImportedModel;
+
+    fn mesh_of(s: &Session, id: &str) -> Mesh {
+        let shape = s.project().shapes.iter().find(|x| x.id() == id).unwrap();
+        crate::shape_mesh(shape).unwrap()
+    }
+
+    /// The positions and the area of the triangles on face `<id>:<name>`.
+    fn face(m: &Mesh, id: &str, name: &str) -> (Vec<[f32; 3]>, f64) {
+        let i = m
+            .faces
+            .iter()
+            .position(|f| f.name == format!("{id}:{name}"))
+            .unwrap();
+        let (mut pts, mut area) = (Vec::new(), 0.0f64);
+        for (t, f) in m.triangles.iter().zip(&m.triangle_faces) {
+            if *f as usize == i {
+                let v = t.map(|k| m.positions[k as usize]);
+                pts.extend(v);
+                let (a, b) = (
+                    [v[1][0] - v[0][0], v[1][1] - v[0][1], v[1][2] - v[0][2]],
+                    [v[2][0] - v[0][0], v[2][1] - v[0][1], v[2][2] - v[0][2]],
+                );
+                let c = [
+                    a[1] * b[2] - a[2] * b[1],
+                    a[2] * b[0] - a[0] * b[2],
+                    a[0] * b[1] - a[1] * b[0],
+                ];
+                area += f64::from((c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt()) / 2.0;
+            }
+        }
+        (pts, area)
+    }
+
+    fn round_house(s: &mut Session, radius: f32) -> String {
+        s.run(
+            "shape.add_circle",
+            json!({"center": [0, 0], "radius_m": radius, "kind": "extrusion", "height": 3,
+                   "roof": {"kind": "flat", "parapet_m": 0.4}}),
+        )
+        .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    #[test]
+    fn a_round_house_builds_a_closed_wall_of_constant_thickness_with_a_flat_roof_and_floor() {
+        let mut s = Session::new(Project::default());
+        let id = round_house(&mut s, 5.0);
+        let m = mesh_of(&s, &id);
+        assert!(m.warnings.is_empty(), "{:?}", m.warnings);
+        let disc = std::f64::consts::PI * 25.0;
+        // The wall is a continuous ring of short pieces: its area is the cylinder's (within the
+        // chord tolerance), the deck and the floor are the disc.
+        let wall: f64 = (0..4).map(|n| face(&m, &id, &format!("side({n})")).1).sum();
+        assert!(
+            (wall / (2.0 * disc / 5.0 * 3.0) - 1.0).abs() < 0.003,
+            "{wall}"
+        );
+        assert!((face(&m, &id, "roof").1 / disc - 1.0).abs() < 0.003);
+        assert!((face(&m, &id, "bottom").1 / disc - 1.0).abs() < 0.003);
+        // The parapet: outside at the wall (radius 5), inside 0.2 m in, every vertex of the ring.
+        let (pts, _) = face(&m, &id, "parapet");
+        assert!(!pts.is_empty());
+        for p in &pts {
+            let r = p[0].hypot(p[2]);
+            assert!(
+                (r - 5.0).abs() < 0.004 || (r - 4.8).abs() < 0.004,
+                "radius {r}"
+            );
+        }
+        // A pitched roof on a curved outline is drawn flat, with a note pointing to a flat one.
+        let r = s
+            .run("shape.set_roof", json!({"id": id, "kind": "gable"}))
+            .unwrap();
+        assert!(
+            r["warnings"][0].as_str().unwrap().contains("flat roof"),
+            "{r}"
+        );
+        assert!(face(&mesh_of(&s, &id), &id, "roof").1 > 0.0);
+    }
+
+    fn inside(poly: &[[f32; 2]], p: [f32; 2]) -> bool {
+        let mut c = false;
+        for i in 0..poly.len() {
+            let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
+            if (a[1] > p[1]) != (b[1] > p[1])
+                && p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0]
+            {
+                c = !c;
+            }
+        }
+        c
+    }
+
+    #[test]
+    fn an_opening_on_an_arc_edge_is_a_flat_unit_on_its_chord_inside_the_wall() {
+        let mut s = Session::new(Project::default());
+        // 8 m wide house, its south wall bulging out 1 m: radius 8.5, arc length about 8.6.
+        let id = s
+            .run(
+                "shape.add_extrusion",
+                json!({"name": "Bay", "outline": [[0, 0], [8, 0], [8, 6], [0, 6]], "height": 3,
+                       "curves": {"0": {"type": "arc", "sagitta_m": 1.0}},
+                       "roof": {"kind": "flat"}}),
+            )
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let r = s
+            .run(
+                "shape.add_opening",
+                json!({"id": id, "side": 0, "offset_m": 3.0, "width_m": 1.5, "frame": "split"}),
+            )
+            .unwrap();
+        assert!(r["warnings"].as_array().unwrap().is_empty(), "{r}");
+        s.run(
+            "shape.add_opening",
+            json!({"id": id, "side": 0, "offset_m": 6.0, "kind": "door"}),
+        )
+        .unwrap();
+        let m = mesh_of(&s, &id);
+        let outline = s.project().shapes[0].outline().into_owned();
+        let (glass, _) = face(&m, &id, "glass");
+        assert!(!glass.is_empty());
+        // The glass is one vertical plane (the chord's), 1.5 m of arc wide.
+        let (x0, z0) = (glass[0][0], glass[0][2]);
+        let far = glass
+            .iter()
+            .max_by(|p, q| {
+                (p[0] - x0)
+                    .hypot(p[2] - z0)
+                    .total_cmp(&(q[0] - x0).hypot(q[2] - z0))
+            })
+            .unwrap();
+        let (dx, dz) = (far[0] - x0, far[2] - z0);
+        let chord = dx.hypot(dz);
+        // The glass is the frame's inside: the opening's 1.5 m less a slim frame's 5 cm a side.
+        assert!((chord - 1.4).abs() < 0.01, "{chord}");
+        for p in &glass {
+            // On the vertical plane through the chord ...
+            let off = ((p[0] - x0) * dz - (p[2] - z0) * dx) / chord;
+            assert!(off.abs() < 1e-3, "off the chord plane by {off}");
+            // ... inside the wall, within its thickness of the surface.
+            assert!(inside(&outline, [p[0], p[2]]), "{p:?} is outside");
+            let near = (0..outline.len())
+                .map(|i| {
+                    let (a, b) = (outline[i], outline[(i + 1) % outline.len()]);
+                    let (ex, ez) = (b[0] - a[0], b[1] - a[1]);
+                    let t = (((p[0] - a[0]) * ex + (p[2] - a[1]) * ez) / (ex * ex + ez * ez))
+                        .clamp(0.0, 1.0);
+                    (p[0] - a[0] - ex * t).hypot(p[2] - a[1] - ez * t)
+                })
+                .fold(f32::MAX, f32::min);
+            assert!(near < 0.3 && near > 0.0, "glass {near} m from the surface");
+        }
+        // The door has its leaf and handle too.
+        assert!(face(&m, &id, "door").1 > 0.0 && face(&m, &id, "handle").1 > 0.0);
+        // Both openings are cut out of the wall: the arc wall's own area is the strip less them.
+        let (_, wall) = face(&m, &id, "side(0)");
+        assert!(wall > 0.0);
+        // The lamps of the lit rooms hang behind the windows, inside the outline.
+        s.run("shape.set_lit_rooms", json!({"id": id, "share": 1}))
+            .unwrap();
+        let crate::Shape::Extrusion(e) = &s.project().shapes[0] else {
+            unreachable!()
+        };
+        let lamps = crate::house::lit_windows(e);
+        assert_eq!(lamps.len(), 1);
+        assert!(inside(&outline, [lamps[0][0], lamps[0][2]]));
+    }
+
+    #[test]
+    fn wall_area_is_the_true_arc_length_times_the_height_less_the_openings() {
+        let mut s = Session::new(Project::default());
+        let id = round_house(&mut s, 5.0);
+        s.run(
+            "shape.add_opening",
+            json!({"id": id, "side": 0, "offset_m": 4.0, "width_m": 1.2, "height_m": 1.4, "sill_m": 0.9}),
+        )
+        .unwrap();
+        s.run(
+            "shape.add_opening",
+            json!({"id": id, "side": 2, "offset_m": 3.0, "kind": "door"}),
+        )
+        .unwrap();
+        let q = s.run("query.quantities", json!({})).unwrap();
+        let row = q["shapes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == id.as_str())
+            .unwrap();
+        let h = &row["house"];
+        let length = 2.0 * std::f64::consts::PI * 5.0;
+        assert!(
+            (h["wall_length_m"].as_f64().unwrap() - length).abs() < 0.01,
+            "{h}"
+        );
+        let holes = 1.2 * 1.4 + 1.0 * 2.2;
+        assert!(
+            (h["openings_area_m2"].as_f64().unwrap() - holes).abs() < 0.01,
+            "{h}"
+        );
+        assert!(
+            (h["wall_area_m2"].as_f64().unwrap() - (length * 3.0 - holes)).abs() < 0.03,
+            "{h}"
+        );
+        assert_eq!(h["openings"], 2);
+    }
+
+    #[test]
+    fn an_opening_too_curved_for_the_wall_is_narrowed_with_a_warning() {
+        let mut s = Session::new(Project::default());
+        let id = round_house(&mut s, 1.5);
+        // 1.6 m of arc on a 1.5 m radius: its chord would stand 0.2 m off the wall.
+        let r = s
+            .run(
+                "shape.add_opening",
+                json!({"id": id, "side": 0, "offset_m": 1.0, "width_m": 1.6}),
+            )
+            .unwrap();
+        let w = r["warnings"][0].as_str().unwrap();
+        assert!(w.contains("narrowed") && w.contains("o1"), "{r}");
+        let m = mesh_of(&s, &id);
+        let (g, _) = face(&m, &id, "glass");
+        assert!(!g.is_empty());
+        let q = s.run("query.quantities", json!({})).unwrap();
+        let h = q["shapes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == id.as_str())
+            .unwrap()["house"]
+            .clone();
+        // The area taken out is the narrowed width, not the asked one.
+        assert!(h["openings_area_m2"].as_f64().unwrap() < 1.6 * 1.4, "{h}");
+    }
+
+    #[test]
+    fn curving_a_house_rebuilds_it_and_keeps_its_openings_on_their_edges() {
+        let mut s = Session::new(Project::default());
+        let id = s
+            .run(
+                "shape.add_extrusion",
+                json!({"name": "House", "outline": [[0, 0], [10, 0], [10, 8], [0, 8]], "height": 3,
+                       "roof": {"kind": "gable"}}),
+            )
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        s.run(
+            "shape.add_opening",
+            json!({"id": id, "side": 0, "offset_m": 5.0}),
+        )
+        .unwrap();
+        s.run(
+            "shape.set_curve",
+            json!({"id": id, "edge": 0, "sagitta_m": 0.8}),
+        )
+        .unwrap();
+        let m = mesh_of(&s, &id);
+        assert!(face(&m, &id, "glass").1 > 0.0);
+        // The gable roof no longer fits the outline: flat, with a note.
+        assert!(!m.warnings.is_empty());
+        s.run("shape.set_smooth", json!({"id": id, "smooth": true}))
+            .unwrap();
+        assert!(face(&mesh_of(&s, &id), &id, "glass").1 > 0.0);
+        s.run("shape.set_smooth", json!({"id": id, "smooth": false}))
+            .unwrap();
+        s.run("shape.clear_curve", json!({"id": id, "edge": 0}))
+            .unwrap();
+        let m = mesh_of(&s, &id);
+        assert!(m.warnings.is_empty(), "{:?}", m.warnings);
+        // A curved house survives the project's JSON.
+        s.run(
+            "shape.set_curve",
+            json!({"id": id, "edge": 0, "sagitta_m": 0.8}),
+        )
+        .unwrap();
+        let json = serde_json::to_string(s.project()).unwrap();
+        let back: Project = serde_json::from_str(&json).unwrap();
+        assert_eq!(&back.shapes, &s.project().shapes);
     }
 }

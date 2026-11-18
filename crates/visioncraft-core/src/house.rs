@@ -4,8 +4,14 @@
 //! `<id>:door`, `<id>:interior` (the dark room behind a window), `<id>:plinth`, `<id>:parapet`.
 //!
 //! Kept simple rather than complete: pitched roofs on rectangles and L shapes (an L is two
-//! rectangles, each with its own roof); any other outline gets a flat roof and a note.
+//! rectangles, each with its own roof); any other outline, a curved one included, gets a flat
+//! roof and a note.
+//!
+//! A curved wall is the tessellated outline: many short straight segments of one solid, so the
+//! faces stay continuous. An opening on a curved edge is placed by arc length along the control
+//! edge and is a straight unit on the chord of its arc span (see [`place`]).
 
+use crate::curve::Tess;
 use serde::{Deserialize, Serialize};
 
 type P2 = [f32; 2];
@@ -127,6 +133,13 @@ const HANDLE: usize = 9;
 /// How deep windows sit in the wall, and how deep the dark room behind them is.
 const REVEAL_M: f32 = 0.12;
 const ROOM_M: f32 = 0.6;
+/// The wall's thickness for an opening on a curve: its flat unit sits in the reveal, so the
+/// chord of the opening's arc span may stand at most this far (`WALL_M - REVEAL_M`) off the wall
+/// surface, the sagitta of the span.
+const WALL_M: f32 = 0.3;
+pub const MAX_SPAN_SAGITTA_M: f32 = WALL_M - REVEAL_M;
+/// Width of the parapet round a flat roof.
+const PARAPET_T: f32 = 0.2;
 
 /// Where `shape_mesh` draws: a triangle on a face (index into the block's face list) with the
 /// side it faces.
@@ -148,22 +161,227 @@ fn plane(s: &mut dyn Sink, face: usize, v: &[[f32; 3]], up: [f32; 3]) {
     }
 }
 
-/// The walls of a block with its openings and plinth. `ring` is the outline, `sign` its
-/// winding (the outward side of edge `d` is `sign * (dz, -dx)`), `side_face(i)` the face index
-/// of wall `i`, `first` the index of the first house face.
+/// Where an opening is: its extent along its control edge (arc length), its height range and
+/// the flat unit that sits in it.
+pub(crate) struct Placed<'a> {
+    pub o: &'a Opening,
+    /// From the control edge's first corner, along the edge (the arc on a curve).
+    pub s0: f32,
+    pub s1: f32,
+    pub v0: f32,
+    pub v1: f32,
+    unit: Unit,
+}
+
+/// The straight unit of an opening, in the frame of its chord.
+struct Unit {
+    /// The chord's first end (the edge's own first corner on a straight edge).
+    origin: P2,
+    /// Along the chord, and its outward normal.
+    d: P2,
+    n: P2,
+    /// The unit's extent along the chord from `origin`.
+    u0: f32,
+    u1: f32,
+    /// How far behind the chord the deepest point of the wall surface lies in the span: the unit
+    /// sits that much deeper.
+    deep: f32,
+    /// How far the outermost wall surface lies in front of the chord in the span.
+    bulge: f32,
+    /// The wall surface in plan from the span's start to its end (two points on a straight edge).
+    surf: Vec<P2>,
+}
+
+impl Unit {
+    /// Point at `u` along the chord, height `y`, `depth` metres into the wall from the unit's
+    /// base plane.
+    fn at(&self, u: f32, y: f32, depth: f32) -> [f32; 3] {
+        let k = self.deep + depth;
+        [
+            self.origin[0] + self.d[0] * u - self.n[0] * k,
+            y,
+            self.origin[1] + self.d[1] * u - self.n[1] * k,
+        ]
+    }
+}
+
+fn dist(a: P2, b: P2) -> f32 {
+    ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt()
+}
+
+/// The point at arc length `s` along polyline `run` (cumulative lengths `cum`) and the index of
+/// the segment it lies on.
+fn along(run: &[P2], cum: &[f32], s: f32) -> (P2, usize) {
+    let k = cum
+        .partition_point(|&c| c <= s)
+        .saturating_sub(1)
+        .min(run.len() - 2);
+    let len = (cum[k + 1] - cum[k]).max(1e-9);
+    let t = ((s - cum[k]) / len).clamp(0.0, 1.0);
+    (
+        [
+            run[k][0] + (run[k + 1][0] - run[k][0]) * t,
+            run[k][1] + (run[k + 1][1] - run[k][1]) * t,
+        ],
+        k,
+    )
+}
+
+/// The openings of a house on the tessellated outline `tess` (winding `sign`), each placed by
+/// arc length along its control edge, with notes for those cut down or dropped. The offset and
+/// width of an opening are lengths along the edge; on a curved edge the unit is a straight piece
+/// on the chord of its arc span, and a span whose chord would leave the wall (its sagitta over
+/// [`MAX_SPAN_SAGITTA_M`]) is narrowed about its centre until it fits, with a note.
+pub(crate) fn place<'a>(
+    house: &'a House,
+    tess: &Tess,
+    sign: f32,
+    (lo, hi): (f32, f32),
+) -> (Vec<Placed<'a>>, Vec<String>) {
+    let runs = tess.runs();
+    let mut notes = Vec::new();
+    let mut out = Vec::new();
+    for o in &house.openings {
+        let Some(run) = runs.get(o.side).filter(|r| r.len() >= 2) else {
+            continue;
+        };
+        let mut cum = vec![0.0f32];
+        for w in run.windows(2) {
+            cum.push(cum.last().copied().unwrap_or(0.0) + dist(w[0], w[1]));
+        }
+        let len = cum[cum.len() - 1];
+        let (mut s0, mut s1) = (
+            (o.offset_m - o.width_m / 2.0).max(0.05),
+            (o.offset_m + o.width_m / 2.0).min(len - 0.05),
+        );
+        let v0 = (lo + o.sill_m.max(0.0)).max(lo);
+        let v1 = (v0 + o.height_m).min(hi - 0.05);
+        if !(s1 - s0 > 0.05 && v1 - v0 > 0.05) {
+            notes.push(format!(
+                "opening `{}` does not fit on wall {} and is left out",
+                o.id, o.side
+            ));
+            continue;
+        }
+        let unit = if run.len() == 2 {
+            let l = dist(run[0], run[1]).max(1e-9);
+            let d = [(run[1][0] - run[0][0]) / l, (run[1][1] - run[0][1]) / l];
+            let (a, _) = along(run, &cum, s0);
+            let (b, _) = along(run, &cum, s1);
+            Some(Unit {
+                origin: run[0],
+                d,
+                n: [sign * d[1], -sign * d[0]],
+                u0: s0,
+                u1: s1,
+                deep: 0.0,
+                bulge: 0.0,
+                surf: vec![a, b],
+            })
+        } else {
+            let centre = (s0 + s1) / 2.0;
+            let mut half = (s1 - s0) / 2.0;
+            let (full, mut unit) = (half, None);
+            while half >= 0.15 {
+                if let Some((u, sag)) = curved_unit(run, &cum, sign, centre - half, centre + half)
+                    && sag <= MAX_SPAN_SAGITTA_M
+                {
+                    unit = Some(u);
+                    break;
+                }
+                half *= 0.9;
+            }
+            if unit.is_some() {
+                (s0, s1) = (centre - half, centre + half);
+                if half < full - 1e-4 {
+                    notes.push(format!(
+                        "opening `{}` narrowed from {:.2} to {:.2} m: its arc span is too curved for a flat unit in a {:.2} m wall",
+                        o.id,
+                        2.0 * full,
+                        2.0 * half,
+                        WALL_M
+                    ));
+                }
+            } else {
+                notes.push(format!(
+                    "opening `{}` is too curved for the wall and is left out",
+                    o.id
+                ));
+            }
+            unit
+        };
+        if let Some(unit) = unit {
+            out.push(Placed {
+                o,
+                s0,
+                s1,
+                v0,
+                v1,
+                unit,
+            });
+        }
+    }
+    (out, notes)
+}
+
+/// The flat unit for the arc span `s0..s1` of a curved run and the sagitta of that span (the
+/// range of the surface in front of and behind the chord).
+fn curved_unit(run: &[P2], cum: &[f32], sign: f32, s0: f32, s1: f32) -> Option<(Unit, f32)> {
+    let (a, ka) = along(run, cum, s0);
+    let (b, kb) = along(run, cum, s1);
+    let c = dist(a, b);
+    if c < 0.05 {
+        return None;
+    }
+    let d = [(b[0] - a[0]) / c, (b[1] - a[1]) / c];
+    let n = [sign * d[1], -sign * d[0]];
+    let mut surf = vec![a];
+    surf.extend_from_slice(&run[ka + 1..=kb]);
+    surf.push(b);
+    surf.dedup_by(|p, q| dist(*p, *q) < 1e-5);
+    let dev = |p: &P2| (p[0] - a[0]) * n[0] + (p[1] - a[1]) * n[1];
+    let (bulge, back) = surf.iter().fold((0.0f32, 0.0f32), |(hi, lo), p| {
+        (hi.max(dev(p)), lo.min(dev(p)))
+    });
+    Some((
+        Unit {
+            origin: a,
+            d,
+            n,
+            u0: 0.0,
+            u1: c,
+            deep: -back,
+            bulge,
+            surf,
+        },
+        bulge - back,
+    ))
+}
+
+/// The walls of a block with its openings and plinth, on the tessellated outline `tess` (a
+/// curved edge is many short walls of one face). `sign` is its winding (the outward side of
+/// edge `d` is `sign * (dz, -dx)`), `side_face(e)` the face index of control edge `e`, `first`
+/// the index of the first house face. Returns notes about openings cut down or left out.
 pub(crate) fn walls(
     s: &mut dyn Sink,
     house: &House,
-    ring: &[P2],
+    tess: &Tess,
     sign: f32,
     (lo, hi): (f32, f32),
     side_face: &dyn Fn(usize) -> usize,
     first: usize,
-) {
+) -> Vec<String> {
+    let ring = &tess.pts;
     let plinth_top = (lo + house.plinth_m.max(0.0)).min(hi);
+    let (placed, notes) = place(house, tess, sign, (lo, hi));
+    // Arc length at the start of each segment along its control edge.
+    let mut start = vec![0.0f32; tess.edge_of.iter().max().map_or(0, |m| m + 1)];
     for i in 0..ring.len() {
         let (p, q) = (ring[i], ring[(i + 1) % ring.len()]);
-        let len = ((q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2)).sqrt();
+        let len = dist(p, q);
+        let edge = tess.edge_of[i];
+        let a0 = start[edge];
+        start[edge] += len;
         if len < 1e-4 {
             continue;
         }
@@ -178,22 +396,19 @@ pub(crate) fn walls(
             ]
         };
         let out = [n[0], 0.0, n[1]];
-        let rects: Vec<(&Opening, [f32; 4])> = house
-            .openings
+        // The holes in this segment: each opening's arc span clipped to it, in its own length.
+        let rects: Vec<[f32; 4]> = placed
             .iter()
-            .filter(|o| o.side == i)
-            .filter_map(|o| {
-                let u0 = (o.offset_m - o.width_m / 2.0).max(0.05);
-                let u1 = (o.offset_m + o.width_m / 2.0).min(len - 0.05);
-                let v0 = (lo + o.sill_m.max(0.0)).max(lo);
-                let v1 = (v0 + o.height_m).min(hi - 0.05);
-                (u1 - u0 > 0.05 && v1 - v0 > 0.05).then_some((o, [u0, u1, v0, v1]))
+            .filter(|pl| pl.o.side == edge)
+            .filter_map(|pl| {
+                let (u0, u1) = ((pl.s0 - a0).max(0.0), (pl.s1 - a0).min(len));
+                (u1 - u0 > 1e-4).then_some([u0, u1, pl.v0, pl.v1])
             })
             .collect();
         // The wall as a grid cut at every opening edge and the plinth line, less the openings.
         let mut us = vec![0.0, len];
         let mut vs = vec![lo, plinth_top, hi];
-        for (_, r) in &rects {
+        for r in &rects {
             us.extend([r[0], r[1]]);
             vs.extend([r[2], r[3]]);
         }
@@ -206,14 +421,14 @@ pub(crate) fn walls(
                 let (cu, cv) = ((uw[0] + uw[1]) / 2.0, (vw[0] + vw[1]) / 2.0);
                 if rects
                     .iter()
-                    .any(|(_, r)| cu > r[0] && cu < r[1] && cv > r[2] && cv < r[3])
+                    .any(|r| cu > r[0] && cu < r[1] && cv > r[2] && cv < r[3])
                 {
                     continue;
                 }
                 let face = if vw[1] <= plinth_top + 1e-4 && plinth_top > lo {
                     first + PLINTH
                 } else {
-                    side_face(i)
+                    side_face(edge)
                 };
                 quad(
                     s,
@@ -228,55 +443,67 @@ pub(crate) fn walls(
                 );
             }
         }
-        for (o, [u0, u1, v0, v1]) in rects {
-            opening(s, o, (u0, u1, v0, v1), &at, (d, n), side_face(i), first);
-        }
+    }
+    for pl in &placed {
+        opening(s, pl, side_face(pl.o.side), first);
+    }
+    notes
+}
+
+/// Fills the horizontal polygon `pts` (all at one height), facing `outward`.
+fn fill(s: &mut dyn Sink, face: usize, pts: &[[f32; 3]], outward: [f32; 3]) {
+    let flat: Vec<f64> = pts
+        .iter()
+        .flat_map(|p| [f64::from(p[0]), f64::from(p[2])])
+        .collect();
+    for t in earcutr::earcut(&flat, &[], 2)
+        .unwrap_or_default()
+        .as_chunks::<3>()
+        .0
+    {
+        s.tri(face, [pts[t[0]], pts[t[1]], pts[t[2]]], outward);
     }
 }
 
 /// The reveal, frame, glass (or door) and the dark room behind a window.
-fn opening(
-    s: &mut dyn Sink,
-    o: &Opening,
-    (u0, u1, v0, v1): (f32, f32, f32, f32),
-    at: &dyn Fn(f32, f32, f32) -> [f32; 3],
-    (d, n): (P2, P2),
-    wall: usize,
-    first: usize,
-) {
+fn opening(s: &mut dyn Sink, pl: &Placed, wall: usize, first: usize) {
+    let (o, unit) = (pl.o, &pl.unit);
+    let (u0, u1, v0, v1) = (unit.u0, unit.u1, pl.v0, pl.v1);
+    let at = |u: f32, y: f32, depth: f32| unit.at(u, y, depth);
+    let (d, n) = (unit.d, unit.n);
     let out = [n[0], 0.0, n[1]];
     let along = [d[0], 0.0, d[1]];
     let back = [-along[0], 0.0, -along[2]];
     let (up, down) = ([0.0, 1.0, 0.0], [0.0, -1.0, 0.0]);
-    // Reveals: the wall's material, facing into the hole.
+    // Reveals: the wall's material, facing into the hole. Top and bottom follow the wall's
+    // surface (the arc) out to the unit's back plane; the sides are planes through the span's
+    // ends square to the chord.
+    let z0 = -unit.deep;
+    for (v, outward) in [(v0, up), (v1, down)] {
+        if unit.surf.len() == 2 {
+            quad(
+                s,
+                wall,
+                [
+                    at(u0, v, z0),
+                    at(u1, v, z0),
+                    at(u1, v, REVEAL_M),
+                    at(u0, v, REVEAL_M),
+                ],
+                outward,
+            );
+        } else {
+            let mut poly: Vec<[f32; 3]> = unit.surf.iter().map(|p| [p[0], v, p[1]]).collect();
+            poly.extend([at(u1, v, REVEAL_M), at(u0, v, REVEAL_M)]);
+            fill(s, wall, &poly, outward);
+        }
+    }
     quad(
         s,
         wall,
         [
-            at(u0, v0, 0.0),
-            at(u1, v0, 0.0),
-            at(u1, v0, REVEAL_M),
-            at(u0, v0, REVEAL_M),
-        ],
-        up,
-    );
-    quad(
-        s,
-        wall,
-        [
-            at(u0, v1, 0.0),
-            at(u1, v1, 0.0),
-            at(u1, v1, REVEAL_M),
-            at(u0, v1, REVEAL_M),
-        ],
-        down,
-    );
-    quad(
-        s,
-        wall,
-        [
-            at(u0, v0, 0.0),
-            at(u0, v1, 0.0),
+            at(u0, v0, z0),
+            at(u0, v1, z0),
             at(u0, v1, REVEAL_M),
             at(u0, v0, REVEAL_M),
         ],
@@ -286,8 +513,8 @@ fn opening(
         s,
         wall,
         [
-            at(u1, v0, 0.0),
-            at(u1, v1, 0.0),
+            at(u1, v0, z0),
+            at(u1, v1, z0),
             at(u1, v1, REVEAL_M),
             at(u1, v0, REVEAL_M),
         ],
@@ -425,7 +652,7 @@ fn opening(
             block(
                 s,
                 first + HANDLE,
-                at,
+                &at,
                 (hu - 0.06, hu + 0.03),
                 (hv - 0.015, hv + 0.015),
                 (fz - 0.06, fz),
@@ -479,10 +706,10 @@ fn opening(
                 block(
                     s,
                     first + SILL,
-                    at,
+                    &at,
                     (u0 - 0.05, u1 + 0.05),
                     (v0 - 0.05, v0),
-                    (-0.06, REVEAL_M),
+                    (-0.06 - unit.deep - unit.bulge, REVEAL_M),
                     (out, along, up),
                 );
             }
@@ -559,41 +786,39 @@ fn block(
     );
 }
 
-/// Where the lit rooms' lamps hang: for each window chosen by `House::lit_rooms` (by a hash of
-/// its id, so the same windows stay lit), a point in the room behind it, above the middle, in the
-/// block's own coordinates (add the block's lift).
-pub fn lit_windows(outline: &[P2], house: &House, base: f32) -> Vec<[f32; 3]> {
-    if house.lit_rooms <= 0.0 || outline.len() < 3 {
+/// Where the lit rooms' lamps hang: for each window of block `e` chosen by `House::lit_rooms`
+/// (by a hash of its id, so the same windows stay lit), a point in the room behind it, above the
+/// middle, in the block's own coordinates (add the block's lift).
+pub fn lit_windows(e: &crate::shape::Extrusion) -> Vec<[f32; 3]> {
+    let Some(house) = e.house.as_ref().filter(|h| h.lit_rooms > 0.0) else {
+        return Vec::new();
+    };
+    if e.points.len() < 3 {
         return Vec::new();
     }
-    let sign = if crate::shape::shoelace_f32(outline) > 0.0 {
+    let tess = crate::curve::tessellate(&e.points, true, &e.curves, e.smooth);
+    let sign = if crate::shape::shoelace_f32(&tess.pts) > 0.0 {
         1.0
     } else {
         -1.0
     };
-    house
-        .openings
+    place(house, &tess, sign, (e.base, e.base + e.height))
+        .0
         .iter()
-        .filter(|o| o.kind == OpeningKind::Window && o.side < outline.len())
-        .filter(|o| {
-            let h = o.id.bytes().fold(2166136261u32, |h, b| {
+        .filter(|pl| pl.o.kind == OpeningKind::Window)
+        .filter(|pl| {
+            let h = pl.o.id.bytes().fold(2166136261u32, |h, b| {
                 (h ^ u32::from(b)).wrapping_mul(16777619)
             });
             (h % 1000) as f32 / 1000.0 < house.lit_rooms
         })
-        .map(|o| {
-            let (p, q) = (outline[o.side], outline[(o.side + 1) % outline.len()]);
-            let len = ((q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2))
-                .sqrt()
-                .max(1e-6);
-            let d = [(q[0] - p[0]) / len, (q[1] - p[1]) / len];
-            let n = [sign * d[1], -sign * d[0]];
-            let depth = REVEAL_M + ROOM_M * 0.5;
-            [
-                p[0] + d[0] * o.offset_m - n[0] * depth,
-                base + o.sill_m + o.height_m * 0.75,
-                p[1] + d[1] * o.offset_m - n[1] * depth,
-            ]
+        .map(|pl| {
+            let u = &pl.unit;
+            u.at(
+                (u.u0 + u.u1) / 2.0,
+                e.base + pl.o.sill_m + pl.o.height_m * 0.75,
+                REVEAL_M + ROOM_M * 0.5,
+            )
         })
         .collect()
 }
@@ -689,7 +914,7 @@ pub(crate) fn roof(
         }
         (true, None) => {
             flat_roof(s, r, ring, hi, first);
-            Some("a pitched roof needs a rectangular or L-shaped outline: drawn flat".into())
+            Some("a pitched roof needs a rectangular or L-shaped outline with straight walls: drawn flat (use a flat roof on a curved outline)".into())
         }
         (false, _) => {
             flat_roof(s, r, ring, hi, first);
@@ -723,17 +948,44 @@ fn flat_roof(s: &mut dyn Sink, r: &Roof, ring: &[P2], hi: f32, first: usize) {
     } else {
         -1.0
     };
-    let t = 0.2;
-    for i in 0..ring.len() {
-        let (p, q) = (ring[i], ring[(i + 1) % ring.len()]);
-        let len = ((q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2)).sqrt();
-        if len < 1e-4 {
+    // The inner face is the outline offset by the parapet's width, mitred at every vertex, so
+    // the faces meet along a curve of many short segments as along a straight wall.
+    let m = ring.len();
+    let mut normals: Vec<P2> = Vec::with_capacity(m);
+    for i in 0..m {
+        let (p, q) = (ring[i], ring[(i + 1) % m]);
+        let len = dist(p, q);
+        normals.push(if len < 1e-4 {
+            normals.last().copied().unwrap_or([0.0, 0.0])
+        } else {
+            [sign * (q[1] - p[1]) / len, -sign * (q[0] - p[0]) / len]
+        });
+    }
+    if normals[0] == [0.0, 0.0] {
+        let fix = normals.iter().copied().find(|n| *n != [0.0, 0.0]);
+        if let Some(f) = fix {
+            normals[0] = f;
+        }
+    }
+    let inner: Vec<P2> = (0..m)
+        .map(|i| {
+            let (a, b) = (normals[(i + m - 1) % m], normals[i]);
+            let k = PARAPET_T / (1.0 + a[0] * b[0] + a[1] * b[1]).max(0.25);
+            [
+                ring[i][0] - (a[0] + b[0]) * k,
+                ring[i][1] - (a[1] + b[1]) * k,
+            ]
+        })
+        .collect();
+    let c = |a: P2, y: f32| [a[0], y, a[1]];
+    for i in 0..m {
+        let j = (i + 1) % m;
+        let (p, q) = (ring[i], ring[j]);
+        if dist(p, q) < 1e-4 {
             continue;
         }
-        let n = [sign * (q[1] - p[1]) / len, -sign * (q[0] - p[0]) / len];
-        let inn = |a: P2| [a[0] - n[0] * t, a[1] - n[1] * t];
-        let c = |a: P2, y: f32| [a[0], y, a[1]];
-        let (pi, qi) = (inn(p), inn(q));
+        let n = normals[i];
+        let (pi, qi) = (inner[i], inner[j]);
         let face = first + PARAPET;
         quad(
             s,

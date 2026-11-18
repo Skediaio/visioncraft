@@ -19,7 +19,7 @@ pub fn recipes() -> Vec<Value> {
 #[test]
 fn every_recipe_of_the_guide_runs() {
     let recipes = recipes();
-    assert_eq!(recipes.len(), 36);
+    assert_eq!(recipes.len(), 37);
     for (n, recipe) in recipes.into_iter().enumerate() {
         let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("recipe-{n}"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -277,6 +277,38 @@ fn every_recipe_of_the_guide_runs() {
                     end["sun"]["elevation_deg"].as_f64().unwrap() < 10.0,
                     "{report}"
                 );
+            }
+            37 => {
+                // The pavilion's front is an arc 8.46 m long: the walls add up with the three
+                // straight ones, and five openings are taken out by their width along the arc.
+                let q = &results[10]["result"];
+                let row = |id: &str| {
+                    q["shapes"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .find(|r| r["id"] == id)
+                        .unwrap_or_else(|| panic!("no row: {report}"))["house"]
+                        .clone()
+                };
+                let (r, half) = (7.2667f64, (4.0f64 / 6.0667).atan());
+                let arc = 2.0 * r * half;
+                let p = row("S2");
+                let len = p["wall_length_m"].as_f64().unwrap();
+                assert!((len - (arc + 20.0)).abs() < 0.02, "{report}");
+                assert_eq!(p["openings"], 5, "{report}");
+                let holes = 4.0 * 1.2 * 2.2 + 1.0 * 2.2;
+                assert!(
+                    (p["openings_area_m2"].as_f64().unwrap() - holes).abs() < 0.01,
+                    "{report}"
+                );
+                let t = row("S3");
+                assert!(
+                    (t["wall_length_m"].as_f64().unwrap() - 2.0 * std::f64::consts::PI * 2.5).abs()
+                        < 0.01,
+                    "{report}"
+                );
+                assert_eq!(t["openings"], 2, "{report}");
             }
             36 => {
                 // The view is wet and not raining, and halfway through the shot it rains 0.4.

@@ -172,8 +172,14 @@ nothing here is a promise of a date.
   or hollow front, the goings counted from the apex. Draw has Circle and Ellipse tools, an edge
   panel (pick an edge with Shift-click or a number, type a radius, left or right), a Smooth
   checkbox, the radius of every arc on the plan and a handle in the middle of each arc to drag
-  (one `shape.set_curve` on release). Recipes 23 and 35. Next: curved houses (walls on many
-  short edges with openings placed by arc length), an arc on the top edge of a flight (and so
+  (one `shape.set_curve` on release). A house takes curves: the walls follow
+  the tessellated outline as many short pieces of one solid, the flat roof's parapet is the outline
+  offset and mitred so it keeps its width, the roof deck and floor follow the curve, and a window or
+  door on a curved edge is placed by arc length (offset and width along the arc) as a flat unit on
+  the chord of its span with planar reveals, narrowed with a note when the arc is so tight that its
+  chord would leave the 0.3 m wall; `query.quantities` gives a house's wall length by true arc
+  length and its wall area less the openings; a pitched roof on a curved outline is drawn flat with
+  a note. Recipes 23, 35 and 37. Next: pitched roofs on a curved outline, an arc on the top edge of a flight (and so
   fans of treads that converge), curved stairs that turn or are set into the slope, curved
   cheek walls, and a rotation handle for an ellipse.
 - **Rain and wet surfaces:** `view.set {wetness: 0..1, rain: 0..1}` (both 0 by default and not
