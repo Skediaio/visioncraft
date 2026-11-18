@@ -1289,6 +1289,9 @@ impl Scene {
             // What the mesh depends on besides the shape: the terrain and the water on top, and
             // the terraces (what stands in one stands on its floor; a lawn is cut out of it).
             let terrace_area = matches!(&placed, Shape::Area(a) if a.terrace.is_some());
+            let follows_ground = matches!(&placed, Shape::Extrusion(e)
+                if e.stairs.is_some()
+                    || e.fence.as_ref().is_some_and(|f| f.slope != visioncraft_core::fence::FenceSlope::Level));
             let depends = if draped {
                 holes
                     .iter()
@@ -1301,6 +1304,9 @@ impl Scene {
                     ^ zones_key
             } else if terrace_area {
                 terrain_key
+            } else if follows_ground {
+                // Posts and steps stand on the ground under them: it changes with the terrain.
+                terrain_key ^ zones_key
             } else {
                 zones_key
             };

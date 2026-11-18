@@ -12,6 +12,12 @@
 //! tight, so a span stays within [`CURVE_TOL_M`] of the curve). A gate needs a straight edge. A gate leaves
 //! a gap in the run, a post on each side and a leaf in it.
 //!
+//! On sloping ground (`Fence::slope`) the posts stand each on the ground at their own foot, always
+//! plumb. `stepped` lays every span as one level panel at the higher of its two posts' ground (a
+//! gravel board can fill the gap under it), `raked` makes the rails, the top and the bottom follow
+//! the line between the two feet, with slats and pickets plumb and cut to it, boards parallel to
+//! it and panels as parallelograms. A gate leaf stays level.
+//!
 //! The wire mesh is a real grid of thin wires (see through, a few hundred triangles a span), not
 //! a texture with transparency.
 
@@ -79,6 +85,38 @@ impl FenceKind {
     }
 }
 
+/// How a fence follows ground that is not level.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FenceSlope {
+    /// The whole fence stands on the lowest ground under its line.
+    #[default]
+    Level,
+    /// Each post stands on its own ground; every span is a level panel, stepping down the slope.
+    Stepped,
+    /// Each post stands on its own ground; rails and the top and bottom lines run straight between
+    /// the feet, slats and pickets stay plumb.
+    Raked,
+}
+
+impl FenceSlope {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Level => "level",
+            Self::Stepped => "stepped",
+            Self::Raked => "raked",
+        }
+    }
+}
+
+fn is_level(s: &FenceSlope) -> bool {
+    *s == FenceSlope::Level
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
 /// A gate in the run: a gap of `width_m` centred `offset_m` along the line from its start, with
 /// a post on each side and a leaf in it.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -104,6 +142,12 @@ pub struct Fence {
     /// screen).
     pub rails: bool,
     pub gates: Vec<Gate>,
+    /// How the fence follows sloping ground; only used where there is ground to follow.
+    #[serde(skip_serializing_if = "is_level")]
+    pub slope: FenceSlope,
+    /// Stepped only: a board under each panel, down to the lowest ground under it.
+    #[serde(skip_serializing_if = "is_false")]
+    pub gravel_board: bool,
 }
 
 impl Default for Fence {
@@ -131,6 +175,8 @@ impl Fence {
             post_size_m,
             rails,
             gates: Vec::new(),
+            slope: FenceSlope::Level,
+            gravel_board: false,
         }
     }
 
@@ -516,12 +562,29 @@ fn cuboid(
     s: &mut dyn Sink,
     face: usize,
     fr: Frame,
-    (u0, u1): (f32, f32),
-    (w0, w1): (f32, f32),
+    u: (f32, f32),
+    w: (f32, f32),
     (y0, y1): (f32, f32),
     top: bool,
 ) {
-    if u1 - u0 <= 0.0 || w1 - w0 <= 0.0 || y1 - y0 <= 0.0 {
+    prism(s, face, fr, u, w, (y0, y0), (y1, y1), top);
+}
+
+/// A post with plumb sides over `u` and `w`, its bottom and top planes running from heights
+/// `bottom.0`, `top.0` at `u.0` to `bottom.1`, `top.1` at `u.1`: a box for a level run, a
+/// parallelogram (or a slat cut to a raked line) otherwise.
+#[allow(clippy::too_many_arguments)]
+fn prism(
+    s: &mut dyn Sink,
+    face: usize,
+    fr: Frame,
+    (u0, u1): (f32, f32),
+    (w0, w1): (f32, f32),
+    (b0, b1): (f32, f32),
+    (t0, t1): (f32, f32),
+    top: bool,
+) {
+    if u1 - u0 <= 0.0 || w1 - w0 <= 0.0 || t0 - b0 <= 0.0 || t1 - b1 <= 0.0 {
         return;
     }
     let (d, n, up) = (fr.dir3(), fr.n3(), [0.0, 1.0, 0.0]);
@@ -529,74 +592,113 @@ fn cuboid(
     quad(
         s,
         face,
-        [p(u0, w0, y0), p(u1, w0, y0), p(u1, w1, y0), p(u0, w1, y0)],
+        [p(u0, w0, b0), p(u1, w0, b1), p(u1, w1, b1), p(u0, w1, b0)],
         neg(up),
     );
     if top {
         quad(
             s,
             face,
-            [p(u0, w0, y1), p(u1, w0, y1), p(u1, w1, y1), p(u0, w1, y1)],
+            [p(u0, w0, t0), p(u1, w0, t1), p(u1, w1, t1), p(u0, w1, t0)],
             up,
         );
     }
     quad(
         s,
         face,
-        [p(u0, w0, y0), p(u0, w1, y0), p(u0, w1, y1), p(u0, w0, y1)],
+        [p(u0, w0, b0), p(u0, w1, b0), p(u0, w1, t0), p(u0, w0, t0)],
         neg(d),
     );
     quad(
         s,
         face,
-        [p(u1, w0, y0), p(u1, w1, y0), p(u1, w1, y1), p(u1, w0, y1)],
+        [p(u1, w0, b1), p(u1, w1, b1), p(u1, w1, t1), p(u1, w0, t1)],
         d,
     );
     quad(
         s,
         face,
-        [p(u0, w0, y0), p(u1, w0, y0), p(u1, w0, y1), p(u0, w0, y1)],
+        [p(u0, w0, b0), p(u1, w0, b1), p(u1, w0, t1), p(u0, w0, t0)],
         neg(n),
     );
     quad(
         s,
         face,
-        [p(u0, w1, y0), p(u1, w1, y0), p(u1, w1, y1), p(u0, w1, y1)],
+        [p(u0, w1, b0), p(u1, w1, b1), p(u1, w1, t1), p(u0, w1, t0)],
         n,
     );
 }
 
-/// The pointed top of a picket: a ridge across its depth, `TIP` above `y`.
+/// The pointed top of a picket: a ridge across its depth at the middle, its apex at `apex`, the
+/// shoulders at `shoulder.0` (at `u0`) and `shoulder.1` (at `u1`).
 fn tip(
     s: &mut dyn Sink,
     face: usize,
     fr: Frame,
     (u0, u1): (f32, f32),
     (w0, w1): (f32, f32),
-    y: f32,
+    shoulder: (f32, f32),
+    apex: f32,
 ) {
-    let (um, yt) = ((u0 + u1) / 2.0, y + TIP);
+    let um = (u0 + u1) / 2.0;
     let (d, n) = (fr.dir3(), fr.n3());
     let p = |u, w, y| fr.pt(u, w, y);
-    let rise = |sign: f32, run: f32| [sign * TIP * d[0], run, sign * TIP * d[2]];
+    let rise = |sign: f32, run: f32, dy: f32| [sign * dy * d[0], run, sign * dy * d[2]];
     quad(
         s,
         face,
-        [p(u0, w0, y), p(u0, w1, y), p(um, w1, yt), p(um, w0, yt)],
-        rise(-1.0, um - u0),
+        [
+            p(u0, w0, shoulder.0),
+            p(u0, w1, shoulder.0),
+            p(um, w1, apex),
+            p(um, w0, apex),
+        ],
+        rise(-1.0, um - u0, apex - shoulder.0),
     );
     quad(
         s,
         face,
-        [p(u1, w0, y), p(u1, w1, y), p(um, w1, yt), p(um, w0, yt)],
-        rise(1.0, u1 - um),
+        [
+            p(u1, w0, shoulder.1),
+            p(u1, w1, shoulder.1),
+            p(um, w1, apex),
+            p(um, w0, apex),
+        ],
+        rise(1.0, u1 - um, apex - shoulder.1),
     );
-    s.tri(face, [p(u0, w0, y), p(u1, w0, y), p(um, w0, yt)], neg(n));
-    s.tri(face, [p(u0, w1, y), p(u1, w1, y), p(um, w1, yt)], n);
+    s.tri(
+        face,
+        [
+            p(u0, w0, shoulder.0),
+            p(u1, w0, shoulder.1),
+            p(um, w0, apex),
+        ],
+        neg(n),
+    );
+    s.tri(
+        face,
+        [
+            p(u0, w1, shoulder.0),
+            p(u1, w1, shoulder.1),
+            p(um, w1, apex),
+        ],
+        n,
+    );
 }
+
+/// The ground the fence follows: its height above the placement's origin at `(x, z)`.
+type Ground<'a> = &'a dyn Fn(f32, f32) -> f32;
+
+/// How far a gate leaf hangs above the ground it clears, and above the posts' foot.
+const GATE_CLEARANCE: f32 = 0.08;
+/// A stepped panel may stand this much above the lowest ground under it, over the usual
+/// clearance, before the gap is worth a warning.
+const GAP_WARN: f32 = 0.05;
 
 /// Draws a fence of `height` on `line` from `lo` up: posts, infill, rails and gate leaves on the
 /// faces of [`FENCE_FACES`]. `line` must have passed [`Fence::check`] with `thickness`.
+/// With `ground` (the height of the ground at a point, from the same origin as `lo`) and a
+/// `slope` other than level, the fence follows it. Returns what the person should be told.
 pub(crate) fn mesh(
     s: &mut dyn Sink,
     f: &Fence,
@@ -604,10 +706,16 @@ pub(crate) fn mesh(
     thickness: f32,
     lo: f32,
     hi: f32,
-) {
+    ground: Option<Ground<'_>>,
+) -> Vec<String> {
     let l = layout(f, runs);
     let (y0, y1) = f.vertical(lo, hi);
     let t = thickness;
+    let follow = ground.filter(|_| f.slope != FenceSlope::Level);
+    let g = |p: P2| follow.map_or(0.0, |g| g(p[0], p[1]));
+    let (bo, to) = (y0 - lo, y1 - lo);
+    let tall = hi - lo;
+    let mut warnings = Vec::new();
     // With rails the infill takes the front half of the depth and the rails the back half.
     let (iw, rw) = if f.rails && f.kind != FenceKind::Screen {
         ((-t / 2.0, 0.0), (0.0, t / 2.0))
@@ -620,8 +728,18 @@ pub(crate) fn mesh(
             o: post.at,
             d: post.dir,
         };
-        cuboid(s, POSTS, fr, (-ps, ps), (-ps, ps), (lo, hi), true);
+        let foot = lo + g(post.at);
+        cuboid(
+            s,
+            POSTS,
+            fr,
+            (-ps, ps),
+            (-ps, ps),
+            (foot, foot + tall),
+            true,
+        );
     }
+    let (mut gaps, mut worst_gap) = (0, 0.0f32);
     for sp in &l.spans {
         let fr = Frame {
             o: sp.origin,
@@ -632,30 +750,126 @@ pub(crate) fn mesh(
             continue;
         }
         let avail = u1 - u0;
+        let at = |u: f32| [sp.origin[0] + sp.dir[0] * u, sp.origin[1] + sp.dir[1] * u];
+        let (ga, gb) = (g(at(sp.a)), g(at(sp.b)));
+        let high = ga.max(gb);
         if sp.gate {
-            gate_leaf(s, f, fr, (u0, u1), iw, rw, (y0, y1), (lo, hi));
+            // A gate leaf stays level, on the higher ground of its two posts.
+            let up = high;
+            gate_leaf(
+                s,
+                f,
+                fr,
+                (u0, u1),
+                iw,
+                rw,
+                (y0 + up, y1 + up),
+                (lo + up, hi + up),
+            );
+            if let Some(gr) = follow {
+                let rise = (0..=8)
+                    .map(|k| {
+                        let p = at(u0 + avail * k as f32 / 8.0);
+                        gr(p[0], p[1])
+                    })
+                    .fold(f32::MIN, f32::max)
+                    - (high + GATE_CLEARANCE);
+                if rise > 1e-3 {
+                    let m = at((sp.a + sp.b) / 2.0);
+                    warnings.push(format!(
+                        "the ground under the gate at ({:.1}, {:.1}) rises {rise:.2} m above its leaf's bottom, so the leaf would not swing; level the ground or move the gate",
+                        m[0], m[1]
+                    ));
+                }
+            }
             continue;
+        }
+        // The line the span's bottom and top follow, at `u` along it.
+        let shift = |u: f32| match f.slope {
+            FenceSlope::Level => lo,
+            FenceSlope::Stepped => lo + high,
+            FenceSlope::Raked => {
+                let k = if sp.b > sp.a {
+                    (u - sp.a) / (sp.b - sp.a)
+                } else {
+                    0.0
+                };
+                lo + ga + (gb - ga) * k
+            }
+        };
+        let bl = |u: f32| shift(u) + bo;
+        let tl = |u: f32| shift(u) + to;
+        let low = (0..=8)
+            .map(|k| g(at(u0 + avail * k as f32 / 8.0)))
+            .fold(ga.min(gb), f32::min);
+        if f.slope == FenceSlope::Stepped {
+            let gap = (high + bo) - low;
+            if f.gravel_board {
+                let (ya, yb) = (lo + low, bl(u0));
+                cuboid(s, RAILS, fr, (u0, u1), (-t / 2.0, t / 2.0), (ya, yb), true);
+            } else if gap > bo + GAP_WARN {
+                gaps += 1;
+                worst_gap = worst_gap.max(gap);
+            }
         }
         match f.kind {
             FenceKind::Slats => {
                 for (a, b) in pieces(avail, f.slat_width_m, f.gap_m) {
-                    cuboid(s, INFILL, fr, (u0 + a, u0 + b), iw, (y0, y1), true);
+                    let (ua, ub) = (u0 + a, u0 + b);
+                    prism(
+                        s,
+                        INFILL,
+                        fr,
+                        (ua, ub),
+                        iw,
+                        (bl(ua), bl(ub)),
+                        (tl(ua), tl(ub)),
+                        true,
+                    );
                 }
             }
             FenceKind::Picket => {
                 for (a, b) in pieces(avail, f.slat_width_m, f.gap_m) {
                     let (ua, ub) = (u0 + a, u0 + b);
-                    cuboid(s, INFILL, fr, (ua, ub), iw, (y0, y1 - TIP), false);
-                    tip(s, INFILL, fr, (ua, ub), iw, y1 - TIP);
+                    let shoulder = (tl(ua) - TIP, tl(ub) - TIP);
+                    prism(
+                        s,
+                        INFILL,
+                        fr,
+                        (ua, ub),
+                        iw,
+                        (bl(ua), bl(ub)),
+                        shoulder,
+                        false,
+                    );
+                    tip(s, INFILL, fr, (ua, ub), iw, shoulder, tl((ua + ub) / 2.0));
                 }
             }
             FenceKind::HorizontalSlats => {
-                for (a, b) in pieces(y1 - y0, f.slat_width_m, f.gap_m) {
-                    cuboid(s, INFILL, fr, (u0, u1), iw, (y0 + a, y0 + b), true);
+                for (a, b) in pieces(to - bo, f.slat_width_m, f.gap_m) {
+                    prism(
+                        s,
+                        INFILL,
+                        fr,
+                        (u0, u1),
+                        iw,
+                        (bl(u0) + a, bl(u1) + a),
+                        (bl(u0) + b, bl(u1) + b),
+                        true,
+                    );
                 }
             }
             FenceKind::Panels | FenceKind::Screen => {
-                cuboid(s, INFILL, fr, (u0, u1), iw, (y0, y1), true);
+                prism(
+                    s,
+                    INFILL,
+                    fr,
+                    (u0, u1),
+                    iw,
+                    (bl(u0), bl(u1)),
+                    (tl(u0), tl(u1)),
+                    true,
+                );
             }
             FenceKind::Mesh => wires(
                 s,
@@ -666,18 +880,36 @@ pub(crate) fn mesh(
                 (u0, u1),
                 iw,
                 rw,
-                (y0, y1),
+                (&bl, &tl),
             ),
         }
         if f.rails {
-            for (ya, yb) in rail_heights(f, y0, y1) {
-                cuboid(s, RAILS, fr, (u0, u1), rw, (ya, yb), true);
+            for (ya, yb) in rail_heights(f, 0.0, to - bo) {
+                prism(
+                    s,
+                    RAILS,
+                    fr,
+                    (u0, u1),
+                    rw,
+                    (bl(u0) + ya, bl(u1) + ya),
+                    (bl(u0) + yb, bl(u1) + yb),
+                    true,
+                );
             }
         }
     }
+    if gaps > 0 {
+        warnings.push(format!(
+            "{gaps} stepped panel{} stand{} up to {worst_gap:.2} m above the ground at the low end, a gap an animal or a child gets through; set `gravel_board` to close it or use `slope: raked`",
+            if gaps == 1 { "" } else { "s" },
+            if gaps == 1 { "s" } else { "" },
+        ));
+    }
+    warnings
 }
 
-/// A grid of thin wires: verticals in the front of the depth, horizontals behind them.
+/// A grid of thin wires: verticals in the front of the depth, horizontals behind them. `lines` are
+/// the bottom and the top of the grid at `u`; the wires stay plumb and the horizontals follow them.
 #[allow(clippy::too_many_arguments)]
 fn wires(
     s: &mut dyn Sink,
@@ -688,19 +920,38 @@ fn wires(
     (u0, u1): (f32, f32),
     iw: (f32, f32),
     rw: (f32, f32),
-    (y0, y1): (f32, f32),
+    (bl, tl): (&dyn Fn(f32) -> f32, &dyn Fn(f32) -> f32),
 ) {
     let wx = (iw.1 - wire.min(iw.1 - iw.0), iw.1);
     for (a, b) in pieces(u1 - u0, wire, gap) {
-        cuboid(s, face, fr, (u0 + a, u0 + b), wx, (y0, y1), true);
+        let (ua, ub) = (u0 + a, u0 + b);
+        prism(
+            s,
+            face,
+            fr,
+            (ua, ub),
+            wx,
+            (bl(ua), bl(ub)),
+            (tl(ua), tl(ub)),
+            true,
+        );
     }
     let wz = (rw.0, rw.0 + wire.min(rw.1 - rw.0));
-    for (a, b) in pieces(y1 - y0, wire, gap) {
-        cuboid(s, face, fr, (u0, u1), wz, (y0 + a, y0 + b), true);
+    for (a, b) in pieces(tl(u0) - bl(u0), wire, gap) {
+        prism(
+            s,
+            face,
+            fr,
+            (u0, u1),
+            wz,
+            (bl(u0) + a, bl(u1) + a),
+            (bl(u0) + b, bl(u1) + b),
+            true,
+        );
     }
 }
 
-/// The rail boards' bottoms and tops.
+/// The rail boards' bottoms and tops, from a bottom at `y0` and a top at `y1`.
 fn rail_heights(f: &Fence, y0: f32, y1: f32) -> Vec<(f32, f32)> {
     match f.kind {
         FenceKind::Slats | FenceKind::Picket | FenceKind::HorizontalSlats => {
@@ -731,8 +982,8 @@ fn gate_leaf(
     (lo, hi): (f32, f32),
 ) {
     let (ua, ub) = (u0 + 0.02, u1 - 0.02);
-    let (ya, yb) = (lo + 0.08, (hi - 0.08).min(y1));
-    let ya = ya.max(y0.min(lo + 0.08));
+    let (ya, yb) = (lo + GATE_CLEARANCE, (hi - GATE_CLEARANCE).min(y1));
+    let ya = ya.max(y0.min(lo + GATE_CLEARANCE));
     if f.kind == FenceKind::Mesh {
         // See through, like the fence: a wire grid between a top and a bottom bar.
         wires(
@@ -744,7 +995,7 @@ fn gate_leaf(
             (ua, ub),
             iw,
             rw,
-            (ya, yb),
+            (&|_| ya, &|_| yb),
         );
         for (a, b) in [(ya, ya + RAIL_H), (yb - RAIL_H, yb)] {
             cuboid(
@@ -1011,5 +1262,336 @@ mod tests {
         assert!(m.triangles.len() < 40_000, "{}", m.triangles.len());
         let gate = m.faces.iter().position(|f| f.name == "S1:gate").unwrap() as u32;
         assert!(!m.triangle_faces.contains(&gate));
+    }
+
+    // --- Sloping ground ---------------------------------------------------------------------
+
+    use crate::ImportedModel;
+    use crate::shape::shape_mesh_on;
+
+    /// Ground rising 1 m in 6 along x, then flat from x = 3.6 (0.6 m up).
+    fn hill(x: f32, _z: f32) -> Option<f32> {
+        Some((x / 6.0).min(0.6))
+    }
+
+    fn sloped(kind: FenceKind, slope: FenceSlope, gates: &[(f32, f32)]) -> (Fence, ImportedModel) {
+        let mut f = Fence::new(kind);
+        f.slope = slope;
+        f.gates = gates
+            .iter()
+            .map(|&(offset_m, width_m)| Gate { offset_m, width_m })
+            .collect();
+        let shape = fence_shape(f.clone(), vec![[0.0, 0.0], [9.0, 0.0]], 1.8);
+        let m = shape_mesh_on(&shape, &hill).unwrap();
+        (f, m)
+    }
+
+    /// The vertices of the triangles of face `<id>:<name>`.
+    fn verts(m: &ImportedModel, name: &str) -> Vec<[f32; 3]> {
+        let face = m
+            .faces
+            .iter()
+            .position(|f| f.name == format!("S1:{name}"))
+            .unwrap() as u32;
+        m.triangles
+            .iter()
+            .zip(&m.triangle_faces)
+            .filter(|(_, f)| **f == face)
+            .flat_map(|(t, _)| t.iter().map(|&i| m.positions[i as usize]))
+            .collect()
+    }
+
+    fn posts_of(f: &Fence) -> Layout {
+        layout(f, &straight(&[[0.0, 0.0], [9.0, 0.0]]))
+    }
+
+    #[test]
+    fn stepped_posts_stand_on_their_own_ground_and_reach_the_fence_height_above_it() {
+        let (f, m) = sloped(FenceKind::Slats, FenceSlope::Stepped, &[]);
+        let posts = verts(&m, "posts");
+        let l = posts_of(&f);
+        assert_eq!(l.posts.len(), 6);
+        for p in &l.posts {
+            let near: Vec<f32> = posts
+                .iter()
+                .filter(|v| (v[0] - p.at[0]).abs() <= 0.05 + 1e-4)
+                .map(|v| v[1])
+                .collect();
+            let g = hill(p.at[0], 0.0).unwrap();
+            let (lo, hi) = near
+                .iter()
+                .fold((f32::MAX, f32::MIN), |a, &y| (a.0.min(y), a.1.max(y)));
+            assert!((lo - g).abs() < 1e-4, "foot {lo} on ground {g}");
+            assert!((hi - (g + 1.8)).abs() < 1e-4, "top {hi}");
+        }
+    }
+
+    #[test]
+    fn each_stepped_panel_is_level_and_above_both_feet() {
+        let (f, m) = sloped(FenceKind::Panels, FenceSlope::Stepped, &[]);
+        let infill = verts(&m, "infill");
+        for sp in &posts_of(&f).spans {
+            let ga = hill(sp.origin[0] + sp.a, 0.0).unwrap();
+            let gb = hill(sp.origin[0] + sp.b, 0.0).unwrap();
+            let ys: Vec<f32> = infill
+                .iter()
+                .filter(|v| v[0] > sp.origin[0] + sp.a && v[0] < sp.origin[0] + sp.b)
+                .map(|v| v[1])
+                .collect();
+            let (lo, hi) = ys
+                .iter()
+                .fold((f32::MAX, f32::MIN), |a, &y| (a.0.min(y), a.1.max(y)));
+            // Level: only two heights, the bottom and the top.
+            assert!(
+                ys.iter()
+                    .all(|y| (y - lo).abs() < 1e-5 || (y - hi).abs() < 1e-5)
+            );
+            assert!(
+                (lo - (ga.max(gb) + CLEARANCE)).abs() < 1e-4,
+                "{lo} {ga} {gb}"
+            );
+            assert!(lo > ga && lo > gb);
+            assert!((hi - lo - (1.8 - CLEARANCE - TOP_INSET)).abs() < 1e-4);
+        }
+    }
+
+    #[test]
+    fn a_stepped_gap_warns_and_a_gravel_board_closes_it() {
+        let (_, m) = sloped(FenceKind::Slats, FenceSlope::Stepped, &[]);
+        assert!(
+            m.warnings.iter().any(|w| w.contains("gravel_board")),
+            "{:?}",
+            m.warnings
+        );
+        let shape = {
+            let mut f = Fence::new(FenceKind::Slats);
+            f.slope = FenceSlope::Stepped;
+            f.gravel_board = true;
+            fence_shape(f, vec![[0.0, 0.0], [9.0, 0.0]], 1.8)
+        };
+        let m = shape_mesh_on(&shape, &hill).unwrap();
+        assert!(m.warnings.is_empty(), "{:?}", m.warnings);
+        // The board reaches down to the lowest ground under each panel: the first panel's board
+        // starts at the ground at its low post (0).
+        let rails = verts(&m, "rails");
+        let first: Vec<f32> = rails
+            .iter()
+            .filter(|v| v[0] > 0.0 && v[0] < 1.8)
+            .map(|v| v[1])
+            .collect();
+        assert!(first.iter().any(|y| y.abs() < 1e-4), "{first:?}");
+        // Raked and level fences leave no gap to warn about.
+        let (_, raked) = sloped(FenceKind::Slats, FenceSlope::Raked, &[]);
+        assert!(raked.warnings.is_empty());
+    }
+
+    /// The height the ground line between the posts has at `x` (the hill is straight between
+    /// posts: it bends at the post at 3.6).
+    fn line(x: f32) -> f32 {
+        hill(x, 0.0).unwrap()
+    }
+
+    #[test]
+    fn raked_rails_follow_the_line_between_the_feet() {
+        let (f, m) = sloped(FenceKind::Slats, FenceSlope::Raked, &[]);
+        let (y0, y1) = f.vertical(0.0, 1.8);
+        let h = y1 - y0;
+        let expect: Vec<f32> = [0.2, 0.8]
+            .iter()
+            .flat_map(|k| [y0 + h * k - RAIL_H / 2.0, y0 + h * k + RAIL_H / 2.0])
+            .collect();
+        let rails = verts(&m, "rails");
+        assert!(!rails.is_empty());
+        for v in &rails {
+            let rel = v[1] - line(v[0]);
+            assert!(
+                expect.iter().any(|e| (e - rel).abs() < 1e-4),
+                "rail vertex {v:?} is {rel} above the line"
+            );
+        }
+        // And the rails really climb: the first span's rail is higher at its far end.
+        let at = |x: f32| {
+            rails
+                .iter()
+                .filter(|v| (v[0] - x).abs() < 1e-4)
+                .map(|v| v[1])
+                .fold(f32::MAX, f32::min)
+        };
+        let (a, b) = (0.045, 1.755);
+        assert!((at(b) - at(a) - (line(b) - line(a))).abs() < 1e-4);
+    }
+
+    #[test]
+    fn raked_slats_are_plumb_with_their_tops_on_the_raked_line() {
+        let (f, m) = sloped(FenceKind::Slats, FenceSlope::Raked, &[]);
+        let (y0, y1) = f.vertical(0.0, 1.8);
+        let infill = verts(&m, "infill");
+        assert!(!infill.is_empty());
+        // Every slat edge is a vertical pair: the bottom and the top sit on the same (x, z).
+        let mut columns: std::collections::BTreeMap<(i32, i32), Vec<f32>> = Default::default();
+        for v in &infill {
+            let key = ((v[0] * 1e4).round() as i32, (v[2] * 1e4).round() as i32);
+            columns.entry(key).or_default().push(v[1]);
+        }
+        for (key, ys) in &columns {
+            let x = key.0 as f32 / 1e4;
+            let (lo, hi) = ys
+                .iter()
+                .fold((f32::MAX, f32::MIN), |a, &y| (a.0.min(y), a.1.max(y)));
+            assert!((lo - (line(x) + y0)).abs() < 1e-3, "bottom at {x}");
+            assert!((hi - (line(x) + y1)).abs() < 1e-3, "top at {x}");
+            assert!(
+                ys.iter()
+                    .all(|y| (y - lo).abs() < 1e-4 || (y - hi).abs() < 1e-4)
+            );
+        }
+    }
+
+    #[test]
+    fn raked_pickets_have_their_tips_on_the_line_and_each_one_its_own_height() {
+        let (f, m) = sloped(FenceKind::Picket, FenceSlope::Raked, &[]);
+        let (_, y1) = f.vertical(0.0, 1.8);
+        let infill = verts(&m, "infill");
+        assert!(!infill.is_empty());
+        // The highest point of the first picket lies on the line at its middle.
+        let x0 = infill.iter().map(|v| v[0]).fold(f32::MAX, f32::min);
+        let first: Vec<&[f32; 3]> = infill
+            .iter()
+            .filter(|v| v[0] <= x0 + f.slat_width_m + 1e-4)
+            .collect();
+        let apex = first.iter().map(|v| v[1]).fold(f32::MIN, f32::max);
+        let mid = x0 + f.slat_width_m / 2.0;
+        assert!((apex - (line(mid) + y1)).abs() < 1e-3, "{apex}");
+        // Each picket is cut to its own place on the line: the tips are not all level.
+        let top = |x: f32| {
+            infill
+                .iter()
+                .filter(|v| (v[0] - x).abs() < f.slat_width_m)
+                .map(|v| v[1])
+                .fold(f32::MIN, f32::max)
+        };
+        assert!(top(1.5) > top(0.3) + 0.1);
+    }
+
+    #[test]
+    fn raked_boards_run_parallel_to_the_rake_and_the_mesh_is_a_sheared_grid() {
+        // Straight ground, so the line between any two posts is the ground itself.
+        let slope = |x: f32, _z: f32| Some(x / 6.0);
+        for kind in [
+            FenceKind::HorizontalSlats,
+            FenceKind::Mesh,
+            FenceKind::Panels,
+        ] {
+            let mut f = Fence::new(kind);
+            f.slope = FenceSlope::Raked;
+            let shape = fence_shape(f, vec![[0.0, 0.0], [9.0, 0.0]], 1.8);
+            let m = shape_mesh_on(&shape, &slope).unwrap();
+            let infill = verts(&m, "infill");
+            assert!(!infill.is_empty(), "{kind:?}");
+            // Everything is cut to the rake: the height above the line takes few values.
+            let mut above: Vec<f32> = infill.iter().map(|v| v[1] - v[0] / 6.0).collect();
+            above.sort_by(f32::total_cmp);
+            above.dedup_by(|a, b| (*a - *b).abs() < 1e-3);
+            let cap = if kind == FenceKind::Panels { 2 } else { 80 };
+            assert!(above.len() <= cap, "{kind:?}: {} offsets", above.len());
+        }
+    }
+
+    #[test]
+    fn the_level_mode_ignores_the_ground() {
+        for kind in [FenceKind::Slats, FenceKind::Picket, FenceKind::Mesh] {
+            let (_, on) = sloped(kind, FenceSlope::Level, &[(4.5, 1.2)]);
+            let mut f = Fence::new(kind);
+            f.gates = vec![Gate {
+                offset_m: 4.5,
+                width_m: 1.2,
+            }];
+            let flat = shape_mesh(&fence_shape(f, vec![[0.0, 0.0], [9.0, 0.0]], 1.8)).unwrap();
+            assert_eq!(on.positions, flat.positions, "{kind:?}");
+            assert_eq!(on.triangles, flat.triangles, "{kind:?}");
+            assert!(on.warnings.is_empty());
+        }
+    }
+
+    #[test]
+    fn a_gate_stays_level_on_the_higher_post_and_warns_when_the_ground_rises_under_it() {
+        // On the slope between 3.9 and 5.1 m: the ground is 0.65 and 0.6 (flat from 3.6).
+        for slope in [FenceSlope::Stepped, FenceSlope::Raked] {
+            let (f, m) = sloped(FenceKind::Slats, slope, &[(1.0, 1.2)]);
+            let gate = verts(&m, "gate");
+            assert!(!gate.is_empty());
+            let l = posts_of(&f);
+            // Posts either side keep their own feet.
+            let posts = verts(&m, "posts");
+            for p in l
+                .posts
+                .iter()
+                .filter(|p| (p.at[0] - 0.4).abs() < 1e-3 || (p.at[0] - 1.6).abs() < 1e-3)
+            {
+                let foot = posts
+                    .iter()
+                    .filter(|v| (v[0] - p.at[0]).abs() <= 0.05 + 1e-4)
+                    .map(|v| v[1])
+                    .fold(f32::MAX, f32::min);
+                assert!((foot - line(p.at[0])).abs() < 1e-4);
+            }
+            // The leaf is level: only a few heights, its bottom 0.08 above the higher post's foot.
+            let high = line(1.6);
+            let bottom = gate.iter().map(|v| v[1]).fold(f32::MAX, f32::min);
+            assert!((bottom - (high + GATE_CLEARANCE)).abs() < 1e-4, "{bottom}");
+            assert!(
+                !m.warnings.iter().any(|w| w.contains("swing")),
+                "{:?}",
+                m.warnings
+            );
+        }
+        // A ridge under the gate, higher than the leaf's bottom.
+        let ridge = |x: f32, _z: f32| Some(if (4.2..4.8).contains(&x) { 0.4 } else { 0.0 });
+        let mut f = Fence::new(FenceKind::Slats);
+        f.slope = FenceSlope::Raked;
+        f.gates = vec![Gate {
+            offset_m: 4.5,
+            width_m: 1.2,
+        }];
+        let shape = fence_shape(f.clone(), vec![[0.0, 0.0], [9.0, 0.0]], 1.8);
+        let m = shape_mesh_on(&shape, &ridge).unwrap();
+        assert!(
+            m.warnings.iter().any(|w| w.contains("would not swing")),
+            "{:?}",
+            m.warnings
+        );
+        // Level mode says nothing.
+        f.slope = FenceSlope::Level;
+        let m = shape_mesh_on(&fence_shape(f, vec![[0.0, 0.0], [9.0, 0.0]], 1.8), &ridge).unwrap();
+        assert!(m.warnings.is_empty());
+    }
+
+    #[test]
+    fn a_sloped_fence_without_ground_is_the_level_fence() {
+        let mut f = Fence::new(FenceKind::Slats);
+        let level = shape_mesh(&fence_shape(f.clone(), vec![[0.0, 0.0], [9.0, 0.0]], 1.8)).unwrap();
+        for slope in [FenceSlope::Stepped, FenceSlope::Raked] {
+            f.slope = slope;
+            let m = shape_mesh(&fence_shape(f.clone(), vec![[0.0, 0.0], [9.0, 0.0]], 1.8)).unwrap();
+            assert_eq!(m.positions, level.positions);
+        }
+    }
+
+    #[test]
+    fn the_slope_survives_a_round_trip_and_old_files_without_it_are_level() {
+        let mut f = Fence::new(FenceKind::Panels);
+        f.slope = FenceSlope::Raked;
+        let json = serde_json::to_value(&f).unwrap();
+        assert_eq!(json["slope"], "raked");
+        assert_eq!(serde_json::from_value::<Fence>(json).unwrap(), f);
+        let plain = serde_json::to_value(Fence::new(FenceKind::Slats)).unwrap();
+        assert!(plain.get("slope").is_none() && plain.get("gravel_board").is_none());
+        let old: Fence = serde_json::from_value(serde_json::json!({"kind": "slats"})).unwrap();
+        assert_eq!((old.slope, old.gravel_board), (FenceSlope::Level, false));
+        let mut g = Fence::new(FenceKind::Slats);
+        g.slope = FenceSlope::Stepped;
+        g.gravel_board = true;
+        let back: Fence = serde_json::from_str(&serde_json::to_string(&g).unwrap()).unwrap();
+        assert_eq!(back, g);
     }
 }

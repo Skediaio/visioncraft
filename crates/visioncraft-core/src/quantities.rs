@@ -305,6 +305,7 @@ pub fn quantities_in(
                             json!({
                                 "kind": f.kind, "posts": c.posts,
                                 f.kind.item_name(): c.items, "gates": c.gates,
+                                "slope": f.slope, "gravel_board": f.gravel_board,
                             }),
                         );
                         mesh_volume(&mesh)

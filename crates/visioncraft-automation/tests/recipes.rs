@@ -19,7 +19,7 @@ pub fn recipes() -> Vec<Value> {
 #[test]
 fn every_recipe_of_the_guide_runs() {
     let recipes = recipes();
-    assert_eq!(recipes.len(), 32);
+    assert_eq!(recipes.len(), 33);
     for (n, recipe) in recipes.into_iter().enumerate() {
         let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("recipe-{n}"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -277,6 +277,27 @@ fn every_recipe_of_the_guide_runs() {
                     end["sun"]["elevation_deg"].as_f64().unwrap() < 10.0,
                     "{report}"
                 );
+            }
+            33 => {
+                // Each fence answers with warnings; the stepped one has its gravel board and the
+                // quantities name the slope.
+                for i in [2, 3, 4, 5] {
+                    assert!(results[i]["result"]["warnings"].is_array(), "{report}");
+                }
+                let q = &results[6]["result"];
+                let slope = |id: &str| {
+                    q["shapes"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .find(|r| r["id"] == id)
+                        .unwrap_or_else(|| panic!("no row {id}: {report}"))["fence"]
+                        .clone()
+                };
+                assert_eq!(slope("S1")["slope"], "raked", "{report}");
+                assert_eq!(slope("S2")["slope"], "stepped", "{report}");
+                assert_eq!(slope("S2")["gravel_board"], true, "{report}");
+                assert_eq!(slope("S1")["gates"], 1, "{report}");
             }
             32 => {
                 // A mean floor cuts and fills; the sleeper wall counts its beams; the ground

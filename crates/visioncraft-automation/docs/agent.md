@@ -474,7 +474,7 @@ start as timber, with a dark timber for posts and rails (metal for mesh). `fence
 any field (or turns a plain wall made with `shape.add_extrusion` into a fence), `fence.clear`
 turns it back into a wall. `query.quantities` gives a fence's posts, slats (boards, pickets,
 panels), gates, length and the real material volume. On terrain a fence stands on the lowest
-ground under its line, not following the slope.
+ground under its line (`slope: "level"`, the default); recipe 33 makes one follow a slope.
 
 ### 21. Steps up to a raised terrace
 
@@ -971,6 +971,40 @@ floor, style, thickness, coping or parapet (and turns a plain flat area into a t
 other. Draped areas (a lawn on the slope) are cut out under a terrace. Draw has a Terrace tool: draw
 the outline, with the floor at the mean ground by default, a wall style and a parapet; the area
 panel shows the terrace's fields and its cut and fill.
+
+### 33. Fences down a slope: raked pickets, stepped panels
+
+```json recipe
+{"intent": "a picket fence raked down a slope and a stepped panel fence beside it, with a gravel board", "steps": [
+  {"id": "terrain.create", "params": {"origin": [0, 0], "width_m": 40, "depth_m": 30, "cell_m": 0.5, "base_material": "lawn"}},
+  {"id": "terrain.stroke", "params": {"tool": "raise", "points": [[5, 1], [35, 1]], "radius_m": 12, "strength": 0.12, "falloff": 0.8}},
+  {"id": "fence.add", "params": {"name": "Picket fence", "line": [[12, 3], [12, 15]], "height": 1.0, "kind": "picket", "slope": "raked"}},
+  {"id": "fence.add", "params": {"name": "Panel fence", "line": [[20, 3], [20, 15]], "height": 1.8, "kind": "panels", "slope": "stepped"}},
+  {"id": "fence.set", "params": {"id": "S2", "gravel_board": true}},
+  {"id": "fence.add_gate", "params": {"id": "S1", "offset_m": 6, "width_m": 1.0}},
+  {"id": "query.quantities", "params": {}},
+  {"id": "view.render", "params": {"camera": {"position": [30, 6, 22], "target": [16, 1.5, 9]}, "width": 960, "height": 540, "path": "fence-slope.png"}}
+]}
+```
+
+`slope` says how a fence follows ground that is not level, and `fence.add` and `fence.set` take it
+with `gravel_board`. `level` (the default) stands the whole fence on the lowest ground under its
+line. `stepped` and `raked` stand each post on the ground at its own foot, always plumb, reaching
+the fence height above it; they differ in what is between the posts. `stepped` makes every span
+one level panel whose bottom is the clearance above the higher of its two posts' ground, so the
+run steps down the slope; `gravel_board` adds a board under each panel down to the lowest ground
+under it (`<id>:rails`), and without it the answer warns when a panel stands more than 0.05 m
+above the ground at its low end. `raked` runs the rails, the top and the bottom straight between
+the two feet: slats and pickets stay plumb and are cut to those lines (a picket's tip on the top
+line), horizontal boards run parallel to the rake, panels and the screen are parallelograms and
+the wire mesh is a sheared grid. A gate leaf always stays level, on the higher ground of its two
+posts, with the posts on either side keeping their own feet; the answer of `fence.add`, `fence.set`
+and `fence.add_gate` has `warnings`, which tell when the ground under a leaf rises above its
+bottom (it would not swing). Ground comes from the terrain and from terraces (a fence on a
+terrace floor stands on the floor); without terrain every mode is the level fence.
+`query.quantities` gives `slope` and `gravel_board` in the fence row, and the volume and face
+areas are those of the real mesh. Draw's fence panel has an On a slope list and a Gravel board
+checkbox.
 
 ## Known traps
 

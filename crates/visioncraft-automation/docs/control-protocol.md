@@ -96,7 +96,7 @@ The core's commands (`model.*`, `shape.*`, `material.*`, `planting.*`, `species.
 `query.measure {kind, points?, outline?}`, `query.quantities {ids?, layer?}`) never do. Curves are `shape.*` commands too:
 `shape.set_curve {id, edge, radius_m?, sagitta_m?, side?}`, `shape.clear_curve {id, edge}`,
 `shape.set_smooth {id, smooth}` and `shape.add_circle {center, radius_m, kind, ...}`; `shape.add_area`,
-`shape.add_extrusion`, `bed.add` and `fence.add` take `curves` and `smooth`. A shape's `outline` in
+`shape.add_extrusion`, `bed.add` and `fence.add` take `curves` and `smooth`. `fence.add` and `fence.set` take `slope` (`level`, `stepped`, `raked`) and `gravel_board`, and answer with `warnings`. A shape's `outline` in
 `document.inspect` is its control points, with `curves` and `smooth` next to it when it has them; areas,
 lengths and quantities measure the curved outline. Weathering is a material field and a view field:
 `material.add|update {weathering: {amount, dirt?, moss?, wear?, streaks?}}` (each 0..1; the rest

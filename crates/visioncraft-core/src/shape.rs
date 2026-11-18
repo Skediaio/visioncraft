@@ -682,8 +682,22 @@ fn shape_mesh_with(
                     edge: Vec::new(),
                     soft: false,
                 };
-                crate::fence::mesh(&mut b, f, &runs, e.thickness, e.base, e.base + e.height);
-                return Ok(b.finish(id, &e.name, names));
+                // Heights relative to the block's placement (`footing`, the lowest ground under
+                // the line), as stairs' step bottoms are.
+                let lift = ground.map_or(0.0, |g| footing(&shape.outline(), g));
+                let rel = |x: f32, z: f32| ground.and_then(|g| g(x, z)).unwrap_or(0.0) - lift;
+                let notes = crate::fence::mesh(
+                    &mut b,
+                    f,
+                    &runs,
+                    e.thickness,
+                    e.base,
+                    e.base + e.height,
+                    ground.map(|_| &rel as &dyn Fn(f32, f32) -> f32),
+                );
+                let mut m = b.finish(id, &e.name, names);
+                m.warnings.extend(notes);
+                return Ok(m);
             }
             if let Some(st) = e.stairs.as_ref().filter(|_| e.closed) {
                 if shape.is_curved() {

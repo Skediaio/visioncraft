@@ -99,10 +99,13 @@ nothing here is a promise of a date.
   evenly between) with slats, horizontal boards, closed panels, pickets, a wire mesh or a solid
   screen between them, and gates (`fence.add_gate`); faces `<id>:posts`, `:infill`, `:rails`,
   `:gate` take materials per part, `query.quantities` counts the parts and the real volume, and
-  Draw has a Fence tool. Next: posts and boards following a slope (a fence stands on the lowest
-  ground under its line now, and `shape_mesh_on`'s ground function could set each post's foot),
-  stepped panels, a gate that swings, climbers on mesh, and a see-through board gap in
-  photo-mode shadows.
+  Draw has a Fence tool. On a slope `slope` makes a fence follow the ground (the terrace-aware
+  ground function sets each post's foot): `stepped` stands every post on its own ground with a
+  level panel per span at the higher post's ground (and an optional gravel board under it),
+  `raked` runs the rails and the top and bottom lines between the feet with plumb slats and
+  pickets cut to them, boards parallel to the rake and sheared panels and mesh; gate leaves stay
+  level and warn over rising ground, and Draw has a slope list and a gravel-board checkbox.
+  Next: a gate that swings, climbers on mesh, and a see-through board gap in photo-mode shadows.
 
 - **Levels:** `stairs.add` draws a flight of solid steps between a bottom and a top centre (the
   rise from the ground when left out; steps from a riser height, Blondel's rule checked, a

@@ -2,7 +2,7 @@
 
 use super::shapes::add;
 use super::{fail, house::assign_defaults};
-use crate::fence::{Fence, FenceKind, Gate};
+use crate::fence::{Fence, FenceKind, FenceSlope, Gate};
 use crate::project::Project;
 use crate::session::{CommandError, Session, parse};
 use crate::shape::{Extrusion, Shape, shape_mesh};
@@ -20,6 +20,8 @@ fn fields() -> Vec<crate::spec::ParamSpec> {
         param("post_size_m", T::Number, "A post's square side, 0.02..0.5. Default by kind.").unit("m"),
         param("rails", T::Boolean, "Rails behind the infill (slats, pickets, boards) or framing it (panels, mesh). Default by kind."),
         param("thickness", T::Number, "Depth of the line, 0.005..1. Default by kind.").unit("m"),
+        param("slope", T::String, "How the fence follows sloping ground: level (the whole fence on the lowest ground under its line), stepped (each post on its own ground, every span a level panel at the higher post's ground, stepping down the slope) or raked (each post on its own ground, rails and the top and bottom lines straight between the feet, slats and pickets plumb and cut to them, boards parallel to the rake). Posts are always plumb and gate leaves always level, on the higher ground of their two posts. Default level; changing `kind` keeps it.").default(json!("level")),
+        param("gravel_board", T::Boolean, "Stepped only: a board under each panel down to the lowest ground under it, closing the gap a panel leaves on a slope (`<id>:rails`). Without it the answer warns when a panel stands more than 0.05 m above the ground at its low end. Default false."),
     ]
 }
 
@@ -41,10 +43,10 @@ pub(super) fn register(s: &mut Session) {
         spec(
             "fence.add",
             "Add Fence",
-            "Adds a fence or screen along a line: posts at every corner, both ends and evenly between, with slats, boards, panels, pickets, wire mesh or a solid screen between them, and gates. An open extrusion; the faces are `<id>:posts`, `<id>:infill`, `<id>:rails` and `<id>:gate`, so a material can be assigned per part. It starts with timber (a dark timber for the posts) where the project has none assigned. On terrain it stands on the lowest ground under its line.",
+            "Adds a fence or screen along a line: posts at every corner, both ends and evenly between, with slats, boards, panels, pickets, wire mesh or a solid screen between them, and gates. An open extrusion; the faces are `<id>:posts`, `<id>:infill`, `<id>:rails` and `<id>:gate`, so a material can be assigned per part. It starts with timber (a dark timber for the posts) where the project has none assigned. On terrain it stands on the lowest ground under its line, or with `slope` stepped or raked each post stands on its own ground. The answer has `warnings` (a gate leaf over rising ground, a gap under a stepped panel).",
             add_params,
-            "{id} (S1, S2...)",
-            json!({"name": "Garden fence", "line": [[0, 0], [8, 0], [8, 6]], "height": 1.8, "kind": "slats"}),
+            "{id (S1, S2...), warnings}",
+            json!({"name": "Garden fence", "line": [[0, 0], [8, 0], [8, 6]], "height": 1.8, "kind": "slats", "slope": "raked"}),
         ),
         add_fence,
     );
@@ -65,9 +67,9 @@ pub(super) fn register(s: &mut Session) {
         spec(
             "fence.set",
             "Set Fence",
-            "Changes any fields of a fence; the others stay. Changing `kind` starts from the new kind's sizes (keeping the gates) unless you give them. On an open wall that is not a fence yet it turns the wall into one, with the kind's usual depth.",
+            "Changes any fields of a fence; the others stay. Changing `kind` starts from the new kind's sizes (keeping the gates, the slope and the gravel board) unless you give them. On an open wall that is not a fence yet it turns the wall into one, with the kind's usual depth. The answer has `warnings` as fence.add.",
             set_params,
-            "null",
+            "{warnings}",
             json!({"id": "S3", "kind": "picket", "height": 1.0}),
         ),
         set_fence,
@@ -76,13 +78,13 @@ pub(super) fn register(s: &mut Session) {
         spec(
             "fence.add_gate",
             "Add Fence Gate",
-            "Opens a gap in a fence run with a post on each side and a gate leaf (`<id>:gate`). Refused outside the line, round a corner, over another gate or closer to a corner than a post's width.",
+            "Opens a gap in a fence run with a post on each side and a gate leaf (`<id>:gate`). Refused outside the line, round a corner, over another gate or closer to a corner than a post's width. On sloping ground the leaf stays level on the higher ground of its two posts; `warnings` says when the ground under it rises above its bottom.",
             vec![
                 id(),
                 param("offset_m", T::Number, "Centre of the gate, along the line from its start.").unit("m").required(),
                 param("width_m", T::Number, "Width of the gap, 0.3..6.").unit("m").default(json!(1.0)),
             ],
-            "{gate} (the gate's index)",
+            "{gate (the gate's index), warnings}",
             json!({"id": "S3", "offset_m": 7.0, "width_m": 1.0}),
         ),
         add_gate,
@@ -149,6 +151,8 @@ struct Fields {
     rails: Option<bool>,
     thickness: Option<f32>,
     gates: Option<Vec<Gate>>,
+    slope: Option<FenceSlope>,
+    gravel_board: Option<bool>,
 }
 
 impl Fields {
@@ -162,6 +166,8 @@ impl Fields {
         let mut f = Fence::new(kind);
         if let Some(old) = fence {
             f.gates = old.gates;
+            f.slope = old.slope;
+            f.gravel_board = old.gravel_board;
             if !fresh {
                 f = Fence {
                     gates: f.gates,
@@ -186,6 +192,12 @@ impl Fields {
         }
         if let Some(g) = &self.gates {
             f.gates = g.clone();
+        }
+        if let Some(v) = self.slope {
+            f.slope = v;
+        }
+        if let Some(v) = self.gravel_board {
+            f.gravel_board = v;
         }
         let thickness = self.thickness.unwrap_or(kind.default_thickness());
         (f, thickness, fresh)
@@ -237,6 +249,10 @@ fn add_fence(project: &mut Project, params: &Value) -> Result<Value, CommandErro
     if !owned && let Some(id) = r["id"].as_str() {
         default_materials(project, id, kind);
     }
+    let mut r = r;
+    if let Some(id) = r["id"].as_str() {
+        r["warnings"] = warnings(project, id).into();
+    }
     Ok(r)
 }
 
@@ -274,7 +290,18 @@ fn set_fence(project: &mut Project, params: &Value) -> Result<Value, CommandErro
         Ok(Value::Null)
     })?;
     default_materials(project, &p.id, kind);
-    Ok(Value::Null)
+    Ok(json!({ "warnings": warnings(project, &p.id) }))
+}
+
+/// What the fence's mesh on the project's ground has to say (a gate over rising ground, a gap
+/// under a stepped panel).
+fn warnings(project: &Project, id: &str) -> Vec<String> {
+    let Some(shape) = project.shapes.iter().find(|s| s.id() == id) else {
+        return Vec::new();
+    };
+    crate::plant_ground::placed_shape_mesh(project, shape, &Default::default(), &[])
+        .map(|(m, _)| m.warnings)
+        .unwrap_or_default()
 }
 
 fn add_gate(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
@@ -296,7 +323,7 @@ fn add_gate(project: &mut Project, params: &Value) -> Result<Value, CommandError
         index = f.gates.len() - 1;
         Ok(Value::Null)
     })?;
-    Ok(json!({ "gate": index }))
+    Ok(json!({ "gate": index, "warnings": warnings(project, &p.id) }))
 }
 
 fn remove_gate(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
@@ -549,5 +576,82 @@ mod tests {
         let v = row["volume_m3"].as_f64().unwrap();
         // Far less than the slab 2 m * 0.05 m * 1.8 m = 0.18 m3, and not nothing.
         assert!(v > 0.02 && v < 0.12, "{v}");
+    }
+
+    #[test]
+    fn slope_and_gravel_board_are_set_kept_over_a_kind_change_and_refused_when_unknown() {
+        let mut s = Session::new(Project::default());
+        let id = fence(&mut s);
+        assert_eq!(
+            get(&s, &id).fence.unwrap().slope,
+            crate::fence::FenceSlope::Level
+        );
+        let r = s
+            .run(
+                "fence.set",
+                json!({"id": id, "slope": "stepped", "gravel_board": true}),
+            )
+            .unwrap();
+        assert!(r["warnings"].is_array());
+        let f = get(&s, &id).fence.unwrap();
+        assert_eq!(f.slope, crate::fence::FenceSlope::Stepped);
+        assert!(f.gravel_board);
+        s.run("fence.set", json!({"id": id, "kind": "picket"}))
+            .unwrap();
+        let f = get(&s, &id).fence.unwrap();
+        assert_eq!(f.slope, crate::fence::FenceSlope::Stepped);
+        assert!(f.gravel_board);
+        s.run("fence.set", json!({"id": id, "slope": "raked"}))
+            .unwrap();
+        assert_eq!(
+            get(&s, &id).fence.unwrap().slope,
+            crate::fence::FenceSlope::Raked
+        );
+        assert!(
+            s.run("fence.set", json!({"id": id, "slope": "diagonal"}))
+                .is_err()
+        );
+        assert!(s.undo());
+        assert_eq!(
+            get(&s, &id).fence.unwrap().slope,
+            crate::fence::FenceSlope::Stepped
+        );
+        let r = s
+            .run(
+                "fence.add",
+                json!({"line": [[0, 0], [6, 0]], "height": 1.0, "slope": "raked"}),
+            )
+            .unwrap();
+        assert!(r["warnings"].as_array().unwrap().is_empty());
+        let e = get(&s, r["id"].as_str().unwrap());
+        assert_eq!(e.fence.unwrap().slope, crate::fence::FenceSlope::Raked);
+    }
+
+    #[test]
+    fn warnings_come_from_the_terrain_under_the_fence_and_the_gate_is_reported() {
+        let mut s = Session::new(Project::default());
+        s.run(
+            "terrain.create",
+            json!({"origin": [-2, -2], "width_m": 14, "depth_m": 8, "cell_m": 0.5, "base_material": "lawn"}),
+        )
+        .unwrap();
+        s.run(
+            "terrain.stroke",
+            json!({"tool": "raise", "points": [[0, 0], [10, 0]], "radius_m": 3, "strength": 0.2, "falloff": 0.5}),
+        )
+        .unwrap();
+        let r = s
+            .run(
+                "fence.add",
+                json!({"line": [[0, 0], [10, 0]], "height": 1.8, "slope": "stepped"}),
+            )
+            .unwrap();
+        // The level fence says nothing; with a slope the ground matters for the gate.
+        let id = r["id"].as_str().unwrap().to_string();
+        let g = s
+            .run("fence.add_gate", json!({"id": id, "offset_m": 5.0}))
+            .unwrap();
+        assert_eq!(g["gate"], 0);
+        assert!(g["warnings"].is_array());
     }
 }

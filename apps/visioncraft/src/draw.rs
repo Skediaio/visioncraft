@@ -1726,7 +1726,7 @@ fn roof_tiles(cx: &mut Cx, id: &str) {
 
 /// A wall's fence: kind, gates, and the way back to a plain wall; each change one command.
 fn fence_panel(ui: &mut egui::Ui, cx: &mut Cx, x: &visioncraft_core::shape::Extrusion) {
-    use visioncraft_core::fence::FenceKind;
+    use visioncraft_core::fence::{FenceKind, FenceSlope};
     let Some(f) = &x.fence else {
         if ui.button(t::MAKE_FENCE).clicked() {
             cx.run("fence.set", json!({"id": x.id, "kind": "slats"}));
@@ -1752,6 +1752,47 @@ fn fence_panel(ui: &mut egui::Ui, cx: &mut Cx, x: &visioncraft_core::shape::Extr
             }
         }
     });
+    ui.horizontal_wrapped(|ui| {
+        ui.label(t::FENCE_SLOPE);
+        egui::ComboBox::from_id_salt("fence-slope")
+            .selected_text(match f.slope {
+                FenceSlope::Level => t::FENCE_LEVEL,
+                FenceSlope::Stepped => t::FENCE_STEPPED,
+                FenceSlope::Raked => t::FENCE_RAKED,
+            })
+            .show_ui(ui, |ui| {
+                for (slope, label) in [
+                    (FenceSlope::Level, t::FENCE_LEVEL),
+                    (FenceSlope::Stepped, t::FENCE_STEPPED),
+                    (FenceSlope::Raked, t::FENCE_RAKED),
+                ] {
+                    if ui.selectable_label(f.slope == slope, label).clicked() && f.slope != slope {
+                        cx.run("fence.set", json!({"id": x.id, "slope": slope.name()}));
+                    }
+                }
+            });
+        if f.slope == FenceSlope::Stepped {
+            let mut board = f.gravel_board;
+            if ui.checkbox(&mut board, t::FENCE_GRAVEL_BOARD).changed() {
+                cx.run("fence.set", json!({"id": x.id, "gravel_board": board}));
+            }
+        }
+    });
+    // What the fence has to say on the ground it stands on (a gate over rising ground, a gap).
+    let notes = cx
+        .s
+        .project()
+        .shapes
+        .iter()
+        .find(|s| s.id() == x.id)
+        .and_then(|s| {
+            visioncraft_core::placed_shape_mesh(cx.s.project(), s, &Default::default(), &[]).ok()
+        })
+        .map(|(m, _)| m.warnings)
+        .unwrap_or_default();
+    for w in &notes {
+        ui.colored_label(egui::Color32::from_rgb(230, 170, 70), w);
+    }
     ui.horizontal_wrapped(|ui| {
         // The gate goes in the middle of the first stretch.
         if ui.button(t::ADD_GATE).clicked()
