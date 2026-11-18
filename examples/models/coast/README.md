@@ -2,7 +2,7 @@
 
 The `coast` example (`project.load_example {"name": "coast"}`): the furnished beach house from
 [../beach-house](../beach-house) on a mainland beach in southern California, with its coastal
-garden, the dunes inland, the sea with its coastline and fifteen viewpoints. Made for this
+garden, the dunes inland, the sea with its coastline and fifteen viewpoints and four ready-made films (Arrival, Drone over the coast, Garden walk, Golden hour by the sea). Made for this
 project, MIT.
 
 | File | What it is |

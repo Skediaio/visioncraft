@@ -1,5 +1,6 @@
 """Writes crates/visioncraft-core/src/examples/coast.json, the `coast` example's own part."""
 import json
+import math
 import os
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..")
@@ -233,6 +234,47 @@ V = [
 
 for name, pos, tgt, fov, extra in V:
     c("viewpoint.add", name=name, position=pos, target=tgt, fov_y_deg=fov, **extra)
+
+# ---- Films: four ready-made films for the Films panel (ids f1 to f4) -------------------------------
+# Each shot sets its own time and weather, so the project's view settings stay as they are.
+def film(name, shots):
+    fid = "f%d" % (sum(1 for cmd, _ in C if cmd == "film.add") + 1)
+    c("film.add", name=name, fps=25)
+    for shot in shots:
+        c("film.add_shot", id=fid, shot=shot)
+
+
+# Down the drive, over the entrance court and up to the front door (13.3, -12.3), in the low
+# afternoon sun; the walk is routed round the court beds and hedges.
+film("Arrival", [
+    {"kind": "walk", "route": [[-5, -56], [-4.6, -30], [-1, -20], [1, -13.6], [9.5, -13.5], [13.3, -15.5]],
+     "duration_s": 17, "eye_height_m": 1.6, "look_at": [DOOR_X, 1.3, -12.3],
+     "date": {"month": 7, "day": 15}, "time_of_day": [18.4, 18.9]}])
+
+# From high over the sea, 128 m out, down to the house, then a third of a circle round it at 45 m
+# and 22 m above its floor (the dunes behind rise to 6 m).
+HOUSE = [12.5, 1.0, -5]
+ORBIT_R, ORBIT_H, ORBIT_FROM = 45, 22, 255
+orbit_start = [round(HOUSE[0] + ORBIT_R * math.cos(math.radians(ORBIT_FROM)), 2), HOUSE[1] + ORBIT_H,
+               round(HOUSE[2] - ORBIT_R * math.sin(math.radians(ORBIT_FROM)), 2)]
+film("Drone over the coast", [
+    {"kind": "glide", "path": [[28, 40, 128], [16, 31, 82], orbit_start], "look_at": HOUSE, "duration_s": 8,
+     "ease": "in"},
+    {"kind": "orbit", "center": HOUSE, "radius_m": ORBIT_R, "height_m": ORBIT_H, "from_deg": ORBIT_FROM,
+     "to_deg": ORBIT_FROM + 120, "duration_s": 9, "join": "continue", "ease": "out"}])
+
+# Along the garden path past the lavender border, then over the lawn towards the garden room
+# pot and its clipped bay; the route keeps clear of beds, hedges and trunks.
+film("Garden walk", [
+    {"kind": "walk", "route": [[-6, 2.3], [-14, 2.3], [-16, -0.5], [-16.8, -1.8]], "duration_s": 18,
+     "eye_height_m": 1.6, "time_of_day": [15.5, 16.5]}])
+
+# Along the beach, a few metres from the swash, looking at the house while the sun sets behind it
+# into dusk (sunset 20.1 h on 15 July); a little mist and light shafts, the colour easing to warm.
+film("Golden hour by the sea", [
+    {"kind": "walk", "path": [[46, 23], [30, 23.5], [12, 23.5], [-4, 23]], "duration_s": 18,
+     "eye_height_m": 1.6, "look_at": HOUSE, "time_of_day": [18.9, 19.8], "mist": [0.05, 0.15],
+     "shafts": [0.3, 0.5], "grade": ["neutral", "warm"], "fov_y_deg": 55}])
 
 with open(os.path.join(ROOT, "crates", "visioncraft-core", "src", "examples", "coast.json"), "w") as f:
     f.write("[\n" + ",\n".join("  " + json.dumps(x) for x in C) + "\n]\n")

@@ -20,7 +20,7 @@
   ["terrain.stroke", {"tool": "flatten", "points": [[-520, 300], [520, 300]], "radius_m": 110, "strength": 1.0, "falloff": 0.9, "target_height": -21.8}],
   ["terrain.stroke", {"tool": "flatten", "points": [[525, 80], [525, 300]], "radius_m": 110, "strength": 1.0, "falloff": 0.9, "target_height": -21.8}],
   ["terrain.stroke", {"tool": "flatten", "points": [[-525, 270], [-525, 300]], "radius_m": 110, "strength": 1.0, "falloff": 0.9, "target_height": -21.8}],
-  ["view.set", {"ground": {"height": 4.2, "color": [0.2, 0.18, 0.11]}, "wind_direction_deg": 0, "wind_speed_mps": 3.3, "haze": 1.4, "surroundings": "dunes"}],
+  ["view.set", {"ground": {"height": 4.2, "color": [0.2, 0.18, 0.11]}, "wind_direction_deg": 0, "wind_strength": 0.5, "haze": 1.4, "surroundings": "dunes"}],
   ["shape.add_area", {"name": "Drive", "outline": [[-7.5, -11.8], [-0.8, -11.8], [-0.8, -31], [-1.5, -75], [-8.5, -75], [-8, -31]], "material": "gravel"}],
   ["shape.add_area", {"name": "Entrance court", "outline": [[-0.8, -12.3], [18.3, -12.3], [18.3, -24], [8.3, -24], [8.3, -14.8], [-0.8, -14.8]], "material": "paving"}],
   ["shape.add_area", {"name": "Garden room lawn", "outline": [[-19.7, -4.6], [-8.6, -4.6], [-8.6, 1.5], [-19.7, 1.5]], "material": "lawn"}],
@@ -127,5 +127,14 @@
   ["viewpoint.add", {"name": "Border in flower", "position": [-12, 1.5, -1.0], "target": [-15.5, 0.4, -6.5], "fov_y_deg": 60}],
   ["viewpoint.add", {"name": "The garden in winter", "position": [-23, 2.2, -8.4], "target": [-4, 0.5, 4], "fov_y_deg": 60, "season": "winter"}],
   ["viewpoint.add", {"name": "The garden after 10 years", "position": [-23, 2.2, -8.4], "target": [-4, 0.5, 4], "fov_y_deg": 60, "years": 10}],
-  ["viewpoint.add", {"name": "Plan", "position": [10, 140, -10.01], "target": [10, 0, -10], "fov_y_deg": 50}]
+  ["viewpoint.add", {"name": "Plan", "position": [10, 140, -10.01], "target": [10, 0, -10], "fov_y_deg": 50}],
+  ["film.add", {"name": "Arrival", "fps": 25}],
+  ["film.add_shot", {"id": "f1", "shot": {"kind": "walk", "route": [[-5, -56], [-4.6, -30], [-1, -20], [1, -13.6], [9.5, -13.5], [13.3, -15.5]], "duration_s": 17, "eye_height_m": 1.6, "look_at": [13.3, 1.3, -12.3], "date": {"month": 7, "day": 15}, "time_of_day": [18.4, 18.9]}}],
+  ["film.add", {"name": "Drone over the coast", "fps": 25}],
+  ["film.add_shot", {"id": "f2", "shot": {"kind": "glide", "path": [[28, 40, 128], [16, 31, 82], [0.85, 23.0, 38.47]], "look_at": [12.5, 1.0, -5], "duration_s": 8, "ease": "in"}}],
+  ["film.add_shot", {"id": "f2", "shot": {"kind": "orbit", "center": [12.5, 1.0, -5], "radius_m": 45, "height_m": 22, "from_deg": 255, "to_deg": 375, "duration_s": 9, "join": "continue", "ease": "out"}}],
+  ["film.add", {"name": "Garden walk", "fps": 25}],
+  ["film.add_shot", {"id": "f3", "shot": {"kind": "walk", "route": [[-6, 2.3], [-14, 2.3], [-16, -0.5], [-16.8, -1.8]], "duration_s": 18, "eye_height_m": 1.6, "time_of_day": [15.5, 16.5]}}],
+  ["film.add", {"name": "Golden hour by the sea", "fps": 25}],
+  ["film.add_shot", {"id": "f4", "shot": {"kind": "walk", "path": [[46, 23], [30, 23.5], [12, 23.5], [-4, 23]], "duration_s": 18, "eye_height_m": 1.6, "look_at": [12.5, 1.0, -5], "time_of_day": [18.9, 19.8], "mist": [0.05, 0.15], "shafts": [0.3, 0.5], "grade": ["neutral", "warm"], "fov_y_deg": 55}}]
 ]

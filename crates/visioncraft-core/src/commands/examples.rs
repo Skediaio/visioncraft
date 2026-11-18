@@ -347,6 +347,59 @@ mod tests {
         assert!(small > 300, "{small} perennials and grasses");
     }
 
+    /// Four ready-made films of 10 to 20 s whose cameras stay above the ground and the sea, and
+    /// whose walks keep clear of walls, hedges and trunks.
+    #[test]
+    fn the_coast_comes_with_four_films_that_stay_clear_of_the_ground_and_the_walls() {
+        use crate::film::{Env, Timeline, terrain_ground};
+        let p = super::example("coast").unwrap();
+        let sea = p.sea.clone().expect("a sea");
+        let names: Vec<&str> = p.films.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "Arrival",
+                "Drone over the coast",
+                "Garden walk",
+                "Golden hour by the sea"
+            ]
+        );
+        let ground = |x: f32, z: f32| terrain_ground(&p, x, z);
+        let env = Env::new(&p, &ground);
+        let obstacles =
+            crate::route::Obstacles::from_scene(&crate::reference::Scene::new(&p, None));
+        for film in &p.films {
+            assert!([24, 25].contains(&film.fps), "{}", film.name);
+            let tl = Timeline::new(film, &env).unwrap();
+            let len = film.duration(&env).unwrap();
+            assert!((10.0..=20.0).contains(&len), "{}: {len} s", film.name);
+            let walk = film.name != "Drone over the coast";
+            let steps = (len * 4.0) as usize;
+            for i in 0..=steps {
+                let f = tl.camera_at((i as f32 / 4.0).min(len)).unwrap();
+                let [x, y, z] = f.eye;
+                let floor = ground(x, z).max(if sea.covers(x, z) { sea.level } else { f32::MIN });
+                let want = if walk { 1.5 } else { 3.0 };
+                assert!(
+                    y >= floor + want,
+                    "{}: eye {:?} at {:.2} s is {:.2} m above the ground or sea",
+                    film.name,
+                    f.eye,
+                    i as f32 / 4.0,
+                    y - floor
+                );
+                if walk && let Some((what, d)) = obstacles.nearest([x, z]) {
+                    assert!(
+                        d >= 0.3,
+                        "{}: eye {:?} is {d:.2} m from {what}",
+                        film.name,
+                        f.eye
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn the_pond_is_square_and_its_coping_stands_on_the_lawn() {
         let p = super::example("garden").unwrap();
