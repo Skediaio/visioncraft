@@ -324,7 +324,12 @@ pub fn sway(u: &Uniforms, rel: Vec3, origin: Vec3, w: f32, phase: f32, hz_in: f3
     }
     let mut q = rel + dir * (w * w * bend * size);
     q *= size / q.length().max(1e-6);
-    let detail = u.amp[1] * gust_detail * w * (0.02 + 0.01 * size.min(6.0)) * detail_size_factor(size) * (size * 2.0).min(1.0);
+    let detail = u.amp[1]
+        * gust_detail
+        * w
+        * (0.02 + 0.01 * size.min(6.0))
+        * detail_size_factor(size)
+        * (size * 2.0).min(1.0);
     q + (dir * waves[2] + Vec3::new(0.0, 0.6, 0.0) * waves[3]) * detail
 }
 
@@ -370,7 +375,10 @@ mod tests {
             let hz = plant_hz(h, false);
             assert!(hz <= 1.2, "{h}: {hz}");
             let b = branch_hz(hz);
-            assert!(b <= 2.5 + 1e-6 && b <= 2.0 * hz + 1.0 / SWAY_CLOCK as f32, "{h}: {b}");
+            assert!(
+                b <= 2.5 + 1e-6 && b <= 2.0 * hz + 1.0 / SWAY_CLOCK as f32,
+                "{h}: {b}"
+            );
         }
         // Trees keep their rate and their branch ratio.
         assert!((plant_hz(10.0, true) - 0.5).abs() < 1e-6);

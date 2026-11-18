@@ -378,7 +378,11 @@ mod tests {
             for i in 0..=steps {
                 let f = tl.camera_at((i as f32 / 4.0).min(len)).unwrap();
                 let [x, y, z] = f.eye;
-                let floor = ground(x, z).max(if sea.covers(x, z) { sea.level } else { f32::MIN });
+                let floor = ground(x, z).max(if sea.covers(x, z) {
+                    sea.level
+                } else {
+                    f32::MIN
+                });
                 let want = if walk { 1.5 } else { 3.0 };
                 assert!(
                     y >= floor + want,
