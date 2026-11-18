@@ -369,7 +369,7 @@ series of every viewpoint.
   {"id": "view.set", "params": {"season": "winter", "snow": 0.7}},
   {"id": "document.inspect", "params": {"faces": false}},
   {"id": "view.render", "params": {"camera": {"position": [0, 1.7, 18], "target": [0, 1.5, 0]}, "quality": "high", "width": 960, "height": 540, "path": "snowy.png"}},
-  {"id": "view.render", "params": {"viewpoint": "Lawn in spring", "width": 960, "height": 540, "path": "spring.png"}},
+  {"id": "view.render", "params": {"viewpoint": "Lawn in spring", "snow": 0, "width": 960, "height": 540, "path": "spring.png"}},
   {"id": "view.set", "params": {"season": "summer", "snow": 0}}
 ]}
 ```

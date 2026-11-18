@@ -10,6 +10,9 @@ pub const WALK_SPEED: f32 = 1.9;
 /// showing the same would (where the asset library measures distances from).
 const TOP_FOV: f32 = 0.105;
 pub const FLY_SECONDS: f64 = 1.2;
+/// The steepest pitch `look_from` gives: a hair short of straight down (1 mrad), so the yaw still
+/// decides which side of the target the eye stands.
+const PLAN_PITCH_MAX: f32 = std::f32::consts::FRAC_PI_2 - 1e-3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum View {
@@ -221,7 +224,12 @@ impl Camera {
         self.pivot = target;
         self.dist = d.length().max(0.05);
         self.yaw = d.x.atan2(d.z);
-        self.pitch = (d.y / self.dist).clamp(-1.0, 1.0).asin();
+        // From the height and the horizontal distance, not asin(y / dist): over a plan camera
+        // a hair off vertical, y / dist rounds to 1 and the eye lands on the wrong side of the
+        // target, turning north down. Kept just short of the pole so the yaw always decides
+        // which side the eye is on.
+        let horizontal = d.x.hypot(d.z);
+        self.pitch = d.y.atan2(horizontal).clamp(-PLAN_PITCH_MAX, PLAN_PITCH_MAX);
     }
 
     /// Fits the box `[min, max]` in view.
@@ -357,6 +365,20 @@ mod tests {
         let (pos, target) = (Vec3::new(5.0, 3.0, -7.0), Vec3::new(1.0, 1.0, 1.0));
         c.look_from(pos, target);
         assert!((c.eye() - pos).length() < 1e-4);
+    }
+
+    #[test]
+    fn a_plan_camera_a_hair_off_vertical_keeps_north_up() {
+        // Eye south of the target (larger z) by a hair: the view's up is north (-Z); eye north
+        // of it turns the picture round. Both as `view.render` sets the camera.
+        for (dz, north_up) in [(0.01_f32, true), (-0.01, false), (0.0, true)] {
+            let mut c = Camera::default();
+            c.look_from(Vec3::new(10.0, 50.0, 15.0 + dz), Vec3::new(10.0, 0.0, 15.0));
+            let (view, _, _) = c.matrices(1.0);
+            // The view's up axis in world space is its second row.
+            let up = view.row(1).truncate();
+            assert_eq!(up.z < 0.0, north_up, "dz {dz}: up {up}");
+        }
     }
 
     #[test]
