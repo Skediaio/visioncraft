@@ -329,6 +329,7 @@ fn add_stairs(project: &mut Project, params: &Value) -> Result<Value, CommandErr
                 tread_m: p.tread_m,
             }),
             raised_bed: None,
+            furniture: None,
         })
     })?;
     let id = r["id"].as_str().expect("add returns an id").to_string();
@@ -647,6 +648,7 @@ fn add_bed(project: &mut Project, params: &Value) -> Result<Value, CommandError>
             fence: None,
             stairs: None,
             raised_bed: Some(bed),
+            furniture: None,
         })
     })?;
     let id = r["id"].as_str().expect("add returns an id").to_string();

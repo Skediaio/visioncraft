@@ -492,6 +492,40 @@ pub fn builtin_palette() -> Vec<Material> {
         },
         // Dry beach sand: pale, warm; darkened where wet by the sea's shore band.
         plain("sand", "Sand", [0.50, 0.42, 0.30], 0.0, 0.95, pbr(1.0)),
+        // Furniture: upholstery, oiled teak, black powder coat and canvas.
+        plain(
+            "fabric-sand",
+            "Sand fabric",
+            [0.62, 0.55, 0.44],
+            0.0,
+            0.95,
+            pbr(0.3),
+        ),
+        plain(
+            "fabric-charcoal",
+            "Charcoal fabric",
+            [0.12, 0.12, 0.13],
+            0.0,
+            0.95,
+            pbr(0.3),
+        ),
+        plain("teak", "Teak", [0.42, 0.26, 0.12], 0.0, 0.6, pbr(1.0)),
+        plain(
+            "powder-coat-black",
+            "Black powder coat",
+            [0.03, 0.03, 0.035],
+            0.3,
+            0.5,
+            pbr(1.0),
+        ),
+        plain(
+            "canvas-white",
+            "White canvas",
+            [0.85, 0.84, 0.80],
+            0.0,
+            0.9,
+            pbr(0.3),
+        ),
         // The room behind a window: dark, so glass reads as glass, lit by lamps inside.
         plain(
             "interior",
@@ -685,10 +719,10 @@ mod tests {
     #[test]
     fn palette_is_valid_and_unique() {
         let p = builtin_palette();
-        assert_eq!(p.len(), 17);
+        assert_eq!(p.len(), 22);
         assert!(p.iter().all(|m| m.validate().is_ok()));
         let ids: std::collections::BTreeSet<_> = p.iter().map(|m| &m.id).collect();
-        assert_eq!(ids.len(), 17);
+        assert_eq!(ids.len(), 22);
     }
 
     #[test]

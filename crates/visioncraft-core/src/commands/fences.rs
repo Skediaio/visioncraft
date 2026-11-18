@@ -231,6 +231,7 @@ fn add_fence(project: &mut Project, params: &Value) -> Result<Value, CommandErro
             fence: Some(fence),
             stairs: None,
             raised_bed: None,
+            furniture: None,
         })
     })?;
     if !owned && let Some(id) = r["id"].as_str() {

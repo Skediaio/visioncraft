@@ -370,6 +370,11 @@ pub fn example_project(command: &str) -> crate::project::Project {
             "stairs.add",
             json!({"name": "Steps", "from": [12, 5], "to": [12, 3.2], "width_m": 1.2, "height": 0.5}),
         ),
+        // The furniture commands work on S4, a table.
+        (
+            "furniture.add",
+            json!({"kind": "table", "position": [5, 5]}),
+        ),
         (
             "bed.add",
             json!({"name": "Bed", "outline": [[12, 6], [14.4, 6], [14.4, 7.2], [12, 7.2]]}),
@@ -387,6 +392,9 @@ pub fn example_project(command: &str) -> crate::project::Project {
         }
         let family = name.split('.').next().unwrap_or_default();
         if matches!(family, "stairs" | "bed") && !command.starts_with(&format!("{family}.")) {
+            continue;
+        }
+        if family == "furniture" && !matches!(command, "furniture.set" | "furniture.clear") {
             continue;
         }
         if name == "terrain.create" && command == "terrain.create" {

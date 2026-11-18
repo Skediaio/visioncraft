@@ -19,7 +19,7 @@ pub fn recipes() -> Vec<Value> {
 #[test]
 fn every_recipe_of_the_guide_runs() {
     let recipes = recipes();
-    assert_eq!(recipes.len(), 29);
+    assert_eq!(recipes.len(), 30);
     for (n, recipe) in recipes.into_iter().enumerate() {
         let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("recipe-{n}"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -277,6 +277,25 @@ fn every_recipe_of_the_guide_runs() {
                     end["sun"]["elevation_deg"].as_f64().unwrap() < 10.0,
                     "{report}"
                 );
+            }
+            30 => {
+                // A dining set is a table and six chairs; the table grew to 2.4 m.
+                let set = &results[2]["result"];
+                assert_eq!(set["ids"].as_array().unwrap().len(), 7, "{report}");
+                let q = &results[7]["result"];
+                let kind = |k: &str| {
+                    q["furniture"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .find(|r| r["kind"] == k)
+                        .unwrap_or_else(|| panic!("no {k}: {report}"))
+                };
+                assert_eq!(kind("chair")["count"], 6, "{report}");
+                assert_eq!(kind("table")["count"], 2, "{report}");
+                assert_eq!(kind("table")["pieces"][0]["length_m"], 2.4, "{report}");
+                assert_eq!(kind("parasol")["count"], 1, "{report}");
+                assert_eq!(kind("lounger")["count"], 1, "{report}");
             }
             29 => {
                 // The hedge is on the west side, so the border faces east, away from it.

@@ -844,6 +844,56 @@ The border is an area scatter with a `border` (`planting.update` changes it: `se
 or the `border` object whole; `planting.remove` takes it away; all undoable). It is deterministic
 by `seed`.
 
+### 30. Garden furniture: a dining set on a terrace, and a parasol
+
+```json recipe
+{"intent": "a paved terrace with a dining table for six, a round bistro table with a parasol through it and a sun lounger, each piece sized by its parameters", "steps": [
+  {"id": "shape.add_area", "params": {"name": "Lawn", "outline": [[0, 0], [14, 0], [14, 12], [0, 12]], "material": "lawn"}},
+  {"id": "shape.add_area", "params": {"name": "Terrace", "outline": [[2, 2], [9, 2], [9, 8], [2, 8]], "elevation": 0.02, "drape": false, "material": "paving"}},
+  {"id": "furniture.add_set", "params": {"set": "dining", "position": [4.6, 5], "seats": 6, "base": 0.02}},
+  {"id": "furniture.add", "params": {"kind": "table", "name": "Bistro table", "position": [8, 3.2], "round": true, "length": 0.8, "height": 0.72, "base": 0.02}},
+  {"id": "furniture.add", "params": {"kind": "parasol", "position": [8, 3.2], "length": 2.6, "height": 2.4, "base": 0.02, "open": true}},
+  {"id": "furniture.add", "params": {"kind": "lounger", "position": [11.5, 6], "rotation_deg": 90, "back_deg": 55}},
+  {"id": "furniture.set", "params": {"id": "S3", "length": 2.4}},
+  {"id": "query.quantities", "params": {}},
+  {"id": "view.render", "params": {"camera": {"position": [9, 3.2, 11], "target": [5.5, 0.5, 4.5]}, "width": 960, "height": 540, "path": "furniture-terrace.png"}},
+  {"id": "view.render", "params": {"camera": {"position": [1, 4, 9.5], "target": [6, 0.5, 4]}, "width": 960, "height": 540, "path": "furniture-above.png"}}
+]}
+```
+
+`furniture.add {kind, position, ...}` makes a piece of furniture from parameters, the way
+`stairs.add` makes steps: a closed extrusion whose rectangular footprint is its length and depth
+and whose height is its overall height, so a table can be given a length. Kinds: `table`
+(`round: true` for a circle, `length` its diameter; a round table stands on a pedestal, others on
+four legs unless `pedestal` says so), `chair`, `bench` (`back: false` for a plain seat),
+`sofa` and `armchair` (seat cushions split by length, about one per 0.7 m between the arms, or
+`cushions`), `lounger` (`back_deg` 0 to 80, default 40), `parasol` (`open`; `length` is the
+canopy's diameter), `side_table`, `cabinet` (`doors`, `drawers`: separate front panels with
+grooves) and `bed`. Each kind has default sizes (a dining table 1.8 by 0.9 by 0.75 m, a chair
+0.45 by 0.5 by 0.85, a sofa 2.2 by 0.9 by 0.8, a lounger 1.95 by 0.7, a parasol 3 m across and
+2.4 high); `length`, `depth` and `height` change them, and the parts follow: legs keep their
+thickness, cushions are added or taken away. `position` is the centre and `rotation_deg` turns the
+piece counter-clockwise seen from above (-Z north, +X east): a chair, sofa or cabinet faces +Z
+(south) at 0, a lounger or bed has its head at the west end. `base` is the height of the feet.
+
+The faces take materials like any shape's: `<id>:frame` (legs, frames, pole, door fronts),
+`<id>:top` (table tops, seat shells, headboards, cabinet bodies), `<id>:cushion` (cushions,
+mattress, pillows) and `<id>:canopy`, only those the kind has (the result's `faces`). They start
+with teak, black powder coat, sand fabric and white canvas from the palette; `material.assign`
+changes them. `furniture.set {id, ...}` changes the kind, the options, the size, the position or the
+turn (a new length keeps the centre and the turn; `round` switches between a circle and a
+rectangle; `null` puts an option back to its default) and turns a plain rectangular block into
+a piece when it is given a `kind`; `furniture.clear {id}` makes it a block again.
+
+`furniture.add_set {set, position, rotation_deg?, seats?}` places a group as separate pieces in
+one undo step and returns their ids: `dining` is a table sized for `seats` (2 to 12, default 6)
+with the chairs pulled up round it, facing it; `lounge` a sofa, two armchairs and a coffee table
+facing each other; `sunbathing` two loungers with their heads north, a side table between and a
+parasol behind. The group turns round `position` as a whole. `query.quantities` lists the pieces
+per kind under `furniture` with their length, depth and height. Pieces are shapes, so layers,
+`shape.set_height`, `shape.remove` and `material.assign` work on them; stacking a piece on a
+terrace is `base` (or `shape.set_height`).
+
 ## Known traps
 
 - **Ids are not names**: `S2`, not `House`; viewpoints are `v1`, lights `li1`.

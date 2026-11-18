@@ -802,6 +802,7 @@ mod tests {
             fence: Some(f),
             stairs: None,
             raised_bed: None,
+            furniture: None,
         })
     }
 

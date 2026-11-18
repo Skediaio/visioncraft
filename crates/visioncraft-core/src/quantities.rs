@@ -133,6 +133,8 @@ pub fn quantities_in(
     let terrain = project.terrain.as_deref();
 
     let mut shapes = Vec::new();
+    // Furniture by kind: the pieces with their dimensions.
+    let mut furniture: BTreeMap<&'static str, Vec<Value>> = BTreeMap::new();
     let mut by_material: BTreeMap<Option<usize>, f64> = BTreeMap::new();
     let (mut total_plan, mut total_surface, mut total_volume) = (0.0, 0.0, 0.0);
     for shape in project.shapes.iter().filter(|s| wanted(s.id(), s.layer())) {
@@ -219,6 +221,29 @@ pub fn quantities_in(
                         );
                     }
                     mesh_volume(&mesh)
+                } else if e.raised_bed.is_none()
+                    && let Some(f) = &e.furniture
+                {
+                    // Pieces are not solid blocks: no volume is counted.
+                    if let Ok(fr) = f.frame(&e.points, shape.is_curved(), e.height) {
+                        let dims = json!({
+                            "length_m": fr.dims()[0], "depth_m": fr.dims()[1], "height_m": fr.dims()[2],
+                        });
+                        o.insert(
+                            "furniture".into(),
+                            json!({
+                                "kind": f.kind, "length_m": fr.dims()[0], "depth_m": fr.dims()[1],
+                                "height_m": fr.dims()[2],
+                            }),
+                        );
+                        let mut piece = json!({"id": e.id, "name": e.name});
+                        piece
+                            .as_object_mut()
+                            .expect("an object")
+                            .extend(dims.as_object().expect("an object").clone());
+                        furniture.entry(f.kind.name()).or_default().push(piece);
+                    }
+                    0.0
                 } else if let Some(bed) = &e.raised_bed {
                     if let Ok(inner) = bed.inner(&outline) {
                         let inner_area = f64::from(measure::polygon_area(&inner));
@@ -360,6 +385,10 @@ pub fn quantities_in(
     let mut out = json!({
         "counted_with": if scene.is_some() { "scene" } else { "plan" },
         "shapes": shapes,
+        "furniture": furniture
+            .into_iter()
+            .map(|(kind, pieces)| json!({"kind": kind, "count": pieces.len(), "pieces": pieces}))
+            .collect::<Vec<_>>(),
         "plantings": plantings,
         "materials": material_rows(project, &by_material),
         "assets": asset_rows(&by_asset),

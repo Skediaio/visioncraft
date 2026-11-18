@@ -489,6 +489,7 @@ mod tests {
                 wall_thickness_m: thickness,
                 soil: None,
             }),
+            furniture: None,
         })
     }
 

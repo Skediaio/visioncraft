@@ -262,6 +262,9 @@ pub enum Tool {
     Stairs,
     /// A closed outline drawn as a raised bed with soil (`bed.add`).
     Bed,
+    /// A click on the plan places a piece of furniture or a set (`furniture.add`,
+    /// `furniture.add_set`).
+    Furniture,
     /// Two clicks, the centre and a point on the edge of a round area (`shape.add_circle`).
     Circle,
     /// Puts a window, or a door, in the wall of a block that is clicked.
@@ -287,6 +290,45 @@ impl Default for OpeningForm {
             frame: "slim",
         }
     }
+}
+
+/// What the Furniture tool places: a piece of one of the kinds, or a set (the entries after the
+/// kinds); sizes at 0 are the piece's own.
+pub struct FurnitureForm {
+    pub choice: usize,
+    pub length: f32,
+    pub depth: f32,
+    pub height: f32,
+    pub rotation_deg: f32,
+    pub seats: usize,
+}
+
+impl Default for FurnitureForm {
+    fn default() -> Self {
+        Self {
+            choice: 0,
+            length: 0.0,
+            depth: 0.0,
+            height: 0.0,
+            rotation_deg: 0.0,
+            seats: visioncraft_core::furniture::DEFAULT_SEATS,
+        }
+    }
+}
+
+/// The kinds of furniture, then the sets, as the Furniture tool lists them.
+fn furniture_choices() -> Vec<(String, Option<visioncraft_core::furniture::FurnitureKind>)> {
+    use visioncraft_core::furniture::{FurnitureKind, SETS};
+    let label = |name: &str| {
+        let mut s = name.replace('_', " ");
+        s[..1].make_ascii_uppercase();
+        s
+    };
+    FurnitureKind::ALL
+        .iter()
+        .map(|k| (label(k.name()), Some(*k)))
+        .chain(SETS.iter().map(|s| (format!("{} set", label(s)), None)))
+        .collect()
 }
 
 /// What an area is: decides its name and its material, so a terrace drawn on a lawn shows at once.
@@ -353,6 +395,8 @@ pub struct DrawState {
     /// The project had nothing in it when Draw opened.
     started_empty: bool,
     pub opening: OpeningForm,
+    /// What the Furniture tool places.
+    pub furniture: FurnitureForm,
     /// The plan underlay's fields and clicks (the Plan tool).
     pub plan: crate::underlay_ui::PlanState,
 }
@@ -486,6 +530,7 @@ impl DrawState {
         match self.tool {
             Tool::Select => self.editing(cx, cursor, radius, &mut top),
             Tool::Window | Tool::Door => self.placing(cx, cursor, radius, &mut top),
+            Tool::Furniture => self.furnishing(cx, cursor, radius, &mut top),
             Tool::Plan => self.plan.update(cx, cursor, radius, &mut top),
             _ => self.drawing(cx, cursor, radius, &mut top),
         }
@@ -755,7 +800,7 @@ impl DrawState {
                 "",
                 json!({"name": name(t::TOOL_BED), "outline": points}),
             ),
-            Tool::Select | Tool::Window | Tool::Door | Tool::Plan => return,
+            Tool::Select | Tool::Window | Tool::Door | Tool::Plan | Tool::Furniture => return,
         };
         let mut params = params;
         if !material.is_empty() {
@@ -804,6 +849,148 @@ impl DrawState {
             );
             self.selected = Some(id);
         }
+    }
+
+    /// The Furniture tool: the footprint of what a click would place follows the pointer; the
+    /// click runs `furniture.add` or `furniture.add_set`.
+    fn furnishing(
+        &mut self,
+        cx: &mut Cx,
+        cursor: Option<P2>,
+        radius: f32,
+        top: &mut Vec<LineVertex>,
+    ) {
+        use visioncraft_core::furniture::{Furniture, SETS, rect_outline, set_pieces};
+        let Some(c) = cursor else {
+            return;
+        };
+        let existing = all_vertices(cx, None);
+        let at = snap_point(c, &[], &existing, radius, !cx.input.alt).pos;
+        let choices = furniture_choices();
+        let form = &self.furniture;
+        let (_, kind) = &choices[form.choice.min(choices.len() - 1)];
+        let turn = form.rotation_deg;
+        let sized = |default: [f32; 3]| {
+            let pick = |v: f32, d: f32| if v > 0.0 { v } else { d };
+            [pick(form.length, default[0]), pick(form.depth, default[1])]
+        };
+        let mut footprints: Vec<(Vec<P2>, P2)> = Vec::new();
+        let set = kind
+            .is_none()
+            .then(|| SETS[form.choice - (choices.len() - SETS.len())]);
+        match (kind, set) {
+            (Some(k), _) => {
+                let [l, d] = sized(Furniture::new(*k).default_size(false));
+                footprints.push((rect_outline(at, turn, l, d), at));
+            }
+            (None, Some(set)) => {
+                let t = turn.to_radians();
+                let (ex, ez) = ([t.cos(), -t.sin()], [t.sin(), t.cos()]);
+                for p in set_pieces(set, form.seats).unwrap_or_default() {
+                    let pos = [
+                        at[0] + ex[0] * p.position[0] + ez[0] * p.position[1],
+                        at[1] + ex[1] * p.position[0] + ez[1] * p.position[1],
+                    ];
+                    footprints.push((
+                        rect_outline(pos, turn + p.rotation_deg, p.size[0], p.size[1]),
+                        pos,
+                    ));
+                }
+            }
+            (None, None) => {}
+        }
+        for (outline, centre) in &footprints {
+            top.extend(outline_lines(outline, true, 0.05, ACCENT, 2.5));
+            // A tick from the middle to the front edge shows which way the piece faces.
+            let front = [
+                (outline[2][0] + outline[3][0]) / 2.0,
+                (outline[2][1] + outline[3][1]) / 2.0,
+            ];
+            top.extend(line(
+                y_point(*centre, 0.05),
+                y_point(front, 0.05),
+                ACCENT,
+                1.5,
+            ));
+        }
+        top.extend(dot(at, 0.05, [255, 255, 255, 220], 6.0));
+        if !cx.input.clicked {
+            return;
+        }
+        let name = |base: &str| next_name(cx.s.project(), base);
+        let result = match (kind, set) {
+            (Some(k), _) => {
+                let mut params = json!({
+                    "kind": k.name(), "position": at, "rotation_deg": turn,
+                    "name": name(&choices[form.choice].0),
+                });
+                for (key, v) in [
+                    ("length", form.length),
+                    ("depth", form.depth),
+                    ("height", form.height),
+                ] {
+                    if v > 0.0 {
+                        params[key] = json!(v);
+                    }
+                }
+                cx.run("furniture.add", params)
+            }
+            (None, Some(set)) => cx.run(
+                "furniture.add_set",
+                json!({"set": set, "position": at, "rotation_deg": turn, "seats": form.seats}),
+            ),
+            (None, None) => None,
+        };
+        if let Some(r) = result {
+            let id = r["id"]
+                .as_str()
+                .or_else(|| r["ids"][0].as_str())
+                .unwrap_or_default()
+                .to_string();
+            self.selected = Some(id);
+            self.vertex = None;
+        }
+    }
+
+    /// The piece or set the Furniture tool places, its sizes and its turn.
+    fn furniture_form_panel(&mut self, ui: &mut egui::Ui) {
+        let choices = furniture_choices();
+        let f = &mut self.furniture;
+        f.choice = f.choice.min(choices.len() - 1);
+        ui.horizontal(|ui| {
+            ui.label(t::FURNITURE_PIECE);
+            egui::ComboBox::from_id_salt("furniture-choice")
+                .selected_text(&choices[f.choice].0)
+                .show_ui(ui, |ui| {
+                    for (i, (label, _)) in choices.iter().enumerate() {
+                        ui.selectable_value(&mut f.choice, i, label);
+                    }
+                });
+        });
+        if choices[f.choice].1.is_some() {
+            drag_field(
+                ui,
+                t::FURNITURE_LENGTH,
+                &mut f.length,
+                0.01,
+                0.0..=8.0,
+                " m",
+            );
+            drag_field(ui, t::FURNITURE_DEPTH, &mut f.depth, 0.01, 0.0..=8.0, " m");
+            drag_field(ui, t::HEIGHT, &mut f.height, 0.01, 0.0..=4.0, " m");
+        } else if f.choice == choices.len() - 3 {
+            let mut seats = f.seats as f32;
+            drag_field(ui, t::FURNITURE_SEATS, &mut seats, 0.1, 2.0..=12.0, "");
+            f.seats = seats.round() as usize;
+        }
+        drag_field(
+            ui,
+            t::FURNITURE_TURN,
+            &mut f.rotation_deg,
+            1.0,
+            -360.0..=360.0,
+            "°",
+        );
     }
 
     fn editing(&mut self, cx: &mut Cx, cursor: Option<P2>, radius: f32, top: &mut Vec<LineVertex>) {
@@ -1000,6 +1187,7 @@ impl DrawState {
                 (Tool::Fence, t::TOOL_FENCE),
                 (Tool::Stairs, t::TOOL_STAIRS),
                 (Tool::Bed, t::TOOL_BED),
+                (Tool::Furniture, t::TOOL_FURNITURE),
                 (Tool::Circle, t::TOOL_CIRCLE),
                 (Tool::Window, t::TOOL_WINDOW),
                 (Tool::Door, t::TOOL_DOOR),
@@ -1020,11 +1208,15 @@ impl DrawState {
         if matches!(self.tool, Tool::Window | Tool::Door) {
             self.opening_panel(ui);
         }
+        if self.tool == Tool::Furniture {
+            self.furniture_form_panel(ui);
+        }
         ui.small(match self.tool {
             Tool::Select => t::SELECT_HINT,
             Tool::Wall | Tool::Fence => t::WALL_HINT,
             Tool::Stairs => t::STAIRS_HINT,
             Tool::Circle => t::CIRCLE_HINT,
+            Tool::Furniture => t::FURNITURE_HINT,
             Tool::Window | Tool::Door => t::OPENING_HINT,
             Tool::Plan => "",
             _ => t::DRAW_HINT,
@@ -1035,7 +1227,8 @@ impl DrawState {
     /// straighten it; and the smooth outline. Each change one command. Stairs and houses are
     /// straight.
     fn curve_panel(&mut self, ui: &mut egui::Ui, cx: &mut Cx, shape: &Shape) {
-        if matches!(shape, Shape::Extrusion(x) if x.stairs.is_some() || x.house.is_some()) {
+        if matches!(shape, Shape::Extrusion(x) if x.stairs.is_some() || x.house.is_some() || x.furniture.is_some())
+        {
             return;
         }
         let points = shape.points();
@@ -1192,6 +1385,9 @@ impl DrawState {
                 edge_panel(ui, cx, a);
             }
             Shape::Extrusion(x) if x.closed && x.raised_bed.is_some() => bed_panel(ui, cx, x),
+            Shape::Extrusion(x) if x.closed && x.furniture.is_some() => {
+                furniture_panel(ui, cx, x, shape.is_curved());
+            }
             Shape::Extrusion(x) => {
                 for (label, v, key, range) in [
                     (t::HEIGHT, &mut x.height, "height", 0.05..=100.0),
@@ -1487,6 +1683,107 @@ fn edge_panel(ui: &mut egui::Ui, cx: &mut Cx, a: &visioncraft_core::shape::Area)
     });
     if a.drape {
         ui.weak(t::EDGE_NEEDS_FLAT);
+    }
+}
+
+/// A piece of furniture's kind, size, turn and the options its kind has; each change one command.
+fn furniture_panel(
+    ui: &mut egui::Ui,
+    cx: &mut Cx,
+    x: &visioncraft_core::shape::Extrusion,
+    curved: bool,
+) {
+    use visioncraft_core::furniture::FurnitureKind;
+    let Some(f) = &x.furniture else {
+        return;
+    };
+    let Ok(fr) = f.frame(&x.points, curved, x.height) else {
+        return;
+    };
+    let kinds = furniture_choices();
+    ui.horizontal(|ui| {
+        ui.label(t::FURNITURE_KIND);
+        egui::ComboBox::from_id_salt("furniture-kind")
+            .selected_text(f.kind.name().replace('_', " "))
+            .show_ui(ui, |ui| {
+                for (label, k) in kinds.iter().filter_map(|(l, k)| k.map(|k| (l, k))) {
+                    if ui.selectable_label(f.kind == k, label).clicked() && f.kind != k {
+                        cx.run("furniture.set", json!({"id": x.id, "kind": k.name()}));
+                    }
+                }
+            });
+    });
+    let [mut length, mut depth, mut height] = [fr.length, fr.depth, fr.height];
+    let mut done = false;
+    done |= drag_field(ui, t::FURNITURE_LENGTH, &mut length, 0.01, 0.1..=8.0, " m") == Edit::Done;
+    if !fr.round {
+        done |= drag_field(ui, t::FURNITURE_DEPTH, &mut depth, 0.01, 0.1..=8.0, " m") == Edit::Done;
+    }
+    done |= drag_field(ui, t::HEIGHT, &mut height, 0.01, 0.1..=4.0, " m") == Edit::Done;
+    if done {
+        let mut p = json!({"id": x.id, "length": length, "height": height});
+        if !fr.round {
+            p["depth"] = json!(depth);
+        }
+        cx.run("furniture.set", p);
+    }
+    let mut turn = fr.rotation_deg();
+    if !fr.round
+        && drag_field(ui, t::FURNITURE_TURN, &mut turn, 1.0, -360.0..=360.0, "°") == Edit::Done
+    {
+        cx.run("furniture.set", json!({"id": x.id, "rotation_deg": turn}));
+    }
+    let mut toggle = |ui: &mut egui::Ui, label: &str, now: bool, key: &str| {
+        let mut v = now;
+        if ui.checkbox(&mut v, label).changed() {
+            cx.run("furniture.set", json!({"id": x.id, key: v}));
+        }
+    };
+    if f.kind.can_be_round() {
+        toggle(ui, t::FURNITURE_ROUND, fr.round, "round");
+    }
+    match f.kind {
+        FurnitureKind::Table | FurnitureKind::SideTable => {
+            toggle(
+                ui,
+                t::FURNITURE_PEDESTAL,
+                f.pedestal.unwrap_or(fr.round),
+                "pedestal",
+            );
+        }
+        FurnitureKind::Bench => toggle(ui, t::FURNITURE_BACK, f.back, "back"),
+        FurnitureKind::Parasol => toggle(ui, t::FURNITURE_OPEN, f.open, "open"),
+        FurnitureKind::Lounger => {
+            let mut deg = f.back_angle();
+            if drag_field(ui, t::FURNITURE_BACK_DEG, &mut deg, 0.5, 0.0..=80.0, "°") == Edit::Done
+            {
+                cx.run("furniture.set", json!({"id": x.id, "back_deg": deg}));
+            }
+        }
+        FurnitureKind::Sofa | FurnitureKind::Armchair => {
+            let mut n = f.cushion_count(fr.length) as f32;
+            if drag_field(ui, t::FURNITURE_CUSHIONS, &mut n, 0.1, 1.0..=8.0, "") == Edit::Done {
+                cx.run(
+                    "furniture.set",
+                    json!({"id": x.id, "cushions": n.round() as u32}),
+                );
+            }
+        }
+        FurnitureKind::Cabinet => {
+            let (mut doors, mut drawers) = (f.door_count(fr.length) as f32, f.drawers as f32);
+            let ed = drag_field(ui, t::FURNITURE_DOORS, &mut doors, 0.1, 1.0..=8.0, "");
+            let er = drag_field(ui, t::FURNITURE_DRAWERS, &mut drawers, 0.1, 0.0..=4.0, "");
+            if ed == Edit::Done || er == Edit::Done {
+                cx.run(
+                    "furniture.set",
+                    json!({"id": x.id, "doors": doors.round() as u32, "drawers": drawers.round() as u32}),
+                );
+            }
+        }
+        FurnitureKind::Chair | FurnitureKind::Bed => {}
+    }
+    if ui.button(t::BACK_TO_BLOCK).clicked() {
+        cx.run("furniture.clear", json!({"id": x.id}));
     }
 }
 

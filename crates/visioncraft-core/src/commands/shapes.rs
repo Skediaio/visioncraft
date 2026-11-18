@@ -405,6 +405,7 @@ pub(super) fn add_extrusion(project: &mut Project, params: &Value) -> Result<Val
             fence: None,
             stairs: None,
             raised_bed: None,
+            furniture: None,
         })
     })?;
     if roofed && let Some(id) = r["id"].as_str() {

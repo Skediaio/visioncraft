@@ -151,12 +151,20 @@ nothing here is a promise of a date.
   coordinates converted to the drawing's metres and north, the site set for the sun, and each
   source's licence and attribution shown. The model is then placed on that ground. Import from
   common geodata files and services as well.
-- **Furniture and interiors library:** far more furniture than today, indoors and outdoors:
-  sofas, chairs, tables, beds, storage, kitchens and appliances, bathroom fixtures, rugs,
-  curtains, lamps, plants in pots, garden sets, loungers, parasols, barbecues, with variants in
-  size, colour and material. From open sources (CC0 or CC-BY) and as parametric pieces generated
-  like plants are, so a sofa or a table can be given a length. Placed with snapping to floors and
-  walls, grouped as room sets, and listed with dimensions.
+- **Furniture and interiors library:** the parametric pieces are done: furniture generated from
+  parameters the way stairs and raised beds are, so a table or a sofa can be given a length
+  (`furniture.add`, `furniture.set`, `furniture.clear`). The kinds are table (rectangular, or round
+  with a pedestal), chair, bench (with or without a back), sofa and armchair (cushions split by
+  length), sun lounger (adjustable back angle), parasol (open or folded), side table, cabinet (doors
+  and drawer fronts) and bed (frame, mattress, pillows, headboard), each with stable faces for
+  materials (`frame`, `top`, `cushion`, `canopy`) and palette materials of its own.
+  `furniture.add_set` places a dining set for 2 to 12 seats, a lounge set or a sunbathing
+  set as separate pieces, and `query.quantities` lists the pieces per kind with their dimensions.
+  The window has a Furniture tool in Draw. Next: far more furniture than today, indoors and
+  outdoors: storage, kitchens and appliances, bathroom fixtures, rugs, curtains, lamps, plants in
+  pots, barbecues, with variants in colour and material; more kinds as parametric pieces; pieces
+  from open sources (CC0 or CC-BY) as downloadable library assets; placing with snapping to floors
+  and walls; grouping as room sets.
 
 ## Later
 

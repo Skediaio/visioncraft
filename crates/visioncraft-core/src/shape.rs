@@ -118,6 +118,10 @@ pub struct Extrusion {
     /// A closed extrusion drawn as the hollow wall ring of a raised bed (`crate::bed`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raised_bed: Option<crate::bed::RaisedBed>,
+    /// A closed extrusion drawn as a piece of furniture (`crate::furniture`): the footprint is
+    /// its length and depth, `height` its overall height, `base` where it stands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub furniture: Option<crate::furniture::Furniture>,
 }
 
 impl Area {
@@ -281,6 +285,8 @@ pub enum ShapeError {
     BadStairs(String),
     /// A raised bed whose walls do not fit its outline.
     BadBed(String),
+    /// Furniture that cannot be drawn on its footprint.
+    BadFurniture(String),
     /// A curve an outline cannot have, or a shape that cannot be drawn with curves.
     BadCurve(String),
     /// A retaining edge an area cannot have.
@@ -296,6 +302,7 @@ impl fmt::Display for ShapeError {
             Self::BadFence(why) => write!(f, "the fence cannot be drawn: {why}"),
             Self::BadStairs(why) => write!(f, "the stairs cannot be drawn: {why}"),
             Self::BadBed(why) => write!(f, "the raised bed cannot be drawn: {why}"),
+            Self::BadFurniture(why) => write!(f, "the furniture cannot be drawn: {why}"),
             Self::BadCurve(why) => write!(f, "the curves cannot be drawn: {why}"),
             Self::BadEdge(why) => write!(f, "the area's edge cannot be drawn: {why}"),
         }
@@ -681,6 +688,24 @@ fn shape_mesh_with(
                     soft: false,
                 };
                 crate::bed::mesh(&mut b, bed, &tess.pts, &inner, e.base, e.base + e.height);
+                return Ok(b.finish(id, &e.name, names));
+            }
+            if let Some(fu) = e.furniture.as_ref().filter(|_| e.closed) {
+                let fr = fu
+                    .frame(&e.points, shape.is_curved(), e.height)
+                    .map_err(ShapeError::BadFurniture)?;
+                let names = fu
+                    .faces()
+                    .iter()
+                    .map(|n| format!("{id}:{n}"))
+                    .collect::<Vec<_>>();
+                let mut b = Builder {
+                    model: ImportedModel::default(),
+                    triangles: vec![Vec::new(); names.len()],
+                    edge: Vec::new(),
+                    soft: false,
+                };
+                crate::furniture::mesh(&mut b, fu, &fr, e.base);
                 return Ok(b.finish(id, &e.name, names));
             }
             if e.house.is_some() && e.closed && shape.is_curved() {
@@ -1135,6 +1160,7 @@ mod tests {
             fence: None,
             stairs: None,
             raised_bed: None,
+            furniture: None,
         })
     }
 
@@ -1155,6 +1181,7 @@ mod tests {
             fence: None,
             stairs: None,
             raised_bed: None,
+            furniture: None,
         })
     }
 

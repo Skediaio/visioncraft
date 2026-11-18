@@ -302,6 +302,7 @@ mod tests {
             fence: None,
             stairs: Some(stairs),
             raised_bed: None,
+            furniture: None,
         })
     }
 
