@@ -114,9 +114,16 @@ nothing here is a promise of a date.
   tools. `area.set_edge` gives a raised area a retaining edge, a skirt in the same four styles from
   its top down to the ground (faces `<id>:edge`, `:edge_rim`; quantities give length, face area,
   beams or plate area), so terraces at different heights no longer float; Draw has an Edge
-  selector in the area panel. Next: retaining walls that hold a slope, terraces cut into the
+  selector in the area panel. Stairs turn: `stairs.add` with `via` (one or two corner points)
+  makes an L, U or S flight whose corners are square landings of the flight's width, with the
+  steps shared over the flights by clear run and each landing at the height of the step reaching
+  it; two corners a width apart make a half-landing with the flights side by side, further apart a
+  wider landing round a well. The outline is derived from the path, so the vertex commands refuse
+  it and `stairs.set` takes `path` or `via` (`null` straightens it); the answer lists `flights`
+  and `landings`, quantities count landings and their area and the total going, and the Stairs
+  tool has a Turn option that holds each segment at a right angle. Next: retaining walls that hold a slope, terraces cut into the
   terrain (a level that moves the ground, not only sits on it), an edge that steps with a draped
-  area, stairs that follow the terrain, landings and turns (L and U stairs), a soil
+  area, stairs that follow the terrain, winders and curved stairs, a soil
   that follows terrain edited after the bed.
 
 - **Curves:** a shape keeps its control points and draws a curved outline from them: an arc on

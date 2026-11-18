@@ -211,14 +211,22 @@ pub fn quantities_in(
                 plan = f64::from(measure::polygon_area(&outline));
                 volume = if let Some(st) = &e.stairs {
                     if let Ok(g) = st.geometry(&e.points, e.height) {
-                        o.insert(
-                            "stairs".into(),
-                            json!({
-                                "steps": g.steps, "riser_m": g.riser, "going_m": g.tread,
-                                "rise_m": e.height, "run_m": g.tread * g.steps as f32,
-                                "width_m": g.width,
-                            }),
-                        );
+                        let mut row = json!({
+                            "steps": g.steps, "riser_m": g.riser, "going_m": g.tread,
+                            "rise_m": e.height, "run_m": g.tread * g.steps as f32,
+                            "width_m": g.width,
+                        });
+                        if let Some(t) = &g.turned {
+                            // The landings' count and area, the flights, and the total going:
+                            // the length of the centreline walked from the bottom to the top.
+                            let area: f32 =
+                                t.landings.iter().map(|l| l.size_m[0] * l.size_m[1]).sum();
+                            row["flights"] = t.flights.len().into();
+                            row["landings"] = t.landings.len().into();
+                            row["landing_area_m2"] = area.into();
+                            row["total_going_m"] = g.length.into();
+                        }
+                        o.insert("stairs".into(), row);
                     }
                     mesh_volume(&mesh)
                 } else if e.raised_bed.is_none()

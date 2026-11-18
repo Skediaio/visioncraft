@@ -17,6 +17,11 @@ type P2 = [f32; 2];
 /// Default height of a raised bed's walls (metres).
 const DEFAULT_BED_HEIGHT_M: f32 = 0.4;
 
+/// A list that is present, `null` (clear it) or absent (leave it).
+fn double_list<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Option<Vec<P2>>>, D::Error> {
+    Option::<Vec<P2>>::deserialize(d).map(Some)
+}
+
 /// Present and `null` (clear it) apart from absent (leave it).
 fn double_option<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Option<f32>>, D::Error> {
     Option::<f32>::deserialize(d).map(Some)
@@ -38,15 +43,16 @@ pub(super) fn register(s: &mut Session) {
         param("base", T::Number, "Height of the bottom (on terrain, above the lowest ground under the footprint).").unit("m").default(json!(0)),
         param("height", T::Number, "Rise from the bottom to the top landing, 0.05..6. Left out it is the height of the ground at `to` (terrain and areas, such as a raised terrace) above the lowest ground under the stairs; refused when that is not clear.").unit("m"),
         param("layer", T::String, "Layer id.").default(json!("shapes")),
+        param("via", T::Outline, "One or two corner points [[x, z]] between `from` and `to`: the flight turns 90 degrees at each on a square landing of width x width centred on the corner (an L with one corner, a U or S with two). Segments must meet at right angles (within 1 degree). With two corners at least one width apart (exactly one width: a half-landing, the flights side by side with no gap; more: a wider landing with a well between the flights; less is refused). The steps share the height in proportion to each flight's clear run (the segment less half a landing at each corner end); a landing lies at the height of the last step reaching it. `to` is then the top centre of the last flight."),
     ];
     add_params.extend(sizes());
     s.register_with_spec(
         spec(
             "stairs.add",
             "Add Stairs",
-            "Adds a flight of solid steps (a closed extrusion on a rectangular footprint built from the bottom and top centres and a width). Every step is a block from the ground up, so none floats: on uneven terrain each block goes down to the lowest ground under its own footprint; the faces are `<id>:treads`, `<id>:risers` and `<id>:sides`. Checks Blondel's rule (2 x riser + tread between 0.60 and 0.65 m) and a footprint too short for the treads: these come back as `warnings` and are in the shape's mesh warnings. It starts with concrete where the project has none assigned.",
+            "Adds a flight of solid steps (a closed extrusion on a rectangular footprint built from the bottom and top centres and a width). Every step is a block from the ground up, so none floats: on uneven terrain each block goes down to the lowest ground under its own footprint; the faces are `<id>:treads`, `<id>:risers` and `<id>:sides`. Checks Blondel's rule (2 x riser + tread between 0.60 and 0.65 m) and a footprint too short for the treads: these come back as `warnings` and are in the shape's mesh warnings. With `via` the flight turns (L, U or S; see `via`): its outline is derived from `from`, `via`, `to` and `width_m`, so the vertex commands refuse it (use stairs.set with `path` or `via`). It starts with concrete where the project has none assigned.",
             add_params,
-            "{id, steps, riser_m, tread_m, height_m, warnings}",
+            "{id, steps, riser_m, tread_m, height_m, flights: [{steps, run_m}], landings: [{size_m: [width, length], height_m}], warnings}",
             json!({"name": "Garden steps", "from": [12, 5], "to": [12, 3.2], "width_m": 1.2, "height": 0.5}),
         ),
         add_stairs,
@@ -64,15 +70,25 @@ pub(super) fn register(s: &mut Session) {
         ),
         param("base", T::Number, "New bottom height.").unit("m"),
         param("height", T::Number, "New rise.").unit("m"),
+        param(
+            "via",
+            T::Outline,
+            "New corner points (one or two, see stairs.add) between the bottom and the top centre; `null` makes the flight straight again, from its first to its last point. Left out, a flight that turns keeps its corners.",
+        ),
+        param(
+            "path",
+            T::Outline,
+            "The whole centreline of a flight that turns, 2 (straight), 3 or 4 points: bottom centre, corners, top centre. Not with `via`, `from` or `to`.",
+        ),
     ];
     set_params.extend(sizes());
     s.register_with_spec(
         spec(
             "stairs.set",
             "Set Stairs",
-            "Changes any fields of a flight; the others stay. `riser_m` or `tread_m` set to null go back to their default. On a closed 4-point rectangular block that is not stairs yet it turns the block into stairs (`up_edge` says which edge is the top, default 0).",
+            "Changes any fields of a flight; the others stay. `riser_m` or `tread_m` set to null go back to their default. On a closed 4-point rectangular block that is not stairs yet it turns the block into stairs (`up_edge` says which edge is the top, default 0). On a flight that turns, `from` and `to` move its first and last point and `width_m` its width; the outline is derived again.",
             set_params,
-            "{steps, riser_m, tread_m, height_m, warnings}",
+            "{steps, riser_m, tread_m, height_m, flights, landings, warnings}",
             json!({"id": "S4", "height": 0.7}),
         ),
         set_stairs,
@@ -279,10 +295,24 @@ fn stairs_report(project: &Project, id: &str) -> Value {
         return Value::Null;
     };
     match st.geometry(&e.points, e.height) {
-        Ok(g) => json!({
-            "steps": g.steps, "riser_m": g.riser, "tread_m": g.tread,
-            "height_m": e.height, "warnings": mesh.warnings,
-        }),
+        Ok(g) => {
+            let flights: Vec<Value> = g
+                .flights()
+                .into_iter()
+                .map(|(steps, run)| json!({"steps": steps, "run_m": run}))
+                .collect();
+            let landings: Vec<Value> = g.turned.as_ref().map_or_else(Vec::new, |t| {
+                t.landings
+                    .iter()
+                    .map(|l| json!({"size_m": l.size_m, "height_m": l.height_m}))
+                    .collect()
+            });
+            json!({
+                "steps": g.steps, "riser_m": g.riser, "tread_m": g.tread,
+                "height_m": e.height, "flights": flights, "landings": landings,
+                "warnings": mesh.warnings,
+            })
+        }
         Err(_) => Value::Null,
     }
 }
@@ -300,14 +330,30 @@ fn add_stairs(project: &mut Project, params: &Value) -> Result<Value, CommandErr
         layer: Option<String>,
         riser_m: Option<f32>,
         tread_m: Option<f32>,
+        via: Option<Vec<P2>>,
     }
     let p: P = parse(params)?;
-    let outline = footprint(p.from, p.to, p.width_m)?;
+    let via = p.via.clone().unwrap_or_default();
+    if via.len() > 2 {
+        return Err(fail("`via` takes one or two corner points"));
+    }
+    let (outline, path) = if via.is_empty() {
+        (footprint(p.from, p.to, p.width_m)?, None)
+    } else {
+        let mut path = vec![p.from];
+        path.extend(&via);
+        path.push(p.to);
+        let outline = crate::stairs::turned_outline(&path, p.width_m).map_err(fail)?;
+        (outline, Some(path))
+    };
     let base = p.base.unwrap_or(0.0);
+    // The direction the last flight arrives in.
+    let before_top = path.as_ref().map_or(p.from, |p| p[p.len() - 2]);
     let height = match p.height {
         Some(h) => h,
-        None => derived_height(project, &outline, p.from, p.to, base)?,
+        None => derived_height(project, &outline, before_top, p.to, base)?,
     };
+    let width_m = path.as_ref().map(|_| p.width_m);
     let r = add(project, (p.layer, None), |id, layer| {
         Shape::Extrusion(Extrusion {
             id,
@@ -327,6 +373,8 @@ fn add_stairs(project: &mut Project, params: &Value) -> Result<Value, CommandErr
                 up_edge: 2,
                 riser_m: p.riser_m,
                 tread_m: p.tread_m,
+                path,
+                width_m,
             }),
             raised_bed: None,
             furniture: None,
@@ -355,8 +403,14 @@ fn set_stairs(project: &mut Project, params: &Value) -> Result<Value, CommandErr
         riser_m: Option<Option<f32>>,
         #[serde(default, deserialize_with = "double_option")]
         tread_m: Option<Option<f32>>,
+        #[serde(default, deserialize_with = "double_list")]
+        via: Option<Option<Vec<P2>>>,
+        path: Option<Vec<P2>>,
     }
     let p: P = parse(params)?;
+    if p.path.is_some() && (p.via.is_some() || p.from.is_some() || p.to.is_some()) {
+        return Err(fail("give `path` alone, without `via`, `from` or `to`"));
+    }
     edit(project, &p.id, true, |e| {
         if e.house.is_some() || e.raised_bed.is_some() {
             return Err(fail(format!(
@@ -375,24 +429,72 @@ fn set_stairs(project: &mut Project, params: &Value) -> Result<Value, CommandErr
         if let Some(t) = p.tread_m {
             st.tread_m = t;
         }
-        if p.from.is_some() || p.to.is_some() || p.width_m.is_some() {
+        if p.from.is_some()
+            || p.to.is_some()
+            || p.width_m.is_some()
+            || p.via.is_some()
+            || p.path.is_some()
+        {
             // What is not given stays as the flight is now.
             let now = had.then(|| st.geometry(&e.points, e.height).ok()).flatten();
-            let from = p.from.or(now.as_ref().map(|g| g.origin));
-            let to = p.to.or(now.as_ref().map(|g| {
-                [
-                    g.origin[0] + g.dir[0] * g.length,
-                    g.origin[1] + g.dir[1] * g.length,
-                ]
-            }));
-            let width = p.width_m.or(now.as_ref().map(|g| g.width));
-            let (Some(from), Some(to), Some(width)) = (from, to, width) else {
+            let (cur_from, cur_to, cur_via) = match (&st.path, &now) {
+                (Some(path), _) => (
+                    Some(path[0]),
+                    path.last().copied(),
+                    path[1..path.len() - 1].to_vec(),
+                ),
+                (None, Some(g)) => (
+                    Some(g.origin),
+                    Some([
+                        g.origin[0] + g.dir[0] * g.length,
+                        g.origin[1] + g.dir[1] * g.length,
+                    ]),
+                    Vec::new(),
+                ),
+                (None, None) => (None, None, Vec::new()),
+            };
+            let width = p.width_m.or(st.width_m).or(now.as_ref().map(|g| g.width));
+            let path = match &p.path {
+                Some(path) if path.len() >= 2 => path.clone(),
+                Some(_) => return Err(fail("`path` takes 2, 3 or 4 points")),
+                None => {
+                    let (Some(from), Some(to)) = (p.from.or(cur_from), p.to.or(cur_to)) else {
+                        return Err(fail(
+                            "`from`, `to` and `width_m` are all needed for a block that is not stairs yet",
+                        ));
+                    };
+                    let via = match &p.via {
+                        Some(Some(v)) => v.clone(),
+                        Some(None) => Vec::new(),
+                        None => cur_via,
+                    };
+                    if via.len() > 2 {
+                        return Err(fail("`via` takes one or two corner points"));
+                    }
+                    let mut path = vec![from];
+                    path.extend(via);
+                    path.push(to);
+                    path
+                }
+            };
+            if path.len() > 4 {
+                return Err(fail("`path` takes 2, 3 or 4 points"));
+            }
+            let Some(width) = width else {
                 return Err(fail(
                     "`from`, `to` and `width_m` are all needed for a block that is not stairs yet",
                 ));
             };
-            e.points = footprint(from, to, width)?;
-            st.up_edge = 2;
+            if path.len() == 2 {
+                e.points = footprint(path[0], path[1], width)?;
+                st.up_edge = 2;
+                st.path = None;
+                st.width_m = None;
+            } else {
+                e.points = crate::stairs::turned_outline(&path, width).map_err(fail)?;
+                st.path = Some(path);
+                st.width_m = Some(width);
+            }
         }
         e.stairs = Some(st);
         if let Some(n) = p.name {
@@ -1280,5 +1382,206 @@ mod tests {
             .map(|a| (a.target.owner().to_string(), a.material.clone()))
             .collect();
         assert_eq!(a, [(id, "metal".to_string())]);
+    }
+
+    fn turned(s: &mut Session, via: serde_json::Value) -> String {
+        s.run(
+            "stairs.add",
+            json!({"name": "Turn", "from": [10, 14], "to": [12.5, 11.5], "via": via,
+                   "width_m": 1.0, "height": 1.5}),
+        )
+        .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    #[test]
+    fn a_turned_flight_is_added_with_flights_and_landings_and_set_again() {
+        let mut s = Session::new(Project::default());
+        let r = s
+            .run(
+                "stairs.add",
+                json!({"from": [10, 14], "to": [12.5, 11.5], "via": [[10, 11.5]],
+                       "width_m": 1.0, "height": 1.5}),
+            )
+            .unwrap();
+        assert_eq!(r["steps"], 9);
+        let flights = r["flights"].as_array().unwrap();
+        assert_eq!(flights.len(), 2);
+        assert_eq!(
+            flights
+                .iter()
+                .map(|f| f["steps"].as_u64().unwrap())
+                .sum::<u64>(),
+            9
+        );
+        let landing = &r["landings"][0];
+        assert_eq!(landing["size_m"], json!([1.0, 1.0]));
+        assert!(landing["height_m"].as_f64().unwrap() > 0.5);
+        let id = r["id"].as_str().unwrap().to_string();
+        let e = get(&s, &id);
+        assert_eq!(e.points.len(), 6);
+        let st = e.stairs.clone().unwrap();
+        assert_eq!(st.path.as_ref().unwrap().len(), 3);
+        assert_eq!(st.width_m, Some(1.0));
+        // Materials as for a straight flight.
+        assert!(
+            s.project()
+                .assignments
+                .iter()
+                .any(|a| a.target.owner() == id)
+        );
+        // Changing the rise or the width keeps the turn; the outline follows.
+        let r = s
+            .run(
+                "stairs.set",
+                json!({"id": id, "height": 2.0, "width_m": 1.2}),
+            )
+            .unwrap();
+        assert_eq!(r["steps"], 12);
+        let size = &r["landings"][0]["size_m"];
+        assert!((size[0].as_f64().unwrap() - 1.2).abs() < 1e-5 && size[0] == size[1]);
+        assert_eq!(get(&s, &id).points.len(), 6);
+        // A U with a half-landing, set from the L through `via`.
+        let r = s
+            .run(
+                "stairs.set",
+                json!({"id": id, "from": [10, 14], "to": [11, 14], "via": [[10, 11.5], [11, 11.5]], "width_m": 1.0}),
+            )
+            .unwrap();
+        assert_eq!(r["flights"].as_array().unwrap().len(), 2);
+        assert_eq!(r["landings"][0]["size_m"], json!([1.0, 2.0]));
+        assert_eq!(get(&s, &id).stairs.unwrap().path.unwrap().len(), 4);
+        // `via: null` makes it straight again, from the first to the last point.
+        // (The U's first and last points are a metre apart: give a top that fits 12 steps.)
+        let r = s
+            .run("stairs.set", json!({"id": id, "via": null, "to": [10, 9]}))
+            .unwrap();
+        let e = get(&s, &id);
+        assert!(e.stairs.as_ref().unwrap().path.is_none());
+        assert!(e.stairs.as_ref().unwrap().width_m.is_none());
+        assert_eq!(e.points.len(), 4);
+        assert_eq!(r["flights"].as_array().unwrap().len(), 1);
+        assert_eq!(r["landings"], json!([]));
+        // `path` sets the whole centreline.
+        s.run(
+            "stairs.set",
+            json!({"id": id, "path": [[10, 14], [10, 11.5], [12.5, 11.5]], "width_m": 1.0}),
+        )
+        .unwrap();
+        assert_eq!(get(&s, &id).points.len(), 6);
+        // Each of those was one undo step.
+        assert!(s.undo());
+        assert!(get(&s, &id).stairs.unwrap().path.is_none());
+    }
+
+    #[test]
+    fn bad_turns_are_refused_and_leave_the_project_alone() {
+        let mut s = Session::new(Project::default());
+        let before = s.project().shapes.len();
+        let add = |s: &mut Session, via: serde_json::Value, to: serde_json::Value| {
+            s.run(
+                "stairs.add",
+                json!({"from": [0, 0], "to": to, "via": via, "width_m": 1.0, "height": 1.0}),
+            )
+            .unwrap_err()
+            .to_string()
+        };
+        let e = add(&mut s, json!([[0, 2.5]]), json!([2.5, 3.0]));
+        assert!(e.contains("right angle"), "{e}");
+        let e = add(&mut s, json!([[0, 3], [0.6, 3]]), json!([0.6, 0]));
+        assert!(e.contains("overlap"), "{e}");
+        let e = add(&mut s, json!([[0, 1], [1, 1], [1, 2]]), json!([2, 2]));
+        assert!(e.contains("one or two"), "{e}");
+        assert_eq!(s.project().shapes.len(), before);
+        // A bad set leaves the flight as it was.
+        let id = turned(&mut s, json!([[10, 11.5]]));
+        let was = get(&s, &id);
+        assert!(
+            s.run(
+                "stairs.set",
+                json!({"id": id, "path": [[10, 14], [10, 11.5], [12.5, 12]], "width_m": 1.0})
+            )
+            .is_err()
+        );
+        assert!(
+            s.run(
+                "stairs.set",
+                json!({"id": id, "path": [[0, 0]], "width_m": 1.0})
+            )
+            .is_err()
+        );
+        assert!(
+            s.run(
+                "stairs.set",
+                json!({"id": id, "path": [[10, 14], [10, 12], [12, 12]], "via": []})
+            )
+            .is_err()
+        );
+        assert_eq!(get(&s, &id), was);
+    }
+
+    #[test]
+    fn the_vertex_commands_refuse_a_turned_flight() {
+        let mut s = Session::new(Project::default());
+        let id = turned(&mut s, json!([[10, 11.5]]));
+        let was = get(&s, &id);
+        for (command, params) in [
+            (
+                "shape.move_vertex",
+                json!({"id": id, "index": 0, "position": [9, 14]}),
+            ),
+            (
+                "shape.insert_vertex",
+                json!({"id": id, "edge": 0, "position": [9.5, 14]}),
+            ),
+            ("shape.remove_vertex", json!({"id": id, "index": 1})),
+            (
+                "shape.set_outline",
+                json!({"id": id, "outline": [[0, 0], [1, 0], [1, 1], [0, 1]]}),
+            ),
+        ] {
+            let e = s.run(command, params).unwrap_err().to_string();
+            assert!(
+                e.contains("stairs.set") && e.contains("path"),
+                "{command}: {e}"
+            );
+        }
+        assert_eq!(get(&s, &id), was);
+    }
+
+    #[test]
+    fn a_turned_flight_survives_a_save_and_load_and_old_projects_still_load() {
+        let mut s = Session::new(Project::default());
+        let id = turned(&mut s, json!([[10, 11.5]]));
+        let straight = stairs(&mut s);
+        let bytes = s.project().to_json_bytes();
+        let loaded = Project::from_json_bytes(&bytes).unwrap();
+        assert_eq!(&loaded, s.project());
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(text.contains("\"path\""));
+        // A straight flight writes neither field, and a project without them loads.
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let shapes = v["shapes"].as_array().unwrap();
+        let find = |id: &str| shapes.iter().find(|x| x["id"] == id).unwrap();
+        assert!(find(&straight)["stairs"].get("path").is_none());
+        assert!(find(&straight)["stairs"].get("width_m").is_none());
+        assert!(find(&id)["stairs"].get("path").is_some());
+    }
+
+    #[test]
+    fn quantities_count_a_turned_flights_landings_and_going() {
+        let mut s = Session::new(Project::default());
+        let id = turned(&mut s, json!([[10, 11.5]]));
+        let q = s.run("query.quantities", json!({})).unwrap();
+        let rows = q["shapes"].as_array().unwrap();
+        let row = rows.iter().find(|r| r["id"] == id.as_str()).unwrap();
+        let st = &row["stairs"];
+        assert_eq!(st["steps"], 9);
+        assert_eq!(st["flights"], 2);
+        assert_eq!(st["landings"], 1);
+        assert!((st["landing_area_m2"].as_f64().unwrap() - 1.0).abs() < 1e-4);
+        assert!((st["total_going_m"].as_f64().unwrap() - 5.0).abs() < 1e-3);
     }
 }

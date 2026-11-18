@@ -432,6 +432,17 @@ fn edit(
     Ok(())
 }
 
+/// A flight of stairs that turns has an outline derived from its `path`: changing points by hand
+/// would part the two.
+fn refuse_turned(s: &Shape) -> Result<(), CommandError> {
+    match s {
+        Shape::Extrusion(e) if e.stairs.as_ref().is_some_and(|st| st.path.is_some()) => Err(bad(
+            "the outline of a flight that turns comes from its path; change it with stairs.set and `path` or `via`",
+        )),
+        _ => Ok(()),
+    }
+}
+
 fn set_outline(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -441,6 +452,7 @@ fn set_outline(project: &mut Project, params: &Value) -> Result<Value, CommandEr
     }
     let p: P = parse(params)?;
     edit(project, &p.id, |s| {
+        refuse_turned(s)?;
         *s.points_mut() = p.outline;
         fit_curves(s);
         Ok(())
@@ -458,6 +470,7 @@ fn move_vertex(project: &mut Project, params: &Value) -> Result<Value, CommandEr
     }
     let p: P = parse(params)?;
     edit(project, &p.id, |s| {
+        refuse_turned(s)?;
         *s.points_mut()
             .get_mut(p.index)
             .ok_or_else(|| bad("no such vertex"))? = p.position;
@@ -528,6 +541,7 @@ fn insert_vertex(project: &mut Project, params: &Value) -> Result<Value, Command
     }
     let p: P = parse(params)?;
     edit(project, &p.id, |s| {
+        refuse_turned(s)?;
         let edges = crate::curve::edge_count(s.points().len(), s.is_closed());
         if p.edge >= edges {
             return Err(bad("no such edge"));
@@ -556,6 +570,7 @@ fn remove_vertex(project: &mut Project, params: &Value) -> Result<Value, Command
     let p: P = parse(params)?;
     let mut last_of_open = false;
     edit(project, &p.id, |s| {
+        refuse_turned(s)?;
         let len = s.points().len();
         if p.index >= len {
             return Err(bad("no such vertex"));

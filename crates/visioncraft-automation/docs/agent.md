@@ -894,6 +894,41 @@ per kind under `furniture` with their length, depth and height. Pieces are shape
 `shape.set_height`, `shape.remove` and `material.assign` work on them; stacking a piece on a
 terrace is `base` (or `shape.set_height`).
 
+### 31. An L stair from a terrace down to the garden
+
+```json recipe
+{"intent": "a terrace raised a metre above the lawn, reached by an L stair that turns on a landing", "steps": [
+  {"id": "shape.add_area", "params": {"name": "Lawn", "outline": [[0, 0], [20, 0], [20, 12], [0, 12]], "material": "lawn"}},
+  {"id": "shape.add_area", "params": {"name": "Terrace", "outline": [[6, 0], [20, 0], [20, 12], [6, 12]], "elevation": 1.0, "drape": false, "edge": {"style": "masonry"}, "material": "paving"}},
+  {"id": "stairs.add", "params": {"name": "Garden stair", "from": [3, 7.5], "via": [[3, 6]], "to": [6, 6], "width_m": 1.2, "tread_m": 0.3}},
+  {"id": "query.quantities", "params": {}},
+  {"id": "view.render", "params": {"camera": {"position": [-2, 5, 13], "target": [5, 0.5, 6.5]}, "width": 960, "height": 540, "path": "stair-l.png"}}
+]}
+```
+
+`stairs.add` with `via` makes a flight that turns. `via` is one or two corner points between
+`from` (the bottom centre) and `to` (the top centre): here the flight leaves the lawn going north,
+turns right at [3, 6] and arrives on the terrace's edge going east. At each corner the flight
+turns 90 degrees on a square landing of width by width centred on the corner, so the segments must
+meet at right angles (within a degree) or the command says so. The height is read off the terrace
+(1 m) as for a straight flight; the step count is `round(height / riser_m)` and the steps are
+shared over the flights in proportion to each flight's clear run, the segment less half a landing
+at each corner end (here 2 steps on the short flight and 4 on the long one). A landing lies at the
+height of the last step reaching it, so it is that step with a long tread. The result adds
+`flights` (`steps` and `run_m` of each) and `landings` (`size_m` and `height_m`) to the straight
+flight's fields; `warnings` are per flight. Two corners make a U (or an S, when the second turn goes
+the other way): the middle segment is one landing. With the corners exactly a width apart the
+two flights run side by side with no gap and the landing is a half-landing of width by twice the
+width; further apart it is a wider landing with a well between the flights; closer than a width
+the flights would overlap, so it is refused. The outline is derived from the path and the width
+(an L is 6 points, a U with a well 8), so `shape.move_vertex`, `shape.insert_vertex`,
+`shape.remove_vertex` and `shape.set_outline` refuse a flight that turns: change it with
+`stairs.set`, with `path` (the whole centreline, 2, 3 or 4 points) or `via` (the corners alone;
+`null` makes the flight straight again, from its first point to its last). `query.quantities` adds
+`flights`, `landings`, `landing_area_m2` and `total_going_m` (the length of the centreline) to a
+flight that turns. The Stairs tool in Draw has a Turn option: click the bottom, each corner and
+the top, with every segment held at a right angle to the one before.
+
 ## Known traps
 
 - **Ids are not names**: `S2`, not `House`; viewpoints are `v1`, lights `li1`.

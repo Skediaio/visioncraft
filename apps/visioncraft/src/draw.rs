@@ -26,6 +26,22 @@ pub struct Snap {
     pub kind: SnapKind,
 }
 
+/// The width of the stairs the tool draws (metres).
+const STAIRS_WIDTH_M: f32 = 1.2;
+
+/// `pos` held on the line through `b` at a right angle to the segment `a` to `b`, at least
+/// `min` metres from `b`.
+fn right_angle_point(a: P2, b: P2, pos: P2, min: f32) -> P2 {
+    let len = dist(a, b);
+    if len < 1e-4 {
+        return pos;
+    }
+    let n = [-(b[1] - a[1]) / len, (b[0] - a[0]) / len];
+    let t = (pos[0] - b[0]) * n[0] + (pos[1] - b[1]) * n[1];
+    let t = if t < 0.0 { t.min(-min) } else { t.max(min) };
+    [b[0] + n[0] * t, b[1] + n[1] * t]
+}
+
 fn round(v: f32, step: f32) -> f32 {
     (v / step).round() * step
 }
@@ -258,7 +274,8 @@ pub enum Tool {
     Wall,
     /// An open line drawn as a fence (`fence.add`).
     Fence,
-    /// Two clicks, the bottom and then the top of a flight of steps (`stairs.add`).
+    /// Two clicks, the bottom and then the top of a flight of steps (`stairs.add`); a flight that
+    /// turns takes the corners in between and ends with Enter (or a fourth click).
     Stairs,
     /// A closed outline drawn as a raised bed with soil (`bed.add`).
     Bed,
@@ -375,6 +392,9 @@ pub fn next_name(project: &visioncraft_core::Project, base: &str) -> String {
 pub struct DrawState {
     /// What the Area tool draws.
     pub area_kind: AreaKind,
+    /// Whether the Stairs tool draws a flight that turns: the bottom, one or two corners and the
+    /// top, each segment at a right angle to the one before (`stairs.add` with `via`).
+    pub stairs_turn: bool,
     pub tool: Tool,
     pub points: Vec<P2>,
     pub selected: Option<String>,
@@ -464,7 +484,9 @@ impl DrawState {
     /// Before leaving for Walk: a shape being drawn with enough corners is kept (as Enter would),
     /// a shorter one is dropped.
     pub fn finish_for_walk(&mut self, cx: &mut Cx) {
-        let needed = if matches!(
+        let needed = if self.tool == Tool::Stairs && self.stairs_turn {
+            3
+        } else if matches!(
             self.tool,
             Tool::Wall | Tool::Fence | Tool::Stairs | Tool::Circle
         ) {
@@ -549,7 +571,23 @@ impl DrawState {
             Tool::Wall | Tool::Fence | Tool::Stairs | Tool::Circle
         );
         let existing = all_vertices(cx, None);
-        let snap = cursor.map(|c| snap_point(c, &self.points, &existing, radius, !cx.input.alt));
+        let mut snap =
+            cursor.map(|c| snap_point(c, &self.points, &existing, radius, !cx.input.alt));
+        // A flight that turns: from the second segment on, the pointer is held at a right angle
+        // to the segment before; the point after the first corner may be a U's second corner, so
+        // it keeps one width from it (`stairs.add` refuses flights that would overlap).
+        if self.tool == Tool::Stairs
+            && self.stairs_turn
+            && let (Some(s), [.., a, b]) = (snap.as_mut(), &self.points[..])
+        {
+            let min = if self.points.len() == 2 {
+                STAIRS_WIDTH_M
+            } else {
+                0.0
+            };
+            s.pos = right_angle_point(*a, *b, s.pos, min);
+            s.kind = SnapKind::RightAngle;
+        }
         if cx.input.escape && !self.points.is_empty() {
             self.points.clear();
             self.typed.clear();
@@ -631,12 +669,15 @@ impl DrawState {
             }
         }
         // Steps are two clicks: the bottom, then the top; a circle too: the centre, then the edge.
-        if matches!(self.tool, Tool::Stairs | Tool::Circle) && self.points.len() >= 2 {
+        // A flight that turns takes up to four, and Enter ends it at three.
+        let turning = self.tool == Tool::Stairs && self.stairs_turn;
+        let clicks = if turning { 4 } else { 2 };
+        if matches!(self.tool, Tool::Stairs | Tool::Circle) && self.points.len() >= clicks {
             self.finish(cx);
             return;
         }
         if cx.input.enter && typed_len.is_none() {
-            let needed = if closed_shape { 3 } else { 2 };
+            let needed = if turning || closed_shape { 3 } else { 2 };
             if self.points.len() >= needed {
                 self.finish(cx);
             }
@@ -776,10 +817,15 @@ impl DrawState {
             ),
             // Steps 1.2 m wide and half a metre high to start; the panel changes both (the rise
             // can be left out of the command, to read it off the ground).
+            Tool::Stairs if self.stairs_turn && points.len() >= 3 => (
+                "stairs.add",
+                "",
+                json!({"name": name(t::TOOL_STAIRS), "from": points[0], "via": &points[1..points.len() - 1], "to": points[points.len() - 1], "width_m": STAIRS_WIDTH_M, "height": 1.5}),
+            ),
             Tool::Stairs => (
                 "stairs.add",
                 "",
-                json!({"name": name(t::TOOL_STAIRS), "from": points[0], "to": points[1], "width_m": 1.2, "height": 0.5}),
+                json!({"name": name(t::TOOL_STAIRS), "from": points[0], "to": points[1], "width_m": STAIRS_WIDTH_M, "height": 0.5}),
             ),
             // A round area: the centre and the radius (an exact circle of four arcs).
             Tool::Circle => {
@@ -1211,7 +1257,12 @@ impl DrawState {
         if self.tool == Tool::Furniture {
             self.furniture_form_panel(ui);
         }
+        if self.tool == Tool::Stairs && ui.checkbox(&mut self.stairs_turn, t::STAIRS_TURN).changed()
+        {
+            self.points.clear();
+        }
         ui.small(match self.tool {
+            Tool::Stairs if self.stairs_turn => t::STAIRS_TURN_HINT,
             Tool::Select => t::SELECT_HINT,
             Tool::Wall | Tool::Fence => t::WALL_HINT,
             Tool::Stairs => t::STAIRS_HINT,
@@ -1636,6 +1687,29 @@ fn stairs_panel(ui: &mut egui::Ui, cx: &mut Cx, x: &visioncraft_core::shape::Ext
             g.riser * 1000.0,
             g.tread * 1000.0
         ));
+        // A flight that turns: its flights and landings.
+        if let Some(turned) = &g.turned {
+            for (i, f) in turned.flights.iter().enumerate() {
+                ui.label(format!(
+                    "{} {}: {} {} ({:.2} m)",
+                    t::FLIGHT,
+                    i + 1,
+                    f.steps,
+                    t::STEPS,
+                    f.run_m
+                ));
+            }
+            for l in &turned.landings {
+                ui.label(format!(
+                    "{}: {:.2} x {:.2} m, {:.2} m {}",
+                    t::LANDING,
+                    l.size_m[0],
+                    l.size_m[1],
+                    l.height_m,
+                    t::UP
+                ));
+            }
+        }
         let (mut riser, mut tread) = (st.riser_m.unwrap_or(g.riser), st.tread_m.unwrap_or(g.tread));
         if drag_field(ui, t::RISER, &mut riser, 0.005, 0.05..=0.3, " m") == Edit::Done {
             cx.run("stairs.set", json!({"id": x.id, "riser_m": riser}));
@@ -1652,6 +1726,9 @@ fn stairs_panel(ui: &mut egui::Ui, cx: &mut Cx, x: &visioncraft_core::shape::Ext
     ui.horizontal_wrapped(|ui| {
         if st.tread_m.is_some() && ui.button(t::FIT_TREADS).clicked() {
             cx.run("stairs.set", json!({"id": x.id, "tread_m": null}));
+        }
+        if st.path.is_some() && ui.button(t::STRAIGHTEN_STAIRS).clicked() {
+            cx.run("stairs.set", json!({"id": x.id, "via": null}));
         }
         if ui.button(t::BACK_TO_BLOCK).clicked() {
             cx.run("stairs.clear", json!({"id": x.id}));

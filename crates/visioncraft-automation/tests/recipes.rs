@@ -19,7 +19,7 @@ pub fn recipes() -> Vec<Value> {
 #[test]
 fn every_recipe_of_the_guide_runs() {
     let recipes = recipes();
-    assert_eq!(recipes.len(), 30);
+    assert_eq!(recipes.len(), 31);
     for (n, recipe) in recipes.into_iter().enumerate() {
         let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("recipe-{n}"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -277,6 +277,25 @@ fn every_recipe_of_the_guide_runs() {
                     end["sun"]["elevation_deg"].as_f64().unwrap() < 10.0,
                     "{report}"
                 );
+            }
+            31 => {
+                // The L stair: 6 steps over a short and a long flight, one landing half way up.
+                let stair = &results[2]["result"];
+                assert_eq!(stair["steps"], 6, "{report}");
+                let flights = stair["flights"].as_array().unwrap();
+                assert_eq!(flights.len(), 2, "{report}");
+                assert_eq!(flights[0]["steps"], 2, "{report}");
+                assert_eq!(flights[1]["steps"], 4, "{report}");
+                assert_eq!(stair["landings"].as_array().unwrap().len(), 1, "{report}");
+                let q = &results[3]["result"];
+                let row = q["shapes"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|r| r["id"] == stair["id"])
+                    .unwrap_or_else(|| panic!("no stair row: {report}"));
+                assert_eq!(row["stairs"]["landings"], 1, "{report}");
+                assert_eq!(row["stairs"]["flights"], 2, "{report}");
             }
             30 => {
                 // A dining set is a table and six chairs; the table grew to 2.4 m.
