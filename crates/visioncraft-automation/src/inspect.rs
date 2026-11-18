@@ -669,7 +669,7 @@ impl Shadows {
             owners,
             casters,
             crowns,
-            zones: visioncraft_core::terrace::zones(&project.shapes),
+            zones: visioncraft_core::terrace::project_zones(project),
         }
     }
 

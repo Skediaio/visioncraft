@@ -23,6 +23,7 @@
 //! step with a long tread. Every step and landing is a solid block from the ground up.
 
 use crate::house::Sink;
+use crate::setin::{self, SetIn};
 use serde::{Deserialize, Serialize};
 
 type P2 = [f32; 2];
@@ -59,6 +60,10 @@ pub struct Stairs {
     /// The width of a flight that turns (the outline cannot tell it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width_m: Option<f32>,
+    /// A flight set into the slope it climbs (see [`crate::setin`]): the steps are spaced along
+    /// the ground, the footprint is cut out of the terrain and cheek walls hold the earth beside.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub set_in: Option<SetIn>,
 }
 
 /// One flight of a stair that turns: the steps it climbs and the run they have.
@@ -68,6 +73,8 @@ pub struct Flight {
     /// The clear run: the segment less half a landing at each corner end.
     pub run_m: f32,
     pub tread_m: f32,
+    /// The depth of each step's tread, bottom to top (the last one runs on to the landing).
+    pub goings: Vec<f32>,
 }
 
 /// A landing of a stair that turns.
@@ -130,8 +137,12 @@ pub struct Geometry {
     pub steps: usize,
     /// Height of one riser.
     pub riser: f32,
-    /// Depth of one tread (the top one runs on to the back when there is a landing).
+    /// Depth of one tread (the top one runs on to the back when there is a landing); the mean
+    /// going of a flight set into the slope.
     pub tread: f32,
+    /// The depth of every step's tread, bottom to top; for a stair that turns, flight after
+    /// flight. All the same but the last one unless the flight is set into the slope.
+    pub goings: Vec<f32>,
     /// Remarks that do not stop the flight being drawn.
     pub warnings: Vec<String>,
     /// The flights, landings and blocks of a stair that turns. For one, `origin` and `dir` are
@@ -148,6 +159,47 @@ impl Geometry {
             None => vec![(self.steps, self.length)],
         }
     }
+
+    /// Every step and landing piece as a block, bottom to top.
+    pub fn blocks(&self) -> Vec<Block> {
+        if let Some(t) = &self.turned {
+            return t.blocks.clone();
+        }
+        let us = offsets(&self.goings);
+        (1..=self.steps)
+            .map(|k| {
+                let (u0, u1) = (us[k - 1], us[k]);
+                let mid = (u0 + u1) / 2.0;
+                Block {
+                    centre: [
+                        self.origin[0] + self.dir[0] * mid,
+                        self.origin[1] + self.dir[1] * mid,
+                    ],
+                    axis: self.dir,
+                    half: [(u1 - u0) / 2.0, self.width / 2.0],
+                    rise: ((k - 1) as f32 * self.riser, k as f32 * self.riser),
+                    step: true,
+                }
+            })
+            .collect()
+    }
+}
+
+/// Where each step starts along its flight: the running sum of the goings, with the total last.
+pub(crate) fn offsets(goings: &[f32]) -> Vec<f32> {
+    let mut out = vec![0.0];
+    for g in goings {
+        out.push(out.last().copied().unwrap_or(0.0) + g);
+    }
+    out
+}
+
+/// The goings of `n` equal treads of `tread` m on a run of `run` m: the last one runs on to the
+/// end.
+fn even_goings(n: usize, tread: f32, run: f32) -> Vec<f32> {
+    let mut v = vec![tread; n];
+    v[n - 1] = run - (n - 1) as f32 * tread;
+    v
 }
 
 impl Stairs {
@@ -158,6 +210,7 @@ impl Stairs {
             tread_m: None,
             path: None,
             width_m: None,
+            set_in: None,
         }
     }
 
@@ -181,8 +234,21 @@ impl Stairs {
     /// The flight on a 4-point rectangular `outline` rising `height` (or, with a `path`, the
     /// turned flight on its derived outline); the reason if it cannot be drawn.
     pub fn geometry(&self, outline: &[P2], height: f32) -> Result<Geometry, String> {
+        self.geometry_with(outline, height, None)
+    }
+
+    /// [`Stairs::geometry`] with the ground: `ground(x, z)` is its height above the bottom of the
+    /// flight. A flight that is set into the slope ([`SetIn`]) spaces its steps along it; without
+    /// ground (or without `set_in`) the treads are equal.
+    pub fn geometry_with(
+        &self,
+        outline: &[P2],
+        height: f32,
+        ground: Option<&dyn Fn(f32, f32) -> f32>,
+    ) -> Result<Geometry, String> {
+        let ground = ground.filter(|_| self.set_in.is_some());
         if let Some(path) = &self.path {
-            return self.turned_geometry(path, outline, height);
+            return self.turned_geometry(path, outline, height, ground);
         }
         if outline.len() != 4 {
             return Err("stairs need a 4-point rectangular outline".into());
@@ -224,6 +290,29 @@ impl Stairs {
             ));
         }
         let mut warnings = Vec::new();
+        if let Some(ground) = ground {
+            let profile = |s: f32| ground(origin[0] + dir[0] * s, origin[1] + dir[1] * s);
+            let fit = setin::fit_goings(&profile, length, steps, riser, 0.0, "")?;
+            warnings.extend(fit.notes);
+            if self.tread_m.is_some() {
+                warnings.push(
+                    "`tread_m` is not used by a flight set into the slope: the goings follow the ground"
+                        .into(),
+                );
+            }
+            return Ok(Geometry {
+                origin,
+                dir,
+                length,
+                width,
+                steps,
+                riser,
+                tread: length / steps as f32,
+                goings: fit.goings,
+                warnings,
+                turned: None,
+            });
+        }
         let tread = match self.tread_m {
             Some(t) if t * steps as f32 <= length + 1e-4 => t,
             Some(t) => {
@@ -257,6 +346,7 @@ impl Stairs {
             steps,
             riser,
             tread,
+            goings: even_goings(steps, tread, length),
             warnings,
             turned: None,
         })
@@ -267,6 +357,7 @@ impl Stairs {
         path: &[P2],
         outline: &[P2],
         height: f32,
+        ground: Option<&dyn Fn(f32, f32) -> f32>,
     ) -> Result<Geometry, String> {
         let width = self
             .width_m
@@ -302,10 +393,51 @@ impl Stairs {
             ));
         }
         let runs: Vec<f32> = lay.flights.iter().map(|f| f.run).collect();
-        let counts = split_steps(total, &runs);
+        // A flight set into the slope takes steps in proportion to the ground it climbs.
+        let profile = |lf: &FlightRun| {
+            let (start, dir) = (lf.start, lf.dir);
+            move |g: &dyn Fn(f32, f32) -> f32, s: f32| {
+                g(start[0] + dir[0] * s, start[1] + dir[1] * s)
+            }
+        };
+        let weights: Vec<f32> = match ground {
+            Some(g) => lay
+                .flights
+                .iter()
+                .map(|lf| {
+                    let at = profile(lf);
+                    (at(g, lf.run) - at(g, 0.0)).max(0.02)
+                })
+                .collect(),
+            None => runs.clone(),
+        };
+        let counts = split_steps(total, &weights);
         let mut warnings = Vec::new();
         let mut flights = Vec::new();
+        let mut done_steps = 0usize;
         for (i, (&n, &run)) in counts.iter().zip(&runs).enumerate() {
+            if let Some(g) = ground {
+                let at = profile(&lay.flights[i]);
+                let label = format!("flight {}: ", i + 1);
+                let fit = setin::fit_goings(
+                    &|s| at(g, s),
+                    run,
+                    n,
+                    riser,
+                    done_steps as f32 * riser,
+                    &label,
+                )?;
+                warnings.extend(fit.notes);
+                done_steps += n;
+                flights.push(Flight {
+                    steps: n,
+                    run_m: run,
+                    tread_m: run / n as f32,
+                    goings: fit.goings,
+                });
+                continue;
+            }
+            done_steps += n;
             let tread = match self.tread_m {
                 Some(t) if t * n as f32 <= run + 1e-4 => t,
                 Some(t) => {
@@ -339,6 +471,7 @@ impl Stairs {
                 steps: n,
                 run_m: run,
                 tread_m: tread,
+                goings: even_goings(n, tread, run),
             });
         }
         // Blocks: the steps of each flight, the landing after the first one.
@@ -347,13 +480,10 @@ impl Stairs {
         let mut landings = Vec::new();
         let mut done = 0usize;
         for (i, (f, lf)) in flights.iter().zip(&lay.flights).enumerate() {
+            let us = offsets(&f.goings);
             for j in 1..=f.steps {
-                let u0 = (j - 1) as f32 * f.tread_m;
-                let u1 = if j == f.steps {
-                    f.run_m
-                } else {
-                    j as f32 * f.tread_m
-                };
+                let u0 = us[j - 1];
+                let u1 = if j == f.steps { f.run_m } else { us[j] };
                 let mid = (u0 + u1) / 2.0;
                 blocks.push(Block {
                     centre: [lf.start[0] + lf.dir[0] * mid, lf.start[1] + lf.dir[1] * mid],
@@ -382,6 +512,7 @@ impl Stairs {
             }
         }
         let going = flights.iter().map(|f| f.run_m).sum::<f32>() / total as f32;
+        let goings = flights.iter().flat_map(|f| f.goings.clone()).collect();
         Ok(Geometry {
             origin: lay.q[0],
             dir: lay.d[0],
@@ -390,6 +521,7 @@ impl Stairs {
             steps: total,
             riser,
             tread: going,
+            goings,
             warnings,
             turned: Some(Turned {
                 flights,
@@ -756,14 +888,11 @@ pub fn step_bottoms(
     let d = g.dir;
     let n = [-d[1], d[0]];
     let hw = g.width / 2.0;
+    let us = offsets(&g.goings);
     (1..=g.steps)
         .map(|k| {
-            let u0 = (k - 1) as f32 * g.tread;
-            let u1 = if k == g.steps {
-                g.length
-            } else {
-                k as f32 * g.tread
-            };
+            let u0 = us[k - 1];
+            let u1 = if k == g.steps { g.length } else { us[k] };
             let mut low = f32::INFINITY;
             for i in 0..=4 {
                 for j in 0..=4 {
@@ -782,8 +911,9 @@ pub fn step_bottoms(
 }
 
 /// Draws the flight `g` from `lo` up on the faces of [`STAIR_FACES`]. `bottoms` holds the bottom
-/// of each step's block (see [`step_bottoms`]), all at or under `lo`, so that on uneven ground
-/// every step stays solid down to the ground under it.
+/// of each step's block (see [`step_bottoms`]), all at or under `lo` (a flight set into the slope
+/// has them under each step's riser instead), so that on uneven ground every step stays solid
+/// down to the ground under it.
 pub(crate) fn mesh(s: &mut dyn Sink, g: &Geometry, lo: f32, bottoms: &[f32]) {
     if let Some(t) = &g.turned {
         return mesh_blocks(s, &t.blocks, lo, bottoms);
@@ -801,7 +931,7 @@ pub(crate) fn mesh(s: &mut dyn Sink, g: &Geometry, lo: f32, bottoms: &[f32]) {
     let (d3, n3, up) = ([d[0], 0.0, d[1]], [n[0], 0.0, n[1]], [0.0, 1.0, 0.0]);
     let neg = |v: [f32; 3]| v.map(|c| -c);
     let hi = lo + g.riser * g.steps as f32;
-    let bottom = |k: usize| bottoms.get(k - 1).copied().unwrap_or(lo).min(lo);
+    let bottom = |k: usize| bottoms.get(k - 1).copied().unwrap_or(lo);
     // A wall across the flight at `u` from `ya` to `yb`, facing `outward`.
     let wall = |s: &mut dyn Sink, face: usize, u: f32, ya: f32, yb: f32, outward: [f32; 3]| {
         quad(
@@ -814,13 +944,10 @@ pub(crate) fn mesh(s: &mut dyn Sink, g: &Geometry, lo: f32, bottoms: &[f32]) {
     wall(s, SIDES, g.length, bottom(g.steps), hi, d3);
     // What the block before has under the riser: the bottom of the flight for the first step.
     let mut before = lo;
+    let us = offsets(&g.goings);
     for k in 1..=g.steps {
-        let u0 = (k - 1) as f32 * g.tread;
-        let u1 = if k == g.steps {
-            g.length
-        } else {
-            k as f32 * g.tread
-        };
+        let u0 = us[k - 1];
+        let u1 = if k == g.steps { g.length } else { us[k] };
         let (y0, y1) = (lo + (k - 1) as f32 * g.riser, lo + k as f32 * g.riser);
         let yb = bottom(k);
         quad(
@@ -918,7 +1045,7 @@ fn minus(a: (f32, f32), b: (f32, f32)) -> Vec<(f32, f32)> {
 fn mesh_blocks(s: &mut dyn Sink, blocks: &[Block], lo: f32, bottoms: &[f32]) {
     let eps = 2e-3;
     let range = |i: usize| {
-        let yb = bottoms.get(i).copied().unwrap_or(lo).min(lo);
+        let yb = bottoms.get(i).copied().unwrap_or(lo);
         (yb, lo + blocks[i].rise.1)
     };
     let all: Vec<[Wall; 4]> = blocks.iter().map(walls).collect();

@@ -30,6 +30,7 @@ pub mod quantities;
 pub mod raycast;
 pub mod season;
 pub mod session;
+pub mod setin;
 pub mod shape;
 pub mod sky_volume;
 pub mod spec;

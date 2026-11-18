@@ -6,6 +6,7 @@ use super::{fail, house::assign_defaults};
 use crate::bed::{BedStyle, RaisedBed};
 use crate::project::Project;
 use crate::session::{CommandError, Session, parse};
+use crate::setin::SetIn;
 use crate::shape::{Extrusion, Shape, shape_mesh};
 use crate::spec::{ParamType as T, param, spec};
 use crate::stairs::Stairs;
@@ -17,6 +18,8 @@ type P2 = [f32; 2];
 /// Default height of a raised bed's walls (metres).
 const DEFAULT_BED_HEIGHT_M: f32 = 0.4;
 
+const SET_IN_HELP: &str = "Sets the flight into the slope it climbs: {cheek_style, thickness_m?, coping_m?}; `null` (stairs.set) takes it out. The step count is still round(height / riser_m), but each riser stands where the original ground (terrain and terraces, along the centreline) reaches the level of the step before, so a flat stretch becomes a long tread and a steep one a short one; each going is held within 0.25..2 m, and a going outside 0.28..0.45 m is warned about when Blondel's rule fails, or when it was held. A flight that turns does this per flight (the steps shared in proportion to the ground each climbs; landings as before). The flight's footprint, widened at the sides by the cheeks' thickness, is cut out of the terrain like a terrace's, and the ground inside it is the treads' level (nothing grows on the steps). Cheek walls stand along both sides from below the steps to the ground beside them plus `coping_m` (0..1, default 0.1) where they hold earth, and just under the treads where the ground is lower; faces `<id>:cheeks` and `<id>:cheeks_rim`. `cheek_style`: plain (default), masonry, sleepers, corten, gabion or none (no cheeks: the terrain is cut and a bank beside the steps is not held, which is warned about). `thickness_m`: the style's own when left out (plain and masonry 0.05..0.3, sleepers 0.1..0.2, corten 0.005..0.02, gabion 0.2..0.6). With `set_in` and no `height`, the rise is the ground at the top minus the lowest ground under the flight.";
+
 /// A list that is present, `null` (clear it) or absent (leave it).
 fn double_list<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Option<Vec<P2>>>, D::Error> {
     Option::<Vec<P2>>::deserialize(d).map(Some)
@@ -27,12 +30,18 @@ fn double_option<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Option<f32>>,
     Option::<f32>::deserialize(d).map(Some)
 }
 
+/// A set-in object that is present, `null` (clear it) or absent (leave it).
+fn double_set_in<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Option<SetIn>>, D::Error> {
+    Option::<SetIn>::deserialize(d).map(Some)
+}
+
 pub(super) fn register(s: &mut Session) {
     let id = |what: &'static str| param("id", T::String, what).required();
     let sizes = || {
         vec![
             param("riser_m", T::Number, "Height of a riser to aim for, 0.05..0.30; the step count is round(height / riser_m) and the risers share the height evenly. Default 0.17.").unit("m"),
-            param("tread_m", T::Number, "Depth of a tread, 0.15..0.60. A footprint longer than the steps need ends in a landing; a shorter one is warned about and the treads shrink to fit. Without it the treads share the footprint evenly."),
+            param("tread_m", T::Number, "Depth of a tread, 0.15..0.60. A footprint longer than the steps need ends in a landing; a shorter one is warned about and the treads shrink to fit. Without it the treads share the footprint evenly. Not used by a flight set into the slope (`set_in`): its goings follow the ground."),
+            param("set_in", T::Object, SET_IN_HELP),
         ]
     };
     let mut add_params = vec![
@@ -270,7 +279,9 @@ fn derived_height(
     Ok(h)
 }
 
-fn stairs_materials(project: &mut Project, id: &str) {
+/// Gives the flight's faces their materials where they have none; `restyle` gives the cheeks the
+/// material of their style over what they have.
+fn stairs_materials(project: &mut Project, id: &str, restyle: bool) {
     assign_defaults(
         project,
         id,
@@ -280,17 +291,49 @@ fn stairs_materials(project: &mut Project, id: &str) {
             ("sides", "concrete"),
         ],
     );
+    let style = project.shapes.iter().find_map(|s| match s {
+        Shape::Extrusion(e) if e.id == id => e.stairs.as_ref()?.set_in?.cheek_style.bed(),
+        _ => None,
+    });
+    if restyle || style.is_none() {
+        drop_face_materials(project, id, crate::setin::FACES);
+    }
+    if let Some(style) = style {
+        assign_defaults(
+            project,
+            id,
+            &[
+                ("cheeks", style.default_material()),
+                ("cheeks_rim", style.rim_material()),
+            ],
+        );
+    }
+}
+
+/// The mesh of closed extrusion `shape` as the scene draws it: on the project's terrain.
+fn placed_mesh(project: &Project, shape: &Shape) -> Option<crate::ImportedModel> {
+    let lifts = crate::shape::area_lifts(&project.shapes)
+        .into_iter()
+        .collect();
+    crate::plant_ground::placed_shape_mesh(project, shape, &lifts, &[])
+        .ok()
+        .map(|(m, _)| m)
 }
 
 /// What `stairs.add` and `stairs.set` report on flight `id`.
 fn stairs_report(project: &Project, id: &str) -> Value {
-    let Some(Shape::Extrusion(e)) = project.shapes.iter().find(|s| s.id() == id) else {
+    let Some(shape @ Shape::Extrusion(e)) = project.shapes.iter().find(|s| s.id() == id) else {
         return Value::Null;
     };
-    let (Some(st), Ok(mesh)) = (&e.stairs, shape_mesh(&Shape::Extrusion(e.clone()))) else {
+    let (Some(st), Some(mesh)) = (&e.stairs, placed_mesh(project, shape)) else {
         return Value::Null;
     };
-    match st.geometry(&e.points, e.height) {
+    let built = st.set_in.and_then(|_| crate::setin::build_in(project, e));
+    let geometry = match &built {
+        Some(b) => Ok(b.geometry.clone()),
+        None => st.geometry(&e.points, e.height),
+    };
+    match geometry {
         Ok(g) => {
             let flights: Vec<Value> = g
                 .flights()
@@ -303,11 +346,16 @@ fn stairs_report(project: &Project, id: &str) -> Value {
                     .map(|l| json!({"size_m": l.size_m, "height_m": l.height_m}))
                     .collect()
             });
-            json!({
+            let mut out = json!({
                 "steps": g.steps, "riser_m": g.riser, "tread_m": g.tread,
                 "height_m": e.height, "flights": flights, "landings": landings,
                 "warnings": mesh.warnings,
-            })
+            });
+            if let (Some(b), Some(si)) = (&built, &st.set_in) {
+                out["goings_m"] = json!(g.goings);
+                out["set_in"] = b.report().json(si);
+            }
+            out
         }
         Err(_) => Value::Null,
     }
@@ -327,8 +375,12 @@ fn add_stairs(project: &mut Project, params: &Value) -> Result<Value, CommandErr
         riser_m: Option<f32>,
         tread_m: Option<f32>,
         via: Option<Vec<P2>>,
+        set_in: Option<SetIn>,
     }
     let p: P = parse(params)?;
+    if let Some(si) = &p.set_in {
+        si.check().map_err(fail)?;
+    }
     let via = p.via.clone().unwrap_or_default();
     if via.len() > 2 {
         return Err(fail("`via` takes one or two corner points"));
@@ -371,13 +423,22 @@ fn add_stairs(project: &mut Project, params: &Value) -> Result<Value, CommandErr
                 tread_m: p.tread_m,
                 path,
                 width_m,
+                set_in: p.set_in,
             }),
             raised_bed: None,
             furniture: None,
         })
     })?;
     let id = r["id"].as_str().expect("add returns an id").to_string();
-    stairs_materials(project, &id);
+    // A flight set into the slope can only be checked against the terrain.
+    if let Some(shape) = project.shapes.iter().find(|s| s.id() == id) {
+        let lifts = crate::shape::area_lifts(&project.shapes)
+            .into_iter()
+            .collect();
+        crate::plant_ground::placed_shape_mesh(project, shape, &lifts, &[])
+            .map_err(|e| fail(e.to_string()))?;
+    }
+    stairs_materials(project, &id, false);
     let mut out = stairs_report(project, &id);
     out["id"] = json!(id);
     Ok(out)
@@ -402,8 +463,13 @@ fn set_stairs(project: &mut Project, params: &Value) -> Result<Value, CommandErr
         #[serde(default, deserialize_with = "double_list")]
         via: Option<Option<Vec<P2>>>,
         path: Option<Vec<P2>>,
+        #[serde(default, deserialize_with = "double_set_in")]
+        set_in: Option<Option<SetIn>>,
     }
     let p: P = parse(params)?;
+    if let Some(Some(si)) = &p.set_in {
+        si.check().map_err(fail)?;
+    }
     if p.path.is_some() && (p.via.is_some() || p.from.is_some() || p.to.is_some()) {
         return Err(fail("give `path` alone, without `via`, `from` or `to`"));
     }
@@ -416,6 +482,9 @@ fn set_stairs(project: &mut Project, params: &Value) -> Result<Value, CommandErr
         }
         let had = e.stairs.is_some();
         let mut st = e.stairs.take().unwrap_or_else(|| Stairs::new(0));
+        if let Some(si) = p.set_in {
+            st.set_in = si;
+        }
         if let Some(u) = p.up_edge {
             st.up_edge = u;
         }
@@ -504,7 +573,7 @@ fn set_stairs(project: &mut Project, params: &Value) -> Result<Value, CommandErr
         }
         Ok(())
     })?;
-    stairs_materials(project, &p.id);
+    stairs_materials(project, &p.id, p.set_in.is_some());
     Ok(stairs_report(project, &p.id))
 }
 
@@ -543,7 +612,11 @@ fn edit(
         return Err(fail(format!("`{id}` is not stairs; use stairs.set")));
     }
     f(e)?;
-    shape_mesh(&shape).map_err(|e| fail(e.to_string()))?;
+    let lifts = crate::shape::area_lifts(&project.shapes)
+        .into_iter()
+        .collect();
+    crate::plant_ground::placed_shape_mesh(project, &shape, &lifts, &[])
+        .map_err(|e| fail(e.to_string()))?;
     project.shapes[at] = shape;
     Ok(())
 }
@@ -1579,5 +1652,217 @@ mod tests {
         assert_eq!(st["landings"], 1);
         assert!((st["landing_area_m2"].as_f64().unwrap() - 1.0).abs() < 1e-4);
         assert!((st["total_going_m"].as_f64().unwrap() - 5.0).abs() < 1e-3);
+    }
+
+    /// A 40 x 30 m terrain rising 1 in 3 towards +x: the ground is `x / 3`.
+    fn hillside() -> Session {
+        let mut t = crate::Terrain::flat([0.0, 0.0], 40.0, 30.0, 0.5, "lawn").unwrap();
+        let w = t.width as usize + 1;
+        for (i, h) in t.heights.iter_mut().enumerate() {
+            *h = (i % w) as f32 * t.cell_m / 3.0;
+        }
+        Session::new(Project {
+            terrain: Some(std::sync::Arc::new(t)),
+            ..Project::default()
+        })
+    }
+
+    fn set_in_steps(s: &mut Session, extra: serde_json::Value) -> serde_json::Value {
+        let mut p = json!({"from": [6, 10], "to": [12, 10], "width_m": 1.2,
+            "set_in": {"cheek_style": "sleepers"}});
+        p.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        s.run("stairs.add", p).unwrap()
+    }
+
+    fn mats(s: &Session, id: &str) -> Vec<(String, String)> {
+        s.project()
+            .assignments
+            .iter()
+            .filter(|a| a.target.owner() == id)
+            .map(|a| (format!("{:?}", a.target), a.material.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn set_in_stairs_follow_the_slope_and_report_goings_cheeks_and_earth() {
+        let mut s = hillside();
+        let r = set_in_steps(&mut s, json!({}));
+        let id = r["id"].as_str().unwrap().to_string();
+        // The rise is the ground at the top over the lowest ground under the flight.
+        assert!((r["height_m"].as_f64().unwrap() - 2.05).abs() < 0.01, "{r}");
+        assert_eq!(r["steps"], 12);
+        let goings = r["goings_m"].as_array().unwrap();
+        assert_eq!(goings.len(), 12);
+        assert!((goings[0].as_f64().unwrap() - 0.5).abs() < 0.03);
+        let si = &r["set_in"];
+        assert_eq!(si["cheek_style"], "sleepers");
+        // The treads stand on the slope: the earth under them is fill.
+        assert!(si["fill_m3"].as_f64().unwrap() > 0.5, "{si}");
+        assert!(si["cheek_length_m"].as_f64().unwrap() > 11.0, "{si}");
+        assert!(si["cheek_outer_face_area_m2"].as_f64().unwrap() > 1.0);
+        assert!(si["beams"].as_u64().unwrap() > 5);
+        // 1 in 3 is gentler than a comfortable stair.
+        assert!(r["warnings"].to_string().contains("uncomfortable"), "{r}");
+        // The cheeks have their style's material.
+        let m = mats(&s, &id);
+        assert!(
+            m.iter()
+                .any(|(t, mat)| t.contains("cheeks_rim") && mat == "timber"),
+            "{m:?}"
+        );
+        // The ground inside the flight is a tread, beside it the terrain's.
+        let (at, beside) = {
+            let ground = crate::terrace::ground_fn(s.project());
+            (ground(9.0, 10.0).unwrap(), ground(9.0, 12.0).unwrap())
+        };
+        assert!((at - 3.0).abs() < 0.3 && (at - 3.0).abs() > 1e-4, "{at}");
+        assert!((beside - 3.0).abs() < 1e-4);
+        // The quantities say it too.
+        let q = s.run("query.quantities", json!({})).unwrap();
+        let row = q["shapes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|x| x["id"] == id.as_str())
+            .unwrap();
+        assert_eq!(
+            row["stairs"]["set_in"]["goings_m"]
+                .as_array()
+                .unwrap()
+                .len(),
+            12
+        );
+        assert!(row["stairs"]["set_in"]["fill_m3"].as_f64().unwrap() > 0.5);
+        // One undo takes it all away.
+        assert!(s.undo());
+        assert!(s.project().shapes.is_empty());
+        assert!(crate::terrace::project_zones(s.project()).is_empty());
+    }
+
+    #[test]
+    fn set_changes_the_cheeks_and_takes_the_flight_out_of_the_slope() {
+        let mut s = hillside();
+        let id = set_in_steps(&mut s, json!({}))["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let r = s
+            .run(
+                "stairs.set",
+                json!({"id": id, "set_in": {"cheek_style": "masonry", "coping_m": 0.2}}),
+            )
+            .unwrap();
+        assert_eq!(r["set_in"]["cheek_style"], "masonry");
+        let m = mats(&s, &id);
+        assert!(
+            m.iter()
+                .any(|(t, mat)| t.contains("\"S1:cheeks\"") && mat == "brick"),
+            "{m:?}"
+        );
+        assert_eq!(get(&s, &id).stairs.unwrap().set_in.unwrap().coping_m, 0.2);
+        // No cheeks: the terrain is still cut, the faces and their materials are gone.
+        let r = s
+            .run(
+                "stairs.set",
+                json!({"id": id, "set_in": {"cheek_style": "none"}}),
+            )
+            .unwrap();
+        assert_eq!(r["set_in"]["cheek_length_m"], 0.0);
+        assert!(
+            r["warnings"].to_string().contains("no cheeks")
+                || r["warnings"].to_string().contains("uncomfortable")
+        );
+        assert_eq!(crate::terrace::project_zones(s.project()).len(), 1);
+        assert!(mats(&s, &id).iter().all(|(t, _)| !t.contains("cheeks")));
+        // Null takes it out: equal treads again, no zone, no set-in answer.
+        let r = s
+            .run("stairs.set", json!({"id": id, "set_in": null}))
+            .unwrap();
+        assert!(r.get("set_in").is_none());
+        assert!(get(&s, &id).stairs.unwrap().set_in.is_none());
+        assert!(crate::terrace::project_zones(s.project()).is_empty());
+        // A bad one is refused and leaves the project alone.
+        let before = s.project().clone();
+        assert!(
+            s.run("stairs.set", json!({"id": id, "set_in": {"coping_m": 3}}))
+                .is_err()
+        );
+        assert!(
+            s.run(
+                "stairs.set",
+                json!({"id": id, "set_in": {"cheek_style": "marble"}})
+            )
+            .is_err()
+        );
+        assert!(
+            s.run(
+                "stairs.set",
+                json!({"id": id, "set_in": {"cheek_style": "sleepers", "thickness_m": 0.5}})
+            )
+            .is_err()
+        );
+        assert_eq!(&before, s.project());
+    }
+
+    #[test]
+    fn set_in_survives_a_save_and_load_and_old_flights_have_no_field() {
+        let mut s = hillside();
+        let id = set_in_steps(&mut s, json!({"height": 2.0}))["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let plain = stairs(&mut s);
+        let bytes = s.project().to_json_bytes();
+        let loaded = Project::from_json_bytes(&bytes).unwrap();
+        assert_eq!(&loaded, s.project());
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let shapes = v["shapes"].as_array().unwrap();
+        let find = |id: &str| shapes.iter().find(|x| x["id"] == id).unwrap();
+        assert_eq!(find(&id)["stairs"]["set_in"]["cheek_style"], "sleepers");
+        assert!(find(&plain)["stairs"].get("set_in").is_none());
+        // A project saved before the field existed loads with none.
+        let mut old = v.clone();
+        for sh in old["shapes"].as_array_mut().unwrap() {
+            if let Some(st) = sh.get_mut("stairs").and_then(|x| x.as_object_mut()) {
+                st.remove("set_in");
+            }
+        }
+        let loaded = Project::from_json_bytes(&serde_json::to_vec(&old).unwrap()).unwrap();
+        for sh in &loaded.shapes {
+            if let Shape::Extrusion(e) = sh {
+                assert!(e.stairs.as_ref().unwrap().set_in.is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn a_turned_flight_can_be_set_in_and_refuses_a_flight_too_short_for_its_steps() {
+        let mut s = hillside();
+        let r = s
+            .run(
+                "stairs.add",
+                json!({"from": [6, 6], "via": [[6, 12]], "to": [12, 12], "width_m": 1.0,
+                       "height": 2.0, "set_in": {"cheek_style": "plain"}}),
+            )
+            .unwrap();
+        assert_eq!(r["flights"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            r["goings_m"].as_array().unwrap().len() as u64,
+            r["steps"].as_u64().unwrap()
+        );
+        assert_eq!(r["landings"].as_array().unwrap().len(), 1);
+        // 12 steps need 3 m at least: a 1.5 m flight cannot be set in.
+        let before = s.project().clone();
+        assert!(
+            s.run(
+                "stairs.add",
+                json!({"from": [20, 10], "to": [21.5, 10], "width_m": 1.0, "height": 2.0,
+                       "set_in": {}}),
+            )
+            .is_err()
+        );
+        assert_eq!(&before, s.project());
     }
 }

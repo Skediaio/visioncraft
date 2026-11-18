@@ -1006,6 +1006,45 @@ terrace floor stands on the floor); without terrain every mode is the level fenc
 areas are those of the real mesh. Draw's fence panel has an On a slope list and a Gravel board
 checkbox.
 
+### 34. Garden steps set into a lawn slope, up to a cut-in terrace
+
+```json recipe
+{"intent": "garden steps with sleeper cheeks climbing a lawn slope to a terrace cut into the top of it", "steps": [
+  {"id": "terrain.create", "params": {"origin": [0, 0], "width_m": 40, "depth_m": 30, "cell_m": 0.5, "base_material": "lawn"}},
+  {"id": "terrain.stroke", "params": {"tool": "raise", "points": [[5, 1], [35, 1]], "radius_m": 12, "strength": 0.5, "falloff": 0.8}},
+  {"id": "terrace.add", "params": {"name": "Upper terrace", "outline": [[12, 0.5], [22, 0.5], [22, 5], [12, 5]], "floor_from": "lowest", "style": "sleepers", "coping_m": 0, "material": "paving"}},
+  {"id": "stairs.add", "params": {"name": "Garden steps", "from": [17, 13.5], "to": [17, 5.15], "width_m": 1.2, "set_in": {"cheek_style": "sleepers"}}},
+  {"id": "query.ground_height", "params": {"x": 17, "z": 9}},
+  {"id": "query.quantities", "params": {}},
+  {"id": "view.render", "params": {"camera": {"position": [26, 4, 20], "target": [17, 1.2, 8]}, "width": 960, "height": 540, "path": "steps-set-in.png"}},
+  {"id": "view.render", "params": {"camera": {"position": [32, 1.5, 9], "target": [17, 1.2, 9]}, "width": 960, "height": 540, "path": "steps-set-in-side.png"}}
+]}
+```
+
+`set_in` on `stairs.add` or `stairs.set` sets a flight into the slope it climbs instead of standing
+it on the ground. Three things change. The goings follow the ground: the step count is still the
+rise over `riser_m`, but each riser stands where the original ground (terrain and terraces, along
+the centreline) has climbed to the level of the step before, so a gentle stretch becomes a long
+tread and a steep one a short one, each held within 0.25 to 2 m (`tread_m` is not used). The
+answer lists `goings_m` and `warnings` for a going held at a limit (the ground is steeper or
+flatter than steps can follow) and for goings outside 0.28 to 0.45 m when Blondel's rule fails
+too. A flight that turns does this per flight, sharing the steps by the ground each one climbs;
+the landings stay as they were. The footprint is cut out of the terrain like a terrace's, widened
+by the cheeks' thickness at the sides, and everything that asks for the ground inside it gets the
+tread's level: plants never stand on the steps. And cheek walls stand along both sides, in a
+`cheek_style` (`plain`, `masonry`, `sleepers`, `corten`, `gabion`, or `none`), `thickness_m` and
+`coping_m` as a terrace wall has them: from below the step up to the ground beside it plus the
+coping where it holds earth, and just under the tread where the ground is lower, so the top
+follows the slope and steps with the treads. Their faces are `<id>:cheeks` and
+`<id>:cheeks_rim`. With `none` the terrain is still cut and a bank beside the steps is not held,
+which the answer warns about. Without `height` the rise is the ground just past the top (here the
+terrace's floor) over the lowest ground under the flight, so end the flight at the terrace's
+outline moved out by its wall. The answer's `set_in` and the `stairs.set_in` row of
+`query.quantities` give `goings_m`, `cheek_length_m`, the cheeks' face areas, `beams` or
+`plate_area_m2`, and `cut_m3` and `fill_m3`, the earth above and below the treads. `stairs.set`
+with `"set_in": null` stands the flight on the ground again. Draw's stairs panel has a "Set into
+the slope" checkbox and the cheek styles.
+
 ## Known traps
 
 - **Ids are not names**: `S2`, not `House`; viewpoints are `v1`, lights `li1`.

@@ -1134,7 +1134,7 @@ impl Scene {
         let old = self.terrain.clone();
         // The terraces: their footprints are cut out of the terrain, and what stood on the old
         // ground there (or stands on the floor now) is placed again.
-        let zones = visioncraft_core::terrace::zones(&project.shapes);
+        let zones = visioncraft_core::terrace::project_zones(project);
         if self.zones != zones {
             let moved: Vec<&visioncraft_core::terrace::Zone> = self
                 .zones
@@ -1268,13 +1268,10 @@ impl Scene {
         // How shapes sit on the ground: `visioncraft_core::shape`'s module docs.
         let lifts: HashMap<String, f32> = area_lifts(&project.shapes).into_iter().collect();
         let terrain = project.terrain.clone();
-        let zones_key = self.zones.iter().fold(0usize, |k, z| {
-            z.hole
-                .iter()
-                .fold(k.rotate_left(11) ^ (z.floor.to_bits() as usize), |k, p| {
-                    k.rotate_left(7) ^ (p[0].to_bits() as usize) ^ ((p[1].to_bits() as usize) << 1)
-                })
-        });
+        let zones_key = self
+            .zones
+            .iter()
+            .fold(0usize, |k, z| k.rotate_left(11) ^ z.signature());
         // Water areas: the areas under them are cut out there (the pond's bed is the terrain's).
         let water = water_areas(project);
         for s in &project.shapes {

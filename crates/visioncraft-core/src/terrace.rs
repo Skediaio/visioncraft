@@ -610,28 +610,102 @@ pub fn warnings(project: &Project, a: &crate::shape::Area, r: &Report) -> Vec<St
 
 // --- Ground queries -------------------------------------------------------------------------
 
-/// A terrace as the ground queries see it.
+/// One step or landing piece of a flight set into the slope (`crate::setin`), as the ground
+/// queries see it: a rectangle and the level of its tread (absolute).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Tread {
+    pub centre: P2,
+    /// Unit direction of the half extent `half[0]`; the other one lies across it.
+    pub axis: P2,
+    pub half: [f32; 2],
+    pub level: f32,
+}
+
+impl Tread {
+    fn contains(&self, p: P2) -> bool {
+        let n = [-self.axis[1], self.axis[0]];
+        let (dx, dz) = (p[0] - self.centre[0], p[1] - self.centre[1]);
+        (dx * self.axis[0] + dz * self.axis[1]).abs() <= self.half[0] + 1e-4
+            && (dx * n[0] + dz * n[1]).abs() <= self.half[1] + 1e-4
+    }
+}
+
+/// A terrace, or a flight of stairs set into the slope, as the ground queries see it: a footprint
+/// cut out of the terrain and a ground inside it that is the floor (or the treads).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Zone {
-    /// The terrace's area.
+    /// The terrace's area, or the flight's shape.
     pub id: String,
     /// The floor's outline.
     pub outline: Vec<P2>,
     /// The footprint cut out of the terrain: the outline moved out by the wall.
     pub hole: Vec<P2>,
-    /// The floor's height.
+    /// The floor's height; for a flight, the bottom of its lowest step.
     pub floor: f32,
+    /// The treads of a flight set into the slope; empty for a terrace.
+    pub treads: Vec<Tread>,
     lo: P2,
     hi: P2,
 }
 
 impl Zone {
+    /// A zone cutting `hole` out of the terrain, with the ground `floor` inside `outline`, or the
+    /// level of the `treads` that cover it.
+    pub fn new(
+        id: String,
+        outline: Vec<P2>,
+        hole: Vec<P2>,
+        floor: f32,
+        treads: Vec<Tread>,
+    ) -> Self {
+        let lo = hole
+            .iter()
+            .fold([f32::MAX; 2], |m, p| [m[0].min(p[0]), m[1].min(p[1])]);
+        let hi = hole
+            .iter()
+            .fold([f32::MIN; 2], |m, p| [m[0].max(p[0]), m[1].max(p[1])]);
+        Self {
+            id,
+            outline,
+            hole,
+            floor,
+            treads,
+            lo,
+            hi,
+        }
+    }
+
+    /// Whether this is a flight of stairs and not a terrace.
+    pub fn is_stairs(&self) -> bool {
+        !self.treads.is_empty()
+    }
+
+    /// A number that changes when the zone's footprint, floor or treads do.
+    pub fn signature(&self) -> usize {
+        let mix = |k: usize, v: f32| k.rotate_left(7) ^ (v.to_bits() as usize);
+        let k = self
+            .hole
+            .iter()
+            .fold(self.floor.to_bits() as usize, |k, p| {
+                mix(mix(k, p[0]), p[1]).rotate_left(3)
+            });
+        self.treads.iter().fold(k, |k, t| {
+            mix(mix(mix(k, t.centre[0]), t.centre[1]), t.level)
+        })
+    }
+
     fn boxed(&self, p: P2) -> bool {
         p[0] >= self.lo[0] && p[0] <= self.hi[0] && p[1] >= self.lo[1] && p[1] <= self.hi[1]
     }
 
-    /// The floor's height when `p` is inside the outline.
+    /// The floor's height (a flight's tread level) when `p` is inside the outline.
     pub fn floor_at(&self, p: P2) -> Option<f32> {
+        if self.is_stairs() {
+            return self
+                .boxed(p)
+                .then(|| self.treads.iter().find(|t| t.contains(p)).map(|t| t.level))
+                .flatten();
+        }
         (self.boxed(p) && inside_outline(p, &self.outline)).then_some(self.floor)
     }
 
@@ -650,20 +724,13 @@ pub fn zones(shapes: &[Shape]) -> Vec<Zone> {
                 let t = a.terrace.as_ref()?;
                 let outline = a.outline().into_owned();
                 let hole = t.hole(&outline);
-                let lo = hole
-                    .iter()
-                    .fold([f32::MAX; 2], |m, p| [m[0].min(p[0]), m[1].min(p[1])]);
-                let hi = hole
-                    .iter()
-                    .fold([f32::MIN; 2], |m, p| [m[0].max(p[0]), m[1].max(p[1])]);
-                Some(Zone {
-                    id: a.id.clone(),
+                Some(Zone::new(
+                    a.id.clone(),
                     outline,
                     hole,
-                    floor: a.elevation,
-                    lo,
-                    hi,
-                })
+                    a.elevation,
+                    Vec::new(),
+                ))
             }
             Shape::Extrusion(_) => None,
         })
@@ -685,8 +752,24 @@ pub fn ground_at(terrain: Option<&Terrain>, zones: &[Zone], x: f32, z: f32) -> O
         .or_else(|| terrain.and_then(|t| t.height_at(x, z)))
 }
 
-/// [`ground_at`] for a project, as a function (the terraces found once).
+/// The terraces and the flights set into the slope of a project: the zones ground questions and
+/// the terrain's cut-outs are about. A flight is measured against the ground without flights.
+pub fn project_zones(project: &Project) -> Vec<Zone> {
+    let mut all = zones(&project.shapes);
+    let stairs = crate::setin::zones(project, &all);
+    all.extend(stairs);
+    all
+}
+
+/// [`ground_at`] for a project, as a function (the zones found once).
 pub fn ground_fn(project: &Project) -> impl Fn(f32, f32) -> Option<f32> + '_ {
+    let zones = project_zones(project);
+    let terrain = project.terrain.as_deref();
+    move |x, z| ground_at(terrain, &zones, x, z)
+}
+
+/// [`ground_fn`] without the flights set into the slope: the ground they are set into.
+pub fn original_ground_fn(project: &Project) -> impl Fn(f32, f32) -> Option<f32> + '_ {
     let zones = zones(&project.shapes);
     let terrain = project.terrain.as_deref();
     move |x, z| ground_at(terrain, &zones, x, z)
@@ -715,7 +798,7 @@ pub fn project_raycast(
     dir: [f32; 3],
 ) -> Option<(f32, [f32; 3], [f32; 3])> {
     let t = project.terrain.as_deref()?;
-    terrain_raycast(t, &zones(&project.shapes), origin, dir)
+    terrain_raycast(t, &project_zones(project), origin, dir)
 }
 
 #[cfg(test)]

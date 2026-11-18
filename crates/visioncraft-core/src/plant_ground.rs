@@ -88,7 +88,7 @@ pub fn placed_shape_mesh(
     let holes: Vec<&[P2]> = holes.iter().map(Vec::as_slice).collect();
     let mesh = match project.terrain.as_deref() {
         Some(t) => {
-            shape_mesh_on_terrain_with(&placed, t, &holes, &crate::terrace::zones(&project.shapes))?
+            shape_mesh_on_terrain_with(&placed, t, &holes, &crate::terrace::project_zones(project))?
         }
         None => shape_mesh(&placed)?,
     };

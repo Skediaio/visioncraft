@@ -134,8 +134,21 @@ nothing here is a promise of a date.
   hours, the walking camera) gets the floor inside it. The answer and `query.quantities` give cut
   and fill volumes, the wall's length and face areas and its beams or plate, and warn about a wall
   over 1.2 m, no terrain, and a floor that cuts nothing; `terrace.set` and `terrace.clear` change
-  or undo it, and Draw has a Terrace tool and the options in the area panel. Next: an edge that
-  steps with a draped area, stairs that follow the terrain, winders and curved stairs, a soil
+  or undo it, and Draw has a Terrace tool and the options in the area panel. Stairs follow the
+  terrain: `set_in` on `stairs.add` and `stairs.set` sets a flight into the slope it climbs. The
+  step count is still the rise over the riser, but each riser stands where the original ground
+  (terrain and terraces, along the centreline) has climbed to the level of the step before, so a
+  gentle stretch is a long tread and a steep one a short one, each held within 0.25 and 2 m and
+  warned about when it is held or when a going outside 0.28 to 0.45 m fails Blondel's rule; a
+  flight that turns does it per flight and keeps its landings. The footprint, widened at the sides
+  by the cheeks, is cut out of the terrain's chunk meshes like a terrace's and the ground inside
+  it is the tread's level, so nothing grows on the steps. Cheek walls stand along both sides in
+  any wall style (faces `<id>:cheeks`, `:cheeks_rim`), from below the step up to the ground beside
+  it plus a coping where they hold earth and just under the tread where the ground is lower, or
+  none at all, which warns about the bank. The answer and `query.quantities` give the goings, the
+  cheek length and face areas, and cut and fill; Draw has a Set into the slope checkbox and the
+  cheek styles in the stairs panel. Next: an edge that
+  steps with a draped area, winders and curved stairs, a soil
   that follows terrain edited after the bed, walls that step in plan (a terrace with several
   levels sharing one wall), drainage behind a wall, and a wall whose top follows the slope in a
   smooth line for the styles that can.

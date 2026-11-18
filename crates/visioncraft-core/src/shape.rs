@@ -706,19 +706,34 @@ fn shape_mesh_with(
                             .into(),
                     ));
                 }
-                let g = st
-                    .geometry(&e.points, e.height)
-                    .map_err(ShapeError::BadStairs)?;
-                let names = crate::stairs::STAIR_FACES
+                let set_in = st.set_in.filter(|s| s.cheek_style.bed().is_some());
+                let mut names = crate::stairs::STAIR_FACES
                     .iter()
                     .map(|n| format!("{id}:{n}"))
                     .collect::<Vec<_>>();
+                if set_in.is_some() {
+                    names.extend(crate::setin::FACES.iter().map(|n| format!("{id}:{n}")));
+                }
                 let mut b = Builder {
                     model: ImportedModel::default(),
                     triangles: vec![Vec::new(); names.len()],
                     edge: Vec::new(),
                     soft: false,
                 };
+                if let Some(ground) = ground.filter(|_| st.set_in.is_some()) {
+                    // Set into the slope: the steps follow the ground and the cheeks stand beside.
+                    let built =
+                        crate::setin::build(e, ground, cell).map_err(ShapeError::BadStairs)?;
+                    crate::stairs::mesh(&mut b, &built.geometry, e.base, &built.bottoms);
+                    built.draw(&mut Shifted(&mut b, 3));
+                    let mut m = b.finish(id, &e.name, names);
+                    m.warnings.extend(built.geometry.warnings.iter().cloned());
+                    m.warnings.extend(built.notes());
+                    return Ok(m);
+                }
+                let g = st
+                    .geometry(&e.points, e.height)
+                    .map_err(ShapeError::BadStairs)?;
                 let bottoms = ground.map_or_else(Vec::new, |ground| {
                     let lift = footing(&shape.outline(), ground);
                     crate::stairs::step_bottoms(&g, e.base, lift, ground)
@@ -1634,6 +1649,15 @@ pub fn shape_mesh_on_terrain_with(
     let ground = |x: f32, z: f32| crate::terrace::ground_at(Some(terrain), zones, x, z);
     let cell = terrain.cell_m;
     let Shape::Area(a) = shape else {
+        // A flight set into the slope is measured against the ground it is set into, not against
+        // the cut it makes itself or another flight's.
+        if matches!(shape, Shape::Extrusion(e) if e.stairs.as_ref().is_some_and(|s| s.set_in.is_some()))
+        {
+            let others: Vec<crate::terrace::Zone> =
+                zones.iter().filter(|z| !z.is_stairs()).cloned().collect();
+            let original = |x: f32, z: f32| crate::terrace::ground_at(Some(terrain), &others, x, z);
+            return shape_mesh_with(shape, 0.0, Some(&original), cell);
+        }
         return shape_mesh_with(shape, 0.0, Some(&ground), cell);
     };
     if a.terrace.is_some() {

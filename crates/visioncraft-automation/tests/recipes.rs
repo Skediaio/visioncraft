@@ -19,7 +19,7 @@ pub fn recipes() -> Vec<Value> {
 #[test]
 fn every_recipe_of_the_guide_runs() {
     let recipes = recipes();
-    assert_eq!(recipes.len(), 33);
+    assert_eq!(recipes.len(), 34);
     for (n, recipe) in recipes.into_iter().enumerate() {
         let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("recipe-{n}"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -275,6 +275,43 @@ fn every_recipe_of_the_guide_runs() {
                 assert_eq!(end["shot"], 2, "{report}");
                 assert!(
                     end["sun"]["elevation_deg"].as_f64().unwrap() < 10.0,
+                    "{report}"
+                );
+            }
+            34 => {
+                // The steps follow the slope: the goings vary and add up to the flight, the
+                // terrain is cut out under them and the cheeks have sleepers.
+                let st = &results[3]["result"];
+                let goings = st["goings_m"].as_array().unwrap();
+                assert_eq!(
+                    goings.len() as u64,
+                    st["steps"].as_u64().unwrap(),
+                    "{report}"
+                );
+                let g = |i: usize| goings[i].as_f64().unwrap();
+                assert!(g(0) > 1.5 * g(goings.len() - 2), "{report}");
+                let run: f64 = goings.iter().map(|v| v.as_f64().unwrap()).sum();
+                assert!(
+                    (run - st["flights"][0]["run_m"].as_f64().unwrap()).abs() < 1e-3,
+                    "{report}"
+                );
+                assert!(st["set_in"]["beams"].as_u64().unwrap() > 10, "{report}");
+                assert!(
+                    st["set_in"]["cheek_length_m"].as_f64().unwrap() > 15.0,
+                    "{report}"
+                );
+                // The ground in the flight is a tread's level, above the ground beside it.
+                let on = results[4]["result"]["height"].as_f64().unwrap();
+                assert!(on > 0.3 && on < 1.9, "{on}: {report}");
+                let q = &results[5]["result"];
+                let row = q["shapes"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|r| r["id"] == st["id"])
+                    .unwrap_or_else(|| panic!("no stairs row: {report}"));
+                assert_eq!(
+                    row["stairs"]["set_in"]["cheek_style"], "sleepers",
                     "{report}"
                 );
             }

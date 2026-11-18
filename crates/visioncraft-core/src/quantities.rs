@@ -214,7 +214,12 @@ pub fn quantities_in(
             Shape::Extrusion(e) if e.closed => {
                 plan = f64::from(measure::polygon_area(&outline));
                 volume = if let Some(st) = &e.stairs {
-                    if let Ok(g) = st.geometry(&e.points, e.height) {
+                    let built = st.set_in.and_then(|_| crate::setin::build_in(project, e));
+                    let geometry = match &built {
+                        Some(b) => Ok(b.geometry.clone()),
+                        None => st.geometry(&e.points, e.height),
+                    };
+                    if let Ok(g) = geometry {
                         let mut row = json!({
                             "steps": g.steps, "riser_m": g.riser, "going_m": g.tread,
                             "rise_m": e.height, "run_m": g.tread * g.steps as f32,
@@ -229,6 +234,10 @@ pub fn quantities_in(
                             row["landings"] = t.landings.len().into();
                             row["landing_area_m2"] = area.into();
                             row["total_going_m"] = g.length.into();
+                        }
+                        if let (Some(b), Some(si)) = (&built, &st.set_in) {
+                            row["goings_m"] = json!(g.goings);
+                            row["set_in"] = b.report().json(si);
                         }
                         o.insert("stairs".into(), row);
                     }

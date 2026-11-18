@@ -1821,7 +1821,15 @@ fn stairs_panel(ui: &mut egui::Ui, cx: &mut Cx, x: &visioncraft_core::shape::Ext
     let Some(st) = &x.stairs else {
         return;
     };
-    if let Ok(g) = st.geometry(&x.points, x.height) {
+    // A flight set into the slope is worked out on the ground it climbs.
+    let built = st
+        .set_in
+        .and_then(|_| visioncraft_core::setin::build_in(cx.s.project(), x));
+    let geometry = match &built {
+        Some(b) => Ok(b.geometry.clone()),
+        None => st.geometry(&x.points, x.height),
+    };
+    if let Ok(g) = geometry {
         ui.label(format!(
             "{} {} ({:.0} mm / {:.0} mm)",
             g.steps,
@@ -1856,11 +1864,58 @@ fn stairs_panel(ui: &mut egui::Ui, cx: &mut Cx, x: &visioncraft_core::shape::Ext
         if drag_field(ui, t::RISER, &mut riser, 0.005, 0.05..=0.3, " m") == Edit::Done {
             cx.run("stairs.set", json!({"id": x.id, "riser_m": riser}));
         }
-        if drag_field(ui, t::TREAD, &mut tread, 0.005, 0.15..=0.6, " m") == Edit::Done {
+        // The goings of a flight set into the slope follow the ground, so there is no tread to give.
+        if st.set_in.is_none()
+            && drag_field(ui, t::TREAD, &mut tread, 0.005, 0.15..=0.6, " m") == Edit::Done
+        {
             cx.run("stairs.set", json!({"id": x.id, "tread_m": tread}));
         }
+        if st.set_in.is_some() {
+            let (lo, hi) = g
+                .goings
+                .iter()
+                .fold((f32::MAX, f32::MIN), |(lo, hi), v| (lo.min(*v), hi.max(*v)));
+            ui.label(format!("{} {:.2} .. {:.2} m", t::STAIRS_GOINGS, lo, hi));
+        }
     }
-    if let Ok(m) = visioncraft_core::shape_mesh(&Shape::Extrusion(x.clone())) {
+    // Set into the slope: a checkbox, and the cheek walls' style.
+    let mut set_in = st.set_in.is_some();
+    if ui.checkbox(&mut set_in, t::STAIRS_SET_IN).changed() {
+        let value = if set_in {
+            json!({"cheek_style": "plain"})
+        } else {
+            serde_json::Value::Null
+        };
+        cx.run("stairs.set", json!({"id": x.id, "set_in": value}));
+    }
+    if let Some(si) = st.set_in {
+        let now = serde_json::to_value(si.cheek_style).ok();
+        let now = now.as_ref().and_then(|v| v.as_str()).unwrap_or("plain");
+        ui.horizontal_wrapped(|ui| {
+            ui.label(t::STAIRS_CHEEKS);
+            for (key, label) in [("none", t::EDGE_NONE)].into_iter().chain(WALL_STYLES) {
+                if ui.selectable_label(now == key, label).clicked() && now != key {
+                    cx.run(
+                        "stairs.set",
+                        json!({"id": x.id, "set_in": {"cheek_style": key, "coping_m": si.coping_m}}),
+                    );
+                }
+            }
+        });
+    }
+    let mesh = {
+        let lifts = visioncraft_core::area_lifts(&cx.s.project().shapes)
+            .into_iter()
+            .collect();
+        visioncraft_core::placed_shape_mesh(
+            cx.s.project(),
+            &Shape::Extrusion(x.clone()),
+            &lifts,
+            &[],
+        )
+        .map(|(m, _)| m)
+    };
+    if let Ok(m) = mesh {
         for w in &m.warnings {
             ui.colored_label(egui::Color32::from_rgb(230, 170, 70), w);
         }
