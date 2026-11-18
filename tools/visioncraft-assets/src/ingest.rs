@@ -5,7 +5,10 @@ use crate::{
     glb::{fit, jpeg, write_glb},
     net::{Candidate, Source, ph_info},
     raster,
-    scene::{Model, pack_orm, read_gltf_variant, variant_count},
+    scene::{
+        Model, PLANT_SURFACE_TOLERANCE, SURFACE_TOLERANCE, pack_orm, read_gltf_variant,
+        variant_count,
+    },
 };
 use anyhow::{Context, Result, bail};
 use image::{DynamicImage, GrayImage, imageops::FilterType};
@@ -193,25 +196,31 @@ pub fn ingest_model(
 }
 
 /// A lower LOD of `lod0`, at about `target` triangles, that still resembles it. When it does
-/// not, the target is raised step by step, and finally the previous LOD is reused.
+/// not, the target is raised step by step (more triangles each time), and finally the previous
+/// LOD is reused; `notes` says which was chosen and why. `tolerance` is the share of stray or
+/// missing surface allowed (see [`Model::resembles`]).
 fn guarded_lod(
     lod0: &Model,
     prev: &Model,
     target: usize,
+    tolerance: f64,
     notes: &mut Vec<String>,
     k: usize,
 ) -> Model {
     let mut why = String::new();
-    for f in [1.0, 1.4, 2.0, 3.0] {
+    for f in [1.0, 1.4, 2.0, 3.0, 4.5] {
         let t = (target as f64 * f) as usize;
         if t * 10 >= prev.tris() * 9 {
             break;
         }
         let m = lod0.simplified(t).ground();
-        match m.resembles(lod0) {
+        match m.resembles(lod0, tolerance) {
             Ok(()) => {
                 if f > 1.0 {
-                    notes.push(format!("lod{k}: gentler target x{f} ({why})"));
+                    notes.push(format!(
+                        "lod{k}: gentler target x{f}, {} triangles instead of about {target} ({why})",
+                        m.tris()
+                    ));
                 }
                 return m;
             }
@@ -219,7 +228,10 @@ fn guarded_lod(
         }
     }
     if prev.tris() < lod0.tris() || k == 1 {
-        notes.push(format!("lod{k}: reused the previous LOD ({why})"));
+        notes.push(format!(
+            "lod{k}: reused the previous LOD, {} triangles ({why})",
+            prev.tris()
+        ));
     } else {
         notes.push(format!("lod{k}: reused lod0 ({why})"));
     }
@@ -258,6 +270,11 @@ fn ingest_variant(
 ) -> Result<Option<Asset>> {
     let cat = category(&c.category)?;
     let source_tris = model.tris();
+    let tolerance = if is_plant(cat) {
+        PLANT_SURFACE_TOLERANCE
+    } else {
+        SURFACE_TOLERANCE
+    };
     let mut tags = vec![c.category.clone()];
     tags.extend(c.tags.iter().cloned());
     tags.extend(info.tags.iter().map(|t| t.to_lowercase()));
@@ -275,7 +292,7 @@ fn ingest_variant(
         loop {
             let m = model.simplified(target).ground();
             if m.tris() <= budget(cat) {
-                if let Err(why) = m.resembles(&model) {
+                if let Err(why) = m.resembles(&model, tolerance) {
                     println!("FALLBACK {id} lod0: simplified to the budget but {why}");
                 }
                 break m;
@@ -313,8 +330,8 @@ fn ingest_variant(
     let reuse = t0 < REUSE_BELOW;
     let target = |f: f64| (((t0 as f64 * f).round() as usize).max(MIN_TRIS)).min(t0);
     let mut notes = Vec::new();
-    let lod1 = guarded_lod(&lod0, &lod0, target(0.35), &mut notes, 1);
-    let lod2 = guarded_lod(&lod0, &lod1, target(0.08), &mut notes, 2);
+    let lod1 = guarded_lod(&lod0, &lod0, target(0.35), tolerance, &mut notes, 1);
+    let lod2 = guarded_lod(&lod0, &lod1, target(0.08), tolerance, &mut notes, 2);
     for n in &notes {
         println!("FALLBACK {id} {n}");
     }

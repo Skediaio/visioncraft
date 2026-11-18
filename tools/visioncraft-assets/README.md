@@ -47,5 +47,9 @@ data out of it) and `--delay-ms` (pause between requests, default 500).
 
 Paths in the JSON files are relative to the library root. A model has `lod0..2.glb`
 (textures at 1024, 512, 256 px; lod0 at most 10,000 triangles, plants 20,000), `thumb.png` and a
-catalogue entry. Light fixtures carry `light.offset_m` (emitter position relative to the pivot);
+catalogue entry. lod1 and lod2 aim at 35% and 8% of lod0's triangles; a simplification that
+moves the bounding box, loses a material, shifts the area seen along an axis, turns faces inside
+out, or leaves surface stray from or missing in the original (geometry or texture coordinates,
+`Model::resembles`) is retried with more triangles, else the previous LOD is reused. `ingest`
+prints each such choice as a `FALLBACK` line. Light fixtures carry `light.offset_m` (emitter position relative to the pivot);
 the emitting materials are named `<name>_emitter` and are emissive.

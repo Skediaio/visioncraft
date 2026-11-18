@@ -4,6 +4,28 @@ use anyhow::{Context, Result, bail};
 use image::{DynamicImage, GrayImage, RgbImage, imageops::FilterType};
 use std::{collections::HashMap, path::Path, sync::Arc};
 
+/// Simplification limits, tuned on the catalogue so that faceting passes and holes, sheets
+/// spanned across empty space and faces turned round do not. Distances are shares of the
+/// largest dimension; LOD2 is shown from 40 times that, where 6% is about 1.5 pixels (1080
+/// lines, 60 degree field of view).
+///
+/// The area a material shows along one signed axis may change by this share of itself plus
+/// [`PROJECTED_FLOOR`] of the area the whole model shows along all six.
+pub const PROJECTED_TOLERANCE: f64 = 0.5;
+pub const PROJECTED_FLOOR: f64 = 0.05;
+/// Share of the model's area that may newly be wound against its vertex normals.
+pub const INVERTED_TOLERANCE: f64 = 0.2;
+/// Surface with no face of the other within this distance that has the same material, faces
+/// the same way and shows the same spot of the texture (texture coordinates within
+/// [`UV_TOLERANCE`]) counts as stray (simplified surface) or missing (original surface).
+pub const SURFACE_DISTANCE: f32 = 0.06;
+/// Share of the surface that may be stray, and share that may be missing; plants, which lose
+/// whole leaves when simplified, get [`PLANT_SURFACE_TOLERANCE`].
+pub const SURFACE_TOLERANCE: f64 = 0.03;
+pub const PLANT_SURFACE_TOLERANCE: f64 = 0.1;
+/// In texture space (0..1): 8 texels of the 256 px texture LOD2 gets.
+pub const UV_TOLERANCE: f32 = 0.03;
+
 #[derive(Clone, Default)]
 pub struct Mesh {
     pub pos: Vec<[f32; 3]>,
@@ -118,10 +140,48 @@ impl Model {
         out
     }
 
+    /// Per material, the area projected onto each signed axis (+x, -x, +y, -y, +z, -z): the sum
+    /// over triangles of max(0, n . axis) * area. A hole loses some, a face turned round moves
+    /// it to the opposite sign, a sheet spanned across empty space adds some.
+    pub fn projected_area_by_material(&self) -> HashMap<usize, [f64; 6]> {
+        let mut out: HashMap<usize, [f64; 6]> = HashMap::new();
+        for m in &self.meshes {
+            let a = out.entry(m.mat).or_default();
+            for t in m.idx.as_chunks::<3>().0 {
+                let c = face_cross(m, t);
+                for k in 0..3 {
+                    let v = f64::from(c[k]) / 2.0;
+                    a[2 * k] += v.max(0.0);
+                    a[2 * k + 1] += (-v).max(0.0);
+                }
+            }
+        }
+        out
+    }
+
+    /// Area of the triangles wound against their own vertex normals (seen from the side the
+    /// normals point to, they show their back).
+    pub fn inverted_area(&self) -> f64 {
+        let mut a = 0.0_f64;
+        for m in &self.meshes {
+            for t in m.idx.as_chunks::<3>().0 {
+                let c = face_cross(m, t);
+                let n: [f32; 3] =
+                    std::array::from_fn(|k| t.iter().map(|&i| m.nrm[i as usize][k]).sum());
+                if c[0] * n[0] + c[1] * n[1] + c[2] * n[2] < 0.0 {
+                    a += f64::from((c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt()) / 2.0;
+                }
+            }
+        }
+        a
+    }
+
     /// Does `self`, a simplification of `reference`, still look like it? The box may move by at
-    /// most 3% of the largest dimension, and no material may lose more than half its area or
-    /// all its triangles.
-    pub fn resembles(&self, reference: &Model) -> Result<(), String> {
+    /// most 3% of the largest dimension, no material may lose more than half its area or all its
+    /// triangles, and the limits above hold: projected area per material and signed axis,
+    /// newly inverted area, and at most `surface_tolerance` of stray and of missing surface
+    /// ([`SURFACE_TOLERANCE`], or [`PLANT_SURFACE_TOLERANCE`] for plants).
+    pub fn resembles(&self, reference: &Model, surface_tolerance: f64) -> Result<(), String> {
         let ((lo, hi), (rlo, rhi)) = (self.bounds(), reference.bounds());
         let largest = reference.size().into_iter().fold(0.0_f32, f32::max);
         for k in 0..3 {
@@ -130,12 +190,55 @@ impl Model {
             }
         }
         let (a, b) = (self.area_by_material(), reference.area_by_material());
-        for (mat, ref_area) in b {
+        for (&mat, &ref_area) in &b {
             let kept = a.get(&mat).copied().unwrap_or(0.0);
             if kept < 0.5 * ref_area {
                 return Err(format!(
                     "material {mat} kept {:.0}% of its area",
                     100.0 * kept / ref_area.max(1e-12)
+                ));
+            }
+        }
+        let (p, rp) = (
+            self.projected_area_by_material(),
+            reference.projected_area_by_material(),
+        );
+        let floor = PROJECTED_FLOOR * rp.values().flatten().sum::<f64>();
+        for (mat, r) in &rp {
+            let s = p.get(mat).copied().unwrap_or_default();
+            for k in 0..6 {
+                if (s[k] - r[k]).abs() > PROJECTED_TOLERANCE * (r[k] + floor) {
+                    return Err(format!(
+                        "material {mat} shows {:.0}% of its area along {}",
+                        100.0 * s[k] / r[k].max(1e-12),
+                        ["+x", "-x", "+y", "-y", "+z", "-z"][k]
+                    ));
+                }
+            }
+        }
+        let area: f64 = b.values().sum();
+        let inverted = (self.inverted_area() - reference.inverted_area()) / area.max(1e-12);
+        if inverted > INVERTED_TOLERANCE {
+            return Err(format!(
+                "{:.0}% of the area turned inside out",
+                100.0 * inverted
+            ));
+        }
+        let d = SURFACE_DISTANCE * largest;
+        for (share, what) in [
+            (
+                crate::surface::stray_share(self, reference, d, UV_TOLERANCE),
+                "strays from",
+            ),
+            (
+                crate::surface::stray_share(reference, self, d, UV_TOLERANCE),
+                "is missing from",
+            ),
+        ] {
+            if share > surface_tolerance {
+                return Err(format!(
+                    "{:.0}% of the surface {what} the original",
+                    100.0 * share
                 ));
             }
         }
@@ -382,6 +485,15 @@ type M4 = [[f32; 4]; 4];
 
 fn mul(a: &M4, b: &M4) -> M4 {
     std::array::from_fn(|c| std::array::from_fn(|r| (0..4).map(|k| a[k][r] * b[c][k]).sum()))
+}
+
+/// Twice the area vector of triangle `t` of `m`.
+fn face_cross(m: &Mesh, t: &[u32; 3]) -> [f32; 3] {
+    let [p, q, r] = t.map(|i| m.pos[i as usize]);
+    cross(
+        std::array::from_fn(|k| q[k] - p[k]),
+        std::array::from_fn(|k| r[k] - p[k]),
+    )
 }
 
 fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {

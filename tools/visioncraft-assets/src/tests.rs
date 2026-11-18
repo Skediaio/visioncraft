@@ -1,7 +1,7 @@
 use crate::{
     glb::write_glb,
     library,
-    scene::{Mesh, Model, pack_orm, read_glb, read_gltf_variant},
+    scene::{Mesh, Model, SURFACE_TOLERANCE, pack_orm, read_glb, read_gltf_variant},
 };
 use image::{GrayImage, Luma};
 use std::path::PathBuf;
@@ -205,8 +205,8 @@ fn a_simplification_that_loses_a_material_does_not_resemble_the_original() {
     let m = cube_model();
     let mut flat = m.clone();
     flat.meshes[0].pos.iter_mut().for_each(|p| p[1] *= 0.5);
-    assert!(m.resembles(&m).is_ok());
-    assert!(flat.resembles(&m).is_err());
+    assert!(m.resembles(&m, SURFACE_TOLERANCE).is_ok());
+    assert!(flat.resembles(&m, SURFACE_TOLERANCE).is_err());
 }
 
 #[test]
@@ -296,4 +296,121 @@ fn a_flipped_cut_out_turns_round_its_tip() {
     let f = crate::flora::flipped(vec![c.clone(), c], &[1], 1.0);
     assert_eq!(f[0].pivot, [0.1, 0.05]);
     assert!((f[1].pivot[1] - 0.35).abs() < 1e-6 && f[1].axis == [0.0, -1.0]);
+}
+
+/// A closed box from `lo` to `hi`, each face an `n` x `n` grid with its own outward normal and
+/// a planar UV, wound counter-clockwise seen from outside.
+fn grid_box(lo: [f32; 3], hi: [f32; 3], n: u32) -> Mesh {
+    let mut m = Mesh::default();
+    for axis in 0..3 {
+        for side in [0, 1] {
+            let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
+            let mut normal = [0.0; 3];
+            normal[axis] = if side == 1 { 1.0 } else { -1.0 };
+            let base = m.pos.len() as u32;
+            for j in 0..=n {
+                for i in 0..=n {
+                    let (s, t) = (i as f32 / n as f32, j as f32 / n as f32);
+                    let mut p = [0.0; 3];
+                    p[axis] = if side == 1 { hi[axis] } else { lo[axis] };
+                    p[u] = lo[u] + s * (hi[u] - lo[u]);
+                    p[v] = lo[v] + t * (hi[v] - lo[v]);
+                    m.pos.push(p);
+                    m.nrm.push(normal);
+                    m.uv.push([s, t]);
+                }
+            }
+            for j in 0..n {
+                for i in 0..n {
+                    let a = base + j * (n + 1) + i;
+                    let (b, c, d) = (a + 1, a + n + 2, a + n + 1);
+                    // (u, v, axis) is right-handed, so u x v points along +axis
+                    if side == 1 {
+                        m.idx.extend([a, b, c, a, c, d]);
+                    } else {
+                        m.idx.extend([a, c, b, a, d, c]);
+                    }
+                }
+            }
+        }
+    }
+    m
+}
+
+/// A bench of 3 cm slabs: seat, shelf and two sides, each its own mesh. The seat has 28% of the
+/// area and half of what is seen from above.
+fn slab_bench() -> Model {
+    let slabs = [
+        ([-0.6, 0.42, -0.22], [0.6, 0.45, 0.22]),
+        ([-0.6, 0.12, -0.22], [0.6, 0.15, 0.22]),
+        ([-0.63, 0.0, -0.22], [-0.6, 0.9, 0.22]),
+        ([0.6, 0.0, -0.22], [0.63, 0.9, 0.22]),
+    ];
+    Model {
+        meshes: slabs.iter().map(|&(lo, hi)| grid_box(lo, hi, 4)).collect(),
+        mats: vec![Default::default()],
+    }
+}
+
+/// Reverse the winding of triangles `range` of mesh `mesh`.
+fn reverse_winding(m: &mut Model, mesh: usize, range: std::ops::Range<usize>) {
+    for t in m.meshes[mesh].idx.as_chunks_mut::<3>().0[range].iter_mut() {
+        t.swap(1, 2);
+    }
+}
+
+#[test]
+fn a_slab_model_and_a_gentle_simplification_of_it_resemble_it() {
+    let m = slab_bench();
+    m.resembles(&m, SURFACE_TOLERANCE).unwrap();
+    let gentle = m.simplified(m.tris() / 2).ground();
+    assert!(gentle.tris() < m.tris());
+    gentle.resembles(&m, SURFACE_TOLERANCE).unwrap();
+}
+
+#[test]
+fn a_slab_turned_inside_out_does_not_resemble_the_original() {
+    // winding reversed, normals as they were: what a collapse across a thin slab leaves
+    let mut m = slab_bench();
+    let n = m.meshes[0].tris();
+    reverse_winding(&mut m, 0, 0..n);
+    let why = m.resembles(&slab_bench(), SURFACE_TOLERANCE).unwrap_err();
+    assert!(why.contains("inside out"), "{why}");
+}
+
+#[test]
+fn a_slab_face_turned_round_does_not_resemble_the_original() {
+    // the seat's top face (the fourth of its six: -x, +x, -y, +y, -z, +z) points down, normals
+    // included
+    let mut m = slab_bench();
+    let n = m.meshes[0].tris();
+    reverse_winding(&mut m, 0, n / 2..n * 4 / 6);
+    let seat = &mut m.meshes[0];
+    let verts = seat.pos.len();
+    seat.nrm[verts / 2..verts * 4 / 6]
+        .iter_mut()
+        .for_each(|v| v[1] = -v[1]);
+    let why = m.resembles(&slab_bench(), SURFACE_TOLERANCE).unwrap_err();
+    assert!(why.contains("missing"), "{why}");
+}
+
+#[test]
+fn a_slab_model_with_a_hole_does_not_resemble_the_original() {
+    // the seat loses its top face: 13% of the area, but all of what is seen from above it
+    let mut m = slab_bench();
+    let seat = &mut m.meshes[0];
+    let n = seat.idx.len();
+    seat.idx.drain(n / 2..n * 4 / 6);
+    let why = m.resembles(&slab_bench(), SURFACE_TOLERANCE).unwrap_err();
+    assert!(why.contains("+y") || why.contains("missing"), "{why}");
+}
+
+#[test]
+fn a_gentle_simplification_of_the_sample_resembles_it() {
+    let mut m = sample();
+    m.normalise();
+    m.simplified(m.tris() * 35 / 100)
+        .ground()
+        .resembles(&m, SURFACE_TOLERANCE)
+        .unwrap();
 }

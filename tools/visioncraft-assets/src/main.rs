@@ -10,6 +10,7 @@ mod library;
 mod net;
 mod raster;
 mod scene;
+mod surface;
 
 use anyhow::{Result, bail};
 use clap::{Parser, Subcommand};
