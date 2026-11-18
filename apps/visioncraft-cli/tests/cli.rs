@@ -739,3 +739,214 @@ fn a_film_renders_numbered_frames_that_differ() {
         assert!(err.contains("ffmpeg"), "{err}");
     }
 }
+
+/// The pixel of world point `p` in a `w` x `h` picture from `eye` looking at `target` with a
+/// vertical field of view of `fov_deg`.
+fn project(
+    eye: [f32; 3],
+    target: [f32; 3],
+    fov_deg: f32,
+    w: f32,
+    h: f32,
+    p: [f32; 3],
+) -> (f32, f32) {
+    let sub = |a: [f32; 3], b: [f32; 3]| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let norm = |a: [f32; 3]| {
+        let l = dot(a, a).sqrt();
+        a.map(|v| v / l)
+    };
+    let cross = |a: [f32; 3], b: [f32; 3]| {
+        [
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0],
+        ]
+    };
+    let f = norm(sub(target, eye));
+    let r = norm(cross(f, [0.0, 1.0, 0.0]));
+    let u = cross(r, f);
+    let d = sub(p, eye);
+    let t = (fov_deg.to_radians() / 2.0).tan();
+    let (x, y) = (
+        dot(d, r) / (dot(d, f) * t * w / h),
+        dot(d, u) / (dot(d, f) * t),
+    );
+    ((x * 0.5 + 0.5) * w, (0.5 - y * 0.5) * h)
+}
+
+/// A PNG's pixels (RGBA8) and width.
+fn read_rgba(path: &Path) -> (Vec<u8>, usize) {
+    let bytes = std::fs::read(path).unwrap();
+    let mut reader = png::Decoder::new(std::io::Cursor::new(&bytes))
+        .read_info()
+        .unwrap();
+    let mut buf = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buf).unwrap();
+    assert_eq!(info.color_type, png::ColorType::Rgba);
+    (buf, info.width as usize)
+}
+
+/// The mean luminance (linear, Rec. 709) of the pixels within `r` of `(x, y)`.
+fn luminance_at(px: &(Vec<u8>, usize), (x, y): (f32, f32), r: i32) -> f32 {
+    let lin = |c: u8| {
+        let c = f32::from(c) / 255.0;
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let (buf, w) = px;
+    let h = buf.len() / 4 / w;
+    assert!(
+        x as i32 - r >= 0
+            && y as i32 - r >= 0
+            && (x as i32 + r) < *w as i32
+            && (y as i32 + r) < h as i32,
+        "({x}, {y}) is off the picture"
+    );
+    let (mut sum, mut n) = (0.0, 0.0);
+    for dy in -r..=r {
+        for dx in -r..=r {
+            let i = ((y as i32 + dy) as usize * w + (x as i32 + dx) as usize) * 4;
+            sum += 0.2126 * lin(buf[i]) + 0.7152 * lin(buf[i + 1]) + 0.0722 * lin(buf[i + 2]);
+            n += 1.0;
+        }
+    }
+    sum / n
+}
+
+/// Sky occlusion on a tree and an L of garden wall (GPU: `--ignored`): just after sunset
+/// the ground under the crown and in the wall's inner corner are darker than the open ground by
+/// a plausible share of the sky they lose, and looking into a low sun through the crown, its
+/// leaves are brighter with it on than off (the sky through the leaves, not black).
+#[test]
+#[ignore]
+fn sky_occlusion_darkens_the_shade_and_lights_the_backlit_crown() {
+    let d = dir("sky-occlusion");
+    let made = cli(
+        &[
+            "run",
+            "--cmd",
+            "planting.add_single",
+            "--params",
+            r#"{"name": "Maple", "asset": "flora:acer-campestre", "position": [0, 0, 0]}"#,
+            "--cmd",
+            "shape.add_extrusion",
+            "--params",
+            r#"{"name": "Wall", "outline": [[-2, -8], [8.3, -8], [8.3, -2], [8, -2], [8, -7.7], [-2, -7.7]], "height": 2.5, "material": "plaster"}"#,
+            "--out",
+            "tree.visioncraft",
+        ],
+        &d,
+    );
+    assert!(
+        made.status.success(),
+        "{}",
+        String::from_utf8_lossy(&made.stderr)
+    );
+    let render = |name: &str, eye: [f32; 3], target: [f32; 3], extra: &[&str]| {
+        let camera = format!(
+            "{},{},{},{},{},{}",
+            eye[0], eye[1], eye[2], target[0], target[1], target[2]
+        );
+        let mut args = vec![
+            "render",
+            "tree.visioncraft",
+            "--out",
+            name,
+            "--size",
+            "640x360",
+            "--camera",
+            &camera,
+            "--fov",
+            "60",
+        ];
+        args.extend_from_slice(extra);
+        let out = cli(&args, &d);
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        read_rgba(&d.join(name))
+    };
+    // The shade: just after sunset, so the sky's light is all there is; seen from 6 m up on
+    // the open lawn, under the crown (its lowest leaves about 2.5 m up) and into the corner.
+    let (eye, target) = ([5.0, 6.0, 7.0], [4.0, 0.0, -4.0]);
+    let dusk = ["--date", "2026-07-15", "--time", "21:50"];
+    let grey = |on: &str, name: &str| {
+        let mut extra = dusk.to_vec();
+        extra.extend_from_slice(&["--sky-occlusion", on]);
+        render(name, eye, target, &extra)
+    };
+    let (on, off) = (grey("on", "shade-on.png"), grey("off", "shade-off.png"));
+    let at = |p: [f32; 3]| project(eye, target, 60.0, 640.0, 360.0, p);
+    let (under, corner, open) = (
+        at([1.5, 0.0, 1.5]),
+        at([7.3, 0.0, -6.8]),
+        at([7.5, 0.0, 2.0]),
+    );
+    let ratio = |px: &(Vec<u8>, usize), p| luminance_at(px, p, 3) / luminance_at(px, open, 3);
+    let (under_on, under_off) = (ratio(&on, under), ratio(&off, under));
+    let (corner_on, corner_off) = (ratio(&on, corner), ratio(&off, corner));
+    // Under a field maple about half the sky is left; the inner corner of a 2.5 m wall about a
+    // third to two thirds, the screen-space occlusion's share not counted twice.
+    assert!(
+        (0.3..0.85).contains(&under_on) && under_on < under_off,
+        "under the crown {under_on} (off {under_off})"
+    );
+    assert!(
+        (0.25..0.9).contains(&corner_on) && corner_on < corner_off,
+        "in the corner {corner_on} (off {corner_off})"
+    );
+    // Into a low sun (an early September evening, from the west, 12 degrees up) through the
+    // crown.
+    let (eye, target) = ([14.0, 1.5, -0.9], [0.0, 5.5, 0.0]);
+    assert!(
+        cli(
+            &[
+                "run",
+                "tree.visioncraft",
+                "--cmd",
+                "view.set",
+                "--params",
+                r#"{"clouds": {"kind": "clear", "cover": 0}}"#,
+                "--out",
+                "tree.visioncraft"
+            ],
+            &d
+        )
+        .status
+        .success()
+    );
+    // A photo (eight samples): its sky light is gathered by bounce rays from each leaf's near
+    // side, the light through the leaves from their far side only with sky occlusion.
+    let low = [
+        "--date",
+        "2026-09-05",
+        "--time",
+        "19:00",
+        "--quality",
+        "photo",
+        "--samples",
+        "8",
+    ];
+    let backlit = |on: &str, name: &str| {
+        let mut extra = low.to_vec();
+        extra.extend_from_slice(&["--sky-occlusion", on]);
+        render(name, eye, target, &extra)
+    };
+    let (on, off) = (
+        backlit("on", "backlit-on.png"),
+        backlit("off", "backlit-off.png"),
+    );
+    // The crown's upper half, off the sun's disc behind its lower middle.
+    let crown = project(eye, target, 60.0, 640.0, 360.0, [1.0, 7.0, 1.0]);
+    let (lit_on, lit_off) = (luminance_at(&on, crown, 12), luminance_at(&off, crown, 12));
+    assert!(
+        lit_on > lit_off * 1.05,
+        "the backlit crown: {lit_on} on, {lit_off} off"
+    );
+}

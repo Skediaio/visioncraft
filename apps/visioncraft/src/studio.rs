@@ -198,6 +198,10 @@ pub struct Studio {
     underlay_quads: Vec<visioncraft_render::UnderlayQuad>,
     /// The sun-hours map on the ground (`view.set_sun_map`).
     pub sun_map: crate::sun_map::SunMapState,
+    /// The baked sky visibility (`view.set sky_occlusion`) and what the last check saw: the
+    /// revision, the loaded models, the years and the month.
+    pub sky_vis: crate::sky_vis::SkyVisState,
+    sky_vis_checked: Option<(u64, u64, Option<u32>, u32)>,
     /// The plant light check and its marks on the plan.
     pub light: crate::light_ui::LightState,
     /// An opacity being dragged on a slider, shown before it is committed: (underlay id, value).
@@ -433,6 +437,8 @@ impl Studio {
             extra: (Vec::new(), Vec::new()),
             underlay_quads: Vec::new(),
             sun_map: Default::default(),
+            sky_vis: Default::default(),
+            sky_vis_checked: None,
             light: crate::light_ui::LightState::new(),
             underlay_live: None,
             pick_underlay: false,
@@ -739,6 +745,7 @@ impl Studio {
             if self.plants_pending() == 0
                 && self.scene.library.idle()
                 && !self.sky_volume_pending()
+                && !self.sky_vis.pending()
                 && !self.sun_map.pending()
             {
                 break;
@@ -1036,7 +1043,14 @@ impl Studio {
     fn update_sky_volume(&mut self, project: &Project) {
         use std::hash::{Hash, Hasher};
         let triangles = self.scene.sky_occluders(project);
-        let crowns = self.scene.sky_crowns();
+        // With sky occlusion on, the baked sky visibility (`sync_sky_visibility`) has the crowns,
+        // each by its species' density: the room volume keeps to the buildings, so a crown is
+        // not counted twice.
+        let crowns = if project.view.sky_occlusion.unwrap_or(true) {
+            Vec::new()
+        } else {
+            self.scene.sky_crowns()
+        };
         let mut h = std::collections::hash_map::DefaultHasher::new();
         for t in &triangles {
             t.as_flattened()
@@ -1408,6 +1422,9 @@ impl Studio {
         // the photographic look, not settings.
         self.renderer.set_sun_glare(1.0);
         self.renderer.set_aerial_perspective(true);
+        // The window and its pictures light by the sky each point sees unless told not to.
+        self.renderer
+            .set_sky_occlusion(v.sky_occlusion.unwrap_or(true));
         self.renderer.set_clouds(&visioncraft_render::Clouds {
             cover: match clouds.kind {
                 visioncraft_core::CloudKind::Clear => 0.0,
@@ -1722,6 +1739,7 @@ impl Studio {
         self.scene
             .sync_terrain_layers(&mut self.renderer, self.session.project());
         self.sync_sun_map();
+        self.sync_sky_visibility();
         self.sync_underlays();
         let (view, proj, eye) = self.camera.matrices(self.aspect());
         self.renderer.set_camera(view, proj, eye);
@@ -1989,6 +2007,70 @@ impl Studio {
                 self.sun_map.fail(key, why);
             }
         }
+    }
+
+    /// Keeps the baked sky visibility up to date while sky occlusion is on: takes a finished
+    /// grid up to the GPU, and bakes again when what blocks the sky changed (`sky_vis`).
+    fn sync_sky_visibility(&mut self) {
+        let now = crate::assets::now_ms();
+        if let Some(grid) = self.sky_vis.poll(now) {
+            match &grid {
+                Some(v) => {
+                    let texels = v.texels();
+                    self.renderer
+                        .set_sky_visibility(Some(visioncraft_render::SkyVisibilityGrid {
+                            origin: v.origin,
+                            cell: v.cell,
+                            dims: v.dims,
+                            lift: v.lift,
+                            height: v.height,
+                            texels: &texels,
+                        }));
+                }
+                None => self.renderer.set_sky_visibility(None),
+            }
+        }
+        let p = self.session.project();
+        if !p.view.sky_occlusion.unwrap_or(true) {
+            return;
+        }
+        let models = self
+            .loaded
+            .iter()
+            .map(|(id, l)| {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                (id, l.version).hash(&mut h);
+                h.finish()
+            })
+            .fold(0u64, u64::wrapping_add);
+        let checked = (
+            self.session.revision(),
+            models,
+            p.view.years.map(f32::to_bits),
+            p.time.month,
+        );
+        if self.sky_vis_checked == Some(checked) {
+            return;
+        }
+        self.sky_vis_checked = Some(checked);
+        let inputs = crate::sky_vis::inputs_key(p, models);
+        if self.sky_vis.is_current(inputs) {
+            return;
+        }
+        let loaded = |id: &str| self.loaded.get(id).map(|l| l.model.clone());
+        let scene = crate::load_stats::time("sky visibility scene (main thread)", || {
+            visioncraft_automation::sky_scene(p, &loaded, &self.assets, p.view.years, p.time.month)
+        });
+        if self.sky_vis.note(inputs, scene.key()) {
+            self.sky_vis
+                .start(visioncraft_automation::SkyVisJob::new(scene), now);
+        }
+    }
+
+    /// Whether the sky visibility is being baked.
+    pub fn sky_visibility_pending(&self) -> bool {
+        self.sky_vis.pending()
     }
 
     /// Whether the sun-hours map is being worked out.

@@ -136,20 +136,29 @@ pub fn crown_transmission(evergreen: bool, month: u32, latitude: f64) -> f32 {
     if evergreen {
         return 0.0;
     }
+    BARE_CROWN_TRANSMISSION * (1.0 - leaf_share(false, month, latitude))
+}
+
+/// The share of its leaves a crown carries in `month` at `latitude`: 1 for an evergreen; for a
+/// deciduous crown none in winter (December to March in the north), part in April and in
+/// autumn, all in summer: the leaf fractions the plants are drawn with by month.
+pub fn leaf_share(evergreen: bool, month: u32, latitude: f64) -> f32 {
+    if evergreen {
+        return 1.0;
+    }
     // The tables are written for the north.
     let m = if latitude < 0.0 {
         (month + 5) % 12 + 1
     } else {
         month
     };
-    let leaves = match m {
+    match m {
         12 | 1 | 2 | 3 => 0.0,
         4 => 0.55,
         10 => 0.9,
         11 => 0.3,
         _ => 1.0,
-    };
-    BARE_CROWN_TRANSMISSION * (1.0 - leaves)
+    }
 }
 
 /// A crown as an ellipsoid that casts shadow.

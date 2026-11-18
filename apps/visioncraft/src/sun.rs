@@ -649,6 +649,15 @@ fn view_fields(ui: &mut egui::Ui, cx: &mut Cx) {
             }
         }
     });
+    // Sky occlusion: on unless switched off (`null` lets the window decide, which is on).
+    let mut occlusion = v.sky_occlusion.unwrap_or(true);
+    if ui
+        .checkbox(&mut occlusion, t::SKY_OCCLUSION)
+        .on_hover_text(t::SKY_OCCLUSION_TIP)
+        .changed()
+    {
+        cx.run("view.set", json!({"sky_occlusion": occlusion}));
+    }
     ui.horizontal(|ui| {
         ui.label(t::LOOK);
         let now = serde_json::to_value(v.look).unwrap_or_default();

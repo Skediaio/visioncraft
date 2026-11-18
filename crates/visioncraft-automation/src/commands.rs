@@ -410,6 +410,43 @@ pub fn host_docs() -> Vec<CommandDoc> {
             false,
         ),
         host_doc(
+            "query.sky_view",
+            "Sky View",
+            "How open a spot is: the share of the sky it sees, cosine-weighted as light falls on a surface (the sky view factor, 0..1; 1 under the open sky). Traced with 4096 rays against what the sky occlusion of the window is baked from: models, shapes (not areas), terrain on visible layers, and the crowns of trees, shrubs and hedges as ellipsoids of leaves that let sky through by their species' leaf density and the leaves they carry in the project's month, `years` after planting. About 0.5 at the foot of a wall, 0.15 at the bottom of a 2 m wide passage between 6 m walls, 0.3 to 0.6 under a garden tree's crown (less under a dense beech or lime than a birch). Gardeners read it with the sun hours: a spot with little sun but a high sky view is bright shade (good for ferns and hostas), a low sky view deep shade.",
+            vec![
+                p(
+                    "point",
+                    "[x, z] | [x, y, z]",
+                    Some("m"),
+                    true,
+                    None,
+                    &[],
+                    "The spot: [x, z] stands on the ground there (terrain, areas, models); [x, y, z] a point in space",
+                ),
+                p(
+                    "normal",
+                    "[x, y, z]",
+                    None,
+                    false,
+                    Some("[0, 1, 0]"),
+                    &[],
+                    "The way the surface faces: up for the ground, sideways for a wall",
+                ),
+                p(
+                    "years",
+                    "number",
+                    Some("years"),
+                    false,
+                    Some("the view's years, else full grown"),
+                    &[],
+                    "Years after planting the crowns have grown, 0..60",
+                ),
+            ],
+            "{point: [x, y, z], normal, sky_view, crowns, years, month}",
+            json!({"point": [6, 26]}),
+            false,
+        ),
+        host_doc(
             "query.light_check",
             "Light Check",
             "Checks every placed plant (the `flora:` species of the plantings, single placements too) against the sun its spot gets. For each plant it computes the hours of direct sun on the day (the summer solstice unless `season` or `date` say otherwise) as `query.sun_hours` does, with shadow from models, shapes, terrain and the crowns of the other plantings' woody plants; a plant is measured at half its height (up to 2 m), and the crowns of its own planting do not shade it (a planting is judged against the light from outside it; its own crown never shades the plant). The hours are held against the species' estimated light range (full sun 6+ h, part shade 3 to 6 h, full shade under 3 h; the lawn wants 4+ h; a species outside the table gets a guess from its grower type, flagged `from_table: false`; none of it is checked against open data yet). A plant is `ok` when its hours lie inside the range give or take half an hour, `too_sunny` above it, `too_shady` below it. The answer starts with the count by verdict and lists the misfits, each with 2 or 3 better-fitting species of the same grower type to swap in (closest in mature height first). Lawn tufts are many and alike: at most 25 per lawn are measured. More than 4,000 plants are refused: narrow it with `ids` or `layer`.",
@@ -1097,6 +1134,15 @@ pub fn host_docs() -> Vec<CommandDoc> {
                     "Light shafts 0..1 for this picture only: beams of sun through the mist, rain fog or haze where crowns and houses shadow it",
                 ),
                 p(
+                    "sky_occlusion",
+                    "boolean",
+                    None,
+                    false,
+                    Some("the project's, else on"),
+                    &[],
+                    "Sky occlusion for this picture only: every surface lit by the sky it sees (view.set `sky_occlusion`)",
+                ),
+                p(
                     "white_balance",
                     "any",
                     None,
@@ -1350,6 +1396,15 @@ pub fn execute(host: &mut dyn Host, id: &str, params: &Value) -> Result<Value, S
             };
             let (session, state) = host.parts();
             inspect::sun_hours_json(session, state, &q)
+        }
+        "query.sky_view" => {
+            Fields::new(id, "parameter", Some(params), &["point", "normal", "years"])?;
+            let point: Vec<f32> =
+                take(id, params, "point")?.ok_or_else(|| format!("{id}: `point` is required"))?;
+            let normal: Option<[f32; 3]> = take(id, params, "normal")?;
+            let years: Option<f32> = take(id, params, "years")?;
+            let (session, state) = host.parts();
+            inspect::sky_view_json(session, state, &point, normal, years)
         }
         "query.plants_for_light" => {
             Fields::new(
@@ -2097,6 +2152,7 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
             "mist",
             "gustiness",
             "shafts",
+            "sky_occlusion",
             "white_balance",
             "grade",
             "grade_to",
@@ -2227,6 +2283,11 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
             return Err(format!("{id}: `haze` must be from 0 to {max}"));
         }
         project.view.haze = v as f32;
+    }
+    match a.get("sky_occlusion") {
+        None | Some(Value::Null) => {}
+        Some(Value::Bool(on)) => project.view.sky_occlusion = Some(*on),
+        Some(_) => return Err(format!("{id}: `sky_occlusion` must be true or false")),
     }
     if let Some(v) = a.get("white_balance") {
         let wb: visioncraft_core::WhiteBalance = serde_json::from_value(v.clone())

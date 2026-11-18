@@ -462,6 +462,7 @@ impl Host for Bound<'_, '_> {
                     "models": h.studio.models_pending(),
                     "library": !h.studio.scene.library.idle(),
                     "skyVolume": h.studio.sky_volume_pending(),
+                    "skyVisibility": h.studio.sky_visibility_pending(),
                     "sunMap": h.studio.sun_map_pending(),
                 },
             })),

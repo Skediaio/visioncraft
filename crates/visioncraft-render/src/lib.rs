@@ -156,7 +156,7 @@ const CLUSTER_CELL: f32 = 8.0;
 /// `set_time` wraps here (seconds) to keep f32 precision in the shaders.
 const TIME_WRAP: f64 = 4096.0;
 /// Byte offset of the SH in the globals (written by the GPU, see env.rs).
-const SH_OFFSET: u64 = 9 * 64 + 55 * 16;
+const SH_OFFSET: u64 = 9 * 64 + 57 * 16;
 /// The roughness up to which a metal is a mirror (`Material::mirror`, scene.wgsl `light`).
 const MIRROR_ROUGHNESS: f32 = 0.1;
 
@@ -1001,16 +1001,23 @@ pub struct Renderer {
     grade: (f32, f32),
     /// The camera is in a room (`set_indoors`): glass mirrors the room, not the sky.
     indoors: bool,
-    /// The sky visibility volume (`set_sky_volume`) and its view; 1 texel of open sky when unset.
-    sky_volume: (wgpu::Texture, wgpu::TextureView),
-    /// Its room light (`set_sky_volume`): per sample the lamps' and the sun's light passed
-    /// round the rooms (lux) and the sky's (per unit of its mean light; < 0 inside a wall).
+    /// The sky visibility volume (`set_sky_volume`), two tiles side by side along x: its room
+    /// light (per sample the lamps' and the sun's light passed round the rooms (lux) and the
+    /// sky's, per unit of its mean light, < 0 inside a wall), then the visible fraction and the
+    /// mean visible direction; open sky and no room light when unset.
     room_volume: (wgpu::Texture, wgpu::TextureView),
     /// Its occluders' voxels (`set_sky_volume`): 1 where solid; one empty voxel when unset.
     occupancy: (wgpu::Texture, wgpu::TextureView),
     /// Globals `sky_vol` and `sky_vol_size`: origin (m) and 1 / cell, 1 / texture size in
     /// cells and on (0/1).
     sky_volume_box: [f32; 8],
+    /// The baked sky visibility (`set_sky_visibility`) as a 3D texture; one empty probe when
+    /// unset.
+    sky_occ: (wgpu::Texture, wgpu::TextureView),
+    /// Globals `sky_occ` and `sky_occ_size` for it (`None`: no grid).
+    sky_occ_box: Option<[f32; 8]>,
+    /// Sky occlusion on (`set_sky_occlusion`): off by default.
+    sky_occlusion: bool,
     /// The procedural cloud layer of the analytic skies (`set_clouds`).
     clouds: Clouds,
     /// Snow cover 0..1 (`set_snow`), and the top-down depth map of what lies over the ground
@@ -1181,9 +1188,15 @@ impl Renderer {
             },
         );
         let white = white_texture.create_view(&Default::default());
-        let sky_volume = sky_volume_texture(device, queue, [1, 1, 1], &[[1.0, 0.0, 0.0, 0.0]]);
-        let room_volume = room_volume_texture(device, queue, [1, 1, 1], &[[0.0, 0.0, 0.0, 1.0]]);
+        let room_volume = room_volume_texture(
+            device,
+            queue,
+            [1, 1, 1],
+            &[[0.0, 0.0, 0.0, 1.0]],
+            &[[1.0, 0.0, 0.0, 0.0]],
+        );
         let occupancy = occupancy_texture(device, queue, [1, 1, 1], &[0]);
+        let sky_occ = sky_occ_texture(device, queue, [1, 1, 1], &[[0.0; 4]; 3]);
         // Material samplers: trilinear with 16x anisotropy (WebGPU core
         // allows up to 16 when all filters are linear).
         let material_sampler = |label, mode| {
@@ -1243,7 +1256,7 @@ impl Renderer {
             &light_buffer,
             &grid_buffer,
             &physical.sky_view,
-            [&sky_volume.1, &room_volume.1, &occupancy.1],
+            [&room_volume.1, &occupancy.1, &sky_occ.1],
         );
         let reflect_globals_bind = globals_bind_group(
             device,
@@ -1254,7 +1267,7 @@ impl Renderer {
             &light_buffer,
             &grid_buffer,
             &physical.sky_view,
-            [&sky_volume.1, &room_volume.1, &occupancy.1],
+            [&room_volume.1, &occupancy.1, &sky_occ.1],
         );
         let sky_bind = sky_bind_group(
             device,
@@ -1364,10 +1377,12 @@ impl Renderer {
             bloom_strength: 0.025,
             grade: (1.0, 1.0),
             indoors: false,
-            sky_volume,
             room_volume,
             occupancy,
             sky_volume_box: [0.0; 8],
+            sky_occ,
+            sky_occ_box: None,
+            sky_occlusion: false,
             clouds: Clouds::default(),
             snow: 0.0,
             snow_cover: None,
@@ -1812,8 +1827,7 @@ impl Renderer {
                 true,
             ),
         };
-        self.sky_volume = sky_volume_texture(&self.device, &self.queue, dims, samples);
-        self.room_volume = room_volume_texture(&self.device, &self.queue, dims, room);
+        self.room_volume = room_volume_texture(&self.device, &self.queue, dims, room, samples);
         self.occupancy = match volume.filter(|_| !open) {
             Some((.., (solid, d))) if solid.len() == d.iter().map(|&d| d as usize).product() => {
                 occupancy_texture(&self.device, &self.queue, d, solid)
@@ -1899,6 +1913,57 @@ impl Renderer {
     /// in a garden it is a few thousandths.
     pub fn set_aerial_perspective(&mut self, on: bool) {
         self.aerial_perspective = on;
+    }
+
+    /// Sky occlusion (off by default): with a grid given (`set_sky_visibility`), every
+    /// surface's sky light, its reflections of the sky and a photo's sky rays go through the sky
+    /// it sees (scene.wgsl `sky_occ_at`), after Ghost of Tsushima's baked sky visibility.
+    pub fn set_sky_occlusion(&mut self, on: bool) {
+        self.sky_occlusion = on;
+    }
+
+    /// Whether sky occlusion is on and has a grid to draw with.
+    pub fn sky_occlusion(&self) -> bool {
+        self.sky_occlusion && self.sky_occ_box.is_some()
+    }
+
+    /// The baked sky visibility (`visioncraft_core::sky_visibility`), drawn while sky occlusion
+    /// is on (`set_sky_occlusion`); `None` forgets it. A grid with impossible sizes is ignored.
+    pub fn set_sky_visibility(&mut self, grid: Option<SkyVisibilityGrid<'_>>) {
+        let limit = self.device.limits().max_texture_dimension_3d;
+        let grid = grid.filter(|g| {
+            let [nx, nl, nz] = g.dims;
+            nx >= 1
+                && nl >= 2
+                && nz >= 1
+                && 3 * nx <= limit
+                && nl <= limit
+                && nz <= limit
+                && g.cell > 0.0
+                && g.height > 0.0
+                && g.texels.len() == (3 * nx * nl * nz) as usize
+        });
+        match grid {
+            Some(g) => {
+                self.sky_occ = sky_occ_texture(&self.device, &self.queue, g.dims, g.texels);
+                self.sky_occ_box = Some([
+                    g.origin[0],
+                    g.origin[1],
+                    1.0 / g.cell,
+                    g.lift,
+                    g.dims[0] as f32,
+                    g.dims[1] as f32,
+                    g.dims[2] as f32,
+                    g.height,
+                ]);
+            }
+            None => {
+                self.sky_occ =
+                    sky_occ_texture(&self.device, &self.queue, [1, 1, 1], &[[0.0; 4]; 3]);
+                self.sky_occ_box = None;
+            }
+        }
+        self.rebind_globals();
     }
 
     /// The camera's white balance, before the grade and the tone map (tonemap.wgsl):
@@ -2020,7 +2085,7 @@ impl Renderer {
                 &self.light_buffer,
                 &self.grid_buffer,
                 sky_view,
-                [&self.sky_volume.1, &self.room_volume.1, &self.occupancy.1],
+                [&self.room_volume.1, &self.occupancy.1, &self.sky_occ.1],
             );
         }
         self.sky_bind = sky_bind_group(
@@ -4501,6 +4566,14 @@ impl Renderer {
         b.floats(&m.x_axis.extend(contrast).to_array());
         b.floats(&m.y_axis.extend(on).to_array());
         b.floats(&m.z_axis.extend(0.0).to_array());
+        // The baked sky visibility: off unless switched on and given (not in the water's
+        // mirrored view, whose surfaces are seen from below the water).
+        b.floats(
+            &self
+                .sky_occ_box
+                .filter(|_| self.sky_occlusion && clip.is_none())
+                .unwrap_or([0.0; 8]),
+        );
         debug_assert_eq!(b.0.len() as u64, SH_OFFSET);
         self.queue.write_buffer(buffer, 0, &b.0);
     }
@@ -4871,7 +4944,7 @@ fn globals_bind_group(
     lights: &wgpu::Buffer,
     grid: &wgpu::Buffer,
     sky: &wgpu::TextureView,
-    [sky_volume, room_volume, occupancy]: [&wgpu::TextureView; 3],
+    [room_volume, occupancy, sky_occ]: [&wgpu::TextureView; 3],
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("globals"),
@@ -4903,7 +4976,7 @@ fn globals_bind_group(
             },
             wgpu::BindGroupEntry {
                 binding: 6,
-                resource: wgpu::BindingResource::TextureView(sky_volume),
+                resource: wgpu::BindingResource::TextureView(sky_occ),
             },
             wgpu::BindGroupEntry {
                 binding: 7,
@@ -4915,6 +4988,62 @@ fn globals_bind_group(
             },
         ],
     })
+}
+
+/// A baked sky visibility grid for `Renderer::set_sky_visibility` (visioncraft-core's
+/// `SkyVisibility`, `texels()`): columns `cell` apart from `origin` (x, z), `dims` columns along
+/// x, layers and columns along z, layer k at `lift + height (k / (layers - 1))^2` over the ground,
+/// and the probes as three tiles side by side along x (x fastest, then the layer, then z).
+#[derive(Clone, Copy, Debug)]
+pub struct SkyVisibilityGrid<'a> {
+    pub origin: [f32; 2],
+    pub cell: f32,
+    pub dims: [u32; 3],
+    pub lift: f32,
+    pub height: f32,
+    pub texels: &'a [[f32; 4]],
+}
+
+/// The baked sky visibility as an `Rgba16Float` 3D texture three tiles wide (common.wgsl
+/// `sky_occ_tex`), one level.
+fn sky_occ_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    dims: [u32; 3],
+    texels: &[[f32; 4]],
+) -> (wgpu::Texture, wgpu::TextureView) {
+    let size = wgpu::Extent3d {
+        width: 3 * dims[0],
+        height: dims[1],
+        depth_or_array_layers: dims[2],
+    };
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("sky visibility"),
+        size,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D3,
+        format: wgpu::TextureFormat::Rgba16Float,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let bytes: Vec<u8> = texels
+        .iter()
+        .flat_map(|s| s.map(|v| hdri::f16_bits(v.clamp(-60000.0, 60000.0))))
+        .flat_map(u16::to_le_bytes)
+        .collect();
+    queue.write_texture(
+        texture.as_image_copy(),
+        &bytes,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(8 * 3 * dims[0]),
+            rows_per_image: Some(dims[1]),
+        },
+        size,
+    );
+    let view = texture.create_view(&Default::default());
+    (texture, view)
 }
 
 /// A sky visibility volume for `Renderer::set_sky_volume`: origin (m), cell (m), cells per
@@ -4965,16 +5094,19 @@ fn occupancy_texture(
     (texture, view)
 }
 
-/// The room light of a sky visibility volume as an `Rgba16Float` 3D texture, one level: rgb the
-/// lamps' and the sun's light passed round the rooms (lux), a the sky's (common.wgsl `room_vis`).
+/// A sky visibility volume as an `Rgba16Float` 3D texture, one level, two tiles side by side
+/// along x (common.wgsl `room_vis`): the room light, rgb the lamps' and the sun's light passed
+/// round the rooms (lux) and a the sky's; then the sky's visibility, r the visible fraction and
+/// gba the mean visible direction.
 fn room_volume_texture(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     dims: [u32; 3],
-    samples: &[[f32; 4]],
+    room: &[[f32; 4]],
+    sky: &[[f32; 4]],
 ) -> (wgpu::Texture, wgpu::TextureView) {
     let size = wgpu::Extent3d {
-        width: dims[0],
+        width: 2 * dims[0],
         height: dims[1],
         depth_or_array_layers: dims[2],
     };
@@ -4988,8 +5120,11 @@ fn room_volume_texture(
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
-    let bytes: Vec<u8> = samples
-        .iter()
+    let row = dims[0] as usize;
+    let bytes: Vec<u8> = room
+        .chunks(row)
+        .zip(sky.chunks(row))
+        .flat_map(|(r, s)| r.iter().chain(s))
         .flat_map(|s| s.map(|v| hdri::f16_bits(v.clamp(-1.0, 60000.0))))
         .flat_map(u16::to_le_bytes)
         .collect();
@@ -5003,95 +5138,11 @@ fn room_volume_texture(
         &bytes,
         wgpu::TexelCopyBufferLayout {
             offset: 0,
-            bytes_per_row: Some(8 * dims[0]),
+            bytes_per_row: Some(16 * dims[0]),
             rows_per_image: Some(dims[1]),
         },
         size,
     );
-    let view = texture.create_view(&Default::default());
-    (texture, view)
-}
-
-/// The sky visibility volume as an RGBA8 3D texture with its mips (averages of 2 x 2 x 2): r the
-/// visible fraction, gba the mean visible direction (at most 0.25 long) as `0.5 + 2 * a`.
-fn sky_volume_texture(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    dims: [u32; 3],
-    samples: &[[f32; 4]],
-) -> (wgpu::Texture, wgpu::TextureView) {
-    let levels = 32 - dims.iter().max().copied().unwrap_or(1).leading_zeros();
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("sky volume"),
-        size: wgpu::Extent3d {
-            width: dims[0],
-            height: dims[1],
-            depth_or_array_layers: dims[2],
-        },
-        mip_level_count: levels,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D3,
-        format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-        view_formats: &[],
-    });
-    let (mut d, mut level) = (dims, samples.to_vec());
-    for mip in 0..levels {
-        let bytes: Vec<u8> = level
-            .iter()
-            .flat_map(|s| {
-                let enc = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-                [
-                    enc(s[0]),
-                    enc(0.5 + 2.0 * s[1]),
-                    enc(0.5 + 2.0 * s[2]),
-                    enc(0.5 + 2.0 * s[3]),
-                ]
-            })
-            .collect();
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &texture,
-                mip_level: mip,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &bytes,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(4 * d[0]),
-                rows_per_image: Some(d[1]),
-            },
-            wgpu::Extent3d {
-                width: d[0],
-                height: d[1],
-                depth_or_array_layers: d[2],
-            },
-        );
-        let next = d.map(|n| (n / 2).max(1));
-        let at = |p: [u32; 3]| level[(p[0] + d[0] * (p[1] + d[1] * p[2])) as usize];
-        let mut down = Vec::with_capacity(next.iter().map(|&n| n as usize).product());
-        for z in 0..next[2] {
-            for y in 0..next[1] {
-                for x in 0..next[0] {
-                    let mut sum = [0.0f32; 4];
-                    for k in 0..8u32 {
-                        let p = [
-                            (2 * x + (k & 1)).min(d[0] - 1),
-                            (2 * y + (k >> 1 & 1)).min(d[1] - 1),
-                            (2 * z + (k >> 2)).min(d[2] - 1),
-                        ];
-                        let s = at(p);
-                        for c in 0..4 {
-                            sum[c] += s[c] / 8.0;
-                        }
-                    }
-                    down.push(sum);
-                }
-            }
-        }
-        (d, level) = (next, down);
-    }
     let view = texture.create_view(&Default::default());
     (texture, view)
 }
@@ -6983,6 +7034,86 @@ mod tests {
         assert_eq!(SH_OFFSET % 16, 0, "SH copy needs 16-byte texel alignment");
         assert_eq!(globals_size(), u64::from(span));
         assert_eq!(globals_size(), SH_OFFSET + 144);
+    }
+
+    /// The straight-line SH product in scene.wgsl (`sh_product9`) is the triple-product table:
+    /// each `T * (v[j] * c[k] ...)` term against the integral of the basis, found here by
+    /// quadrature, and no non-zero integral left out.
+    #[test]
+    fn sky_product_matches_the_triple_product() {
+        let basis = |x: f64, y: f64, z: f64| {
+            [
+                0.282_095,
+                0.488_603 * y,
+                0.488_603 * z,
+                0.488_603 * x,
+                1.092_548 * x * y,
+                1.092_548 * y * z,
+                0.315_392 * (3.0 * z * z - 1.0),
+                1.092_548 * x * z,
+                0.546_274 * (x * x - y * y),
+            ]
+        };
+        // Midpoint in the cosine and round the axis, fine enough for these polynomials.
+        let (rows, cols) = (400, 64);
+        let mut t = [[[0.0f64; 9]; 9]; 9];
+        for a in 0..rows {
+            let mu = -1.0 + (a as f64 + 0.5) * 2.0 / rows as f64;
+            let s = (1.0 - mu * mu).sqrt();
+            for b in 0..cols {
+                let phi = (b as f64 + 0.5) * std::f64::consts::TAU / cols as f64;
+                let y = basis(s * phi.cos(), s * phi.sin(), mu);
+                let w = 2.0 / rows as f64 * std::f64::consts::TAU / cols as f64;
+                for i in 0..9 {
+                    for j in 0..9 {
+                        for k in 0..9 {
+                            t[i][j][k] += w * y[i] * y[j] * y[k];
+                        }
+                    }
+                }
+            }
+        }
+        let src = include_str!("scene.wgsl");
+        let body = &src[src.find("fn sh_product9").unwrap()..];
+        let body = &body[..body.find("return w;").unwrap()];
+        let mut seen = std::collections::HashSet::new();
+        let mut i = 0usize;
+        for line in body.lines().map(str::trim) {
+            let line = line.trim_start_matches("+ ").trim_end_matches(';');
+            let rest = match line.strip_prefix("w[") {
+                Some(r) => {
+                    i = r[..1].parse().unwrap();
+                    r[r.find("= ").unwrap() + 2..].to_string()
+                }
+                None if line.contains("* v[") || line.contains("* (v[") => line.to_string(),
+                None => continue,
+            };
+            let coef: f64 = rest[..rest.find(" *").unwrap()].parse().unwrap();
+            let idx: Vec<usize> = rest
+                .match_indices("v[")
+                .map(|(p, _)| rest[p + 2..p + 3].parse().unwrap())
+                .collect();
+            let jdx: Vec<usize> = rest
+                .match_indices("c[")
+                .map(|(p, _)| rest[p + 2..p + 3].parse().unwrap())
+                .collect();
+            let (j, k) = (idx[0], jdx[0]);
+            assert!(
+                (coef - t[i][j][k]).abs() < 2e-4,
+                "w[{i}] v[{j}] c[{k}]: {coef} vs {}",
+                t[i][j][k]
+            );
+            seen.insert((i, j.min(k), j.max(k)));
+        }
+        for (i, ti) in t.iter().enumerate() {
+            for (j, tij) in ti.iter().enumerate() {
+                for (k, v) in tij.iter().enumerate().skip(j) {
+                    if v.abs() > 1e-3 {
+                        assert!(seen.contains(&(i, j, k)), "T[{i}][{j}][{k}] missing");
+                    }
+                }
+            }
+        }
     }
 
     #[test]

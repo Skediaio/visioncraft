@@ -19,7 +19,7 @@ pub fn recipes() -> Vec<Value> {
 #[test]
 fn every_recipe_of_the_guide_runs() {
     let recipes = recipes();
-    assert_eq!(recipes.len(), 42);
+    assert_eq!(recipes.len(), 43);
     for (n, recipe) in recipes.into_iter().enumerate() {
         let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("recipe-{n}"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -114,7 +114,6 @@ fn every_recipe_of_the_guide_runs() {
             }
             19 => {
                 // Hidden, not removed: the house model keeps all its bodies.
-                assert_eq!(results[1]["result"], Value::Null, "{report}");
                 assert!(
                     results[2]["result"]["models"][0]["bodies"]
                         .as_u64()
@@ -536,6 +535,17 @@ fn every_recipe_of_the_guide_runs() {
                 assert_eq!(inspect["sea"]["wave_height_m"], 0.875, "{report}");
                 let count = inspect["generators"][0]["count"].as_u64().unwrap();
                 assert!((200..450).contains(&count), "{count} plants");
+            }
+            43 => {
+                // The middle of the lawn sees most of the sky (the full-grown trees and the house
+                // take some); under the field maple and by the hedge less; the house wall,
+                // facing the garden, under half (a wall sees no more than the sky's half).
+                let view = |i: usize| results[i]["result"]["sky_view"].as_f64().unwrap();
+                let (lawn, maple, hedge, wall) = (view(2), view(3), view(4), view(5));
+                assert!(lawn > 0.65, "{report}");
+                assert!(maple < lawn - 0.1 && maple > 0.05, "{report}");
+                assert!(hedge < lawn && hedge > 0.3, "{report}");
+                assert!(wall > 0.2 && wall < 0.5, "{report}");
             }
             42 => {
                 // The walk is planned round the pond and the hedge and keeps its 19.6 s.

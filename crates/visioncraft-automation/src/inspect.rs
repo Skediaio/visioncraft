@@ -1755,6 +1755,215 @@ pub fn light_check(
     }))
 }
 
+/// The age a plant is drawn at when the view shows every plant full grown (`ViewState::years`
+/// `None`): far past any growth curve's maturity.
+const FULL_GROWN_YEARS: f32 = 500.0;
+
+/// What blocks the sky round `project` for the sky visibility (`visioncraft_core::sky_visibility`,
+/// `query.sky_view`): the visible models' and shapes' triangles less glass and see-through
+/// materials (areas are the ground, not occluders), the crowns of the woody plants `years` after
+/// planting (`None`: full grown, as the window draws them) with their species' leaf density in
+/// `month`, and the ground (terrain and terraces, else the ground plane).
+pub fn sky_scene(
+    project: &Project,
+    models: &Models,
+    assets: &[visioncraft_core::Asset],
+    years: Option<f32>,
+    month: u32,
+) -> visioncraft_core::SkyScene {
+    use visioncraft_core::sky_visibility::{Canopy, Ground, SkyScene, crown_extinction};
+    let owners = owners(project, models);
+    let mut triangles = Vec::new();
+    for o in owners.iter().filter(|o| !(o.ground && o.kind == "shape")) {
+        let materials = visioncraft_core::resolve_materials(project, &o.id, &o.mesh);
+        let clear = |face: u32| {
+            materials
+                .get(face as usize)
+                .copied()
+                .flatten()
+                .and_then(|m| project.materials.get(m))
+                .is_some_and(|m| {
+                    matches!(
+                        m.kind,
+                        visioncraft_core::SurfaceKind::ArchitecturalGlass { .. }
+                    ) || m.base_color[3] < 0.99
+                })
+        };
+        for (t, face) in o.mesh.triangles.iter().zip(&o.mesh.triangle_faces) {
+            if clear(*face) {
+                continue;
+            }
+            triangles.push(t.map(|v| {
+                let p = o.mesh.positions[v as usize];
+                o.xf.as_ref().map_or(p, |x| to_world(x, p))
+            }));
+        }
+    }
+    let mut crowns = Vec::new();
+    for g in &project.generators {
+        if !project.layer_visible(g.layer()) {
+            continue;
+        }
+        for pl in placements(project, &owners, assets, g).0 {
+            let evergreen = pl
+                .asset
+                .strip_prefix("flora:")
+                .and_then(visioncraft_flora::Species::by_id)
+                .is_none_or(|s| s.evergreen);
+            let age = g.planted_age_years().unwrap_or_else(|| {
+                visioncraft_core::growth::growth_of(&pl.asset, None).planted_age_years
+            }) + years.unwrap_or(FULL_GROWN_YEARS);
+            let latitude = project.site.latitude;
+            if let Some(c) = plant_occluder(
+                &pl.asset,
+                pl.position,
+                pl.scale,
+                age,
+                evergreen,
+                month,
+                latitude,
+            ) {
+                let leaves = visioncraft_core::sun_hours::leaf_share(evergreen, month, latitude);
+                crowns.push(Canopy {
+                    center: c.center,
+                    radii: c.radii,
+                    extinction: crown_extinction(&pl.asset, c.radii[1], leaves),
+                });
+            }
+        }
+    }
+    let plane = project.view.ground.map_or(0.0, |g| g.height);
+    let ground = if project.terrain.is_some() {
+        let (mut lo, mut hi) = ([f32::INFINITY; 2], [f32::NEG_INFINITY; 2]);
+        let mut grow = |x: f32, z: f32, r: f32| {
+            lo = [lo[0].min(x - r), lo[1].min(z - r)];
+            hi = [hi[0].max(x + r), hi[1].max(z + r)];
+        };
+        triangles
+            .iter()
+            .flatten()
+            .for_each(|p| grow(p[0], p[2], 0.0));
+        crowns
+            .iter()
+            .for_each(|c| grow(c.center[0], c.center[2], c.radii[0].max(c.radii[2])));
+        if lo[0].is_finite() {
+            // Room for the hills round the design that hide the low sky.
+            let pad = 30.0;
+            let at = visioncraft_core::terrace::ground_fn(project);
+            Ground::sample(
+                [lo[0] - pad, lo[1] - pad],
+                [hi[0] + pad, hi[1] + pad],
+                1.0,
+                |x, z| at(x, z).unwrap_or(plane),
+            )
+        } else {
+            Ground::flat(plane)
+        }
+    } else {
+        Ground::flat(plane)
+    };
+    SkyScene {
+        triangles,
+        crowns,
+        ground,
+    }
+}
+
+/// The sky visibility of a project, baked a few probes at a time (`visioncraft_core::SkyBake`):
+/// what the window draws with `view.set sky_occlusion`. A host that must not stop (a window on
+/// the web) calls [`SkyVisJob::step`] every frame, one that has a thread runs it at once.
+pub struct SkyVisJob {
+    bake: Option<visioncraft_core::SkyBake>,
+    /// The scene's key (`SkyScene::key`): the same key, the same bake.
+    pub key: u64,
+}
+
+impl SkyVisJob {
+    /// The job for `scene` (`sky_scene`).
+    pub fn new(scene: visioncraft_core::SkyScene) -> Self {
+        let key = scene.key();
+        Self {
+            bake: visioncraft_core::SkyBake::new(scene),
+            key,
+        }
+    }
+
+    /// Probes in the grid, and how many are done.
+    pub fn progress(&self) -> (usize, usize) {
+        self.bake.as_ref().map_or((0, 0), |b| b.progress())
+    }
+
+    /// Does the next `n` probes; true when all are done.
+    pub fn step(&mut self, n: usize) -> bool {
+        self.bake.as_mut().is_none_or(|b| b.step(n))
+    }
+
+    /// The baked visibility at once (on all cores natively); `None` when nothing blocks the sky.
+    pub fn run(self) -> Option<visioncraft_core::SkyVisibility> {
+        self.bake.map(visioncraft_core::SkyBake::run)
+    }
+
+    /// The visibility; `None` when nothing blocks the sky.
+    pub fn finish(self) -> Option<visioncraft_core::SkyVisibility> {
+        self.bake.map(visioncraft_core::SkyBake::finish)
+    }
+}
+
+/// Rays `query.sky_view` traces.
+const SKY_VIEW_RAYS: usize = 4096;
+
+/// `query.sky_view`: the share of the sky a spot sees, cosine-weighted (the sky view factor).
+pub(crate) fn sky_view_json(
+    session: &Session,
+    state: &HostState,
+    point: &[f32],
+    normal: Option<[f32; 3]>,
+    years: Option<f32>,
+) -> Result<Value, String> {
+    const ID: &str = "query.sky_view";
+    let p = session.project();
+    if let Some(y) = years
+        && !(0.0..=visioncraft_core::YEARS_MAX).contains(&y)
+    {
+        return Err(format!(
+            "{ID}: `years` must be 0..{}",
+            visioncraft_core::YEARS_MAX
+        ));
+    }
+    let n = normal.unwrap_or([0.0, 1.0, 0.0]);
+    let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+    if !len.is_finite() || len < 1e-6 {
+        return Err(format!("{ID}: `normal` must be a direction, not zero"));
+    }
+    let n = n.map(|v| v / len);
+    let models = models_of(state);
+    let at = match *point {
+        [x, z] => {
+            let owners = owners(p, &models);
+            [
+                x,
+                ground_at(p, &owners, x, z, true).unwrap_or(0.0) + 0.02,
+                z,
+            ]
+        }
+        [x, y, z] => [x, y, z],
+        _ => return Err(format!("{ID}: `point` must be [x, z] or [x, y, z]")),
+    };
+    if at.iter().any(|v| !v.is_finite()) {
+        return Err(format!("{ID}: `point` must be finite numbers"));
+    }
+    let years = years.or(p.view.years);
+    let scene = sky_scene(p, &models, &state.catalog.assets, years, p.time.month);
+    // Lifted a hair off the surface it stands on along the normal.
+    let from: [f32; 3] = std::array::from_fn(|k| at[k] + n[k] * 0.02);
+    let view = visioncraft_core::sky_visibility::sky_view_at(&scene, from, n, SKY_VIEW_RAYS);
+    Ok(json!({
+        "point": at.map(|v| r3(f64::from(v))), "normal": n.map(|v| r3(f64::from(v))),
+        "sky_view": r3(f64::from(view)),
+        "crowns": scene.crowns.len(), "years": years, "month": p.time.month,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

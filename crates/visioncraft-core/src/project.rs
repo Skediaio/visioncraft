@@ -256,6 +256,11 @@ pub struct ViewState {
     /// while off, so files from before it existed round-trip unchanged.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sun_map: Option<crate::sun_map::SunMap>,
+    /// Baked sky visibility (`sky_visibility`): shade and backlight get the sky's light in
+    /// proportion to the sky they see. `None` (the default; not written): the host decides, and
+    /// the window and its pictures turn it on, while the bare renderer leaves it off.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sky_occlusion: Option<bool>,
 }
 
 /// The land round a design, painted and shaped on the endless ground beyond the plot: never
@@ -467,6 +472,7 @@ impl Default for ViewState {
             photo: crate::photo::PhotoSettings::default(),
             surroundings: Surroundings::default(),
             sun_map: None,
+            sky_occlusion: None,
         }
     }
 }

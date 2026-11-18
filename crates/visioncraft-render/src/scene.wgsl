@@ -384,6 +384,134 @@ fn sh_irradiance(n: vec3<f32>) -> vec3<f32> {
 // How much of the sky's colour the ambient light keeps (see `sh_irradiance`).
 const AMBIENT_CHROMA: f32 = 0.55;
 
+// ---- baked sky visibility (sky_visibility.rs; Patry, "Real-Time Samurai Cinema", SIGGRAPH 2021) --
+
+// The real L2 SH at unit `d`, in env.wgsl's order, each times its band's clamped-cosine factor
+// over pi (1, 2/3, 1/4): the cosine lobe round `d` as harmonics, scaled so a sky of unit
+// radiance gives an irradiance of pi times `sky_view_seen`.
+fn cosine_lobe(d: vec3<f32>) -> array<f32, 9> {
+    return array<f32, 9>(
+        0.282095 * PI,
+        0.488603 * d.y * (2.0 * PI / 3.0),
+        0.488603 * d.z * (2.0 * PI / 3.0),
+        0.488603 * d.x * (2.0 * PI / 3.0),
+        1.092548 * d.x * d.y * (PI / 4.0),
+        1.092548 * d.y * d.z * (PI / 4.0),
+        0.315392 * (3.0 * d.z * d.z - 1.0) * (PI / 4.0),
+        1.092548 * d.x * d.z * (PI / 4.0),
+        0.546274 * (d.x * d.x - d.y * d.y) * (PI / 4.0),
+    );
+}
+
+// The projection onto L2 of the product of two functions given as L2 SH: w_i = sum T_ijk v_j c_k
+// with T the triple-product integrals of the basis (sky_visibility.rs `sh_triple`, the same
+// quadrature; the render test `sky_product_matches_the_triple_product` checks these numbers).
+fn sh_product9(v: array<f32, 9>, c: array<f32, 9>) -> array<f32, 9> {
+    var w: array<f32, 9>;
+    w[0] = 0.282095 * v[0] * c[0]
+        + 0.282096 * v[1] * c[1]
+        + 0.282096 * v[2] * c[2]
+        + 0.282096 * v[3] * c[3]
+        + 0.282095 * v[4] * c[4]
+        + 0.282095 * v[5] * c[5]
+        + 0.282096 * v[6] * c[6]
+        + 0.282095 * v[7] * c[7]
+        + 0.282095 * v[8] * c[8];
+    w[1] = 0.282096 * (v[0] * c[1] + v[1] * c[0])
+        + -0.126157 * (v[1] * c[6] + v[6] * c[1])
+        + -0.218510 * (v[1] * c[8] + v[8] * c[1])
+        + 0.218510 * (v[2] * c[5] + v[5] * c[2])
+        + 0.218510 * (v[3] * c[4] + v[4] * c[3]);
+    w[2] = 0.282096 * (v[0] * c[2] + v[2] * c[0])
+        + 0.218510 * (v[1] * c[5] + v[5] * c[1])
+        + 0.252314 * (v[2] * c[6] + v[6] * c[2])
+        + 0.218510 * (v[3] * c[7] + v[7] * c[3]);
+    w[3] = 0.282096 * (v[0] * c[3] + v[3] * c[0])
+        + 0.218510 * (v[1] * c[4] + v[4] * c[1])
+        + 0.218510 * (v[2] * c[7] + v[7] * c[2])
+        + -0.126157 * (v[3] * c[6] + v[6] * c[3])
+        + 0.218510 * (v[3] * c[8] + v[8] * c[3]);
+    w[4] = 0.282095 * (v[0] * c[4] + v[4] * c[0])
+        + 0.218510 * (v[1] * c[3] + v[3] * c[1])
+        + -0.180224 * (v[4] * c[6] + v[6] * c[4])
+        + 0.156078 * (v[5] * c[7] + v[7] * c[5]);
+    w[5] = 0.282095 * (v[0] * c[5] + v[5] * c[0])
+        + 0.218510 * (v[1] * c[2] + v[2] * c[1])
+        + 0.156078 * (v[4] * c[7] + v[7] * c[4])
+        + 0.090112 * (v[5] * c[6] + v[6] * c[5])
+        + -0.156078 * (v[5] * c[8] + v[8] * c[5]);
+    w[6] = 0.282096 * (v[0] * c[6] + v[6] * c[0])
+        + -0.126157 * v[1] * c[1]
+        + 0.252314 * v[2] * c[2]
+        + -0.126157 * v[3] * c[3]
+        + -0.180224 * v[4] * c[4]
+        + 0.090112 * v[5] * c[5]
+        + 0.180224 * v[6] * c[6]
+        + 0.090112 * v[7] * c[7]
+        + -0.180224 * v[8] * c[8];
+    w[7] = 0.282095 * (v[0] * c[7] + v[7] * c[0])
+        + 0.218510 * (v[2] * c[3] + v[3] * c[2])
+        + 0.156078 * (v[4] * c[5] + v[5] * c[4])
+        + 0.090112 * (v[6] * c[7] + v[7] * c[6])
+        + 0.156078 * (v[7] * c[8] + v[8] * c[7]);
+    w[8] = 0.282095 * (v[0] * c[8] + v[8] * c[0])
+        + -0.218510 * v[1] * c[1]
+        + 0.218510 * v[3] * c[3]
+        + -0.156078 * v[5] * c[5]
+        + -0.180224 * (v[6] * c[8] + v[8] * c[6])
+        + 0.156078 * v[7] * c[7];
+    return w;
+}
+
+// The sky's irradiance on a surface facing `n` that sees the sky through visibility `v`: the
+// sky's radiance (g.sh over the cosine factors) times the visibility, projected back onto L2 and
+// convolved with the clamped cosine; then as `sh_irradiance` (chroma, exposure).
+fn sh_irradiance_seen(n: vec3<f32>, v: array<f32, 9>) -> vec3<f32> {
+    let w = sh_product9(v, cosine_lobe(n));
+    var e = g.sh[0].rgb * (w[0] / PI);
+    e += (g.sh[1].rgb * w[1] + g.sh[2].rgb * w[2] + g.sh[3].rgb * w[3]) * (1.5 / PI);
+    e += (g.sh[4].rgb * w[4] + g.sh[5].rgb * w[5] + g.sh[6].rgb * w[6] + g.sh[7].rgb * w[7] + g.sh[8].rgb * w[8]) * (4.0 / PI);
+    let luma = dot(e, vec3<f32>(0.2126, 0.7152, 0.0722));
+    e = mix(vec3<f32>(luma), e, AMBIENT_CHROMA);
+    return max(e, vec3<f32>(0.0)) * g.night.w;
+}
+
+// The cosine-weighted share of the sky a surface facing `n` sees through `v` (0..1).
+fn sky_view_seen(v: array<f32, 9>, n: vec3<f32>) -> f32 {
+    let c = cosine_lobe(n);
+    var sum = 0.0;
+    for (var k = 0; k < 9; k++) {
+        sum += v[k] * c[k];
+    }
+    return clamp(sum / PI, 0.0, 1.0);
+}
+
+// The mean visibility over a cone of half-angle `half_angle` round `d` (the cap's zonal
+// harmonics by Funk-Hecke: band factors 1, (1 + c) / 2, c (1 + c) / 2): the specular
+// occlusion of a reflection lobe; with a tiny cone, the visibility along `d`.
+fn sky_cone_seen(v: array<f32, 9>, d: vec3<f32>, half_angle: f32) -> f32 {
+    let c = cos(half_angle);
+    let b1 = 0.5 * (1.0 + c);
+    let b2 = 0.5 * c * (1.0 + c);
+    var sum = 0.282095 * v[0];
+    sum += b1 * 0.488603 * (v[1] * d.y + v[2] * d.z + v[3] * d.x);
+    sum += b2 * (1.092548 * (v[4] * d.x * d.y + v[5] * d.y * d.z + v[7] * d.x * d.z)
+        + 0.315392 * v[6] * (3.0 * d.z * d.z - 1.0) + 0.546274 * v[8] * (d.x * d.x - d.y * d.y));
+    return clamp(sum, 0.0, 1.0);
+}
+
+// The light the occluders a probe sees bounce on, per unit of the share they block: their
+// reflectance (`SkyOcc.albedo`) under half the open sky and part of the sun (about a third of
+// the occluders lit, at a mean cosine of a half: walls and leaves catch the sun from the side).
+// Irradiance, as a surface facing them would take it.
+// shortcut: the talk's bounced sky visibility is baked as a second set of harmonics; this
+// keeps one number per probe and lights it with the sky and sun as they are now.
+fn occluder_light(albedo: f32) -> vec3<f32> {
+    let up = sh_irradiance(vec3<f32>(0.0, 1.0, 0.0));
+    let sun = g.sun_light.rgb * max(g.sun_dir.y, 0.0);
+    return albedo * (0.5 * up + 0.35 * sun);
+}
+
 // The mean reflectance of a room's surfaces (pale walls and ceiling, a wooden floor).
 const ROOM_REFLECTANCE: f32 = 0.45;
 
@@ -1071,6 +1199,9 @@ const CROWN_TAG: u32 = 0xC0000000u;
 // 550 nm, a half at 670 nm and a quarter at 450 nm (Jacquemoud & Baret 1990, PROSPECT spectra).
 // The earlier yellow tint (red kept at 0.9 of green) made sunlit crowns read lime-yellow.
 const LEAF_T: f32 = 0.8;
+// The mean share of a collimated beam's irradiance over a sphere's surface (its outline over its
+// area, pi r^2 / 4 pi r^2): the sun on a crown standing in the open, whatever the sun's height.
+const CROWN_SUN_SHARE: f32 = 0.25;
 const LEAF_T_TINT = vec3<f32>(0.48, 0.95, 0.29);
 // Lawn tufts carry the same, tagged apart (ground-level shade at their base; the app's
 // `tuft_occlusion`): snow, which settles on a crown's leaves, leaves them alone.
@@ -1264,30 +1395,86 @@ fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, aging: Agin
     var sky_irr = sh_irradiance(n);
     var ambient_ao = ao;
     var fill = vec3<f32>(0.0);
+    // The baked sky visibility (`sky_occ_at`), when on: the sky's light through what this point
+    // sees of it, per direction, instead of the open sky's dimmed by one number. It and the
+    // room volume (`volume_at`) both see the houses: the darker of their cosine-weighted
+    // shares decides (`sky_k`), so a wall or roof both know is not counted twice; the share the
+    // baked grid blocks beyond the room volume's sees occluders, which bounce their light on.
+    let occ = sky_occ_at(in.world, s.geometric);
+    let occ_light = occluder_light(occ.albedo);
+    var sky_k = seen;
+    var occ_bounce = vec3<f32>(0.0);
+    var sky_scale = 1.0;
+    // The sky through a leaf from its far side (foliage), kept apart for a photo's bounce rays.
+    var leaf_back = vec3<f32>(0.0);
+    if occ.weight > 0.0 {
+        let k_g = mix(1.0, sky_view_seen(occ.v, n), occ.weight);
+        sky_k = min(k_g, seen);
+        sky_scale = min(1.0, seen / max(k_g, 0.02)) / max(seen, 1e-4);
+        sky_irr = mix(sky_irr, sh_irradiance_seen(n, occ.v), occ.weight);
+        occ_bounce = occ_light * max(seen - k_g, 0.0) * occ.weight;
+    }
     if foliage && !clay {
         // A leaf is thin: of the sky light on its far side about as much comes through as its
         // near side reflects (diffuse transmission of thin leaves, as in Habel, Kusternig &
         // Wimmer, "Physically Based Real-Time Translucency for Leaves", EGSR 2007). Without it
         // the leaves under a crown, facing the dark ground, read near black.
-        sky_irr = sky_irr + sh_irradiance(-n) * LEAF_T_TINT;
+        var back = sh_irradiance(-n);
+        if occ.weight > 0.0 {
+            back = mix(back, sh_irradiance_seen(-n, occ.v), occ.weight);
+        }
+        leaf_back = back * LEAF_T_TINT;
+        sky_irr = sky_irr + leaf_back;
         // The crown's sky view (`crown_sky`, in s.ao) already is the occlusion by the other
-        // leaves; screen-space AO of alpha-tested cards counts the same leaves again.
+        // leaves; screen-space AO of alpha-tested cards counts the same leaves again. The baked
+        // visibility leaves a crown out of its own probes (sky_visibility.rs `near`): it brings
+        // the other crowns, the house and the hedge, and which way the open sky lies, and the
+        // light among the leaves is the crown's own multiple scattering (`fill`) below.
         ambient_ao = s.ao * mix(1.0, screen.r, 0.3);
+        occ_bounce = vec3<f32>(0.0);
         // Light scattered among the leaves (the canopy's multiple scattering, as in the
         // two-stream model of P. J. Sellers, "Canopy reflectance, photosynthesis and
         // transpiration", Int. J. Remote Sensing 6(8), 1985): a leaf deep in the crown sees
         // other leaves where it does not see sky, and they pass on about R + T = 2 x albedo of
         // the sun and sky falling on the crown, about half of them lit. Green, never black.
-        let on_crown = g.sun_light.rgb * max(l.y, 0.0) + sh_irradiance(vec3<f32>(0.0, 1.0, 0.0));
+        var on_crown = g.sun_light.rgb * max(l.y, 0.0) + sh_irradiance(vec3<f32>(0.0, 1.0, 0.0));
+        if occ.weight > 0.0 {
+            // What falls on the crown from outside, as the baked visibility says (a crown is
+            // left out of its own probes): the sky its top sees past the house and the other
+            // crowns, and the sun. The top's cosine is a closed canopy's; a crown standing in
+            // the open intercepts the sun over its outline at any height of the sun, a quarter
+            // of the beam on average over a sphere's surface, so a low sun still lights a lone
+            // crown from the side and its inside glows green against the light. Either as far
+            // as the way to the sun is open (a narrow cone towards it).
+            let up = vec3<f32>(0.0, 1.0, 0.0);
+            let sun_open = sky_cone_seen(occ.v, l, 0.1);
+            let side = max(max(l.y, 0.0), CROWN_SUN_SHARE * sun_open);
+            let lit = g.sun_light.rgb * side + sh_irradiance(up) * sky_view_seen(occ.v, up);
+            on_crown = mix(on_crown, lit, occ.weight);
+        }
         fill = diffuse_color * (1.0 + LEAF_T_TINT) * (diffuse_color * on_crown) * (1.0 - s.ao) / PI;
     }
-    var ambient_diffuse = diffuse_color * (sky_irr * seen + bounce * (1.0 - seen)) / PI * ambient_ao + fill;
+    if occ.weight > 0.0 && !foliage {
+        // Screen-space AO only darkens the sky the grid still lets through: the walls and
+        // crowns both find are counted once (1 - (1 - ao) k; a full darkening where the
+        // grid sees open sky, none where it already sees none).
+        ambient_ao = s.ao * (1.0 - (1.0 - screen.r) * sky_k);
+    }
+    var ambient_diffuse = diffuse_color * (sky_irr * seen * sky_scale + bounce * (1.0 - seen) + occ_bounce) / PI * ambient_ao + fill;
     // Photos from their second sample on: the diffuse light arriving from the scene itself,
     // gathered along two cosine-distributed rays per sample against the depth buffer and lit
     // by the previous sample (so bounces add up over the samples); where a ray leaves the
     // picture or finds nothing, the sky's light as before.
     if g.grade.w >= 1.0 {
-        ambient_diffuse = diffuse_color * photo_bounce(in.world, n, in.clip.xy, ao);
+        ambient_diffuse = diffuse_color * photo_bounce(in.world, n, in.clip.xy, ao, occ);
+        // The bounce rays gather what the near side of a leaf sees; with sky occlusion the
+        // light through it from its far side and among the crown's leaves stays, as above, so
+        // a backlit crown in a photo is not lit by its front alone. The far side of a leaf
+        // inside a crown is lit through the leaves between it and the sky: its place in the
+        // crown (`crown_sky`) once more, so a dense hedge's shaded face stays shaded.
+        if foliage && !clay && occ.weight > 0.0 {
+            ambient_diffuse += diffuse_color * leaf_back * seen * sky_scale * s.ao / PI * ambient_ao + fill;
+        }
     }
     // Snow out of the sun is blue-grey, clearly darker than sunlit snow: under a winter sun the
     // sky's light alone made shade and sun on snow almost the same white.
@@ -1298,19 +1485,34 @@ fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, aging: Agin
     let spec_ao = clamp(pow(nov + ao, exp2(-16.0 * s.roughness - 1.0)) - 1.0 + ao, 0.0, 1.0);
     // A reflection that the sky volume says meets the room shows the room's own light, not sky.
     let seen_r = sky_seen(vis, r);
-    var reflected = environment(r, s.roughness) * seen_r + room_seen(vis, bounce, r) * (1.0 - seen_r);
+    // Specular occlusion from the baked visibility: its mean over the reflection lobe's cone
+    // (half-angle twice the GGX half-vector's median, atan(alpha): Walter et al., "Microfacet
+    // Models for Refraction through Rough Surfaces", EGSR 2007), so a wet path or a window
+    // under a tree mirrors the crown's dim light, not the open sky.
+    var spec_open = 1.0;
+    if occ.weight > 0.0 {
+        let cone = clamp(2.0 * atan(a), 0.1, 1.5);
+        spec_open = mix(1.0, sky_cone_seen(occ.v, r, cone), occ.weight);
+    }
+    let sky_r = min(seen_r, spec_open);
+    var reflected = environment(r, s.roughness) * sky_r + room_seen(vis, bounce, r) * (1.0 - seen_r)
+        + occ_light / PI * max(seen_r - spec_open, 0.0);
     // A mirror (drawn after the opaque scene, lib.rs `Material::mirror`) shows what the screen
     // does, else the sky or the room as its exact ray finds them.
     if screen_effects && s.metallic >= 0.5 && s.roughness <= 0.1 {
         let open = ray_open(in.world, r);
-        reflected = environment(r, s.roughness) * open + room_seen(vis, bounce, r) * (1.0 - open);
+        let sky_open = min(open, spec_open);
+        reflected = environment(r, s.roughness) * sky_open + room_seen(vis, bounce, r) * (1.0 - open)
+            + occ_light / PI * max(open - spec_open, 0.0);
         let ssr = screen_reflection(in.world, r);
         reflected = mix(reflected, ssr.rgb, ssr.a);
     } else if wet.y > 0.0 {
         // A puddle mirrors the sky, and the room's light where the sky volume says a wall or a
         // crown stands in the way (the screen-space copy of the scene is not there yet in this pass).
         let open = ray_open(in.world, r);
-        let mirrored = environment(r, s.roughness) * open + room_seen(vis, bounce, r) * (1.0 - open);
+        let sky_open = min(open, spec_open);
+        let mirrored = environment(r, s.roughness) * sky_open + room_seen(vis, bounce, r) * (1.0 - open)
+            + occ_light / PI * max(open - spec_open, 0.0);
         reflected = mix(reflected, mirrored, wet.y);
     }
     let ambient_specular = env_brdf_approx(f0, s.roughness, nov) * reflected * spec_ao * wet_boost;
@@ -1458,7 +1660,7 @@ const SNOW_ALBEDO: vec3<f32> = vec3<f32>(0.80, 0.83, 0.88);
 // One cosine-weighted ray from `p` along a direction about `n`: the radiance it brings (the
 // previous sample's colour where it meets a surface in the depth buffer, else the sky, dimmed
 // by `ao` for the occlusion the coarse march cannot see).
-fn bounce_ray(p: vec3<f32>, n: vec3<f32>, r1: f32, r2: f32, ao: f32) -> vec3<f32> {
+fn bounce_ray(p: vec3<f32>, n: vec3<f32>, r1: f32, r2: f32, ao: f32, occ: SkyOcc) -> vec3<f32> {
     let phi = 2.0 * PI * r1;
     let s = sqrt(r2);
     let t = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), abs(n.x) > 0.9);
@@ -1485,17 +1687,23 @@ fn bounce_ray(p: vec3<f32>, n: vec3<f32>, r1: f32, r2: f32, ao: f32) -> vec3<f32
         }
         dist *= 1.45;
     }
+    // Nothing found on screen: the sky, as far as the baked visibility says it is open along
+    // the ray (a narrow cone round it), the occluders' bounced light for the rest.
+    if occ.weight > 0.0 {
+        let open = mix(1.0, sky_cone_seen(occ.v, d, 0.35), occ.weight);
+        return (sh_irradiance(d) * open + occluder_light(occ.albedo) * (1.0 - open)) / PI * ao;
+    }
     return sh_irradiance(d) / PI * ao;
 }
 
-fn photo_bounce(p: vec3<f32>, n: vec3<f32>, pixel: vec2<f32>, ao: f32) -> vec3<f32> {
+fn photo_bounce(p: vec3<f32>, n: vec3<f32>, pixel: vec2<f32>, ao: f32, occ: SkyOcc) -> vec3<f32> {
     let k = g.grade.w;
     var sum = vec3<f32>(0.0);
     for (var i = 0; i < 2; i++) {
         let o = vec2<f32>(f32(i) * 37.0, f32(i) * 11.0);
         let r1 = fract(ign(pixel + o) + k * 0.618034);
         let r2 = fract(ign(pixel.yx + o + vec2<f32>(13.0, 7.0)) + k * 0.754878);
-        sum += bounce_ray(p, n, r1, r2, ao);
+        sum += bounce_ray(p, n, r1, r2, ao, occ);
     }
     return sum * 0.5;
 }

@@ -123,6 +123,7 @@ Usage: visioncraft-cli render FILE --out PNG [--size WxH] [--viewpoint V]
                               [--season S] [--snow N] [--wetness N] [--rain N]
                               [--haze T] [--mist N] [--gustiness N]
                               [--shafts N] [--white-balance WB] [--grade G]
+                              [--sky-occlusion on|off]
                               [--quality low|medium|high|ultra|photo] [--samples N]
                               [--aperture F] [--focus M|auto|target] [--focus-point X,Y]
                               [--shutter S] [--vignette N] [--grain N] [--animation-s S]
@@ -150,6 +151,9 @@ Options:
                   fog or thick haze where crowns and houses shadow it
   --white-balance WB  daylight, auto or a temperature in kelvin (2000..12000)
   --grade G       Colour grade: neutral, warm, cool or soft
+  --sky-occlusion on|off  Light every surface by the sky it sees (baked over the
+                  design: darker under trees and by walls, backlit crowns green
+                  inside). Default: the project's, else on
   --quality Q     low, medium, high (default), ultra or photo (many frames averaged
                   at ULTRA: soft shadows, smooth edges; slower)
 PHOTO_FLAGS
@@ -748,6 +752,7 @@ fn cmd_render(raw: &[String]) -> Res {
             "--shafts",
             "--white-balance",
             "--grade",
+            "--sky-occlusion",
         ],
         &[],
     )?;
@@ -826,6 +831,18 @@ fn cmd_render(raw: &[String]) -> Res {
     }
     if let Some(s) = a.value("--grade")? {
         params["grade"] = s.into();
+    }
+    if let Some(s) = a.value("--sky-occlusion")? {
+        params["sky_occlusion"] = match s {
+            "on" | "true" => true,
+            "off" | "false" => false,
+            _ => {
+                return Err(CliError::Usage(format!(
+                    "`--sky-occlusion` must be on or off, got `{s}`"
+                )));
+            }
+        }
+        .into();
     }
     photo_params(&a, &mut params)?;
     if let Some(v) = a.value("--animation-s")? {

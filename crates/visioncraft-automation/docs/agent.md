@@ -62,7 +62,7 @@ same over MCP (`visioncraft-cli mcp`), JSON lines (`visioncraft-cli serve`) and 
 4. **Render.** `doc_render_preview {"viewpoint": ...}`: a PNG and what was drawn (camera, sun,
    `plantsPending`: 0 means every plant is drawn). Its `time` changes the picture only.
 5. **Verify** against the plan: `doc_inspect` (`area_m2`, `footprint_m2`, plant `count`),
-   `query.measure`, `query.plants_for_light {point | outline | hours}` (species ranked by the light a spot gets), `query.light_check` (every placed plant against its light range), `query.quantities {ids?, layer?}` (areas, lengths, volumes and plant counts per object, per material and per asset; linked models too, per body with surface and volume (closed bodies), scale applied, in `models`; plants are counted with the renderer's building rule, `counted_with: "scene"`), `query.raycast`, `query.sun_hours {point | outline, season | date, cell_m?, years?, plants?}` (hours of direct sun at a spot or as a grid over an area, with shadow from models, shapes, terrain and plant crowns; `view.set_sun_map` draws the same grid on the ground, recipe 26), `query.ground_height`, `query.ground_length`, `query.sun`. A film of camera moves is `film.*` (recipe 27); `film.preview` reads it without drawing.
+   `query.measure`, `query.plants_for_light {point | outline | hours}` (species ranked by the light a spot gets), `query.light_check` (every placed plant against its light range), `query.quantities {ids?, layer?}` (areas, lengths, volumes and plant counts per object, per material and per asset; linked models too, per body with surface and volume (closed bodies), scale applied, in `models`; plants are counted with the renderer's building rule, `counted_with: "scene"`), `query.raycast`, `query.sun_hours {point | outline, season | date, cell_m?, years?, plants?}` (hours of direct sun at a spot or as a grid over an area, with shadow from models, shapes, terrain and plant crowns; `view.set_sun_map` draws the same grid on the ground, recipe 26), `query.sky_view {point, normal?, years?}` (how open a spot is: the sky view factor 0..1, crowns letting sky through by their leaf density; recipe 43), `query.ground_height`, `query.ground_length`, `query.sun`. A film of camera moves is `film.*` (recipe 27); `film.preview` reads it without drawing.
    Save with `command_run file.save {"path": ...}`.
 
 ## Recipes
@@ -1428,6 +1428,45 @@ without any other tool; the answer's `sheet` lists the time and the shot of each
 agent's three films were 345 lines of pretty-printed JSON (19 steps, with every coordinate
 worked out and the walk cut in three); the same three films here are 214 lines (12 steps), and
 the walk is one shot.
+
+### 43. How open is each spot: sky occlusion and the sky view of the garden
+
+```json recipe
+{"intent": "the example garden lit by the sky it sees: the ground under the trees and the corners by the hedge and the house gently darker, the backlit crowns green inside, and how open three spots are for a planting plan", "steps": [
+  {"id": "project.load_example", "params": {"name": "garden"}},
+  {"id": "view.set", "params": {"sky_occlusion": true}},
+  {"id": "query.sky_view", "params": {"point": [12, 18]}},
+  {"id": "query.sky_view", "params": {"point": [6, 27]}},
+  {"id": "query.sky_view", "params": {"point": [1.3, 15]}},
+  {"id": "query.sky_view", "params": {"point": [8.3, 1.5, 9.1], "normal": [0, 0, 1]}},
+  {"id": "time.set", "params": {"month": 9, "day": 5, "hour": 19.0}},
+  {"id": "view.render", "params": {"camera": {"position": [18.8, 1.4, 26.4], "target": [6, 4.6, 27.1], "fov_y_deg": 60}, "width": 1280, "height": 720, "mist": 0.4, "shafts": 1, "white_balance": "auto", "grade": "warm", "path": "golden-hour-sky-occlusion.png"}},
+  {"id": "view.render", "params": {"camera": {"position": [18.8, 1.4, 26.4], "target": [6, 4.6, 27.1], "fov_y_deg": 60}, "width": 1280, "height": 720, "mist": 0.4, "shafts": 1, "white_balance": "auto", "grade": "warm", "sky_occlusion": false, "path": "golden-hour-open-sky.png"}}
+]}
+```
+
+`view.set {"sky_occlusion": true}` lights every surface by the sky it sees, after the sky
+visibility of Ghost of Tsushima: once per change of the design a grid of probes over the garden
+(a metre apart, twelve layers crowding towards the ground) traces how much of the sky each point
+sees through buildings, shapes, models, the terrain and the crowns, which let sky through by their
+species' leaf density and the leaves they carry in the month shown; every frame the sky's light,
+as it is at that hour and in that weather, is multiplied by it. The ground under a tree and the
+foot of a wall go gently darker, the leaves inside a backlit crown get the sky through the leaves
+on both sides instead of going black, and wet paving and windows under a tree stop mirroring the
+open sky. It is rebaked when the shapes, the plantings, the terrain, the years or the leaves
+change (0.4 s for the example garden natively, a few seconds in the browser spread over the
+frames), not when
+the hour or the weather does. Leave it unset (`null`) and the window and its pictures turn it on;
+`view.render {sky_occlusion}` and the CLI's `--sky-occlusion on|off` set it for one picture.
+
+`query.sky_view {point}` answers how open a spot is: the share of the sky it sees,
+cosine-weighted as light falls (the sky view factor: 1 on an open field, about 0.75 in the middle
+of the example's lawn among its full-grown trees, 0.5 to 0.55 under the field maple and by the
+hedge, 0.15 at the bottom of a narrow passage; a wall facing open ground sees at most 0.5). `[x, z]` stands on the
+ground there; `[x, y, z]` with a `normal` measures a wall or a window (the third query above is
+the house's back wall at window height, facing the garden). Read it with `query.sun_hours`: a spot
+with three hours of sun and a sky view of 0.7 is bright part shade, one with three hours under a
+dense crown at 0.3 is dark.
 
 ## Known traps
 

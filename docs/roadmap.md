@@ -278,11 +278,18 @@ nothing here is a promise of a date.
   3. Plants: lawn blades generated in compute with clumping and backlit translucency (as in
      Ghost of Tsushima, GDC 2021), tall and ornamental grasses that glow against the sun, flowers
      and fine leaves up close (more leaf sets), and fuller crowns (see Tree form).
-  4. Light in the shade: sky visibility baked per design change as SH and multiplied by the live
-     sky (Ghost of Tsushima, Advances 2021), GTAO with specular occlusion, soft shadows (PCSS on the
-     four cascades, contact shadows, cloud shadows), SSR with a sky fallback for water, windows and
-     puddles, and later probe GI (DDGI traced against an SDF or voxels). Lumen is out of reach in
-     the browser.
+  4. Light in the shade. Done: sky visibility baked per design change as L2 SH and multiplied by
+     the live sky (Ghost of Tsushima, Advances 2021; `view.set sky_occlusion`, on in the window
+     and its pictures): a ground-following grid of probes a metre apart, twelve layers crowding
+     to the ground, traced on the CPU against buildings, shapes, models, terrain and the crowns as
+     Beer-Lambert ellipsoids with a leaf area per species and month; per pixel the sky's SH times
+     the visibility, projected back with the triple product and convolved with the cosine, both
+     faces of a leaf through its translucency, SSAO only on the sky the grid leaves, a cone of
+     the reflection lobe against the visibility as specular occlusion, and the occluders' bounce
+     from one reflectance per probe. `query.sky_view` answers how open a spot is. Recipe 43.
+     Next: GTAO, soft shadows (PCSS on the four cascades, contact shadows, cloud shadows), SSR
+     with a sky fallback for water, windows and puddles, and later probe GI (DDGI traced against
+     an SDF or voxels). Lumen is out of reach in the browser.
   5. Life: people, a furniture library of real CC0 models next to the parametric pieces, small
      props, falling leaves and birds as particles, and warm lit interiors behind windows at dusk.
   6. Weather, finished: a top-down rain occlusion map, wetness that builds up and dries with

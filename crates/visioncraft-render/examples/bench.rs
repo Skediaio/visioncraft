@@ -14,7 +14,8 @@
 //! `--garden`: the beauty-shot garden (house, pond with planar reflection,
 //! infinite ground, haze, lamps on) instead of the budget scene, with
 //! `--no-haze` `--no-ground` `--no-bloom` `--no-reflection` `--no-fxaa` to
-//! price each realism feature. `--forest`: 20 000 trees and 60 000
+//! price each realism feature, and `--sky-occlusion` (a baked sky visibility grid over the
+//! scene, on) to price that one. `--forest`: 20 000 trees and 60 000
 //! understory plants over 4 ha, meshes near and impostors far.
 //! `--woodland`: 23 303 plants of 8 species (3 trees, 5 shrubs, each its
 //! own item with two mesh levels and an impostor) over 4 ha, about the
@@ -120,6 +121,40 @@ fn main() {
         }
         if has("--no-bloom") {
             r.set_bloom(0.0);
+        }
+        if has("--sky-occlusion") {
+            // A grid of baked sky visibility over the scene (a metre apart, twelve layers): the
+            // runtime cost does not depend on what it holds, so each probe sees the upper sky
+            // and half the ground.
+            let dims = [80u32, 12, 80];
+            let (y00, y1) = (
+                0.282_095f32 * 4.0 * std::f32::consts::PI * 0.75,
+                0.488_603f32 * 2.4,
+            );
+            let probe = [y00, y1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+            let mut texels = Vec::new();
+            for _z in 0..dims[2] {
+                for _k in 0..dims[1] {
+                    for tile in 0..3 {
+                        for _x in 0..dims[0] {
+                            texels.push(match tile {
+                                0 => [probe[0], probe[1], probe[2], probe[3]],
+                                1 => [probe[4], probe[5], probe[6], probe[7]],
+                                _ => [probe[8], 1.0, 0.0, 0.3],
+                            });
+                        }
+                    }
+                }
+            }
+            r.set_sky_visibility(Some(visioncraft_render::SkyVisibilityGrid {
+                origin: [-40.0, -40.0],
+                cell: 1.0,
+                dims,
+                lift: 0.1,
+                height: 20.0,
+                texels: &texels,
+            }));
+            r.set_sky_occlusion(true);
         }
         // Lights scattered over the garden, 6 m range.
         let list: Vec<Light> = (0..lights)

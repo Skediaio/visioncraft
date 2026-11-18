@@ -40,6 +40,7 @@ pub mod selection;
 pub mod shell;
 pub mod sky_panel;
 pub mod sky_task;
+pub mod sky_vis;
 pub mod smoke;
 pub mod species_editor;
 pub mod strings;
@@ -1887,6 +1888,7 @@ impl eframe::App for App {
         busy |= self.studio.animating()
             || self.studio.plants_pending() > 0
             || self.studio.sky_volume_pending()
+            || self.studio.sky_visibility_pending()
             || self.studio.sun_map_pending()
             || !self.studio.scene.library.idle();
         #[cfg(not(target_arch = "wasm32"))]

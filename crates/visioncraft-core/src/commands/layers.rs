@@ -107,7 +107,7 @@ pub(super) fn register(s: &mut Session) {
         spec(
             "view.set",
             "Set View",
-            "Sets the season, snow, weathering, wetness, rain, mist, light shafts, exposure, white balance, grade, vignette, film grain, look, sky, clouds, years after planting, haze, wind and gusts, the ground plane, the surroundings, ground clutter and the view distance stored with the project; only the fields given change.",
+            "Sets the season, snow, weathering, wetness, rain, mist, light shafts, exposure, white balance, grade, vignette, film grain, look, sky, clouds, years after planting, haze, wind and gusts, the ground plane, the surroundings, ground clutter, sky occlusion and the view distance stored with the project; only the fields given change.",
             vec![
                 param("season", T::String, "spring, summer, autumn or winter: the plants as they are then, and the project's date set to the season's day at the site (20 April, 21 June, 20 October, 15 January in the north; six months on in the south), the hour kept. An exact date (time.set) maps back to its season."),
                 param("snow", T::Number, "Snow cover 0..1 on the ground, lawns, roofs, terraces, hedge tops, evergreen crowns, branches, wall tops and sills, not under roofs or dense evergreens; about 0.7 for a snowy winter. 0: none.").default(json!(0)),
@@ -134,6 +134,7 @@ pub(super) fn register(s: &mut Session) {
                     .default(json!({"height": 0, "color": [0.065, 0.12, 0.035]})),
                 param("clouds", T::Object, "The cloud layer over the analytic sky: {kind: \"clear\" | \"cumulus\" (light fair-weather clouds) | \"overcast\", cover: 0..1}; overcast softens shadows and dims the sun.").default(json!({"kind": "cumulus", "cover": 0.35})),
                 param("lights", T::Boolean, "Lamps and lit rooms on (true) or off (false); null: on while the sun is below the horizon at the time shown."),
+                param("sky_occlusion", T::Boolean, "Sky occlusion: the sky's light on every surface in proportion to the sky it sees, baked over the design (buildings, shapes, models, terrain, and crowns by their species' leaf density): the ground under trees and the corners by walls and the house go gently darker, the inside of a backlit crown keeps the sky that comes through its leaves, and wet paving and windows under a tree stop mirroring the open sky. Rebaked when the design, the years or the leaves change. null: the host decides (on in the window and its pictures)."),
                 param("clutter", T::Boolean, "Ground clutter: fallen leaves under deciduous trees (most in October and November), stones and twigs on soil and gravel, grass hanging over the lawn's edge. Off at LOW quality whatever this says.").default(json!(true)),
                 param("years", T::Number, "Years after planting to show the plants at (0..60): each grows from its planting age along its species' curve; null shows everything full grown.").unit("years"),
                 param("look", T::String, "neutral, natural or vivid: the picture's exposure, contrast and colour on top of the tone map.").default(json!("natural")),
@@ -346,6 +347,7 @@ fn view_set(project: &mut Project, params: &Value) -> Result<Value, CommandError
             "years",
             "lights",
             "clutter",
+            "sky_occlusion",
             "snow",
             "weathering",
             "wetness",

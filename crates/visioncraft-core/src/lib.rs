@@ -37,6 +37,7 @@ pub mod season;
 pub mod session;
 pub mod setin;
 pub mod shape;
+pub mod sky_visibility;
 pub mod sky_volume;
 pub mod spec;
 pub mod stairs;
@@ -89,6 +90,7 @@ pub use shape::{
     blends_over, footing, ground_faces, ground_model_lift, inside_outline, offset_outline,
     shape_mesh, shape_mesh_on, shape_mesh_on_terrain, shape_mesh_on_terrain_with,
 };
+pub use sky_visibility::{Canopy, Ground, SkyBake, SkyScene, SkyVisibility};
 pub use sky_volume::{Crown, Lamp, SkyVolume, sky_volume, sky_volume_with_canopy};
 pub use spec::{CommandSpec, ParamSpec, ParamType, example_project};
 pub use sun_map::SunMap;

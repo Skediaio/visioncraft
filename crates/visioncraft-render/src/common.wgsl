@@ -65,6 +65,8 @@ struct Globals {
     white: vec4<f32>,           // white balance (tonemap.wgsl): rgb the light taken for white, w mode (0 off, 1 fixed, 2 auto from the sun and sky)
     white_ref: vec4<f32>,       // rgb the white it is adapted to, w degree of adaptation 0..1
     color_grade: array<vec4<f32>, 3>, // grade matrix columns (linear Rec.709); [0].w contrast exponent about mid grey, [1].w grade on (0/1)
+    sky_occ: vec4<f32>,         // baked sky visibility (`sky_occ_at`): xy (x, z) of the first column (m), z 1 / cell (m), w the lowest layer's height over the ground (m)
+    sky_occ_size: vec4<f32>,    // x columns along x, y layers, z columns along z, w the layers' height span (m; 0: sky occlusion off)
     sh: array<vec4<f32>, 9>,    // sky irradiance as L2 SH (kcd/m2 * sr), written on the GPU (env.wgsl)
 }
 @group(0) @binding(0) var<uniform> g: Globals;
@@ -73,15 +75,20 @@ struct Globals {
 @group(0) @binding(1) var env_map: texture_cube<f32>;
 @group(0) @binding(2) var env_sampler: sampler;
 @group(0) @binding(5) var sky_tex: texture_2d<f32>;
-// The sky's visibility round the buildings (lib.rs `set_sky_volume`): r the visible fraction of
-// directions, gba the mean visible direction as 0.5 + 2 a; mipmapped.
-@group(0) @binding(6) var sky_vis: texture_3d<f32>;
-// Its room light: rgb the lamps' and the sun's light passed round the rooms (lux), a the sky's
-// (per unit of its mean illuminance), or -1 minus its neighbours' inside a wall or a thin gap;
-// one level (sky_volume.rs).
+// The sky's visibility round the buildings (lib.rs `set_sky_volume`, sky_volume.rs), one level,
+// two tiles side by side along x: its room light, rgb the lamps' and the sun's light passed round
+// the rooms (lux), a the sky's (per unit of its mean illuminance), or -1 minus its neighbours'
+// inside a wall or a thin gap; then the sky's visibility, r the visible fraction of directions,
+// gba the mean visible direction.
 @group(0) @binding(7) var room_vis: texture_3d<f32>;
 // Its occluders' voxels, 0.2 m from the same origin: r 1 where solid.
 @group(0) @binding(8) var occupancy: texture_3d<f32>;
+// The baked sky visibility (sky_visibility.rs, lib.rs `set_sky_visibility`): per probe the
+// visibility of the sky as L2 SH, three tiles side by side along x (coefficients 0-3, 4-7, and 8
+// with the probe's weight, its column's ground height and its occluders' reflectance), the
+// coefficients and the reflectance multiplied by the weight (0 indoors): a filtered read over the
+// filtered weight interpolates over the outdoor probes only. One level, filtered.
+@group(0) @binding(6) var sky_occ_tex: texture_3d<f32>;
 // Voxels per metre (sky_volume.rs `VOXEL_M` is 0.2 m); a cell is 1 / g.sky_vol.w metres.
 const VOXELS_PER_M: f32 = 5.0;
 
@@ -124,7 +131,7 @@ fn volume_lifted(world: vec3<f32>, n: vec3<f32>, lift: f32) -> Volume {
     if VOLUME_PART == 2u || g.sky_vol_size.w < 0.5 {
         return open;
     }
-    let dims = vec3<i32>(textureDimensions(room_vis));
+    let dims = vec3<i32>(textureDimensions(room_vis)) / vec3<i32>(2, 1, 1);
     let surface = (world - g.sky_vol.xyz) * g.sky_vol.w;
     let p = surface + n * lift;
     if any(p < vec3<f32>(0.0)) || any(p > vec3<f32>(dims - 1)) {
@@ -153,8 +160,7 @@ fn volume_lifted(world: vec3<f32>, n: vec3<f32>, lift: f32) -> Volume {
         }
         let tri = select(1.0 - f, f, o == vec3<i32>(1));
         let w = tri.x * tri.y * tri.z * select(select(1e-5, 1e-3, valid), 1.0, seen) + 1e-7;
-        let t = textureLoad(sky_vis, at, 0);
-        sky += w * vec4<f32>(t.r, (t.gba - 0.5) * 0.5);
+        sky += w * textureLoad(room_vis, at + vec3<i32>(dims.x, 0, 0), 0);
         room += w * r;
         total += w;
         valid_weight += select(0.0, w, valid);
@@ -184,6 +190,59 @@ fn ray_open(world: vec3<f32>, r: vec3<f32>) -> f32 {
         }
     }
     return 1.0;
+}
+
+// The baked sky visibility at a surface at `world` facing `n` (lifted half a cell, at most 0.6 m,
+// off it, so the probes on its own side of a thin wall weigh most, as sky_visibility.rs
+// `SkyVisibility::sky_view` reads it): the visibility SH
+// `v`, the weight of the outdoor probes round the point `weight` (0 outside the grid, where only
+// indoor probes are round, or with sky occlusion off) and the mean reflectance of what those
+// probes see instead of sky. The grid follows the ground: layer k stands at
+// lift + span (k / (layers - 1))^2 over its column's ground.
+struct SkyOcc {
+    v: array<f32, 9>,
+    weight: f32,
+    albedo: f32,
+}
+
+fn sky_occ_at(world: vec3<f32>, n: vec3<f32>) -> SkyOcc {
+    var o: SkyOcc;
+    o.weight = 0.0;
+    o.albedo = 0.3;
+    if g.sky_occ_size.w <= 0.0 {
+        return o;
+    }
+    let dims = g.sky_occ_size.xyz;
+    let p = world + n * min(0.5 / g.sky_occ.z, 0.6);
+    let fx = (p.x - g.sky_occ.x) * g.sky_occ.z;
+    let fz = (p.z - g.sky_occ.y) * g.sky_occ.z;
+    if fx < 0.0 || fz < 0.0 || fx > dims.x - 1.0 || fz > dims.z - 1.0 {
+        return o;
+    }
+    let width = 3.0 * dims.x;
+    let w = (fz + 0.5) / dims.z;
+    let u = (fx + 0.5) / width;
+    let ground = textureSampleLevel(sky_occ_tex, env_sampler, vec3<f32>(u + 2.0 / 3.0, 0.5 / dims.y, w), 0.0).b;
+    let k = (dims.y - 1.0) * sqrt(max(p.y - ground - g.sky_occ.w, 0.0) / g.sky_occ_size.w);
+    if k > dims.y - 1.0 {
+        return o;
+    }
+    let v = (k + 0.5) / dims.y;
+    let a = textureSampleLevel(sky_occ_tex, env_sampler, vec3<f32>(u, v, w), 0.0);
+    let b = textureSampleLevel(sky_occ_tex, env_sampler, vec3<f32>(u + 1.0 / 3.0, v, w), 0.0);
+    let c = textureSampleLevel(sky_occ_tex, env_sampler, vec3<f32>(u + 2.0 / 3.0, v, w), 0.0);
+    if c.g < 1e-3 {
+        return o;
+    }
+    let inv = 1.0 / c.g;
+    o.v = array<f32, 9>(a.x * inv, a.y * inv, a.z * inv, a.w * inv, b.x * inv, b.y * inv, b.z * inv, b.w * inv, c.r * inv);
+    // Faded out over the outermost two cells and the top layer, where the grid meets the open
+    // sky it is not drawn with: no seam on the ground at the grid's edge.
+    let edge = min(min(fx, fz), min(dims.x - 1.0 - fx, dims.z - 1.0 - fz));
+    let fade = clamp(edge * 0.5, 0.0, 1.0) * clamp(dims.y - 1.0 - k, 0.0, 1.0);
+    o.weight = clamp(c.g, 0.0, 1.0) * fade;
+    o.albedo = c.a * inv;
+    return o;
 }
 
 // The cosine-weighted visibility of the sky for a surface facing `n` from an L1 sample: 1 under
