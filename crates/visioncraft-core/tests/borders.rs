@@ -2,6 +2,7 @@
 //! closes up as it grows.
 
 use serde_json::{Value, json};
+use visioncraft_core::border;
 use visioncraft_core::growth::growth_of;
 use visioncraft_core::planting::{Generator, Placement, evaluate};
 use visioncraft_core::{Project, Session};
@@ -68,7 +69,11 @@ fn a_border_is_made_of_catalogue_species_and_undone() {
             visioncraft_core::growth::GROWTH.iter().any(|r| r.0 == sp),
             "{sp}"
         );
-        assert!((0.8..=3.0).contains(&p.position[0]) && (1.0..=29.0).contains(&p.position[2]));
+        // Inside the outline, but low plants may stand a little over the front edge (x = 3).
+        assert!(
+            (0.8..=3.0 + border::FRONT_SPILL_M).contains(&p.position[0])
+                && (1.0..=29.0).contains(&p.position[2])
+        );
     }
     assert!(s.undo());
     assert!(s.project().generators.is_empty());
@@ -85,6 +90,35 @@ fn a_border_is_made_of_catalogue_species_and_undone() {
     assert!(bad(&mut s, json!({"species": ["flora:no-such-plant"]})));
     assert!(bad(&mut s, json!({"height_range": [2.0, 1.0]})));
     assert!(s.project().generators.is_empty());
+}
+
+#[test]
+fn low_plants_stand_at_the_front_edge_and_the_back_keeps_its_clearance() {
+    for style in ["cottage", "prairie", "shade", "dry"] {
+        let (s, id) = garden_border(style, json!({}));
+        let ps = plants(&s, &id);
+        // Facing +x: the front edge is x = 3. A plant stands within 0.25 m of it (or over it),
+        // and only low ones go beyond it.
+        let front = ps.iter().map(|p| p.position[0]).fold(f32::MIN, f32::max);
+        assert!(
+            front >= 3.0 - 0.25,
+            "{style}: the front row ends at {front}"
+        );
+        for p in ps.iter().filter(|p| p.position[0] > 3.0) {
+            let h = growth_of(&p.asset, None).mature_height_m;
+            assert!(
+                h <= border::FRONT_SPILL_MAX_HEIGHT_M,
+                "{style}: {}",
+                p.asset
+            );
+        }
+        // The back (x = 0.8, against the hedge) and the sides stay inside the outline.
+        assert!(ps.iter().all(|p| p.position[0] >= 0.8), "{style}");
+        assert!(
+            ps.iter().all(|p| (1.0..=29.0).contains(&p.position[2])),
+            "{style}"
+        );
+    }
 }
 
 #[test]

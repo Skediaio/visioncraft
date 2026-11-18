@@ -550,6 +550,17 @@ pub fn shape_mesh(shape: &Shape) -> Result<ImportedModel, ShapeError> {
 /// [`shape_mesh`] for an area whose retaining edge ends at `floor` (the lowest ground under it,
 /// see [`footing`]); anything else is as [`shape_mesh`] makes it.
 pub fn shape_mesh_floor(shape: &Shape, floor: f32) -> Result<ImportedModel, ShapeError> {
+    shape_mesh_with(shape, floor, None)
+}
+
+/// [`shape_mesh_floor`] with the terrain's ground function: the blocks of a flight of stairs go
+/// down to the lowest ground under each step ([`crate::stairs::step_bottoms`], relative to
+/// [`footing`], the height the shape is placed at).
+fn shape_mesh_with(
+    shape: &Shape,
+    floor: f32,
+    ground: Option<&dyn Fn(f32, f32) -> Option<f32>>,
+) -> Result<ImportedModel, ShapeError> {
     curve::check(shape.points(), shape.is_closed(), shape.curves())
         .map_err(ShapeError::BadCurve)?;
     let tess = shape.tessellate();
@@ -642,7 +653,11 @@ pub fn shape_mesh_floor(shape: &Shape, floor: f32) -> Result<ImportedModel, Shap
                     edge: Vec::new(),
                     soft: false,
                 };
-                crate::stairs::mesh(&mut b, &g, e.base);
+                let bottoms = ground.map_or_else(Vec::new, |ground| {
+                    let lift = footing(&shape.outline(), ground);
+                    crate::stairs::step_bottoms(&g, e.base, lift, ground)
+                });
+                crate::stairs::mesh(&mut b, &g, e.base, &bottoms);
                 let mut m = b.finish(id, &e.name, names);
                 m.warnings.extend(g.warnings);
                 return Ok(m);
@@ -759,7 +774,7 @@ pub fn shape_mesh_on(
     ground: &dyn Fn(f32, f32) -> Option<f32>,
 ) -> Result<ImportedModel, ShapeError> {
     let Shape::Area(a) = shape else {
-        return shape_mesh(shape);
+        return shape_mesh_with(shape, 0.0, Some(ground));
     };
     if !a.drape {
         return shape_mesh_floor(shape, footing(&shape.outline(), ground));
@@ -1512,14 +1527,12 @@ pub fn shape_mesh_on_terrain(
     terrain: &crate::Terrain,
     holes: &[&[P2]],
 ) -> Result<ImportedModel, ShapeError> {
+    let ground = |x: f32, z: f32| terrain.height_at(x, z);
     let Shape::Area(a) = shape else {
-        return shape_mesh(shape);
+        return shape_mesh_with(shape, 0.0, Some(&ground));
     };
     if !a.drape {
-        return shape_mesh_floor(
-            shape,
-            footing(&shape.outline(), &|x, z| terrain.height_at(x, z)),
-        );
+        return shape_mesh_floor(shape, footing(&shape.outline(), &ground));
     }
     let flat = shape_mesh(shape)?;
     let cell = terrain.cell_m;

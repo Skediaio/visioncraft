@@ -698,8 +698,55 @@ enum Drag {
     Stroke,
 }
 
+/// The settings of "Make border" in the planting panel (`planting.add_border`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct BorderForm {
+    /// The area shape to plant over; `None`: the first area of the project.
+    pub area: Option<String>,
+    pub style: String,
+    /// Mature plant height (m) at the front and at the back.
+    pub height: [f32; 2],
+    pub drift_m: f32,
+    pub seed: u64,
+}
+
+impl Default for BorderForm {
+    fn default() -> Self {
+        let style = "cottage";
+        Self {
+            area: None,
+            style: style.into(),
+            height: visioncraft_core::border::style(style).map_or([0.4, 1.6], |s| s.1),
+            drift_m: 2.4,
+            seed: 1,
+        }
+    }
+}
+
+impl BorderForm {
+    /// Switches the style and takes the style's own height range.
+    pub fn set_style(&mut self, style: &str) {
+        self.style = style.to_string();
+        if let Some((_, range)) = visioncraft_core::border::style(style) {
+            self.height = range;
+        }
+    }
+
+    /// The parameters of `planting.add_border` for area `area`.
+    pub fn params(&self, area: &str) -> serde_json::Value {
+        serde_json::json!({
+            "area": area,
+            "style": self.style,
+            "height_range": [self.height[0], self.height[1].max(self.height[0])],
+            "drift_m": self.drift_m,
+            "seed": self.seed,
+        })
+    }
+}
+
 pub struct PlantingTools {
     pub tool: Tool,
+    pub border: BorderForm,
     /// The Lights tool of the tool row is open instead of a planting tool.
     pub lights: bool,
     /// Settings for new plantings with the current tool.
@@ -732,6 +779,7 @@ impl Default for PlantingTools {
     fn default() -> Self {
         Self {
             tool: Tool::Select,
+            border: BorderForm::default(),
             lights: false,
             form: Form::default(),
             forms: HashMap::new(),
@@ -982,6 +1030,23 @@ impl PlantingTools {
             return;
         };
         let new = form.apply(&old);
+        if edit == Edit::Live {
+            cx.s.set_draft(Some(Draft::Generator(new)));
+        } else {
+            cx.s.set_draft(None);
+            self.commit_update(cx, &old, &new);
+        }
+    }
+
+    /// Writes an edit of the selected planting that does not go through the form (a border's
+    /// settings): `new` is the planting as edited. A draft while it changes, a command when it ends.
+    pub fn finish_generator_edit(&mut self, cx: &mut Cx, new: Generator, edit: Edit) {
+        if edit == Edit::None {
+            return;
+        }
+        let Some(old) = stored(cx, new.id()) else {
+            return;
+        };
         if edit == Edit::Live {
             cx.s.set_draft(Some(Draft::Generator(new)));
         } else {
@@ -2105,5 +2170,40 @@ mod tests {
             assert_eq!(pa, pb);
             assert_eq!(pa, visioncraft_core::evaluate(&a, &ground).placements);
         }
+    }
+
+    #[test]
+    fn the_border_form_makes_a_border_and_a_changed_one_updates_it() {
+        let mut s = visioncraft_core::Session::new(Project::default());
+        s.run(
+            "shape.add_area",
+            serde_json::json!({"name": "Bed", "outline": [[0, 0], [8, 0], [8, 2], [0, 2]]}),
+        )
+        .unwrap();
+        let mut f = BorderForm::default();
+        f.set_style("shade");
+        assert_eq!(f.height, [0.2, 1.2], "the style's own range");
+        f.drift_m = 3.0;
+        f.height[1] = 0.1;
+        let r = s.run("planting.add_border", f.params("S1")).unwrap();
+        // Back never under front.
+        assert_eq!(r["height_range"][0], r["height_range"][1]);
+        let id = r["id"].as_str().unwrap().to_string();
+        let old = s.project().generators[0].clone();
+        let Generator::AreaScatter(mut a) = old.clone() else {
+            panic!("an area scatter");
+        };
+        let b = a.border.as_mut().unwrap();
+        assert_eq!((b.style.as_str(), b.drift_m), ("shade", 3.0));
+        b.drift_m = 5.0;
+        a.seed += 1;
+        let p = handles::diff_params(&old, &Generator::AreaScatter(a)).unwrap();
+        assert!(p.get("border").is_some() && p.get("seed").is_some());
+        s.run("planting.update", p).unwrap();
+        let Generator::AreaScatter(a) = &s.project().generators[0] else {
+            panic!();
+        };
+        assert_eq!(a.border.as_ref().unwrap().drift_m, 5.0);
+        assert_eq!(a.id, id);
     }
 }

@@ -511,7 +511,8 @@ a tread: a footprint longer than the steps need ends in a landing, a shorter one
 `stairs.set` changes any field or moves the flight (`from`, `to`, `width_m`), or turns a closed
 rectangular block into stairs; `stairs.clear` makes it a block again. `query.quantities` gives
 `steps`, `riser_m`, `going_m`, `rise_m`, `run_m` and the real volume. A flight stands on the lowest
-ground under its footprint, like a block does.
+ground under its footprint, like a block does, and on uneven terrain each step's block goes down
+to the lowest ground under that step, so no step floats over a dip.
 
 ### 22. A raised bed with plants
 
@@ -693,7 +694,7 @@ or as an `outline` `[[x, z], ...]` (the box round the plot, say). The day is a `
 solstice or equinox: 21 December for winter in the north) or a `date` `{month, day}`, else the
 project's date; `years` is the age of the plants (null follows `view.set {years}`). The sun is
 cast exactly as `query.sun_hours` casts it (models, shapes, terrain and plant crowns; clouds are
-not counted), on cells of `cell_m` (0.5 m, at most 10,000 inside the area), so ask
+not counted), on cells of `cell_m` (0.5 m, at most 10,000 inside the area; a cell whose centre lies inside an area drawn over the target, such as the pond or a path on the lawn, is clear and not counted, and `query.sun_hours` with an `outline` skips water areas the same way), so ask
 `query.sun_hours` with the same outline for the numbers behind the picture (the shares in full
 sun, part shade and shade; recipe 10 for a spot through the day). The map is see-through
 (`opacity`, 0.6), flat a few centimetres over the area's height (over terrain too: a flat

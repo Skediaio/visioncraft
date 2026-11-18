@@ -16,6 +16,11 @@
 //!   per m2 (1.3 by default: crowns touch and overlap at maturity). The growth curves make a
 //!   young border open and a mature one closed: the placements are the same at every age.
 //!
+//! - **Spills over the front.** Low plants (mature height up to [`FRONT_SPILL_MAX_HEIGHT_M`])
+//!   may stand up to [`FRONT_SPILL_M`] beyond the front edge of the outline, so their crowns lie
+//!   over the edge as in a real border and no strip of soil shows there. Back edges (against a
+//!   hedge or a wall) and sides keep their clearance: the plants stay inside the outline there.
+//!
 //! The garden's own height variation and the drift layout depend on the seed only.
 
 use crate::growth::{Grower, growth_of};
@@ -27,6 +32,11 @@ use std::collections::HashMap;
 
 /// The styles `planting.add_border` knows.
 pub const STYLES: &[&str] = &["cottage", "prairie", "shade", "dry"];
+
+/// How far (m) beyond the front edge of the outline a low plant's centre may stand.
+pub const FRONT_SPILL_M: f32 = 0.2;
+/// The tallest mature height (m) of a plant that may spill over the front edge.
+pub const FRONT_SPILL_MAX_HEIGHT_M: f32 = 0.7;
 
 /// A species of a border, with how often it is chosen and whether it fills between the drifts.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -347,6 +357,21 @@ impl Layout<'_> {
         )
     }
 
+    /// Whether a plant of mature height `height` may stand at `p`: inside the outline, or a low
+    /// plant within [`FRONT_SPILL_M`] of it across the front (moving `p` back, away from the
+    /// viewer, puts it inside: only edges that face the front count).
+    fn admits(&self, outline: &[[f32; 2]], p: [f32; 2], height: f32) -> bool {
+        point_in_polygon(p, outline)
+            || (height <= FRONT_SPILL_MAX_HEIGHT_M
+                && point_in_polygon(
+                    [
+                        p[0] - self.f[0] * FRONT_SPILL_M,
+                        p[1] - self.f[1] * FRONT_SPILL_M,
+                    ],
+                    outline,
+                ))
+    }
+
     /// 0 at the front of the border, 1 at its back.
     fn depth(&self, v: f32) -> f32 {
         ((self.vmax - v) / (self.vmax - self.vmin)).clamp(0.0, 1.0)
@@ -470,7 +495,11 @@ pub(crate) fn evaluate(
         cv: span / rows,
         height_range: b.height_range_m,
     };
-    let bb = bounds(g.outline.iter().copied());
+    let mut bb = bounds(g.outline.iter().copied());
+    for k in 0..2 {
+        bb[0][k] -= FRONT_SPILL_M;
+        bb[1][k] += FRONT_SPILL_M;
+    }
     // Large plants first: they keep their room, the small ones fill round them.
     let mut order: Vec<usize> = (0..infos.len()).collect();
     order.sort_by(|&i, &j| infos[j].width.total_cmp(&infos[i].width).then(i.cmp(&j)));
@@ -511,7 +540,7 @@ pub(crate) fn evaluate(
                     sx + off + i as f32 * d + (rng.f32() - 0.5) * 0.5 * d,
                     sz + j as f32 * row_h + (rng.f32() - 0.5) * 0.5 * d,
                 ];
-                if !point_in_polygon(p, &g.outline) || layout.species_at(p) != Some(k) {
+                if !layout.admits(&g.outline, p, s.height) || layout.species_at(p) != Some(k) {
                     continue;
                 }
                 let (cx, cz) = ((p[0] / cell).floor() as i32, (p[1] / cell).floor() as i32);
@@ -561,9 +590,6 @@ pub(crate) fn evaluate(
                 break 'fill;
             }
             let p = [(gi as f32 + 0.5) * fine, (gj as f32 + 0.5) * fine];
-            if !point_in_polygon(p, &g.outline) {
-                continue;
-            }
             let (cx, cz) = ((p[0] / cell).floor() as i32, (p[1] / cell).floor() as i32);
             let covered = (-1..=1).any(|dx| {
                 (-1..=1).any(|dz| {
@@ -580,6 +606,9 @@ pub(crate) fn evaluate(
                 continue;
             };
             let s = &infos[k];
+            if !layout.admits(&g.outline, p, s.height) {
+                continue;
+            }
             let mut rng = Rng::new(mix(mix(g.seed ^ 0xF177, gi), gj));
             taken.entry((cx, cz)).or_default().push((p, s.width));
             out.push(Placement {

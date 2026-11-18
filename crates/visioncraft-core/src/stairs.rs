@@ -169,8 +169,48 @@ fn quad(s: &mut dyn Sink, face: usize, v: [[f32; 3]; 4], outward: [f32; 3]) {
     s.tri(face, [v[0], v[2], v[3]], outward);
 }
 
-/// Draws the flight `g` from `lo` up on the faces of [`STAIR_FACES`].
-pub(crate) fn mesh(s: &mut dyn Sink, g: &Geometry, lo: f32) {
+/// How low each step's block goes: the lowest ground under the step's footprint (its corners,
+/// edge midpoints and a few points between, as [`crate::shape::footing`] samples a footprint)
+/// less `lift`, the height the whole flight stands at, but never above `lo`, the bottom of the
+/// flight. Without ground every block starts at `lo`.
+pub fn step_bottoms(
+    g: &Geometry,
+    lo: f32,
+    lift: f32,
+    ground: &dyn Fn(f32, f32) -> Option<f32>,
+) -> Vec<f32> {
+    let d = g.dir;
+    let n = [-d[1], d[0]];
+    let hw = g.width / 2.0;
+    (1..=g.steps)
+        .map(|k| {
+            let u0 = (k - 1) as f32 * g.tread;
+            let u1 = if k == g.steps {
+                g.length
+            } else {
+                k as f32 * g.tread
+            };
+            let mut low = f32::INFINITY;
+            for i in 0..=4 {
+                for j in 0..=4 {
+                    let u = u0 + (u1 - u0) * i as f32 / 4.0;
+                    let w = -hw + g.width * j as f32 / 4.0;
+                    let (x, z) = (
+                        g.origin[0] + d[0] * u + n[0] * w,
+                        g.origin[1] + d[1] * u + n[1] * w,
+                    );
+                    low = low.min(ground(x, z).unwrap_or(0.0));
+                }
+            }
+            (low - lift).min(lo)
+        })
+        .collect()
+}
+
+/// Draws the flight `g` from `lo` up on the faces of [`STAIR_FACES`]. `bottoms` holds the bottom
+/// of each step's block (see [`step_bottoms`]), all at or under `lo`, so that on uneven ground
+/// every step stays solid down to the ground under it.
+pub(crate) fn mesh(s: &mut dyn Sink, g: &Geometry, lo: f32, bottoms: &[f32]) {
     let d = g.dir;
     let n = [-d[1], d[0]];
     let hw = g.width / 2.0;
@@ -184,28 +224,19 @@ pub(crate) fn mesh(s: &mut dyn Sink, g: &Geometry, lo: f32) {
     let (d3, n3, up) = ([d[0], 0.0, d[1]], [n[0], 0.0, n[1]], [0.0, 1.0, 0.0]);
     let neg = |v: [f32; 3]| v.map(|c| -c);
     let hi = lo + g.riser * g.steps as f32;
-    quad(
-        s,
-        SIDES,
-        [
-            p(0.0, -hw, lo),
-            p(g.length, -hw, lo),
-            p(g.length, hw, lo),
-            p(0.0, hw, lo),
-        ],
-        neg(up),
-    );
-    quad(
-        s,
-        SIDES,
-        [
-            p(g.length, -hw, lo),
-            p(g.length, hw, lo),
-            p(g.length, hw, hi),
-            p(g.length, -hw, hi),
-        ],
-        d3,
-    );
+    let bottom = |k: usize| bottoms.get(k - 1).copied().unwrap_or(lo).min(lo);
+    // A wall across the flight at `u` from `ya` to `yb`, facing `outward`.
+    let wall = |s: &mut dyn Sink, face: usize, u: f32, ya: f32, yb: f32, outward: [f32; 3]| {
+        quad(
+            s,
+            face,
+            [p(u, -hw, ya), p(u, hw, ya), p(u, hw, yb), p(u, -hw, yb)],
+            outward,
+        );
+    };
+    wall(s, SIDES, g.length, bottom(g.steps), hi, d3);
+    // What the block before has under the riser: the bottom of the flight for the first step.
+    let mut before = lo;
     for k in 1..=g.steps {
         let u0 = (k - 1) as f32 * g.tread;
         let u1 = if k == g.steps {
@@ -214,23 +245,33 @@ pub(crate) fn mesh(s: &mut dyn Sink, g: &Geometry, lo: f32) {
             k as f32 * g.tread
         };
         let (y0, y1) = (lo + (k - 1) as f32 * g.riser, lo + k as f32 * g.riser);
+        let yb = bottom(k);
+        quad(
+            s,
+            SIDES,
+            [p(u0, -hw, yb), p(u1, -hw, yb), p(u1, hw, yb), p(u0, hw, yb)],
+            neg(up),
+        );
         quad(
             s,
             TREADS,
             [p(u0, -hw, y1), p(u1, -hw, y1), p(u1, hw, y1), p(u0, hw, y1)],
             up,
         );
-        quad(
-            s,
-            RISERS,
-            [p(u0, -hw, y0), p(u0, hw, y0), p(u0, hw, y1), p(u0, -hw, y1)],
-            neg(d3),
-        );
+        wall(s, RISERS, u0, y0, y1, neg(d3));
+        // Where this block goes lower than the one before, its front shows under it; where the
+        // one before goes lower, its back shows.
+        if yb < before {
+            wall(s, SIDES, u0, yb, before, neg(d3));
+        } else if yb > before && k > 1 {
+            wall(s, SIDES, u0, before, yb, d3);
+        }
+        before = yb;
         for (w, out) in [(-hw, neg(n3)), (hw, n3)] {
             quad(
                 s,
                 SIDES,
-                [p(u0, w, lo), p(u1, w, lo), p(u1, w, y1), p(u0, w, y1)],
+                [p(u0, w, yb), p(u1, w, yb), p(u1, w, y1), p(u0, w, y1)],
                 out,
             );
         }
@@ -458,5 +499,110 @@ mod tests {
         assert!(bad.geometry(&rect, 0.5).unwrap_err().contains("riser_m"));
         // 18 steps in 1 m: no tread left.
         assert!(st.geometry(&rect, 3.0).unwrap_err().contains("too short"));
+    }
+
+    fn volume(m: &crate::ImportedModel) -> f32 {
+        m.triangles
+            .iter()
+            .map(|t| {
+                let [a, b, c] = t.map(|i| m.positions[i as usize]);
+                (a[0] * (b[1] * c[2] - b[2] * c[1])
+                    + a[1] * (b[2] * c[0] - b[0] * c[2])
+                    + a[2] * (b[0] * c[1] - b[1] * c[0]))
+                    / 6.0
+            })
+            .sum::<f32>()
+            .abs()
+    }
+
+    /// The volume the closed mesh of `g` (from 0) encloses, each triangle turned to face its
+    /// stated outward side: a mesh that is not closed or has a wrong side gives another number.
+    fn mesh_volume(g: &Geometry, bottoms: &[f32]) -> f32 {
+        struct Vol(f32);
+        impl Sink for Vol {
+            fn tri(&mut self, _: usize, [a, b, c]: [[f32; 3]; 3], outward: [f32; 3]) {
+                let det = |a: [f32; 3], b: [f32; 3], c: [f32; 3]| {
+                    a[0] * (b[1] * c[2] - b[2] * c[1])
+                        + a[1] * (b[2] * c[0] - b[0] * c[2])
+                        + a[2] * (b[0] * c[1] - b[1] * c[0])
+                };
+                let n = [
+                    (b[1] - a[1]) * (c[2] - a[2]) - (b[2] - a[2]) * (c[1] - a[1]),
+                    (b[2] - a[2]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[2] - a[2]),
+                    (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]),
+                ];
+                let flip = n.iter().zip(outward).map(|(x, y)| x * y).sum::<f32>() < 0.0;
+                let v = if flip { det(a, c, b) } else { det(a, b, c) };
+                self.0 += v / 6.0;
+            }
+        }
+        let mut v = Vol(0.0);
+        mesh(&mut v, g, 0.0, bottoms);
+        v.0
+    }
+
+    #[test]
+    fn on_sloping_ground_every_block_goes_down_to_the_ground_under_it() {
+        let st = Stairs {
+            tread_m: Some(0.30),
+            ..top_edge()
+        };
+        let outline = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.2], [0.0, 1.2]];
+        let g = st.geometry(&outline, 0.51).unwrap();
+        // The ground falls away 0.2 m per m along the flight, the way a bank runs down past
+        // the flight's own footing: the flight stands at 0.
+        let fall = |_: f32, z: f32| Some(-0.2 * z);
+        let bottoms = step_bottoms(&g, 0.0, 0.0, &fall);
+        assert_eq!(bottoms.len(), 3);
+        assert!(bottoms.windows(2).all(|w| w[1] < w[0]), "{bottoms:?}");
+        // Step 1 covers z 0..0.3 (lowest ground -0.06), step 3 z 0.6..1.2 (-0.24).
+        assert!((bottoms[0] + 0.06).abs() < 1e-5 && (bottoms[2] + 0.24).abs() < 1e-5);
+        // Level ground, or ground above the flight, changes nothing.
+        let level = step_bottoms(&g, 0.0, 0.0, &|_, _| Some(0.0));
+        assert_eq!(level, [0.0; 3]);
+        assert_eq!(step_bottoms(&g, 0.0, 0.0, &|_, z| Some(z)), [0.0; 3]);
+        // The mesh stays closed: its volume is the flat flight's plus the columns under it.
+        let v0 = mesh_volume(&g, &[]);
+        let extra: f32 = (0..3)
+            .map(|k| {
+                let u1 = if k == 2 {
+                    g.length
+                } else {
+                    (k + 1) as f32 * g.tread
+                };
+                1.0 * (u1 - k as f32 * g.tread) * -bottoms[k]
+            })
+            .sum();
+        assert!((mesh_volume(&g, &bottoms) - v0 - extra).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_flight_on_a_terrain_with_a_dip_reaches_down_into_it() {
+        let mut t = crate::Terrain::flat([-1.0, -1.0], 4.0, 4.0, 0.5, "lawn").unwrap();
+        let w = t.width as usize + 1;
+        // A trench across the flight at z = 0.5, and the flight's corners and edge midpoints
+        // (where its footing is taken) on the flat.
+        for (i, h) in t.heights.iter_mut().enumerate() {
+            let z = -1.0 + (i / w) as f32 * 0.5;
+            if (z - 0.5).abs() < 1e-3 {
+                *h = -0.3;
+            }
+        }
+        let shape = flight(
+            1.2,
+            1.0,
+            0.51,
+            Stairs {
+                tread_m: Some(0.30),
+                ..top_edge()
+            },
+        );
+        let flat = shape_mesh(&shape).unwrap();
+        let on = crate::shape::shape_mesh_on_terrain(&shape, &t, &[]).unwrap();
+        let low =
+            |m: &crate::ImportedModel| m.positions.iter().map(|p| p[1]).fold(f32::MAX, f32::min);
+        assert!(low(&flat).abs() < 1e-6);
+        assert!(low(&on) < -0.03, "the flight stops at {}", low(&on));
+        assert!(volume(&on) > volume(&flat));
     }
 }

@@ -717,7 +717,8 @@ fn hours_of(lit: &[(SunSample, f32)]) -> f64 {
 /// What a grid of sun hours is made of.
 pub struct SunGridQuery {
     pub spec: GridSpec,
-    /// The cell centres inside the area, `None` outside (`GridSpec::cells`).
+    /// The cell centres inside the area and not under another area, `None` otherwise
+    /// (`sun_map::clear_cells`).
     pub cells: Vec<Option<[f32; 2]>>,
     pub month: u32,
     pub day: u32,
@@ -802,7 +803,12 @@ impl SunGridJob {
             models,
             assets,
             SunGridQuery {
-                cells: spec.cells(&outline),
+                cells: visioncraft_core::sun_map::clear_cells(
+                    project,
+                    &spec,
+                    &outline,
+                    map.shape.as_deref(),
+                ),
                 spec,
                 month,
                 day,
@@ -954,7 +960,10 @@ pub(crate) fn sun_hours_json(
             if cols.saturating_mul(rows) > 25 * MAX_CELLS {
                 return Err(too_many());
             }
-            Some((spec, spec.cells(o)))
+            Some((
+                spec,
+                visioncraft_core::sun_map::clear_cells(p, &spec, o, None),
+            ))
         }
         None => None,
     };

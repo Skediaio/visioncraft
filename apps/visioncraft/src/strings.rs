@@ -639,3 +639,21 @@ pub const FILM_PATH_BAD: &str =
 pub const FILM_ORBIT_TIP: &str = "Degrees from east of the centre, counter-clockwise seen from above; more than 360 turns more than once.";
 pub const FILM_RENDER_HINT: &str =
     "Frames: visioncraft-cli film FILE --out DIR, or the command film.render.";
+
+pub const BORDER_TITLE: &str = "Border";
+pub const BORDER_MAKE: &str = "Make border";
+pub const BORDER_MAKE_TIP: &str = "Plants a layered perennial border over the area: tall species at the back, short at the front, in drifts that close up as they grow";
+pub const BORDER_AREA: &str = "Area";
+pub const BORDER_NO_AREAS: &str = "Draw an area first (Draw mode), then plant a border over it";
+pub const BORDER_STYLE: &str = "Style";
+pub const BORDER_STYLES: &[(&str, &str)] = &[
+    ("cottage", "Cottage"),
+    ("prairie", "Prairie"),
+    ("shade", "Shade"),
+    ("dry", "Dry"),
+];
+pub const BORDER_HEIGHT: &str = "Height front / back";
+pub const BORDER_HEIGHT_TIP: &str =
+    "The mature plant height wanted at the front edge and at the back edge";
+pub const BORDER_DRIFT: &str = "Drift length";
+pub const BORDER_SPECIES: &str = "species";

@@ -44,7 +44,7 @@ pub(super) fn register(s: &mut Session) {
         spec(
             "stairs.add",
             "Add Stairs",
-            "Adds a flight of solid steps (a closed extrusion on a rectangular footprint built from the bottom and top centres and a width). Every step is a block from the ground up, so none floats; the faces are `<id>:treads`, `<id>:risers` and `<id>:sides`. Checks Blondel's rule (2 x riser + tread between 0.60 and 0.65 m) and a footprint too short for the treads: these come back as `warnings` and are in the shape's mesh warnings. It starts with concrete where the project has none assigned.",
+            "Adds a flight of solid steps (a closed extrusion on a rectangular footprint built from the bottom and top centres and a width). Every step is a block from the ground up, so none floats: on uneven terrain each block goes down to the lowest ground under its own footprint; the faces are `<id>:treads`, `<id>:risers` and `<id>:sides`. Checks Blondel's rule (2 x riser + tread between 0.60 and 0.65 m) and a footprint too short for the treads: these come back as `warnings` and are in the shape's mesh warnings. It starts with concrete where the project has none assigned.",
             add_params,
             "{id, steps, riser_m, tread_m, height_m, warnings}",
             json!({"name": "Garden steps", "from": [12, 5], "to": [12, 3.2], "width_m": 1.2, "height": 0.5}),

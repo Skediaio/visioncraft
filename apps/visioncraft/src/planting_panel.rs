@@ -10,8 +10,9 @@ use crate::planting_tools::{
 use crate::strings as t;
 use crate::ui::{Cx, Edit, drag_field, panel_frame};
 use eframe::egui::{self, Align2, Color32, RichText, Vec2};
-use visioncraft_core::planting::Weighted;
+use visioncraft_core::planting::{AreaScatter, Weighted};
 use visioncraft_core::planting_presets;
+use visioncraft_core::{Generator, Shape};
 
 /// 1240 as "1,240".
 pub fn thousands(n: usize) -> String {
@@ -393,6 +394,60 @@ fn slider(
     crate::ui::slider_field(ui, label, v, range)
 }
 
+/// The style menu of a border; true when another style was picked.
+fn style_combo(ui: &mut egui::Ui, id: &str, style: &mut String) -> bool {
+    let label = |s: &str| {
+        t::BORDER_STYLES
+            .iter()
+            .find(|(k, _)| *k == s)
+            .map_or_else(|| s.to_string(), |(_, l)| (*l).to_string())
+    };
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.label(t::BORDER_STYLE);
+        egui::ComboBox::from_id_salt(id)
+            .selected_text(label(style))
+            .show_ui(ui, |ui| {
+                for (key, name) in t::BORDER_STYLES {
+                    if ui.selectable_label(style == key, *name).clicked() && style != key {
+                        *style = (*key).to_string();
+                        changed = true;
+                    }
+                }
+            });
+    });
+    changed
+}
+
+/// The mature heights wanted at the front and at the back of a border.
+fn height_fields(ui: &mut egui::Ui, height: &mut [f32; 2]) -> Edit {
+    let mut edit = Edit::None;
+    ui.horizontal(|ui| {
+        ui.label(t::BORDER_HEIGHT)
+            .on_hover_text(t::BORDER_HEIGHT_TIP);
+        for v in height.iter_mut() {
+            let r = ui.add(
+                egui::DragValue::new(v)
+                    .speed(0.02)
+                    .range(0.05..=10.0)
+                    .suffix(" m")
+                    .max_decimals(2),
+            );
+            if r.changed() {
+                edit = Edit::Live;
+            }
+            if r.drag_stopped() || r.lost_focus() {
+                edit = Edit::Done;
+            }
+        }
+    });
+    edit
+}
+
+fn drift_field(ui: &mut egui::Ui, drift: &mut f32) -> Edit {
+    drag_field(ui, t::BORDER_DRIFT, drift, 0.05, 1.0..=10.0, " m")
+}
+
 impl PlantingTools {
     /// The tools: the planting tools, then Lights.
     pub fn tool_row(&mut self, ui: &mut egui::Ui, cx: &mut Cx) {
@@ -581,6 +636,11 @@ impl PlantingTools {
         {
             ui.label(RichText::new(why).small().color(ui.visuals().warn_fg_color));
         }
+        // A border has species, a style and a height range of its own, no palette to edit.
+        let border_sel = match &selected {
+            Some(Generator::AreaScatter(a)) if a.border.is_some() => Some(a.clone()),
+            _ => None,
+        };
         let show_form = selected.is_some() || self.tool != Tool::Select;
         if show_form {
             let names = |id: &str| display_name(cx, id);
@@ -592,9 +652,13 @@ impl PlantingTools {
                 (true, Some(f)) => f,
                 _ => form,
             };
-            let e = form_ui(ui, f, kind, add_to, &names, &project_layers);
-            if editing {
-                self.finish_edit(cx, e);
+            if let Some(a) = &border_sel {
+                self.border_edit_ui(ui, cx, a);
+            } else {
+                let e = form_ui(ui, f, kind, add_to, &names, &project_layers);
+                if editing {
+                    self.finish_edit(cx, e);
+                }
             }
             if let Some((n, truncated)) = self.readout(cx) {
                 ui.label(
@@ -610,6 +674,9 @@ impl PlantingTools {
                 }
             }
         }
+        if selected.is_none() && matches!(self.tool, Tool::Area | Tool::Select) {
+            self.border_make_ui(ui, cx);
+        }
         if dup {
             self.duplicate(cx);
         }
@@ -623,6 +690,133 @@ impl PlantingTools {
             cx.run("planting.undo_stroke", serde_json::json!({ "id": id }));
         }
         self.list(ui, cx);
+    }
+
+    /// "Make border": the style, heights, drift and seed of a new border, planted over an area
+    /// of the project (`planting.add_border`).
+    fn border_make_ui(&mut self, ui: &mut egui::Ui, cx: &mut Cx) {
+        let areas: Vec<(String, String)> =
+            cx.s.project()
+                .shapes
+                .iter()
+                .filter_map(|s| match s {
+                    Shape::Area(a) => Some((a.id.clone(), format!("{} ({})", a.name, a.id))),
+                    Shape::Extrusion(_) => None,
+                })
+                .collect();
+        let mut make = None;
+        egui::CollapsingHeader::new(RichText::new(t::BORDER_TITLE).strong())
+            .id_salt("planting-border-make")
+            .default_open(false)
+            .show(ui, |ui| {
+                if areas.is_empty() {
+                    ui.weak(t::BORDER_NO_AREAS);
+                    return;
+                }
+                let b = &mut self.border;
+                let chosen = b
+                    .area
+                    .clone()
+                    .filter(|id| areas.iter().any(|(i, _)| i == id))
+                    .unwrap_or_else(|| areas[0].0.clone());
+                ui.horizontal(|ui| {
+                    ui.label(t::BORDER_AREA);
+                    egui::ComboBox::from_id_salt("planting-border-area")
+                        .selected_text(
+                            areas
+                                .iter()
+                                .find(|(i, _)| *i == chosen)
+                                .map_or(String::new(), |(_, n)| n.clone()),
+                        )
+                        .show_ui(ui, |ui| {
+                            for (id, name) in &areas {
+                                if ui.selectable_label(*id == chosen, name).clicked() {
+                                    b.area = Some(id.clone());
+                                }
+                            }
+                        });
+                });
+                b.area = Some(
+                    b.area
+                        .clone()
+                        .filter(|id| areas.iter().any(|(i, _)| i == id))
+                        .unwrap_or(chosen),
+                );
+                let mut style = b.style.clone();
+                style_combo(ui, "planting-border-style", &mut style);
+                if style != b.style {
+                    b.set_style(&style);
+                }
+                height_fields(ui, &mut b.height);
+                drift_field(ui, &mut b.drift_m);
+                ui.horizontal(|ui| {
+                    if ui
+                        .button(t::PT_RESHUFFLE)
+                        .on_hover_text(t::PT_RESHUFFLE_HINT)
+                        .clicked()
+                    {
+                        b.seed = next_seed(b.seed);
+                    }
+                    if ui
+                        .button(t::BORDER_MAKE)
+                        .on_hover_text(t::BORDER_MAKE_TIP)
+                        .clicked()
+                    {
+                        make = b.area.clone();
+                    }
+                });
+            });
+        if let Some(area) = make {
+            let params = self.border.params(&area);
+            if let Some(r) = cx.run("planting.add_border", params)
+                && let Some(id) = r["id"].as_str()
+            {
+                self.border.seed = next_seed(self.border.seed);
+                self.set_tool(cx, Tool::Select);
+                self.select_generator(cx, Some(id.to_string()));
+            }
+        }
+    }
+
+    /// The selected border's style and numbers, edited through `planting.update` with `border`
+    /// (and `seed`).
+    fn border_edit_ui(&mut self, ui: &mut egui::Ui, cx: &mut Cx, a: &AreaScatter) {
+        let Some(border) = &a.border else {
+            return;
+        };
+        let mut new = a.clone();
+        let mut edit = Edit::None;
+        let mut style = border.style.clone();
+        if style_combo(ui, "planting-border-edit-style", &mut style) {
+            if let (Some(nb), Some((species, range))) =
+                (new.border.as_mut(), visioncraft_core::border::style(&style))
+            {
+                nb.style = style.clone();
+                nb.species = species;
+                nb.height_range_m = range;
+            }
+            edit = Edit::Done;
+        }
+        let mut height = new.border.as_ref().map_or([0.4, 1.6], |b| b.height_range_m);
+        edit = merge(edit, height_fields(ui, &mut height));
+        let mut drift = new.border.as_ref().map_or(2.4, |b| b.drift_m);
+        edit = merge(edit, drift_field(ui, &mut drift));
+        if let Some(nb) = new.border.as_mut() {
+            nb.height_range_m = [height[0], height[1].max(height[0])];
+            nb.drift_m = drift;
+        }
+        ui.horizontal(|ui| {
+            if ui
+                .button(t::PT_RESHUFFLE)
+                .on_hover_text(t::PT_RESHUFFLE_HINT)
+                .clicked()
+            {
+                new.seed = next_seed(new.seed);
+                edit = Edit::Done;
+            }
+            ui.small(format!("{} {}", border.species.len(), t::BORDER_SPECIES));
+        });
+        self.finish_generator_edit(cx, Generator::AreaScatter(new), edit);
     }
 
     /// All plantings: select the ones that are hard to click, hide a layer. Single plants of one

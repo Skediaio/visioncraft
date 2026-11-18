@@ -5,7 +5,7 @@
 
 use crate::project::Project;
 use crate::season::Season;
-use crate::shape::{Shape, inside_outline};
+use crate::shape::{Shape, areas_over, inside_outline};
 use crate::sun_hours::{FULL_SUN_HOURS, PART_SHADE_HOURS, days_in_month, season_date};
 use serde::{Deserialize, Serialize};
 
@@ -90,7 +90,14 @@ impl SunMap {
         }
         let outline = self.resolve_outline(project)?;
         let spec = GridSpec::new(&outline, self.cell_m);
-        let n = spec.inside_count(&outline);
+        let n = if spec.cols.saturating_mul(spec.rows) > 25 * MAX_CELLS {
+            spec.inside_count(&outline)
+        } else {
+            clear_cells(project, &spec, &outline, self.shape.as_deref())
+                .iter()
+                .flatten()
+                .count()
+        };
         if n == 0 {
             return Err("no cell centre lies inside the area; use a smaller `cell_m`".into());
         }
@@ -153,6 +160,41 @@ impl SunMap {
         let base = area.unwrap_or_else(|| project.view.ground.map_or(0.0, |g| g.height));
         base + LIFT_M
     }
+}
+
+/// The cell centres of `spec` that count for a map over `outline`: inside it and not under
+/// another area. For an area (`shape`) those are the areas on top of it (`areas_over`: later in
+/// the shape list and overlapping it, such as the pond or the path drawn on a lawn); for a plain
+/// outline (no target area) water areas only, since the plot box has no area of its own. Cells
+/// under such an area are `None`: transparent in the map and left out of its numbers, and of
+/// `query.sun_hours`, which uses this too.
+pub fn clear_cells(
+    project: &Project,
+    spec: &GridSpec,
+    outline: &[[f32; 2]],
+    shape: Option<&str>,
+) -> Vec<Option<[f32; 2]>> {
+    let holes: Vec<Vec<[f32; 2]>> = match shape {
+        Some(id) => areas_over(&project.shapes, id)
+            .into_iter()
+            .map(|h| h.to_vec())
+            .collect(),
+        None => {
+            let water = crate::plant_ground::water_areas(project);
+            project
+                .shapes
+                .iter()
+                .filter_map(|s| match s {
+                    Shape::Area(a) if water.contains(&a.id) => Some(a.outline().into_owned()),
+                    _ => None,
+                })
+                .collect()
+        }
+    };
+    spec.cells(outline)
+        .into_iter()
+        .map(|c| c.filter(|p| !holes.iter().any(|h| inside_outline(*p, h))))
+        .collect()
 }
 
 /// The cells over an outline: `cols` x `rows` squares of `cell_m` from `origin` (the lowest x
@@ -461,6 +503,52 @@ mod tests {
         let w: SunMap = serde_json::from_value(json!({"shape": "S1", "season": "winter"})).unwrap();
         assert_eq!(w.day(p), (12, 21));
         assert_eq!(map_day_default(p), (p.time.month, p.time.day));
+    }
+
+    #[test]
+    fn cells_under_an_area_on_top_are_left_out() {
+        use serde_json::json;
+        let mut s = crate::Session::new(Project::default());
+        for (name, o) in [
+            ("Lawn", json!([[0, 0], [10, 0], [10, 8], [0, 8]])),
+            // A pond inside the lawn and a path across its edge, both drawn later.
+            ("Pond", json!([[3, 2], [6, 2], [6, 5], [3, 5]])),
+            ("Path", json!([[8, -2], [9, -2], [9, 4], [8, 4]])),
+        ] {
+            s.run("shape.add_area", json!({"name": name, "outline": o}))
+                .unwrap();
+        }
+        let p = s.project();
+        let map: SunMap = serde_json::from_value(json!({"shape": "S1", "cell_m": 1.0})).unwrap();
+        let outline = map.resolve_outline(p).unwrap();
+        let spec = GridSpec::new(&outline, 1.0);
+        let all = spec.cells(&outline).iter().flatten().count();
+        let clear = clear_cells(p, &spec, &outline, Some("S1"));
+        // 80 cells, less the pond's 9 and the path's 4 (x 8..9, z 0..4).
+        assert_eq!((all, clear.iter().flatten().count()), (80, 80 - 9 - 4));
+        assert!(
+            clear.iter().flatten().all(|c| {
+                !inside_outline(*c, &[[3.0, 2.0], [6.0, 2.0], [6.0, 5.0], [3.0, 5.0]])
+            })
+        );
+        // The pond itself has nothing over it; a plain outline has no area to be under.
+        let pond: SunMap = serde_json::from_value(json!({"shape": "S2", "cell_m": 1.0})).unwrap();
+        let po = pond.resolve_outline(p).unwrap();
+        let ps = GridSpec::new(&po, 1.0);
+        assert_eq!(
+            clear_cells(p, &ps, &po, Some("S2"))
+                .iter()
+                .flatten()
+                .count(),
+            9
+        );
+        assert_eq!(
+            clear_cells(p, &spec, &outline, None)
+                .iter()
+                .flatten()
+                .count(),
+            80
+        );
     }
 
     fn map_day_default(p: &Project) -> (u32, u32) {
