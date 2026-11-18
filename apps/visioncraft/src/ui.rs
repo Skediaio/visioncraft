@@ -280,7 +280,7 @@ pub fn floating_own_scroll(
         .anchor(anchor, offset)
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
-            panel_frame().show(ui, |ui| {
+            wrapper(ctx, id).show(ui, |ui| {
                 ui.set_max_width(max_width);
                 if !folded(ui, id) {
                     add(ui);
@@ -293,9 +293,27 @@ pub fn floating_own_scroll(
 /// window each frame), so it can be moved out of a drawing's way; true while folded.
 pub const MODE_PANEL: &str = "modepanel";
 pub const MODE_PANEL_TITLE: &str = "modepanel-title";
+/// Set (to true) in the context's data by the window each frame while the mode panel is drawn
+/// without its frame and fold button (`HostUi::mode_panel_frame` false).
+pub const MODE_PANEL_BARE: &str = "modepanel-bare";
+
+fn bare(ctx: &egui::Context, id: &str) -> bool {
+    id == MODE_PANEL
+        && ctx
+            .data(|d| d.get_temp(egui::Id::new(MODE_PANEL_BARE)))
+            .unwrap_or(false)
+}
+
+fn wrapper(ctx: &egui::Context, id: &str) -> egui::Frame {
+    if bare(ctx, id) {
+        egui::Frame::NONE
+    } else {
+        panel_frame()
+    }
+}
 
 fn folded(ui: &mut egui::Ui, id: &str) -> bool {
-    if id != MODE_PANEL {
+    if id != MODE_PANEL || bare(ui.ctx(), id) {
         return false;
     }
     let ctx = ui.ctx().clone();
@@ -334,7 +352,7 @@ pub fn floating(
         .anchor(anchor, offset)
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
-            panel_frame().show(ui, |ui| {
+            wrapper(ctx, id).show(ui, |ui| {
                 ui.set_max_width(max_width);
                 // A panel taller than the window scrolls instead of running off it.
                 let room = (ctx.content_rect().height() - offset.y.abs() - 40.0).max(120.0);
@@ -445,6 +463,8 @@ pub struct Hud {
     pub mode: Option<Mode>,
     /// Extensions' modes after the built-in ones: (id, label).
     pub extension_modes: Vec<(&'static str, &'static str)>,
+    /// Which built-in bars are drawn.
+    pub host: crate::host_ui::HostUi,
     pub show_fps: bool,
     pub layers_open: bool,
     pub export_open: bool,
@@ -461,6 +481,7 @@ impl Default for Hud {
         Self {
             mode: None,
             extension_modes: Vec::new(),
+            host: Default::default(),
             show_fps: true,
             layers_open: false,
             export_open: false,
@@ -568,64 +589,69 @@ impl Hud {
         let compact = w < 520.0;
 
         // Bottom-left: the five modes.
-        floating(
-            &ctx,
-            "modes",
-            Align2::LEFT_BOTTOM,
-            Vec2::new(10.0, -10.0),
-            w - 20.0,
-            |ui| {
-                ui.horizontal(|ui| {
-                    let built_in = crate::ui::MODES.iter().zip(t::MODE_LABELS);
-                    let extensions = self
-                        .extension_modes
-                        .iter()
-                        .map(|(id, label)| (Mode::Extension(id), (*label, *label)));
-                    let modes: Vec<_> = built_in.map(|(m, l)| (*m, l)).chain(extensions).collect();
-                    for (mode, (full, short)) in modes {
-                        let active = self.mode == Some(mode);
-                        if pill(ui, if compact { short } else { full }, active)
-                            .on_hover_text(full)
-                            .clicked()
-                        {
-                            actions.push(Action::Mode(if active { None } else { Some(mode) }));
+        if self.host.tabs {
+            floating(
+                &ctx,
+                "modes",
+                Align2::LEFT_BOTTOM,
+                Vec2::new(10.0, -10.0),
+                w - 20.0,
+                |ui| {
+                    ui.horizontal(|ui| {
+                        let built_in = crate::ui::MODES.iter().zip(t::MODE_LABELS);
+                        let extensions = self
+                            .extension_modes
+                            .iter()
+                            .map(|(id, label)| (Mode::Extension(id), (*label, *label)));
+                        let modes: Vec<_> =
+                            built_in.map(|(m, l)| (*m, l)).chain(extensions).collect();
+                        for (mode, (full, short)) in modes {
+                            let active = self.mode == Some(mode);
+                            if pill(ui, if compact { short } else { full }, active)
+                                .on_hover_text(full)
+                                .clicked()
+                            {
+                                actions.push(Action::Mode(if active { None } else { Some(mode) }));
+                            }
                         }
-                    }
-                });
-            },
-        );
+                    });
+                },
+            );
+        }
 
         // Top-left: file and history.
-        floating(
-            &ctx,
-            "filebar",
-            Align2::LEFT_TOP,
-            Vec2::new(10.0, 10.0),
-            w - 20.0,
-            |ui| {
-                ui.horizontal(|ui| {
-                    if ui.button(t::OPEN).clicked() {
-                        actions.push(Action::Open);
-                    }
-                    if ui.button(t::SAVE).clicked() {
-                        actions.push(Action::Save);
-                    }
-                    ui.separator();
-                    if ui
-                        .add_enabled(cx.s.session.can_undo(), egui::Button::new(t::UNDO))
-                        .clicked()
-                    {
-                        actions.push(Action::Undo);
-                    }
-                    if ui
-                        .add_enabled(cx.s.session.can_redo(), egui::Button::new(t::REDO))
-                        .clicked()
-                    {
-                        actions.push(Action::Redo);
-                    }
-                });
-            },
-        );
+        if self.host.file_bar {
+            floating(
+                &ctx,
+                "filebar",
+                Align2::LEFT_TOP,
+                Vec2::new(10.0, 10.0),
+                w - 20.0,
+                |ui| {
+                    ui.horizontal(|ui| {
+                        if ui.button(t::OPEN).clicked() {
+                            actions.push(Action::Open);
+                        }
+                        if ui.button(t::SAVE).clicked() {
+                            actions.push(Action::Save);
+                        }
+                        ui.separator();
+                        if ui
+                            .add_enabled(cx.s.session.can_undo(), egui::Button::new(t::UNDO))
+                            .clicked()
+                        {
+                            actions.push(Action::Undo);
+                        }
+                        if ui
+                            .add_enabled(cx.s.session.can_redo(), egui::Button::new(t::REDO))
+                            .clicked()
+                        {
+                            actions.push(Action::Redo);
+                        }
+                    });
+                },
+            );
+        }
 
         // Top-right (below the file bar on a phone): the view group.
         let (anchor, offset) = if narrow(&ctx) {
@@ -633,125 +659,130 @@ impl Hud {
         } else {
             (Align2::RIGHT_TOP, Vec2::new(-10.0, 10.0))
         };
-        floating(&ctx, "viewbar", anchor, offset, w - 20.0, |ui| {
-            ui.horizontal(|ui| {
-                if ui.selectable_label(self.layers_open, t::LAYERS).clicked() {
-                    self.layers_open = !self.layers_open;
-                }
-                if ui
-                    .selectable_label(cx.s.lights_on(), t::LIGHTS_BUTTON)
-                    .clicked()
-                {
-                    let on = !cx.s.lights_on();
-                    cx.run("view.set", serde_json::json!({"lights": on}));
-                }
-                if cx.s.dropped_lights > 0 {
-                    ui.weak(format!("{} {}", cx.s.dropped_lights, t::LIGHTS_DROPPED));
-                }
-                let clay = cx.s.project().style.clay;
-                if ui.selectable_label(clay, t::CLAY).clicked() {
-                    cx.run("style.set", serde_json::json!({"clay": !clay}));
-                }
-                let name = if cx.s.quality_auto {
-                    t::AUTO
-                } else {
-                    Quality::PRESETS[cx.s.quality].0
-                };
-                egui::ComboBox::from_id_salt("quality")
-                    .height(400.0)
-                    .selected_text(if compact {
-                        name.to_string()
-                    } else {
-                        format!("{} {name}", t::QUALITY)
-                    })
-                    .show_ui(ui, |ui| {
-                        if ui.selectable_label(cx.s.quality_auto, t::AUTO).clicked() {
-                            cx.s.quality_auto = true;
-                        }
-                        for (i, (name, _)) in Quality::PRESETS.iter().enumerate() {
-                            if ui
-                                .selectable_label(!cx.s.quality_auto && cx.s.quality == i, *name)
-                                .clicked()
-                            {
-                                cx.s.quality = i;
-                                cx.s.quality_auto = false;
-                            }
-                        }
-                        ui.separator();
-                        // Stored with the project (a command); Auto still lowers detail by fps.
-                        let mut vd = cx.s.project().view.view_distance;
-                        let r = ui
-                            .add(
-                                egui::Slider::new(&mut vd, 0.25..=4.0)
-                                    .logarithmic(true)
-                                    .max_decimals(2)
-                                    .text(t::VIEW_DISTANCE),
-                            )
-                            .on_hover_text(t::VIEW_DISTANCE_TIP);
-                        if r.drag_stopped() || (r.changed() && !r.dragged()) {
-                            cx.run("view.set", serde_json::json!({"view_distance": vd}));
-                        }
-                        ui.horizontal(|ui| {
-                            ui.label(t::TEXTURES).on_hover_text(t::TEXTURES_TIP);
-                            for (label, v) in [
-                                (t::AUTO, None),
-                                ("1k", Some("1k")),
-                                ("2k", Some("2k")),
-                                ("4k", Some("4k")),
-                            ] {
-                                if ui.selectable_label(cx.s.textures == v, label).clicked() {
-                                    cx.s.textures = v;
-                                }
-                            }
-                        });
-                        ui.separator();
-                        // What the hardware probe found: where Auto started.
-                        if cx.s.measuring {
-                            ui.weak(t::MEASURING);
-                        } else if let Some(line) = &cx.s.hardware_line {
-                            ui.weak(line);
-                        }
-                        if ui
-                            .add_enabled(!cx.s.measuring, egui::Button::new(t::REMEASURE))
-                            .on_hover_text(t::REMEASURE_TIP)
-                            .clicked()
-                        {
-                            cx.s.remeasure = true;
-                            cx.s.quality_auto = true;
-                        }
-                    });
-                let export = ui.selectable_label(self.export_open, t::EXPORT);
-                self.export_at = export.rect;
-                if export.clicked() {
-                    self.export_open = !self.export_open;
-                }
-                if ui
-                    .selectable_label(false, t::SCREENSHOT)
-                    .on_hover_text(t::SCREENSHOT_TIP)
-                    .clicked()
-                {
-                    actions.push(Action::Screenshot);
-                }
-                if ui.selectable_label(walking, t::WALK).clicked() {
-                    actions.push(Action::ToggleWalk);
-                }
-                if self.show_fps {
+        if self.host.view_bar {
+            floating(&ctx, "viewbar", anchor, offset, w - 20.0, |ui| {
+                ui.horizontal(|ui| {
+                    if ui.selectable_label(self.layers_open, t::LAYERS).clicked() {
+                        self.layers_open = !self.layers_open;
+                    }
                     if ui
-                        .small_button(format!("{fps:.0} {}", t::FPS))
-                        .on_hover_text(format!(
-                            "{} (render scale {:.0}%)",
-                            t::HIDE_FPS,
-                            cx.s.current_quality().render_scale * 100.0
-                        ))
+                        .selectable_label(cx.s.lights_on(), t::LIGHTS_BUTTON)
                         .clicked()
                     {
-                        self.show_fps = false;
+                        let on = !cx.s.lights_on();
+                        cx.run("view.set", serde_json::json!({"lights": on}));
                     }
-                } else if ui.small_button("…").on_hover_text(t::SHOW_FPS).clicked() {
-                    self.show_fps = true;
-                }
+                    if cx.s.dropped_lights > 0 {
+                        ui.weak(format!("{} {}", cx.s.dropped_lights, t::LIGHTS_DROPPED));
+                    }
+                    let clay = cx.s.project().style.clay;
+                    if ui.selectable_label(clay, t::CLAY).clicked() {
+                        cx.run("style.set", serde_json::json!({"clay": !clay}));
+                    }
+                    let name = if cx.s.quality_auto {
+                        t::AUTO
+                    } else {
+                        Quality::PRESETS[cx.s.quality].0
+                    };
+                    egui::ComboBox::from_id_salt("quality")
+                        .height(400.0)
+                        .selected_text(if compact {
+                            name.to_string()
+                        } else {
+                            format!("{} {name}", t::QUALITY)
+                        })
+                        .show_ui(ui, |ui| {
+                            if ui.selectable_label(cx.s.quality_auto, t::AUTO).clicked() {
+                                cx.s.quality_auto = true;
+                            }
+                            for (i, (name, _)) in Quality::PRESETS.iter().enumerate() {
+                                if ui
+                                    .selectable_label(
+                                        !cx.s.quality_auto && cx.s.quality == i,
+                                        *name,
+                                    )
+                                    .clicked()
+                                {
+                                    cx.s.quality = i;
+                                    cx.s.quality_auto = false;
+                                }
+                            }
+                            ui.separator();
+                            // Stored with the project (a command); Auto still lowers detail by fps.
+                            let mut vd = cx.s.project().view.view_distance;
+                            let r = ui
+                                .add(
+                                    egui::Slider::new(&mut vd, 0.25..=4.0)
+                                        .logarithmic(true)
+                                        .max_decimals(2)
+                                        .text(t::VIEW_DISTANCE),
+                                )
+                                .on_hover_text(t::VIEW_DISTANCE_TIP);
+                            if r.drag_stopped() || (r.changed() && !r.dragged()) {
+                                cx.run("view.set", serde_json::json!({"view_distance": vd}));
+                            }
+                            ui.horizontal(|ui| {
+                                ui.label(t::TEXTURES).on_hover_text(t::TEXTURES_TIP);
+                                for (label, v) in [
+                                    (t::AUTO, None),
+                                    ("1k", Some("1k")),
+                                    ("2k", Some("2k")),
+                                    ("4k", Some("4k")),
+                                ] {
+                                    if ui.selectable_label(cx.s.textures == v, label).clicked() {
+                                        cx.s.textures = v;
+                                    }
+                                }
+                            });
+                            ui.separator();
+                            // What the hardware probe found: where Auto started.
+                            if cx.s.measuring {
+                                ui.weak(t::MEASURING);
+                            } else if let Some(line) = &cx.s.hardware_line {
+                                ui.weak(line);
+                            }
+                            if ui
+                                .add_enabled(!cx.s.measuring, egui::Button::new(t::REMEASURE))
+                                .on_hover_text(t::REMEASURE_TIP)
+                                .clicked()
+                            {
+                                cx.s.remeasure = true;
+                                cx.s.quality_auto = true;
+                            }
+                        });
+                    let export = ui.selectable_label(self.export_open, t::EXPORT);
+                    self.export_at = export.rect;
+                    if export.clicked() {
+                        self.export_open = !self.export_open;
+                    }
+                    if ui
+                        .selectable_label(false, t::SCREENSHOT)
+                        .on_hover_text(t::SCREENSHOT_TIP)
+                        .clicked()
+                    {
+                        actions.push(Action::Screenshot);
+                    }
+                    if ui.selectable_label(walking, t::WALK).clicked() {
+                        actions.push(Action::ToggleWalk);
+                    }
+                    if self.show_fps {
+                        if ui
+                            .small_button(format!("{fps:.0} {}", t::FPS))
+                            .on_hover_text(format!(
+                                "{} (render scale {:.0}%)",
+                                t::HIDE_FPS,
+                                cx.s.current_quality().render_scale * 100.0
+                            ))
+                            .clicked()
+                        {
+                            self.show_fps = false;
+                        }
+                    } else if ui.small_button("…").on_hover_text(t::SHOW_FPS).clicked() {
+                        self.show_fps = true;
+                    }
+                });
             });
-        });
+        }
 
         if self.export_open {
             // Hanging under its button, right edges aligned.

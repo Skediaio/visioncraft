@@ -183,6 +183,8 @@ pub struct WindowHost<'a> {
     pub selection: &'a mut crate::selection::SelectionState,
     /// Ids of the extensions' modes, which `ui.set` opens like the built-in ones.
     pub extension_modes: &'a [(&'static str, &'static str)],
+    /// Which parts of the built-in UI are drawn (`ui.set` / `ui.get`).
+    pub host_ui: &'a mut crate::host_ui::HostUi,
     pub now: f64,
 }
 
@@ -284,7 +286,7 @@ fn mode_id(m: Mode) -> &'static str {
     }
 }
 
-fn mode_of(s: &str, extensions: &[(&'static str, &'static str)]) -> Option<Mode> {
+pub(crate) fn mode_of(s: &str, extensions: &[(&'static str, &'static str)]) -> Option<Mode> {
     let extensions = extensions.iter().map(|(id, _)| Mode::Extension(id));
     crate::ui::MODES
         .into_iter()
@@ -305,12 +307,12 @@ const UI_METHODS: &[Method] = &[
     Method {
         name: "ui.get",
         params: "{}",
-        summary: "What the window shows: mode, camera (view, position, target, fov_y_deg), the selection, lights on, size, and what is still on its way (pending: plants to generate, library downloads, the sky volume). `selection` is what the person has picked, in any mode: {items: [{kind: shape|placement|planting|model|lamp|underlay, id, name, summary (one line: what it is, size, material or species, position), sub?: {edge?, vertex?, index?}}], point?: [x, y, z] (the last ground or surface point the person clicked, metres), revision (bumps on every change)}. A tree picked in a planting is kind `placement`: id is its planting, sub.index its plant number (for planting.replace_placement and planting.remove_placement). `selected` ({planting, model}) is the older form of the same. Poll it and compare `revision` to notice a new selection.",
+        summary: "What the window shows: mode, ui (tabs, file_bar, view_bar, mode_panel_frame: which built-in bars are drawn), camera (view, position, target, fov_y_deg), the selection, lights on, size, and what is still on its way (pending: plants to generate, library downloads, the sky volume). `selection` is what the person has picked, in any mode: {items: [{kind: shape|placement|planting|model|lamp|underlay, id, name, summary (one line: what it is, size, material or species, position), sub?: {edge?, vertex?, index?}}], point?: [x, y, z] (the last ground or surface point the person clicked, metres), revision (bumps on every change)}. A tree picked in a planting is kind `placement`: id is its planting, sub.index its plant number (for planting.replace_placement and planting.remove_placement). `selected` ({planting, model}) is the older form of the same. Poll it and compare `revision` to notice a new selection.",
     },
     Method {
         name: "ui.set",
-        params: r#"{"mode": "draw"|"materials"|"objects"|"sun"|"viewpoints"|extension id|null, "camera": {"position": [x, y, z], "target": [x, y, z], "fov_y_deg": number}, "lightsOn": boolean, "overlaysInPictures": boolean, "textures": "auto"|"1k"|"2k"|"4k", "quality": "auto"|"low"|"medium"|"high"|"ultra", "walk": boolean}"#,
-        summary: "Switches the mode, places the camera (orbiting `target`), walks (as the Walk button: on foot near the camera's target; the arrow keys or WASD move) or orbits again, turns the lights on or off (the project's view.set lights), whether pictures show the editor's overlays, the texture resolution and the rendering quality (the Quality menu).",
+        params: r#"{"mode": "draw"|"materials"|"objects"|"sun"|"viewpoints"|extension id|null, "camera": {"position": [x, y, z], "target": [x, y, z], "fov_y_deg": number}, "lightsOn": boolean, "overlaysInPictures": boolean, "tabs": boolean, "file_bar": boolean, "view_bar": boolean, "mode_panel_frame": boolean, "textures": "auto"|"1k"|"2k"|"4k", "quality": "auto"|"low"|"medium"|"high"|"ultra", "walk": boolean}"#,
+        summary: "Switches the mode, places the camera (orbiting `target`), walks (as the Walk button: on foot near the camera's target; the arrow keys or WASD move) or orbits again, turns the lights on or off (the project's view.set lights), whether pictures show the editor's overlays, the texture resolution and the rendering quality (the Quality menu). `tabs`, `file_bar`, `view_bar` and `mode_panel_frame` show or hide the built-in mode tabs, the Open/Save/Undo/Redo bar, the view bar (Layers, Lights, Quality, Export, Walk, fps) and the frame and fold button of the mode panel (an embedding app hides what it replaces; `ui.get` reports them under `ui`). Hidden controls stay reachable as commands and shortcuts (Ctrl+Z, `ui.set mode`).",
     },
     Method {
         name: "ui.fly",
@@ -439,6 +441,7 @@ impl Host for Bound<'_, '_> {
         Some(match method {
             "ui.get" => Ok(json!({
                 "mode": h.mode_name(),
+                "ui": h.host_ui.to_json(),
                 "camera": {
                     "view": match h.studio.camera.view { View::Orbit => "orbit", View::Walk => "walk", View::Top => "plan" },
                     "position": h.studio.camera.eye().to_array(),
@@ -467,6 +470,7 @@ impl Host for Bound<'_, '_> {
                 },
             })),
             "ui.set" => (|| {
+                h.host_ui.apply(params)?;
                 if let Some(m) = params.get("mode") {
                     *h.mode = match m {
                         Value::Null => None,
@@ -618,6 +622,7 @@ pub fn serve_headless(port: u16, token_file: &str, seconds: f64) -> Result<(), S
     }
     eprintln!("agents: listening on 127.0.0.1:{port}");
     let (mut mode, mut selection) = (None, crate::selection::SelectionState::default());
+    let mut host_ui = crate::host_ui::HostUi::default();
     let start = std::time::Instant::now();
     while start.elapsed().as_secs_f64() < seconds {
         let now = start.elapsed().as_secs_f64();
@@ -628,6 +633,7 @@ pub fn serve_headless(port: u16, token_file: &str, seconds: f64) -> Result<(), S
             mode: &mut mode,
             selection: &mut selection,
             extension_modes: &[],
+            host_ui: &mut host_ui,
             now,
         };
         if agents.poll(host, now)
@@ -743,6 +749,7 @@ mod tests {
             visioncraft_render::Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
         let mut studio = super::Studio::new(renderer, project);
         let (mut mode, mut selection) = (None, crate::selection::SelectionState::default());
+        let mut host_ui = crate::host_ui::HostUi::default();
         let mut host = super::WindowHost {
             studio: &mut studio,
             device: &device,
@@ -750,6 +757,7 @@ mod tests {
             mode: &mut mode,
             selection: &mut selection,
             extension_modes: &[],
+            host_ui: &mut host_ui,
             now: 0.0,
         };
         let mut state = super::HostState::new(visioncraft_automation::Access::any());
@@ -779,6 +787,41 @@ mod tests {
             s.run(c, p).unwrap();
         }
         s.project().clone()
+    }
+
+    #[test]
+    fn ui_set_and_get_carry_the_host_ui_flags() {
+        use super::Host;
+        with_host(Project::default(), |h| {
+            let got = h.call("ui.get", &json!({})).unwrap().unwrap();
+            assert_eq!(got["ui"]["tabs"], true);
+            h.call("ui.set", &json!({"tabs": false, "view_bar": false}))
+                .unwrap()
+                .unwrap();
+            assert!(!h.host.host_ui.tabs && !h.host.host_ui.view_bar && h.host.host_ui.file_bar);
+            let got = h.call("ui.get", &json!({})).unwrap().unwrap();
+            assert_eq!(got["ui"]["tabs"], false);
+            assert!(h.call("ui.set", &json!({"file_bar": 3})).unwrap().is_err());
+        });
+    }
+
+    #[test]
+    fn import_object_returns_a_reference_the_project_knows() {
+        with_host(Project::default(), |h| {
+            let id = h
+                .host
+                .studio
+                .import_object("Shed", crate::user_objects::tests::triangle_glb())
+                .unwrap();
+            assert!(id.starts_with("user:"));
+            assert_eq!(h.host.studio.project().objects.len(), 1);
+            assert!(
+                h.host
+                    .studio
+                    .import_object("Bad", b"nope".to_vec())
+                    .is_err()
+            );
+        });
     }
 
     #[test]

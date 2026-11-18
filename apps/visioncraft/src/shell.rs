@@ -3,10 +3,12 @@
 
 use crate::App;
 use crate::extension::Extension;
+use crate::host_ui::HostUi;
 
 #[derive(Default)]
 pub struct Shell {
     extensions: Vec<Box<dyn Extension>>,
+    host_ui: Option<HostUi>,
 }
 
 impl Shell {
@@ -17,6 +19,21 @@ impl Shell {
     pub fn with(mut self, extension: impl Extension) -> Self {
         self.extensions.push(Box::new(extension));
         self
+    }
+
+    /// Chooses which built-in UI is drawn and where the window starts. It wins over what an
+    /// extension asks for ([`Extension::host_ui`]).
+    pub fn host_ui(mut self, host_ui: HostUi) -> Self {
+        self.host_ui = Some(host_ui);
+        self
+    }
+
+    /// The explicit option, else the first extension's, else everything shown.
+    fn resolved_host_ui(&self) -> HostUi {
+        HostUi::combine(
+            self.host_ui.clone(),
+            self.extensions.iter().map(|e| e.host_ui()),
+        )
     }
 
     /// Runs the window (natively) or the page (wasm32) until it closes.
@@ -62,6 +79,7 @@ impl Shell {
             }
             return;
         }
+        let host_ui = self.resolved_host_ui();
         let run = eframe::run_native(
             "VisionCraft",
             eframe::NativeOptions {
@@ -74,7 +92,7 @@ impl Shell {
                 },
                 ..Default::default()
             },
-            Box::new(|cc| Ok(Box::new(App::new(cc, self.extensions)))),
+            Box::new(|cc| Ok(Box::new(App::new(cc, self.extensions, host_ui)))),
         );
         if let Err(e) = run {
             eprintln!("VisionCraft could not start: {e}");
@@ -85,6 +103,7 @@ impl Shell {
     #[cfg(target_arch = "wasm32")]
     pub fn run(self) {
         use eframe::wasm_bindgen::JsCast;
+        let host_ui = self.resolved_host_ui();
         let extensions = self.extensions;
         let canvas = web_sys::window()
             .and_then(|w| w.document())
@@ -109,7 +128,7 @@ impl Shell {
                 .start(
                     canvas,
                     options,
-                    Box::new(|cc| Ok(Box::new(App::new(cc, extensions)))),
+                    Box::new(|cc| Ok(Box::new(App::new(cc, extensions, host_ui)))),
                 )
                 .await;
             let report = |name: &str, args: &[wasm_bindgen::JsValue]| {

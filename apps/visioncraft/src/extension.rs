@@ -17,6 +17,9 @@
 //!   project (and of the models, materials and species that have one); other builds keep it as is;
 //! - may have a mode pill with a panel ([`Extension::mode`], [`Extension::panel`]) and a pointer
 //!   tool while that mode is open ([`Extension::update`], [`Extension::leave`]);
+//! - may choose which built-in UI is shown and the mode the window starts in
+//!   ([`Extension::host_ui`], or the shell's `.host_ui(..)`, which wins), and show a mesh it
+//!   generated with [`ExtensionCx::import_object`];
 //! - draws lines, points and labels over the scene ([`Extension::overlay`]), in the same overlay
 //!   pass as the Draw tool;
 //! - makes its own kinds of objects from the existing primitives: a command that writes core
@@ -47,6 +50,12 @@ pub trait Extension: 'static {
 
     /// Its mode closes (another mode opens, or none): drop what the tool was in the middle of.
     fn leave(&mut self, _cx: &mut ExtensionCx) {}
+
+    /// Which built-in UI the build shows and which mode it starts in; the first extension that
+    /// returns `Some` is used unless the shell has an explicit `.host_ui(..)`.
+    fn host_ui(&self) -> Option<crate::host_ui::HostUi> {
+        None
+    }
 
     /// The panel of its mode.
     fn panel(&mut self, _ui: &mut egui::Ui, _cx: &mut ExtensionCx) {}
@@ -143,6 +152,15 @@ impl ExtensionCx<'_, '_> {
     /// A double click is the tool's this frame: the camera does not re-aim.
     pub fn capture_double_click(&mut self) {
         self.cx.s.double_click_captured = true;
+    }
+
+    /// Shows a mesh the extension generated (a binary glTF, `.glb`) without any server: the
+    /// bytes are checked and held by the window, and the object is added to the project with
+    /// `object.add` (one undo step). Returns its asset id, `user:<id>`, which is also what
+    /// `placement.add` and the other commands take as the object's `asset`; it fails when the
+    /// bytes are not a usable glb.
+    pub fn import_object(&mut self, name: &str, glb_bytes: Vec<u8>) -> Result<String, String> {
+        self.cx.s.import_object(name, glb_bytes)
     }
 
     pub fn info(&mut self, text: impl Into<String>) {

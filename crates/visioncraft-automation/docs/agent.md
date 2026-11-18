@@ -1597,3 +1597,17 @@ and `--clouds`); a film shot takes
   and open an extension's mode with `ui.set {"mode": "<extension id>"}`. `visioncraft-cli` on its
   own and `visioncraft --agents-headless` build their session from the core commands and cannot
   know a third-party build's commands, by design (nothing is loaded at run time).
+- **Embedding: hide the built-in UI.** An app built on VisionCraft that brings its own chrome
+  hides parts of the window with `Shell::new().host_ui(HostUi {..})` or an extension's
+  `fn host_ui(&self) -> Option<HostUi>` (the shell's option wins, else the first extension that
+  returns `Some`). `HostUi` has `tabs`, `file_bar`, `view_bar`, `mode_panel_frame` (all true by
+  default; false draws the open mode's panel without frame and fold button), `start_mode` (a
+  built-in mode id or an extension id) and `quiet_missing_assets` (no startup notice when there
+  is no asset library). At run time `ui.set {"tabs", "file_bar", "view_bar", "mode_panel_frame"}`
+  changes them and `ui.get` reports them under `ui`, so an extension's own "view in 3D" button
+  can show the bars and switch back. Hiding only hides buttons: every action stays a command and
+  Ctrl+Z, Ctrl+Shift+Z and `ui.set {"mode"}` keep working.
+- **Embedding: a generated mesh.** An extension can show a mesh it made, without a server:
+  `ExtensionCx::import_object(name, glb_bytes)` checks the `.glb`, keeps its bytes in the window
+  and runs `object.add` (one undo step). It returns `user:<id>`, the asset reference that
+  `placement.add` and the other commands take; a bad file is an `Err` with a message.

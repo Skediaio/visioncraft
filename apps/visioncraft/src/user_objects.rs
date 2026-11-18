@@ -221,7 +221,7 @@ impl Library {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -238,7 +238,7 @@ mod tests {
     }
 
     /// A one-triangle GLB, 2 m wide and 1 m tall.
-    fn triangle_glb() -> Vec<u8> {
+    pub(crate) fn triangle_glb() -> Vec<u8> {
         let pos: [[f32; 3]; 3] = [[0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
         let bin: Vec<u8> = pos.iter().flatten().flat_map(|f| f.to_le_bytes()).collect();
         let json = format!(

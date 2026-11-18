@@ -17,6 +17,7 @@ pub mod fixtures;
 pub mod gltf_load;
 pub mod handles;
 pub mod hardware;
+pub mod host_ui;
 pub mod import_task;
 pub mod lamps;
 pub mod library;
@@ -61,6 +62,7 @@ pub mod work_pool;
 
 pub use eframe::egui;
 pub use extension::{Extension, ExtensionCx, Overlay};
+pub use host_ui::HostUi;
 pub use shell::Shell;
 
 use eframe::egui::{Align2, Key, PointerButton, Vec2};
@@ -229,7 +231,11 @@ fn stem(name: &str) -> String {
 }
 
 impl App {
-    pub fn new(cc: &eframe::CreationContext<'_>, extensions: Vec<Box<dyn Extension>>) -> Self {
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        extensions: Vec<Box<dyn Extension>>,
+        host_ui: HostUi,
+    ) -> Self {
         ui::apply_theme(&cc.egui_ctx);
         let state = cc
             .wgpu_render_state
@@ -306,6 +312,11 @@ impl App {
                 app.hud.extension_modes.push((e.id(), label));
             }
         }
+        app.studio.scene.library.store.quiet_missing = host_ui.quiet_missing_assets;
+        if let Some(id) = host_ui.start_mode {
+            app.hud.mode = agents::mode_of(id, &app.hud.extension_modes);
+        }
+        app.hud.host = host_ui;
         #[cfg(target_arch = "wasm32")]
         {
             agents::web_rpc::install_waker(&cc.egui_ctx);
@@ -1214,6 +1225,7 @@ impl App {
             mode: &mut mode,
             selection: &mut self.selection,
             extension_modes: &self.hud.extension_modes,
+            host_ui: &mut self.hud.host,
             now,
         };
         let answered = self.agents.poll(host, now);
@@ -1977,6 +1989,8 @@ impl eframe::App for App {
             None => String::new(),
         };
         ctx.data_mut(|d| d.insert_temp(egui::Id::new(ui::MODE_PANEL_TITLE), title));
+        let bare = !self.hud.host.mode_panel_frame;
+        ctx.data_mut(|d| d.insert_temp(egui::Id::new(ui::MODE_PANEL_BARE), bare));
         match self.hud.mode {
             Some(Mode::Draw) => ui::floating(
                 &ctx,

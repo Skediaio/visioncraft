@@ -808,6 +808,8 @@ pub struct AssetStore {
     pub rev: u64,
     /// New problems in plain words, for the toasts.
     pub messages: Vec<String>,
+    /// No notice when the asset library (its catalogue) is missing.
+    pub quiet_missing: bool,
     /// GPU texture memory above which the least recently used things go.
     pub cap_bytes: u64,
     pub max_inflight: usize,
@@ -857,6 +859,7 @@ impl AssetStore {
             evicted: Vec::new(),
             rev: 0,
             messages: Vec::new(),
+            quiet_missing: false,
             cap_bytes: if cfg!(target_arch = "wasm32") {
                 700 << 20
             } else {
@@ -1042,10 +1045,12 @@ impl AssetStore {
     pub fn fail_key(&mut self, key: Key, why: &str) {
         let catalog_failed = self.failed.iter().any(|k| k.path() == "catalog.json");
         if key.path() == "catalog.json" {
-            self.messages.push(format!(
+            if !self.quiet_missing {
+                self.messages.push(format!(
                 "No asset library found at {} ({why}). Objects and library materials are unavailable; start with --assets <dir>, set VISIONCRAFT_ASSETS, or open the page with ?assets=<url>.",
                 self.base_description()
-            ));
+                ));
+            }
         } else if matches!(key, Key::Thumb(_))
             || (matches!(key, Key::Bytes(_)) && catalog_failed)
             || is_tier_file(key.path())
