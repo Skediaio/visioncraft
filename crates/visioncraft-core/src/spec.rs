@@ -21,6 +21,12 @@ pub enum ParamType {
     Outline,
     /// An array of `[x, y, z]` triples in metres.
     Points3,
+    /// `[x, y, z]`, or a reference to something in the project: a shape id (`S6`), a planting
+    /// (`g4`) or one plant of it (`g4#12`), a model, a lamp, a viewpoint, `plot` (everything
+    /// drawn) or a name, matched without regard to case (`Pond`).
+    Place,
+    /// An array of places (`[x, y, z]` or `[x, z]` or a reference each).
+    Places,
     Object,
     Array,
     Any,
@@ -39,6 +45,8 @@ impl ParamType {
             Self::Color => "[r, g, b] or [r, g, b, a]",
             Self::Outline => "[[x, z], ...]",
             Self::Points3 => "[[x, y, z], ...]",
+            Self::Place => "[x, y, z] or a name",
+            Self::Places => "[[x, z] or [x, y, z] or a name, ...]",
             Self::Object => "object",
             Self::Array => "array",
             Self::Any => "any",
@@ -65,6 +73,10 @@ impl ParamType {
             Self::Color => numbers(v, &[3, 4]),
             Self::Outline => list(v, 2),
             Self::Points3 => list(v, 3),
+            Self::Place => numbers(v, &[3]) || v.is_string() || v.is_object(),
+            Self::Places => v
+                .as_array()
+                .is_some_and(|a| a.iter().all(|p| numbers(p, &[2, 3]) || p.is_string())),
             Self::Object => v.is_object(),
             Self::Array => v.is_array(),
             Self::Any => true,
@@ -212,7 +224,18 @@ impl CommandSpec {
                                 "unknown parameter `{key}` for `{}`; did you mean `{near}`?",
                                 self.name
                             ),
-                            None => format!("`{}` takes no parameters, got `{key}`", self.name),
+                            None if self.params.is_empty() => {
+                                format!("`{}` takes no parameters, got `{key}`", self.name)
+                            }
+                            None => format!(
+                                "unknown parameter `{key}` for `{}`; the parameters are {}",
+                                self.name,
+                                self.params
+                                    .iter()
+                                    .map(|p| p.name.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            ),
                         },
                     );
                 }
@@ -273,9 +296,39 @@ fn kind_of(v: &Value) -> String {
     }
 }
 
-/// The candidate closest to `key` by edit distance; `None` when there are none.
+/// The candidate closest to `key` by edit distance, when it is close enough to be a
+/// misspelling or an abbreviation of it: within a third of the longer word (at least 2 edits),
+/// or one holding the other. `None` when nothing is close (`lights` is not `mist`).
 pub fn nearest<'a>(key: &str, candidates: impl Iterator<Item = &'a str>) -> Option<&'a str> {
-    candidates.min_by_key(|c| edit_distance(key, c))
+    let (best, d) = candidates
+        .map(|c| (c, edit_distance(&key.to_lowercase(), &c.to_lowercase())))
+        .min_by_key(|(_, d)| *d)?;
+    let (k, b) = (key.to_lowercase(), best.to_lowercase());
+    let limit = (k.chars().count().max(b.chars().count()) / 3).max(2);
+    let contains = k.len() >= 3 && (b.contains(&k) || k.contains(&b));
+    (d <= limit || contains).then_some(best)
+}
+
+/// Up to `n` candidates close to `key`, the closest first: those that hold it or that it
+/// holds, then by edit distance within a third of the longer word (at least 2 edits).
+pub fn close_matches<'a>(
+    key: &str,
+    candidates: impl Iterator<Item = &'a str>,
+    n: usize,
+) -> Vec<&'a str> {
+    let k = key.to_lowercase();
+    let mut scored: Vec<(usize, &str)> = candidates
+        .filter_map(|c| {
+            let b = c.to_lowercase();
+            let d = edit_distance(&k, &b);
+            let limit = (k.chars().count().max(b.chars().count()) / 3).max(2);
+            let contains = k.len() >= 2 && (b.contains(&k) || k.contains(&b));
+            (d <= limit || contains).then_some((if contains { 0 } else { d }, c))
+        })
+        .collect();
+    scored.sort();
+    scored.dedup_by_key(|s| s.1);
+    scored.into_iter().take(n).map(|s| s.1).collect()
 }
 
 fn edit_distance(a: &str, b: &str) -> usize {
@@ -443,6 +496,18 @@ pub fn example_project(command: &str) -> crate::project::Project {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn nearest_is_a_misspelling_not_just_the_least_far_word() {
+        let words = ["mist", "haze", "rain", "shafts"];
+        assert_eq!(nearest("lights", words.into_iter()), None);
+        assert_eq!(nearest("mits", words.into_iter()), Some("mist"));
+        assert_eq!(nearest("shaft", words.into_iter()), Some("shafts"));
+        assert_eq!(
+            close_matches("Pnd", ["Pond", "Lawn", "Path"].into_iter(), 3),
+            vec!["Pond"]
+        );
+    }
 
     #[test]
     fn nearest_key_and_types() {

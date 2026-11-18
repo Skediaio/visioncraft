@@ -1029,6 +1029,8 @@ pub struct Renderer {
     aerial_perspective: bool,
     white_balance: WhiteBalance,
     color_grade: ColorGrade,
+    /// A second grade mixed over `color_grade`, and its share 0..1.
+    color_grade_mix: Option<(ColorGrade, f32)>,
     /// A photo's sample (`still::Photo`): the shadow's light direction moved within the sun's
     /// disc, and the noise seed of ambient occlusion; zero for live frames.
     shadow_jitter: Vec3,
@@ -1377,6 +1379,7 @@ impl Renderer {
             aerial_perspective: false,
             white_balance: WhiteBalance::Daylight,
             color_grade: ColorGrade::Neutral,
+            color_grade_mix: None,
             shadow_jitter: Vec3::ZERO,
             photo_seed: 0.0,
             vignette: 0.0,
@@ -1908,6 +1911,12 @@ impl Renderer {
     /// applies nothing.
     pub fn set_color_grade(&mut self, grade: ColorGrade) {
         self.color_grade = grade;
+    }
+
+    /// A second grade mixed over the first by `share` (0..1): a grade that eases from one look
+    /// to another. `None`: the first alone.
+    pub fn set_color_grade_mix(&mut self, mix: Option<(ColorGrade, f32)>) {
+        self.color_grade_mix = mix;
     }
 
     /// What of the air runs this frame for a camera with `proj` (`Air`).
@@ -4472,12 +4481,23 @@ impl Renderer {
         };
         b.floats(&white);
         b.floats(&reference);
-        let (m, contrast) = tonemap::grade_matrix(self.color_grade);
-        let on = if self.color_grade == ColorGrade::Neutral {
+        let (mut m, mut contrast) = tonemap::grade_matrix(self.color_grade);
+        let mut on = if self.color_grade == ColorGrade::Neutral {
             0.0
         } else {
             1.0
         };
+        if let Some((other, t)) = self.color_grade_mix {
+            let t = t.clamp(0.0, 1.0);
+            let (m2, c2) = tonemap::grade_matrix(other);
+            m = m * (1.0 - t) + m2 * t;
+            contrast = contrast * (1.0 - t) + c2 * t;
+            on = if self.color_grade == ColorGrade::Neutral && other == ColorGrade::Neutral {
+                0.0
+            } else {
+                1.0
+            };
+        }
         b.floats(&m.x_axis.extend(contrast).to_array());
         b.floats(&m.y_axis.extend(on).to_array());
         b.floats(&m.z_axis.extend(0.0).to_array());

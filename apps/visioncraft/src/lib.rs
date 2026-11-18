@@ -36,6 +36,7 @@ pub mod planting_tools;
 pub mod plants;
 pub mod scans;
 pub mod scene;
+pub mod selection;
 pub mod shell;
 pub mod sky_panel;
 pub mod sky_task;
@@ -204,6 +205,8 @@ pub struct App {
     /// The last frame asked for the next one: the time between them is a frame, not idle.
     repainting: bool,
     agents: agents::Agents,
+    /// What the person has selected, for agents (`selection`).
+    selection: selection::SelectionState,
     #[cfg(not(target_arch = "wasm32"))]
     focused: bool,
 }
@@ -290,6 +293,7 @@ impl App {
             plan_fit: None,
             repainting: false,
             agents: Default::default(),
+            selection: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             focused: false,
         };
@@ -1198,14 +1202,16 @@ impl App {
         }
         #[cfg(target_arch = "wasm32")]
         self.agents.webmcp.sync(&self.studio.session, now);
+        // What the person selected since the last frame is what agents read.
+        let now_selected = self.current_selection();
+        self.selection.observe(now_selected);
         let mut mode = self.hud.mode;
         let host = agents::WindowHost {
             studio: &mut self.studio,
             device: &self.device,
             queue: &self.queue,
             mode: &mut mode,
-            planting: &mut self.objects.tools,
-            model_selected: &mut self.modelui.selected,
+            selection: &mut self.selection,
             extension_modes: &self.hud.extension_modes,
             now,
         };
@@ -1213,7 +1219,112 @@ impl App {
         if mode != self.hud.mode {
             self.set_mode(ctx, mode);
         }
+        if let Some(keys) = self.selection.apply.take() {
+            self.apply_selection(keys);
+        }
         answered
+    }
+
+    /// The selection the modes show now, as the selection model's keys.
+    fn current_selection(&self) -> Vec<selection::Key> {
+        use selection::{Key, Kind};
+        let project = self.studio.project();
+        let mut keys = Vec::new();
+        match self.hud.mode {
+            Some(Mode::Draw) => {
+                if let Some(id) = &self.draw.selected
+                    && project.shapes.iter().any(|s| s.id() == id)
+                {
+                    let mut k = Key::new(Kind::Shape, id.clone());
+                    (k.vertex, k.edge) = (self.draw.vertex, self.draw.edge);
+                    keys.push(k);
+                } else if self.draw.tool == draw::Tool::Plan
+                    && let Some(id) = self.draw.plan.selected_id()
+                    && project.underlays.iter().any(|u| u.id == id)
+                {
+                    keys.push(Key::new(Kind::Underlay, id));
+                }
+            }
+            Some(Mode::Objects) => {
+                let t = &self.objects.tools;
+                if t.lights {
+                    if let Some(id) = self.objects.library.lights.selected()
+                        && project.lights.iter().any(|l| l.id == id)
+                    {
+                        keys.push(Key::new(Kind::Lamp, id));
+                    }
+                } else if let Some(id) = &t.selected
+                    && project.generators.iter().any(|g| g.id() == id)
+                {
+                    if let Some((i, _)) = t.placement {
+                        let mut k = Key::new(Kind::Placement, id.clone());
+                        k.index = Some(i);
+                        keys.push(k);
+                    } else {
+                        let mut k = Key::new(Kind::Planting, id.clone());
+                        k.vertex = t.vertex;
+                        keys.push(k);
+                    }
+                }
+            }
+            None => {
+                if let Some(id) = &self.modelui.selected
+                    && project.models.iter().any(|m| &m.id == id)
+                {
+                    keys.push(Key::new(Kind::Model, id.clone()));
+                }
+            }
+            _ => {}
+        }
+        keys
+    }
+
+    /// Puts an agent's selection into the modes' own states, as a click would (the mode is
+    /// already the right one).
+    fn apply_selection(&mut self, keys: Vec<selection::Key>) {
+        use selection::Kind;
+        let rev = self.studio.session.revision();
+        self.draw.selected = None;
+        (self.draw.vertex, self.draw.edge) = (None, None);
+        if self.objects.tools.selected.is_some() || self.objects.tools.placement.is_some() {
+            self.objects.tools.select_stored(None, rev);
+        }
+        self.objects.library.lights.select(None);
+        self.modelui.selected = None;
+        let Some(k) = keys.first() else {
+            return;
+        };
+        let project = self.studio.project();
+        match k.kind {
+            Kind::Shape => {
+                self.draw.tool = draw::Tool::Select;
+                self.draw.points.clear();
+                self.draw.selected = Some(k.id.clone());
+                (self.draw.vertex, self.draw.edge) = (k.vertex, k.edge);
+            }
+            Kind::Underlay => {
+                self.draw.tool = draw::Tool::Plan;
+                self.draw.plan.select(k.id.clone());
+            }
+            Kind::Planting | Kind::Placement => {
+                let g = project.generators.iter().find(|g| g.id() == k.id).cloned();
+                let placed = g.as_ref().zip(k.index).and_then(|(g, i)| {
+                    let p = selection::plant(project, g, i)?.position;
+                    Some((i, p))
+                });
+                self.objects.tools.select_stored(g.as_ref(), rev);
+                if k.kind == Kind::Placement {
+                    self.objects.tools.placement = placed;
+                } else {
+                    self.objects.tools.vertex = k.vertex;
+                }
+            }
+            Kind::Lamp => {
+                self.objects.tools.lights = true;
+                self.objects.library.lights.select(Some(k.id.clone()));
+            }
+            Kind::Model => self.modelui.selected = Some(k.id.clone()),
+        }
     }
 
     /// The agents switch and what the last agent did, bottom right.
@@ -1680,6 +1791,17 @@ impl eframe::App for App {
             input: &input,
             ctx: &ctx,
         };
+        // The point clicked on the ground or a surface, for "put a tree here".
+        if input.clicked
+            && let Some(h) = input.hover
+        {
+            let (o, d) = cx.s.pointer_ray(glam::Vec2::new(h.x, h.y), cx.size());
+            let at = cx.s.scene.raycast(o, d, false).map(|p| p.point);
+            self.selection.set_point(
+                at.or_else(|| camera::ray_plane(o, d, 0.0))
+                    .map(|p| p.to_array()),
+            );
+        }
         if cx.s.placing_person && input.clicked {
             if let Some(h) = input.hover {
                 let (o, d) = cx.s.pointer_ray(glam::Vec2::new(h.x, h.y), cx.size());

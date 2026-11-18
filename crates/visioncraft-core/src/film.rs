@@ -12,7 +12,7 @@
 //! from +X, **positive degrees counter-clockwise seen from above** (+X turns towards -Z), the
 //! same as `rotation_y_deg`.
 
-use crate::project::{Project, SunTime, YEARS_MAX};
+use crate::project::{Grade, Project, SunTime, YEARS_MAX};
 use crate::season::Season;
 use crate::viewpoint::Viewpoint;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -132,7 +132,64 @@ pub struct Shot {
     /// Light shafts at the start and the end of the shot (as `view.set shafts`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shafts: Option<Span<f32>>,
+    /// How much of the lamps' light is on, 0..1, at the start and the end of the shot: lamps
+    /// fade in instead of popping on at sunset. Any value forces the lamps on or off (else they
+    /// follow the sun).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lights: Option<Span<f32>>,
+    /// White balance in kelvin (2000..12000) at the start and the end of the shot (as
+    /// `view.set white_balance`; 6500 is daylight).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub white_balance: Option<Span<f32>>,
+    /// The colour grade at the start and the end of the shot; two grades are mixed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grade: Option<Span<Grade>>,
+    /// Exposure compensation in stops **relative to the automatic exposure** at the start and the
+    /// end of the shot: 0 is no correction, +1 one stop brighter, -1 darker. (`view.set
+    /// exposure_ev` is the other thing: an absolute exposure value, where 0 is white daylight.)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exposure_ev: Option<Span<f32>>,
+    /// `"continue"`: the shot starts where the one before ended, in position, look direction and
+    /// speed, and its easing is blended across the boundary (no dip in speed). `"cut"` (the
+    /// default): it starts where its own fields say. For walk, glide, flyover and orbit shots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub join: Option<Join>,
 }
+
+/// How a shot follows the one before it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Join {
+    Cut,
+    Continue,
+}
+
+/// A stop of a walk: the camera stands still at `point` for `s` seconds.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Pause {
+    /// Where, `[x, z]`: the nearest point of the path.
+    pub point: [f32; 2],
+    pub s: f32,
+}
+
+/// A look of a walk: from `at_s` into the shot the camera turns to `target`, holds it for
+/// `hold_s` seconds and turns back.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LookStop {
+    pub at_s: f32,
+    pub target: [f32; 3],
+    #[serde(default = "look_hold")]
+    pub hold_s: f32,
+}
+
+fn look_hold() -> f32 {
+    2.0
+}
+
+/// How long the camera takes to turn to a look and back.
+const LOOK_TURN_S: f32 = 1.0;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -142,6 +199,13 @@ pub enum ShotKind {
         path: Vec<[f32; 2]>,
         #[serde(default = "eye_height")]
         eye_height_m: f32,
+        /// Stops along the path; the speed is solved so that walking and stopping fit
+        /// `duration_s`.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pause_at: Vec<Pause>,
+        /// Looks away from the way ahead, by time in the shot.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        look: Vec<LookStop>,
     },
     /// A smooth curve (Catmull-Rom) through points in space.
     Glide { path: Vec<[f32; 3]> },
@@ -197,9 +261,10 @@ impl ShotKind {
         }
     }
 
-    fn fields(kind: &str) -> &'static [&'static str] {
+    /// The fields of one kind of shot.
+    pub fn fields(kind: &str) -> &'static [&'static str] {
         match kind {
-            "walk" => &["path", "eye_height_m"],
+            "walk" => &["path", "eye_height_m", "pause_at", "look"],
             "glide" => &["path"],
             "rise" => &["at", "from_height", "to_height"],
             "orbit" => &["center", "radius_m", "height_m", "from_deg", "to_deg"],
@@ -210,7 +275,8 @@ impl ShotKind {
     }
 }
 
-const COMMON_FIELDS: &[&str] = &[
+/// The fields every kind of shot takes (the others are its kind's: [`ShotKind::fields`]).
+pub const COMMON_FIELDS: &[&str] = &[
     "kind",
     "duration_s",
     "speed_mps",
@@ -228,6 +294,11 @@ const COMMON_FIELDS: &[&str] = &[
     "mist",
     "gustiness",
     "shafts",
+    "lights",
+    "white_balance",
+    "grade",
+    "exposure_ev",
+    "join",
 ];
 
 /// The highest haze (a turbidity) a shot or a picture takes: thick fog-like haze.
@@ -250,11 +321,23 @@ impl Shot {
             ));
         }
         let own = ShotKind::fields(kind);
+        if kind == "walk" && map.contains_key("route") {
+            return Err(
+                "a walk shot has no field `route`: film.add_shot and film.update_shot plan it into the `path`".into(),
+            );
+        }
         for key in map.keys() {
             if !COMMON_FIELDS.contains(&key.as_str()) && !own.contains(&key.as_str()) {
-                let near =
-                    crate::spec::nearest(key, COMMON_FIELDS.iter().chain(own.iter()).copied())
-                        .map_or(String::new(), |n| format!("; did you mean `{n}`?"));
+                let fields = || COMMON_FIELDS.iter().chain(own.iter()).copied();
+                let near = crate::spec::nearest(key, fields()).map_or_else(
+                    || {
+                        format!(
+                            "; its fields are {}",
+                            fields().collect::<Vec<_>>().join(", ")
+                        )
+                    },
+                    |n| format!("; did you mean `{n}`?"),
+                );
                 return Err(format!("a {kind} shot has no field `{key}`{near}"));
             }
         }
@@ -296,10 +379,34 @@ impl Shot {
             return err("`look_at` must be finite numbers");
         }
         match &self.kind {
-            ShotKind::Walk { path, eye_height_m } => {
+            ShotKind::Walk {
+                path,
+                eye_height_m,
+                pause_at,
+                look,
+            } => {
                 if path.len() < 2 || !path.iter().flatten().all(|v| v.is_finite()) {
                     return err("`path` needs at least 2 finite [x, z] points");
                 }
+                for p in pause_at {
+                    if !(p.s > 0.0 && p.s <= SHOT_MAX_S && p.point.iter().all(|v| v.is_finite())) {
+                        return err(&format!(
+                            "`pause_at` needs a finite `point` [x, z] and `s` above 0 and at most {SHOT_MAX_S}"
+                        ));
+                    }
+                }
+                for l in look {
+                    if !(l.at_s >= 0.0
+                        && l.hold_s >= 0.0
+                        && l.at_s + l.hold_s <= SHOT_MAX_S
+                        && l.target.iter().all(|v| v.is_finite()))
+                    {
+                        return err(
+                            "`look` needs `at_s` (0 or more), a finite `target` [x, y, z] and `hold_s` (0 or more)",
+                        );
+                    }
+                }
+
                 if !(0.0..=20.0).contains(eye_height_m) || *eye_height_m <= 0.0 {
                     return err("`eye_height_m` must be above 0 and at most 20");
                 }
@@ -423,6 +530,41 @@ impl Shot {
             && (!(0.0..=HAZE_MAX).contains(&s.from) || !(0.0..=HAZE_MAX).contains(&s.to))
         {
             return err(&format!("`haze` must be from 0 to {HAZE_MAX}"));
+        }
+        if let Some(s) = self.lights
+            && (!(0.0..=1.0).contains(&s.from) || !(0.0..=1.0).contains(&s.to))
+        {
+            return err("`lights` must be from 0 (off) to 1 (all the lamps' light)");
+        }
+        if let Some(s) = self.white_balance {
+            let k = crate::project::WHITE_BALANCE_KELVIN;
+            if !k.contains(&s.from) || !k.contains(&s.to) {
+                return err(&format!(
+                    "`white_balance` is a colour temperature from {} to {} kelvin (6500 is daylight)",
+                    k.start(),
+                    k.end()
+                ));
+            }
+        }
+        if let Some(s) = self.exposure_ev
+            && (!(-8.0..=8.0).contains(&s.from) || !(-8.0..=8.0).contains(&s.to))
+        {
+            return err(
+                "`exposure_ev` is a correction in stops from -8 to 8 relative to the automatic exposure (0: none)",
+            );
+        }
+        if self.join == Some(Join::Continue)
+            && !matches!(
+                self.kind,
+                ShotKind::Walk { .. }
+                    | ShotKind::Glide { .. }
+                    | ShotKind::Flyover { .. }
+                    | ShotKind::Orbit { .. }
+            )
+        {
+            return err(
+                "`join: \"continue\"` is for walk, glide, flyover and orbit shots (a rise or a hold starts where its own fields say)",
+            );
         }
         if self.date.is_some() && self.season.is_some() {
             return err("give `date` or `season`, not both");
@@ -647,6 +789,22 @@ pub struct Overrides {
     pub gustiness: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shafts: Option<f32>,
+    /// Lamp light 0..1.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lights: Option<f32>,
+    /// Kelvin.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub white_balance: Option<f32>,
+    /// The grade, and when two are mixed the second and how much of it (0..1).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grade: Option<Grade>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grade_to: Option<Grade>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grade_mix: Option<f32>,
+    /// Stops relative to the automatic exposure.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exposure_ev: Option<f32>,
 }
 
 impl Overrides {
@@ -691,6 +849,30 @@ impl Overrides {
         if let Some(s) = self.shafts {
             m.insert("shafts".into(), json!(s));
         }
+        if let Some(s) = self.lights {
+            m.insert("lights".into(), json!(s));
+        }
+        if let Some(k) = self.white_balance {
+            m.insert("white_balance".into(), json!(k));
+        }
+        if let Some(g) = self.grade {
+            m.insert(
+                "grade".into(),
+                serde_json::to_value(g).unwrap_or(Value::Null),
+            );
+        }
+        if let Some(g) = self.grade_to {
+            m.insert(
+                "grade_to".into(),
+                serde_json::to_value(g).unwrap_or(Value::Null),
+            );
+        }
+        if let Some(x) = self.grade_mix {
+            m.insert("grade_mix".into(), json!(x));
+        }
+        if let Some(e) = self.exposure_ev {
+            m.insert("exposure_offset_ev".into(), json!(e));
+        }
         m
     }
 }
@@ -725,6 +907,26 @@ struct Built {
     /// A hold on a viewpoint carries the viewpoint's own time and years.
     base: Overrides,
     fov: f32,
+    /// How far along the path (or round the orbit) the camera is at a time in the shot.
+    motion: Motion,
+    /// The shot takes over from the one before it.
+    join: Option<JoinState>,
+}
+
+/// What a joined shot blends away from the end of the shot before it.
+struct JoinState {
+    /// Where the previous camera ended, minus where this shot would start: decays to 0.
+    eye_offset: [f32; 3],
+    /// The previous look direction: blends into this shot's.
+    dir: [f32; 3],
+    blend_s: f32,
+}
+
+/// The camera at the end of a shot.
+struct EndState {
+    eye: [f32; 3],
+    dir: [f32; 3],
+    speed_mps: f32,
 }
 
 enum Geom {
@@ -748,12 +950,83 @@ enum Geom {
     },
 }
 
+/// The share of the way covered at a time in the shot.
+enum Motion {
+    /// The shot's own ease over its whole time.
+    Ease(Ease),
+    /// Legs of walking and standing still, each a cubic from `e0` to `e1` of the way over
+    /// `t0..t1` seconds with the slopes `m0` and `m1` (the leg's own length over its own time
+    /// is 1) at its ends.
+    Legs(Vec<Leg>),
+}
+
+struct Leg {
+    t0: f32,
+    t1: f32,
+    e0: f32,
+    e1: f32,
+    m0: f32,
+    m1: f32,
+}
+
+impl Motion {
+    fn share(&self, ts: f32, duration: f32) -> f32 {
+        match self {
+            Motion::Ease(e) => e.apply(ts / duration),
+            Motion::Legs(legs) => {
+                let Some(last) = legs.last() else { return 0.0 };
+                if ts >= last.t1 {
+                    return last.e1;
+                }
+                let leg = legs.iter().find(|l| ts < l.t1).unwrap_or(last);
+                if (leg.e1 - leg.e0).abs() < 1e-9 {
+                    return leg.e0;
+                }
+                let u = ((ts - leg.t0) / (leg.t1 - leg.t0).max(1e-9)).clamp(0.0, 1.0);
+                let (u2, u3) = (u * u, u * u * u);
+                let p = (u3 - 2.0 * u2 + u) * leg.m0 + (-2.0 * u3 + 3.0 * u2) + (u3 - u2) * leg.m1;
+                leg.e0 + (leg.e1 - leg.e0) * p
+            }
+        }
+    }
+}
+
+fn smooth01(x: f32) -> f32 {
+    let x = x.clamp(0.0, 1.0);
+    x * x * (3.0 - 2.0 * x)
+}
+
+fn sub3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn add_scaled(a: [f32; 3], b: [f32; 3], k: f32) -> [f32; 3] {
+    [a[0] + b[0] * k, a[1] + b[1] * k, a[2] + b[2] * k]
+}
+
+fn lerp3(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
+    std::array::from_fn(|k| a[k] + (b[k] - a[k]) * t)
+}
+
+/// The direction `t` of the way from unit vector `a` to `b` at a constant turning rate.
+fn slerp3(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
+    let dot = (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]).clamp(-1.0, 1.0);
+    let angle = dot.acos();
+    if angle < 1e-4 || angle > std::f32::consts::PI - 1e-3 {
+        return normalize(lerp3(a, b, t));
+    }
+    let (wa, wb) = (((1.0 - t) * angle).sin(), (t * angle).sin());
+    normalize(std::array::from_fn(|k| {
+        (a[k] * wa + b[k] * wb) / angle.sin()
+    }))
+}
+
 impl Timeline {
     pub fn new(film: &Film, env: &Env) -> Result<Timeline, String> {
         let mut start = 0.0;
-        let mut shots = Vec::new();
+        let mut shots: Vec<Built> = Vec::new();
         for (i, shot) in film.shots.iter().enumerate() {
-            let b = build(shot, start, env).map_err(|e| format!("shot {i}: {e}"))?;
+            let b = build(shot, start, env, shots.last()).map_err(|e| format!("shot {i}: {e}"))?;
             start += b.duration;
             shots.push(b);
         }
@@ -784,81 +1057,7 @@ impl Timeline {
             .min(self.shots.len() - 1);
         let b = &self.shots[i];
         let u = ((t - b.start) / b.duration).clamp(0.0, 1.0);
-        let e = b.shot.ease.apply(u);
-        let (eye, target) = match (&b.geom, &b.shot.kind) {
-            (
-                Geom::Path {
-                    path,
-                    level,
-                    pitch_deg,
-                },
-                _,
-            ) => {
-                let s = e * path.len();
-                let eye = path.at(s);
-                let target = match b.shot.look_at {
-                    Some(Look::At(p)) => p,
-                    _ if *pitch_deg > 0.0 => {
-                        let a = path.ahead(s, 1.0);
-                        let h = normalize([a[0] - eye[0], 0.0, a[2] - eye[2]]);
-                        let (c, sn) = (
-                            (*pitch_deg).to_radians().cos(),
-                            (*pitch_deg).to_radians().sin(),
-                        );
-                        let d = 30.0;
-                        [
-                            eye[0] + h[0] * c * d,
-                            eye[1] - sn * d,
-                            eye[2] + h[2] * c * d,
-                        ]
-                    }
-                    _ => {
-                        let a = path.ahead(s, LOOK_AHEAD_M);
-                        [a[0], if *level { eye[1] } else { a[1] }, a[2]]
-                    }
-                };
-                (eye, target)
-            }
-            (
-                Geom::Rise {
-                    at,
-                    ground,
-                    from,
-                    to,
-                },
-                ShotKind::Rise { .. },
-            ) => {
-                let h = from + (to - from) * e;
-                let Some(Look::At(target)) = b.shot.look_at else {
-                    return Err("a rise needs `look_at`".into());
-                };
-                ([at[0], ground + h, at[1]], target)
-            }
-            (
-                Geom::Orbit,
-                ShotKind::Orbit {
-                    center,
-                    radius_m,
-                    height_m,
-                    from_deg,
-                    to_deg,
-                },
-            ) => {
-                let a = (from_deg + (to_deg - from_deg) * e).to_radians();
-                let eye = [
-                    center[0] + radius_m * a.cos(),
-                    center[1] + height_m,
-                    center[2] - radius_m * a.sin(),
-                ];
-                let target = match b.shot.look_at {
-                    Some(Look::At(p)) => p,
-                    _ => *center,
-                };
-                (eye, target)
-            }
-            (Geom::Hold { eye, target }, _) => (*eye, *target),
-            _ => return Err("the shot does not match its path".into()),
-        };
+        let (eye, target) = shot_camera(b, t - b.start)?;
         let eye_target = if eye == target {
             [target[0], target[1], target[2] - 0.01]
         } else {
@@ -873,6 +1072,128 @@ impl Timeline {
             progress: u,
         })
     }
+}
+
+/// The camera `ts` seconds into a shot: its path, then its looks, then the blend from the shot
+/// before.
+fn shot_camera(b: &Built, ts: f32) -> Result<([f32; 3], [f32; 3]), String> {
+    let (mut eye, mut target) = natural_camera(b, ts)?;
+    if let ShotKind::Walk { look, .. } = &b.shot.kind {
+        let mut best: Option<(f32, [f32; 3])> = None;
+        for l in look {
+            let up = smooth01((ts - l.at_s) / LOOK_TURN_S);
+            let down = 1.0 - smooth01((ts - (l.at_s + l.hold_s)) / LOOK_TURN_S);
+            let w = up * down;
+            if w > 0.0 && best.is_none_or(|(bw, _)| w > bw) {
+                best = Some((w, l.target));
+            }
+        }
+        if let Some((w, at)) = best {
+            let dist = dist3(eye, target).max(1.0);
+            let d = slerp3(normalize(sub3(target, eye)), normalize(sub3(at, eye)), w);
+            target = add_scaled(eye, d, dist);
+        }
+    }
+    if let Some(j) = &b.join {
+        let w = smooth01(ts / j.blend_s);
+        eye = add_scaled(eye, j.eye_offset, 1.0 - w);
+        let dist = dist3(eye, target).max(1.0);
+        let d = slerp3(j.dir, normalize(sub3(target, eye)), w);
+        target = add_scaled(eye, d, dist);
+    }
+    Ok((eye, target))
+}
+
+/// The camera of the shot's own fields `ts` seconds in.
+fn natural_camera(b: &Built, ts: f32) -> Result<([f32; 3], [f32; 3]), String> {
+    let ts = ts.clamp(0.0, b.duration);
+    let e = b.motion.share(ts, b.duration);
+    Ok(match (&b.geom, &b.shot.kind) {
+        (
+            Geom::Path {
+                path,
+                level,
+                pitch_deg,
+            },
+            _,
+        ) => {
+            let s = e * path.len();
+            let eye = path.at(s);
+            let target = match b.shot.look_at {
+                Some(Look::At(p)) => p,
+                _ if *pitch_deg > 0.0 => {
+                    let a = path.ahead(s, 1.0);
+                    let h = normalize([a[0] - eye[0], 0.0, a[2] - eye[2]]);
+                    let (c, sn) = (
+                        (*pitch_deg).to_radians().cos(),
+                        (*pitch_deg).to_radians().sin(),
+                    );
+                    let d = 30.0;
+                    [
+                        eye[0] + h[0] * c * d,
+                        eye[1] - sn * d,
+                        eye[2] + h[2] * c * d,
+                    ]
+                }
+                _ => {
+                    let a = path.ahead(s, LOOK_AHEAD_M);
+                    [a[0], if *level { eye[1] } else { a[1] }, a[2]]
+                }
+            };
+            (eye, target)
+        }
+        (
+            Geom::Rise {
+                at,
+                ground,
+                from,
+                to,
+            },
+            ShotKind::Rise { .. },
+        ) => {
+            let h = from + (to - from) * e;
+            let Some(Look::At(target)) = b.shot.look_at else {
+                return Err("a rise needs `look_at`".into());
+            };
+            ([at[0], ground + h, at[1]], target)
+        }
+        (
+            Geom::Orbit,
+            ShotKind::Orbit {
+                center,
+                radius_m,
+                height_m,
+                from_deg,
+                to_deg,
+            },
+        ) => {
+            let a = (from_deg + (to_deg - from_deg) * e).to_radians();
+            let eye = [
+                center[0] + radius_m * a.cos(),
+                center[1] + height_m,
+                center[2] - radius_m * a.sin(),
+            ];
+            let target = match b.shot.look_at {
+                Some(Look::At(p)) => p,
+                _ => *center,
+            };
+            (eye, target)
+        }
+        (Geom::Hold { eye, target }, _) => (*eye, *target),
+        _ => return Err("the shot does not match its path".into()),
+    })
+}
+
+fn end_state(prev: &Built) -> Result<EndState, String> {
+    let (eye, target) = shot_camera(prev, prev.duration)?;
+    let t0 = (prev.duration - 1.0 / 120.0).max(0.0);
+    let (before, _) = shot_camera(prev, t0)?;
+    let dt = (prev.duration - t0).max(1e-4);
+    Ok(EndState {
+        eye,
+        dir: normalize(sub3(target, eye)),
+        speed_mps: dist3(before, eye) / dt,
+    })
 }
 
 fn overrides_at(shot: &Shot, base: Overrides, u: f32) -> Overrides {
@@ -912,23 +1233,154 @@ fn overrides_at(shot: &Shot, base: Overrides, u: f32) -> Overrides {
     if let Some(s) = shot.shafts {
         o.shafts = Some(s.at(u));
     }
+    if let Some(s) = shot.lights {
+        o.lights = Some(s.at(u));
+    }
+    if let Some(s) = shot.white_balance {
+        o.white_balance = Some(s.at(u));
+    }
+    if let Some(s) = shot.grade {
+        o.grade = Some(s.from);
+        if s.from != s.to {
+            o.grade_to = Some(s.to);
+            o.grade_mix = Some(u);
+        }
+    }
+    if let Some(s) = shot.exposure_ev {
+        o.exposure_ev = Some(s.at(u));
+    }
     o
 }
 
-fn build(shot: &Shot, start: f32, env: &Env) -> Result<Built, String> {
+/// A stop or a stretch of a walk, in order.
+enum Part {
+    Walk { from: f32, to: f32 },
+    Wait { at: f32, secs: f32 },
+}
+
+/// The legs of a shot: its stretches of walking between the waits at `stops` (arc length,
+/// seconds), `move_time` seconds of walking in all over `len`, the first stretch taking over
+/// the speed `v0` when the shot continues one before.
+fn legs_of(
+    ease: Ease,
+    len: f32,
+    move_time: f32,
+    stops: &[(f32, f32)],
+    v0: Option<f32>,
+) -> Vec<Leg> {
+    let mut parts = Vec::new();
+    let mut cur = 0.0;
+    for &(at, secs) in stops {
+        if at > cur + 1e-4 {
+            parts.push(Part::Walk { from: cur, to: at });
+        }
+        parts.push(Part::Wait { at, secs });
+        cur = at.max(cur);
+    }
+    if len > cur + 1e-4 {
+        parts.push(Part::Walk { from: cur, to: len });
+    }
+    let soft_start = matches!(ease, Ease::In | Ease::InOut);
+    let soft_end = matches!(ease, Ease::Out | Ease::InOut);
+    let mut legs = Vec::new();
+    let mut t = 0.0;
+    for (k, part) in parts.iter().enumerate() {
+        match part {
+            Part::Wait { at, secs } => {
+                legs.push(Leg {
+                    t0: t,
+                    t1: t + secs,
+                    e0: at / len,
+                    e1: at / len,
+                    m0: 0.0,
+                    m1: 0.0,
+                });
+                t += secs;
+            }
+            Part::Walk { from, to } => {
+                let dur = move_time * (to - from) / len;
+                let first = k == 0;
+                let last = k + 1 == parts.len();
+                let after_wait = k > 0 && matches!(parts[k - 1], Part::Wait { .. });
+                let before_wait = !last && matches!(parts[k + 1], Part::Wait { .. });
+                let m0 = if after_wait || (first && v0.is_none() && soft_start) {
+                    0.0
+                } else if first && let Some(v) = v0 {
+                    (v * dur / (to - from).max(1e-6)).clamp(0.0, 3.0)
+                } else if first && ease == Ease::Out {
+                    2.0
+                } else {
+                    1.0
+                };
+                let m1 = if before_wait || (last && soft_end) {
+                    0.0
+                } else if last && ease == Ease::In {
+                    2.0
+                } else {
+                    1.0
+                };
+                legs.push(Leg {
+                    t0: t,
+                    t1: t + dur,
+                    e0: from / len,
+                    e1: to / len,
+                    m0,
+                    m1,
+                });
+                t += dur;
+            }
+        }
+    }
+    legs
+}
+
+fn build(shot: &Shot, start: f32, env: &Env, prev: Option<&Built>) -> Result<Built, String> {
     let mut base = Overrides::default();
     let mut fov = shot.fov_y_deg.unwrap_or(DEFAULT_FOV);
+    let joined = shot.join == Some(Join::Continue);
+    let prev_end = if joined {
+        let prev = prev.ok_or("`join: \"continue\"` needs a shot before it to continue")?;
+        Some(end_state(prev)?)
+    } else {
+        None
+    };
+    // Where the shot's stops lie on its path: (arc length, seconds).
+    let mut stops: Vec<(f32, f32)> = Vec::new();
     let (geom, length, default_speed) = match &shot.kind {
-        ShotKind::Walk { path, eye_height_m } => {
-            let plan = densify(path, 0.25);
+        ShotKind::Walk {
+            path,
+            eye_height_m,
+            pause_at,
+            ..
+        } => {
+            let mut pts = path.clone();
+            if let Some(e) = &prev_end {
+                let a = [e.eye[0], e.eye[2]];
+                if (pts[0][0] - a[0]).hypot(pts[0][1] - a[1]) > 0.05 {
+                    pts.insert(0, a);
+                }
+            }
+            let plan = densify(&pts, 0.25);
             let ground: Vec<f32> = plan.iter().map(|p| (env.ground)(p[0], p[1])).collect();
             let ground = smooth(&ground, 3);
-            let pts: Vec<[f32; 3]> = plan
+            let pts3: Vec<[f32; 3]> = plan
                 .iter()
                 .zip(&ground)
                 .map(|(p, g)| [p[0], g + eye_height_m, p[1]])
                 .collect();
-            let path = Path3::new(pts);
+            let path = Path3::new(pts3);
+            for p in pause_at {
+                let nearest = plan
+                    .iter()
+                    .enumerate()
+                    .min_by(|a, b| {
+                        let d = |q: &[f32; 2]| (q[0] - p.point[0]).hypot(q[1] - p.point[1]);
+                        d(a.1).total_cmp(&d(b.1))
+                    })
+                    .map_or(0, |(i, _)| i);
+                stops.push((path.cum[nearest], p.s));
+            }
+            stops.sort_by(|a, b| a.0.total_cmp(&b.0));
             let len = path.len();
             (
                 Geom::Path {
@@ -941,7 +1393,13 @@ fn build(shot: &Shot, start: f32, env: &Env) -> Result<Built, String> {
             )
         }
         ShotKind::Glide { path } => {
-            let path = Path3::new(catmull_rom(path));
+            let mut pts = path.clone();
+            if let Some(e) = &prev_end
+                && dist3(pts[0], e.eye) > 0.05
+            {
+                pts.insert(0, e.eye);
+            }
+            let path = Path3::new(catmull_rom(&pts));
             let len = path.len();
             (
                 Geom::Path {
@@ -958,15 +1416,22 @@ fn build(shot: &Shot, start: f32, env: &Env) -> Result<Built, String> {
             height_m,
             pitch_deg,
         } => {
-            let plan = densify(path, 0.5);
+            let mut pts = path.clone();
+            if let Some(e) = &prev_end {
+                let a = [e.eye[0], e.eye[2]];
+                if (pts[0][0] - a[0]).hypot(pts[0][1] - a[1]) > 0.05 {
+                    pts.insert(0, a);
+                }
+            }
+            let plan = densify(&pts, 0.5);
             let ground: Vec<f32> = plan.iter().map(|p| (env.ground)(p[0], p[1])).collect();
             let ground = smooth(&ground, 12);
-            let pts: Vec<[f32; 3]> = plan
+            let pts3: Vec<[f32; 3]> = plan
                 .iter()
                 .zip(&ground)
                 .map(|(p, g)| [p[0], g + height_m, p[1]])
                 .collect();
-            let path = Path3::new(pts);
+            let path = Path3::new(pts3);
             let len = path.len();
             (
                 Geom::Path {
@@ -1033,27 +1498,61 @@ fn build(shot: &Shot, start: f32, env: &Env) -> Result<Built, String> {
             (Geom::Hold { eye, target }, None, 1.0)
         }
     };
-    let duration = match (shot.duration_s, shot.speed_mps, length) {
-        (Some(d), _, _) => d,
+    // The time of the stops is standing still: what is left is walking.
+    let wait: f32 = stops.iter().map(|s| s.1).sum();
+    let speed = match &prev_end {
+        Some(e) if e.speed_mps > 0.05 => e.speed_mps,
+        _ => default_speed,
+    };
+    let move_time = match (shot.duration_s, shot.speed_mps, length) {
+        (Some(d), _, _) => d - wait,
         (None, Some(v), Some(l)) => l / v,
         (None, None, Some(l))
             if !matches!(shot.kind, ShotKind::Rise { .. } | ShotKind::Orbit { .. }) =>
         {
-            l / default_speed
+            l / speed
         }
-        _ => DEFAULT_DURATION,
+        _ => DEFAULT_DURATION - wait,
     };
-    if !(duration > 0.0 && duration.is_finite()) {
-        return Err("the shot has no length in time; give `duration_s`".into());
+    if !(move_time > 0.0 && move_time.is_finite()) {
+        return Err(if wait > 0.0 {
+            format!(
+                "`duration_s` leaves no time to walk: the pauses alone take {wait} s; give a longer `duration_s`"
+            )
+        } else {
+            "the shot has no length in time; give `duration_s`".into()
+        });
     }
-    Ok(Built {
+    let duration = move_time + wait;
+    let motion = match length {
+        Some(len) if len > 1e-4 && (joined || !stops.is_empty()) => Motion::Legs(legs_of(
+            shot.ease,
+            len,
+            move_time,
+            &stops,
+            prev_end.as_ref().map(|e| e.speed_mps),
+        )),
+        _ => Motion::Ease(shot.ease),
+    };
+    let mut built = Built {
         shot: shot.clone(),
         start,
         duration,
         geom,
         base,
         fov,
-    })
+        motion,
+        join: None,
+    };
+    if let Some(e) = prev_end {
+        let (eye0, _) = natural_camera(&built, 0.0)?;
+        built.join = Some(JoinState {
+            eye_offset: sub3(e.eye, eye0),
+            dir: e.dir,
+            blend_s: (0.4 * duration).clamp(0.05, 1.2),
+        });
+    }
+    Ok(built)
 }
 
 // ---------------------------------------------------------------------------- path helpers
@@ -1567,6 +2066,14 @@ mod tests {
         );
         assert!(why(json!({"kind": "hold", "duration_s": 2})).contains("viewpoint"));
         assert!(why(json!({"kind": "swim"})).contains("unknown shot kind"));
+        // Nothing near: the fields are listed, not the least far one (`lights` is not `mist`).
+        let far = why(
+            json!({"kind": "hold", "eye": [0, 1, 0], "target": [0, 1, 1], "duration_s": 1, "sunbeams": 1}),
+        );
+        assert!(
+            far.contains("its fields are") && !far.contains("did you mean"),
+            "{far}"
+        );
         assert!(why(json!({"kind": "rise", "at": [0, 0], "from_height": 1, "to_height": 5, "duration_s": 1})).contains("look_at"));
         assert!(
             why(json!({"kind": "orbit", "center": [0, 0, 0], "radius_m": 0, "height_m": 3, "from_deg": 0, "to_deg": 90}))
@@ -1588,5 +2095,205 @@ mod tests {
             "ease": "in_out", "look_at": "ahead", "time_of_day": [17.0, 18.0], "years": 5.0});
         let s = Shot::from_value(&v, 50.8).unwrap();
         assert_eq!(serde_json::to_value(&s).unwrap(), v);
+    }
+
+    /// The eye's speed (m/s) just before and just after `t`, by differences.
+    fn speeds_around(tl: &Timeline, t: f32) -> (f32, f32) {
+        let h = 0.01;
+        let at = |t: f32| tl.camera_at(t).unwrap().eye;
+        (
+            dist3(at(t - h), at(t - 2.0 * h)) / h,
+            dist3(at(t + 2.0 * h), at(t + h)) / h,
+        )
+    }
+
+    #[test]
+    fn a_continued_shot_starts_where_the_last_ended_with_its_speed() {
+        let ground: &dyn Fn(f32, f32) -> f32 = &flat;
+        // The first walk stops at ease none: 1.4 m/s all the way; the second is told to
+        // continue and would ease in from rest on its own.
+        let first =
+            json!({"kind": "walk", "path": [[0, 0], [14, 0]], "speed_mps": 1.4, "ease": "none"});
+        let second = json!({"kind": "walk", "path": [[14, 0.5], [14, 10]], "duration_s": 8, "ease": "in_out", "join": "continue"});
+        let cut = json!({"kind": "walk", "path": [[14, 0.5], [14, 10]], "duration_s": 8, "ease": "in_out"});
+        let e = env(ground, &[]);
+        let joined = Timeline::new(&film(vec![shot(first.clone()), shot(second)]), &e).unwrap();
+        let t = joined.spans()[1].0;
+        // Position is continuous at the boundary, so is the speed (no dip), and so is the look.
+        let (before, after) = (
+            joined.camera_at(t - 1e-3).unwrap(),
+            joined.camera_at(t + 1e-3).unwrap(),
+        );
+        assert!(dist3(before.eye, after.eye) < 0.01, "{before:?} {after:?}");
+        let (v0, v1) = speeds_around(&joined, t);
+        assert!(
+            (v0 - 1.4).abs() < 0.05 && (v1 - 1.4).abs() < 0.15,
+            "{v0} {v1}"
+        );
+        let look = |f: &Frame| normalize(sub3(f.target, f.eye));
+        assert!(dist3(look(&before), look(&after)) < 0.02);
+        // The same shot as a cut starts from rest: the speed dips to 0.
+        let cutfilm = Timeline::new(&film(vec![shot(first), shot(cut)]), &e).unwrap();
+        let (_, v1cut) = speeds_around(&cutfilm, cutfilm.spans()[1].0);
+        assert!(v1cut < 0.2, "{v1cut}");
+        // Along the joined shot the speed never falls near zero before its easing out.
+        let mid = joined.camera_at(t + 1.0).unwrap().eye;
+        let mid2 = joined.camera_at(t + 1.01).unwrap().eye;
+        assert!(dist3(mid, mid2) / 0.01 > 0.8);
+        // It ends at rest, as its ease says.
+        let end = joined.duration_s;
+        let (v_end, _) = speeds_around(&joined, end - 0.05);
+        assert!(v_end < 0.5, "{v_end}");
+    }
+
+    #[test]
+    fn glides_and_orbits_continue_too() {
+        let ground: &dyn Fn(f32, f32) -> f32 = &flat;
+        let e = env(ground, &[]);
+        let f = film(vec![
+            shot(
+                json!({"kind": "glide", "path": [[0, 2, 0], [10, 3, 0], [20, 4, 5]], "speed_mps": 2, "ease": "none", "look_at": [10, 0, 10]}),
+            ),
+            shot(
+                json!({"kind": "orbit", "center": [20, 0, 10], "radius_m": 6, "height_m": 3, "from_deg": 0, "to_deg": 120, "duration_s": 6, "join": "continue", "ease": "none"}),
+            ),
+        ]);
+        let tl = Timeline::new(&f, &e).unwrap();
+        let t = tl.spans()[1].0;
+        let (a, b) = (
+            tl.camera_at(t - 1e-3).unwrap(),
+            tl.camera_at(t + 1e-3).unwrap(),
+        );
+        assert!(dist3(a.eye, b.eye) < 0.02, "{:?} {:?}", a.eye, b.eye);
+        // Not the first shot, and a rise cannot continue.
+        let err = Timeline::new(
+            &film(vec![shot(
+                json!({"kind": "walk", "path": [[0, 0], [5, 0]], "join": "continue"}),
+            )]),
+            &e,
+        )
+        .err()
+        .unwrap();
+        assert!(err.contains("needs a shot before it"), "{err}");
+        assert!(
+            Shot::from_value(
+                &json!({"kind": "hold", "eye": [0, 1, 0], "target": [0, 1, 1], "join": "continue"}),
+                50.8
+            )
+            .unwrap_err()
+            .contains("walk, glide, flyover and orbit")
+        );
+    }
+
+    #[test]
+    fn a_walk_pauses_and_the_speed_is_solved_to_fit_the_duration() {
+        let ground: &dyn Fn(f32, f32) -> f32 = &flat;
+        let e = env(ground, &[]);
+        let f = film(vec![shot(json!({
+            "kind": "walk", "path": [[0, 0], [10, 0], [10, 10]], "duration_s": 20,
+            "pause_at": [{"point": [10, 0], "s": 4}], "ease": "none"
+        }))]);
+        let tl = Timeline::new(&f, &e).unwrap();
+        assert!((tl.duration_s - 20.0).abs() < 1e-3);
+        let at = |t: f32| tl.camera_at(t).unwrap().eye;
+        // 20 m in 16 s of walking: the first 10 m take 8 s, then 4 s standing at the corner.
+        assert!(
+            dist3(at(8.5), at(11.5)) < 0.7,
+            "{:?} {:?}",
+            at(8.5),
+            at(11.5)
+        );
+        let corner = at(10.0);
+        assert!(
+            (corner[0] - 10.0).abs() < 0.3 && corner[2].abs() < 0.3,
+            "{corner:?}"
+        );
+        assert!(dist3(at(14.0), at(10.0)) > 0.5);
+        let end = at(20.0);
+        assert!((end[0] - 10.0).abs() < 1e-3 && (end[2] - 10.0).abs() < 1e-3);
+        // Too short a duration for the pauses is refused.
+        let bad = film(vec![shot(
+            json!({"kind": "walk", "path": [[0, 0], [10, 0]], "duration_s": 3, "pause_at": [{"point": [5, 0], "s": 4}]}),
+        )]);
+        assert!(Timeline::new(&bad, &e).err().unwrap().contains("pauses"));
+    }
+
+    #[test]
+    fn a_walk_looks_away_and_back_without_a_cut() {
+        let ground: &dyn Fn(f32, f32) -> f32 = &flat;
+        let e = env(ground, &[]);
+        let f = film(vec![shot(json!({
+            "kind": "walk", "path": [[0, 0], [20, 0]], "speed_mps": 2, "ease": "none",
+            "look": [{"at_s": 3, "target": [8, 1.6, 20], "hold_s": 2}]
+        }))]);
+        let tl = Timeline::new(&f, &e).unwrap();
+        let dir = |t: f32| {
+            let f = tl.camera_at(t).unwrap();
+            normalize(sub3(f.target, f.eye))
+        };
+        assert!(dir(1.0)[0] > 0.99, "{:?}", dir(1.0));
+        // Held on the target at 4 s: looking towards +Z (south) from x = 8.
+        assert!(dir(4.0)[2] > 0.95, "{:?}", dir(4.0));
+        // Back ahead after the turn.
+        assert!(dir(7.0)[0] > 0.99, "{:?}", dir(7.0));
+        // Turning, not jumping: neighbouring frames differ little.
+        let mut t = 0.0;
+        while t < 8.0 {
+            assert!(dist3(dir(t), dir(t + 0.04)) < 0.12, "{t}");
+            t += 0.04;
+        }
+        // The walk keeps its speed through the look.
+        let (a, b) = (
+            tl.camera_at(3.0).unwrap().eye,
+            tl.camera_at(4.0).unwrap().eye,
+        );
+        assert!((dist3(a, b) - 2.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn lights_white_balance_grade_and_exposure_ease_along_a_shot() {
+        let ground: &dyn Fn(f32, f32) -> f32 = &flat;
+        let e = env(ground, &[]);
+        let f = film(vec![shot(json!({
+            "kind": "hold", "eye": [0, 1.6, 0], "target": [0, 1.6, -5], "duration_s": 10,
+            "lights": [0, 1], "white_balance": [6500, 4500], "grade": ["neutral", "warm"],
+            "exposure_ev": [0, 1]
+        }))]);
+        let tl = Timeline::new(&f, &e).unwrap();
+        let o = |t: f32| tl.camera_at(t).unwrap().overrides;
+        assert_eq!(o(0.0).lights, Some(0.0));
+        assert!((o(5.0).lights.unwrap() - 0.5).abs() < 1e-5);
+        assert!((o(5.0).white_balance.unwrap() - 5500.0).abs() < 1.0);
+        assert_eq!(o(0.0).exposure_ev, Some(0.0));
+        assert!((o(10.0).exposure_ev.unwrap() - 1.0).abs() < 1e-5);
+        assert_eq!(
+            (o(2.5).grade, o(2.5).grade_to),
+            (Some(Grade::Neutral), Some(Grade::Warm))
+        );
+        assert!((o(2.5).grade_mix.unwrap() - 0.25).abs() < 1e-5);
+        let p = o(5.0).render_params();
+        assert_eq!(p["lights"], json!(0.5));
+        assert_eq!(p["grade_to"], json!("warm"));
+        assert_eq!(p["exposure_offset_ev"], json!(0.5));
+        // A single grade is constant; a shot without them leaves the project's own.
+        let g = shot(
+            json!({"kind": "hold", "eye": [0, 1, 0], "target": [0, 1, 1], "duration_s": 1, "grade": "cool"}),
+        );
+        let tl = Timeline::new(&film(vec![g]), &e).unwrap();
+        let o = tl.camera_at(0.5).unwrap().overrides;
+        assert_eq!(
+            (o.grade, o.grade_to, o.lights),
+            (Some(Grade::Cool), None, None)
+        );
+        let why = |v: Value| Shot::from_value(&v, 50.8).unwrap_err();
+        let hold = |extra: (&str, Value)| {
+            let mut v =
+                json!({"kind": "hold", "eye": [0, 1, 0], "target": [0, 1, 1], "duration_s": 1});
+            v[extra.0] = extra.1;
+            v
+        };
+        assert!(why(hold(("lights", json!(2)))).contains("`lights`"));
+        assert!(why(hold(("white_balance", json!(100)))).contains("kelvin"));
+        assert!(why(hold(("exposure_ev", json!(20)))).contains("relative to the automatic"));
     }
 }

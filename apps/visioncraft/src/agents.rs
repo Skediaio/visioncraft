@@ -13,7 +13,6 @@
 //! of the tools with the browser, and unticking it takes them away.
 
 use crate::camera::View;
-use crate::planting_tools::PlantingTools;
 use crate::studio::Studio;
 use crate::ui::Mode;
 use serde_json::{Value, json};
@@ -180,8 +179,8 @@ pub struct WindowHost<'a> {
     pub device: &'a wgpu::Device,
     pub queue: &'a wgpu::Queue,
     pub mode: &'a mut Option<Mode>,
-    pub planting: &'a mut PlantingTools,
-    pub model_selected: &'a mut Option<String>,
+    /// What is selected, and what an agent selects (`selection`).
+    pub selection: &'a mut crate::selection::SelectionState,
     /// Ids of the extensions' modes, which `ui.set` opens like the built-in ones.
     pub extension_modes: &'a [(&'static str, &'static str)],
     pub now: f64,
@@ -306,7 +305,7 @@ const UI_METHODS: &[Method] = &[
     Method {
         name: "ui.get",
         params: "{}",
-        summary: "What the window shows: mode, camera (view, position, target, fov_y_deg), the selected planting and model, lights on, size, and what is still on its way (pending: plants to generate, library downloads, the sky volume).",
+        summary: "What the window shows: mode, camera (view, position, target, fov_y_deg), the selection, lights on, size, and what is still on its way (pending: plants to generate, library downloads, the sky volume). `selection` is what the person has picked, in any mode: {items: [{kind: shape|placement|planting|model|lamp|underlay, id, name, summary (one line: what it is, size, material or species, position), sub?: {edge?, vertex?, index?}}], point?: [x, y, z] (the last ground or surface point the person clicked, metres), revision (bumps on every change)}. A tree picked in a planting is kind `placement`: id is its planting, sub.index its plant number (for planting.replace_placement and planting.remove_placement). `selected` ({planting, model}) is the older form of the same. Poll it and compare `revision` to notice a new selection.",
     },
     Method {
         name: "ui.set",
@@ -320,8 +319,8 @@ const UI_METHODS: &[Method] = &[
     },
     Method {
         name: "ui.select",
-        params: r#"{"planting": string|null, "model": string|null}"#,
-        summary: "Selects a planting (opening Objects mode) or a model in the window; null deselects.",
+        params: r#"{"items": [{"kind": "shape"|"placement"|"planting"|"model"|"lamp"|"underlay", "id": string, "sub": {"edge": integer, "vertex": integer, "index": integer}}]|null, "planting": string|null, "model": string|null, "point": [x, y, z]|null}"#,
+        summary: "Selects one thing in the window as a click would: opens its mode (shape and underlay: Draw with the handles; planting, placement and lamp: Objects; model: the plain view). A plant of a planting is `placement` (id: the planting, sub.index: its number). `items: null` or [] clears; an unknown id is an error. The window selects one thing at a time. `planting` and `model` are the older form. `point` sets the picked point alone. The selection is not part of the project and not an undo step.",
     },
     Method {
         name: "ui.screenshot",
@@ -446,7 +445,8 @@ impl Host for Bound<'_, '_> {
                     "target": h.studio.camera.pivot.to_array(),
                     "fov_y_deg": h.studio.camera.fov_y.to_degrees(),
                 },
-                "selected": {"planting": h.planting.selected, "model": h.model_selected},
+                "selection": h.selection.to_json(h.studio.project(), &h.studio.assets),
+                "selected": h.selection.legacy(),
                 "lightsOn": h.studio.lights_on(),
                 "overlaysInPictures": h.studio.overlays_in_pictures,
                 "textures": h.studio.textures.unwrap_or("auto"),
@@ -563,33 +563,19 @@ impl Host for Bound<'_, '_> {
                 Ok(Value::Null)
             })(),
             "ui.select" => (|| {
-                if let Some(p) = params.get("planting") {
-                    let id = p.as_str();
-                    let g = id
-                        .map(|id| {
-                            h.studio
-                                .project()
-                                .generators
-                                .iter()
-                                .find(|g| g.id() == id)
-                                .cloned()
-                                .ok_or_else(|| format!("no planting `{id}`"))
-                        })
-                        .transpose()?;
-                    let rev = h.studio.session.revision();
-                    h.planting.select_stored(g.as_ref(), rev);
-                    if g.is_some() {
-                        *h.mode = Some(Mode::Objects);
+                let items = ["items", "planting", "model"]
+                    .iter()
+                    .any(|k| params.get(*k).is_some());
+                if items || params.get("point").is_none() {
+                    let keys = crate::selection::parse(h.studio.project(), params)?;
+                    // The mode a click on it would be in; the window opens it after this call.
+                    if let Some(k) = keys.first() {
+                        *h.mode = k.mode();
                     }
+                    h.selection.set(keys);
                 }
-                if let Some(m) = params.get("model") {
-                    let id = m.as_str();
-                    if let Some(id) = id
-                        && !h.studio.project().models.iter().any(|m| m.id == id)
-                    {
-                        return Err(format!("no model `{id}`"));
-                    }
-                    *h.model_selected = id.map(str::to_string);
+                if let Some(p) = params.get("point") {
+                    h.selection.set_point(vec3(p).map(|p| p.to_array()));
                 }
                 Ok(Value::Null)
             })(),
@@ -630,7 +616,7 @@ pub fn serve_headless(port: u16, token_file: &str, seconds: f64) -> Result<(), S
         return Err(e.clone());
     }
     eprintln!("agents: listening on 127.0.0.1:{port}");
-    let (mut mode, mut planting, mut model) = (None, PlantingTools::default(), None);
+    let (mut mode, mut selection) = (None, crate::selection::SelectionState::default());
     let start = std::time::Instant::now();
     while start.elapsed().as_secs_f64() < seconds {
         let now = start.elapsed().as_secs_f64();
@@ -639,8 +625,7 @@ pub fn serve_headless(port: u16, token_file: &str, seconds: f64) -> Result<(), S
             device: &device,
             queue: &queue,
             mode: &mut mode,
-            planting: &mut planting,
-            model_selected: &mut model,
+            selection: &mut selection,
             extension_modes: &[],
             now,
         };
@@ -725,6 +710,8 @@ pub fn base64(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::base64;
+    use serde_json::{Value, json};
+    use visioncraft_core::{Project, Session};
 
     #[test]
     fn base64_matches_the_standard() {
@@ -744,5 +731,153 @@ mod tests {
         assert_eq!(mode_id(m.unwrap()), "example.pipe-length");
         assert_eq!(mode_of("draw", &ext), Some(Mode::Draw));
         assert_eq!(mode_of("example.other", &ext), None);
+    }
+
+    /// A window host over a headless device, or `None` where there is no adapter.
+    fn with_host(project: Project, f: impl FnOnce(&mut super::Bound<'_, '_>)) {
+        let Ok((device, queue)) = pollster::block_on(visioncraft_render::headless_device()) else {
+            return;
+        };
+        let renderer =
+            visioncraft_render::Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let mut studio = super::Studio::new(renderer, project);
+        let (mut mode, mut selection) = (None, crate::selection::SelectionState::default());
+        let mut host = super::WindowHost {
+            studio: &mut studio,
+            device: &device,
+            queue: &queue,
+            mode: &mut mode,
+            selection: &mut selection,
+            extension_modes: &[],
+            now: 0.0,
+        };
+        let mut state = super::HostState::new(visioncraft_automation::Access::any());
+        f(&mut super::Bound {
+            host: &mut host,
+            state: &mut state,
+        });
+    }
+
+    fn garden() -> Project {
+        let mut s = Session::new(Project::default());
+        for (c, p) in [
+            (
+                "terrace.add",
+                json!({"name": "Patio", "outline": [[0, 0], [4, 0], [4, 3], [0, 3]], "floor": -0.3}),
+            ),
+            (
+                "planting.add_cluster",
+                json!({"name": "Grove", "center": [8, 8], "radius_m": 2, "count": 4,
+                    "asset_palette": [{"asset": "flora:betula-pendula", "weight": 1}]}),
+            ),
+            (
+                "light.add",
+                json!({"name": "Lamp", "position": [1, 2, 1], "kind": {"type": "point"}}),
+            ),
+        ] {
+            s.run(c, p).unwrap();
+        }
+        s.project().clone()
+    }
+
+    #[test]
+    fn what_ui_select_selects_ui_get_reads_back() {
+        use super::Host;
+        with_host(garden(), |h| {
+            let lamp = h.host.studio.project().lights[0].id.clone();
+            let cases = [
+                (
+                    json!({"kind": "shape", "id": "S1", "sub": {"vertex": 1}}),
+                    "terrace, floor at -0.3 m",
+                    Some("draw"),
+                ),
+                (
+                    json!({"kind": "planting", "id": "g1"}),
+                    "cluster",
+                    Some("objects"),
+                ),
+                (
+                    json!({"kind": "placement", "id": "g1", "sub": {"index": 2}}),
+                    "plant number 2 of 4",
+                    Some("objects"),
+                ),
+                (
+                    json!({"kind": "lamp", "id": lamp}),
+                    "point light",
+                    Some("objects"),
+                ),
+            ];
+            let mut last = 0;
+            for (item, summary, mode) in cases {
+                let r = h.call("ui.select", &json!({"items": [item.clone()]}));
+                assert_eq!(r, Some(Ok(Value::Null)), "{item}");
+                let got = h.call("ui.get", &json!({})).unwrap().unwrap();
+                let sel = &got["selection"];
+                assert_eq!(sel["items"].as_array().unwrap().len(), 1, "{sel}");
+                let it = &sel["items"][0];
+                assert_eq!(it["kind"], item["kind"]);
+                assert_eq!(it["id"], item["id"]);
+                assert_eq!(it.get("sub"), item.get("sub"));
+                assert!(it["summary"].as_str().unwrap().contains(summary), "{it}");
+                assert!(!it["name"].as_str().unwrap().is_empty());
+                assert_eq!(got["mode"], json!(mode));
+                let rev = sel["revision"].as_u64().unwrap();
+                assert!(rev > last, "the revision bumps: {rev} after {last}");
+                last = rev;
+            }
+            // The older fields follow.
+            let r = h.call("ui.select", &json!({"planting": "g1"}));
+            assert_eq!(r, Some(Ok(Value::Null)));
+            let got = h.call("ui.get", &json!({})).unwrap().unwrap();
+            assert_eq!(got["selected"]["planting"], "g1");
+            assert_eq!(got["selection"]["items"][0]["kind"], "planting");
+            // null and [] clear.
+            for clear in [json!({"items": null}), json!({"items": []})] {
+                h.call("ui.select", &json!({"planting": "g1"}));
+                h.call("ui.select", &clear);
+                let got = h.call("ui.get", &json!({})).unwrap().unwrap();
+                assert_eq!(got["selection"]["items"], json!([]));
+                assert_eq!(got["selected"]["planting"], Value::Null);
+            }
+        });
+    }
+
+    #[test]
+    fn ui_select_refuses_unknown_ids_and_keeps_the_selection() {
+        use super::Host;
+        with_host(garden(), |h| {
+            h.call(
+                "ui.select",
+                &json!({"items": [{"kind": "planting", "id": "g1"}]}),
+            );
+            let before = h.call("ui.get", &json!({})).unwrap().unwrap()["selection"].clone();
+            let e = h
+                .call(
+                    "ui.select",
+                    &json!({"items": [{"kind": "shape", "id": "S9"}]}),
+                )
+                .unwrap()
+                .unwrap_err();
+            assert!(e.contains("no shape `S9`"), "{e}");
+            assert_eq!(
+                h.call("ui.get", &json!({})).unwrap().unwrap()["selection"],
+                before
+            );
+        });
+    }
+
+    #[test]
+    fn the_picked_point_is_set_beside_the_items() {
+        use super::Host;
+        with_host(garden(), |h| {
+            h.call(
+                "ui.select",
+                &json!({"items": [{"kind": "planting", "id": "g1"}]}),
+            );
+            h.call("ui.select", &json!({"point": [3.5, 0.0, -2.0]}));
+            let sel = h.call("ui.get", &json!({})).unwrap().unwrap()["selection"].clone();
+            assert_eq!(sel["point"], json!([3.5, 0.0, -2.0]));
+            assert_eq!(sel["items"][0]["id"], "g1", "the items stay");
+        });
     }
 }

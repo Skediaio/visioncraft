@@ -19,7 +19,7 @@ pub fn recipes() -> Vec<Value> {
 #[test]
 fn every_recipe_of_the_guide_runs() {
     let recipes = recipes();
-    assert_eq!(recipes.len(), 41);
+    assert_eq!(recipes.len(), 42);
     for (n, recipe) in recipes.into_iter().enumerate() {
         let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("recipe-{n}"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -48,6 +48,8 @@ fn every_recipe_of_the_guide_runs() {
             .unwrap()
             .iter()
             .filter(|s| s["id"] != "view.render" && s["id"] != "film.render")
+            // A contact sheet is drawn.
+            .filter(|s| !(s["id"] == "film.preview" && s["params"]["sheet"] == true))
             .cloned()
             .collect();
         let line = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "command_batch", "arguments": args}});
@@ -534,6 +536,64 @@ fn every_recipe_of_the_guide_runs() {
                 assert_eq!(inspect["sea"]["wave_height_m"], 0.875, "{report}");
                 let count = inspect["generators"][0]["count"].as_u64().unwrap();
                 assert!((200..450).contains(&count), "{count} plants");
+            }
+            42 => {
+                // The walk is planned round the pond and the hedge and keeps its 19.6 s.
+                let walk = &results[3]["result"];
+                assert!(
+                    walk["route"]["length_m"].as_f64().unwrap() > 20.0,
+                    "{report}"
+                );
+                assert_eq!(walk["resolved"].as_array().unwrap().len(), 2, "{report}");
+                let at = &results[11]["result"];
+                assert!(
+                    (at["duration_s"].as_f64().unwrap() - 19.6).abs() < 0.01,
+                    "{report}"
+                );
+                // At 11 s the camera stands at the corner, looking towards the pond.
+                let pos = &at["camera"]["position"];
+                assert!((pos[0].as_f64().unwrap() - 4.7).abs() < 0.3, "{report}");
+                assert!(
+                    at["camera"]["target"][0].as_f64().unwrap() > 7.0,
+                    "{report}"
+                );
+                // The drone orbit is framed from the plot and starts where the reveal ends.
+                let orbit = &results[5]["result"];
+                assert!(
+                    orbit["framing"]["radius_m"].as_f64().unwrap() > 20.0,
+                    "{report}"
+                );
+                let reveal_end = &results[4]["result"]["shot"]["path"][4];
+                let eye = [
+                    orbit["shot"]["center"][0].as_f64().unwrap(),
+                    orbit["shot"]["center"][1].as_f64().unwrap()
+                        + orbit["shot"]["height_m"].as_f64().unwrap(),
+                    orbit["shot"]["center"][2].as_f64().unwrap()
+                        + orbit["shot"]["radius_m"].as_f64().unwrap(),
+                ];
+                for k in 0..3 {
+                    assert!(
+                        (reveal_end[k].as_f64().unwrap() - eye[k]).abs() < 0.01,
+                        "{report}"
+                    );
+                }
+                // The plan reveal ends high above the plot.
+                let top = &results[8]["result"]["shot"]["path"][4];
+                assert!(top[1].as_f64().unwrap() > 30.0, "{report}");
+                // The straight way to the terrace crosses the pond's edge; a route goes round.
+                let clear = &results[9]["result"];
+                assert_eq!(clear["clear"], false, "{report}");
+                assert!(
+                    clear["route"]["path"].as_array().unwrap().len() > 2,
+                    "{report}"
+                );
+                // The ray at crown height meets the birch's crown.
+                let hit = &results[10]["result"];
+                assert_eq!(
+                    (hit["owner"].as_str(), hit["part"].as_str()),
+                    (Some("g4#0"), Some("crown")),
+                    "{report}"
+                );
             }
             10 => assert!(
                 results[5]["result"]["elevation_deg"].as_f64().unwrap()

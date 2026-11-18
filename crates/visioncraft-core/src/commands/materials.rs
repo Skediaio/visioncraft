@@ -211,8 +211,11 @@ fn update(project: &mut Project, params: &Value) -> Result<Value, CommandError> 
         ];
         for (k, v) in given {
             if !known.contains(&k.as_str()) {
-                let near = crate::spec::nearest(&k, known.into_iter()).unwrap_or("");
-                return Err(bad(&format!("unknown map `{k}`; did you mean `{near}`?")));
+                let hint = crate::spec::nearest(&k, known.into_iter()).map_or_else(
+                    || format!("; the maps are {}", known.join(", ")),
+                    |n| format!("; did you mean `{n}`?"),
+                );
+                return Err(bad(&format!("unknown map `{k}`{hint}")));
             }
             match v {
                 Value::Null => maps.as_object_mut().expect("an object").remove(&k),

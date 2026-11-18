@@ -120,7 +120,7 @@ pub(super) fn register(s: &mut Session) {
                 param("grade", T::String, "A colour grade before the tone map: neutral (none), warm (a little warmer and richer), cool (a little cooler and calmer) or soft (lower contrast and colour, a matte print).").default(json!("neutral")),
                 param("vignette", T::Number, "The lens' light fall-off towards the corners 0..1, before the tone map (highlights stay bright): 0.3 a light vignette (about half a stop off the corners), 1 two stops. In the live view and every picture. 0: none.").default(json!(0)),
                 param("grain", T::Number, "Film grain 0..1 after the tone map: noise in the luminance only (no colour speckle), most in the mid-tones, none in black; 0.2 is a fine grain, 0.5 a fast film. In the live view and every picture. 0: none.").default(json!(0)),
-                param("exposure_ev", T::Number, "Exposure offset in stops; null for automatic exposure."),
+                param("exposure_ev", T::Number, "A fixed exposure as an EV100 value, not a correction: lower is brighter (about 15 in full sun, 13 under a low sun), and 0 is a white frame in daylight; null for automatic exposure, the default. For stops relative to the automatic exposure (0 = no correction) use a film shot's `exposure_ev` or view.render's `exposure_offset_ev`."),
                 param("sky", T::Object, "{type: \"physical\"} or {type: \"hdri\", id: string, rotation_deg: number, intensity: number >= 0}.")
                     .default(json!({"type": "physical"})),
                 param("haze", T::Number, "Atmospheric haze as a turbidity: 1 pure air, 2.5 a clear day (about 30 km visibility), 6 hazy (9 km), 20 misty (2.5 km); 0 turns the haze off.").default(json!(2.5)),

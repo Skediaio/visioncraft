@@ -4,7 +4,7 @@
 use crate::ImportedModel;
 use crate::material::Lawn3d;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::hash::{BuildHasherDefault, Hasher};
 
 /// Hard cap on the items one generator evaluates to, so a typo in a density cannot freeze a browser.
@@ -26,6 +26,52 @@ pub struct Placement {
     /// Index of the [`PlantLayer`] that made it; `None` for a generator without layers.
     #[serde(default)]
     pub layer: Option<u32>,
+}
+
+/// What is changed about one plant of a generator (see [`Generator::overrides`]).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlacementOverride {
+    /// Another species or object in its place.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asset: Option<String>,
+    /// The plant is left out.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub removed: bool,
+    /// Its scale, instead of the generator's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale: Option<f32>,
+    /// Moved by this much in x and z (m).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<[f32; 2]>,
+}
+
+/// Per-plant edits by the plant's number in what the generator evaluates to (before any edit).
+/// The generator is deterministic, so a number holds as long as its recipe does.
+pub type Overrides = BTreeMap<u32, PlacementOverride>;
+
+/// Serde for [`Overrides`] inside a generator: JSON keys are strings, and a generator sits in an
+/// internally tagged enum, whose buffered map cannot turn a string key into a number by itself.
+mod overrides_keyed {
+    use super::{Overrides, PlacementOverride};
+    use serde::de::Error;
+    use serde::{Deserialize, Deserializer, Serializer};
+    use std::collections::BTreeMap;
+
+    pub fn serialize<S: Serializer>(o: &Overrides, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_map(o.iter().map(|(k, v)| (k.to_string(), v)))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Overrides, D::Error> {
+        BTreeMap::<String, PlacementOverride>::deserialize(d)?
+            .into_iter()
+            .map(|(k, v)| {
+                k.parse::<u32>()
+                    .map(|k| (k, v))
+                    .map_err(|_| D::Error::custom(format!("`{k}` is not a plant number")))
+            })
+            .collect()
+    }
 }
 
 /// One species of a palette. `asset` is, by convention, one of: a catalogue asset id, `flora:<id>`
@@ -140,6 +186,15 @@ pub struct SplineMass {
     /// the rule existed, so they do not change by themselves.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub avoid_buildings: bool,
+    /// Edits of single plants by their number in the generator's own plants (`planting.replace_placement`
+    /// and friends): a species swapped, a plant taken out, moved or resized. Applied after the
+    /// generator evaluates, so the recipe stays; not written while empty.
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        with = "overrides_keyed"
+    )]
+    pub overrides: Overrides,
 }
 
 /// Points inside a polygon on a jittered grid anchored at the world origin: a point depends only
@@ -180,6 +235,15 @@ pub struct AreaScatter {
     /// plants (from its own species list) and the palette, density and layers are not used.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub border: Option<crate::border::Border>,
+    /// Edits of single plants by their number in the generator's own plants (`planting.replace_placement`
+    /// and friends): a species swapped, a plant taken out, moved or resized. Applied after the
+    /// generator evaluates, so the recipe stays; not written while empty.
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        with = "overrides_keyed"
+    )]
+    pub overrides: Overrides,
 }
 
 fn is_zero_f32(v: &f32) -> bool {
@@ -250,6 +314,15 @@ pub struct MixedBrush {
     /// the rule existed, so they do not change by themselves.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub avoid_buildings: bool,
+    /// Edits of single plants by their number in the generator's own plants (`planting.replace_placement`
+    /// and friends): a species swapped, a plant taken out, moved or resized. Applied after the
+    /// generator evaluates, so the recipe stays; not written while empty.
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        with = "overrides_keyed"
+    )]
+    pub overrides: Overrides,
 }
 
 /// Fills named faces of a model or shape with plants; needs the owner's mesh, see
@@ -305,6 +378,15 @@ pub struct Cluster {
     pub scale_max: f32,
     pub random_rotation: bool,
     pub seed: u64,
+    /// Edits of single plants by their number in the generator's own plants (`planting.replace_placement`
+    /// and friends): a species swapped, a plant taken out, moved or resized. Applied after the
+    /// generator evaluates, so the recipe stays; not written while empty.
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        with = "overrides_keyed"
+    )]
+    pub overrides: Overrides,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -342,6 +424,27 @@ impl Generator {
 
     pub fn layer(&self) -> &str {
         each!(self, g => &g.layer)
+    }
+
+    /// The edits of single plants; none for a single plant and a surface fill.
+    pub fn overrides(&self) -> Option<&Overrides> {
+        match self {
+            Self::SplineMass(g) => Some(&g.overrides),
+            Self::AreaScatter(g) => Some(&g.overrides),
+            Self::MixedBrush(g) => Some(&g.overrides),
+            Self::Cluster(g) => Some(&g.overrides),
+            Self::Single(_) | Self::SurfaceFill(_) => None,
+        }
+    }
+
+    pub fn overrides_mut(&mut self) -> Option<&mut Overrides> {
+        match self {
+            Self::SplineMass(g) => Some(&mut g.overrides),
+            Self::AreaScatter(g) => Some(&mut g.overrides),
+            Self::MixedBrush(g) => Some(&mut g.overrides),
+            Self::Cluster(g) => Some(&mut g.overrides),
+            Self::Single(_) | Self::SurfaceFill(_) => None,
+        }
     }
 
     /// The age its plants have when planted, if set (else each species' usual age).
@@ -415,6 +518,17 @@ impl Generator {
             .is_some_and(|a| !(a.is_finite() && (0.0..=200.0).contains(&a)))
         {
             return Err("planted_age_years: 0..200".into());
+        }
+        for o in self.overrides().into_iter().flat_map(|o| o.values()) {
+            if o.scale.is_some_and(|s| !(s.is_finite() && s > 0.0))
+                || o.offset.is_some_and(|d| !d.iter().all(|c| c.is_finite()))
+                || o.asset.as_deref().is_some_and(|a| a.trim().is_empty())
+            {
+                return Err(
+                    "a plant's edit needs a scale above zero, a finite offset and a named asset"
+                        .into(),
+                );
+            }
         }
         let ok = |c: bool, why: &str| if c { Ok(()) } else { Err(why.to_string()) };
         let finite = |v: &[f32]| v.iter().all(|c| c.is_finite());
@@ -1177,9 +1291,61 @@ fn spread_variants(ps: &mut [Placement]) {
 }
 
 pub fn evaluate(generator: &Generator, ground: &dyn Fn(f32, f32) -> Option<f32>) -> Evaluation {
+    let mut e = evaluate_raw(generator, ground);
+    if generator.overrides().is_some_and(|o| !o.is_empty()) {
+        e.placements = numbered(generator, e.placements)
+            .into_iter()
+            .map(|(_, p)| p)
+            .collect();
+    }
+    e
+}
+
+/// What the generator plants before its plants are edited: the numbering of
+/// [`Generator::overrides`].
+pub fn evaluate_raw(generator: &Generator, ground: &dyn Fn(f32, f32) -> Option<f32>) -> Evaluation {
     let mut e = evaluate_forms(generator, ground);
     spread_variants(&mut e.placements);
     e
+}
+
+/// [`evaluate`] with each plant's number, the one `planting.replace_placement` and
+/// `planting.remove_placement` count by: those taken out are missing from the list, the others
+/// keep their numbers.
+pub fn evaluate_numbered(
+    generator: &Generator,
+    ground: &dyn Fn(f32, f32) -> Option<f32>,
+) -> (Vec<(usize, Placement)>, bool) {
+    let e = evaluate_raw(generator, ground);
+    (numbered(generator, e.placements), e.truncated)
+}
+
+/// The plants with the generator's edits applied, each with its number.
+fn numbered(generator: &Generator, placements: Vec<Placement>) -> Vec<(usize, Placement)> {
+    let none = Overrides::new();
+    let edits = generator.overrides().unwrap_or(&none);
+    placements
+        .into_iter()
+        .enumerate()
+        .filter_map(|(i, mut p)| {
+            if let Some(o) = edits.get(&(i as u32)) {
+                if o.removed {
+                    return None;
+                }
+                if let Some(a) = &o.asset {
+                    p.asset.clone_from(a);
+                }
+                if let Some(s) = o.scale {
+                    p.scale = s;
+                }
+                if let Some(d) = o.offset {
+                    p.position[0] += d[0];
+                    p.position[2] += d[1];
+                }
+            }
+            Some((i, p))
+        })
+        .collect()
 }
 
 /// [`evaluate`] with each placement's variant as drawn.
@@ -1914,6 +2080,7 @@ mod tests {
 
     fn area(outline: Vec<[f32; 2]>, density: f32) -> AreaScatter {
         AreaScatter {
+            overrides: Default::default(),
             id: "g1".into(),
             name: "Scatter".into(),
             planted_age_years: None,
@@ -2044,6 +2211,7 @@ mod tests {
         let e = evaluate(&g, &flat);
         assert!(e.truncated && e.placements.len() == MAX_PLACEMENTS);
         let line = Generator::SplineMass(SplineMass {
+            overrides: Default::default(),
             id: "g".into(),
             name: "Hedge".into(),
             planted_age_years: None,
@@ -2067,6 +2235,7 @@ mod tests {
 
     fn spline(closed: bool, spacing: Spacing) -> SplineMass {
         SplineMass {
+            overrides: Default::default(),
             id: "g2".into(),
             name: "Hedge".into(),
             planted_age_years: None,
@@ -2188,6 +2357,7 @@ mod tests {
             erase,
         };
         let mut g = MixedBrush {
+            overrides: Default::default(),
             id: "g3".into(),
             name: "Brush".into(),
             planted_age_years: None,
@@ -2249,6 +2419,7 @@ mod tests {
     #[test]
     fn cluster_is_within_radius_and_centre_weighted() {
         let g = Generator::Cluster(Cluster {
+            overrides: Default::default(),
             id: "g4".into(),
             name: "Clump".into(),
             planted_age_years: None,
@@ -2752,6 +2923,7 @@ mod layer_tests {
 
     fn hectare_brush(layers: Vec<PlantLayer>) -> Generator {
         Generator::MixedBrush(MixedBrush {
+            overrides: Default::default(),
             id: "g1".into(),
             name: "Forest".into(),
             planted_age_years: None,
@@ -2788,6 +2960,7 @@ mod layer_tests {
         {
             let n = preset.layers.len();
             let g = Generator::MixedBrush(MixedBrush {
+                overrides: Default::default(),
                 id: "g1".into(),
                 name: preset.name.clone(),
                 planted_age_years: None,
@@ -2900,6 +3073,7 @@ mod layer_tests {
     fn layered_area_and_fill_work_and_validate() {
         let flat = |_: f32, _: f32| None;
         let area = Generator::AreaScatter(AreaScatter {
+            overrides: Default::default(),
             id: "g2".into(),
             name: "A".into(),
             planted_age_years: None,

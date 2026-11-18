@@ -72,6 +72,15 @@ pub struct RenderRequest {
     pub photo: Option<PhotoRequest>,
     /// The animation clock (s) the picture is taken at: wind and water move with it.
     pub animation_s: f64,
+    /// How much of the lamps' light is on, 0..1 (1: all of it; whether the lamps are on at all
+    /// is the project's `view.lights` or the sun's).
+    pub lamp_level: f32,
+    /// Exposure compensation in stops relative to the automatic exposure: 0 none, positive
+    /// brighter.
+    pub exposure_offset_ev: f32,
+    /// A second grade mixed in: the grade and how much of it, 0..1 (the project's grade is the
+    /// first).
+    pub grade_mix: Option<(visioncraft_core::Grade, f32)>,
     /// The project's image files (plan underlays, wall photos) by their `file` (see
     /// [`HostState::images`]).
     pub images: Vec<(String, Arc<[u8]>)>,

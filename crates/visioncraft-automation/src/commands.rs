@@ -80,7 +80,7 @@ fn host_doc(
 /// The host's own commands, documented exactly.
 pub fn host_docs() -> Vec<CommandDoc> {
     let time = "{year?, month?, day?, hour?}: local time at the site";
-    let camera = "{position: [x, y, z], target: [x, y, z], fov_y_deg? = 50}";
+    let camera = "{position: [x, y, z] or a reference, target: [x, y, z] or a reference (a shape id, a planting such as g4 or g4#12, `plot`, a name such as \"Pond\": its centre), fov_y_deg? = 50}";
     vec![
         host_doc(
             "agent.log",
@@ -220,7 +220,7 @@ pub fn host_docs() -> Vec<CommandDoc> {
         host_doc(
             "query.raycast",
             "Ray Cast",
-            "The nearest surface a ray hits: models, shapes and terrain on visible layers. Not a hit is {hit: false}.",
+            "The nearest surface a ray hits: models, shapes and terrain on visible layers, and with `plants` the crowns (ellipsoids) and trunks (cylinders) of the plantings as the growth model sizes them. Not a hit is {hit: false}.",
             vec![
                 p(
                     "origin",
@@ -240,9 +240,82 @@ pub fn host_docs() -> Vec<CommandDoc> {
                     &[],
                     "Which way it goes; any length but zero",
                 ),
+                p(
+                    "plants",
+                    "boolean",
+                    None,
+                    false,
+                    Some("false"),
+                    &[],
+                    "Also hit plants: each plant of the visible plantings has a crown (an ellipsoid; trees, conifers, shrubs and hedges) and a trunk (a cylinder; trees and conifers)",
+                ),
+                p(
+                    "years",
+                    "number",
+                    Some("years"),
+                    false,
+                    Some("the view's years, else full grown"),
+                    &[],
+                    "With `plants`: the years after planting the plants are sized at",
+                ),
             ],
-            "{hit, owner, kind: model|shape|terrain, face, body, point, normal, distance}",
+            "{hit, owner, kind: model|shape|terrain|plant, face, body, point, normal, distance; a plant: owner `g4#12` (planting and plant), part crown|trunk, planting, name, asset}",
             json!({"origin": [0, 20, 0], "direction": [0, -1, 0]}),
+            false,
+        ),
+        host_doc(
+            "query.clearance",
+            "Clearance",
+            "Whether one can walk and see from one place to another: the straight line on the ground between `from` and `to` against what a person cannot walk through (houses and blocks, walls and fences, water, hedges and shrubs, trunks; as plants are at `years`), and an eye-high line of sight against the same and the crowns. When something is in the way the answer plans a route round it. `from` and `to` are [x, z], [x, y, z] or a reference (a shape id, a planting, a name: its centre).",
+            vec![
+                p(
+                    "from",
+                    "[x, z] or a name",
+                    Some("m"),
+                    true,
+                    None,
+                    &[],
+                    "Where it starts: [x, z], [x, y, z] or a reference",
+                ),
+                p(
+                    "to",
+                    "[x, z] or a name",
+                    Some("m"),
+                    true,
+                    None,
+                    &[],
+                    "Where it ends",
+                ),
+                p(
+                    "clearance_m",
+                    "number",
+                    Some("m"),
+                    false,
+                    Some("0.4"),
+                    &[],
+                    "How near an obstacle counts as in the way (half the width of a person)",
+                ),
+                p(
+                    "eye_height_m",
+                    "number",
+                    Some("m"),
+                    false,
+                    Some("1.6"),
+                    &[],
+                    "Eye height for the line of sight",
+                ),
+                p(
+                    "years",
+                    "number",
+                    Some("years"),
+                    false,
+                    Some("the view's years, else full grown"),
+                    &[],
+                    "The years after planting the plants are sized at",
+                ),
+            ],
+            "{from, to, length_m, clearance_m, clear, crossings: [{what, at, distance_m}], nearest: {what, distance_m, at}, route?: {path, length_m, warnings}, sight: {clear, blocked_by?, kind?, at?}}",
+            json!({"from": [5, 22.5], "to": [16, 22.5]}),
             false,
         ),
         host_doc(
@@ -606,15 +679,51 @@ pub fn host_docs() -> Vec<CommandDoc> {
                     &[],
                     "Film time in seconds, 0 to the duration (later is the last frame); without it only the shot list comes back",
                 ),
+                p(
+                    "sheet",
+                    "boolean",
+                    None,
+                    false,
+                    Some("false"),
+                    &[],
+                    "Also draw a contact sheet: the film at evenly spaced times, small, tiled on one picture (over MCP an image block, so an agent can see the film; the answer's `sheet` has the times and the layout). Needs the renderer (a GPU)",
+                ),
+                p(
+                    "frames",
+                    "integer",
+                    None,
+                    false,
+                    Some("9"),
+                    &[],
+                    "With `sheet`: how many pictures on it, 1 to 16",
+                ),
+                p(
+                    "width",
+                    "integer",
+                    Some("px"),
+                    false,
+                    Some("320"),
+                    &[],
+                    "With `sheet`: the width of one picture, 64 to 640 (16:9)",
+                ),
+                p(
+                    "quality",
+                    "string",
+                    None,
+                    false,
+                    Some("\"low\""),
+                    &["low", "medium", "high", "ultra", "photo"],
+                    "With `sheet`: the renderer's quality preset, as view.render",
+                ),
             ],
-            "{id, name, fps, duration_s, frame_count, shots: [{index, kind, start_s, duration_s}], t?, shot?, progress?, camera?: {position, target, fov_y_deg}, overrides?: {time_of_day?, date?, season?, years?, snow?, wetness?, rain?, haze?, mist?, gustiness?, shafts?}, time?, sun?}",
+            "{id, name, fps, duration_s, frame_count, shots: [{index, kind, start_s, duration_s}], t?, shot?, progress?, camera?: {position, target, fov_y_deg}, overrides?: {time_of_day?, date?, season?, years?, snow?, wetness?, rain?, haze?, mist?, gustiness?, shafts?, lights?, white_balance?, grade?, grade_to?, grade_mix?, exposure_ev?}, time?, sun?, with `sheet`: mime, base64, sheet: {columns, frames, cell_px, size_px, times_s, shots, order}}",
             json!({"id": "f1", "t": 2.5}),
             false,
         ),
         host_doc(
             "film.render",
             "Render Film",
-            "Draws a film as numbered PNGs `frame_00000.png`... in a folder beneath the write root, one view.render per frame: the film's camera, the animation clock set to the film time (so wind and water move) and the shot's time of day, date or season, years, snow, wetness, rain, haze, mist, gustiness and shafts for that picture only; the project does not change. Frames are counted from 0 in what is drawn, so `every` 5 gives a film of fps / 5. At most 10000 frames per call: render a long film in parts (`from`, `to`). A video needs a program such as ffmpeg: the result's `ffmpeg` is the command to run on the frames.",
+            "Draws a film as numbered PNGs `frame_00000.png`... in a folder beneath the write root, one view.render per frame: the film's camera, the animation clock set to the film time (so wind and water move) and the shot's time of day, date or season, years, snow, wetness, rain, haze, mist, gustiness, shafts, lamp light, white balance, grade and exposure compensation for that picture only; the project does not change. Frames are counted from 0 in what is drawn, so `every` 5 gives a film of fps / 5. At most 10000 frames per call: render a long film in parts (`from`, `to`). A video needs a program such as ffmpeg: the result's `ffmpeg` is the command to run on the frames.",
             vec![
                 p("id", "string", None, true, None, &[], "Film id"),
                 p(
@@ -650,8 +759,8 @@ pub fn host_docs() -> Vec<CommandDoc> {
                     None,
                     false,
                     Some("\"high\""),
-                    &["low", "medium", "high", "ultra"],
-                    "The renderer's quality preset, as view.render",
+                    &["low", "medium", "high", "ultra", "photo"],
+                    "The renderer's quality preset, as view.render (photo averages samples)",
                 ),
                 p(
                     "from",
@@ -743,8 +852,17 @@ pub fn host_docs() -> Vec<CommandDoc> {
                     &[],
                     "Film grain 0..1",
                 ),
+                p(
+                    "preview",
+                    "string",
+                    None,
+                    false,
+                    Some("not set"),
+                    &["sheet"],
+                    "\"sheet\": also return a contact sheet of up to nine of the frames drawn (over MCP an image block), so a film can be seen without any other tool",
+                ),
             ],
-            "{dir, frames, framePattern, fps, width, height, duration_s, first_t, last_t, renderer, ffmpeg}",
+            "{dir, frames, framePattern, fps, width, height, duration_s, first_t, last_t, renderer, ffmpeg, with preview: mime, base64, sheet}",
             json!({"id": "f1", "dir": "frames", "width": 640, "height": 360, "every": 5}),
             false,
         ),
@@ -996,6 +1114,42 @@ pub fn host_docs() -> Vec<CommandDoc> {
                     &["neutral", "warm", "cool", "soft"],
                     "Colour grade for this picture only",
                 ),
+                p(
+                    "grade_to",
+                    "string",
+                    None,
+                    false,
+                    Some("not set"),
+                    &["neutral", "warm", "cool", "soft"],
+                    "A second grade mixed over `grade` (or the project's) by `grade_mix`: how a film eases from one look to another",
+                ),
+                p(
+                    "grade_mix",
+                    "number",
+                    None,
+                    false,
+                    Some("0.5"),
+                    &[],
+                    "With `grade_to`: its share, 0 to 1",
+                ),
+                p(
+                    "lights",
+                    "any",
+                    None,
+                    false,
+                    Some("the project's"),
+                    &[],
+                    "The lamps for this picture only: true, false or the share of their light, 0 to 1 (a fade; any value forces the lamps on or off, 0 off)",
+                ),
+                p(
+                    "exposure_offset_ev",
+                    "number",
+                    Some("EV"),
+                    false,
+                    Some("0"),
+                    &[],
+                    "Exposure compensation in stops relative to the automatic exposure (0 none, +1 one stop brighter), -8 to 8. Not view.set's exposure_ev, which is an absolute exposure value (0 is white in daylight)",
+                ),
             ],
             "{path? | mime, base64; width, height, camera, time, years, ...the renderer's info}",
             json!({"width": 960, "height": 540, "viewpoint": "From the gate"}),
@@ -1123,14 +1277,27 @@ pub fn execute(host: &mut dyn Host, id: &str, params: &Value) -> Result<Value, S
             Ok(inspect::inspect(session, state, &v))
         }
         "query.raycast" => {
-            Fields::new(id, "parameter", Some(params), &["origin", "direction"])?;
+            let a = Fields::new(
+                id,
+                "parameter",
+                Some(params),
+                &["origin", "direction", "plants", "years"],
+            )?;
             let origin = need::<[f32; 3]>(id, params, "origin")?;
             let dir = need::<[f32; 3]>(id, params, "direction")?;
             if dir.iter().all(|c| *c == 0.0) {
                 return Err(format!("{id}: `direction` must not be [0, 0, 0]"));
             }
+            // `plants`: the crowns (ellipsoids) and trunks (cylinders) of the plantings too, as
+            // they are `years` after planting (the view's years; else full grown).
+            let plants = if a.bool("plants")?.unwrap_or(false) {
+                let years = a.number("years")?.map(|y| y as f32);
+                Some(years.or(host.session().project().view.years))
+            } else {
+                None
+            };
             let (session, state) = host.parts();
-            Ok(inspect::raycast_json(session, state, origin, dir))
+            Ok(inspect::raycast_json(session, state, origin, dir, plants))
         }
         "query.quantities" => {
             Fields::new(id, "parameter", Some(params), &["ids", "layer"])?;
@@ -1303,13 +1470,74 @@ pub fn execute(host: &mut dyn Host, id: &str, params: &Value) -> Result<Value, S
                 .collect();
             Ok(json!({ "presets": presets }))
         }
-        "view.render" => view_render(host, params),
+        "view.render" => {
+            let params = resolve_camera(host, params)?;
+            view_render(host, &params)
+        }
+        "film.add_shot" | "film.update_shot" | "film.orbit" | "film.flythrough" | "film.reveal"
+        | "viewpoint.add" | "viewpoint.update" => run_resolved(host, id, params),
+        "query.clearance" => {
+            let a = Fields::new(
+                id,
+                "parameter",
+                Some(params),
+                &["from", "to", "clearance_m", "eye_height_m", "years"],
+            )?;
+            let (from, to) = (
+                a.get("from").ok_or_else(|| a.missing("from"))?,
+                a.get("to").ok_or_else(|| a.missing("to"))?,
+            );
+            let q = inspect::ClearanceQuery {
+                from,
+                to,
+                clearance_m: a.number("clearance_m")?.map(|c| c as f32),
+                eye_height_m: a.number("eye_height_m")?.map_or(1.6, |c| c as f32),
+                years: a.number("years")?.map(|y| y as f32),
+            };
+            let (session, state) = host.parts();
+            inspect::clearance_json(session, state, &q).map_err(|e| format!("{id}: {e}"))
+        }
         "film.preview" => crate::film::preview(host, params),
         "film.render" => crate::film::render(host, params),
         "agent.log" => agent_log(host, params),
         _ => run_core(host, id, params),
     }?;
     Ok(result)
+}
+
+/// A director's command with its references resolved and routes planned over the host's scene
+/// (model geometry, plants as drawn, the ground), then run; what was resolved, the route and
+/// the warnings are in the answer.
+fn run_resolved(host: &mut dyn Host, id: &str, params: &Value) -> Result<Value, String> {
+    let (given, notes) = {
+        let (session, state) = host.parts();
+        inspect::resolve_params(session, state, id, params).map_err(|e| format!("{id}: {e}"))?
+    };
+    let mut result = run_core(host, id, &given)?;
+    if result.is_null() && (!notes.warnings.is_empty() || !notes.resolved.is_empty()) {
+        result = json!({});
+    }
+    if let Some(map) = result.as_object_mut() {
+        for key in ["resolved", "route", "warnings"] {
+            map.remove(key);
+        }
+    }
+    notes.apply(&mut result);
+    Ok(result)
+}
+
+/// `view.render`'s `camera` with `position` and `target` that are references made points.
+fn resolve_camera(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
+    let named = ["position", "target"]
+        .iter()
+        .any(|k| params["camera"][k].is_string() || params["camera"][k].is_object());
+    if !named {
+        return Ok(params.clone());
+    }
+    let (session, state) = host.parts();
+    inspect::resolve_params(session, state, "view.render", params)
+        .map(|(p, _)| p)
+        .map_err(|e| format!("view.render: {e}"))
 }
 
 fn take<T: serde::de::DeserializeOwned>(
@@ -1871,6 +2099,10 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
             "shafts",
             "white_balance",
             "grade",
+            "grade_to",
+            "grade_mix",
+            "lights",
+            "exposure_offset_ev",
             "quality",
             "years",
             "samples",
@@ -2018,6 +2250,47 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
             )
         })?;
     }
+    // Lamps: a level 0..1 (a film's `lights` span fades them), true or false; any value forces
+    // them on or off, else they follow the sun.
+    let lamp_level = match a.get("lights") {
+        None => 1.0,
+        Some(Value::Bool(on)) => f32::from(u8::from(*on)),
+        Some(v) => v
+            .as_f64()
+            .filter(|l| (0.0..=1.0).contains(l))
+            .ok_or_else(|| format!("{id}: `lights` must be true, false or a number from 0 to 1"))?
+            as f32,
+    };
+    if a.get("lights").is_some() {
+        project.view.lights = Some(lamp_level > 0.0);
+    }
+    let exposure_offset_ev = match a.number("exposure_offset_ev")? {
+        Some(e) if !(-8.0..=8.0).contains(&e) => {
+            return Err(format!(
+                "{id}: `exposure_offset_ev` must be from -8 to 8 stops"
+            ));
+        }
+        Some(e) => e as f32,
+        None => 0.0,
+    };
+    let grade_mix = match (a.str("grade_to")?, a.number("grade_mix")?) {
+        (Some(to), mix) => {
+            let grade: visioncraft_core::Grade =
+                serde_json::from_value(json!(to)).map_err(|_| {
+                    format!(
+                        "{id}: `grade_to` must be neutral, warm, cool or soft, got `{}`",
+                        shorten(to)
+                    )
+                })?;
+            let mix = mix.unwrap_or(0.5);
+            if !(0.0..=1.0).contains(&mix) {
+                return Err(format!("{id}: `grade_mix` must be from 0 to 1"));
+            }
+            Some((grade, mix as f32))
+        }
+        (None, Some(_)) => return Err(format!("{id}: `grade_mix` goes with `grade_to`")),
+        (None, None) => None,
+    };
     if project.view.snow > 0.0 && project.season() != visioncraft_core::Season::Winter {
         return Err(format!(
             "{id}: snow lies only in winter, and this picture is in {}; give `season: \"winter\"` or `snow: 0`",
@@ -2040,6 +2313,9 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
         quality: quality.to_string(),
         photo,
         animation_s,
+        lamp_level,
+        exposure_offset_ev,
+        grade_mix,
         images: {
             let state = host.state();
             project

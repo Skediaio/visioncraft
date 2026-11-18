@@ -553,20 +553,205 @@ pub(crate) fn sun_json(p: &Project) -> Value {
         .unwrap_or(Value::Null)
 }
 
+/// Plants as rays see them: for each plant of the visible plantings the crown and trunk
+/// `years` after planting (`None`: full grown), nearest hit of `dir` from `origin`.
+fn cast_plants(
+    project: &Project,
+    owners: &[Owner],
+    assets: &[visioncraft_core::Asset],
+    years: Option<f32>,
+    origin: [f32; 3],
+    dir: [f32; 3],
+) -> Option<Value> {
+    let mut best: Option<(f32, Value)> = None;
+    for g in &project.generators {
+        if !project.layer_visible(g.layer()) {
+            continue;
+        }
+        for (i, pl) in placements(project, owners, assets, g).0.iter().enumerate() {
+            let gr = visioncraft_core::growth::growth_of(&pl.asset, None);
+            let age = match years {
+                Some(y) => g.planted_age_years().unwrap_or(gr.planted_age_years) + y,
+                None => gr.years_to_maturity * 4.0,
+            };
+            let solids =
+                visioncraft_core::raycast::plant_solids(&pl.asset, pl.position, pl.scale, age);
+            let Some((t, part)) = solids.hit(origin, dir) else {
+                continue;
+            };
+            if best.as_ref().is_some_and(|(d, _)| *d <= t) {
+                continue;
+            }
+            let point = [0, 1, 2].map(|k| origin[k] + dir[k] * t);
+            let normal = match (part, solids.crown, solids.trunk) {
+                ("crown", Some((c, r)), _) => {
+                    let n = [0, 1, 2].map(|k| (point[k] - c[k]) / (r[k] * r[k]));
+                    let l = n.iter().map(|v| v * v).sum::<f32>().sqrt().max(1e-9);
+                    n.map(|v| v / l)
+                }
+                (_, _, Some((f, _, h))) if point[1] >= f[1] + h - 1e-3 => [0.0, 1.0, 0.0],
+                (_, _, Some((f, _, _))) => {
+                    let n = [point[0] - f[0], 0.0, point[2] - f[2]];
+                    let l = n[0].hypot(n[2]).max(1e-9);
+                    [n[0] / l, 0.0, n[2] / l]
+                }
+                _ => [0.0, 1.0, 0.0],
+            };
+            best = Some((
+                t,
+                json!({
+                    "owner": format!("{}#{i}", g.id()), "kind": "plant", "part": part,
+                    "planting": g.id(), "name": g.name(), "asset": pl.asset,
+                    "face": null, "point": point, "normal": normal, "distance": t,
+                }),
+            ));
+        }
+    }
+    best.map(|(_, v)| v)
+}
+
 pub(crate) fn raycast_json(
     session: &Session,
     state: &HostState,
     origin: [f32; 3],
     dir: [f32; 3],
+    plants: Option<Option<f32>>,
 ) -> Value {
     let p = session.project();
-    match cast(p, &owners(p, &models_of(state)), origin, dir) {
+    let owners = owners(p, &models_of(state));
+    let mut hit = cast(p, &owners, origin, dir);
+    if let Some(years) = plants
+        && let Some(found) = cast_plants(p, &owners, &state.catalog.assets, years, origin, dir)
+        && hit.as_ref().is_none_or(|h| {
+            found["distance"].as_f64().unwrap_or(f64::MAX)
+                < h["distance"].as_f64().unwrap_or(f64::MAX)
+        })
+    {
+        hit = Some(found);
+    }
+    match hit {
         Some(mut hit) => {
             hit["hit"] = true.into();
             hit
         }
         None => json!({"hit": false}),
     }
+}
+
+/// References and routes, over what the host knows: model geometry, plants placed with the
+/// building rule and the ground they stand on.
+pub(crate) fn with_scene<R>(
+    session: &Session,
+    state: &HostState,
+    years: Option<f32>,
+    f: impl FnOnce(&visioncraft_core::reference::Scene) -> R,
+) -> R {
+    let p = session.project();
+    let owners = owners(p, &models_of(state));
+    let assets = &state.catalog.assets;
+    let ground = |x: f32, z: f32| ground_at(p, &owners, x, z, true).unwrap_or(0.0);
+    let place = |g: &Generator| placements(p, &owners, assets, g).0;
+    let bounds = |id: &str| {
+        owners
+            .iter()
+            .find(|o| o.kind == "model" && o.id == id)
+            .and_then(|o| world_bounds(&o.mesh, o.xf.as_ref()))
+    };
+    let scene = visioncraft_core::reference::Scene {
+        project: p,
+        years,
+        model_bounds: Some(&bounds),
+        placements: Some(&place),
+        ground: Some(&ground),
+    };
+    f(&scene)
+}
+
+/// A command's params with references resolved and routes planned (`directing`).
+pub(crate) fn resolve_params(
+    session: &Session,
+    state: &HostState,
+    id: &str,
+    params: &Value,
+) -> Result<(Value, visioncraft_core::directing::Notes), String> {
+    let years = visioncraft_core::directing::years_of(session.project(), id, params);
+    with_scene(session, state, years, |scene| {
+        visioncraft_core::directing::resolve_command(id, params, scene)
+    })
+}
+
+/// What `query.clearance` was asked.
+pub(crate) struct ClearanceQuery<'a> {
+    pub from: &'a Value,
+    pub to: &'a Value,
+    pub clearance_m: Option<f32>,
+    pub eye_height_m: f32,
+    pub years: Option<f32>,
+}
+
+/// `query.clearance`: whether one can walk and see from one place to another.
+pub(crate) fn clearance_json(
+    session: &Session,
+    state: &HostState,
+    q: &ClearanceQuery,
+) -> Result<Value, String> {
+    use visioncraft_core::reference::{place, place_xz};
+    use visioncraft_core::route::{self, BODY_RADIUS_M, Obstacles};
+    let years = q.years.or(session.project().view.years);
+    let (from, to, obstacles) = with_scene(session, state, years, |scene| {
+        Ok::<_, String>((
+            place_xz(scene, q.from, "from")?,
+            place_xz(scene, q.to, "to")?,
+            Obstacles::from_scene(scene),
+        ))
+    })?;
+    let margin = q.clearance_m.unwrap_or(BODY_RADIUS_M);
+    let line = [from, to];
+    let length = (to[0] - from[0]).hypot(to[1] - from[1]);
+    let crossings = obstacles.crossings(&line, margin);
+    // The nearest an obstacle comes to the line, sampled every 0.25 m.
+    let steps = (length / 0.25).ceil().max(1.0) as usize;
+    let nearest = (0..=steps)
+        .filter_map(|i| {
+            let t = i as f32 / steps as f32;
+            let p = [
+                from[0] + (to[0] - from[0]) * t,
+                from[1] + (to[1] - from[1]) * t,
+            ];
+            obstacles.nearest(p).map(|(w, d)| (w, d, p))
+        })
+        .min_by(|a, b| a.1.total_cmp(&b.1));
+    let mut out = json!({
+        "from": from, "to": to, "length_m": length, "clearance_m": margin,
+        "clear": crossings.is_empty(),
+        "crossings": crossings.iter().map(|c| json!({"what": c.what, "at": c.at, "distance_m": c.distance_m})).collect::<Vec<_>>(),
+        "nearest": nearest.map(|(w, d, p)| json!({"what": w, "distance_m": d, "at": p})),
+    });
+    if !crossings.is_empty() {
+        let planned = route::plan(&obstacles, &line, q.clearance_m);
+        let len: f32 = planned
+            .path
+            .windows(2)
+            .map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1]))
+            .sum();
+        out["route"] = json!({"path": planned.path, "length_m": len, "warnings": planned.warnings});
+    }
+    // Sight: an eye-high ray, over the plants' crowns and trunks too.
+    let p = session.project();
+    let ground =
+        |x: f32, z: f32| ground_at(p, &owners(p, &models_of(state)), x, z, true).unwrap_or(0.0);
+    let eye = |q2: [f32; 2]| [q2[0], ground(q2[0], q2[1]) + q.eye_height_m, q2[1]];
+    let (a, b) = (eye(from), eye(to));
+    let dir = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    let hit = raycast_json(session, state, a, dir, Some(years));
+    let blocked = hit["hit"] == true && hit["distance"].as_f64().is_some_and(|d| d < 0.999);
+    out["sight"] = if blocked {
+        json!({"clear": false, "blocked_by": hit["owner"], "kind": hit["kind"], "at": hit["point"]})
+    } else {
+        json!({"clear": true})
+    };
+    let _ = place;
+    Ok(out)
 }
 
 pub(crate) fn ground_json(session: &Session, state: &HostState, x: f32, z: f32) -> Value {

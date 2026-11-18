@@ -113,6 +113,11 @@ impl Pictures for GpuPictures {
             .unwrap_or(if request.photo.is_some() { 3 } else { 2 });
         s.resize(request.width, request.height);
         s.clock = request.animation_s;
+        // What only this picture changes: the lamps' level, the exposure compensation and the
+        // grade mixed in (set for every picture, the studio is kept for the next).
+        s.lamp_level = request.lamp_level;
+        s.exposure = request.exposure_offset_ev;
+        s.grade_mix = request.grade_mix;
         s.sync();
         let (position, target, fov) = match request.camera {
             Some((p, t, fov)) => {

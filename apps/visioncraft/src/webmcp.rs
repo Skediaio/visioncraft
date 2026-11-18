@@ -58,6 +58,8 @@ enum Route {
     RunCommand,
     /// `engine.commands`.
     ListCommands,
+    /// `ui.get`, narrowed to its `selection`.
+    Selection,
     /// The canvas as an image.
     Snapshot,
 }
@@ -100,6 +102,7 @@ const DEFS: &[Def] = &[
             wrap: None,
         },
     ),
+    d("visioncraft_get_selection", Inspect, Route::Selection),
     d(
         "visioncraft_select",
         Inspect,
@@ -146,7 +149,6 @@ const DEFS: &[Def] = &[
     cmd("visioncraft_film_add", Film, "film.add"),
     cmd("visioncraft_film_add_shot", Film, "film.add_shot"),
     cmd("visioncraft_film_update_shot", Film, "film.update_shot"),
-    cmd("visioncraft_film_remove_shot", Film, "film.remove_shot"),
     cmd("visioncraft_film_remove", Film, "film.remove"),
     cmd("visioncraft_film_orbit", Film, "film.orbit"),
     cmd("visioncraft_film_flythrough", Film, "film.flythrough"),
@@ -234,7 +236,7 @@ fn resolve(defs: &[Def], docs: &[CommandDoc]) -> Result<Vec<Tool>, String> {
                     );
                     t.destructive = is_destructive(id);
                     if def.group == Design {
-                        t.description.push_str(" When the person says \"this\", \"here\" or \"the selected one\", check the current selection first with visioncraft_window_state.");
+                        t.description.push_str(" When the person says \"this\", \"here\" or \"the selected one\", check the current selection first with visioncraft_get_selection.");
                     }
                     if id == "film.render" {
                         t.description.push_str(" In the browser the frames cannot be written to disk (pictures cannot be read back): check a film with visioncraft_film_preview and visioncraft_snapshot, and render it with visioncraft-cli on a computer. Only one render runs at a time.");
@@ -249,16 +251,28 @@ fn resolve(defs: &[Def], docs: &[CommandDoc]) -> Result<Vec<Tool>, String> {
             Route::Method { name, wrap } => {
                 let (description, schema, read_only) = match (name, wrap) {
                     ("ui.get", _) => (
-                        "What the window shows: mode, the camera (view, position, target, fov_y_deg), the selection (`selected.planting` and `selected.model`: what the person has picked), lights and what is still loading. Call it first when the person says \"this\", \"here\" or \"the selected one\".".to_string(),
+                        "What the window shows: mode, the camera (view, position, target, fov_y_deg), the selection, lights and what is still loading. `selection` is what the person has picked in any mode: {items: [{kind (shape, placement, planting, model, lamp, underlay), id, name, summary (one line: what it is, size, material or species, position), sub?: {edge?, vertex?, index?}}], point? (the last ground or surface point the person clicked, [x, y, z] metres), revision (bumps on every change)}. A single tree of a planting is kind placement: id is its planting, sub.index its plant number. Call it first when the person says \"this\", \"here\" or \"the selected one\" (visioncraft_get_selection returns just the selection).".to_string(),
                         object(json!({}), &[]),
                         true,
                     ),
                     ("ui.select", _) => (
-                        "Selects a planting (opens Objects mode) or a model in the window, as a click would; null deselects. The person sees the selection; it is not part of the project and not an undo step.".to_string(),
+                        "Selects one thing in the window as a click would, so the person sees what you mean: a shape (opens Draw with its handles, optionally a vertex or edge), a planting, one plant of a planting (placement) or a lamp (Objects mode), a model or a plan image. `items` null or [] clears. An unknown id is an error; the window selects one thing at a time. It is not part of the project and not an undo step.".to_string(),
                         object(
                             json!({
-                                "planting": {"type": ["string", "null"], "description": "A planting's id (see visioncraft_list plantings)."},
-                                "model": {"type": ["string", "null"], "description": "A linked model's id (see visioncraft_list models)."},
+                                "items": {"type": ["array", "null"], "maxItems": 1, "description": "What to select, or null to clear.", "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "kind": {"type": "string", "enum": ["shape", "placement", "planting", "model", "lamp", "underlay"]},
+                                        "id": {"type": "string", "description": "The shape, planting (for a placement too), model, lamp (light) or underlay id (see visioncraft_list)."},
+                                        "sub": {"type": "object", "description": "The part picked: a shape's vertex or edge, a placement's index (its plant number in the planting, from 0), a planting's vertex.", "properties": {
+                                            "edge": {"type": "integer", "minimum": 0},
+                                            "vertex": {"type": "integer", "minimum": 0},
+                                            "index": {"type": "integer", "minimum": 0},
+                                        }, "additionalProperties": false},
+                                    },
+                                    "required": ["kind", "id"],
+                                    "additionalProperties": false,
+                                }},
                             }),
                             &[],
                         ),
@@ -321,6 +335,12 @@ fn resolve(defs: &[Def], docs: &[CommandDoc]) -> Result<Vec<Tool>, String> {
                 ),
                 true,
                 json!({"kind": "list_commands"}),
+            ),
+            Route::Selection => tool(
+                "What the person has selected right now, in any mode: {items: [{kind, id, name, summary, sub?}], point? ([x, y, z] metres: the last ground or surface point they clicked, for \"put it here\"), revision (bumps on every change; poll and compare to notice a new selection)}. A single tree of a planting is kind placement (id: its planting, sub.index: its plant number), which visioncraft_run_command's planting.replace_placement and planting.remove_placement take. Call it when the person says \"this\", \"here\" or \"the selected one\".".into(),
+                object(json!({}), &[]),
+                true,
+                json!({"kind": "method", "name": "ui.get", "wrap": null, "pick": "selection"}),
             ),
             Route::Snapshot => tool(
                 "A picture of the 3D view as the person sees it now (JPEG or PNG, at most 1024 px wide by default), so you can check your own work. Frame the view first with visioncraft_camera_set or a viewpoint. Plants and effects that are still loading may be missing; visioncraft_window_state reports what is pending.".into(),
@@ -535,6 +555,7 @@ mod tests {
             "visioncraft_redo",
             "visioncraft_window_state",
             "visioncraft_select",
+            "visioncraft_get_selection",
         ] {
             assert!(names.contains(&must), "{must}");
         }

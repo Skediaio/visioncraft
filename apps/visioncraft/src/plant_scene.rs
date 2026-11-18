@@ -255,6 +255,7 @@ mod tests {
     fn bounds_cover_the_control_geometry() {
         use visioncraft_core::planting::{Cluster, Weighted};
         let c = Generator::Cluster(Cluster {
+            overrides: Default::default(),
             id: "g1".into(),
             name: "c".into(),
             planted_age_years: None,

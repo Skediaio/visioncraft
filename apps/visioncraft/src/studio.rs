@@ -115,6 +115,11 @@ pub struct Studio {
     pub base_offset: f64,
     /// Exposure offset in stops on top of the automatic exposure: positive is brighter.
     pub exposure: f32,
+    /// How much of the lamps' light is on, 0..1 (a film's `lights`; 1 all of it).
+    pub lamp_level: f32,
+    /// A second colour grade mixed over the project's: the grade and its share, 0..1 (a film's
+    /// `grade` span).
+    pub grade_mix: Option<(visioncraft_core::Grade, f32)>,
     pub draft: Option<Draft>,
     /// The species editor's plant: drawn, never part of the session's project.
     pub species_preview: Option<(visioncraft_core::CustomSpecies, Generator)>,
@@ -381,6 +386,8 @@ impl Studio {
             auto_dst: true,
             base_offset: 1.0,
             exposure: 0.0,
+            lamp_level: 1.0,
+            grade_mix: None,
             draft: None,
             species_preview: None,
             time_draft: None,
@@ -1388,12 +1395,15 @@ impl Studio {
                 visioncraft_render::WhiteBalance::Kelvin(k)
             }
         });
-        self.renderer.set_color_grade(match v.grade {
+        let render_grade = |g: visioncraft_core::Grade| match g {
             visioncraft_core::Grade::Neutral => visioncraft_render::ColorGrade::Neutral,
             visioncraft_core::Grade::Warm => visioncraft_render::ColorGrade::Warm,
             visioncraft_core::Grade::Cool => visioncraft_render::ColorGrade::Cool,
             visioncraft_core::Grade::Soft => visioncraft_render::ColorGrade::Soft,
-        });
+        };
+        self.renderer.set_color_grade(render_grade(v.grade));
+        self.renderer
+            .set_color_grade_mix(self.grade_mix.map(|(g, t)| (render_grade(g), t)));
         // A camera sees the sun's glare and the air's own colour far off; both are part of
         // the photographic look, not settings.
         self.renderer.set_sun_glare(1.0);
@@ -1445,7 +1455,14 @@ impl Studio {
         // the lamps light it. Only part of the way (`METER_SHARE`), so a dim corridor still
         // reads dimmer than a daylit room, and only as far as the view is enclosed. The eye
         // takes a moment to adapt (`adapt_ev`), a picture none.
-        let auto = self.sky.auto_ev(elevation, self.moon_lux(), lamps);
+        // Lamps fading in (a film's `lights`) fade the exposure's dusk allowance in with them.
+        let auto = if lamps && self.lamp_level < 1.0 {
+            let off = self.sky.auto_ev(elevation, self.moon_lux(), false);
+            let on = self.sky.auto_ev(elevation, self.moon_lux(), true);
+            off + (on - off) * self.lamp_level
+        } else {
+            self.sky.auto_ev(elevation, self.moon_lux(), lamps)
+        };
         let room = match self.meter_view(METER_LUX * auto.exp2()) {
             Some((lux, enclosed)) => meter_shift(auto, lux, enclosed),
             None => 0.0,
@@ -1511,11 +1528,14 @@ impl Studio {
             gusts: v.gustiness,
         });
         self.renderer.set_time(self.clock);
-        let lights = if self.lights_on() {
+        let mut lights = if self.lights_on() {
             render_lights(self.project())
         } else {
             Vec::new()
         };
+        for l in &mut lights {
+            l.intensity *= self.lamp_level;
+        }
         if lights != self.last_lights {
             self.dropped_lights = self.renderer.set_lights(&lights);
             self.last_lights = lights;

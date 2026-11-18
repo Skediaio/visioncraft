@@ -28,6 +28,26 @@ same over MCP (`visioncraft-cli mcp`), JSON lines (`visioncraft-cli serve`) and 
   closest valid ids; a saved file that already has one still opens (a grey cube is drawn).
 - **Sun**: `site.set {latitude, longitude, utc_offset_hours}`, `time.set {year?, month?, day?,
   hour?}` in local time; the offset is fixed, so give summer time yourself (Belgium in June: 2).
+- **Selection.** `ui.get` → `selection` is what the person has picked, in any mode: `{items:
+  [{kind, id, name, summary, sub?}], point?: [x, y, z], revision}`. `kind` is shape, placement,
+  planting, model, lamp or underlay; a single tree of a planting is `placement` (`id` the
+  planting, `sub.index` the plant's number). `point` is the last ground or surface point clicked,
+  so "put a tree here" has a position. When the person says "this", "here" or "the selected
+  one", read the selection first. `ui.select {items: [{kind, id, sub?}]}` selects as a click
+  would (`null` or `[]` clears; the window selects one thing at a time).
+- **Editing one plant.** `planting.replace_placement {planting, index, asset?, scale?, offset?}`
+  swaps, resizes or moves one plant; `planting.remove_placement {planting, index}` takes it out;
+  `planting.reset_placements {planting, index?}` restores one or all. The planting stays one
+  planting with its recipe: the edit is stored on the planting (`overrides`, by plant number) and
+  applied after it evaluates, so quantities, renders and checks all see it. A plant keeps its
+  number while the recipe is unchanged; when `planting.update`, a brush stroke or a preset leaves
+  fewer plants, the edits of plants that no longer exist are dropped and the answer carries
+  `warnings`. A single-plant planting is just changed (or removed); a planting on a surface
+  (`surface_fill`) cannot be edited plant by plant.
+- **Names as targets.** Wherever a point is taken (shot fields, `viewpoint.*`, the `camera` of
+  `view.render`, `film.orbit`, `film.flythrough`, `film.reveal`), a shape id (`S6`), a planting
+  or plant (`g4`, `g4#12`), a model, a lamp, a viewpoint or a name (`"Pond"`) works as well as
+  `[x, y, z]`; the answer's `resolved` shows what each name became.
 
 ## The loop: inspect, plan, batch, render, verify
 
@@ -1337,9 +1357,85 @@ then not written) darken the corners as a lens does (0.3 about half a stop) and 
 the luminance after the tone map, in the live view and every picture; `view.render` takes both for
 one picture (`--vignette`, `--grain`).
 
+### 42. Three films by name: a walk round the hedge, a drone reveal and a dusk glide
+
+```json recipe
+{"intent": "three short films of the example garden made from names instead of coordinates: a dusk walk from the gate past the border to the pond, planned round the hedge and the trunks, pausing at the corner and turning to the pond and the house without a cut; a drone view that rises from eye level to the whole plot and orbits it; a day into dusk whose lamps fade in; and a plan reveal that ends straight above with north up", "steps": [
+  {"id": "project.load_example", "params": {"name": "garden"}},
+  {"id": "view.set", "params": {"wind_speed_mps": 3, "gustiness": 0.4, "vignette": 0.3}},
+  {"id": "film.add", "params": {"name": "Garden walk", "fps": 24}},
+  {"id": "film.add_shot", "params": {"id": "f1", "shot": {"kind": "walk", "route": [[16.6, 28.6], [9, 26.1], [4.7, 23.4], [10, 16.2]], "duration_s": 19.6, "pause_at": [{"point": [4.7, 23.4], "s": 3.2}], "look": [{"at_s": 10, "target": "Pond", "hold_s": 2.5}, {"at_s": 16, "target": "House", "hold_s": 3}], "date": {"month": 9, "day": 5}, "time_of_day": [19.3, 19.7], "mist": 0.5, "shafts": 1, "white_balance": 7500, "grade": "warm"}}},
+  {"id": "film.reveal", "params": {"name": "Drone view", "target": "plot", "end": "orbit", "from": "south", "seconds": 4.5, "extras": {"fov_y_deg": 55, "ease": "in", "date": {"month": 6, "day": 21}, "time_of_day": [16.5, 16.6]}}},
+  {"id": "film.orbit", "params": {"id": "f2", "target": "plot", "from": "south", "sweep_deg": 100, "seconds": 6.5, "extras": {"fov_y_deg": 55, "join": "continue", "ease": "none", "date": {"month": 6, "day": 21}, "time_of_day": [16.6, 16.8]}}},
+  {"id": "film.add", "params": {"name": "Day into dusk", "fps": 24}},
+  {"id": "film.add_shot", "params": {"id": "f3", "shot": {"kind": "glide", "path": [[18.6, 1.7, 29.2], [18.5, 1.65, 26.0], [18.3, 1.6, 23.2]], "duration_s": 12, "look_at": "Terrace", "fov_y_deg": 55, "date": {"month": 6, "day": 21}, "time_of_day": [21.4, 23.1], "mist": 0.15, "lights": [0, 1]}}},
+  {"id": "film.reveal", "params": {"name": "Plan reveal", "target": "plot", "end": "top_down", "north_up": true, "seconds": 6}},
+  {"id": "query.clearance", "params": {"from": [16.6, 28.6], "to": "Terrace"}},
+  {"id": "query.raycast", "params": {"origin": [5, 11, 22], "direction": [1, 0, 0], "plants": true}},
+  {"id": "film.preview", "params": {"id": "f1", "t": 11}},
+  {"id": "film.preview", "params": {"id": "f2", "sheet": true}},
+  {"id": "film.render", "params": {"id": "f1", "dir": "walk", "width": 480, "height": 270, "quality": "low", "every": 12, "preview": "sheet"}}
+]}
+```
+
+Every point a command takes is `[x, y, z]` or a reference, so a film is written with what it is
+about instead of where it is: a shape id (`"S6"`), a planting (`"g4"`: all its plants) or one
+plant of it (`"g4#12"`, counted from 0), a model, a lamp or a viewpoint id, `"plot"` (everything
+drawn) or a name matched without regard to case (`"Pond"`). It becomes the centre of its box, and
+the answer's `resolved` lists what each reference turned into (centre, height, radius, box).
+Plants are as big as the growth model makes them `years` after planting (the shot's `years`, else
+the view's, else full grown), so a tree's crown is where its crown is. A name that is also another
+item's (the pond is a shape and a viewpoint) takes the shape, and a `warnings` entry says what else
+it could mean; an id picks exactly. An unknown reference is refused with the close matches. It
+works in `film.add_shot` and `film.update_shot` (`center`, `look_at`, `target`, `eye`, `at`,
+waypoints, pause points, looks), in `film.orbit`, `film.flythrough` and `film.reveal`, in
+`viewpoint.add` and `viewpoint.update` and in the `camera` of `view.render`.
+
+`film.orbit {target, from, sweep_deg, distance, height_m}` circles a target: `from` is a compass
+word (`south`, `north-east`, `ssw`) or a bearing in degrees (0 north, 90 east, clockwise from
+north; -Z is north, +X is east) and `sweep_deg` goes clockwise seen from above (negative: the
+other way). With `distance: "frame"` (the default for a reference) the radius and the height are
+set from the target's size and the field of view so it fills about 85 % of a 16:9 frame, the camera
+25 degrees above the horizon; a number is the radius in metres. `film.reveal {target, end, from,
+north_up}` rises from eye level on the `from` side: `end: "top_down"` ends straight above the
+target, framed, a hair off the vertical so the picture's up is north (`north_up`; `false`: away
+from `from`); `end: "orbit"` ends exactly where `film.orbit` on the same target starts, so the two
+join. Without `end`, `from` and `to` are points as before.
+
+`join: "continue"` on a walk, glide, flyover or orbit starts the shot where the one before ended:
+its path gets that point first, the look direction turns from the old to the new over about a
+second, and the easing is blended across the boundary: the shot starts at the speed the last one
+ended with, and its `ease` only shapes how it ends (`in_out` ends at rest, `none` keeps the
+speed), so there is no dip. A walk takes `route` (waypoints, planned round houses, blocks, walls,
+fences, water, hedges, shrubs and trunks on a 2D grid with A*; the answer's `route` has the length
+and `warnings` say where no clear way exists or a waypoint stands in something and was moved), or
+a `path` of your own (which warns when it crosses a hedge, wall or water), `pause_at [{point |
+target, s}]` (stands still there; the speed is solved so walking and standing fit `duration_s`)
+and `look [{at_s, target, hold_s = 2}]` (from `at_s` into the shot, the pauses counted, the camera
+turns to the target over a second, holds, and turns back: no cut). `query.clearance {from, to}`
+says whether the line between two places is clear on foot and in sight, with a route round when it
+is not, and `query.raycast {plants: true}` also hits crowns (ellipsoids) and trunks (cylinders).
+
+A shot eases `lights` (0..1: the lamps' light, so lamps fade in with the dark instead of popping
+on at sunset, and the automatic exposure follows), `white_balance` (kelvin), `grade` (two grades
+mix) and `exposure_ev`, besides the weather keys. **`exposure_ev` of a shot is stops relative to
+the automatic exposure**: 0 is no correction, +1 one stop brighter. `view.set`'s `exposure_ev` is
+another thing, an absolute exposure value where lower is brighter and 0 is a white frame in
+daylight; `view.render {exposure_offset_ev}` is the relative one for one picture. `film.preview
+{id, sheet: true}` and `film.render {preview: "sheet"}` return a contact sheet of the film as an
+image block (over MCP, and `command_run` returns any picture that way), so an agent can see a film
+without any other tool; the answer's `sheet` lists the time and the shot of each picture. The
+agent's three films were 345 lines of pretty-printed JSON (19 steps, with every coordinate
+worked out and the walk cut in three); the same three films here are 214 lines (12 steps), and
+the walk is one shot.
+
 ## Known traps
 
-- **Ids are not names**: `S2`, not `House`; viewpoints are `v1`, lights `li1`.
+- **Ids are not names**: `S2`, not `House`; viewpoints are `v1`, lights `li1`. Film commands and
+  `viewpoint.add` take either (a name is matched without regard to case; see recipe 42).
+- **`exposure_ev` is two things**: `view.set {exposure_ev}` is an absolute EV100 (0 is a white frame
+  in daylight; null is automatic); a film shot's `exposure_ev` and `view.render`'s
+  `exposure_offset_ev` are stops relative to the automatic exposure (0 is no correction).
 - **A batch is not a transaction by default**: after a failed step, the earlier ones are applied.
   Inspect, fix and send only the rest, or use `"atomic": true`. `file.new`, `file.open`,
   `edit.undo` and `edit.redo` cannot be part of an atomic batch.

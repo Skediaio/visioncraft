@@ -32,6 +32,7 @@ mod lines;
 pub mod mcp;
 pub mod proof;
 pub mod rpc;
+mod sheet;
 
 pub use host::{
     Access, Headless, Host, HostState, LoadedModel, PhotoRequest, Pictures, RenderRequest, Rendered,

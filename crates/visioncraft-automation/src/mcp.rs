@@ -44,7 +44,7 @@ seen in real time under the sun of a site and a date. Every action is a command 
 Start with command_list {\"brief\": true} (then {\"id\": ...} for one command's parameter docs) and doc_inspect. \
 Build with command_batch (add atomic: true for all or nothing), check with doc_inspect and look with doc_render_preview. \
 Units are metres, Y is up, +X east, -Z north (unless site.set north_deg turns it); outlines are [[x, z], ...]. Plants are flora:<species id> (species.list). \
-A film of camera moves is film.* commands (shots: walk, glide, rise, orbit, flyover, hold); check it with film.preview {id, t} and draw it with film.render. Open and save with command_run file.open / file.save; undo with edit.undo. The resource visioncraft://guide is the agent guide.";
+A film of camera moves is film.* commands (shots: walk, glide, rise, orbit, flyover, hold; film.orbit, film.reveal and film.flythrough build one from a target); points are [x, y, z] or a name (\"S6\", \"g4#12\", \"plot\", \"Pond\"); check it with film.preview {id, t} (or {id, sheet: true}: a contact sheet picture of the whole film) and draw it with film.render. Open and save with command_run file.open / file.save; undo with edit.undo. The resource visioncraft://guide is the agent guide.";
 
 const GUIDE_URI: &str = "visioncraft://guide";
 const PROJECT_URI: &str = "visioncraft://project";
@@ -358,7 +358,7 @@ fn tools() -> Vec<Value> {
         }),
         json!({
             "name": "command_run",
-            "description": "Runs one command by id and returns its JSON result (its wall-clock milliseconds in the tool result's _meta.ms). A failed command returns isError with a message that starts with the command's id and names the parameter. Files: file.new, file.open, file.save; history: edit.undo, edit.redo; queries: query.measure, query.quantities (shapes, plantings and linked models per body, plants counted as drawn), query.sun, query.sun_hours (view.set_sun_map and view.clear_sun_map show its grid on the ground), query.plants_for_light (species ranked by the sun a spot gets), query.light_check (every placed plant against its light range), query.raycast, query.ground_height, query.ground_length, catalog.search, species.list; agent.log.",
+            "description": "Runs one command by id and returns its JSON result (its wall-clock milliseconds in the tool result's _meta.ms). A failed command returns isError with a message that starts with the command's id and names the parameter. Files: file.new, file.open, file.save; history: edit.undo, edit.redo; queries: query.measure, query.quantities (shapes, plantings and linked models per body, plants counted as drawn), query.sun, query.sun_hours (view.set_sun_map and view.clear_sun_map show its grid on the ground), query.plants_for_light (species ranked by the sun a spot gets), query.light_check (every placed plant against its light range), query.raycast (with `plants` it hits crowns and trunks), query.clearance (can one walk and see from one place to another), query.ground_height, query.ground_length, catalog.search, species.list; agent.log.",
             "inputSchema": {"type": "object", "properties": {
                 "id": {"type": "string", "description": "A command id from command_list, e.g. \"shape.add_area\"."},
                 "params": {"type": "object", "description": "The command's parameters, as command_list documents them. Omit for none."},
@@ -474,8 +474,10 @@ fn call_tool(host: &mut dyn Host, params: Option<&Map<String, Value>>) -> Result
             let a = Fields::new(name, "argument", args, &["id", "params", "intent"])?;
             let id = a.required_str("id")?;
             let p = a.object("params")?;
+            // A picture (`view.render` without a path, `film.preview {sheet: true}`) comes back as
+            // an image block, with the rest of the answer as text.
             commands::execute_logged(host, id, &p, a.str("intent")?)
-                .map(|r| vec![text_block(serialize(&r))])
+                .map(|mut r| picture_blocks(&mut r))
                 .map_err(Failure::Failed)
         })(),
         "command_batch" => (|| {

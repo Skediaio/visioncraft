@@ -227,6 +227,27 @@ nothing here is a promise of a date.
   clouds, rain particles as a 3D volume with splashes, drops on all wet surfaces and runoff on
   walls, wetness that builds up and dries over time, lightning, and tone mapping and grading.
 
+- **Directing films by name (done):** every place a point is taken accepts `[x, y, z]` or a
+  reference: a shape id (`S6`), a planting (`g4`, or one plant `g4#12`, sized by the growth model at
+  the film's `years`), a model, lamp or viewpoint, `plot` (everything drawn) or a name matched
+  without regard to case (`Pond`), resolved to a centre, a height and a radius from its box
+  (`crates/visioncraft-core/src/reference.rs`; an unknown one lists its close matches, and
+  `nearest` no longer suggests `mist` for `lights`). `film.orbit {target, from: "south", sweep_deg,
+  distance: "frame" | m}` sets the radius from the target's size and the field of view (compass words,
+  -Z north, +X east), `film.reveal {target: "plot", end: "top_down", north_up}` rises from eye level
+  to straight above with north up, and `film.add_shot {join: "continue"}` starts where the last
+  shot ended in position, look direction and speed with the easing blended across the boundary. A
+  walk takes `route` (A* on a 2D grid of houses, walls, water, hedges and trunks), `pause_at` and
+  `look` (turns to a target and back with no cut), with the speed solved to fit `duration_s`, and
+  answers `warnings` when a hand-given path crosses a hedge or wall. `query.clearance {from, to}`
+  and `query.raycast {plants: true}` (crowns as ellipsoids, trunks as cylinders) say what is in the
+  way. Shots ease `lights` (lamps fade in), `white_balance`, `grade` (two grades mix) and
+  `exposure_ev` (stops relative to the automatic exposure; view.set's own `exposure_ev` is an
+  absolute value). `film.preview {sheet: true}` and `film.render {preview: "sheet"}` return a
+  contact sheet as an image block, and `command_run` returns any picture as one. A test compares
+  the specs with the protocol table. Recipe 42. Next: late-bound references (a film that follows a
+  moved target), routes for flyovers, and lens flares on lamps.
+
 ## Next
 
 - **Photographic quality (on par with commercial visualisers):** a side-by-side with public

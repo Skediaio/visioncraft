@@ -107,6 +107,11 @@ impl PlanState {
         Some(first)
     }
 
+    /// The underlay selected so far, if any.
+    pub fn selected_id(&self) -> Option<&str> {
+        self.selected.as_deref()
+    }
+
     /// Selects an underlay (after an import).
     pub fn select(&mut self, id: String) {
         self.selected = Some(id);

@@ -180,6 +180,7 @@ mod tests {
 
     fn area() -> Generator {
         Generator::AreaScatter(AreaScatter {
+            overrides: Default::default(),
             id: "g1".into(),
             name: "Area".into(),
             planted_age_years: None,
@@ -268,6 +269,7 @@ mod tests {
             "an area keeps three corners"
         );
         let line = Generator::SplineMass(SplineMass {
+            overrides: Default::default(),
             id: "g3".into(),
             name: "L".into(),
             planted_age_years: None,
@@ -320,6 +322,7 @@ mod tests {
     #[test]
     fn cluster_radius_follows_the_handle() {
         let c = Generator::Cluster(Cluster {
+            overrides: Default::default(),
             id: "g4".into(),
             name: "C".into(),
             planted_age_years: None,

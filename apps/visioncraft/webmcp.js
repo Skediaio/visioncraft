@@ -153,7 +153,8 @@
           return text(await runCommand(route.id, input, intent));
         case "method": {
           const params = route.wrap ? { [route.wrap]: input } : input;
-          return text(await call(route.name, params));
+          const reply = await call(route.name, params);
+          return text(route.pick && reply ? reply[route.pick] : reply);
         }
         case "section": {
           const key = route.sections && route.sections[input.what];

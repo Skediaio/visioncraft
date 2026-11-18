@@ -381,6 +381,57 @@ pub(super) fn register(s: &mut Session) {
     );
     s.register_with_spec(
         spec(
+            "planting.replace_placement",
+            "Change One Plant",
+            "Swaps the species of one plant of a planting, or moves or resizes it, leaving the rest of the planting as it is (`index` is the plant's number in the planting: a selected tree's `sub.index` in `ui.get`'s selection). A planting of one plant just changes. In a scatter, border, brush, line or cluster the change is stored as an edit on that plant of the planting, applied after the planting is evaluated: the recipe (density, palette, seed, layers) stays, and the plant keeps its number as long as the recipe does. A change to the recipe that leaves fewer plants drops the edits that no longer have a plant (`planting.update` says which).",
+            vec![
+                param("planting", T::String, "Generator id.").required(),
+                param("index", T::Integer, "The plant's number in the planting, from 0.")
+                    .default(json!(0)),
+                param(
+                    "asset",
+                    T::String,
+                    "The species or object that takes its place: catalogue asset id, `flora:<species id>`, custom species id or `user:<object id>`.",
+                ),
+                param("scale", T::Number, "Its scale, above zero."),
+                param("offset", T::Point2, "Moves it by [x, z].").unit("m"),
+            ],
+            "{planting, index, edited (how many plants of the planting are edited)}",
+            json!({"planting": "g1", "index": 1, "asset": "flora:betula-pendula"}),
+        ),
+        replace_placement,
+    );
+    s.register_with_spec(
+        spec(
+            "planting.remove_placement",
+            "Remove One Plant",
+            "Takes one plant out of a planting (`index` as in `planting.replace_placement`), the rest stays. A planting of one plant is removed whole. `planting.reset_placements` puts it back.",
+            vec![
+                param("planting", T::String, "Generator id.").required(),
+                param("index", T::Integer, "The plant's number in the planting, from 0.")
+                    .default(json!(0)),
+            ],
+            "{planting, index, removed: true, edited}",
+            json!({"planting": "g1", "index": 1}),
+        ),
+        remove_placement,
+    );
+    s.register_with_spec(
+        spec(
+            "planting.reset_placements",
+            "Restore Plants",
+            "Takes the edits off one plant (`index`) or off all plants of a planting: swapped species, moves, sizes and plants taken out go back to what the recipe plants.",
+            vec![
+                param("planting", T::String, "Generator id.").required(),
+                param("index", T::Integer, "One plant's number; all plants without it."),
+            ],
+            "{planting, edited (how many plants are still edited)}",
+            json!({"planting": "g1"}),
+        ),
+        reset_placements,
+    );
+    s.register_with_spec(
+        spec(
             "planting.remove",
             "Remove Planting",
             "Removes a generator.",
@@ -475,6 +526,7 @@ fn add_spline(project: &mut Project, params: &Value) -> Result<Value, CommandErr
     let p: P = parse(params)?;
     add(project, p.layer, |id, layer, seed| {
         Generator::SplineMass(SplineMass {
+            overrides: Default::default(),
             id,
             name: p.name,
             layer,
@@ -527,6 +579,7 @@ fn add_area(project: &mut Project, params: &Value) -> Result<Value, CommandError
     let p: P = parse(params)?;
     add(project, p.layer, |id, layer, seed| {
         Generator::AreaScatter(AreaScatter {
+            overrides: Default::default(),
             id,
             name: p.name,
             layer,
@@ -652,6 +705,7 @@ fn add_border(project: &mut Project, params: &Value) -> Result<Value, CommandErr
     let used: Vec<String> = b.species.iter().map(|s| s.asset.clone()).collect();
     let r = add(project, p.layer, |id, layer, seed| {
         Generator::AreaScatter(AreaScatter {
+            overrides: Default::default(),
             id,
             name: p.name,
             layer,
@@ -753,6 +807,7 @@ fn add_brush(project: &mut Project, params: &Value) -> Result<Value, CommandErro
     let p: P = parse(params)?;
     add(project, p.layer, |id, layer, seed| {
         Generator::MixedBrush(MixedBrush {
+            overrides: Default::default(),
             id,
             name: p.name,
             layer,
@@ -852,6 +907,7 @@ fn add_cluster(project: &mut Project, params: &Value) -> Result<Value, CommandEr
     let p: P = parse(params)?;
     add(project, p.layer, |id, layer, seed| {
         Generator::Cluster(Cluster {
+            overrides: Default::default(),
             id,
             name: p.name,
             layer,
@@ -956,7 +1012,8 @@ fn brush_stroke(project: &mut Project, params: &Value) -> Result<Value, CommandE
     });
     let g = Generator::MixedBrush(b.clone());
     g.validate().map_err(|e| bad(&e))?;
-    Ok(Value::Null)
+    let id = params["id"].as_str().unwrap_or_default().to_string();
+    Ok(pruned(project, &id))
 }
 
 fn update(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
@@ -978,7 +1035,8 @@ fn update(project: &mut Project, params: &Value) -> Result<Value, CommandError> 
     let layer = updated.layer().to_string();
     *g = updated;
     check_layer(project, &layer)?;
-    Ok(Value::Null)
+    let id = params["id"].as_str().unwrap_or_default().to_string();
+    Ok(pruned(project, &id))
 }
 
 fn remove(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
@@ -1020,7 +1078,8 @@ fn apply_preset(project: &mut Project, params: &Value) -> Result<Value, CommandE
     if age.is_none() {
         *age = stand;
     }
-    Ok(Value::Null)
+    let id = params["id"].as_str().unwrap_or_default().to_string();
+    Ok(pruned(project, &id))
 }
 
 fn undo_stroke(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
@@ -1030,7 +1089,8 @@ fn undo_stroke(project: &mut Project, params: &Value) -> Result<Value, CommandEr
     b.strokes
         .pop()
         .ok_or_else(|| fail("the brush has no strokes"))?;
-    Ok(Value::Null)
+    let id = params["id"].as_str().unwrap_or_default().to_string();
+    Ok(pruned(project, &id))
 }
 
 fn duplicate(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
@@ -1106,8 +1166,170 @@ fn duplicate(project: &mut Project, params: &Value) -> Result<Value, CommandErro
             }
         }
     }
+    if p.new_seed
+        && let Some(o) = copy.overrides_mut()
+    {
+        o.clear();
+    }
     project.generators.push(copy);
     Ok(json!({ "id": id }))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PlacementParams {
+    planting: String,
+    index: Option<usize>,
+    asset: Option<String>,
+    scale: Option<f32>,
+    offset: Option<[f32; 2]>,
+}
+
+/// The plants of a planting as the commands number them: before its edits.
+fn plant_count(project: &Project, g: &Generator) -> Result<usize, CommandError> {
+    match g {
+        Generator::Single(_) => Ok(1),
+        Generator::SurfaceFill(_) => Err(fail(format!(
+            "`{}` is planted on a surface: its plants cannot be edited one by one",
+            g.id()
+        ))),
+        _ => {
+            let floor = crate::terrace::ground_fn(project);
+            let ground = |x: f32, z: f32| floor(x, z).or(Some(0.0));
+            Ok(crate::planting::evaluate_raw(g, &ground).placements.len())
+        }
+    }
+}
+
+/// The planting's place in the project and a checked plant number.
+fn plant_of(project: &Project, p: &PlacementParams) -> Result<(usize, u32), CommandError> {
+    let at = project
+        .generators
+        .iter()
+        .position(|g| g.id() == p.planting)
+        .ok_or_else(|| fail(format!("no generator `{}`", p.planting)))?;
+    let n = plant_count(project, &project.generators[at])?;
+    let i = p.index.unwrap_or(0);
+    if i >= n {
+        return Err(fail(format!(
+            "`{}` has {n} plant(s): index {i} is out of range",
+            p.planting
+        )));
+    }
+    Ok((at, i as u32))
+}
+
+/// Drops the edits of `id` that have no plant any more (after the recipe changed); the numbers
+/// dropped.
+fn prune_overrides(project: &mut Project, id: &str) -> Vec<u32> {
+    let Some(at) = project.generators.iter().position(|g| g.id() == id) else {
+        return Vec::new();
+    };
+    if project.generators[at]
+        .overrides()
+        .is_none_or(|o| o.is_empty())
+    {
+        return Vec::new();
+    }
+    let n = plant_count(project, &project.generators[at]).unwrap_or(0) as u32;
+    let Some(o) = project.generators[at].overrides_mut() else {
+        return Vec::new();
+    };
+    let gone: Vec<u32> = o.keys().copied().filter(|i| *i >= n).collect();
+    for i in &gone {
+        o.remove(i);
+    }
+    gone
+}
+
+/// What a recipe change answers: null, or the warning about the edits it dropped.
+fn pruned(project: &mut Project, id: &str) -> Value {
+    let gone = prune_overrides(project, id);
+    if gone.is_empty() {
+        return Value::Null;
+    }
+    let list: Vec<String> = gone.iter().map(u32::to_string).collect();
+    json!({"warnings": [format!(
+        "`{id}` has fewer plants now: the edits of plant(s) {} were dropped",
+        list.join(", ")
+    )]})
+}
+
+fn replace_placement(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
+    let p: PlacementParams = parse(params)?;
+    let asset = p.asset.clone();
+    if asset.as_deref().is_some_and(|a| a.trim().is_empty()) {
+        return Err(bad("asset is empty"));
+    }
+    if asset.is_none() && p.scale.is_none() && p.offset.is_none() {
+        return Err(bad("give an asset, a scale or an offset"));
+    }
+    if p.scale.is_some_and(|s| !(s.is_finite() && s > 0.0)) {
+        return Err(bad("scale: above zero"));
+    }
+    let (at, i) = plant_of(project, &p)?;
+    let g = &mut project.generators[at];
+    if let Generator::Single(s) = g {
+        if let Some(a) = asset {
+            s.asset = a;
+        }
+        if let Some(k) = p.scale {
+            s.scale = k;
+        }
+        if let Some(d) = p.offset {
+            s.position[0] += d[0];
+            s.position[2] += d[1];
+        }
+        return Ok(json!({"planting": p.planting, "index": 0, "edited": 0}));
+    }
+    let o = g.overrides_mut().ok_or_else(|| fail("not editable"))?;
+    let e = o.entry(i).or_default();
+    e.removed = false;
+    if asset.is_some() {
+        e.asset = asset;
+    }
+    if p.scale.is_some() {
+        e.scale = p.scale;
+    }
+    if let Some(d) = p.offset {
+        // Moves add up.
+        let old = e.offset.unwrap_or([0.0, 0.0]);
+        e.offset = Some([old[0] + d[0], old[1] + d[1]]);
+    }
+    Ok(json!({"planting": p.planting, "index": i, "edited": o.len()}))
+}
+
+fn remove_placement(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
+    let p: PlacementParams = parse(params)?;
+    let (at, i) = plant_of(project, &p)?;
+    if matches!(project.generators[at], Generator::Single(_)) {
+        project.generators.remove(at);
+        return Ok(json!({"planting": p.planting, "index": 0, "removed": true, "edited": 0}));
+    }
+    let o = project.generators[at]
+        .overrides_mut()
+        .ok_or_else(|| fail("not editable"))?;
+    o.entry(i).or_default().removed = true;
+    Ok(json!({"planting": p.planting, "index": i, "removed": true, "edited": o.len()}))
+}
+
+fn reset_placements(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
+    let p: PlacementParams = parse(params)?;
+    let at = project
+        .generators
+        .iter()
+        .position(|g| g.id() == p.planting)
+        .ok_or_else(|| fail(format!("no generator `{}`", p.planting)))?;
+    let Some(o) = project.generators[at].overrides_mut() else {
+        return Ok(json!({"planting": p.planting, "edited": 0}));
+    };
+    match p.index {
+        Some(i) => {
+            o.remove(&(i as u32));
+        }
+        None => o.clear(),
+    }
+    Ok(json!({"planting": p.planting, "edited": o.len()}))
 }
 
 #[cfg(test)]
@@ -1232,5 +1454,250 @@ mod tests {
         )
         .unwrap();
         assert!(s.run("planting.add_floor", json!({"id": "g2"})).is_err());
+    }
+
+    fn grove_session() -> Session {
+        let mut s = Session::new(Project::default());
+        s.run(
+            "planting.add_cluster",
+            json!({"name": "Grove", "center": [0, 0], "radius_m": 3, "count": 5,
+                "asset_palette": [{"asset": "flora:quercus-robur", "weight": 1}]}),
+        )
+        .unwrap();
+        s
+    }
+
+    fn plants(s: &Session) -> Vec<crate::planting::Placement> {
+        let g = &s.project().generators[0];
+        crate::planting::evaluate(g, &|_, _| Some(0.0)).placements
+    }
+
+    #[test]
+    fn replacing_a_single_plant_changes_its_species() {
+        let mut s = Session::new(Project::default());
+        s.run(
+            "planting.add_single",
+            json!({"name": "Oak", "asset": "flora:quercus-robur", "position": [4, 0, 3]}),
+        )
+        .unwrap();
+        let r = s
+            .run(
+                "planting.replace_placement",
+                json!({"planting": "g1", "asset": "flora:betula-pendula"}),
+            )
+            .unwrap();
+        assert_eq!(r["planting"], "g1");
+        let g = &s.project().generators[0];
+        assert!(g.uses_asset("flora:betula-pendula"));
+        assert!(!g.uses_asset("flora:quercus-robur"));
+        s.undo();
+        assert!(s.project().generators[0].uses_asset("flora:quercus-robur"));
+    }
+
+    #[test]
+    fn replacing_one_plant_of_a_cluster_keeps_the_planting_and_its_recipe() {
+        let mut s = grove_session();
+        let before = plants(&s);
+        let r = s
+            .run(
+                "planting.replace_placement",
+                json!({"planting": "g1", "index": 2, "asset": "flora:betula-pendula"}),
+            )
+            .unwrap();
+        assert_eq!(r["edited"], 1);
+        assert_eq!(s.project().generators.len(), 1, "still one planting");
+        let after = plants(&s);
+        assert_eq!(after.len(), 5);
+        for (i, (a, b)) in after.iter().zip(&before).enumerate() {
+            assert_eq!(a.position, b.position, "plant {i} stays where it was");
+            assert_eq!(
+                a.asset == "flora:betula-pendula",
+                i == 2,
+                "only plant 2 is a birch"
+            );
+        }
+        // The recipe is untouched: the palette still says oak.
+        assert!(s.project().generators[0].uses_asset("flora:quercus-robur"));
+        // Moving and resizing add to the edit.
+        s.run(
+            "planting.replace_placement",
+            json!({"planting": "g1", "index": 2, "scale": 2, "offset": [1, 0]}),
+        )
+        .unwrap();
+        let moved = &plants(&s)[2];
+        assert_eq!(moved.asset, "flora:betula-pendula");
+        assert_eq!(moved.scale, 2.0);
+        assert!((moved.position[0] - before[2].position[0] - 1.0).abs() < 1e-5);
+        s.undo();
+        s.undo();
+        assert_eq!(plants(&s), before);
+    }
+
+    #[test]
+    fn removing_one_plant_leaves_the_others_where_they_were_and_numbered() {
+        let mut s = grove_session();
+        let before = plants(&s);
+        let r = s
+            .run(
+                "planting.remove_placement",
+                json!({"planting": "g1", "index": 1}),
+            )
+            .unwrap();
+        assert_eq!(r["removed"], true);
+        let after: Vec<[f32; 3]> = plants(&s).iter().map(|p| p.position).collect();
+        let mut want: Vec<[f32; 3]> = before.iter().map(|p| p.position).collect();
+        want.remove(1);
+        assert_eq!(after, want);
+        // The numbers hold: plant 3 is still plant 3 for the next edit.
+        s.run(
+            "planting.replace_placement",
+            json!({"planting": "g1", "index": 3, "asset": "flora:betula-pendula"}),
+        )
+        .unwrap();
+        let g = &s.project().generators[0];
+        let (numbered, _) = crate::planting::evaluate_numbered(g, &|_, _| Some(0.0));
+        let birch: Vec<usize> = numbered
+            .iter()
+            .filter(|(_, p)| p.asset == "flora:betula-pendula")
+            .map(|(i, _)| *i)
+            .collect();
+        assert_eq!(birch, vec![3]);
+        // And it comes back.
+        s.run("planting.reset_placements", json!({"planting": "g1"}))
+            .unwrap();
+        assert_eq!(plants(&s), before);
+    }
+
+    #[test]
+    fn removing_the_only_plant_removes_the_planting() {
+        let mut s = Session::new(Project::default());
+        s.run(
+            "planting.add_single",
+            json!({"name": "Oak", "asset": "flora:quercus-robur", "position": [4, 0, 3]}),
+        )
+        .unwrap();
+        s.run("planting.remove_placement", json!({"planting": "g1"}))
+            .unwrap();
+        assert!(s.project().generators.is_empty());
+    }
+
+    #[test]
+    fn placement_commands_refuse_bad_indices_and_ids() {
+        let mut s = grove_session();
+        let e = s
+            .run(
+                "planting.replace_placement",
+                json!({"planting": "g1", "index": 9, "asset": "flora:betula-pendula"}),
+            )
+            .unwrap_err();
+        assert!(e.to_string().contains("out of range"), "{e}");
+        assert!(
+            s.run("planting.remove_placement", json!({"planting": "nope"}))
+                .is_err()
+        );
+        assert!(
+            s.run(
+                "planting.replace_placement",
+                json!({"planting": "g1", "index": 0})
+            )
+            .is_err()
+        );
+        assert!(s.project().generators[0].overrides().unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_edited_plant_survives_saving_and_loading() {
+        let mut s = grove_session();
+        s.run(
+            "planting.replace_placement",
+            json!({"planting": "g1", "index": 4, "asset": "flora:betula-pendula"}),
+        )
+        .unwrap();
+        s.run(
+            "planting.remove_placement",
+            json!({"planting": "g1", "index": 0}),
+        )
+        .unwrap();
+        let json = serde_json::to_string(s.project()).unwrap();
+        let loaded: Project = serde_json::from_str(&json).unwrap();
+        assert_eq!(&loaded, s.project());
+        let g = &loaded.generators[0];
+        assert_eq!(g.overrides().unwrap().len(), 2);
+        let want = plants(&s);
+        assert_eq!(
+            crate::planting::evaluate(g, &|_, _| Some(0.0)).placements,
+            want
+        );
+        // A project without edits writes no `overrides`, and an old one still loads.
+        let plain = serde_json::to_string(grove_session().project()).unwrap();
+        assert!(!plain.contains("overrides"));
+    }
+
+    #[test]
+    fn a_recipe_change_drops_the_edits_that_lost_their_plant() {
+        let mut s = Session::new(Project::default());
+        s.run(
+            "planting.add_area",
+            json!({"name": "Meadow", "outline": [[0, 0], [20, 0], [20, 20], [0, 20]],
+                "seed": 3, "density_per_m2": 0.1,
+                "asset_palette": [{"asset": "flora:quercus-robur", "weight": 1}]}),
+        )
+        .unwrap();
+        let n = crate::planting::evaluate(&s.project().generators[0], &|_, _| Some(0.0))
+            .placements
+            .len();
+        assert!(n > 20, "{n}");
+        for i in [1, n - 1] {
+            s.run(
+                "planting.replace_placement",
+                json!({"planting": "g1", "index": i, "asset": "flora:betula-pendula"}),
+            )
+            .unwrap();
+        }
+        let r = s
+            .run(
+                "planting.update",
+                json!({"id": "g1", "density_per_m2": 0.02}),
+            )
+            .unwrap();
+        let warning = r["warnings"][0].as_str().expect("a warning");
+        assert!(warning.contains(&(n - 1).to_string()), "{warning}");
+        let g = &s.project().generators[0];
+        let kept: Vec<u32> = g.overrides().unwrap().keys().copied().collect();
+        assert_eq!(kept, vec![1], "the one that still has a plant stays");
+        // A change that loses nothing has nothing to say.
+        let r = s
+            .run(
+                "planting.update",
+                json!({"id": "g1", "name": "Wild meadow"}),
+            )
+            .unwrap();
+        assert_eq!(r, serde_json::Value::Null);
+    }
+
+    #[test]
+    fn quantities_count_the_replaced_species() {
+        let mut s = grove_session();
+        let count = |s: &mut Session, asset: &str| -> u64 {
+            let q = s.run("query.quantities", json!({})).unwrap();
+            let species = q["assets"].as_array().cloned().unwrap_or_default();
+            species
+                .iter()
+                .find(|e| e["asset"] == asset)
+                .map_or(0, |e| e["count"].as_u64().unwrap())
+        };
+        assert_eq!(count(&mut s, "flora:quercus-robur"), 5);
+        s.run(
+            "planting.replace_placement",
+            json!({"planting": "g1", "index": 2, "asset": "flora:betula-pendula"}),
+        )
+        .unwrap();
+        s.run(
+            "planting.remove_placement",
+            json!({"planting": "g1", "index": 0}),
+        )
+        .unwrap();
+        assert_eq!(count(&mut s, "flora:quercus-robur"), 3);
+        assert_eq!(count(&mut s, "flora:betula-pendula"), 1);
     }
 }

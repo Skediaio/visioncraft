@@ -158,6 +158,17 @@ const HANDLE_M: f32 = 3.0;
 const HANDLE_PX: f32 = 18.0;
 
 impl LightsTool {
+    /// The selected light's id.
+    pub fn selected(&self) -> Option<&str> {
+        self.selected.as_deref()
+    }
+
+    /// Selects a light (or none), as a click on it does.
+    pub fn select(&mut self, id: Option<String>) {
+        self.selected = id;
+        self.aiming = None;
+    }
+
     fn light<'a>(&self, cx: &'a Cx) -> Option<&'a Light> {
         let id = self.selected.as_ref()?;
         cx.s.project().lights.iter().find(|l| &l.id == id)

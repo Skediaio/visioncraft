@@ -754,6 +754,9 @@ pub struct PlantingTools {
     /// The other tools' settings: each tool keeps its own palette.
     forms: HashMap<Tool, Form>,
     pub selected: Option<String>,
+    /// One plant of the selected planting that was picked: its number (as `selection::plants`
+    /// counts) and place. Agents act on it (`planting.replace_placement`).
+    pub placement: Option<(usize, [f32; 3])>,
     /// The selected planting's settings, edited live.
     pub edit: Option<Form>,
     edit_rev: u64,
@@ -784,6 +787,7 @@ impl Default for PlantingTools {
             form: Form::default(),
             forms: HashMap::new(),
             selected: None,
+            placement: None,
             edit: None,
             edit_rev: u64::MAX,
             panel_height: 0.0,
@@ -933,6 +937,7 @@ impl PlantingTools {
         self.stroke.clear();
         self.drag = Drag::None;
         self.selected = None;
+        self.placement = None;
         self.edit = None;
         self.vertex = None;
         self.brush_target = None;
@@ -957,6 +962,7 @@ impl PlantingTools {
         self.vertex = None;
         if tool != Tool::Select {
             self.selected = None;
+            self.placement = None;
             self.edit = None;
         }
         cx.s.set_draft(None);
@@ -964,6 +970,7 @@ impl PlantingTools {
 
     pub fn select_generator(&mut self, cx: &mut Cx, id: Option<String>) {
         self.vertex = None;
+        self.placement = None;
         self.edit = id
             .as_deref()
             .and_then(|id| stored(cx, id))
@@ -991,6 +998,7 @@ impl PlantingTools {
         self.lights = false;
         self.switch_form(Tool::Select);
         self.vertex = None;
+        self.placement = None;
         self.edit = g.map(Form::from_generator);
         self.selected = g.map(|g| g.id().to_string());
         self.edit_rev = revision;
@@ -1221,6 +1229,7 @@ impl PlantingTools {
             match stored(cx, id) {
                 None => {
                     self.selected = None;
+                    self.placement = None;
                     self.edit = None;
                     self.vertex = None;
                     self.drag = Drag::None;
@@ -1229,6 +1238,11 @@ impl PlantingTools {
                 Some(g) if self.edit_rev != cx.s.session.revision() && cx.s.draft.is_none() => {
                     self.edit = Some(Form::from_generator(&g));
                     self.edit_rev = cx.s.session.revision();
+                    // The plants may have moved or gone: keep the picked one where it still is.
+                    if let Some((i, _)) = self.placement {
+                        self.placement =
+                            crate::selection::plant(cx.s.project(), &g, i).map(|p| (i, p.position));
+                    }
                 }
                 Some(_) => {}
             }
@@ -1439,6 +1453,9 @@ impl PlantingTools {
                     }
                 }
             }
+            if let Some((_, at)) = self.placement {
+                top.extend(ring(cx, [at[0], at[2]], 0.6, [255, 200, 70, 255], 3.0));
+            }
             for (h, p, at) in &world {
                 let picked = matches!(h, Handle::Point(k) if self.vertex == Some(*k));
                 let is_hot = hot == Some(*h) || matches!(self.drag, Drag::Handle(d) if d == *h);
@@ -1459,13 +1476,18 @@ impl PlantingTools {
 
     fn pick(&mut self, cx: &mut Cx, hv: Vec2) {
         let (o, d) = cx.s.pointer_ray(hv, cx.size());
-        let plant = cx.s.scene.pick_plant(o, d);
+        let plant = cx.s.scene.pick_plant_detail(o, d);
         let ground = ground_distance(cx, o, d);
         // A trunk stands on the ground that is hit around its foot: allow a little behind it.
-        let id = plant
-            .filter(|(_, t)| ground.is_none_or(|g| *t <= g + 2.0))
-            .map(|p| p.0);
-        self.select_generator(cx, id);
+        let hit = plant.filter(|(_, _, t)| ground.is_none_or(|g| *t <= g + 2.0));
+        self.select_generator(cx, hit.as_ref().map(|h| h.0.clone()));
+        // The plant itself: the one standing where the picked cylinder is.
+        if let Some((id, inst, _)) = hit
+            && let Some(g) = stored(cx, &id)
+        {
+            self.placement =
+                crate::selection::plant_near(cx.s.project(), &g, inst.pos[0], inst.pos[2], 0.5);
+        }
     }
 
     // ---- Single ----

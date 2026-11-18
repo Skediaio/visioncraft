@@ -22,8 +22,8 @@ pub(super) fn register(s: &mut Session) {
             "Saves a camera position and target, optionally with a time of day, a season and years after planting.",
             vec![
                 param("name", T::String, "Display name.").required(),
-                param("position", T::Point3, "Camera position [x, y, z].").unit("m").required(),
-                param("target", T::Point3, "Point it looks at; must differ from the position.").unit("m").required(),
+                param("position", T::Place, "Camera position [x, y, z], or a reference (a shape id, a planting, a name) for its centre.").unit("m").required(),
+                param("target", T::Place, "Point it looks at, [x, y, z] or a reference such as \"Pond\"; must differ from the position.").unit("m").required(),
                 fov().default(json!(60)),
                 time(),
                 param("season", T::String, "spring, summer, autumn or winter: the season shown from here (its day at the site, as view.set season; the hour from `time` or the project's)."),
@@ -42,8 +42,18 @@ pub(super) fn register(s: &mut Session) {
             vec![
                 param("id", T::String, "Viewpoint id.").required(),
                 param("name", T::String, "Display name."),
-                param("position", T::Point3, "Camera position.").unit("m"),
-                param("target", T::Point3, "Look-at point.").unit("m"),
+                param(
+                    "position",
+                    T::Place,
+                    "Camera position: [x, y, z] or a reference.",
+                )
+                .unit("m"),
+                param(
+                    "target",
+                    T::Place,
+                    "Look-at point: [x, y, z] or a reference.",
+                )
+                .unit("m"),
                 fov(),
                 time(),
                 param(
@@ -97,7 +107,16 @@ fn at(project: &Project, id: &str) -> Result<usize, CommandError> {
         .ok_or_else(|| fail(format!("no viewpoint `{id}`")))
 }
 
+/// The params with references in `position` and `target` turned into points.
+fn with_points(project: &Project, id: &str, params: &Value) -> Result<Value, CommandError> {
+    let scene = crate::reference::Scene::new(project, project.view.years);
+    crate::directing::resolve_command(id, params, &scene)
+        .map(|(p, _)| p)
+        .map_err(|e| bad(&e))
+}
+
 fn viewpoint_add(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
+    let params = &with_points(project, "viewpoint.add", params)?;
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct P {
@@ -131,6 +150,7 @@ fn viewpoint_add(project: &mut Project, params: &Value) -> Result<Value, Command
 }
 
 fn viewpoint_update(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
+    let params = &with_points(project, "viewpoint.update", params)?;
     let i = at(
         project,
         params["id"].as_str().ok_or_else(|| bad("missing id"))?,
