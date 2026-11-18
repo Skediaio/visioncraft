@@ -31,7 +31,7 @@ pub struct Loaded {
     pub version: u64,
 }
 
-pub type LookKey = [u32; 16];
+pub type LookKey = [u32; 22];
 
 /// What a surface looks like to the renderer.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -43,6 +43,10 @@ pub struct Look {
     pub relief: f32,
     pub gloss: f32,
     pub weathering: f32,
+    /// How strongly dirt, moss, wear and streaks age the surface (`Weathering::strengths`: the
+    /// material's own and the view's) and true north on the ground (x, z) for the moss.
+    pub aging: [f32; 4],
+    pub north: [f32; 2],
     /// 0 standard, 1 glass, 2 water.
     pub surface: u32,
     pub variation: f32,
@@ -68,6 +72,8 @@ impl Look {
             relief: 0.0,
             gloss: 0.0,
             weathering: 0.0,
+            aging: [0.0; 4],
+            north: [0.0, -1.0],
             surface: 0,
             variation: 0.0,
             scale_m: 1.0,
@@ -105,6 +111,12 @@ impl Look {
             f32::from_bits(self.stripes),
             self.parallax_m,
             f32::from_bits(self.photo),
+            self.aging[0],
+            self.aging[1],
+            self.aging[2],
+            self.aging[3],
+            self.north[0],
+            self.north[1],
         ]
         .map(f32::to_bits)
     }
@@ -131,7 +143,21 @@ pub fn shown_variation(lib: &Library, m: &Material) -> f32 {
     material_library::overlay(lib, m).map_or(0.0, |o| o.variation)
 }
 
-fn look_of(m: &Material, lib: &mut Library, month: u32, site: &visioncraft_core::Site) -> Look {
+/// True north on the ground as a drawing direction (x, z), turned to the south in the southern
+/// hemisphere: the side of a wall the sun does not reach, where moss grows.
+fn shade_direction(site: &visioncraft_core::Site) -> [f32; 2] {
+    let b = site.bearing_to_drawing(if site.latitude < 0.0 { 180.0 } else { 0.0 });
+    [b[0], b[2]]
+}
+
+/// `view_weathering`: the view's, added to the material's own (`Weathering::strengths`).
+fn look_of(
+    m: &Material,
+    lib: &mut Library,
+    month: u32,
+    site: &visioncraft_core::Site,
+    view_weathering: f32,
+) -> Look {
     let own = library::spec_of(&m.maps);
     // An unchanged palette material shows its library look while the library is there.
     let ov = if own.is_empty() {
@@ -194,6 +220,8 @@ fn look_of(m: &Material, lib: &mut Library, month: u32, site: &visioncraft_core:
             },
             gloss: ov.as_ref().map_or(*gloss, |o| o.gloss),
             weathering: *weathering,
+            aging: visioncraft_core::material::Weathering::strengths(m.weathering, view_weathering),
+            north: shade_direction(site),
             scale_m: ov.as_ref().map_or(*map_scale_m, |o| o.scale_m),
             ..plain
         },
@@ -255,6 +283,8 @@ fn gpu_material(look: &Look) -> visioncraft_render::Material {
         relief: look.relief,
         gloss: look.gloss,
         weathering: look.weathering,
+        aging: look.aging,
+        aging_north: look.north,
         variation: look.variation,
         stripes: look.stripes,
         parallax_depth_m: look.parallax_m,
@@ -1278,6 +1308,7 @@ impl Scene {
                                 &mut self.library,
                                 u32::from(project.plant_month()),
                                 &project.site,
+                                project.view.weathering,
                             )
                         } else if let Some(c) = model.bodies[f.body as usize].color {
                             Look {
@@ -2425,9 +2456,11 @@ impl Scene {
         self.terrain_gpu
             .sync_layers(r, project, &mut self.library, &mut |m, lib| {
                 // Mowing stripes belong to the drawn lawn, not the ground round it.
+                // The ground is not aged here (terrain.wgsl shades it without).
                 Look {
                     stripes: 0,
-                    ..look_of(m, lib, month, &site)
+                    aging: [0.0; 4],
+                    ..look_of(m, lib, month, &site, 0.0)
                 }
             });
         // The endless ground wears the terrain's base layer, so the terrain's edge cannot be
@@ -2443,7 +2476,8 @@ impl Scene {
         let ground = base.map(|m| {
             let look = Look {
                 stripes: 0,
-                ..look_of(m, &mut self.library, month, &project.site)
+                aging: [0.0; 4],
+                ..look_of(m, &mut self.library, month, &project.site, 0.0)
             };
             self.material(r, &look)
         });
@@ -2965,20 +2999,20 @@ mod tests {
 
     #[test]
     fn classify_picks_the_cheapest_update() {
-        let a = key(1, vec![[0; 16]], true);
+        let a = key(1, vec![[0; 22]], true);
         let (i, t) = (Mat4::IDENTITY, Mat4::from_translation(Vec3::X));
         assert_eq!(classify(&a, &a.clone(), &i, &i), Change::Keep);
         assert_eq!(classify(&a, &a.clone(), &i, &t), Change::Transform);
         assert_eq!(
-            classify(&a, &key(2, vec![[0; 16]], true), &i, &i),
+            classify(&a, &key(2, vec![[0; 22]], true), &i, &i),
             Change::Rebuild
         );
         assert_eq!(
-            classify(&a, &key(1, vec![[1; 16]], true), &i, &i),
+            classify(&a, &key(1, vec![[1; 22]], true), &i, &i),
             Change::Rebuild
         );
         assert_eq!(
-            classify(&a, &key(1, vec![[0; 16]], false), &i, &t),
+            classify(&a, &key(1, vec![[0; 22]], false), &i, &t),
             Change::Rebuild
         );
     }

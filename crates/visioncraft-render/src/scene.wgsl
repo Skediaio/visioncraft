@@ -53,7 +53,8 @@ struct Material {
     emissive: vec4<f32>,   // rgb emitted luminance (cd/m2), w weathering
     alpha: vec4<f32>,      // x cutout threshold, y 1 / triplanar scale (0: UVs), z surface (0 standard, 1 glass, 2 water), w foliage
     flags: vec4<u32>,      // x texture bits (1 base, 2 normal, 4 orm, 8 roughness, 16 metallic, 32 occlusion, 64 height in the occlusion slot), y double-sided, z macro variation (f32 bits), w mowing stripes (cm | deg << 16)
-    relief: vec4<f32>,     // x parallax depth of the height map (m; 0 off)
+    relief: vec4<f32>,     // x parallax depth of the height map (m; 0 off), yz true north's direction on the ground (x, z; unit)
+    aging: vec4<f32>,      // how strongly dirt, moss, wear and rain streaks show (0..1 each; all 0 off)
 }
 @group(1) @binding(0) var<uniform> material: Material;
 // Absent maps are bound to a 1x1 white texture (a neutral factor).
@@ -879,6 +880,97 @@ fn weather(base: vec3<f32>, world: vec3<f32>, n: vec3<f32>, ao: f32, amount: f32
     return c;
 }
 
+// Ageing of standard surfaces: dirt, moss, wear and rain streaks, procedural and in world space
+// (no textures: a few value-noise lookups), changing albedo, roughness and metallic only, so the
+// lighting stays correct. `k` holds how strongly each shows (the material's `weathering` and the
+// view's, already combined by the app); all zero costs nothing (the caller skips this). A look,
+// not a physical model: the pieces follow what is seen on old walls and paving. Dirt collects
+// in the splash zone above the ground (`g.options.w`, the ground plane: a hill's own ground is not
+// known here), in crevices (ambient occlusion) and under overhangs; moss grows on up-facing
+// surfaces and on the wall side away from the sun (`north`, true north in the drawing; the app
+// turns it to the south in the southern hemisphere), low down and where it is damp, in patches,
+// more in the crevices; wear lightens and smooths up-facing patches where feet go; streaks
+// run down walls in stretched noise.
+struct Aging {
+    k: vec4<f32>,     // dirt, moss, wear, streaks
+    north: vec2<f32>, // unit direction of true north on the ground (world x, z)
+}
+const NO_AGING = Aging(vec4<f32>(0.0), vec2<f32>(0.0, -1.0));
+struct Aged {
+    albedo: vec3<f32>,
+    roughness: f32,
+    metallic: f32,
+}
+
+fn age(base: vec3<f32>, roughness: f32, metallic: f32, world: vec3<f32>, n: vec3<f32>, ao: f32, aging: Aging, snow: f32) -> Aged {
+    var out = Aged(base, roughness, metallic);
+    let k = aging.k;
+    // Where the surface faces and how far above the ground it is.
+    let up = smoothstep(0.55, 0.92, n.y);
+    let wall = 1.0 - smoothstep(0.25, 0.65, abs(n.y));
+    let down = max(-n.y, 0.0);
+    let h = max(world.y - g.options.w, 0.0);
+    // Patches of a metre or so, and the finer breakup inside them.
+    let broad = value_noise(world * 0.65);
+    let fine = value_noise(world * 3.7 + vec3<f32>(11.0, 3.0, 7.0));
+    let crevice = clamp((1.0 - ao) * 1.6, 0.0, 1.0);
+
+    // Wear first: it scrubs the dirt and moss off.
+    var worn = 0.0;
+    if k.z > 0.0 && up > 0.0 {
+        let tread = value_noise(world * vec3<f32>(0.45, 0.45, 0.45) + vec3<f32>(5.0, 1.0, 13.0));
+        worn = up * smoothstep(0.62 - 0.3 * k.z, 0.82 - 0.2 * k.z, tread * 0.75 + fine * 0.25) * min(k.z * 1.6, 1.0);
+    }
+
+    // Dirt: darker, greyer, warm.
+    let splash = exp(-h / 0.9) * (0.65 + 0.7 * fine);
+    let grime = clamp(splash * (0.35 + 1.2 * wall + 0.3 * up) + crevice * 0.7 + down * 0.6 + 0.16 * broad, 0.0, 1.0);
+    var dirt = clamp(k.x * grime * 1.5, 0.0, 0.85) * (1.0 - 0.7 * worn);
+
+    // Rain streaks: stretched along y, strongest high on a wall where the water leaves the top
+    // edge and the sills, gone near the splash zone's own darkening.
+    if k.w > 0.0 && wall > 0.0 {
+        let across = dot(world.xz, vec2<f32>(-n.z, n.x));
+        let into = dot(world.xz, n.xz);
+        let run = value_noise(vec3<f32>(across * 8.0, world.y * 0.32, into * 0.5 + 9.0));
+        let thin = value_noise(vec3<f32>(across * 17.0 + 3.0, world.y * 0.9, into * 0.5));
+        let streak = smoothstep(0.62 - 0.1 * k.w, 0.86, run * 0.7 + thin * 0.3);
+        let sheltered = 1.0 - 0.6 * crevice;
+        dirt = max(dirt, clamp(k.w * 1.1 * streak * wall * sheltered * smoothstep(0.2, 2.5, h), 0.0, 0.7));
+    }
+
+    // Moss: low, damp and shaded; patchy; thickest in the joints.
+    var moss = 0.0;
+    if k.y > 0.0 {
+        let shade = dot(normalize(n.xz + vec2<f32>(1e-4, 0.0)), aging.north) * 0.5 + 0.5;
+        // Up-facing surfaces take it anywhere (a little less in the open sun, the south side of
+        // a wall's foot); a wall only on its shaded side and low down.
+        let suits = max(up * (0.55 + 0.45 * shade), wall * shade * shade * (1.0 - smoothstep(0.15, 1.6, h)));
+        let damp = mix(0.55, 1.0, 1.0 - smoothstep(0.1, 1.2, h)) + 0.35 * crevice;
+        // Ragged edges: a finer grain across the patches' rims.
+        let grain = value_noise(world * 13.0 + vec3<f32>(2.0, 9.0, 4.0));
+        let clump = broad * 0.55 + fine * 0.3 + (grain - 0.5) * 0.3 + 0.3 * crevice * suits;
+        let edge = 0.62 - 0.4 * k.y;
+        moss = smoothstep(edge, edge + 0.12, clump * damp) * suits * (1.0 - 0.85 * worn);
+        moss = clamp(moss * min(k.y * 2.6, 1.0), 0.0, 0.9);
+    }
+
+    var c = out.albedo;
+    // Wear: lighter and smoother, like a polished stone.
+    c = mix(c, c * 1.22 + vec3<f32>(0.02), worn * 0.8);
+    // Dirt: towards a warm grey-brown of under half the brightness.
+    let l = luminance(c);
+    c = mix(c, vec3<f32>(l) * vec3<f32>(0.5, 0.44, 0.37) + vec3<f32>(0.004, 0.003, 0.0), dirt * 0.95);
+    // Moss: dark olive green, browner and drier at the fringe of a patch.
+    let mossy = mix(vec3<f32>(0.06, 0.065, 0.02), vec3<f32>(0.03, 0.07, 0.012), smoothstep(0.1, 0.6, moss));
+    c = mix(c, mossy * (0.7 + 0.7 * fine), moss);
+    let keep = 1.0 - snow;
+    out.albedo = mix(base, c, keep);
+    out.roughness = mix(roughness, clamp(roughness + 0.12 * dirt + (0.95 - roughness) * moss - 0.2 * worn, 0.05, 1.0), keep);
+    out.metallic = mix(metallic, metallic * (1.0 - clamp(dirt + moss, 0.0, 1.0)), keep);
+    return out;
+}
+
 // Point and spot lights from the light list of the fragment's grid cell.
 // Inverse-square falloff windowed to the light's range: Karis, "Real Shading
 // in Unreal Engine 4" (2013), eq. 9, with the distance clamp of Lagarde & de
@@ -947,7 +1039,12 @@ fn shade(in: Varying, front: bool, screen_effects: bool, ground: bool) -> Shaded
     var s = surface(in, front, ground);
     // Leaves, and the branches among them (both tagged by the app).
     s.ao *= crown_sky(in.face);
-    return light(in, s, material.alpha.w > 0.0, material.emissive.w, screen_effects);
+    // Standard surfaces age (no glass, water or leaves).
+    var aging = NO_AGING;
+    if material.alpha.z == 0.0 && material.alpha.w == 0.0 {
+        aging = Aging(material.aging, material.relief.yz);
+    }
+    return light(in, s, material.alpha.w > 0.0, material.emissive.w, aging, screen_effects);
 }
 
 // A plant's leaves carry the sky their place in the crown sees (the app's crown_occlusion)
@@ -973,7 +1070,7 @@ fn crown_sky(face: u32) -> f32 {
 
 // Lighting of a surface (any source: a material, the terrain layers, an
 // impostor atlas), without reading the material uniform.
-fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, screen_effects: bool) -> Shaded {
+fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, aging: Aging, screen_effects: bool) -> Shaded {
     var s = surf;
     let clay = g.time.w > 0.5;
     if clay {
@@ -1012,7 +1109,6 @@ fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, screen_effe
     // Bent leaf normals often face away from the viewer; clamping n.v keeps
     // those cards from turning into grazing-angle mirrors of the sky.
     let nov = select(max(dot(n, v), 1e-4), max(abs(dot(n, v)), 0.35), foliage);
-    let a = s.roughness * s.roughness;
 
     let depth = -(g.view * vec4<f32>(in.world, 1.0)).z;
     var screen = vec2<f32>(1.0);
@@ -1022,6 +1118,12 @@ fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, screen_effe
     let ao = screen.r * s.ao;
     if !clay {
         base = weather(base, in.world, s.geometric, ao, weathering);
+        if aging.k.x + aging.k.y + aging.k.z + aging.k.w > 0.0 {
+            let aged = age(base, s.roughness, s.metallic, in.world, s.geometric, ao, aging, snow);
+            base = aged.albedo;
+            s.roughness = aged.roughness;
+            s.metallic = aged.metallic;
+        }
         if foliage {
             // Leaves differ in hue across a crown: a slow, seamless drift between a yellower
             // and a bluer, darker green over half a metre or so.
@@ -1031,6 +1133,8 @@ fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, screen_effe
         }
     }
     base = mix(base, SNOW_ALBEDO, snow);
+    // After the weathering, which changes the roughness.
+    let a = s.roughness * s.roughness;
     // Leaves have a waxy but thin cuticle: half the specular of other dielectrics.
     let f0 = mix(vec3<f32>(select(0.04, 0.02, foliage)), base, s.metallic);
     let diffuse_color = base * (1.0 - s.metallic);

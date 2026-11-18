@@ -52,7 +52,7 @@ pub use light::{
     Light, LightKind, LightSpec, kelvin_to_linear_rgb, lights_for_placement, lights_for_placements,
 };
 pub use material::{
-    Assignment, Material, McMat, McMatError, SurfaceKind, Target, builtin_palette,
+    Assignment, Material, McMat, McMatError, SurfaceKind, Target, Weathering, builtin_palette,
     dangling_assignments, read_mcmat, resolve_materials,
 };
 pub use model::{Body, Face, ImportError, ImportedModel, ModelCodecError};

@@ -87,6 +87,81 @@ impl Default for SurfaceKind {
     }
 }
 
+/// How far a material has aged: dirt, moss, wear and rain streaks, each 0..1, all scaled by
+/// `amount`. Only `amount` is needed; the others default to a plausible mix. Procedural and
+/// drawn in the renderer (it changes albedo and roughness only); not written while a material
+/// has none, so files from before it existed round-trip unchanged.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Weathering {
+    /// 0..1: how much of all of it shows.
+    pub amount: f32,
+    /// Darkening and greying near the ground, in crevices and under overhangs.
+    #[serde(default = "Weathering::default_dirt")]
+    pub dirt: f32,
+    /// Green-brown patches on up-facing surfaces and on the shaded side, in low and damp spots.
+    #[serde(default = "Weathering::default_moss")]
+    pub moss: f32,
+    /// Lighter, smoother patches on up-facing paving where feet go, and worn edges.
+    #[serde(default = "Weathering::default_wear")]
+    pub wear: f32,
+    /// Vertical rain streaks running down walls from their top edges and sills.
+    #[serde(default = "Weathering::default_streaks")]
+    pub streaks: f32,
+}
+
+impl Weathering {
+    pub const DEFAULT_DIRT: f32 = 0.6;
+    pub const DEFAULT_MOSS: f32 = 0.4;
+    pub const DEFAULT_WEAR: f32 = 0.4;
+    pub const DEFAULT_STREAKS: f32 = 0.5;
+    fn default_dirt() -> f32 {
+        Self::DEFAULT_DIRT
+    }
+    fn default_moss() -> f32 {
+        Self::DEFAULT_MOSS
+    }
+    fn default_wear() -> f32 {
+        Self::DEFAULT_WEAR
+    }
+    fn default_streaks() -> f32 {
+        Self::DEFAULT_STREAKS
+    }
+
+    /// `amount` with the default mix of the rest.
+    pub fn new(amount: f32) -> Self {
+        Self {
+            amount,
+            dirt: Self::DEFAULT_DIRT,
+            moss: Self::DEFAULT_MOSS,
+            wear: Self::DEFAULT_WEAR,
+            streaks: Self::DEFAULT_STREAKS,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        let unit = |v: f32| (0.0..=1.0).contains(&v);
+        if [self.amount, self.dirt, self.moss, self.wear, self.streaks]
+            .into_iter()
+            .all(unit)
+        {
+            Ok(())
+        } else {
+            Err("weathering amount, dirt, moss, wear and streaks must lie in 0..1".into())
+        }
+    }
+
+    /// How strongly dirt, moss, wear and streaks show on a surface, each 0..1, from the
+    /// material's own weathering (`None`: the default mix at amount 0) and the view's global
+    /// `view.weathering`. The two add up as independent layers of age: `1 - (1 - own)(1 - global)`.
+    /// All zero when neither is set, which the renderer skips entirely.
+    pub fn strengths(own: Option<Self>, global: f32) -> [f32; 4] {
+        let w = own.unwrap_or_else(|| Self::new(0.0));
+        let amount = 1.0 - (1.0 - w.amount.clamp(0.0, 1.0)) * (1.0 - global.clamp(0.0, 1.0));
+        [w.dirt, w.moss, w.wear, w.streaks].map(|k| k.clamp(0.0, 1.0) * amount)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Material {
     pub id: String,
@@ -101,6 +176,10 @@ pub struct Material {
     /// 0..1: how much the colour varies across the surface at large scale (breaks up repetition).
     #[serde(default)]
     pub variation: f32,
+    /// Dirt, moss, wear and rain streaks on top of the surface (`Weathering`); `None` (the
+    /// default, not written): only the view's global weathering ages it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weathering: Option<Weathering>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extensions: Extensions,
 }
@@ -115,6 +194,9 @@ impl Material {
             && unit(self.variation))
         {
             return Err("colour, metallic, roughness and variation must lie in 0..1".into());
+        }
+        if let Some(w) = &self.weathering {
+            w.validate()?;
         }
         let ok = match &self.kind {
             SurfaceKind::StandardTriplanarPbr {
@@ -262,6 +344,7 @@ fn plain(
         roughness,
         maps: MaterialMaps::default(),
         variation: 0.0,
+        weathering: None,
         extensions: Extensions::new(),
     }
 }

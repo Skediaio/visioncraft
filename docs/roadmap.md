@@ -5,6 +5,17 @@ nothing here is a promise of a date.
 
 ## In progress
 
+- **Weathering:** `material.update {weathering: {amount, dirt, moss, wear, streaks}}` and
+  `view.set {weathering}` (one slider for the whole design, kept explicit: the view's `years` does
+  not drive it) age standard materials with procedural dirt (near the ground, in crevices, under
+  overhangs), moss (up-facing surfaces and the shaded side, low and damp, in patches), wear
+  (lighter, smoother up-facing paving) and rain streaks down walls, in the renderer in world
+  space, changing albedo and roughness only, at a few noise lookups and nothing when off. In the
+  window: a Weathering section in Materials and an Age slider in Sun & sky. Next: texture-based
+  moss and lichen from CC0 scans, leaf litter stains, efflorescence on brick, edge wear from
+  real curvature, dirt measured from each object's own footing (on a hill today it follows the
+  ground plane), weathering of terrain layers and lawns' edges, and ageing that follows the
+  years of a design.
 - **A plan as underlay:** `underlay.add` puts a PNG or JPEG (a floor plan, a site plan, a scan)
   flat under the drawing, unlit and see-through (`opacity`, `elevation`, its own `underlay`
   layer), casting no shadow and not picked; `underlay.calibrate` (two image points and the drawing
@@ -112,7 +123,6 @@ nothing here is a promise of a date.
 - **More leaf sets:** the remaining CC0 atlases, then coverage reported again.
 - **Growth data checked against open data,** with the source of each value recorded. The table
   is estimated today.
-- **Weathering:** dirt, moss and wear on walls and paving, so materials stop looking new.
 - **Tree form:** a better branch solver in the plant generator, compared against reference scans
   of real plants.
 - **North and site:** turning the whole drawing against north is done (`site.set north_deg`,

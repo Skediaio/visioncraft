@@ -198,6 +198,11 @@ pub struct ViewState {
     /// written) to 1. The season stays the date's (`Project::season`).
     #[serde(skip_serializing_if = "is_zero")]
     pub snow: f32,
+    /// Weathering of every standard material at once, 0 (none, the default; not written) to 1:
+    /// dirt, moss, wear and rain streaks with the default mix, added to each material's own
+    /// `weathering` (`Weathering::strengths`). Explicit: the view's `years` does not drive it.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub weathering: f32,
     /// What lies round the design on the endless ground, beyond its plot. Not written while the
     /// default (fields).
     #[serde(skip_serializing_if = "Surroundings::is_default")]
@@ -326,6 +331,7 @@ impl Default for ViewState {
             lights: None,
             clutter: true,
             snow: 0.0,
+            weathering: 0.0,
             surroundings: Surroundings::default(),
             sun_map: None,
         }
@@ -357,6 +363,7 @@ impl ViewState {
             && (0.0..=1.0).contains(&self.clouds.cover)
             && self.years.is_none_or(|y| (0.0..=YEARS_MAX).contains(&y))
             && (0.0..=1.0).contains(&self.snow)
+            && (0.0..=1.0).contains(&self.weathering)
             && self.ground.is_none_or(|g| {
                 finite(g.height) && g.color.iter().all(|c| c.is_finite() && *c >= 0.0)
             })

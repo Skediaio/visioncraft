@@ -762,6 +762,44 @@ run). In the window, Views mode has a Film panel to list shots, add a shot from 
 camera (or a walk, an orbit, a flyover), scrub and play the film in the viewport. Not yet: smooth
 joins between shots, a film's own cuts and fades, sound.
 
+### 28. Weather the garden: dirt on the house walls, moss on the paving
+
+```json recipe
+{"intent": "age the example garden: rain streaks and a dirty foot on the plaster walls, moss and worn patches on the paving, and one slider for everything else", "steps": [
+  {"id": "project.load_example", "params": {"name": "garden"}},
+  {"id": "view.render", "params": {"camera": {"position": [10, 1.6, 22], "target": [10, 3, 9]}, "width": 960, "height": 540, "path": "new.png"}},
+  {"id": "material.update", "params": {"id": "plaster", "weathering": {"amount": 0.7, "streaks": 0.6, "moss": 0.2}}},
+  {"id": "material.update", "params": {"id": "paving", "weathering": {"amount": 0.7, "moss": 0.7, "wear": 0.5}}},
+  {"id": "view.set", "params": {"weathering": 0.3}},
+  {"id": "view.render", "params": {"camera": {"position": [10, 1.6, 22], "target": [10, 3, 9]}, "width": 960, "height": 540, "path": "aged.png"}},
+  {"id": "view.render", "params": {"camera": {"position": [11, 0.9, 13.5], "target": [10, 0, 10]}, "width": 960, "height": 540, "path": "terrace.png"}},
+  {"id": "material.update", "params": {"id": "paving", "weathering": null}},
+  {"id": "view.set", "params": {"weathering": 0}}
+]}
+```
+
+Materials age with procedural **weathering**, drawn in the renderer on top of the surface: dirt,
+moss, wear and rain streaks, no textures, and only the albedo and the roughness change, so the
+lighting stays right. `material.update {id, weathering: {amount, dirt?, moss?, wear?, streaks?}}`
+(also on `material.add`): each number is 0 to 1, `amount` scales the rest, and without the others
+they default to dirt 0.6, moss 0.4, wear 0.4 and streaks 0.5. A later update changes only the keys
+given (a first one needs `amount`); `null` takes the weathering off. **Dirt** collects in the first
+metre or so above the ground, in crevices (where occlusion darkens) and under overhangs; **moss**
+grows on up-facing surfaces and on the wall side away from the sun (true north in the northern
+hemisphere, south in the southern: `site.set north_deg` turns it with the drawing), low down and in
+patches; **wear** lightens and smooths patches of up-facing paving; **streaks** run down walls,
+more the higher the wall. `view.set {weathering: 0..1}` weathers every standard material at once
+with the default mix, added to each material's own as layers of age (1 - (1 - own)(1 - view)), so
+one slider ages a whole design; the view's `years` does not drive it, it stays explicit. Glass,
+water, lawns, plants and the terrain's ground layers are not weathered. The height above the
+ground is measured from the view's ground plane (`view.set {ground: {height}}`), so on a hill the
+dirt follows that plane, not the slope. Compare the pictures: a wall at 0.7 shows a darker foot, a
+few streaks and a hint of moss at its shaded base; paving shows greenish patches in the damp and
+paler, smoother patches in the open. In the window: Materials has a Weathering section (Amount,
+Dirt, Moss, Wear, Streaks) for the picked material, and Sun & sky an Age slider for the whole view.
+`weathering` of the older kind (`kind.weathering`, the "Grime tint" slider: one tint for occluded
+and downward faces, green on up-facing ones) still works and adds to it.
+
 ## Known traps
 
 - **Ids are not names**: `S2`, not `House`; viewpoints are `v1`, lights `li1`.

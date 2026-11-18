@@ -211,7 +211,16 @@ pub const EYEDROPPER: &str = "Eyedropper";
 pub const MAP_SCALE: &str = "Map scale";
 pub const RELIEF: &str = "Relief";
 pub const GLOSS: &str = "Gloss";
-pub const WEATHERING: &str = "Weathering";
+pub const WEATHERING: &str = "Grime tint";
+pub const WEATHERING_SECTION: &str = "Weathering";
+pub const WEATHERING_TIP: &str = "Dirt, moss, wear and rain streaks on top of the surface; the amount scales the rest. Not on glass, water or lawns.";
+pub const WEATHER_AMOUNT: &str = "Amount";
+pub const WEATHER_DIRT: &str = "Dirt";
+pub const WEATHER_MOSS: &str = "Moss";
+pub const WEATHER_WEAR: &str = "Wear";
+pub const WEATHER_STREAKS: &str = "Streaks";
+pub const AGE: &str = "Age";
+pub const AGE_TIP: &str = "Weathers every material at once: dirt, moss, wear and rain streaks, added to each material's own weathering. Years after planting does not change it.";
 pub const MATERIALS_HINT: &str =
     "Hover a surface and click it to choose a material. Drop a .mcmat file to add one.";
 pub const MATERIAL_ADDED: &str = "Material added";

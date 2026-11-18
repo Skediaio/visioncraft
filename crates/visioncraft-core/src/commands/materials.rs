@@ -1,5 +1,5 @@
 use super::{fail, merge_update, next_id};
-use crate::material::{Assignment, Material, MaterialMaps, SurfaceKind, Target};
+use crate::material::{Assignment, Material, MaterialMaps, SurfaceKind, Target, Weathering};
 use crate::project::Project;
 use crate::session::{CommandError, Session, bad, parse};
 use crate::spec::{ParamType as T, param, spec};
@@ -39,6 +39,13 @@ pub(super) fn register(s: &mut Session) {
             "0..1: large-scale colour variation across the surface, to break up repetition.",
         )
     };
+    let weathering = || {
+        param(
+            "weathering",
+            T::Object,
+            "{amount 0..1, dirt, moss, wear, streaks (each 0..1, default 0.6, 0.4, 0.4, 0.5)}: procedural ageing drawn on top of the surface, in the renderer only (albedo and roughness; the lighting stays right). Dirt darkens and greys near the ground, in crevices and under overhangs; moss grows on up-facing surfaces and the shaded (north) side, in low damp spots; wear lightens and smooths up-facing paving where feet go; streaks run down walls from top edges and sills. `amount` scales the rest; `view.set {weathering}` ages every material at once. On update the keys given change, the rest stay (a first `weathering` needs `amount`); null clears it. Applies to standard (not glass, water or lawn) materials.",
+        )
+    };
     let extensions = || {
         param(
             "extensions",
@@ -67,6 +74,7 @@ pub(super) fn register(s: &mut Session) {
                 param("roughness", T::Number, "0 (mirror) to 1 (matte).").default(json!(0.5)),
                 maps("").default(json!({})),
                 variation().default(json!(0)),
+                weathering(),
                 extensions().default(json!({})),
             ],
             "{id} (mat1, mat2...)",
@@ -88,10 +96,11 @@ pub(super) fn register(s: &mut Session) {
                 param("roughness", T::Number, "0 to 1."),
                 maps(" Keys given replace those keys only; null clears one."),
                 variation(),
+                weathering(),
                 extensions(),
             ],
             "null",
-            json!({"id": "glass", "roughness": 0.2, "variation": 0.3, "maps": {"orm": "glass_orm.png"}, "extensions": {"com.example.tool": {"tag": 1}}}),
+            json!({"id": "glass", "roughness": 0.2, "variation": 0.3, "weathering": {"amount": 0.7, "moss": 0.8}, "maps": {"orm": "glass_orm.png"}, "extensions": {"com.example.tool": {"tag": 1}}}),
         ),
         update,
     );
@@ -151,6 +160,8 @@ fn add(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
         #[serde(default)]
         variation: f32,
         #[serde(default)]
+        weathering: Option<Weathering>,
+        #[serde(default)]
         extensions: BTreeMap<String, Value>,
     }
     fn white() -> [f32; 4] {
@@ -170,6 +181,7 @@ fn add(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
         roughness: p.roughness,
         maps: p.maps,
         variation: p.variation,
+        weathering: p.weathering,
         extensions: p.extensions,
     };
     m.validate().map_err(|e| bad(&e))?;
@@ -209,7 +221,20 @@ fn update(project: &mut Project, params: &Value) -> Result<Value, CommandError> 
         }
         params["maps"] = maps;
     }
-    let m = merge_update(&project.materials[at], &params, &["extensions"])?;
+    // `weathering` merges key by key onto the material's (null clears it).
+    if let (Some(Value::Object(given)), Some(old)) = (
+        params.get("weathering").cloned(),
+        project.materials[at].weathering,
+    ) {
+        let mut merged = serde_json::to_value(old).expect("weathering serialises");
+        merged.as_object_mut().expect("an object").extend(given);
+        params["weathering"] = merged;
+    }
+    let m = merge_update(
+        &project.materials[at],
+        &params,
+        &["extensions", "weathering"],
+    )?;
     m.validate().map_err(|e| bad(&e))?;
     project.materials[at] = m;
     Ok(Value::Null)

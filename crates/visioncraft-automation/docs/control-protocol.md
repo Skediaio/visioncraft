@@ -98,7 +98,13 @@ The core's commands (`model.*`, `shape.*`, `material.*`, `planting.*`, `species.
 `shape.set_smooth {id, smooth}` and `shape.add_circle {center, radius_m, kind, ...}`; `shape.add_area`,
 `shape.add_extrusion`, `bed.add` and `fence.add` take `curves` and `smooth`. A shape's `outline` in
 `document.inspect` is its control points, with `curves` and `smooth` next to it when it has them; areas,
-lengths and quantities measure the curved outline. The host adds what needs files, history,
+lengths and quantities measure the curved outline. Weathering is a material field and a view field:
+`material.add|update {weathering: {amount, dirt?, moss?, wear?, streaks?}}` (each 0..1; the rest
+default to 0.6, 0.4, 0.4, 0.5; an update merges key by key, `null` clears it) and `view.set
+{weathering: 0..1}` (every standard material at once, added to each one's own); both undoable, both
+stored in the project (not written while off) and drawn by the renderer as dirt, moss, wear and
+rain streaks on albedo and roughness only; `document.inspect` shows them under `materials` (with `full: true`) and
+`view`. The host adds what needs files, history,
 loaded geometry or a GPU:
 
 | Command | Params | Result |

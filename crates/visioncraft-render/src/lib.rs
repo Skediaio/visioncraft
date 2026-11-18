@@ -93,7 +93,7 @@ const MSAA_SAMPLES: u32 = 4;
 /// Uniform slot size: WebGPU's default `minUniformBufferOffsetAlignment`.
 const SLOT: u64 = 256;
 const VERTEX_STRIDE: u64 = 44; // position, normal, face id, uv, wind
-const MATERIAL_SIZE: u64 = 96;
+const MATERIAL_SIZE: u64 = 112;
 const CASCADE_SIZE: u64 = 80;
 const AO_RADIUS: f32 = 0.6; // metres
 /// Staging chunk of the upload belt: a streamed step (256 KB a frame) with row padding fits.
@@ -247,6 +247,13 @@ pub struct Material {
     /// 0..1: darkens and desaturates occluded and downward-facing areas and
     /// tints up-facing ones green (procedural, not physical).
     pub weathering: f32,
+    /// How strongly dirt, moss, wear and rain streaks age the surface, each 0..1 (all 0: none,
+    /// and the shader skips it). Procedural, in world space, on standard surfaces; it changes
+    /// albedo, roughness and metallic only.
+    pub aging: [f32; 4],
+    /// True north on the ground as a unit direction (world x, z): moss favours the wall side
+    /// facing it (the shaded side in the northern hemisphere). -Z unless the site turns it.
+    pub aging_north: [f32; 2],
     pub alpha_mode: AlphaMode,
     /// Draw both sides (back faces shade with the flipped normal).
     pub double_sided: bool,
@@ -283,6 +290,8 @@ impl Default for Material {
             relief: 1.0,
             gloss: 0.0,
             weathering: 0.0,
+            aging: [0.0; 4],
+            aging_north: [0.0, -1.0],
             alpha_mode: AlphaMode::Opaque,
             double_sided: false,
             foliage: false,
@@ -4271,7 +4280,16 @@ fn material_bytes(material: &Material, bits: u32) -> Vec<u8> {
     ] {
         b.0.extend_from_slice(&u.to_le_bytes());
     }
-    b.floats(&[material.parallax_depth_m.clamp(0.0, 0.1), 0.0, 0.0, 0.0]);
+    let north = glam::Vec2::from(material.aging_north)
+        .try_normalize()
+        .unwrap_or(glam::Vec2::NEG_Y);
+    b.floats(&[
+        material.parallax_depth_m.clamp(0.0, 0.1),
+        north.x,
+        north.y,
+        0.0,
+    ]);
+    b.floats(&material.aging.map(|k| k.clamp(0.0, 1.0)));
     debug_assert_eq!(b.0.len() as u64, MATERIAL_SIZE);
     b.0
 }

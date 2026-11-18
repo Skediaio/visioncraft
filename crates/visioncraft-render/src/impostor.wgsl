@@ -302,7 +302,7 @@ fn impostor_shade(in: ImpostorVarying, screen_effects: bool) -> vec3<f32> {
     s.ao = sky;
     s.emissive = vec3<f32>(0.0);
     let v = Varying(in.clip, in.world, n_world, 0xfffffffdu, vec2<f32>(0.0));
-    return light(v, s, t.foliage, 0.0, screen_effects).color;
+    return light(v, s, t.foliage, 0.0, NO_AGING, screen_effects).color;
 }
 
 // Forward: drawn with an Equal depth test, the pre-pass decided coverage.

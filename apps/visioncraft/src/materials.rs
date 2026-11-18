@@ -7,7 +7,7 @@ use crate::ui::{ACCENT, Cx, Edit, panel_frame, slider_field};
 use eframe::egui::{self, Color32, Pos2, Sense, Vec2};
 use serde_json::json;
 use std::collections::HashMap;
-use visioncraft_core::material::{ColorSpace, MapUsage, McMatMap};
+use visioncraft_core::material::{ColorSpace, MapUsage, McMatMap, Weathering};
 use visioncraft_core::{SurfaceKind, read_mcmat, resolve_materials};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -441,18 +441,59 @@ impl MaterialsState {
             slider_field(ui, t::GLOSS, gloss, 0.0..=1.0),
             slider_field(ui, t::WEATHERING, weathering, 0.0..=1.0),
         ];
-        if edits.contains(&Edit::Done) {
+        // Weathering: dirt, moss, wear and rain streaks (`material.update` weathering), a draft
+        // while a slider moves.
+        let mut w = m.weathering.unwrap_or(Weathering::new(0.0));
+        let mut wedits = Vec::new();
+        egui::CollapsingHeader::new(t::WEATHERING_SECTION)
+            .id_salt("material-weathering")
+            .default_open(m.weathering.is_some())
+            .show(ui, |ui| {
+                ui.small(t::WEATHERING_TIP);
+                wedits.push(slider_field(
+                    ui,
+                    t::WEATHER_AMOUNT,
+                    &mut w.amount,
+                    0.0..=1.0,
+                ));
+                wedits.push(slider_field(ui, t::WEATHER_DIRT, &mut w.dirt, 0.0..=1.0));
+                wedits.push(slider_field(ui, t::WEATHER_MOSS, &mut w.moss, 0.0..=1.0));
+                wedits.push(slider_field(ui, t::WEATHER_WEAR, &mut w.wear, 0.0..=1.0));
+                wedits.push(slider_field(
+                    ui,
+                    t::WEATHER_STREAKS,
+                    &mut w.streaks,
+                    0.0..=1.0,
+                ));
+            });
+        if wedits.iter().any(|e| *e != Edit::None) {
+            m.weathering = Some(w);
+        }
+        if edits.contains(&Edit::Done) || wedits.contains(&Edit::Done) {
             cx.s.set_draft(None);
             let original =
                 cx.s.project()
                     .materials
                     .iter()
                     .find(|x| x.id == id)
-                    .map(|x| x.kind.clone());
-            if original.as_ref() != Some(&m.kind) {
-                cx.run("material.update", json!({"id": id, "kind": m.kind}));
+                    .cloned();
+            if let Some(o) = original {
+                let mut change = serde_json::Map::new();
+                if o.kind != m.kind {
+                    change.insert("kind".into(), json!(m.kind));
+                }
+                // Nothing is written for a material that never had any and still has none.
+                if o.weathering != m.weathering
+                    && !(o.weathering.is_none() && m.weathering.is_some_and(|w| w.amount == 0.0))
+                {
+                    change.insert("weathering".into(), json!(m.weathering));
+                }
+                if !change.is_empty() {
+                    change.insert("id".into(), json!(id));
+                    cx.run("material.update", serde_json::Value::Object(change));
+                }
             }
-        } else if edits.contains(&Edit::Live) {
+        } else if edits.contains(&Edit::Live) || wedits.contains(&Edit::Live) {
             cx.s.set_draft(Some(Draft::Material(m)));
         }
     }

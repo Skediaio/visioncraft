@@ -570,6 +570,21 @@ fn view_fields(ui: &mut egui::Ui, cx: &mut Cx) {
             cx.run("view.set", json!({"exposure_ev": ev}));
         }
     });
+    // The whole design's weathering: one slider, a `view.set` when let go.
+    let mut age = v.weathering;
+    let r = ui
+        .add(
+            egui::Slider::new(&mut age, 0.0..=1.0)
+                .text(t::AGE)
+                .max_decimals(2),
+        )
+        .on_hover_text(t::AGE_TIP);
+    if r.drag_stopped() || (r.changed() && !r.dragged() && age != v.weathering) {
+        cx.run(
+            "view.set",
+            json!({"weathering": (age * 100.0).round() / 100.0}),
+        );
+    }
     ui.horizontal(|ui| {
         ui.label(t::LOOK);
         let now = serde_json::to_value(v.look).unwrap_or_default();
