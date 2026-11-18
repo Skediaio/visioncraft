@@ -238,7 +238,7 @@ fn impostor_alpha(in: ImpostorVarying, nearest: bool) -> f32 {
 // The dithered hand-over: the impostor keeps the pixels the fading mesh
 // (fs_depth_fade) gives up.
 fn impostor_keep(in: ImpostorVarying, alpha: f32) -> bool {
-    return alpha >= impostor.grid.w && ign(in.clip.xy) < in.fade;
+    return alpha >= impostor.grid.w && ign_sampled(in.clip.xy) < in.fade;
 }
 
 @fragment
@@ -255,13 +255,13 @@ fn fs_impostor_depth(in: ImpostorVarying) {
 // an impostor's silhouette are a blend, not a screen-door stipple.
 // (mesh samples, impostor samples)
 fn fade_split(clip: vec2<f32>, fade: f32) -> vec2<u32> {
-    let start = u32(ign(clip) * f32(SAMPLES));
+    let start = u32(ign_sampled(clip) * f32(SAMPLES));
     let n = u32(round((1.0 - fade) * f32(SAMPLES)));
     return vec2<u32>(sample_run(n, start), sample_run(SAMPLES - n, start + n));
 }
 
 fn alpha_mask(clip: vec2<f32>, a: f32, cutoff: f32) -> u32 {
-    return sample_run(alpha_samples(a, cutoff), u32(ign(clip + vec2<f32>(17.0, 29.0)) * f32(SAMPLES)));
+    return sample_run(alpha_samples(a, cutoff), u32(ign_sampled(clip + vec2<f32>(17.0, 29.0)) * f32(SAMPLES)));
 }
 
 // The samples of the pixel at `in.clip.xy` (its centre) the impostor keeps.
@@ -342,7 +342,7 @@ fn vs_depth_fade(v: DepthIn) -> FadeOut {
 // in the noise, the far side (a farther mesh level, its fade negated by lib.rs) the rest,
 // as the impostor does.
 fn fade_keeps(clip: vec2<f32>, fade: f32) -> bool {
-    return select(ign(clip) >= fade, ign(clip) < -fade, fade < 0.0);
+    return select(ign_sampled(clip) >= fade, ign_sampled(clip) < -fade, fade < 0.0);
 }
 
 @fragment

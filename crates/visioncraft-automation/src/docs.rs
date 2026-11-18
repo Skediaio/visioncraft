@@ -66,7 +66,73 @@ pub fn from_spec(s: &CommandSpec) -> CommandDoc {
     }
 }
 
+/// The JSON Schema (draft 2020-12) of a parameter type as [`ParamDoc::ty`] spells it; an
+/// unknown spelling (a host command's own words) leaves the value unconstrained.
+fn type_schema(ty: &str) -> Value {
+    let points = |n: usize| json!({"type": "array", "minItems": n, "maxItems": n, "items": {"type": "number"}});
+    match ty {
+        "string" | "number" | "integer" | "boolean" | "object" | "array" => json!({"type": ty}),
+        "[x, z]" => points(2),
+        "[x, y, z]" => points(3),
+        "[r, g, b] or [r, g, b, a]" => {
+            json!({"type": "array", "minItems": 3, "maxItems": 4, "items": {"type": "number"}})
+        }
+        "[[x, z], ...]" => json!({"type": "array", "items": points(2)}),
+        "[[x, y, z], ...]" => json!({"type": "array", "items": points(3)}),
+        _ => json!({}),
+    }
+}
+
 impl CommandDoc {
+    /// The command's params as a JSON Schema object: each parameter with its type, a
+    /// description (doc, unit, default) and its allowed values; `required` as documented.
+    /// Open commands accept more keys; the others refuse them, as the command does.
+    pub fn input_schema(&self) -> Value {
+        let mut properties = serde_json::Map::new();
+        for p in &self.params {
+            let mut schema = type_schema(&p.ty);
+            let mut doc = p.doc.clone();
+            if let Some(unit) = &p.unit {
+                doc.push_str(&format!(" ({unit})"));
+            }
+            if p.ty == "string" && !p.allowed.is_empty() {
+                schema["enum"] = json!(p.allowed);
+            }
+            // An optional parameter may be null (null clears it in many commands).
+            if !p.required {
+                if let Some(ty) = schema["type"].as_str().map(str::to_string) {
+                    schema["type"] = json!([ty, "null"]);
+                }
+                if let Some(values) = schema["enum"].as_array_mut() {
+                    values.push(Value::Null);
+                }
+            }
+            if let Some(d) = &p.default {
+                match serde_json::from_str::<Value>(d) {
+                    Ok(v) if !p.required => schema["default"] = v,
+                    _ => doc.push_str(&format!(" Default: {d}.")),
+                }
+            }
+            schema["description"] = json!(doc.trim());
+            properties.insert(p.name.clone(), schema);
+        }
+        let required: Vec<&str> = self
+            .params
+            .iter()
+            .filter(|p| p.required)
+            .map(|p| p.name.as_str())
+            .collect();
+        let mut schema = json!({
+            "type": "object",
+            "properties": properties,
+            "additionalProperties": self.open,
+        });
+        if !required.is_empty() {
+            schema["required"] = json!(required);
+        }
+        schema
+    }
+
     /// The params in 3dcraft's notation: `{"name": type = default, ...}`.
     pub fn notation(&self) -> String {
         let mut parts: Vec<String> = self
@@ -178,5 +244,28 @@ mod tests {
         );
         assert!(d.notation().starts_with('{'));
         assert_eq!(first_sentence("One. Two."), "One.");
+    }
+
+    #[test]
+    fn the_input_schema_follows_the_spec() {
+        let s = visioncraft_core::Session::new(Default::default());
+        let d = from_spec(s.command_spec("shape.add_extrusion").unwrap());
+        let schema = d.input_schema();
+        assert_eq!(schema["type"], "object");
+        assert_eq!(schema["additionalProperties"], false);
+        assert_eq!(schema["properties"]["outline"]["type"], "array");
+        let optional = d.params.iter().find(|p| !p.required).unwrap();
+        let ty = &schema["properties"][optional.name.as_str()]["type"];
+        assert!(
+            ty.as_array().is_none_or(|t| t.contains(&json!("null"))),
+            "{ty}"
+        );
+        assert_eq!(schema["properties"]["outline"]["items"]["minItems"], 2);
+        assert!(
+            schema["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("outline"))
+        );
     }
 }

@@ -7,6 +7,13 @@
   <link rel="icon" href="data:,">
   <link data-trunk rel="rust" data-bin="visioncraft" data-wasm-opt="z" data-initializer="initializer.js" />
   <link data-trunk rel="copy-file" href="initializer.js" />
+  <!-- WebMCP (experimental): lets the browser's own AI agent use the app's tools; off until the person ticks the box or opens ?webmcp=1. -->
+  <link data-trunk rel="copy-file" href="webmcp.js" />
+  <!-- Origin trial for WebMCP (Chrome): register this site's origin at https://developer.chrome.com/origintrials/ and
+       paste the token it gives you into the tag below, then take it out of the comment. No token is committed on
+       purpose; without one, only a Chrome with the WebMCP flag turned on offers WebMCP (docs/webmcp.md).
+  <meta http-equiv="origin-trial" content="PASTE-THE-ORIGIN-TRIAL-TOKEN-HERE">
+  -->
   <!-- The same crate's second binary, run in a Web Worker so model imports do not freeze the page. -->
   <link data-trunk rel="rust" data-bin="import_worker" data-type="worker" data-loader-shim data-wasm-opt="z" />
   <!-- And a third: block-compresses decoded textures off the page's thread. -->
@@ -100,5 +107,6 @@
       if (resolve) { rpcWaiting.delete(reply.id); resolve(reply); }
     };
   </script>
+  <script src="webmcp.js"></script>
 </body>
 </html>

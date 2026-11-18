@@ -19,7 +19,7 @@ pub fn recipes() -> Vec<Value> {
 #[test]
 fn every_recipe_of_the_guide_runs() {
     let recipes = recipes();
-    assert_eq!(recipes.len(), 40);
+    assert_eq!(recipes.len(), 41);
     for (n, recipe) in recipes.into_iter().enumerate() {
         let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("recipe-{n}"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -331,6 +331,21 @@ fn every_recipe_of_the_guide_runs() {
                     "{report}"
                 );
                 assert_eq!(t["openings"], 2, "{report}");
+            }
+            41 => {
+                // The photo's settings and the look are the project's.
+                let i = visioncraft_automation::commands::execute(
+                    &mut host,
+                    "document.inspect",
+                    &json!({"faces": false}),
+                )
+                .unwrap();
+                let view = &i["view"];
+                let near = |v: &Value, want: f64| (v.as_f64().unwrap() - want).abs() < 1e-5;
+                assert!(near(&view["photo"]["aperture"], 2.8), "{view}");
+                assert!(near(&view["photo"]["focus"], 4.0), "{view}");
+                assert!(near(&view["vignette"], 0.3), "{view}");
+                assert!(near(&view["grain"], 0.2), "{view}");
             }
             40 => {
                 // Halfway through the hold shot the shafts are at half strength.

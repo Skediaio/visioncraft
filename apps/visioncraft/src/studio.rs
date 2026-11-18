@@ -6,6 +6,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use visioncraft_automation::PhotoRequest;
 use visioncraft_core::{
     Asset, Generator, ImportedModel, Material, ModelKind, Project, Session, Shape, Site, SunTime,
     catalog::Category, import_3dcraft, import_obj, sun::sun_position,
@@ -217,6 +218,8 @@ pub struct Studio {
     version: u64,
     synced: Option<(u64, u64)>,
     pub problems: Vec<String>,
+    /// The distance the last photo was focused at (m): its autofocus' or the one set.
+    pub photo_focus_m: Option<f32>,
 }
 
 pub fn make_asset(
@@ -437,6 +440,7 @@ impl Studio {
             version: 0,
             synced: None,
             problems: Vec::new(),
+            photo_focus_m: None,
         }
     }
 
@@ -779,36 +783,56 @@ impl Studio {
         }
     }
 
-    /// A photo of the 3D view at `w` x `h`: `samples` frames at ULTRA averaged (soft shadows,
-    /// smooth edges, smooth occlusion); with `lens` `(aperture radius m, focus distance m)`,
-    /// depth of field. RGBA8. Blocks until done.
+    /// A photo of the 3D view at `w` x `h` at `quality`: `photo.samples` frames averaged (soft
+    /// shadows, smooth edges, smooth occlusion), with its lens (depth of field) and shutter
+    /// (motion blur). RGBA8. Blocks until done.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn render_photo(
         &mut self,
         w: u32,
         h: u32,
-        samples: u32,
-        lens: Option<(f32, Option<f32>)>,
+        quality: Quality,
+        photo: &PhotoRequest,
     ) -> Result<Vec<u8>, String> {
         let live = self.photo_prepare(w, h);
-        let (view, proj, eye) = self.camera.matrices(w as f32 / h as f32);
-        let (aperture, focus) = self.lens(lens);
+        let camera = self.camera.matrices(w as f32 / h as f32);
+        let lens = self.photo_lens(photo, w, h);
         let result = (|| {
-            let mut photo = self.renderer.photo_begin(w, h, Quality::ULTRA)?;
-            for k in 0..samples.max(1) {
-                self.renderer
-                    .photo_sample(&mut photo, view, proj, eye, k, aperture, focus)?;
+            let mut shot = self.renderer.photo_begin(w, h, quality, camera, lens)?;
+            while shot.done < photo.samples.max(1) {
+                if !self.renderer.photo_sample(&mut shot)? {
+                    self.renderer.wait_gpu()?;
+                }
             }
-            self.renderer.photo_finish(&photo).wait()
+            self.photo_focus_m = shot.focus_m();
+            self.renderer.photo_finish(shot)?.wait()
         })();
         self.photo_end(live);
         result
     }
 
-    /// The lens' aperture radius and focus distance (the camera's pivot when not given).
-    pub fn lens(&self, lens: Option<(f32, Option<f32>)>) -> (f32, f32) {
+    /// The renderer's lens for `photo` at `w` x `h`: the aperture's radius from the f-number
+    /// with the focal length a full-frame sensor needs for the camera's field of view (or the
+    /// radius given), the focus (`target`: the distance to the camera's pivot) and the shutter.
+    pub fn photo_lens(&self, photo: &PhotoRequest, w: u32, h: u32) -> visioncraft_render::Lens {
+        use visioncraft_core::photo::{Focus, aperture_radius_m, focal_length_m};
+        let aspect = w as f32 / h.max(1) as f32;
+        let radius_m = match photo.f_number {
+            _ if photo.aperture_m > 0.0 => photo.aperture_m,
+            Some(n) => aperture_radius_m(focal_length_m(self.camera.fov_y, aspect), n),
+            None => 0.0,
+        };
         let pivot = (self.camera.eye() - self.camera.pivot).length().max(0.1);
-        lens.map_or((0.0, pivot), |(a, f)| (a, f.unwrap_or(pivot)))
+        let focus = match photo.focus {
+            Focus::Target => visioncraft_render::Focus::Metres(pivot),
+            Focus::Metres(m) => visioncraft_render::Focus::Metres(m),
+            Focus::Auto => visioncraft_render::Focus::Auto(photo.focus_point),
+        };
+        visioncraft_render::Lens {
+            radius_m,
+            focus,
+            shutter_s: photo.shutter_s,
+        }
     }
 
     /// Swaps the geometry of an existing model, touching nothing else. Returns warnings and the
@@ -1356,6 +1380,7 @@ impl Studio {
         self.renderer.set_wet(v.wetness, v.rain);
         self.renderer.set_mist(v.mist);
         self.renderer.set_shafts(v.shafts);
+        self.renderer.set_vignette_grain(v.vignette, v.grain);
         self.renderer.set_white_balance(match v.white_balance {
             visioncraft_core::WhiteBalance::Daylight => visioncraft_render::WhiteBalance::Daylight,
             visioncraft_core::WhiteBalance::Auto => visioncraft_render::WhiteBalance::Auto,
@@ -2061,6 +2086,18 @@ impl Studio {
             .iter()
             .find(|m| m.id == model)
             .map_or(Mat4::IDENTITY, model_matrix)
+    }
+}
+
+/// The photo the project's settings (`view.set_photo`) take: the app's photo export.
+pub fn photo_request(settings: &visioncraft_core::PhotoSettings) -> PhotoRequest {
+    PhotoRequest {
+        samples: settings.samples,
+        f_number: settings.aperture,
+        aperture_m: 0.0,
+        focus: settings.focus,
+        focus_point: settings.focus_point,
+        shutter_s: settings.shutter_s,
     }
 }
 

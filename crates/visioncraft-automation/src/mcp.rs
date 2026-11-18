@@ -394,7 +394,12 @@ fn tools() -> Vec<Value> {
                 "camera": {"type": "object", "description": "{position: [x, y, z], target: [x, y, z], fov_y_deg?: 50}"},
                 "time": {"type": "object", "description": "{year?, month?, day?, hour?}: local time for this picture only."},
                 "quality": {"type": "string", "enum": ["low", "medium", "high", "ultra", "photo"], "description": "Default high. photo averages many frames at ULTRA: soft shadows, smooth edges; slower (seconds)."},
-                "samples": {"type": "integer", "minimum": 1, "maximum": 1024, "description": "Photo only: frames averaged. Default 64."},
+                "samples": {"type": "integer", "minimum": 1, "maximum": 1024, "description": "Frames averaged (smooth edges, soft shadows). Default 64 at quality photo (view.set_photo's), else 1."},
+                "aperture": {"type": ["number", "null"], "minimum": 1, "maximum": 32, "description": "Lens f-number for depth of field (2.8 blurs what lies behind a subject a few metres off)."},
+                "focus_m": {"description": "Distance in focus (m, 0.1 to 1000), \"auto\" (the depth at the picture's centre) or \"target\"."},
+                "shutter_s": {"type": "number", "minimum": 0, "maximum": 1, "description": "Shutter time: plants in the wind and rain blur with their motion."},
+                "vignette": {"type": "number", "minimum": 0, "maximum": 1, "description": "A light vignette for this picture (0.3 light)."},
+                "grain": {"type": "number", "minimum": 0, "maximum": 1, "description": "Film grain for this picture (0.2 fine)."},
                 "max_side": {"type": "integer", "minimum": PREVIEW_MIN_SIDE, "maximum": PREVIEW_MAX_SIDE, "description": "Longest side in pixels. Default 1024."}
             }, "additionalProperties": false}
         }),
@@ -583,6 +588,11 @@ fn preview(host: &mut dyn Host, args: Option<&Value>) -> Result<Vec<Value>, Fail
             "time",
             "quality",
             "samples",
+            "aperture",
+            "focus_m",
+            "shutter_s",
+            "vignette",
+            "grain",
             "max_side",
         ],
     )?;
@@ -592,7 +602,18 @@ fn preview(host: &mut dyn Host, args: Option<&Value>) -> Result<Vec<Value>, Fail
     let mut params = Map::new();
     params.insert("width".into(), side.into());
     params.insert("height".into(), (side * 3 / 4).max(PREVIEW_MIN_SIDE).into());
-    for key in ["viewpoint", "camera", "time", "quality", "samples"] {
+    for key in [
+        "viewpoint",
+        "camera",
+        "time",
+        "quality",
+        "samples",
+        "aperture",
+        "focus_m",
+        "shutter_s",
+        "vignette",
+        "grain",
+    ] {
         if let Some(v) = a.get(key) {
             params.insert(key.into(), v.clone());
         }

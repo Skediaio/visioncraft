@@ -437,8 +437,8 @@ pub enum Action {
     Screenshot,
     /// Every viewpoint at export preset `usize`.
     ExportAll(usize),
-    /// A photo (`u32` frames averaged) at export preset `usize`.
-    ExportPhoto(usize, u32),
+    /// A photo (the project's photo settings, `view.set_photo`) at export preset `usize`.
+    ExportPhoto(usize),
 }
 
 pub struct Hud {
@@ -452,8 +452,8 @@ pub struct Hud {
     pub export_at: egui::Rect,
     /// Export every viewpoint instead of the current view.
     pub export_all: bool,
-    /// Export a photo (many frames averaged) instead of one frame, with this many samples.
-    pub export_photo: Option<u32>,
+    /// Export a photo (many frames averaged, `view.set_photo`) instead of one frame.
+    pub export_photo: bool,
 }
 
 impl Default for Hud {
@@ -466,7 +466,74 @@ impl Default for Hud {
             export_open: false,
             export_at: egui::Rect::ZERO,
             export_all: false,
-            export_photo: None,
+            export_photo: false,
+        }
+    }
+}
+
+/// The photo's frames, lens, vignette and grain: each change one `view.set_photo` or
+/// `view.set` when let go.
+fn photo_settings(ui: &mut egui::Ui, cx: &mut Cx) {
+    let v = cx.s.project().view.clone();
+    let p = v.photo;
+    let mut samples = p.samples;
+    let r = ui.add(
+        egui::Slider::new(&mut samples, 8..=512)
+            .logarithmic(true)
+            .text(t::PHOTO_SAMPLES),
+    );
+    if r.drag_stopped() || (r.changed() && !r.dragged() && samples != p.samples) {
+        cx.run("view.set_photo", serde_json::json!({"samples": samples}));
+    }
+    ui.horizontal_wrapped(|ui| {
+        ui.label(t::PHOTO_APERTURE)
+            .on_hover_text(t::PHOTO_APERTURE_TIP);
+        let chosen = p.aperture;
+        if ui
+            .selectable_label(chosen.is_none(), t::PHOTO_ALL_SHARP)
+            .clicked()
+            && chosen.is_some()
+        {
+            cx.run("view.set_photo", serde_json::json!({"aperture": null}));
+        }
+        for n in t::PHOTO_F_NUMBERS {
+            let on = chosen.is_some_and(|c| (c - n).abs() < 1e-3);
+            if ui.selectable_label(on, format!("f/{n}")).clicked() && !on {
+                cx.run("view.set_photo", serde_json::json!({"aperture": n}));
+            }
+        }
+    });
+    if p.aperture.is_some() {
+        ui.horizontal(|ui| {
+            ui.label(t::PHOTO_FOCUS).on_hover_text(t::PHOTO_FOCUS_TIP);
+            let now = match p.focus {
+                visioncraft_core::photo::Focus::Auto => "auto",
+                _ => "target",
+            };
+            for (key, label) in t::PHOTO_FOCUSES {
+                if ui.selectable_label(now == key, label).clicked() && now != key {
+                    cx.run("view.set_photo", serde_json::json!({"focus": key}));
+                }
+            }
+        });
+    }
+    for (label, tip, key, value) in [
+        (t::VIGNETTE, t::VIGNETTE_TIP, "vignette", v.vignette),
+        (t::GRAIN, t::GRAIN_TIP, "grain", v.grain),
+    ] {
+        let mut x = value;
+        let r = ui
+            .add(
+                egui::Slider::new(&mut x, 0.0..=1.0)
+                    .text(label)
+                    .max_decimals(2),
+            )
+            .on_hover_text(tip);
+        if r.drag_stopped() || (r.changed() && !r.dragged() && x != value) {
+            cx.run(
+                "view.set",
+                serde_json::json!({key: (x * 100.0).round() / 100.0}),
+            );
         }
     }
 }
@@ -709,27 +776,22 @@ impl Hud {
                 });
                 let all = self.export_all && views > 0;
                 ui.add_enabled_ui(!all, |ui| {
-                    let mut on = self.export_photo.is_some();
-                    ui.checkbox(&mut on, t::EXPORT_PHOTO)
+                    ui.checkbox(&mut self.export_photo, t::EXPORT_PHOTO)
                         .on_hover_text(t::EXPORT_PHOTO_TIP);
-                    match (on, &mut self.export_photo) {
-                        (true, Some(n)) => {
-                            ui.add(
-                                egui::Slider::new(n, 8..=512)
-                                    .logarithmic(true)
-                                    .text(t::PHOTO_SAMPLES),
-                            );
-                        }
-                        (true, None) => self.export_photo = Some(64),
-                        (false, _) => self.export_photo = None,
+                    if self.export_photo {
+                        photo_settings(ui, cx);
                     }
                 });
+                let photo = self.export_photo && !all;
+                if photo {
+                    ui.label(RichText::new(t::RENDER_PHOTO).strong());
+                }
                 for (i, (name, w, h)) in visioncraft_core::export_presets().iter().enumerate() {
                     if ui.button(format!("{name}  {w} × {h}")).clicked() {
-                        actions.push(match (all, self.export_photo) {
+                        actions.push(match (all, photo) {
                             (true, _) => Action::ExportAll(i),
-                            (false, Some(n)) => Action::ExportPhoto(i, n),
-                            (false, _) => Action::Export(i),
+                            (false, true) => Action::ExportPhoto(i),
+                            (false, false) => Action::Export(i),
                         });
                         self.export_open = false;
                     }

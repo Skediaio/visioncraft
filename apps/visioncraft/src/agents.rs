@@ -6,6 +6,11 @@
 //!
 //! In the browser the same protocol answers scripts in the page itself (`web_rpc`):
 //! `await vcRpc("engine.execute", {command: "time.set", params: {hour: 20}})` (index.html).
+//! The browser's own AI agent (WebMCP, `webmcp.rs`) uses that same path: its tools call `vcRpc`,
+//! so they run on the window's `Session`, undo with Ctrl+Z and show as "agent: <command>".
+//! The person's *Experimental: browser AI agent (WebMCP)* box is that agent's consent: the
+//! page's scripts were never gated (they are the page), so the box gates only the registration
+//! of the tools with the browser, and unticking it takes them away.
 
 use crate::camera::View;
 use crate::planting_tools::PlantingTools;
@@ -29,6 +34,9 @@ pub struct Agents {
     pub last: Option<(String, f64)>,
     pub error: Option<String>,
     seen_log: usize,
+    /// The browser's own agent (WebMCP, experimental, off until the person switches it on).
+    #[cfg(target_arch = "wasm32")]
+    pub webmcp: crate::webmcp::WebMcp,
 }
 
 impl Default for Agents {
@@ -45,6 +53,8 @@ impl Default for Agents {
             last: None,
             error: None,
             seen_log: 0,
+            #[cfg(target_arch = "wasm32")]
+            webmcp: crate::webmcp::WebMcp::new(false),
         }
     }
 }
@@ -382,13 +392,9 @@ impl Host for Bound<'_, '_> {
         let png = match &request.photo {
             Some(p) => {
                 let (w, hh) = (request.width, request.height);
+                let quality = h.studio.current_quality();
                 h.studio
-                    .render_photo(
-                        w,
-                        hh,
-                        p.samples,
-                        (p.aperture_m > 0.0).then_some((p.aperture_m, p.focus_m)),
-                    )
+                    .render_photo(w, hh, quality, p)
                     .and_then(|px| crate::studio::png_rgb(&px, w, hh))
             }
             None => h
@@ -415,6 +421,12 @@ impl Host for Bound<'_, '_> {
                 "camera": {"position": eye.to_array(), "target": target.to_array(), "fov_y_deg": fov},
                 "quality": request.quality,
                 "lightsDropped": h.studio.dropped_lights,
+                "samples": request.photo.as_ref().map(|p| p.samples),
+                "focus_m": request
+                    .photo
+                    .as_ref()
+                    .filter(|p| p.f_number.is_some() || p.aperture_m > 0.0)
+                    .and(h.studio.photo_focus_m),
             }),
         })
     }

@@ -511,14 +511,29 @@ fn photo_parameters_are_checked_before_rendering() {
             .unwrap()
             .to_string()
     };
-    assert_eq!(
-        error(&mut h, json!({"samples": 8})),
-        "view.render: `samples`, `aperture_m` and `focus_m` need quality `photo`"
-    );
+    // Frames averaged, a lens and a shutter work at any quality.
+    assert!(error(&mut h, json!({"samples": 8})).contains("no renderer"));
     assert!(error(&mut h, json!({"quality": "photo", "samples": 0})).contains("`samples`"));
     assert_eq!(
         error(&mut h, json!({"quality": "photo", "aperture_m": 2})),
         "view.render: `aperture_m` must be from 0 to 0.5"
+    );
+    assert!(error(&mut h, json!({"aperture": 0.5})).contains("f-number"));
+    assert!(error(&mut h, json!({"aperture": 2.8, "aperture_m": 0.01})).contains("not both"));
+    assert!(error(&mut h, json!({"aperture": 2.8, "focus_m": "near"})).contains("`focus_m`"));
+    assert!(error(&mut h, json!({"aperture": 2.8, "focus_m": 0.01})).contains("`focus_m`"));
+    assert!(
+        error(&mut h, json!({"aperture": 2.8, "focus_point": [0.5, 2]})).contains("`focus_point`")
+    );
+    assert!(error(&mut h, json!({"shutter_s": 3})).contains("`shutter_s`"));
+    assert!(error(&mut h, json!({"vignette": 1.5})).contains("`vignette`"));
+    assert!(error(&mut h, json!({"grain": -0.1})).contains("`grain`"));
+    assert!(
+        error(
+            &mut h,
+            json!({"aperture": 2.8, "focus_m": "auto", "focus_point": [0.5, 0.6], "shutter_s": 0.01, "vignette": 0.3, "grain": 0.2})
+        )
+        .contains("no renderer")
     );
     // Valid: on to the renderer, which this host has not.
     assert!(

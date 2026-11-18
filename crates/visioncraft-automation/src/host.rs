@@ -67,7 +67,8 @@ pub struct RenderRequest {
     pub camera: Option<([f32; 3], [f32; 3], f32)>,
     /// `low`, `medium`, `high` or `photo`.
     pub quality: String,
-    /// With quality `photo`: how to take it.
+    /// A photo (quality `photo`, or frames averaged, a lens or a shutter at another): how to
+    /// take it. `None`: the plain still.
     pub photo: Option<PhotoRequest>,
     /// The animation clock (s) the picture is taken at: wind and water move with it.
     pub animation_s: f64,
@@ -79,13 +80,19 @@ pub struct RenderRequest {
     pub assets: Vec<visioncraft_core::Asset>,
 }
 
-/// A photo: `samples` frames averaged; depth of field when `aperture_m` is over 0, focused at
-/// `focus_m` (else the camera target).
+/// A photo: `samples` frames averaged; depth of field with an f-number (or a lens radius
+/// `aperture_m` over 0) focused at `focus`; motion blur over `shutter_s`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PhotoRequest {
     pub samples: u32,
+    /// The lens' f-number; `None` (and `aperture_m` 0): all sharp.
+    pub f_number: Option<f32>,
+    /// Instead of an f-number: the lens' radius (m); 0 none.
     pub aperture_m: f32,
-    pub focus_m: Option<f32>,
+    pub focus: visioncraft_core::photo::Focus,
+    /// Where an autofocus looks, 0..1 from the top left.
+    pub focus_point: [f32; 2],
+    pub shutter_s: f32,
 }
 
 /// A picture: PNG bytes and what the renderer says about it (adapter, plants drawn, ...).

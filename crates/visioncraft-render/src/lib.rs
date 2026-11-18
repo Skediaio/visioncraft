@@ -84,8 +84,8 @@ pub use lights::{Light, LightKind};
 pub use sea::Sea;
 pub use sky::Sun;
 pub use stats::{RenderStats, TARGET_MS, ULTRA_HEADROOM, suggest_quality};
-pub use still::Photo;
 pub use still::Still;
+pub use still::{FOCUS_RANGE, Focus, Lens, Photo, lens_point, lens_view, pixel_jitter};
 pub use terrain::{TerrainChunk, TerrainLayer};
 pub use texture::{ColorSpace, TextureDesc, TextureId, mip_count};
 pub use tonemap::{ColorGrade, WhiteBalance};
@@ -120,6 +120,16 @@ const SHAFTS_REACH_M: f32 = 30.0;
 /// and the halo's share. A share of a few per cent is what a clean camera lens and the eye
 /// show (Spencer et al. 1995 put the eye's scattered light at about 10 % within 10 degrees).
 const SUN_GLARE: [f32; 4] = [0.03, 0.025, 0.14, 0.35];
+
+/// What `Renderer::render_part` draws of a frame.
+#[derive(Clone, Copy)]
+pub(crate) enum FramePart<'a> {
+    Whole,
+    /// Up to the HDR image with the air in it, before bloom and the tone map.
+    Scene,
+    /// The post chain on the HDR image this bind group's pass (`still::develop`) fills.
+    Develop(&'a wgpu::BindGroup),
+}
 
 /// What of the air runs this frame (`Renderer::air`): the shafts' strength and the glare's
 /// (0 off), and the aerial perspective.
@@ -805,6 +815,8 @@ struct Targets {
     /// opaque scene of this frame, copied before the glass and mirrors, which they reflect.
     prev_hdr: wgpu::Texture,
     linear_depth: wgpu::TextureView,
+    /// Read back at one texel for a photo's autofocus (`still.rs`).
+    linear_depth_texture: wgpu::Texture,
     occlusion: [wgpu::TextureView; 2],
     output: wgpu::Texture,
     /// sRGB view the overlay renders through.
@@ -1021,6 +1033,10 @@ pub struct Renderer {
     /// disc, and the noise seed of ambient occlusion; zero for live frames.
     shadow_jitter: Vec3,
     photo_seed: f32,
+    /// The lens' light fall-off towards the corners, 0..=1 (tonemap.wgsl).
+    vignette: f32,
+    /// Film grain after the tone map, 0..=1 (tonemap.wgsl).
+    grain: f32,
     /// Photo mode's accumulate and resolve passes, made at the first photo.
     photo_pipes: Option<still::PhotoPipes>,
     light_buffer: wgpu::Buffer,
@@ -1363,6 +1379,8 @@ impl Renderer {
             color_grade: ColorGrade::Neutral,
             shadow_jitter: Vec3::ZERO,
             photo_seed: 0.0,
+            vignette: 0.0,
+            grain: 0.0,
             photo_pipes: None,
             light_buffer,
             grid_buffer,
@@ -1609,6 +1627,13 @@ impl Renderer {
         self.time = seconds.rem_euclid(TIME_WRAP) as f32;
         self.clock = seconds;
         self.wind_phases.advance(seconds, self.wind.speed_mps);
+    }
+
+    /// A light vignette (the lens' fall-off towards the corners) and film grain, each 0..=1;
+    /// 0 leaves the picture as it was.
+    pub fn set_vignette_grain(&mut self, vignette: f32, grain: f32) {
+        self.vignette = vignette.clamp(0.0, 1.0);
+        self.grain = grain.clamp(0.0, 1.0);
     }
 
     /// Clay presentation: opaque and cutout materials draw matte white
@@ -2931,6 +2956,13 @@ impl Renderer {
     /// encoder before the next `render` (GPU timings read back the previous
     /// frame's queries then).
     pub fn render(&mut self, encoder: &mut wgpu::CommandEncoder) -> &wgpu::TextureView {
+        self.render_part(encoder, FramePart::Whole);
+        &self.targets.display_view
+    }
+
+    /// Renders `part` of a frame: all of it, the scene into the HDR image (a photo's sample),
+    /// or the post chain on an HDR image a pass fills (a photo's mean, `still.rs`).
+    fn render_part(&mut self, encoder: &mut wgpu::CommandEncoder, part: FramePart) {
         #[cfg(not(target_arch = "wasm32"))]
         let cpu_start = std::time::Instant::now();
         if let Some(t) = &mut self.timer {
@@ -3068,212 +3100,215 @@ impl Renderer {
         );
 
         let t = &self.targets;
-        for (c, layer) in t.shadow_layers.iter().enumerate() {
-            // The last layer is the snow cover map, drawn after the cascades.
-            if c >= refresh.len() || c + 1 == t.shadow_layers.len() || !refresh[c] {
-                continue;
+        let develop = matches!(part, FramePart::Develop(_));
+        if !develop {
+            for (c, layer) in t.shadow_layers.iter().enumerate() {
+                // The last layer is the snow cover map, drawn after the cascades.
+                if c >= refresh.len() || c + 1 == t.shadow_layers.len() || !refresh[c] {
+                    continue;
+                }
+                let mut pass = depth_pass(
+                    encoder,
+                    "shadow",
+                    layer,
+                    wgpu::StoreOp::Store,
+                    self.ts("shadow"),
+                );
+                pass.set_bind_group(0, &self.globals_bind, &[]);
+                pass.set_bind_group(2, &self.cascade_bind, &[(c as u64 * SLOT) as u32]);
+                let far = cached && c == last;
+                self.draw_items(
+                    &mut pass,
+                    cascades.view_proj[c],
+                    false,
+                    Pass::Shadow { far, coarse: c > 0 },
+                );
             }
-            let mut pass = depth_pass(
-                encoder,
-                "shadow",
-                layer,
-                wgpu::StoreOp::Store,
-                self.ts("shadow"),
-            );
-            pass.set_bind_group(0, &self.globals_bind, &[]);
-            pass.set_bind_group(2, &self.cascade_bind, &[(c as u64 * SLOT) as u32]);
-            let far = cached && c == last;
-            self.draw_items(
-                &mut pass,
-                cascades.view_proj[c],
-                false,
-                Pass::Shadow { far, coarse: c > 0 },
-            );
-        }
-        if let (Some(m), Some(layer)) = (self.snow_cover, t.shadow_layers.last()) {
-            let mut pass = depth_pass(encoder, "snow cover", layer, wgpu::StoreOp::Store, None);
-            pass.set_bind_group(0, &self.globals_bind, &[]);
-            pass.set_bind_group(
-                2,
-                &self.cascade_bind,
-                &[(shadow::MAX_CASCADES as u64 * SLOT) as u32],
-            );
-            self.draw_items(
-                &mut pass,
-                m,
-                false,
-                // The view's own levels: a bare tree's coarsest level is a few large twig
-                // cards, which kept the snow off a patch of lawn under a birch.
-                Pass::Shadow {
-                    far: false,
-                    coarse: false,
-                },
-            );
-        }
-        self.counters.split("shadow");
-        {
-            let mut pass = depth_pass(
-                encoder,
-                "depth pre-pass",
-                &t.depth,
-                wgpu::StoreOp::Store,
-                self.ts("depth"),
-            );
-            pass.set_bind_group(0, &self.globals_bind, &[]);
-            self.draw_items(&mut pass, view_proj, true, Pass::Depth);
-        }
-        self.counters.split("depth");
-        {
-            let mut pass = color_pass(
-                encoder,
-                "depth resolve",
-                &t.linear_depth,
-                None,
-                None,
-                self.ts("resolve"),
-            );
-            pass.set_pipeline(&self.sampled.resolve);
-            pass.set_bind_group(0, &self.globals_bind, &[]);
-            pass.set_bind_group(1, &t.resolve_bind, &[]);
-            pass.draw(0..3, 0..1);
-        }
-        if self.quality.ao_samples > 0 || self.quality.contact_shadows {
-            let mut pass = color_pass(
-                encoder,
-                "ssao",
-                &t.occlusion[0],
-                None,
-                None,
-                self.ts("ssao"),
-            );
-            pass.set_pipeline(&self.pipelines.ssao);
-            pass.set_bind_group(0, &self.globals_bind, &[]);
-            pass.set_bind_group(1, &t.ssao_bind, &[]);
-            pass.draw(0..3, 0..1);
-            drop(pass);
-            for (i, pipeline) in [&self.pipelines.blur_h, &self.pipelines.blur_v]
-                .into_iter()
-                .enumerate()
+            if let (Some(m), Some(layer)) = (self.snow_cover, t.shadow_layers.last()) {
+                let mut pass = depth_pass(encoder, "snow cover", layer, wgpu::StoreOp::Store, None);
+                pass.set_bind_group(0, &self.globals_bind, &[]);
+                pass.set_bind_group(
+                    2,
+                    &self.cascade_bind,
+                    &[(shadow::MAX_CASCADES as u64 * SLOT) as u32],
+                );
+                self.draw_items(
+                    &mut pass,
+                    m,
+                    false,
+                    // The view's own levels: a bare tree's coarsest level is a few large twig
+                    // cards, which kept the snow off a patch of lawn under a birch.
+                    Pass::Shadow {
+                        far: false,
+                        coarse: false,
+                    },
+                );
+            }
+            self.counters.split("shadow");
+            {
+                let mut pass = depth_pass(
+                    encoder,
+                    "depth pre-pass",
+                    &t.depth,
+                    wgpu::StoreOp::Store,
+                    self.ts("depth"),
+                );
+                pass.set_bind_group(0, &self.globals_bind, &[]);
+                self.draw_items(&mut pass, view_proj, true, Pass::Depth);
+            }
+            self.counters.split("depth");
             {
                 let mut pass = color_pass(
                     encoder,
-                    "blur",
-                    &t.occlusion[1 - i],
+                    "depth resolve",
+                    &t.linear_depth,
+                    None,
+                    None,
+                    self.ts("resolve"),
+                );
+                pass.set_pipeline(&self.sampled.resolve);
+                pass.set_bind_group(0, &self.globals_bind, &[]);
+                pass.set_bind_group(1, &t.resolve_bind, &[]);
+                pass.draw(0..3, 0..1);
+            }
+            if self.quality.ao_samples > 0 || self.quality.contact_shadows {
+                let mut pass = color_pass(
+                    encoder,
+                    "ssao",
+                    &t.occlusion[0],
                     None,
                     None,
                     self.ts("ssao"),
                 );
-                pass.set_pipeline(pipeline);
+                pass.set_pipeline(&self.pipelines.ssao);
                 pass.set_bind_group(0, &self.globals_bind, &[]);
-                pass.set_bind_group(1, &t.blur_bind[i], &[]);
+                pass.set_bind_group(1, &t.ssao_bind, &[]);
                 pass.draw(0..3, 0..1);
-            }
-        } else {
-            color_pass(
-                encoder,
-                "no ssao",
-                &t.occlusion[0],
-                Some(wgpu::Color::WHITE),
-                None,
-                None,
-            );
-        }
-        if let Some(m) = mirror {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("reflection"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &t.reflection,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &t.reflection_depth,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Discard,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: self.ts("reflection"),
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_bind_group(0, &self.reflect_globals_bind, &[]);
-            pass.set_bind_group(3, &t.reflect_forward_bind, &[]);
-            let coarsest = self.quality.water_reflection >= 4;
-            self.draw_items(
-                &mut pass,
-                view_proj * m,
-                true,
-                Pass::Reflection { coarsest },
-            );
-            // The endless ground has no hole where the terrain is dug out:
-            // seen from water below its height (a pond in the lawn) it would
-            // cover the sky the water mirrors.
-            if self
-                .ground
-                .is_some_and(|g| water.is_some_and(|h| h >= g.height))
-            {
-                self.draw_ground(&mut pass, &[&self.pipelines.reflect_ground]);
-            }
-            pass.set_pipeline(&self.pipelines.reflect_sky);
-            pass.draw(0..3, 0..1);
-        }
-        self.counters.split("reflection");
-        {
-            let (view, resolve) = match &t.hdr_msaa {
-                Some(msaa) => (msaa, Some(&t.hdr)),
-                None => (&t.hdr, None),
-            };
-            // With screen-space reflections the glass and the mirrors are drawn in a second pass,
-            // after the opaque scene is copied for them to reflect (into `prev_hdr`): the first then
-            // keeps its multisampled colour and depth for the second.
-            let ssr = self.quality.screen_reflections > 0;
-            let targets = (view, resolve, &t.depth);
-            let mut pass =
-                forward_pass(encoder, "forward", targets, (true, ssr), self.ts("forward"));
-            pass.set_bind_group(0, &self.globals_bind, &[]);
-            pass.set_bind_group(3, &t.forward_bind, &[]);
-            self.draw_items(&mut pass, view_proj, true, Pass::Forward);
-            if self.ground.is_some() {
-                // The cells near the sky volume only when there is one, and after the others:
-                // all ground lies at one depth, so of two cells over the same pixel the last
-                // drawn shows, and before the split that was the cell further out (the rings
-                // are drawn inside out), which the volume's are from where hills hide them.
-                let [near, away] = &self.sampled.ground;
-                let parts: &[&wgpu::RenderPipeline] = if self.sky_volume_box[7] > 0.5 {
-                    &[away, near]
-                } else {
-                    &[away]
-                };
-                self.draw_ground(&mut pass, parts);
-            }
-            pass.set_pipeline(&self.sampled.sky);
-            pass.draw(0..3, 0..1);
-            self.draw_sea(&mut pass);
-            if ssr {
                 drop(pass);
-                encoder.copy_texture_to_texture(
-                    t.hdr_texture.as_image_copy(),
-                    t.prev_hdr.as_image_copy(),
-                    t.prev_hdr.size(),
+                for (i, pipeline) in [&self.pipelines.blur_h, &self.pipelines.blur_v]
+                    .into_iter()
+                    .enumerate()
+                {
+                    let mut pass = color_pass(
+                        encoder,
+                        "blur",
+                        &t.occlusion[1 - i],
+                        None,
+                        None,
+                        self.ts("ssao"),
+                    );
+                    pass.set_pipeline(pipeline);
+                    pass.set_bind_group(0, &self.globals_bind, &[]);
+                    pass.set_bind_group(1, &t.blur_bind[i], &[]);
+                    pass.draw(0..3, 0..1);
+                }
+            } else {
+                color_pass(
+                    encoder,
+                    "no ssao",
+                    &t.occlusion[0],
+                    Some(wgpu::Color::WHITE),
+                    None,
+                    None,
                 );
-                let label = "glass and mirrors";
-                pass = forward_pass(encoder, label, targets, (false, ssr), self.ts(label));
-                pass.set_bind_group(0, &self.globals_bind, &[]);
-                pass.set_bind_group(3, &t.forward_bind, &[]);
-                self.draw_items(&mut pass, view_proj, true, Pass::Mirrors);
             }
-            self.draw_transparent(&mut pass, view_proj);
-            if self.rain > 0.0 && !shadow::is_orthographic(self.proj) {
-                pass.set_pipeline(&self.sampled.rain);
+            if let Some(m) = mirror {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("reflection"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &t.reflection,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &t.reflection_depth,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(1.0),
+                            store: wgpu::StoreOp::Discard,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: self.ts("reflection"),
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_bind_group(0, &self.reflect_globals_bind, &[]);
+                pass.set_bind_group(3, &t.reflect_forward_bind, &[]);
+                let coarsest = self.quality.water_reflection >= 4;
+                self.draw_items(
+                    &mut pass,
+                    view_proj * m,
+                    true,
+                    Pass::Reflection { coarsest },
+                );
+                // The endless ground has no hole where the terrain is dug out:
+                // seen from water below its height (a pond in the lawn) it would
+                // cover the sky the water mirrors.
+                if self
+                    .ground
+                    .is_some_and(|g| water.is_some_and(|h| h >= g.height))
+                {
+                    self.draw_ground(&mut pass, &[&self.pipelines.reflect_ground]);
+                }
+                pass.set_pipeline(&self.pipelines.reflect_sky);
+                pass.draw(0..3, 0..1);
+            }
+            self.counters.split("reflection");
+            {
+                let (view, resolve) = match &t.hdr_msaa {
+                    Some(msaa) => (msaa, Some(&t.hdr)),
+                    None => (&t.hdr, None),
+                };
+                // With screen-space reflections the glass and the mirrors are drawn in a second pass,
+                // after the opaque scene is copied for them to reflect (into `prev_hdr`): the first then
+                // keeps its multisampled colour and depth for the second.
+                let ssr = self.quality.screen_reflections > 0;
+                let targets = (view, resolve, &t.depth);
+                let mut pass =
+                    forward_pass(encoder, "forward", targets, (true, ssr), self.ts("forward"));
                 pass.set_bind_group(0, &self.globals_bind, &[]);
                 pass.set_bind_group(3, &t.forward_bind, &[]);
+                self.draw_items(&mut pass, view_proj, true, Pass::Forward);
+                if self.ground.is_some() {
+                    // The cells near the sky volume only when there is one, and after the others:
+                    // all ground lies at one depth, so of two cells over the same pixel the last
+                    // drawn shows, and before the split that was the cell further out (the rings
+                    // are drawn inside out), which the volume's are from where hills hide them.
+                    let [near, away] = &self.sampled.ground;
+                    let parts: &[&wgpu::RenderPipeline] = if self.sky_volume_box[7] > 0.5 {
+                        &[away, near]
+                    } else {
+                        &[away]
+                    };
+                    self.draw_ground(&mut pass, parts);
+                }
+                pass.set_pipeline(&self.sampled.sky);
                 pass.draw(0..3, 0..1);
+                self.draw_sea(&mut pass);
+                if ssr {
+                    drop(pass);
+                    encoder.copy_texture_to_texture(
+                        t.hdr_texture.as_image_copy(),
+                        t.prev_hdr.as_image_copy(),
+                        t.prev_hdr.size(),
+                    );
+                    let label = "glass and mirrors";
+                    pass = forward_pass(encoder, label, targets, (false, ssr), self.ts(label));
+                    pass.set_bind_group(0, &self.globals_bind, &[]);
+                    pass.set_bind_group(3, &t.forward_bind, &[]);
+                    self.draw_items(&mut pass, view_proj, true, Pass::Mirrors);
+                }
+                self.draw_transparent(&mut pass, view_proj);
+                if self.rain > 0.0 && !shadow::is_orthographic(self.proj) {
+                    pass.set_pipeline(&self.sampled.rain);
+                    pass.set_bind_group(0, &self.globals_bind, &[]);
+                    pass.set_bind_group(3, &t.forward_bind, &[]);
+                    pass.draw(0..3, 0..1);
+                }
             }
         }
         self.counters.split("forward");
@@ -3291,8 +3326,11 @@ impl Renderer {
             self.counters.add(1, 1, false);
         };
         // The air: light shafts, the sun's glare and the aerial perspective, onto the HDR image.
+        // A photo's mean has them in already.
         let air = self.air(self.proj);
-        if air.any() {
+        if let FramePart::Develop(fill) = part {
+            still::develop(self, encoder, fill);
+        } else if air.any() {
             if air.aerial {
                 self.physical
                     .update_aerial(encoder, &self.globals_only_bind, self.timer.as_ref());
@@ -3336,6 +3374,18 @@ impl Renderer {
                 );
             }
             post(encoder, "air", &t.hdr, Some(()), &p.air, &t.air_bind[3]);
+        }
+        if matches!(part, FramePart::Scene) {
+            self.counters.split("post");
+            if let Some(t) = &mut self.timer {
+                t.end(encoder);
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            let cpu_encode_ms = cpu_start.elapsed().as_secs_f32() * 1000.0;
+            #[cfg(target_arch = "wasm32")]
+            let cpu_encode_ms = 0.0;
+            self.update_stats(view_proj, cpu_encode_ms);
+            return;
         }
         if self.quality.bloom && self.bloom_strength > 0.0 {
             for (i, target) in t.bloom.iter().enumerate() {
@@ -3427,7 +3477,6 @@ impl Renderer {
         #[cfg(target_arch = "wasm32")]
         let cpu_encode_ms = 0.0;
         self.update_stats(view_proj, cpu_encode_ms);
-        &self.targets.display_view
     }
 
     fn update_stats(&mut self, view_proj: Mat4, cpu_encode_ms: f32) {
@@ -4337,7 +4386,7 @@ impl Renderer {
             self.snow,
             self.quality.cascades as f32,
             if self.snow_cover.is_some() { 1.0 } else { 0.0 },
-            0.0,
+            self.grain,
         ]);
         b.floats(&self.sky_volume_box);
         // The sea's coastline: the endless ground stays land on its left (sea.rs).
@@ -4406,7 +4455,7 @@ impl Renderer {
             if air.aerial { 1.0 } else { 0.0 },
             atmosphere::AERIAL_KM,
             0.002 + eye.y.max(0.0) / 1000.0,
-            0.0,
+            self.vignette,
         ]);
         let (white, reference) = match self.white_balance {
             WhiteBalance::Daylight => ([0.0; 4], [1.0, 1.0, 1.0, 0.0]),
@@ -6265,7 +6314,13 @@ impl Targets {
             },
         );
         let prev_view = view(prev_hdr.clone());
-        let linear_depth = view(texture("linear depth", LINEAR_DEPTH, 1, sampled));
+        let linear_depth_texture = texture(
+            "linear depth",
+            LINEAR_DEPTH,
+            1,
+            sampled | wgpu::TextureUsages::COPY_SRC,
+        );
+        let linear_depth = view(linear_depth_texture.clone());
         // Half resolution unless the quality asks for full: AO and contact
         // shadows are low-frequency.
         let ao_div = if quality.ao_full_resolution { 1 } else { 2 };
@@ -6464,6 +6519,7 @@ impl Targets {
             hdr_texture,
             prev_hdr,
             linear_depth,
+            linear_depth_texture,
             occlusion,
             output,
             output_view,
@@ -6653,6 +6709,19 @@ mod tests {
             .validate(&module)
             .unwrap_or_else(|e| panic!("{name}.wgsl: {}", e.emit_to_string(&source)));
         }
+    }
+
+    #[test]
+    fn photo_shader_validates() {
+        let source = include_str!("photo.wgsl");
+        let module = naga::front::wgsl::parse_str(source)
+            .unwrap_or_else(|e| panic!("photo.wgsl: {}", e.emit_to_string(source)));
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::default(),
+        )
+        .validate(&module)
+        .unwrap_or_else(|e| panic!("photo.wgsl: {}", e.emit_to_string(source)));
     }
 
     /// Each entry point also validates as wgpu builds its pipelines: compacted to what the entry

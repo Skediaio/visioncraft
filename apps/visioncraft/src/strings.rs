@@ -550,6 +550,13 @@ pub const LAMPS_OVER_CAP: &str = "lamps stay dark: lights from lamps are capped 
 pub const ALLOW_AGENTS: &str = "Allow AI agents";
 pub const ALLOW_AGENTS_TIP: &str = "Lets visioncraft-cli mcp --bridge (an AI agent on this computer) change this project while you watch; Ctrl+Z undoes its steps. Untick to disconnect.";
 pub const AGENT_LAST: &str = "agent:";
+pub const WEBMCP: &str = "Experimental: browser AI agent (WebMCP)";
+pub const WEBMCP_TIP: &str = "Lets this browser's own AI agent (Chrome's WebMCP) use VisionCraft's tools on this page, films included. Destructive steps ask you first; Ctrl+Z undoes its steps. Untick to take the tools away. Also switched on by ?webmcp=1 in the address.";
+pub const WEBMCP_UNSUPPORTED: &str = "this browser offers no WebMCP";
+pub const WEBMCP_FAILED: &str = "the browser refused the tools";
+pub const WEBMCP_ASK_TITLE: &str = "Browser AI agent asks";
+pub const WEBMCP_ALLOW: &str = "Allow";
+pub const WEBMCP_DENY: &str = "Deny";
 pub const PT_UNDO_STROKE: &str = "Remove last stroke";
 pub const PT_UNDO_STROKE_TIP: &str =
     "Takes back this brush's most recent stroke, even after other changes.";
@@ -589,6 +596,20 @@ pub const EXPORT_PHOTO: &str = "Photo";
 pub const EXPORT_PHOTO_TIP: &str = "Averages many frames: soft shadows with real penumbrae, smooth edges and smooth shading in corners. Takes seconds to minutes.";
 pub const PHOTO_SAMPLES: &str = "frames";
 pub const PHOTO_TAKING: &str = "Taking a photo";
+pub const PHOTO_FOCUSING: &str = "Focusing…";
+pub const RENDER_PHOTO: &str = "Render photo";
+pub const PHOTO_APERTURE: &str = "Aperture";
+pub const PHOTO_APERTURE_TIP: &str = "Depth of field, as on a full-frame camera with a lens for this view: f/2.8 blurs what lies behind a subject a few metres away, f/8 keeps the garden sharp.";
+pub const PHOTO_ALL_SHARP: &str = "All sharp";
+pub const PHOTO_F_NUMBERS: [f32; 7] = [1.4, 2.0, 2.8, 4.0, 5.6, 8.0, 16.0];
+pub const PHOTO_FOCUS: &str = "Focus";
+pub const PHOTO_FOCUS_TIP: &str =
+    "Auto: on what the centre of the picture shows. Target: at the point the camera turns round.";
+pub const PHOTO_FOCUSES: [(&str, &str); 2] = [("auto", "Auto"), ("target", "Target")];
+pub const VIGNETTE: &str = "Vignette";
+pub const VIGNETTE_TIP: &str = "The lens' light fall-off towards the corners.";
+pub const GRAIN: &str = "Grain";
+pub const GRAIN_TIP: &str = "Film grain, most in the mid-tones.";
 pub const EXPORT_ALL_TIP: &str = "One picture per saved viewpoint, each with its own time of day: into a folder you pick, or one zip download in the browser.";
 pub const EXPORTING_VIEWS: &str = "Rendering every viewpoint at";
 pub const CLAY_NOTICE: &str = "Clay view: materials and plant colours are hidden.";

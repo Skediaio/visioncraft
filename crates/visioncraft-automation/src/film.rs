@@ -109,6 +109,9 @@ pub(crate) fn render(host: &mut dyn Host, params: &Value) -> Result<Value, Strin
     render_with_progress(host, params, &mut |_, _| {})
 }
 
+/// The samples a film frame at quality `photo` averages unless `samples` says otherwise.
+pub const FILM_PHOTO_SAMPLES: u32 = 8;
+
 /// `film.render`, telling `progress(done, total)` after each frame.
 pub fn render_with_progress(
     host: &mut dyn Host,
@@ -121,7 +124,21 @@ pub fn render_with_progress(
         "parameter",
         Some(params),
         &[
-            "id", "dir", "width", "height", "quality", "from", "to", "every",
+            "id",
+            "dir",
+            "width",
+            "height",
+            "quality",
+            "from",
+            "to",
+            "every",
+            "samples",
+            "aperture",
+            "focus_m",
+            "focus_point",
+            "shutter_s",
+            "vignette",
+            "grain",
         ],
     )?;
     let film = film_of(host, a.required_str("id")?, name)?;
@@ -159,6 +176,23 @@ pub fn render_with_progress(
         p.insert("quality".into(), quality.into());
         p.insert("camera".into(), camera_json(&f));
         p.insert("animation_s".into(), t.into());
+        // A film's photo frames average fewer samples than a still's: 8 unless told.
+        if quality == "photo" && a.get("samples").is_none() {
+            p.insert("samples".into(), FILM_PHOTO_SAMPLES.into());
+        }
+        for key in [
+            "samples",
+            "aperture",
+            "focus_m",
+            "focus_point",
+            "shutter_s",
+            "vignette",
+            "grain",
+        ] {
+            if let Some(v) = a.get(key) {
+                p.insert(key.into(), v.clone());
+            }
+        }
         last = commands::execute(host, "view.render", &Value::Object(p))
             .map_err(|e| format!("{name}: frame {i} (t = {t:.2} s): {e}"))?;
         progress(n + 1, frames.len());

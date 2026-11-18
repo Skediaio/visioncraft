@@ -275,9 +275,8 @@ and show in reflections and in the ambient light. The rendering quality and
 the texture resolution belong to the window, not the project: set them over the control channel
 with `ui.set {"quality": "auto" | "low" | "medium" | "high" | "ultra", "textures": "auto" | "1k"
 | "2k" | "4k"}`; `view.render` takes its own `quality`. For a final picture use `view.render
-{"quality": "photo", "samples": 64}`: many frames averaged at ULTRA give soft shadows with real
-penumbrae and smooth edges (seconds to minutes); `aperture_m` (lens radius, e.g. 0.02) and
-`focus_m` add depth of field.
+{"quality": "photo"}`: many frames averaged at ULTRA give soft shadows with real penumbrae,
+smooth edges and leaves without shimmer (seconds to minutes); recipe 41 has the lens.
 
 Lamps and lit rooms follow the sun: on after sunset at the time shown, off before. `view.set
 {"lights": true}` or `false` fixes them for the project (the window's Lights button does the same),
@@ -1303,6 +1302,40 @@ sky a little cooler) or a temperature in kelvin (2000 to 12000). `grade` is `neu
 default), `warm`, `cool` or `soft`. `view.render` takes `shafts`, `white_balance` and `grade` for
 one picture (the CLI's `--shafts`, `--white-balance` and `--grade`), and a film shot eases
 `shafts` as `[from, to]`.
+
+### 41. A photo of the border at f/2.8, with a light vignette and grain
+
+```json recipe
+{"intent": "a photo of the example garden's border with a short telephoto at f/2.8, focused on the flowers 4 m away so the hedge behind softens, with a light vignette and fine grain; then the same view stopped down with the autofocus", "steps": [
+  {"id": "project.load_example", "params": {"name": "garden"}},
+  {"id": "view.set_photo", "params": {"samples": 64, "aperture": 2.8, "focus": 4}},
+  {"id": "view.set", "params": {"vignette": 0.3, "grain": 0.2}},
+  {"id": "view.render", "params": {"camera": {"position": [5.4, 1.0, 19.6], "target": [2.2, 0.55, 16.4], "fov_y_deg": 24}, "quality": "photo", "width": 1280, "height": 720, "path": "border-f2.8.png"}},
+  {"id": "view.render", "params": {"camera": {"position": [5.4, 1.0, 19.6], "target": [2.2, 0.55, 16.4], "fov_y_deg": 24}, "quality": "photo", "samples": 16, "aperture": 8, "focus_m": "auto", "focus_point": [0.5, 0.45], "width": 640, "height": 360, "path": "border-f8.png"}}
+]}
+```
+
+A photo averages `samples` frames (1 to 1024): each is moved by a fraction of a pixel (Halton
+points), the sun's light moves within its disc (soft shadows), and the noise of occlusion, light
+shafts and leaf edges turns with the frame. The frames are summed in linear HDR before bloom, the
+tone map and grain, which then run once on their mean, so edges and foliage are smooth, not
+shimmering, and nothing is blurred that a camera keeps sharp. `view.set_photo` keeps the photo's
+settings with the project (the app's photo export uses them; `view.render` at quality `photo`
+takes every field it is not given from them): `samples` (64), `aperture` (an f-number, 1 to 32;
+null, the default, is a pinhole with everything sharp), `focus` (`"target"`, the default: the
+camera's target; `"auto"`: what the picture shows at `focus_point`, read from the first frame's
+depth; or metres) and `shutter_s` (0 to 1: plants in the wind, water and rain blur with their
+motion from `animation_s` on). The lens is a thin lens on a 36 mm full-frame sensor with the focal
+length the field of view asks for: 50 degrees across a 16:9 picture is a 25 mm wide angle, where
+f/2.8 still keeps most of a garden sharp; for a soft background use a narrower field (24 degrees
+is about 60 mm) as a photographer would. `view.render` takes `samples`, `aperture`, `focus_m`,
+`focus_point` and `shutter_s` at any quality (`samples` over 1, an aperture or a shutter averages
+frames at that quality; the result carries `focus_m`), the CLI's `--samples`, `--aperture`,
+`--focus`, `--focus-point` and `--shutter`, and `film.render` the same per frame (8 samples at
+quality `photo` unless told). `view.set {"vignette": 0..1, "grain": 0..1}` (both 0 by default, and
+then not written) darken the corners as a lens does (0.3 about half a stop) and add film grain in
+the luminance after the tone map, in the live view and every picture; `view.render` takes both for
+one picture (`--vignette`, `--grain`).
 
 ## Known traps
 

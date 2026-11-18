@@ -137,13 +137,15 @@ impl Pictures for GpuPictures {
         let (frames, problems) = s.settle_for_picture();
         s.problems.extend(problems);
         let pending = s.plants_pending();
+        let mut photo_s = None;
         let pixels = match &request.photo {
-            Some(p) => s.render_photo(
-                request.width,
-                request.height,
-                p.samples,
-                (p.aperture_m > 0.0).then_some((p.aperture_m, p.focus_m)),
-            )?,
+            Some(p) => {
+                let quality = s.current_quality();
+                let start = std::time::Instant::now();
+                let pixels = s.render_photo(request.width, request.height, quality, p)?;
+                photo_s = Some(start.elapsed().as_secs_f64());
+                pixels
+            }
             None => {
                 let rb = Readback::start(s, &g.device, &g.queue);
                 g.device
@@ -165,6 +167,13 @@ impl Pictures for GpuPictures {
                 "camera": {"position": position, "target": target, "fov_y_deg": fov},
                 "quality": request.quality,
                 "samples": request.photo.as_ref().map(|p| p.samples),
+                // The photo's own time on the GPU, without growing plants and loading textures.
+                "photo_s": photo_s,
+                "focus_m": request
+                    .photo
+                    .as_ref()
+                    .filter(|p| p.f_number.is_some() || p.aperture_m > 0.0)
+                    .and(s.photo_focus_m),
                 "frames": frames,
                 "plantsPending": pending,
                 "problems": problems,

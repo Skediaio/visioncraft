@@ -236,6 +236,18 @@ pub struct ViewState {
     /// A colour grade before the tone map. Not written while `neutral`, the default.
     #[serde(skip_serializing_if = "Grade::is_neutral")]
     pub grade: Grade,
+    /// The lens' light fall-off towards the corners, 0 (none, the default; not written) to 1:
+    /// 0.3 takes about half a stop off the corners, 1 two stops.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub vignette: f32,
+    /// Film grain after the tone map, 0 (none, the default; not written) to 1: noise in the
+    /// luminance, most in the mid-tones.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub grain: f32,
+    /// How a photo is taken (`view.set_photo`): frames, aperture, focus, shutter. Not written
+    /// while the default.
+    #[serde(skip_serializing_if = "crate::photo::PhotoSettings::is_default")]
+    pub photo: crate::photo::PhotoSettings,
     /// What lies round the design on the endless ground, beyond its plot. Not written while the
     /// default (fields).
     #[serde(skip_serializing_if = "Surroundings::is_default")]
@@ -450,6 +462,9 @@ impl Default for ViewState {
             shafts: 0.0,
             white_balance: WhiteBalance::Daylight,
             grade: Grade::Neutral,
+            vignette: 0.0,
+            grain: 0.0,
+            photo: crate::photo::PhotoSettings::default(),
             surroundings: Surroundings::default(),
             sun_map: None,
         }
@@ -492,6 +507,9 @@ impl ViewState {
             && (0.0..=1.0).contains(&self.mist)
             && (0.0..=1.0).contains(&self.gustiness)
             && (0.0..=1.0).contains(&self.shafts)
+            && (0.0..=1.0).contains(&self.vignette)
+            && (0.0..=1.0).contains(&self.grain)
+            && self.photo.validate().is_ok()
             && match self.white_balance {
                 WhiteBalance::Kelvin(k) => WHITE_BALANCE_KELVIN.contains(&k),
                 _ => true,

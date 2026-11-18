@@ -979,8 +979,17 @@ mod native {
                     s.resize(w, h);
                     settle(&mut s, &device, &queue, false);
                     let t = std::time::Instant::now();
-                    let lens = (aperture > 0.0).then_some((aperture, None));
-                    let pixels = s.render_photo(w, h, samples, lens).map_err(at)?;
+                    let photo = visioncraft_automation::PhotoRequest {
+                        samples,
+                        f_number: None,
+                        aperture_m: aperture,
+                        focus: visioncraft_core::photo::Focus::Target,
+                        focus_point: [0.5, 0.5],
+                        shutter_s: 0.0,
+                    };
+                    let pixels = s
+                        .render_photo(w, h, visioncraft_render::Quality::ULTRA, &photo)
+                        .map_err(at)?;
                     let file = out.join(format!("{name}.png"));
                     write_png(&file, &pixels, w, h).map_err(at)?;
                     println!(

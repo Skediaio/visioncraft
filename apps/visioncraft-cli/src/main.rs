@@ -124,7 +124,8 @@ Usage: visioncraft-cli render FILE --out PNG [--size WxH] [--viewpoint V]
                               [--haze T] [--mist N] [--gustiness N]
                               [--shafts N] [--white-balance WB] [--grade G]
                               [--quality low|medium|high|ultra|photo] [--samples N]
-                              [--aperture M] [--focus M] [--animation-s S]
+                              [--aperture F] [--focus M|auto|target] [--focus-point X,Y]
+                              [--shutter S] [--vignette N] [--grain N] [--animation-s S]
 
 Renders the project to a PNG with VisionCraft's renderer on the GPU, without a
 window, plants grown, and prints what it drew as one line of JSON
@@ -151,10 +152,21 @@ Options:
   --grade G       Colour grade: neutral, warm, cool or soft
   --quality Q     low, medium, high (default), ultra or photo (many frames averaged
                   at ULTRA: soft shadows, smooth edges; slower)
-  --samples N     Photo: frames averaged, 1 to 1024. Default 64
-  --aperture M    Photo: lens radius in metres for depth of field (0 to 0.5)
-  --focus M       Photo: distance in focus. Default the camera target
+PHOTO_FLAGS
   --animation-s S The animation clock in seconds (wind, water). Default 0";
+
+/// The photo flags of `render` and `film`.
+const PHOTO_FLAGS: &str = "\
+  --samples N     Frames averaged, 1 to 1024: smooth edges and soft shadows. Default 64
+                  at quality photo (the project's view.set_photo), else 1
+  --aperture F    The lens' f-number for depth of field, 1 to 32 (2.8 or f/2.8): a
+                  full-frame lens for the field of view
+  --focus M       The distance in focus (m), auto (what the picture shows at
+                  --focus-point) or target (the camera target). Default target
+  --focus-point X,Y  Where auto focus looks, 0..1 from the top left. Default 0.5,0.5
+  --shutter S     Shutter time 0..1 s: wind-blown plants and rain blur with their motion
+  --vignette N    A light vignette 0..1 (0.3 about half a stop off the corners)
+  --grain N       Film grain 0..1 after the tone map (0.2 fine)";
 
 const HELP_EXPORT: &str = "\
 Usage: visioncraft-cli export FILE --out DIR [--preset NAME]... [--viewpoint V]... [--years Y]...
@@ -182,6 +194,8 @@ Options:
 const HELP_FILM: &str = "\
 Usage: visioncraft-cli film FILE --out DIR [--film ID] [--size WxH] [--quality Q]
                             [--from S] [--to S] [--every N] [--video OUT.mp4]
+                            [--samples N] [--aperture F] [--focus M|auto|target]
+                            [--focus-point X,Y] [--shutter S] [--vignette N] [--grain N]
 
 Renders a film of the project (film.add, film.add_shot; the only film when --film is
 left out) as DIR/frame_00000.png and on: each frame has the film's camera, the
@@ -193,7 +207,9 @@ video of the frames.
 Options:
   --film ID       The film's id (f1, ...)
   --size WxH      Default 960x540
-  --quality Q     low, medium, high or ultra. Default high
+  --quality Q     low, medium, high, ultra or photo. Default high
+PHOTO_FLAGS
+                  (quality photo averages 8 samples a frame unless --samples says)
   --from S        First film time drawn, seconds. Default 0
   --to S          Last film time drawn. Default the end
   --every N       Draw every Nth frame (a film of fps / N). Default 1
@@ -717,6 +733,10 @@ fn cmd_render(raw: &[String]) -> Res {
             "--samples",
             "--aperture",
             "--focus",
+            "--focus-point",
+            "--shutter",
+            "--vignette",
+            "--grain",
             "--animation-s",
             "--season",
             "--snow",
@@ -732,7 +752,7 @@ fn cmd_render(raw: &[String]) -> Res {
         &[],
     )?;
     if a.help() {
-        return print(HELP_RENDER);
+        return print(&HELP_RENDER.replace("PHOTO_FLAGS", PHOTO_FLAGS));
     }
     a.at_most(1)?;
     let file = a
@@ -807,27 +827,60 @@ fn cmd_render(raw: &[String]) -> Res {
     if let Some(s) = a.value("--grade")? {
         params["grade"] = s.into();
     }
-    for (flag, key) in [
-        ("--samples", "samples"),
-        ("--aperture", "aperture_m"),
-        ("--focus", "focus_m"),
-        ("--animation-s", "animation_s"),
-    ] {
-        if let Some(v) = a.value(flag)? {
-            let n: f64 = v
-                .parse()
-                .map_err(|_| CliError::Usage(format!("`{flag}` must be a number, got `{v}`")))?;
-            params[key] = if key == "samples" {
-                json!(n as u64)
-            } else {
-                json!(n)
-            };
-        }
+    photo_params(&a, &mut params)?;
+    if let Some(v) = a.value("--animation-s")? {
+        let n: f64 = v
+            .parse()
+            .map_err(|_| CliError::Usage(format!("`--animation-s` must be a number, got `{v}`")))?;
+        params["animation_s"] = json!(n);
     }
     let mut host = local_host();
     open_or_new(&mut host, Some(file))?;
     let r = exec(&mut host, "view.render", params)?;
     print_json(&r)
+}
+
+/// The photo flags `render` and `film` share, into `view.render`'s (and `film.render`'s)
+/// parameters; the command checks the ranges.
+fn photo_params(a: &Args, params: &mut Value) -> Result<(), CliError> {
+    let number = |flag: &str, v: &str| {
+        v.parse::<f64>()
+            .map_err(|_| CliError::Usage(format!("`{flag}` must be a number, got `{v}`")))
+    };
+    if let Some(v) = a.value("--samples")? {
+        params["samples"] = v
+            .parse::<u64>()
+            .map_err(|_| CliError::Usage(format!("`--samples` must be a whole number, got `{v}`")))?
+            .into();
+    }
+    if let Some(v) = a.value("--aperture")? {
+        // An f-number, as on a lens: 2.8 or f/2.8.
+        params["aperture"] = number("--aperture", v.trim_start_matches("f/"))?.into();
+    }
+    if let Some(v) = a.value("--focus")? {
+        params["focus_m"] = match v {
+            "auto" | "target" => v.into(),
+            _ => number("--focus", v)?.into(),
+        };
+    }
+    if let Some(v) = a.value("--focus-point")? {
+        let p: Vec<f64> = v
+            .split(',')
+            .map(|x| x.trim().parse())
+            .collect::<Result<_, _>>()
+            .map_err(|_| CliError::Usage(format!("`--focus-point` must be X,Y, got `{v}`")))?;
+        params["focus_point"] = json!(p);
+    }
+    for (flag, key) in [
+        ("--shutter", "shutter_s"),
+        ("--vignette", "vignette"),
+        ("--grain", "grain"),
+    ] {
+        if let Some(v) = a.value(flag)? {
+            params[key] = number(flag, v)?.into();
+        }
+    }
+    Ok(())
 }
 
 fn slug(text: &str) -> String {
@@ -1026,11 +1079,18 @@ fn cmd_film(raw: &[String]) -> Res {
             "--to",
             "--every",
             "--video",
+            "--samples",
+            "--aperture",
+            "--focus",
+            "--focus-point",
+            "--shutter",
+            "--vignette",
+            "--grain",
         ],
         &[],
     )?;
     if a.help() {
-        return print(HELP_FILM);
+        return print(&HELP_FILM.replace("PHOTO_FLAGS", PHOTO_FLAGS));
     }
     a.at_most(1)?;
     let file = a
@@ -1083,6 +1143,7 @@ fn cmd_film(raw: &[String]) -> Res {
     if let Some(q) = a.value("--quality")? {
         params["quality"] = q.into();
     }
+    photo_params(&a, &mut params)?;
     let result = visioncraft_automation::film::render_with_progress(
         &mut host,
         &params,

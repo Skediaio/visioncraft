@@ -185,7 +185,7 @@ fn fs_depth_cutout_1x(in: DepthOut) {
     let a = cutout_alpha(in.uv) * edge_fade(in.world, normalize(to_eye(in.world)));
     let soft = edge_coverage(in.uv, in.world);
     let cut = a < material.alpha.x;
-    let dither = ign(in.clip.xy) >= soft;
+    let dither = ign_sampled(in.clip.xy) >= soft;
     if select(cut, dither, soft >= 0.0) {
         discard;
     }
@@ -201,7 +201,7 @@ fn depth_cutout_mask(in: DepthOut) -> u32 {
         u32(round(soft * f32(SAMPLES))),
         soft >= 0.0,
     );
-    return select(sample_run(n, u32(ign(in.clip.xy) * f32(SAMPLES))), 0u, n == 0u);
+    return select(sample_run(n, u32(ign_sampled(in.clip.xy) * f32(SAMPLES))), 0u, n == 0u);
 }
 
 // Not on Vulkan: `coverage_per_sample.wgsl` (`coverage.rs`).

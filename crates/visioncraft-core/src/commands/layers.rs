@@ -107,7 +107,7 @@ pub(super) fn register(s: &mut Session) {
         spec(
             "view.set",
             "Set View",
-            "Sets the season, snow, weathering, wetness, rain, mist, light shafts, exposure, white balance, grade, look, sky, clouds, years after planting, haze, wind and gusts, the ground plane, the surroundings, ground clutter and the view distance stored with the project; only the fields given change.",
+            "Sets the season, snow, weathering, wetness, rain, mist, light shafts, exposure, white balance, grade, vignette, film grain, look, sky, clouds, years after planting, haze, wind and gusts, the ground plane, the surroundings, ground clutter and the view distance stored with the project; only the fields given change.",
             vec![
                 param("season", T::String, "spring, summer, autumn or winter: the plants as they are then, and the project's date set to the season's day at the site (20 April, 21 June, 20 October, 15 January in the north; six months on in the south), the hour kept. An exact date (time.set) maps back to its season."),
                 param("snow", T::Number, "Snow cover 0..1 on the ground, lawns, roofs, terraces, hedge tops, evergreen crowns, branches, wall tops and sills, not under roofs or dense evergreens; about 0.7 for a snowy winter. 0: none.").default(json!(0)),
@@ -118,6 +118,8 @@ pub(super) fn register(s: &mut Session) {
                 param("shafts", T::Number, "Light shafts 0..1: the sun's light in the haze, mist and rain fog is shadowed by crowns, hedges and houses (a march through the four shadow cascades with the fog's own density and phase), so soft beams and darker lanes run through the air where the sun shines through gaps; strongest looking towards a low sun. 1 is the physical amount. They need a medium: mist 0.2-0.4, rain or thick haze; in clear air nothing shows (and nothing is computed). 0: none.").default(json!(0)),
                 param("white_balance", T::Any, "The camera's white balance: \"daylight\" (fixed at 6500 K: a low sun reads orange, as on film), \"auto\" (from the sun's and the sky's light at the time shown, as a camera's automatic white balance: most of a warm or cool cast is taken out, some of the mood kept) or a colour temperature in kelvin, 2000 to 12000 (light of that temperature reads white: 3200 makes daylight blue, 9000 warms an overcast day).").default(json!("daylight")),
                 param("grade", T::String, "A colour grade before the tone map: neutral (none), warm (a little warmer and richer), cool (a little cooler and calmer) or soft (lower contrast and colour, a matte print).").default(json!("neutral")),
+                param("vignette", T::Number, "The lens' light fall-off towards the corners 0..1, before the tone map (highlights stay bright): 0.3 a light vignette (about half a stop off the corners), 1 two stops. In the live view and every picture. 0: none.").default(json!(0)),
+                param("grain", T::Number, "Film grain 0..1 after the tone map: noise in the luminance only (no colour speckle), most in the mid-tones, none in black; 0.2 is a fine grain, 0.5 a fast film. In the live view and every picture. 0: none.").default(json!(0)),
                 param("exposure_ev", T::Number, "Exposure offset in stops; null for automatic exposure."),
                 param("sky", T::Object, "{type: \"physical\"} or {type: \"hdri\", id: string, rotation_deg: number, intensity: number >= 0}.")
                     .default(json!({"type": "physical"})),
@@ -144,6 +146,23 @@ pub(super) fn register(s: &mut Session) {
             json!({"haze": 3.5, "wind_speed_mps": 3.3, "ground": null, "view_distance": 2.0}),
         ),
         view_set,
+    );
+    s.register_with_spec(
+        spec(
+            "view.set_photo",
+            "Set Photo Settings",
+            "Sets how a photo is taken, stored with the project: the frames averaged, the lens' aperture and focus, and the shutter time; only the fields given change. The app's photo export takes them, and so does `view.render` at quality `photo` for every field it is not given. Each frame is moved by a fraction of a pixel (smooth edges, no stair steps or shimmering foliage), the sun's light within its disc (soft shadows) and the noise of occlusion, light shafts and leaf edges by the frame, and their mean goes through bloom and the tone map once.",
+            vec![
+                param("samples", T::Integer, "Frames averaged, 1 to 1024: 16 smooth edges, 64 a clean photo, 256 for a wide aperture or long shutter.").default(json!(64)),
+                param("aperture", T::Number, "The lens' aperture as an f-number, 1 to 32 (the focal length is the one a 36 mm full-frame sensor needs for the camera's field of view: 50 degrees is a 39 mm lens at 3:2): f/2.8 blurs the background behind a subject a few metres off, f/8 keeps a garden sharp from 2 m to the horizon. null: a pinhole, everything sharp."),
+                param("focus", T::Any, "Where the lens is focused: \"target\" (the camera's target), \"auto\" (what the picture shows at `focus_point`, as a camera's autofocus) or a distance along the view in metres, 0.1 to 1000.").default(json!("target")),
+                param("focus_point", T::Any, "[x, y], 0..1 from the picture's top left: where the autofocus looks.").default(json!([0.5, 0.5])),
+                param("shutter_s", T::Number, "Shutter time 0 to 1: plants in the wind, water and falling rain blur with their motion over it (1/60 s = 0.0167 a hand-held shot). 0: a frozen instant.").unit("s").default(json!(0)),
+            ],
+            "null",
+            json!({"samples": 64, "aperture": 2.8, "focus": "auto", "focus_point": [0.5, 0.6]}),
+        ),
+        view_set_photo,
     );
     s.register_with_spec(
         spec(
@@ -336,6 +355,9 @@ fn view_set(project: &mut Project, params: &Value) -> Result<Value, CommandError
             "shafts",
             "white_balance",
             "grade",
+            "vignette",
+            "grain",
+            "photo",
             "surroundings",
         ],
     )?;
@@ -352,6 +374,14 @@ fn view_set(project: &mut Project, params: &Value) -> Result<Value, CommandError
     }
     project.view = view;
     project.time = time;
+    Ok(Value::Null)
+}
+
+fn view_set_photo(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
+    let photo: crate::photo::PhotoSettings =
+        super::merge_update(&project.view.photo, params, &["aperture"])?;
+    photo.validate().map_err(|e| crate::session::bad(&e))?;
+    project.view.photo = photo;
     Ok(Value::Null)
 }
 
@@ -480,5 +510,55 @@ mod sun_map_tests {
         // An old file reads with no map.
         let old: Project = serde_json::from_str(&before).unwrap();
         assert!(old.view.sun_map.is_none());
+    }
+}
+
+#[cfg(test)]
+mod photo_tests {
+    use crate::photo::Focus;
+    use crate::{Project, Session};
+    use serde_json::json;
+
+    #[test]
+    fn photo_settings_change_field_by_field_and_stay_out_of_files_by_default() {
+        let mut s = Session::new(Project::default());
+        let plain = serde_json::to_value(s.project()).unwrap();
+        assert!(plain["view"].get("photo").is_none());
+        assert!(plain["view"].get("vignette").is_none());
+        s.run(
+            "view.set_photo",
+            json!({"aperture": 2.8, "focus": "auto", "focus_point": [0.5, 0.7]}),
+        )
+        .unwrap();
+        s.run("view.set_photo", json!({"samples": 128})).unwrap();
+        let p = s.project().view.photo;
+        assert_eq!(
+            (p.samples, p.aperture, p.focus, p.focus_point),
+            (128, Some(2.8), Focus::Auto, [0.5, 0.7])
+        );
+        s.run("view.set_photo", json!({"aperture": null, "focus": 4}))
+            .unwrap();
+        let p = s.project().view.photo;
+        assert_eq!((p.aperture, p.focus), (None, Focus::Metres(4.0)));
+        for bad in [
+            json!({"samples": 0}),
+            json!({"aperture": 0.5}),
+            json!({"focus": "near"}),
+            json!({"focus_point": [2, 0]}),
+            json!({"shutter_s": -1}),
+            json!({"iso": 100}),
+        ] {
+            assert!(s.run("view.set_photo", bad.clone()).is_err(), "{bad}");
+        }
+        s.run("view.set", json!({"vignette": 0.3, "grain": 0.2}))
+            .unwrap();
+        assert_eq!(
+            (s.project().view.vignette, s.project().view.grain),
+            (0.3, 0.2)
+        );
+        assert!(s.run("view.set", json!({"grain": 1.5})).is_err());
+        let back: Project =
+            serde_json::from_value(serde_json::to_value(s.project()).unwrap()).unwrap();
+        assert_eq!(back.view, s.project().view);
     }
 }

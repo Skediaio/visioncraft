@@ -243,10 +243,14 @@ nothing here is a promise of a date.
      instead of more bloom levels), white balance from the sky (`white_balance`: daylight, auto
      from the sun's and the sky's irradiance with 70 % von Kries adaptation in Bradford space, or
      kelvin) and grade presets before AgX (`grade`: neutral, warm, cool, soft, as a matrix and a
-     contrast exponent). Recipe 40. Next: a photo mode that accumulates jittered frames (real
-     anti-aliasing, depth of field, motion blur, light vignette and grain), with the shafts'
-     jitter averaged across its samples, and shafts that read at thin mist (a froxel volume with
-     a stronger droplet lobe).
+     contrast exponent). Recipe 40. Done too: a photo mode that accumulates jittered frames
+     (`view.set_photo`, `view.render` and `film.render` `samples` at any quality): Halton (2, 3)
+     sub-pixel shifts, the sun's disc, and the occlusion, shafts and alpha-to-coverage noise turned
+     per sample, summed in 32-bit float linear HDR before bloom and the tone map, which run once on
+     the mean; a thin lens (f-number on a 36 mm sensor, focus in metres, at the camera target or
+     by autofocus from the first sample's depth) as an off-axis frustum per lens point; a shutter
+     time for motion blur of the wind and rain; and a light vignette and film grain (`view.set`).
+     Recipe 41. Next: shafts that read at thin mist (a froxel volume with a stronger droplet lobe).
   2. Materials and ground: download the catalogued CC0 library (ambientCG, Poly Haven) into
      checkouts, hex tiling and height blending on terrain and paving, joints and relief (boards,
      tiles, parallax up close), and leaf litter, pebbles and moss as scatter that follows the season.
@@ -296,6 +300,15 @@ nothing here is a promise of a date.
   pots, barbecues, with variants in colour and material; more kinds as parametric pieces; pieces
   from open sources (CC0 or CC-BY) as downloadable library assets; placing with snapping to floors
   and walls; grouping as room sets.
+
+## Experimental
+
+- Browser AI agent (WebMCP): in a Chrome with WebMCP, the page registers about 40 curated tools
+  (inspect, design, view, film, undo, a generic `visioncraft_run_command`, a canvas snapshot) with
+  `document.modelContext`, off until the person ticks the box or opens `?webmcp=1`; destructive
+  steps ask first. `film.orbit`, `film.flythrough` and `film.reveal` build films for it, and for
+  the CLI and MCP. See `crates/visioncraft-automation/docs/webmcp.md`. Next: follow the API as it
+  settles (`requestUserInteraction`, output schemas), render films in the browser.
 
 ## Later
 

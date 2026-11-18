@@ -155,6 +155,47 @@ fn color_grade(c: vec3<f32>) -> vec3<f32> {
     return grey * pow(graded / grey, vec3<f32>(k));
 }
 
+// A lens' natural vignetting at `uv` (0..1 over the picture) for `amount` 0..1: the light
+// falls off as the square of (1 - k r^2), r the distance from the centre with the corners at 1
+// (the cos^4 law's shape for a moderate field of view, flattened in the middle), so 0.3 takes
+// about half a stop off the corners and 1 two stops. Before the tone map: it is light the lens
+// does not pass, and highlights stay bright where the corners darken.
+fn vignette(uv: vec2<f32>, amount: f32) -> f32 {
+    let aspect = g.viewport.x * g.viewport.w;
+    let d = (uv - 0.5) * vec2<f32>(aspect, 1.0);
+    let r2 = dot(d, d) / dot(vec2<f32>(0.5 * aspect, 0.5), vec2<f32>(0.5 * aspect, 0.5));
+    let f = 1.0 - 0.5 * amount * r2;
+    return f * f;
+}
+
+// A uniform hash in [0, 1) of an integer pixel and a seed (PCG, Jarzynski and Olano, "Hash
+// Functions for GPU Rendering", JCGT 9(3), 2020).
+fn pcg_hash(v: u32) -> u32 {
+    let state = v * 747796405u + 2891336453u;
+    let word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+
+fn hash01(pixel: vec2<f32>, seed: u32) -> f32 {
+    let p = vec2<u32>(pixel);
+    let h = pcg_hash(p.x ^ pcg_hash(p.y ^ pcg_hash(seed)));
+    return f32(h >> 8u) / 16777216.0;
+}
+
+// Film grain on the tone-mapped (display linear) colour `c`, `amount` 0..1: one value of noise
+// per pixel for all three channels (grain is in the luminance, not the colour), roughly
+// Gaussian (the sum of three uniforms, deviation 0.5). As a gain, so black stays black; its
+// size in luminance grows with the square root of the luminance (as a film's or a sensor's
+// shot noise) and fades out towards white, so it shows most in the mid-tones. Fixed per picture;
+// in the live view it changes with the clock.
+fn film_grain(c: vec3<f32>, pixel: vec2<f32>, amount: f32) -> vec3<f32> {
+    let seed = u32(fract(g.time.x * 0.5) * 24.0);
+    let u = hash01(pixel, seed) + hash01(pixel, seed + 101u) + hash01(pixel, seed + 211u) - 1.5;
+    let y = clamp(dot(c, vec3<f32>(0.2126, 0.7152, 0.0722)), 0.0, 1.0);
+    let gain = 1.0 + 0.16 * amount * u * (1.0 - y) / sqrt(max(y, 1e-3));
+    return c * max(gain, 0.0);
+}
+
 @fragment
 fn fs_tonemap(in: Out) -> @location(0) vec4<f32> {
     // Never below zero: the light shafts take light out of the HDR image (shafts.wgsl).
@@ -165,7 +206,13 @@ fn fs_tonemap(in: Out) -> @location(0) vec4<f32> {
         let bloom = textureSampleLevel(src2, smp, in.clip.xy * g.viewport.zw, 0.0).rgb * 0.25;
         hdr = mix(hdr, bloom, g.options.y);
     }
-    let c = agx(color_grade(white_balance(night_vision(hdr))));
+    if g.aerial.w > 0.0 {
+        hdr *= vignette(in.clip.xy * g.viewport.zw, g.aerial.w);
+    }
+    var c = agx(color_grade(white_balance(night_vision(hdr))));
+    if g.snow.w > 0.0 {
+        c = film_grain(c, in.clip.xy, g.snow.w);
+    }
     // Dither by +-0.5 LSB (interleaved gradient noise) in the encoded domain.
     let n = ign(in.clip.xy) - 0.5;
     let encoded = clamp(srgb_encode(c) + n / 255.0, vec3<f32>(0.0), vec3<f32>(1.0));

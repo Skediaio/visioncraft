@@ -49,7 +49,7 @@ struct Globals {
     grade: vec4<f32>,           // x look contrast power, y look saturation (1, 1: plain AgX), z camera indoors (0/1), w photo sample seed
     clouds: vec4<f32>,          // x cover 0..1, y overcast (0/1), zw drift (m)
     snow_cover: mat4x4<f32>,    // world -> the snow cover map (straight down, last shadow layer)
-    snow: vec4<f32>,            // x snow 0..1, y the cover map's shadow layer, z cover map on (0/1)
+    snow: vec4<f32>,            // x snow 0..1, y the cover map's shadow layer, z cover map on (0/1), w film grain 0..1 (tonemap.wgsl)
     sky_vol: vec4<f32>,         // sky visibility volume: xyz origin (m), w 1 / cell (m)
     sky_vol_size: vec4<f32>,    // xyz 1 / cells, w volume on (0/1)
     coast_info: vec4<f32>,      // x coast points (0: none), y sea level (m), z endless ground on the sea side (m), w surroundings kind (scene.wgsl)
@@ -61,7 +61,7 @@ struct Globals {
     gust: vec4<f32>,            // x, y the gust pattern's coarse and fine layers travelled downwind (m, wrapped), z gusts 0..1
     shafts: vec4<f32>,          // light shafts (shafts.wgsl): x strength 0..1 (0 off), y march steps, z march distance (m), w half-res divisor
     glare: vec4<f32>,           // sun glare (shafts.wgsl): x strength (0 off), y narrow lobe width (rad), z wide lobe width (rad), w wide lobe share
-    aerial: vec4<f32>,          // aerial perspective LUT (atmosphere.wgsl): x on (0/1), y farthest slice (km), z camera altitude (km)
+    aerial: vec4<f32>,          // aerial perspective LUT (atmosphere.wgsl): x on (0/1), y farthest slice (km), z camera altitude (km); w vignette 0..1 (tonemap.wgsl)
     white: vec4<f32>,           // white balance (tonemap.wgsl): rgb the light taken for white, w mode (0 off, 1 fixed, 2 auto from the sun and sky)
     white_ref: vec4<f32>,       // rgb the white it is adapted to, w degree of adaptation 0..1
     color_grade: array<vec4<f32>, 3>, // grade matrix columns (linear Rec.709); [0].w contrast exponent about mid grey, [1].w grade on (0/1)
@@ -246,6 +246,13 @@ fn view_to_pixel(p: vec3<f32>) -> vec2<f32> {
 // Call of Duty: Advanced Warfare", SIGGRAPH 2014.
 fn ign(pixel: vec2<f32>) -> f32 {
     return fract(52.9829189 * fract(dot(pixel, vec2<f32>(0.06711056, 0.00583715))));
+}
+
+// The same noise turned by the photo sample (`g.grade.w`, 0 outside photos) along the golden
+// ratio, so a pattern dithered with it (alpha to coverage, fades) averages out over a photo's
+// samples instead of staying fixed in every one.
+fn ign_sampled(pixel: vec2<f32>) -> f32 {
+    return fract(ign(pixel) + g.grade.w * 0.618034);
 }
 
 // Fullscreen triangle; z = 1 puts it on the far plane (the sky uses that).

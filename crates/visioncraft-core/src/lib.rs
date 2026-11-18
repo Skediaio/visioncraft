@@ -22,6 +22,7 @@ pub mod material;
 pub mod measure;
 mod model;
 pub mod object;
+pub mod photo;
 pub mod plant_ground;
 pub mod plant_light;
 pub mod planting;
@@ -62,6 +63,7 @@ pub use material::{
 };
 pub use model::{Body, Face, ImportError, ImportedModel, ModelCodecError};
 pub use object::UserObject;
+pub use photo::PhotoSettings;
 pub use plant_ground::{
     evaluate_in_scene, over_ids, placed_shape, placed_shape_mesh, plant_size, water_areas,
 };

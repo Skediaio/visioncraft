@@ -680,6 +680,69 @@ pub fn host_docs() -> Vec<CommandDoc> {
                     &[],
                     "Draw every Nth frame, 1 to 10000",
                 ),
+                p(
+                    "samples",
+                    "integer",
+                    None,
+                    false,
+                    Some("8 at quality photo, else 1"),
+                    &[],
+                    "Frames averaged per film frame, 1 to 1024 (as view.render's)",
+                ),
+                p(
+                    "aperture",
+                    "number",
+                    None,
+                    false,
+                    Some("as view.render"),
+                    &[],
+                    "Lens f-number for every frame, 1 to 32; null all sharp",
+                ),
+                p(
+                    "focus_m",
+                    "any",
+                    Some("m"),
+                    false,
+                    Some("as view.render"),
+                    &[],
+                    "Focus for every frame: metres, \"auto\" (refocused each frame) or \"target\"",
+                ),
+                p(
+                    "focus_point",
+                    "any",
+                    None,
+                    false,
+                    Some("[0.5, 0.5]"),
+                    &[],
+                    "Where \"auto\" focus looks, [x, y] from 0 to 1",
+                ),
+                p(
+                    "shutter_s",
+                    "number",
+                    Some("s"),
+                    false,
+                    Some("0"),
+                    &[],
+                    "Shutter time per frame, 0 to 1 (1 / (2 fps) is the film look's 180 degree shutter)",
+                ),
+                p(
+                    "vignette",
+                    "number",
+                    None,
+                    false,
+                    Some("the project's"),
+                    &[],
+                    "A light vignette 0..1",
+                ),
+                p(
+                    "grain",
+                    "number",
+                    None,
+                    false,
+                    Some("the project's"),
+                    &[],
+                    "Film grain 0..1",
+                ),
             ],
             "{dir, frames, framePattern, fps, width, height, duration_s, first_t, last_t, renderer, ffmpeg}",
             json!({"id": "f1", "dir": "frames", "width": 640, "height": 360, "every": 5}),
@@ -751,16 +814,25 @@ pub fn host_docs() -> Vec<CommandDoc> {
                     false,
                     Some("\"high\""),
                     &["low", "medium", "high", "ultra", "photo"],
-                    "The renderer's quality preset; photo averages `samples` frames at ULTRA (soft shadows, smooth edges and occlusion, optional depth of field)",
+                    "The renderer's quality preset; photo averages `samples` frames at ULTRA (soft shadows, smooth edges and occlusion, optional depth of field), taking every lens setting it is not given from view.set_photo",
                 ),
                 p(
                     "samples",
                     "integer",
                     None,
                     false,
-                    Some("64"),
+                    Some("quality photo: view.set_photo's (64); else 1"),
                     &[],
-                    "Photo only: frames averaged, 1 to 1024",
+                    "Frames averaged, 1 to 1024, at any quality: each moved by a fraction of a pixel, the sun's light within its disc and the noise of occlusion, shafts and leaf edges by the frame, and their mean (in linear HDR) goes through bloom and the tone map once. 1 without a lens or shutter is the plain still",
+                ),
+                p(
+                    "aperture",
+                    "number",
+                    None,
+                    false,
+                    Some("quality photo: view.set_photo's; else none (all sharp)"),
+                    &[],
+                    "The lens' f-number for depth of field, 1 to 32 (a full-frame lens for the field of view; f/2.8 blurs what lies behind a subject a few metres off); null all sharp",
                 ),
                 p(
                     "aperture_m",
@@ -769,16 +841,52 @@ pub fn host_docs() -> Vec<CommandDoc> {
                     false,
                     Some("0 (all sharp)"),
                     &[],
-                    "Photo only: lens radius for depth of field, 0 to 0.5",
+                    "Instead of `aperture`: the lens' radius, 0 to 0.5",
                 ),
                 p(
                     "focus_m",
-                    "number",
+                    "any",
                     Some("m"),
                     false,
-                    Some("the distance to the camera target"),
+                    Some("quality photo: view.set_photo's; else the camera target"),
                     &[],
-                    "Photo only: distance in focus, 0.1 to 1000",
+                    "With a lens: the distance in focus, 0.1 to 1000, \"auto\" (the depth the picture shows at `focus_point`) or \"target\" (the camera target's distance)",
+                ),
+                p(
+                    "focus_point",
+                    "any",
+                    None,
+                    false,
+                    Some("[0.5, 0.5], the centre"),
+                    &[],
+                    "Where `focus_m` \"auto\" looks: [x, y] from 0 to 1, from the picture's top left",
+                ),
+                p(
+                    "shutter_s",
+                    "number",
+                    Some("s"),
+                    false,
+                    Some("0"),
+                    &[],
+                    "Shutter time 0 to 1 from `animation_s`: plants in the wind, water and rain blur with their motion (give samples enough to cover it: 32 or more)",
+                ),
+                p(
+                    "vignette",
+                    "number",
+                    None,
+                    false,
+                    Some("the project's"),
+                    &[],
+                    "A light vignette 0..1 for this picture only (0.3 about half a stop off the corners)",
+                ),
+                p(
+                    "grain",
+                    "number",
+                    None,
+                    false,
+                    Some("the project's"),
+                    &[],
+                    "Film grain 0..1 for this picture only, after the tone map (0.2 fine)",
                 ),
                 p(
                     "animation_s",
@@ -1663,6 +1771,83 @@ fn with_time(project: &Project, time: &Value) -> Result<Project, String> {
     Ok(scratch.project().clone())
 }
 
+/// `view.render`'s photo: averaged frames, a lens or a shutter. Quality `photo` takes what it
+/// is not given from the project's photo settings (`view.set_photo`); another quality averages
+/// only when asked to (`samples` over 1, an aperture or a shutter time), else it is the still.
+fn photo_request(
+    id: &str,
+    a: &Fields,
+    quality: &str,
+    settings: &visioncraft_core::PhotoSettings,
+) -> Result<Option<PhotoRequest>, String> {
+    use visioncraft_core::photo::{F_NUMBERS, FOCUS_M, Focus, SHUTTER_MAX_S};
+    let photo = quality == "photo";
+    let samples = a.integer("samples", 1, 1024)?.map(|n| n as u32);
+    let aperture = match a.get("aperture") {
+        None => photo.then_some(settings.aperture).flatten(),
+        Some(Value::Null) => None,
+        Some(v) => Some(
+            v.as_f64()
+                .map(|n| n as f32)
+                .filter(|n| F_NUMBERS.contains(n))
+                .ok_or_else(|| {
+                    format!("{id}: `aperture` must be an f-number from 1 to 32, or null")
+                })?,
+        ),
+    };
+    let aperture_m = a.number("aperture_m")?;
+    if aperture_m.is_some_and(|x| !(0.0..=0.5).contains(&x)) {
+        return Err(format!("{id}: `aperture_m` must be from 0 to 0.5"));
+    }
+    if aperture_m.is_some() && a.get("aperture").is_some() {
+        return Err(format!(
+            "{id}: give `aperture` (an f-number) or `aperture_m`, not both"
+        ));
+    }
+    let focus = match a.get("focus_m") {
+        None if photo => settings.focus,
+        None => Focus::Target,
+        Some(v) => serde_json::from_value::<Focus>(v.clone())
+            .ok()
+            .filter(|f| match f {
+                Focus::Metres(m) => FOCUS_M.contains(m),
+                _ => true,
+            })
+            .ok_or_else(|| {
+                format!("{id}: `focus_m` must be from 0.1 to 1000, \"auto\" or \"target\"")
+            })?,
+    };
+    let focus_point = match a.get("focus_point") {
+        None if photo => settings.focus_point,
+        None => [0.5, 0.5],
+        Some(v) => serde_json::from_value::<[f32; 2]>(v.clone())
+            .ok()
+            .filter(|p| p.iter().all(|c| (0.0..=1.0).contains(c)))
+            .ok_or_else(|| format!("{id}: `focus_point` must be [x, y] from 0 to 1"))?,
+    };
+    let shutter_s = match a.number("shutter_s")? {
+        Some(s) if !(0.0..=f64::from(SHUTTER_MAX_S)).contains(&s) => {
+            return Err(format!("{id}: `shutter_s` must be from 0 to 1"));
+        }
+        Some(s) => s as f32,
+        None if photo => settings.shutter_s,
+        None => 0.0,
+    };
+    let aperture_m = aperture_m.unwrap_or(0.0) as f32;
+    let samples = samples.unwrap_or(if photo { settings.samples } else { 1 });
+    let lens = aperture.is_some() || aperture_m > 0.0;
+    Ok(
+        (photo || samples > 1 || lens || shutter_s > 0.0).then_some(PhotoRequest {
+            samples,
+            f_number: aperture,
+            aperture_m,
+            focus,
+            focus_point,
+            shutter_s,
+        }),
+    )
+}
+
 fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
     let id = "view.render";
     let a = Fields::new(
@@ -1689,8 +1874,13 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
             "quality",
             "years",
             "samples",
+            "aperture",
             "aperture_m",
             "focus_m",
+            "focus_point",
+            "shutter_s",
+            "vignette",
+            "grain",
             "animation_s",
         ],
     )?;
@@ -1707,26 +1897,8 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
             shorten(quality)
         ));
     }
-    let samples = a.integer("samples", 1, 1024)?;
-    let aperture = a.number("aperture_m")?;
-    let focus = a.number("focus_m")?;
-    if quality != "photo" && (samples.is_some() || aperture.is_some() || focus.is_some()) {
-        return Err(format!(
-            "{id}: `samples`, `aperture_m` and `focus_m` need quality `photo`"
-        ));
-    }
-    if aperture.is_some_and(|x| !(0.0..=0.5).contains(&x)) {
-        return Err(format!("{id}: `aperture_m` must be from 0 to 0.5"));
-    }
-    if focus.is_some_and(|x| !(0.1..=1000.0).contains(&x)) {
-        return Err(format!("{id}: `focus_m` must be from 0.1 to 1000"));
-    }
-    let photo = (quality == "photo").then(|| PhotoRequest {
-        samples: samples.unwrap_or(64) as u32,
-        aperture_m: aperture.unwrap_or(0.0) as f32,
-        focus_m: focus.map(|f| f as f32),
-    });
     let mut project = host.session().project().clone();
+    let photo = photo_request(id, &a, quality, &project.view.photo)?;
     let mut camera = None;
     if let Some(v) = a.str("viewpoint")? {
         let vp = project
@@ -1807,6 +1979,8 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
         ("mist", &mut project.view.mist),
         ("gustiness", &mut project.view.gustiness),
         ("shafts", &mut project.view.shafts),
+        ("vignette", &mut project.view.vignette),
+        ("grain", &mut project.view.grain),
     ] {
         if let Some(v) = a.number(key)? {
             if !(0.0..=1.0).contains(&v) {

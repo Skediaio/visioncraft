@@ -54,6 +54,7 @@ pub mod user_objects;
 pub mod views;
 pub mod wall_photo_ui;
 pub mod water_panel;
+pub mod webmcp;
 pub mod work_pool;
 
 pub use eframe::egui;
@@ -77,6 +78,8 @@ const KEY_PATH: &str = "project_path";
 const KEY_RELINK: &str = "relink_dir";
 #[cfg(not(target_arch = "wasm32"))]
 const KEY_AGENTS: &str = "allow_agents";
+#[cfg(target_arch = "wasm32")]
+const KEY_WEBMCP: &str = "webmcp";
 
 /// A model file being imported off the UI thread (`import_task`).
 struct Job {
@@ -102,8 +105,6 @@ const STILL_WAIT_S: f64 = 20.0;
 /// A photo being taken: a few of its frames each app frame, then read back as an export.
 struct PhotoJob {
     photo: visioncraft_render::Photo,
-    matrices: (glam::Mat4, glam::Mat4, glam::Vec3),
-    lens: (f32, f32),
     samples: u32,
     /// The export preset.
     idx: usize,
@@ -174,8 +175,8 @@ pub struct App {
     /// tier of what is in frame, with when it was asked for.
     still_wait: Option<(Option<usize>, f64)>,
     export_all: Option<ExportAll>,
-    /// The frames of the photo asked for (the next export is a photo).
-    photo_next: Option<u32>,
+    /// The next export is a photo (`view.set_photo`'s settings).
+    photo_next: bool,
     photo: Option<PhotoJob>,
     pending_replace: Option<Replace>,
     /// Models whose file changed, with the time to re-import them (debounce).
@@ -262,7 +263,7 @@ impl App {
             export: None,
             still_wait: None,
             export_all: None,
-            photo_next: None,
+            photo_next: false,
             photo: None,
             pending_replace: None,
             changed: HashMap::new(),
@@ -304,6 +305,8 @@ impl App {
         {
             agents::web_rpc::install_waker(&cc.egui_ctx);
             app.studio.wake = cc.egui_ctx.clone();
+            let stored = cc.storage.and_then(|s| s.get_string(KEY_WEBMCP)).as_deref() == Some("1");
+            app.agents.webmcp = webmcp::WebMcp::new(stored);
         }
         // AI agents: the person's switch, or `--control [PORT]` for this run.
         #[cfg(not(target_arch = "wasm32"))]
@@ -576,7 +579,7 @@ impl App {
         let (name, w, h) = presets[idx];
         self.studio.prepare();
         let (view, proj, eye) = self.studio.camera.matrices(w as f32 / h as f32);
-        if let Some(samples) = self.photo_next.take() {
+        if std::mem::take(&mut self.photo_next) {
             // A photo has targets of its own beside the live view's. In the browser ULTRA's
             // 4096 shadow maps (five layers of 64 MB) took the page from 75 to 610 MB on an
             // integrated GPU: there the photo's shadows are 2048 (its jittered samples soften
@@ -589,13 +592,17 @@ impl App {
             } else {
                 Quality::ULTRA
             };
-            match self.studio.renderer.photo_begin(w, h, quality) {
+            let request = studio::photo_request(&self.studio.project().view.photo);
+            let lens = self.studio.photo_lens(&request, w, h);
+            match self
+                .studio
+                .renderer
+                .photo_begin(w, h, quality, (view, proj, eye), lens)
+            {
                 Ok(photo) => {
                     self.photo = Some(PhotoJob {
                         photo,
-                        matrices: (view, proj, eye),
-                        lens: self.studio.lens(None),
-                        samples,
+                        samples: request.samples.max(1),
                         idx,
                     });
                 }
@@ -808,32 +815,32 @@ impl App {
         let Some(job) = &mut self.photo else {
             return false;
         };
-        let (view, proj, eye) = job.matrices;
         let until = (job.photo.done + PHOTO_SAMPLES_PER_FRAME).min(job.samples);
         while job.photo.done < until {
-            let k = job.photo.done;
-            if let Err(e) = self.studio.renderer.photo_sample(
-                &mut job.photo,
-                view,
-                proj,
-                eye,
-                k,
-                job.lens.0,
-                job.lens.1,
-            ) {
-                self.toasts.error(format!("Photo failed: {e}"));
-                self.photo = None;
-                return false;
+            match self.studio.renderer.photo_sample(&mut job.photo) {
+                Ok(true) => {}
+                // The autofocus is on its way back from the GPU: on a later frame.
+                Ok(false) => break,
+                Err(e) => {
+                    self.toasts.error(format!("Photo failed: {e}"));
+                    self.photo = None;
+                    return false;
+                }
             }
         }
         let (done, samples) = (job.photo.done, job.samples);
+        let focusing = job.photo.focusing();
         if done >= samples {
             let job = self.photo.take().expect("checked");
-            let still = self.studio.renderer.photo_finish(&job.photo);
-            self.export = Some(ExportJob {
-                still,
-                idx: Some(job.idx),
-            });
+            match self.studio.renderer.photo_finish(job.photo) {
+                Ok(still) => {
+                    self.export = Some(ExportJob {
+                        still,
+                        idx: Some(job.idx),
+                    });
+                }
+                Err(e) => self.toasts.error(format!("Photo failed: {e}")),
+            }
             return true;
         }
         let mut cancel = false;
@@ -843,7 +850,14 @@ impl App {
             .show(ctx, |ui| {
                 ui::panel_frame().show(ui, |ui| {
                     ui.set_width(320.0);
-                    ui.label(egui::RichText::new(strings::PHOTO_TAKING).size(18.0));
+                    ui.label(
+                        egui::RichText::new(if focusing {
+                            strings::PHOTO_FOCUSING
+                        } else {
+                            strings::PHOTO_TAKING
+                        })
+                        .size(18.0),
+                    );
                     ui.add(
                         egui::ProgressBar::new(done as f32 / samples as f32)
                             .text(format!("{done} / {samples}")),
@@ -1182,6 +1196,8 @@ impl App {
             }
             self.focused = focused;
         }
+        #[cfg(target_arch = "wasm32")]
+        self.agents.webmcp.sync(&self.studio.session, now);
         let mut mode = self.hud.mode;
         let host = agents::WindowHost {
             studio: &mut self.studio,
@@ -1231,6 +1247,58 @@ impl App {
         });
         if on != self.agents.allowed() {
             self.agents.allow(on, ctx, None);
+        }
+    }
+
+    /// The browser agent's switch (experimental, WebMCP), what the last agent did, and the
+    /// questions the agent asks before something destructive.
+    #[cfg(target_arch = "wasm32")]
+    fn agents_pill(&mut self, ctx: &egui::Context, now: f64) {
+        let narrow = ui::narrow(ctx);
+        let offset = if narrow {
+            Vec2::new(-10.0, 104.0)
+        } else {
+            Vec2::new(-10.0, 64.0)
+        };
+        let web = &mut self.agents.webmcp;
+        let mut on = web.on;
+        ui::floating(ctx, "agents", Align2::RIGHT_TOP, offset, 300.0, |ui| {
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut on, strings::WEBMCP)
+                    .on_hover_text(strings::WEBMCP_TIP);
+                if let Some((cmd, t)) = &self.agents.last
+                    && now - t < 120.0
+                {
+                    ui.small(format!("{} {cmd}", strings::AGENT_LAST));
+                }
+            });
+            if web.on && !web.status.is_empty() {
+                ui.small(web.status.as_str());
+            }
+        });
+        web.on = on;
+        let mut answer = None;
+        if let Some((id, text)) = web.pending.first() {
+            egui::Window::new(strings::WEBMCP_ASK_TITLE)
+                .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    ui.set_max_width(420.0);
+                    ui.label(text.as_str());
+                    ui.horizontal(|ui| {
+                        if ui.button(strings::WEBMCP_ALLOW).clicked() {
+                            answer = Some((*id, true));
+                        }
+                        if ui.button(strings::WEBMCP_DENY).clicked() {
+                            answer = Some((*id, false));
+                        }
+                    });
+                });
+            ctx.request_repaint();
+        }
+        if let Some((id, allow)) = answer {
+            web.answer(id, allow);
         }
     }
 
@@ -1298,8 +1366,8 @@ impl App {
             Action::New if self.dirty() => self.pending_replace = Some(Replace::New),
             Action::New => self.new_project(),
             Action::Export(i) => self.wait_for_textures(Some(i)),
-            Action::ExportPhoto(i, samples) => {
-                self.photo_next = Some(samples);
+            Action::ExportPhoto(i) => {
+                self.photo_next = true;
                 self.wait_for_textures(Some(i));
             }
             Action::Screenshot => self.wait_for_textures(None),
@@ -1394,6 +1462,11 @@ impl eframe::App for App {
         };
         storage.set_string(KEY_PATH, path(&self.project_path));
         storage.set_string(KEY_RELINK, path(&self.relink_dir));
+        #[cfg(target_arch = "wasm32")]
+        storage.set_string(
+            KEY_WEBMCP,
+            if self.agents.webmcp.on { "1" } else { "0" }.into(),
+        );
         #[cfg(not(target_arch = "wasm32"))]
         storage.set_string(
             KEY_AGENTS,
@@ -2044,7 +2117,6 @@ impl eframe::App for App {
                 });
             busy = true;
         }
-        #[cfg(not(target_arch = "wasm32"))]
         self.agents_pill(&ctx, now);
         busy |= self.poll_still_textures(now);
         busy |= self.poll_export(&ctx);
