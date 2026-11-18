@@ -1905,6 +1905,11 @@ impl SkyVisJob {
         self.bake.map(visioncraft_core::SkyBake::run)
     }
 
+    /// As `run`, on at most `threads` threads (a window keeps cores for its frames).
+    pub fn run_on(self, threads: usize) -> Option<visioncraft_core::SkyVisibility> {
+        self.bake.map(|b| b.run_on(threads))
+    }
+
     /// The visibility; `None` when nothing blocks the sky.
     pub fn finish(self) -> Option<visioncraft_core::SkyVisibility> {
         self.bake.map(visioncraft_core::SkyBake::finish)

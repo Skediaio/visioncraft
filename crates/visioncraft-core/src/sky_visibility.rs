@@ -49,6 +49,8 @@ pub const RAYS: usize = 128;
 const MAX_PROBES: usize = 120_000;
 /// Room round the occluders, metres: the renderer fades the grid out over its outer two cells.
 const PAD_M: f32 = 4.0;
+/// Ground cells per side of a block whose highest point lets a ray skip it (`samples_above`).
+const GROUND_BLOCK: u32 = 8;
 /// The reflectance of a wall, roof or hill a ray meets (plaster, brick, stone, soil).
 // shortcut: one grey for every occluder; the materials are not read.
 pub const SOLID_ALBEDO: f32 = 0.3;
@@ -357,6 +359,33 @@ impl Ground {
         }
     }
 
+    /// The highest sample per block of `GROUND_BLOCK` cells, the samples on its edges included
+    /// (the interpolated height inside a block never exceeds them), and the blocks along x and z.
+    fn block_max(&self) -> (Vec<f32>, [u32; 2]) {
+        if self.dims[0] < 2 || self.dims[1] < 2 {
+            return (Vec::new(), [0, 0]);
+        }
+        let blocks: [u32; 2] = std::array::from_fn(|k| (self.dims[k] - 1).div_ceil(GROUND_BLOCK));
+        let mut max = vec![f32::NEG_INFINITY; (blocks[0] * blocks[1]) as usize];
+        for z in 0..self.dims[1] {
+            for x in 0..self.dims[0] {
+                let h = self.heights[(x + self.dims[0] * z) as usize];
+                // A sample on a block's edge belongs to the blocks on both sides.
+                let bx = [x.saturating_sub(1) / GROUND_BLOCK, x / GROUND_BLOCK];
+                let bz = [z.saturating_sub(1) / GROUND_BLOCK, z / GROUND_BLOCK];
+                for &bz in &bz {
+                    for &bx in &bx {
+                        if bx < blocks[0] && bz < blocks[1] {
+                            let m = &mut max[(bx + blocks[0] * bz) as usize];
+                            *m = m.max(h);
+                        }
+                    }
+                }
+            }
+        }
+        (max, blocks)
+    }
+
     /// The height at `(x, z)`, interpolated, the grid's edge carried on outside it.
     pub fn height(&self, x: f32, z: f32) -> f32 {
         if self.dims[0] == 0 || self.dims[1] == 0 {
@@ -447,6 +476,10 @@ struct Bins {
     /// The ground has relief worth tracing (else a level plane).
     relief: bool,
     ground_top: f32,
+    /// The ground's highest point per block of `GROUND_BLOCK` cells (x fastest), and the
+    /// blocks along x and z: a ray above a block's top skips its samples (`ground_hit`).
+    ground_max: Vec<f32>,
+    ground_blocks: [u32; 2],
 }
 
 /// What a ray finds.
@@ -467,6 +500,7 @@ impl Bins {
         let mut bins: Vec<Vec<u32>> = vec![Vec::new(); n];
         let mut tops = vec![f32::NEG_INFINITY; n];
         let (ground_lo, ground_hi) = scene.ground.range();
+        let (ground_max, ground_blocks) = scene.ground.block_max();
         let (mut top, mut bottom) = (ground_hi, ground_lo);
         for (i, t) in scene.triangles.iter().enumerate() {
             let mut a = [f32::INFINITY; 3];
@@ -516,6 +550,8 @@ impl Bins {
             top: top + 0.01,
             bottom: bottom - 0.01,
             relief: ground_hi - ground_lo > 0.2,
+            ground_max,
+            ground_blocks,
             ground_top: ground_hi,
         }
     }
@@ -642,8 +678,59 @@ impl Tracer<'_> {
             }
             prev = t;
             t += step;
+            // The samples that follow inside this block of the ground while the ray stays above
+            // its highest point cannot hit it: stepped over, as the march would (the same
+            // samples, the same answer), without their heights.
+            for _ in 0..self.samples_above(g, q, d, step) {
+                if t > limit {
+                    break;
+                }
+                prev = t;
+                t += step;
+            }
         }
         None
+    }
+
+    /// How many samples after `q`, `step` apart along `d`, are certainly above the ground: they
+    /// stay in `q`'s block of the grid and above its highest point.
+    fn samples_above(&self, g: &Ground, q: [f32; 3], d: [f32; 3], step: f32) -> u32 {
+        if self.ground_blocks[0] == 0 {
+            return 0;
+        }
+        let (fx, fz) = ((q[0] - g.origin[0]) / g.cell, (q[2] - g.origin[1]) / g.cell);
+        let last = [(g.dims[0] - 1) as f32, (g.dims[1] - 1) as f32];
+        if !(fx >= 0.0 && fz >= 0.0 && fx <= last[0] && fz <= last[1]) {
+            return 0;
+        }
+        let b = GROUND_BLOCK as f32;
+        let (bx, bz) = (
+            ((fx / b) as u32).min(self.ground_blocks[0] - 1),
+            ((fz / b) as u32).min(self.ground_blocks[1] - 1),
+        );
+        let top = self.ground_max[(bx + self.ground_blocks[0] * bz) as usize];
+        // The distance along the ray to the block's edge (in grid units over the cell).
+        let mut exit = f32::INFINITY;
+        for (f, dk, lo, hi) in [
+            (fx, d[0], bx as f32 * b, ((bx + 1) as f32 * b).min(last[0])),
+            (fz, d[2], bz as f32 * b, ((bz + 1) as f32 * b).min(last[1])),
+        ] {
+            let v = dk / g.cell;
+            if v > 1e-9 {
+                exit = exit.min((hi - f) / v);
+            } else if v < -1e-9 {
+                exit = exit.min((lo - f) / v);
+            }
+        }
+        if !exit.is_finite() || exit <= 0.0 {
+            return 0;
+        }
+        let low = q[1] + d[1].min(0.0) * exit;
+        if low <= top + 1e-3 {
+            return 0;
+        }
+        // A hair short of the edge: rounding never carries a sample into the next block.
+        ((exit * 0.999) / step).floor().clamp(0.0, 1e6) as u32
     }
 
     /// How far a ray can go: out of the box of everything that blocks.
@@ -659,6 +746,18 @@ impl Tracer<'_> {
     /// One ray from `p` along unit `d`, the crowns in `near` (indexes into the scene's crowns
     /// with the cone each fills seen from `p`: unit axis and the cosine of its half-angle).
     fn ray(&self, p: [f32; 3], d: [f32; 3], near: &[(usize, [f32; 3], f32)]) -> Ray {
+        self.ray_among(p, d, near, None)
+    }
+
+    /// `ray`, testing only the crowns of `near` at the indexes `only` (in order), when given:
+    /// those whose cones may hold `d` (`probe`, `cone_bands`).
+    fn ray_among(
+        &self,
+        p: [f32; 3],
+        d: [f32; 3],
+        near: &[(usize, [f32; 3], f32)],
+        only: Option<&[u32]>,
+    ) -> Ray {
         let limit = self.reach(p, d);
         let tri = self.triangle_hit(p, d, limit);
         let ground = self.ground_hit(p, d, tri.map_or(limit, |h| h.0));
@@ -680,12 +779,16 @@ impl Tracer<'_> {
             };
         }
         let mut depth = 0.0;
-        for &(i, axis, cos) in near {
+        let mut cross = |&(i, axis, cos): &(usize, [f32; 3], f32)| {
             if axis[0] * d[0] + axis[1] * d[1] + axis[2] * d[2] < cos {
-                continue;
+                return;
             }
             let c = &self.scene.crowns[i];
             depth += c.extinction * c.chord(p, d, end);
+        };
+        match only {
+            Some(list) => list.iter().for_each(|&j| cross(&near[j as usize])),
+            None => near.iter().for_each(cross),
         }
         let t = (-depth).exp();
         Ray {
@@ -727,12 +830,16 @@ impl Tracer<'_> {
     /// reflectance of what it sees instead of sky. `turn`: its own angle round the vertical.
     fn probe(&self, p: [f32; 3], dirs: &[[f32; 3]], turn: f32) -> ([f32; 9], bool, f32) {
         let near = self.near(p);
+        let bands = cone_bands(&near, dirs);
         let (s, c) = turn.sin_cos();
         let mut sh = [0.0f32; 9];
         let (mut up, mut up_open, mut lost, mut albedo) = (0, 0, 0.0f32, 0.0f32);
-        for d in dirs {
+        for (k, d) in dirs.iter().enumerate() {
             let d = [c * d[0] - s * d[2], d[1], s * d[0] + c * d[2]];
-            let r = self.ray(p, d, &near);
+            let only = bands
+                .as_ref()
+                .map(|(starts, ids)| &ids[starts[k] as usize..starts[k + 1] as usize]);
+            let r = self.ray_among(p, d, &near, only);
             let y = sh_basis(d);
             for k in 0..9 {
                 sh[k] += r.visibility * y[k];
@@ -753,6 +860,64 @@ impl Tracer<'_> {
         };
         (sh.map(|v| v * w), outdoors, albedo)
     }
+}
+
+/// Per ray of `dirs` (sorted from the zenith down, as `sphere` makes them), the crowns of
+/// `near` whose cones may hold it, as (starts, indexes into `near` in order): a direction in a
+/// cone is within its half-angle of the axis in elevation too, and a turn round the vertical
+/// keeps the elevation. The ray's own test (`ray_among`) still decides, over the same crowns in
+/// the same order, so the sums are the same; it just skips the crowns of other elevations (a
+/// coastal garden's thousands of crowns took two thirds of a bake). `None` when `dirs` are not
+/// so sorted.
+fn cone_bands(near: &[(usize, [f32; 3], f32)], dirs: &[[f32; 3]]) -> Option<(Vec<u32>, Vec<u32>)> {
+    if !dirs.windows(2).all(|w| w[0][1] >= w[1][1]) {
+        return None;
+    }
+    let ranges: Vec<(usize, usize)> = near
+        .iter()
+        .map(|&(_, axis, cos)| {
+            if cos <= -1.0 {
+                return (0, dirs.len());
+            }
+            // sin(elevation +- half-angle) without trigonometry, with a margin over the float
+            // error of the ray's dot product (the cosine) and a wider one over this arithmetic.
+            let ys = axis[1].clamp(-1.0, 1.0);
+            let yc = (1.0 - ys * ys).max(0.0).sqrt();
+            let hc = (cos - 1e-5).max(-1.0);
+            let hs = (1.0 - hc * hc).max(0.0).sqrt();
+            // Past the zenith (or the nadir): the cosine of elevation + (-) half-angle <= 0.
+            let y_hi = if yc * hc - ys * hs <= 1e-3 {
+                2.0
+            } else {
+                ys * hc + yc * hs + 2e-3
+            };
+            let y_lo = if yc * hc + ys * hs <= 1e-3 {
+                -2.0
+            } else {
+                ys * hc - yc * hs - 2e-3
+            };
+            (
+                dirs.partition_point(|d| d[1] > y_hi),
+                dirs.partition_point(|d| d[1] >= y_lo),
+            )
+        })
+        .collect();
+    let mut starts = vec![0u32; dirs.len() + 1];
+    for &(a, b) in &ranges {
+        starts[a + 1..b.max(a) + 1].iter_mut().for_each(|s| *s += 1);
+    }
+    for k in 0..dirs.len() {
+        starts[k + 1] += starts[k];
+    }
+    let mut fill = starts.clone();
+    let mut ids = vec![0u32; starts[dirs.len()] as usize];
+    for (j, &(a, b)) in ranges.iter().enumerate() {
+        for f in &mut fill[a..b.max(a)] {
+            ids[*f as usize] = j as u32;
+            *f += 1;
+        }
+    }
+    Some((starts, ids))
 }
 
 /// Möller-Trumbore, both sides: the distance and the (unnormalised) normal.
@@ -1102,11 +1267,16 @@ impl SkyBake {
 
     /// All the probes at once: natively shared out over the cores (the same numbers as
     /// stepping, probe by probe).
-    pub fn run(mut self) -> SkyVisibility {
+    pub fn run(self) -> SkyVisibility {
+        let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+        self.run_on(threads)
+    }
+
+    /// As `run`, on at most `threads` threads natively (a window keeps cores for its frames).
+    pub fn run_on(mut self, threads: usize) -> SkyVisibility {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let (done, total) = self.progress();
-            let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
             let per = (total - done).div_ceil(threads.max(1)).max(1);
             let made: Vec<_> = {
                 let this = &self;
@@ -1131,7 +1301,10 @@ impl SkyBake {
             self.next = total;
         }
         #[cfg(target_arch = "wasm32")]
-        while !self.step(1024) {}
+        {
+            let _ = threads;
+            while !self.step(1024) {}
+        }
         self.finish()
     }
 }
@@ -1470,6 +1643,98 @@ mod tests {
         let mut job = SkyBake::new(scene.clone()).unwrap();
         while !job.step(97) {}
         assert_eq!(job.finish(), a);
+    }
+
+    #[test]
+    fn skipping_ground_blocks_finds_the_same_hits_as_marching_every_sample() {
+        let ground = Ground::sample([-60.0, -40.0], [60.0, 40.0], 3.0, |x, z| {
+            3.0 * (x * 0.07).sin() * (z * 0.05).cos() + 0.02 * x
+        });
+        let scene = SkyScene {
+            triangles: Vec::new(),
+            crowns: Vec::new(),
+            ground,
+        };
+        let fast = Bins::new(&scene, [-70.0, -50.0], [70.0, 50.0]);
+        let mut slow = Bins::new(&scene, [-70.0, -50.0], [70.0, 50.0]);
+        assert!(fast.ground_blocks[0] > 0 && fast.relief);
+        slow.ground_blocks = [0, 0];
+        let (a, b) = (
+            Tracer {
+                scene: &scene,
+                bins: &fast,
+            },
+            Tracer {
+                scene: &scene,
+                bins: &slow,
+            },
+        );
+        let mut hits = 0;
+        for (i, d) in sphere(256).into_iter().enumerate() {
+            let p = [
+                (i % 13) as f32 * 7.0 - 45.0,
+                scene.ground.height(0.0, 0.0) + 0.5 + (i % 5) as f32,
+                (i % 7) as f32 * 9.0 - 30.0,
+            ];
+            let limit = a.reach(p, d);
+            let (x, y) = (a.ground_hit(p, d, limit), b.ground_hit(p, d, limit));
+            assert_eq!(x, y, "ray {i} from {p:?} along {d:?}");
+            hits += usize::from(x.is_some());
+        }
+        assert!(hits > 50, "{hits}");
+    }
+
+    #[test]
+    fn crowns_banded_by_elevation_give_the_same_rays_as_all_crowns() {
+        // A grove of small and large crowns near and far, some round the probes.
+        let crowns: Vec<Canopy> = (0..300)
+            .map(|i| {
+                let f = i as f32;
+                Canopy {
+                    center: [
+                        (f * 7.3) % 120.0 - 60.0,
+                        1.0 + (f * 1.7) % 9.0,
+                        (f * 11.9) % 90.0 - 45.0,
+                    ],
+                    radii: [0.5 + f % 4.0, 0.8 + f % 3.0, 0.5 + f % 5.0],
+                    extinction: 0.4,
+                }
+            })
+            .collect();
+        let scene = SkyScene {
+            triangles: Vec::new(),
+            crowns,
+            ground: Ground::flat(0.0),
+        };
+        let bins = Bins::new(&scene, [-70.0, -55.0], [70.0, 55.0]);
+        let t = Tracer {
+            scene: &scene,
+            bins: &bins,
+        };
+        let dirs = sphere(RAYS);
+        let mut crossed = 0;
+        for i in 0..40 {
+            let p = [
+                (i * 13 % 100) as f32 - 50.0,
+                0.3 + (i % 6) as f32,
+                (i * 7 % 80) as f32 - 40.0,
+            ];
+            let near = t.near(p);
+            let (starts, ids) = cone_bands(&near, &dirs).expect("sorted");
+            let (s, c) = (i as f32 * 0.37).sin_cos();
+            for (k, d) in dirs.iter().enumerate() {
+                let d = [c * d[0] - s * d[2], d[1], s * d[0] + c * d[2]];
+                let only = &ids[starts[k] as usize..starts[k + 1] as usize];
+                let (a, b) = (t.ray(p, d, &near), t.ray_among(p, d, &near, Some(only)));
+                assert_eq!(
+                    a.visibility.to_bits(),
+                    b.visibility.to_bits(),
+                    "probe {i} ray {k}"
+                );
+                crossed += usize::from(a.visibility < 1.0);
+            }
+        }
+        assert!(crossed > 100, "{crossed}");
     }
 
     #[test]

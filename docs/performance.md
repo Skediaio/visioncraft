@@ -54,6 +54,12 @@ the costliest stages of each example into its `report.json` (`timeline`).
 - **Pipelines** are made once for the quality the window starts with (the stored hardware
   choice), and per shading after that.
 - **Ground clutter** is built once all plants are there, not on the first frame and again after.
+- **The sky visibility bake** runs on the work pool's share of the cores natively (on all of them
+  it starved the frames for the half minute of the coast's bake), skips the ground samples of
+  blocks a ray passes above, and tests per ray only the crowns whose cones reach its elevation
+  (the same samples and sums as before: the bake is bit for bit the same).
+- **Draws** skip re-binding what is bound (meshes, instances, materials, slots), and the
+  impostors' draw slots are written when they change, not every frame.
 
 ## Measured (November 2026)
 
@@ -71,6 +77,27 @@ Browser, until everything arrived (s), first visit / second visit:
 | coast | 49.0, then 5 fps | 15.0 / 9.9, 27 to 56 fps |
 
 The first frame reached the screen 0.1 to 1.1 s after opening an example in the browser.
+
+### Coast (the main benchmark)
+
+Browser, two interleaved runs each of the build before and after (the machine was shared, so
+the spread is wide); load until nothing is pending but the sky visibility, then until the sky
+visibility is in, then frames while the camera circles at four viewpoints (MEDIUM, auto scale):
+
+| | Before | After |
+| --- | --- | --- |
+| loaded (s) | 64.8, 119.9 | 59.4, 40.1 |
+| sky visibility in (s) | 126, 150 (baked on the page's thread) | 96, 83 (in the worker) |
+| frames while it bakes | 191 ms CPU per frame (5 fps) | no cost on the page |
+| overview frame, median / p90 (ms) | 38.5 / 68.9, 34.0 / 56.3 | 22.2 / 42.9, 16.6 / 20.3 |
+| CPU recording a frame (ms) | 17 to 27 | 6 to 21 |
+
+The GPU part (timestamp queries, Iris Xe, MEDIUM, 1600 x 900 at 55 to 75 % scale): forward
+16 to 35 ms, depth 1 to 5, reflection 1 to 3, shadows 0.5 to 2.2, SSAO 0.5, the post chain
+about 1.5. Natively (`bench` in a smoke script, quiet machine): recording 6 to 7 ms and submit
+6 ms for 1,450 to 1,700 draws. The coast is GPU-bound on an integrated GPU; on a desktop GPU the
+CPU recording of its 1,500 to 2,300 draws (each a few calls into the browser's WebGPU) is what
+remains.
 
 Native, first frame / everything loaded (s), empty disk cache:
 

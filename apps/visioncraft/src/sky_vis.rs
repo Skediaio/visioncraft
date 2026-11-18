@@ -95,7 +95,6 @@ fn in_worker(scene: &SkyScene, slot: &Slot) -> Option<web_sys::Worker> {
     msg.push(&SKY_VIS.into());
     msg.push(&js_sys::Float32Array::from(&scene.to_floats()[..]));
     let (w, done) = (worker.clone(), slot.clone());
-    let t0 = crate::assets::now_ms();
     let on_message =
         Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |e: web_sys::MessageEvent| {
             let data = e.data();
@@ -118,10 +117,6 @@ fn in_worker(scene: &SkyScene, slot: &Slot) -> Option<web_sys::Worker> {
                         SkyVisibility::from_floats(&f).map(Some).ok_or(())
                     }
                 });
-            crate::load_stats::add(
-                "sky visibility bake (worker, wall)",
-                crate::assets::now_ms() - t0,
-            );
             put(&done, grid);
             w.terminate();
         });
@@ -178,7 +173,10 @@ impl SkyVisState {
         {
             let (out, stop) = (slot.clone(), cancel.clone());
             std::thread::spawn(move || {
-                let grid = visioncraft_automation::SkyVisJob::new(scene).run();
+                // The work pool's share of the cores: the frame's thread keeps one (on all of
+                // them a long bake, such as the coast's, starved the frames).
+                let grid =
+                    visioncraft_automation::SkyVisJob::new(scene).run_on(crate::work_pool::size());
                 if !stop.load(Ordering::Relaxed) {
                     put(&out, Ok(grid));
                 }
@@ -247,6 +245,10 @@ impl SkyVisState {
         let grid = grid?;
         self.task = None;
         self.last_ms = Some(now_ms - self.started_ms);
+        crate::load_stats::add(
+            "sky visibility bake (off the frame, wall)",
+            now_ms - self.started_ms,
+        );
         Some(grid)
     }
 

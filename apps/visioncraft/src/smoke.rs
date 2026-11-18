@@ -733,16 +733,36 @@ mod native {
                 Step::Bench { frames, w, h } => {
                     s.resize(w, h);
                     settle(&mut s, &device, &queue, false);
+                    // The sky visibility bake runs beside the frames: measured after it.
+                    let t = std::time::Instant::now();
+                    while s.sky_visibility_pending() && t.elapsed().as_secs() < 600 {
+                        s.prepare();
+                        std::thread::sleep(std::time::Duration::from_millis(20));
+                    }
+                    if t.elapsed().as_secs_f64() > 0.1 {
+                        println!(
+                            "bench waited {:.1} s for the sky visibility bake",
+                            t.elapsed().as_secs_f64()
+                        );
+                    }
                     let mut ms = Vec::new();
                     let mut passes: std::collections::BTreeMap<&str, Vec<f32>> = Default::default();
+                    // CPU per frame: prepare (scene, streaming), record (`render`), submit.
+                    let mut cpu: [Vec<f64>; 3] = Default::default();
                     for _ in 0..frames.max(1) {
                         let t = std::time::Instant::now();
                         s.prepare();
+                        let t1 = t.elapsed().as_secs_f64() * 1000.0;
                         let mut encoder = device.create_command_encoder(&Default::default());
                         s.renderer.render(&mut encoder);
+                        let t2 = t.elapsed().as_secs_f64() * 1000.0;
                         queue.submit([encoder.finish()]);
+                        let t3 = t.elapsed().as_secs_f64() * 1000.0;
                         let _ = device.poll(wgpu::PollType::wait_indefinitely());
                         ms.push(t.elapsed().as_secs_f64() * 1000.0);
+                        cpu[0].push(t1);
+                        cpu[1].push(t2 - t1);
+                        cpu[2].push(t3 - t2);
                         for (k, v) in s.renderer.stats().gpu_passes {
                             passes.entry(k).or_default().push(v);
                         }
@@ -762,6 +782,21 @@ mod native {
                         at(0.5),
                         at(0.9),
                         gpu.join(", ")
+                    );
+                    let med = |v: &mut Vec<f64>| {
+                        v.sort_by(f64::total_cmp);
+                        v[v.len() / 2]
+                    };
+                    let rs = s.renderer.stats();
+                    println!(
+                        "bench cpu ms (median): prepare {:.2}, record {:.2}, submit {:.2}; draws {} {:?}; instances {}; triangles {:?}",
+                        med(&mut cpu[0]),
+                        med(&mut cpu[1]),
+                        med(&mut cpu[2]),
+                        rs.draw_calls,
+                        rs.pass_draws,
+                        rs.instances,
+                        rs.pass_triangles
                     );
                 }
                 Step::Stats => {

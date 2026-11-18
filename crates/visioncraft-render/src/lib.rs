@@ -989,6 +989,9 @@ pub struct Renderer {
     draw_buffer: wgpu::Buffer,
     draw_bind: wgpu::BindGroup,
     draw_capacity: usize,
+    /// An impostor got a slot, or the draw buffer grew (`alloc_slot` writes plain mesh slots):
+    /// the impostors' slots are written again before the next frame.
+    impostor_slots_dirty: bool,
     /// This frame's dissolving clusters' draw slots (`FADE_SLOTS`).
     fade_buffer: wgpu::Buffer,
     fade_bind: wgpu::BindGroup,
@@ -1408,6 +1411,7 @@ impl Renderer {
             fade_buffer,
             fade_bind,
             draw_capacity,
+            impostor_slots_dirty: false,
             next_slot: 0,
             free_slots: Vec::new(),
             white,
@@ -2545,6 +2549,7 @@ impl Renderer {
             return Err("unknown or removed impostor".into());
         }
         let slot = self.alloc_slot(MeshId(u32::MAX - 2));
+        self.impostor_slots_dirty = true;
         let Some(Some(it)) = self.items.get_mut(item.0 as usize) else {
             self.free_slots.push(slot);
             return Err("unknown or removed item".into());
@@ -2948,6 +2953,7 @@ impl Renderer {
                 mapped_at_creation: false,
             });
             self.draw_bind = draw_bind_group(&self.device, &self.layouts.draw, &self.draw_buffer);
+            self.impostor_slots_dirty = true;
             self.queue.write_buffer(
                 &self.draw_buffer,
                 self.ground_slot as u64 * SLOT,
@@ -3308,15 +3314,18 @@ impl Renderer {
         // A ground drawn in the terrain's own base material needs no blend band at the edge.
         let blend = self.ground.filter(|_| self.ground_look.is_none());
         self.terrain.write(&self.queue, blend.map(|g| g.color));
-        // Settled impostors draw whole (fade 1); a buffer regrowth in
-        // `alloc_slot` writes plain mesh slots, so every frame.
-        for item in self.items.iter().flatten() {
-            if let Some((_, slot)) = item.impostor {
-                self.queue.write_buffer(
-                    &self.draw_buffer,
-                    slot as u64 * SLOT,
-                    &fade_slot(MeshId(u32::MAX - 2), 1.0),
-                );
+        // Settled impostors draw whole (fade 1); a buffer regrowth in `alloc_slot` writes plain
+        // mesh slots, so after one (and after a new impostor), not every frame: a write per
+        // planting a frame was hundreds of calls into the browser's WebGPU.
+        if std::mem::take(&mut self.impostor_slots_dirty) {
+            for item in self.items.iter().flatten() {
+                if let Some((_, slot)) = item.impostor {
+                    self.queue.write_buffer(
+                        &self.draw_buffer,
+                        slot as u64 * SLOT,
+                        &fade_slot(MeshId(u32::MAX - 2), 1.0),
+                    );
+                }
             }
         }
         if self.sky_view_dirty && matches!(self.sky_source, SkySource::Physical) {
@@ -3988,8 +3997,16 @@ impl Renderer {
             _ => 0..2 + glass as usize,
         };
         let visible = self.visible_clusters(cull, near_far);
+        // What is bound, so that nothing is set twice: in the browser every set is a call into
+        // its WebGPU, and the parts of an item share their instances, the levels of a plant
+        // their materials. (mesh, instances' item, group 1: material or `u32::MAX` the
+        // terrain, group 2: fading and slot.)
+        let mut bound_mesh: Option<u32> = None;
+        let mut bound_item: Option<usize> = None;
+        let mut bound_g1: Option<u32> = None;
+        let mut bound_g2: Option<(bool, u32)> = None;
         for category in categories {
-            for (item, seen) in self.items.iter().zip(&visible) {
+            for (item_index, (item, seen)) in self.items.iter().zip(&visible).enumerate() {
                 let Some(item) = item else { continue };
                 if seen.is_empty() {
                     continue;
@@ -4073,22 +4090,41 @@ impl Renderer {
                             current = Some(key);
                         }
                         if let Some(w) = weights {
-                            pass.set_bind_group(1, &self.terrain.bind, &[]);
+                            if bound_g1 != Some(u32::MAX) {
+                                pass.set_bind_group(1, &self.terrain.bind, &[]);
+                                bound_g1 = Some(u32::MAX);
+                            }
                             pass.set_vertex_buffer(2, w.slice(..));
-                        } else if shaded || category == 1 || fading {
+                        } else if (shaded || category == 1 || fading)
+                            && bound_g1 != Some(part.material.0)
+                        {
                             pass.set_bind_group(1, &material.bind, &[]);
+                            bound_g1 = Some(part.material.0);
                         }
                         let slots = if fading {
                             &self.fade_bind
                         } else {
                             &self.draw_bind
                         };
-                        pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-                        pass.set_vertex_buffer(1, item.instances.slice(..));
-                        pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                        if bound_mesh != Some(part.mesh.0) {
+                            pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                            pass.set_index_buffer(
+                                mesh.indices.slice(..),
+                                wgpu::IndexFormat::Uint32,
+                            );
+                            bound_mesh = Some(part.mesh.0);
+                        }
+                        if bound_item != Some(item_index) {
+                            pass.set_vertex_buffer(1, item.instances.slice(..));
+                            bound_item = Some(item_index);
+                        }
                         for (i, (r, slot)) in runs.into_iter().enumerate() {
-                            if (shaded || fading) && (fading || i == 0) {
+                            if (shaded || fading)
+                                && (fading || i == 0)
+                                && bound_g2 != Some((fading, slot))
+                            {
                                 pass.set_bind_group(2, slots, &[(slot as u64 * SLOT) as u32]);
+                                bound_g2 = Some((fading, slot));
                             }
                             self.counters.add(
                                 mesh.index_count as u64 / 3,
@@ -4109,6 +4145,8 @@ impl Renderer {
                         self.draw_impostor(pass, item, seen, kind, &mut current);
                     }
                 }
+                // The impostors bound their own groups and instances.
+                (bound_item, bound_g1, bound_g2) = (None, None, None);
             }
         }
         if shadow {
