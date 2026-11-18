@@ -22,6 +22,14 @@ Reads 3dcraft (`.3dcraft`) designs; other CAD sources may follow.
   (`cargo build`, `cargo clippy`, `cargo test`, the wasm32 build) rather than on the laptop.
 - Reach it with `ssh dokploy-slave`; the `HostKeyAlias` in the SSH config means the bare IP fails
   host key verification.
+- Sync the working tree with `rsync -az --delete --exclude target --exclude .claude ./
+  dokploy-slave:visioncraft/`, then run cargo there after `. ~/.cargo/env`. Start long runs
+  detached (`nohup ... > ~/check.log 2>&1 &`) so a dropped connection does not kill them.
+- The server has no GPU: wgpu falls back to a software adapter there, so the pixel references in
+  `crates/visioncraft-render/tests/reference.rs`, the GPU recipe renders
+  (`cargo test -p visioncraft-cli --test cli -- --ignored`) and visual check renders run on the
+  laptop. On the server, run
+  `cargo test --workspace --exclude visioncraft-render && cargo test -p visioncraft-render --lib`.
 
 ## Rules
 
