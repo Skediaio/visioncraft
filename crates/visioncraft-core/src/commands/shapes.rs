@@ -115,13 +115,13 @@ pub(super) fn register(s: &mut Session) {
         spec(
             "shape.insert_vertex",
             "Insert Vertex",
-            "Splits an edge with a new point; the new point gets index edge+1, later sides renumber and their materials follow, both halves of the split edge keep its material. An arc on the split edge is dropped (its two halves would not be one circle); later arcs renumber with their edges.",
+            "Splits an edge with a new point; the new point gets index edge+1, later sides renumber and their materials follow, both halves of the split edge keep its material. An arc on the split edge is split in two arcs on the same circle: the new point is projected onto the arc (kept off the ends) and each half gets the sagitta that keeps it on that circle; later arcs renumber with their edges. The answer has the point as placed.",
             vec![
                 param("id", T::String, "Shape id.").required(),
                 param("edge", T::Integer, "Index of the edge to split (edge n runs from point n to point n+1).").required(),
                 param("position", T::Point2, "The new point [x, z].").unit("m").required(),
             ],
-            "null",
+            "{position}",
             json!({"id": "S2", "edge": 0, "position": [5, 1.5]}),
         ),
         insert_vertex,
@@ -144,13 +144,14 @@ pub(super) fn register(s: &mut Session) {
         spec(
             "shape.set_curve",
             "Curve an Edge",
-            "Makes one edge of a shape an arc, typed as a radius (or a sagitta): edge `n` runs from point `n` to point `n+1`. The radius becomes the sagitta for the edge's length; a radius under half the edge is refused. Stairs and houses take no curves; a sleeper bed neither. A fence follows the curve with posts spread by arc length.",
+            "Makes one edge of a shape an arc, typed as a radius (or a sagitta): edge `n` runs from point `n` to point `n+1`. The radius becomes the sagitta for the edge's length; a radius under half the edge is refused. Give the size as a radius, a sagitta or a point the arc passes through (`through`). Houses take no curves, and stairs only a curved front or back (`stairs.add` with arcs on the bottom or top edge). A fence follows the curve with posts spread by arc length.",
             vec![
                 param("id", T::String, "Shape id.").required(),
                 param("edge", T::Integer, "Edge index, from 0 (edge n runs from point n to point n+1, wrapping when closed).").required(),
                 param("radius_m", T::Number, "Radius of the arc, at least half the edge's length.").unit("m"),
                 param("sagitta_m", T::Number, "Instead of a radius: the signed distance from the middle of the chord to the arc, positive to the left of the edge's direction (seen from above, +X east, -Z north), at most half the chord. 0 makes the edge straight.").unit("m"),
-                param("side", T::String, "Which way the arc bulges, seen along the edge from its first point: `left` (the default for a radius) or `right`. With `sagitta_m` it overrides the sign.").allowed(&["left", "right"]),
+                param("through", T::Point2, "Instead of either: a point [x, z] the arc passes through. It must lie between the ends of the edge (its foot on the chord inside the chord) and off the chord line, and the arc through it may not run past a semicircle; the side follows from where the point is.").unit("m"),
+                param("side", T::String, "Which way the arc bulges, seen along the edge from its first point: `left` (the default for a radius) or `right`. With `sagitta_m` it overrides the sign; with `through` it is not allowed.").allowed(&["left", "right"]),
             ],
             "{sagitta_m, radius_m}",
             json!({"id": "S1", "edge": 0, "radius_m": 6.0, "side": "right"}),
@@ -208,6 +209,32 @@ pub(super) fn register(s: &mut Session) {
             json!({"name": "Round lawn", "center": [11, 20], "radius_m": 6.0, "kind": "area", "material": "lawn"}),
         ),
         add_circle,
+    );
+    s.register_with_spec(
+        spec(
+            "shape.add_ellipse",
+            "Add Ellipse",
+            "An elliptical area or extrusion: an elliptical pond, lawn or bed. Drawn as control points on the ellipse with an arc between each pair (through the ellipse's point halfway between them), with as few as measure within 0.1% of the true area and perimeter (8 to 96 arcs). Takes the other parameters of `shape.add_area` (kind `area`) or `shape.add_extrusion` (kind `extrusion`, with `height`). The answer has the number of arcs, and the area and perimeter of the drawn outline.",
+            vec![
+                param("name", T::String, "Display name.").default(json!("Ellipse")),
+                param("center", T::Point2, "Centre [x, z].").unit("m").required(),
+                param("radius_x", T::Number, "Semi-axis along the x axis (before `rotation_deg`), above zero.").unit("m").required(),
+                param("radius_z", T::Number, "Semi-axis along the z axis (before `rotation_deg`), above zero; at most 20 times (or at least a twentieth of) `radius_x`.").unit("m").required(),
+                param("rotation_deg", T::Number, "Turns the x axis towards +Z, clockwise seen from above.").unit("deg").default(json!(0)),
+                param("kind", T::String, "`area` (flat) or `extrusion` (solid).").allowed(&["area", "extrusion"]).default(json!("area")),
+                param("elevation", T::Number, "Area: height of the surface.").unit("m"),
+                param("drape", T::Boolean, "Area: lie on the ground."),
+                edge_blend(),
+                param("edge", T::Object, "Area: a retaining edge, as in `shape.add_area`."),
+                param("base", T::Number, "Extrusion: height of the bottom.").unit("m"),
+                param("height", T::Number, "Extrusion: height above `base`.").unit("m"),
+                layer(),
+                material(),
+            ],
+            "{id, arcs, area_m2, perimeter_m}",
+            json!({"name": "Pond", "center": [11, 20], "radius_x": 4.0, "radius_z": 2.5, "rotation_deg": 20, "kind": "area", "material": "water"}),
+        ),
+        add_ellipse,
     );
     s.register_with_spec(
         spec(
@@ -541,15 +568,27 @@ fn insert_vertex(project: &mut Project, params: &Value) -> Result<Value, Command
         position: [f32; 2],
     }
     let p: P = parse(params)?;
+    let mut placed = p.position;
     edit(project, &p.id, |s| {
         refuse_turned(s)?;
         let edges = crate::curve::edge_count(s.points().len(), s.is_closed());
         if p.edge >= edges {
             return Err(bad("no such edge"));
         }
-        s.points_mut().insert(p.edge + 1, p.position);
-        let curves = crate::curve::after_insert(s.curves(), p.edge);
+        let points = s.points().to_vec();
+        let (a, b) = (points[p.edge], points[(p.edge + 1) % points.len()]);
+        // An arc is split in two on its own circle, the new point projected onto it.
+        let split = match s.curves().get(&p.edge) {
+            Some(c) => {
+                Some(crate::curve::split_arc(a, b, c.sagitta_m(), p.position).map_err(fail)?)
+            }
+            None => None,
+        };
+        let position = split.map_or(p.position, |(q, _, _)| q);
+        s.points_mut().insert(p.edge + 1, position);
+        let curves = crate::curve::after_insert(s.curves(), p.edge, split.map(|(_, x, y)| (x, y)));
         *s.curves_mut() = curves;
+        placed = position;
         Ok(())
     })?;
     // The split edge keeps its material on both halves.
@@ -558,7 +597,7 @@ fn insert_vertex(project: &mut Project, params: &Value) -> Result<Value, Command
         std::cmp::Ordering::Equal => vec![n, n + 1],
         std::cmp::Ordering::Greater => vec![n + 1],
     });
-    Ok(Value::Null)
+    Ok(json!({"position": placed}))
 }
 
 fn remove_vertex(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
@@ -607,6 +646,7 @@ fn set_curve(project: &mut Project, params: &Value) -> Result<Value, CommandErro
         edge: usize,
         radius_m: Option<f32>,
         sagitta_m: Option<f32>,
+        through: Option<[f32; 2]>,
         side: Option<String>,
     }
     let p: P = parse(params)?;
@@ -615,8 +655,17 @@ fn set_curve(project: &mut Project, params: &Value) -> Result<Value, CommandErro
         Some("right") => false,
         Some(_) => return Err(bad("`side` is `left` or `right`")),
     };
-    if p.radius_m.is_some() == p.sagitta_m.is_some() {
-        return Err(bad("give either `radius_m` or `sagitta_m`"));
+    if usize::from(p.radius_m.is_some())
+        + usize::from(p.sagitta_m.is_some())
+        + usize::from(p.through.is_some())
+        != 1
+    {
+        return Err(bad("give one of `radius_m`, `sagitta_m` or `through`"));
+    }
+    if p.through.is_some() && p.side.is_some() {
+        return Err(bad(
+            "`side` goes with `radius_m` or `sagitta_m`; the side of `through` follows from the point",
+        ));
     }
     let mut report = Value::Null;
     edit(project, &p.id, |s| {
@@ -632,6 +681,10 @@ fn set_curve(project: &mut Project, params: &Value) -> Result<Value, CommandErro
         let (a, b) = (points[p.edge], points[(p.edge + 1) % points.len()]);
         let chord = (b[0] - a[0]).hypot(b[1] - a[1]);
         let curve = match (p.radius_m, p.sagitta_m) {
+            _ if p.through.is_some() => crate::curve::Curve::Arc {
+                sagitta_m: crate::curve::sagitta_through(a, b, p.through.expect("checked"))
+                    .map_err(fail)?,
+            },
             (Some(r), _) => crate::curve::Curve::from_radius(chord, r, left).map_err(fail)?,
             (_, Some(v)) => {
                 let v = if p.side.is_some() {
@@ -641,7 +694,7 @@ fn set_curve(project: &mut Project, params: &Value) -> Result<Value, CommandErro
                 };
                 crate::curve::Curve::Arc { sagitta_m: v }
             }
-            _ => unreachable!("one of the two is given"),
+            _ => unreachable!("one of the three is given"),
         };
         if !curve.sagitta_m().is_finite() {
             return Err(bad("the sagitta is not a number"));
@@ -734,6 +787,78 @@ fn add_circle(project: &mut Project, params: &Value) -> Result<Value, CommandErr
         Some("extrusion") => add_extrusion(project, &Value::Object(q)),
         Some(_) => Err(bad("`kind` is `area` or `extrusion`")),
     }
+}
+
+fn add_ellipse(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
+    #[derive(Deserialize)]
+    struct P {
+        center: [f32; 2],
+        radius_x: f32,
+        radius_z: f32,
+        rotation_deg: Option<f32>,
+        kind: Option<String>,
+    }
+    let p: P = parse(&json!({
+        "center": params["center"], "radius_x": params["radius_x"],
+        "radius_z": params["radius_z"], "rotation_deg": params["rotation_deg"],
+        "kind": params["kind"],
+    }))?;
+    let rotation = p.rotation_deg.unwrap_or(0.0);
+    let ratio = crate::curve::MAX_ELLIPSE_RATIO;
+    if !(p.radius_x.is_finite()
+        && p.radius_z.is_finite()
+        && p.radius_x > 0.0
+        && p.radius_z > 0.0
+        && rotation.is_finite()
+        && p.center.iter().all(|c| c.is_finite()))
+    {
+        return Err(bad(
+            "`center`, a positive `radius_x` and a positive `radius_z` are needed",
+        ));
+    }
+    if p.radius_x / p.radius_z > ratio || p.radius_z / p.radius_x > ratio {
+        return Err(bad(&format!(
+            "`radius_x` and `radius_z` may differ by at most a factor of {ratio}"
+        )));
+    }
+    let (outline, curves) = crate::curve::ellipse(p.center, p.radius_x, p.radius_z, rotation);
+    let tess = crate::curve::tessellate(&outline, true, &curves, false);
+    let mut q = params
+        .as_object()
+        .cloned()
+        .ok_or_else(|| bad("expected an object"))?;
+    for k in ["center", "radius_x", "radius_z", "rotation_deg", "kind"] {
+        q.remove(k);
+    }
+    q.insert("outline".into(), json!(outline));
+    q.insert(
+        "curves".into(),
+        Value::Object(
+            curves
+                .iter()
+                .map(|(k, c)| (k.to_string(), json!(c)))
+                .collect(),
+        ),
+    );
+    if q.get("name").is_none_or(Value::is_null) {
+        q.insert("name".into(), "Ellipse".into());
+    }
+    let mut answer = match p.kind.as_deref() {
+        None | Some("area") => add_area(project, &Value::Object(q))?,
+        Some("extrusion") => add_extrusion(project, &Value::Object(q))?,
+        Some(_) => return Err(bad("`kind` is `area` or `extrusion`")),
+    };
+    answer["arcs"] = curves.len().into();
+    answer["area_m2"] = crate::measure::polygon_area(&tess.pts).into();
+    let n = tess.pts.len();
+    let perimeter: f32 = (0..n)
+        .map(|i| {
+            let (a, b) = (tess.pts[i], tess.pts[(i + 1) % n]);
+            (b[0] - a[0]).hypot(b[1] - a[1])
+        })
+        .sum();
+    answer["perimeter_m"] = perimeter.into();
+    Ok(answer)
 }
 
 fn set_height(project: &mut Project, params: &Value) -> Result<Value, CommandError> {

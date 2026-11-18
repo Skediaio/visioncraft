@@ -129,9 +129,11 @@ pub const FURNITURE_PEDESTAL: &str = "Pedestal";
 pub const TOOL_CIRCLE: &str = "Circle";
 pub const CIRCLE_HINT: &str =
     "Click the centre, then the edge of the circle. Type the radius and press Enter. Esc cancels.";
+pub const TOOL_ELLIPSE: &str = "Ellipse";
+pub const ELLIPSE_HINT: &str =
+    "Click the centre, then a corner of the box round the ellipse. Esc cancels.";
 pub const CURVE_EDGE: &str = "Edge";
-pub const CURVE_HINT: &str =
-    "Shift-click an edge to pick it; a plain click on an edge adds a corner.";
+pub const CURVE_HINT: &str = "Shift-click an edge to pick it; a plain click on an edge adds a corner. Drag the green dot in the middle of an arc to bend it.";
 pub const CURVE_STRAIGHT: &str = "straight";
 pub const CURVE_RADIUS: &str = "Radius";
 pub const CURVE_LEFT: &str = "Curve left";

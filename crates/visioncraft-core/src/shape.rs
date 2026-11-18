@@ -597,12 +597,6 @@ fn shape_mesh_with(
                     ));
                 }
                 edge.check().map_err(ShapeError::BadEdge)?;
-                if shape.is_curved() && edge.style == crate::bed::BedStyle::Sleepers {
-                    return Err(ShapeError::BadEdge(
-                        "a sleeper edge needs straight edges; use the plain, masonry or corten style on a curved area"
-                            .into(),
-                    ));
-                }
             }
             if let Some(t) = &a.terrace {
                 if a.drape {
@@ -616,12 +610,6 @@ fn shape_mesh_with(
                     ));
                 }
                 t.check().map_err(ShapeError::BadTerrace)?;
-                if shape.is_curved() && t.style == crate::bed::BedStyle::Sleepers {
-                    return Err(ShapeError::BadTerrace(
-                        "a sleeper wall needs straight edges; use the plain, masonry, gabion or corten style on a curved terrace"
-                            .into(),
-                    ));
-                }
                 check_simple(&t.hole(&tess.pts), true).map_err(|e| {
                     ShapeError::BadTerrace(format!("the wall does not fit round this outline: {e}"))
                 })?;
@@ -635,7 +623,14 @@ fn shape_mesh_with(
                 };
                 b.cap(0, &tess.pts, a.elevation, 1.0);
                 let at = |x: f32, z: f32| ground.and_then(|g| g(x, z)).unwrap_or(0.0);
-                t.draw(&mut Shifted(&mut b, 1), &tess.pts, a.elevation, &at, cell);
+                t.draw(
+                    &mut Shifted(&mut b, 1),
+                    &tess.pts,
+                    &tess.ctrl,
+                    a.elevation,
+                    &at,
+                    cell,
+                );
                 return Ok(b.finish(id, &a.name, names));
             }
             let band = (a.edge_blend_m > 0.0 && a.edge_blend_m.is_finite())
@@ -660,7 +655,14 @@ fn shape_mesh_with(
                 None => b.cap(0, &tess.pts, a.elevation, 1.0),
             }
             if let Some(edge) = skirt {
-                crate::bed::skirt(&mut Shifted(&mut b, 1), edge, &tess.pts, floor, a.elevation);
+                crate::bed::skirt(
+                    &mut Shifted(&mut b, 1),
+                    edge,
+                    &tess.pts,
+                    &tess.ctrl,
+                    floor,
+                    a.elevation,
+                );
             }
             Ok(b.finish(id, &a.name, names))
         }
@@ -700,9 +702,15 @@ fn shape_mesh_with(
                 return Ok(m);
             }
             if let Some(st) = e.stairs.as_ref().filter(|_| e.closed) {
-                if shape.is_curved() {
+                if e.smooth {
                     return Err(ShapeError::BadStairs(
-                        "stairs need straight edges: clear their curves (`shape.clear_curve`, `shape.set_smooth`)"
+                        "stairs cannot have a smooth outline: turn it off (`shape.set_smooth`); an arc on the bottom edge gives a round front"
+                            .into(),
+                    ));
+                }
+                if st.set_in.is_some() && !e.curves.is_empty() {
+                    return Err(ShapeError::BadStairs(
+                        "a flight set into the slope needs a straight front: clear its curves (`shape.clear_curve`)"
                             .into(),
                     ));
                 }
@@ -732,7 +740,7 @@ fn shape_mesh_with(
                     return Ok(m);
                 }
                 let g = st
-                    .geometry(&e.points, e.height)
+                    .geometry_curved(&e.points, &e.curves, e.height)
                     .map_err(ShapeError::BadStairs)?;
                 let bottoms = ground.map_or_else(Vec::new, |ground| {
                     let lift = footing(&shape.outline(), ground);
@@ -744,12 +752,6 @@ fn shape_mesh_with(
                 return Ok(m);
             }
             if let Some(bed) = e.raised_bed.as_ref().filter(|_| e.closed) {
-                if shape.is_curved() && bed.style == crate::bed::BedStyle::Sleepers {
-                    return Err(ShapeError::BadBed(
-                        "a sleeper bed needs straight edges; use the plain, masonry or corten style for a curved bed"
-                            .into(),
-                    ));
-                }
                 let inner = bed.inner(&tess.pts).map_err(ShapeError::BadBed)?;
                 let names = crate::bed::BED_FACES
                     .iter()
@@ -761,7 +763,15 @@ fn shape_mesh_with(
                     edge: Vec::new(),
                     soft: false,
                 };
-                crate::bed::mesh(&mut b, bed, &tess.pts, &inner, e.base, e.base + e.height);
+                crate::bed::mesh(
+                    &mut b,
+                    bed,
+                    &tess.pts,
+                    &inner,
+                    &tess.ctrl,
+                    e.base,
+                    e.base + e.height,
+                );
                 return Ok(b.finish(id, &e.name, names));
             }
             if let Some(fu) = e.furniture.as_ref().filter(|_| e.closed) {

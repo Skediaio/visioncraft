@@ -253,6 +253,178 @@ fn arc_interior(a: P2, b: P2, s: f32) -> Vec<P2> {
         .collect()
 }
 
+/// The sagitta below which an arc counts as a straight edge (metres).
+pub const MIN_SAGITTA_M: f32 = 1e-4;
+
+/// The circle of the arc over chord `a`..`b` with signed sagitta `s`: its centre, its radius, the
+/// direction from the centre to the arc's apex and the half angle the arc spans (up to a quarter
+/// turn for a semicircle). `None` for a straight edge.
+fn arc_circle(a: P2, b: P2, s: f32) -> Option<(P2, f32, P2, f32)> {
+    let chord = dist(a, b);
+    if chord < 1e-9 || s.abs() < 1e-7 {
+        return None;
+    }
+    let left = [(b[1] - a[1]) / chord, -(b[0] - a[0]) / chord];
+    let mid = lerp(a, b, 0.5);
+    let sa = s.abs();
+    let r = (chord * chord / 4.0 + sa * sa) / (2.0 * sa);
+    let apex = [mid[0] + left[0] * s, mid[1] + left[1] * s];
+    let sign = s.signum();
+    let centre = [apex[0] - left[0] * sign * r, apex[1] - left[1] * sign * r];
+    let e = [(apex[0] - centre[0]) / r, (apex[1] - centre[1]) / r];
+    let half = (chord / 2.0).atan2((r - sa).max(0.0));
+    Some((centre, r, e, half))
+}
+
+/// The signed sagitta of the arc from `a` to `b` that passes through `p`: positive when `p` lies
+/// to the left of the edge's direction. `p` must lie between the ends (its foot on the chord
+/// strictly inside it) and off the chord line, and the arc must not run past a semicircle.
+pub fn sagitta_through(a: P2, b: P2, p: P2) -> Result<f32, String> {
+    let chord = dist(a, b);
+    if chord < 1e-6 {
+        return Err("the edge has no length".into());
+    }
+    if !p.iter().all(|c| c.is_finite()) {
+        return Err("`through` must be a point [x, z]".into());
+    }
+    let d = [(b[0] - a[0]) / chord, (b[1] - a[1]) / chord];
+    let left = [d[1], -d[0]];
+    let w = [p[0] - a[0], p[1] - a[1]];
+    let (u, v) = (w[0] * d[0] + w[1] * d[1], w[0] * left[0] + w[1] * left[1]);
+    if v.abs() < MIN_SAGITTA_M {
+        return Err("the point lies on the edge's chord line: an arc through it is a straight line (use `shape.clear_curve`)".into());
+    }
+    if u <= 1e-4 || u >= chord - 1e-4 {
+        return Err(format!(
+            "the point must lie between the ends of the edge: its foot on the chord is {u:.3} m from the first point, and the edge is {chord:.3} m long"
+        ));
+    }
+    // The centre lies on the chord's perpendicular bisector, `k` to the left of the chord.
+    let k = (v * v - u * (chord - u)) / (2.0 * v);
+    let r = (chord * chord / 4.0 + k * k).sqrt();
+    let s = k + v.signum() * r;
+    if s.abs() > chord / 2.0 * (1.0 + 1e-4) {
+        return Err(format!(
+            "the arc through that point would run past a semicircle ({:.3} m high on a {chord:.3} m edge): pick a point nearer the chord",
+            s.abs()
+        ));
+    }
+    Ok(s)
+}
+
+/// Splits the arc from `a` to `b` with sagitta `s` at the point of it nearest `position`: the new
+/// point (on the circle, kept 5% of the arc's span off either end) and the sagittas of the two
+/// halves, which lie on the same circle and on the same side.
+pub fn split_arc(a: P2, b: P2, s: f32, position: P2) -> Result<(P2, f32, f32), String> {
+    let (centre, r, e, half) = arc_circle(a, b, s).ok_or("the edge is straight")?;
+    let dir = [position[0] - centre[0], position[1] - centre[1]];
+    if dir[0].hypot(dir[1]) < 1e-9 {
+        return Err("the position is the centre of the arc".into());
+    }
+    // The angle of the position round the centre, from the apex, along the way a to b runs.
+    let phi = (e[0] * dir[1] - e[1] * dir[0]).atan2(e[0] * dir[0] + e[1] * dir[1]);
+    let u = [a[0] - centre[0], a[1] - centre[1]];
+    let turn = if u[0] * e[1] - u[1] * e[0] >= 0.0 {
+        1.0
+    } else {
+        -1.0
+    };
+    let psi = (turn * phi).clamp(-0.95 * half, 0.95 * half);
+    let th = turn * psi;
+    let (sn, cs) = th.sin_cos();
+    let q = [
+        centre[0] + r * (e[0] * cs - e[1] * sn),
+        centre[1] + r * (e[0] * sn + e[1] * cs),
+    ];
+    let sagitta = |sweep: f32| s.signum() * r * (1.0 - (sweep / 2.0).cos());
+    Ok((q, sagitta(psi + half), sagitta(half - psi)))
+}
+
+/// An ellipse as `segments` arcs: the control points `[cx, cz] + R(rotation) * [rx cos t, rz sin t]`
+/// at equal steps of `t`, clockwise seen from above (the left of every edge is outward), and on
+/// each edge the arc through its two ends and the ellipse's point halfway between them.
+/// `rotation_deg` turns the x axis towards +Z (clockwise seen from above).
+pub fn ellipse_arcs(
+    center: P2,
+    rx: f32,
+    rz: f32,
+    rotation_deg: f32,
+    segments: usize,
+) -> (Vec<P2>, Curves) {
+    let (sr, cr) = rotation_deg.to_radians().sin_cos();
+    let at = |t: f32| {
+        let (x, z) = (rx * t.cos(), rz * t.sin());
+        [center[0] + x * cr - z * sr, center[1] + x * sr + z * cr]
+    };
+    let step = std::f32::consts::TAU / segments as f32;
+    let points: Vec<P2> = (0..segments).map(|k| at(step * k as f32)).collect();
+    let mut curves = Curves::new();
+    for k in 0..segments {
+        let (a, b) = (points[k], points[(k + 1) % segments]);
+        let mid = at(step * (k as f32 + 0.5));
+        if let Ok(s) = sagitta_through(a, b, mid) {
+            curves.insert(k, Curve::Arc { sagitta_m: s });
+        }
+    }
+    (points, curves)
+}
+
+/// Ramanujan's approximation of the perimeter of an ellipse with semi-axes `a` and `b` (within a
+/// few parts per million of the true value for any shape).
+pub fn ellipse_perimeter(a: f32, b: f32) -> f32 {
+    let (a, b) = (f64::from(a), f64::from(b));
+    let h = ((a - b) / (a + b)).powi(2);
+    (std::f64::consts::PI * (a + b) * (1.0 + 3.0 * h / (10.0 + (4.0 - 3.0 * h).sqrt()))) as f32
+}
+
+/// The longest axis over the shortest an ellipse may have.
+pub const MAX_ELLIPSE_RATIO: f32 = 20.0;
+
+/// The least error (relative, in area and in perimeter) [`ellipse`] aims for.
+pub const ELLIPSE_TOL: f32 = 0.001;
+
+/// An ellipse as control points and arcs ([`ellipse_arcs`]) with as few segments (a multiple of
+/// 4, at least 8, at most 96) as measure within [`ELLIPSE_TOL`] of the true area and perimeter
+/// and keep the outline within [`CHORD_TOL_M`] (or [`ELLIPSE_TOL`] of the short radius, if more)
+/// of the ellipse.
+pub fn ellipse(center: P2, rx: f32, rz: f32, rotation_deg: f32) -> (Vec<P2>, Curves) {
+    let area = std::f32::consts::PI * rx * rz;
+    let perimeter = ellipse_perimeter(rx, rz);
+    let mut segments = 8;
+    loop {
+        let (points, curves) = ellipse_arcs(center, rx, rz, rotation_deg, segments);
+        let t = tessellate(&points, true, &curves, false).pts;
+        let n = t.len();
+        let a: f32 = (0..n)
+            .map(|i| {
+                let (p, q) = (t[i], t[(i + 1) % n]);
+                (p[0] - center[0]) * (q[1] - center[1]) - (q[0] - center[0]) * (p[1] - center[1])
+            })
+            .sum::<f32>()
+            .abs()
+            / 2.0;
+        let l: f32 = (0..n).map(|i| dist(t[i], t[(i + 1) % n])).sum();
+        // How far the outline strays from the ellipse itself (radially, scaled to metres).
+        let (sr, cr) = rotation_deg.to_radians().sin_cos();
+        let stray = t
+            .iter()
+            .map(|p| {
+                let (x, z) = (p[0] - center[0], p[1] - center[1]);
+                let (u, v) = (x * cr + z * sr, -x * sr + z * cr);
+                ((u / rx).hypot(v / rz) - 1.0).abs() * rx.min(rz)
+            })
+            .fold(0.0f32, f32::max);
+        if segments >= 96
+            || ((a - area).abs() <= ELLIPSE_TOL * area
+                && (l - perimeter).abs() <= ELLIPSE_TOL * perimeter
+                && stray <= CHORD_TOL_M.max(ELLIPSE_TOL * rx.min(rz)))
+        {
+            return (points, curves);
+        }
+        segments += 4;
+    }
+}
+
 fn lerp(a: P2, b: P2, w: f32) -> P2 {
     [a[0] + (b[0] - a[0]) * w, a[1] + (b[1] - a[1]) * w]
 }
@@ -330,14 +502,22 @@ pub fn fit(points: &[P2], closed: bool, curves: &mut Curves) {
 }
 
 /// `curves` after a vertex is inserted into edge `edge` (the new vertex gets index `edge + 1`):
-/// the split edge's arc is dropped, since its two halves are no longer the same arc, and the
-/// arcs of later edges move up one.
-pub fn after_insert(curves: &Curves, edge: usize) -> Curves {
-    curves
+/// the split edge's arc is replaced by its two halves (`halves`, from [`split_arc`]; `None` drops
+/// it) and the arcs of later edges move up one.
+pub fn after_insert(curves: &Curves, edge: usize, halves: Option<(f32, f32)>) -> Curves {
+    let mut out: Curves = curves
         .iter()
         .filter(|&(&i, _)| i != edge)
         .map(|(&i, &c)| (if i > edge { i + 1 } else { i }, c))
-        .collect()
+        .collect();
+    if let Some((first, second)) = halves {
+        for (i, s) in [(edge, first), (edge + 1, second)] {
+            if s.abs() >= MIN_SAGITTA_M {
+                out.insert(i, Curve::Arc { sagitta_m: s });
+            }
+        }
+    }
+    out
 }
 
 /// `curves` after vertex `index` of `points` points is removed: the arcs of the two edges it
@@ -453,7 +633,7 @@ mod tests {
         let a = Curve::Arc { sagitta_m: 0.5 };
         let curves: Curves = [(0, a), (1, a), (3, a)].into();
         // Insert into edge 1: its arc goes, edge 3 becomes 4.
-        let c = after_insert(&curves, 1);
+        let c = after_insert(&curves, 1, None);
         assert_eq!(c.keys().copied().collect::<Vec<_>>(), [0, 4]);
         // Remove vertex 2 of 4 closed: edges 1 and 2 join and lose their arcs; 3 becomes 2.
         let c = after_remove(&curves, 2, 4, true);
@@ -467,5 +647,120 @@ mod tests {
         // Remove the first vertex of an open line: edge 0 goes, the rest move down.
         let c = after_remove(&[(0, a), (1, a)].into(), 0, 4, false);
         assert_eq!(c.keys().copied().collect::<Vec<_>>(), [0]);
+    }
+
+    #[test]
+    fn an_arc_through_a_point_passes_through_it() {
+        let (a, b) = ([0.0, 0.0], [6.0, 0.0]);
+        for p in [[3.0, -1.5], [1.0, -0.8], [5.0, 2.0], [3.0, 2.9]] {
+            let s = sagitta_through(a, b, p).unwrap();
+            let pts = arc_interior(a, b, s);
+            assert!(!pts.is_empty());
+            // Exactly: `p` is on the circle of the arc.
+            let (c, r, _, _) = arc_circle(a, b, s).unwrap();
+            assert!((dist(c, p) - r).abs() < 1e-3, "{p:?}");
+            // Left of the eastward edge is north (-Z).
+            assert_eq!(s > 0.0, p[1] < 0.0);
+        }
+        // Off the chord line, between the ends, not past a semicircle.
+        assert!(sagitta_through(a, b, [3.0, 0.0]).is_err());
+        assert!(sagitta_through(a, b, [-1.0, 1.0]).is_err());
+        assert!(sagitta_through(a, b, [7.0, 1.0]).is_err());
+        assert!(sagitta_through(a, b, [0.0, 1.0]).is_err());
+        assert!(sagitta_through(a, b, [3.0, 4.0]).is_err());
+        assert!(sagitta_through(a, b, [f32::NAN, 1.0]).is_err());
+    }
+
+    #[test]
+    fn splitting_an_arc_keeps_both_halves_on_its_circle() {
+        for (a, b, s) in [
+            ([0.0, 0.0], [6.0, 0.0], 1.0),
+            ([0.0, 0.0], [6.0, 0.0], -2.5),
+            ([1.0, 2.0], [4.0, 6.0], 0.8),
+            ([0.0, 0.0], [4.0, 0.0], 2.0),
+        ] {
+            let (c, r, _, _) = arc_circle(a, b, s).unwrap();
+            let (apex_dir, half) = {
+                let (_, _, e, h) = arc_circle(a, b, s).unwrap();
+                (e, h)
+            };
+            // A point a little off the arc, on the way to the first third of it.
+            let ang = -0.4 * half;
+            let (sn, cs) = ang.sin_cos();
+            let on = [
+                c[0] + r * (apex_dir[0] * cs - apex_dir[1] * sn),
+                c[1] + r * (apex_dir[0] * sn + apex_dir[1] * cs),
+            ];
+            let off = [on[0] + (on[0] - c[0]) * 0.1, on[1] + (on[1] - c[1]) * 0.1];
+            let (q, s1, s2) = split_arc(a, b, s, off).unwrap();
+            assert!((dist(c, q) - r).abs() < 1e-3);
+            assert!(s1 * s > 0.0 && s2 * s > 0.0, "same side");
+            let mut all = vec![a];
+            all.extend(arc_interior(a, q, s1));
+            all.push(q);
+            all.extend(arc_interior(q, b, s2));
+            all.push(b);
+            for p in &all {
+                assert!((dist(c, *p) - r).abs() < 1e-3, "{p:?}");
+            }
+            // The two halves add up to the arc: the same length within the tessellation.
+            let len: f32 = all.windows(2).map(|w| dist(w[0], w[1])).sum();
+            let mut whole = vec![a];
+            whole.extend(arc_interior(a, b, s));
+            whole.push(b);
+            let full: f32 = whole.windows(2).map(|w| dist(w[0], w[1])).sum();
+            assert!((len - full).abs() < 0.01 * full, "{len} {full}");
+        }
+        // A position off either end is kept inside the arc.
+        let (q, s1, s2) = split_arc([0.0, 0.0], [6.0, 0.0], 1.0, [-4.0, 2.0]).unwrap();
+        assert!(q[0] > 0.0 && s1.abs() > 0.0 && s2.abs() > 0.0);
+        assert!(split_arc([0.0, 0.0], [6.0, 0.0], 0.0, [3.0, 1.0]).is_err());
+    }
+
+    #[test]
+    fn an_ellipse_measures_within_a_tenth_of_a_percent() {
+        for (rx, rz, rot) in [
+            (4.0, 2.5, 0.0),
+            (2.5, 4.0, 30.0),
+            (6.0, 1.0, 75.0),
+            (3.0, 3.0, 0.0),
+            (10.0, 0.5, 0.0),
+        ] {
+            let (pts, curves) = ellipse([5.0, -3.0], rx, rz, rot);
+            let t = tessellate(&pts, true, &curves, false).pts;
+            let n = t.len();
+            let area: f32 = (0..n)
+                .map(|i| {
+                    let (p, q) = (t[i], t[(i + 1) % n]);
+                    (p[0] - 5.0) * (q[1] + 3.0) - (q[0] - 5.0) * (p[1] + 3.0)
+                })
+                .sum::<f32>()
+                / 2.0;
+            let perimeter: f32 = (0..n).map(|i| dist(t[i], t[(i + 1) % n])).sum();
+            let want_area = std::f32::consts::PI * rx * rz;
+            let want_perimeter = ellipse_perimeter(rx, rz);
+            // Clockwise seen from above: a positive shoelace sum.
+            assert!(area > 0.0);
+            assert!(
+                (area / want_area - 1.0).abs() < 0.001,
+                "{rx} {rz}: {area} {want_area}"
+            );
+            assert!(
+                (perimeter / want_perimeter - 1.0).abs() < 0.001,
+                "{rx} {rz}: {perimeter} {want_perimeter}"
+            );
+            // Every tessellated point lies on the ellipse within a millimetre or two.
+            let (sr, cr) = rot.to_radians().sin_cos();
+            for p in &t {
+                let (x, z) = (p[0] - 5.0, p[1] + 3.0);
+                let (u, v) = (x * cr + z * sr, -x * sr + z * cr);
+                let f = ((u / rx).powi(2) + (v / rz).powi(2)).sqrt();
+                assert!(
+                    (f - 1.0).abs() * rx.min(rz) < 0.003f32.max(0.001 * rx.min(rz)) * 1.1,
+                    "{rx} {rz} {f}"
+                );
+            }
+        }
+        assert!((ellipse_perimeter(1.0, 1.0) - std::f32::consts::TAU).abs() < 1e-5);
     }
 }

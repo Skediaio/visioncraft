@@ -143,6 +143,88 @@ fn circle_polygon(c: P2, radius: f32) -> Vec<P2> {
     visioncraft_core::curve::tessellate(&points, true, &curves, false).pts
 }
 
+/// An ellipse with semi-axes `rx` (along x) and `rz` round `c`, as `shape.add_ellipse` draws it.
+fn ellipse_polygon(c: P2, rx: f32, rz: f32) -> Vec<P2> {
+    let (rx, rz) = (rx.max(0.01), rz.max(0.01));
+    if rx / rz > visioncraft_core::curve::MAX_ELLIPSE_RATIO
+        || rz / rx > visioncraft_core::curve::MAX_ELLIPSE_RATIO
+    {
+        // The command would refuse it: show the box's diagonal until it is a shape.
+        return vec![[c[0] - rx, c[1] - rz], [c[0] + rx, c[1] + rz]];
+    }
+    let (points, curves) = visioncraft_core::curve::ellipse(c, rx, rz, 0.0);
+    visioncraft_core::curve::tessellate(&points, true, &curves, false).pts
+}
+
+/// The point halfway along the arc of the edge from `a` to `b` with signed sagitta `s` (the
+/// chord's middle for a straight edge): the arc's handle.
+fn arc_apex(a: P2, b: P2, s: f32) -> P2 {
+    let chord = dist(a, b).max(1e-9);
+    let left = [(b[1] - a[1]) / chord, -(b[0] - a[0]) / chord];
+    [
+        (a[0] + b[0]) / 2.0 + left[0] * s,
+        (a[1] + b[1]) / 2.0 + left[1] * s,
+    ]
+}
+
+/// The sagitta that puts the arc of the edge from `a` to `b` through the pointer at `p`: its
+/// distance from the chord, left of the edge's direction positive, held to a semicircle and
+/// rounded to a centimetre unless `exact`.
+fn dragged_sagitta(a: P2, b: P2, p: P2, exact: bool) -> f32 {
+    let chord = dist(a, b).max(1e-9);
+    let left = [(b[1] - a[1]) / chord, -(b[0] - a[0]) / chord];
+    let mid = [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0];
+    let s =
+        ((p[0] - mid[0]) * left[0] + (p[1] - mid[1]) * left[1]).clamp(-chord / 2.0, chord / 2.0);
+    if exact {
+        s
+    } else {
+        (s * 100.0).round() / 100.0
+    }
+}
+
+/// `shape` with the arc of `edge` set to `sagitta` (straight when it is about zero).
+fn with_sagitta(shape: &Shape, edge: usize, sagitta: f32) -> Shape {
+    let mut s = shape.clone();
+    let curves = match &mut s {
+        Shape::Area(a) => &mut a.curves,
+        Shape::Extrusion(e) => &mut e.curves,
+    };
+    if sagitta.abs() < visioncraft_core::curve::MIN_SAGITTA_M {
+        curves.remove(&edge);
+    } else {
+        curves.insert(
+            edge,
+            visioncraft_core::curve::Curve::Arc { sagitta_m: sagitta },
+        );
+    }
+    s
+}
+
+/// Whether the shape's edges take arcs by hand (not stairs, houses or furniture).
+fn takes_arcs(shape: &Shape) -> bool {
+    !matches!(shape, Shape::Extrusion(x) if x.stairs.is_some() || x.house.is_some() || x.furniture.is_some())
+}
+
+/// The arc handles of `shape`: the middle of the arc of every curved edge, and of the picked
+/// edge `picked` even when it is straight.
+fn arc_handles(shape: &Shape, picked: Option<usize>) -> Vec<(usize, P2)> {
+    if !takes_arcs(shape) {
+        return Vec::new();
+    }
+    let points = shape.points();
+    let edges = visioncraft_core::curve::edge_count(points.len(), shape.is_closed());
+    (0..edges)
+        .filter_map(|i| {
+            let curve = shape.curves().get(&i);
+            (curve.is_some() || picked == Some(i)).then(|| {
+                let (a, b) = (points[i], points[(i + 1) % points.len()]);
+                (i, arc_apex(a, b, curve.map_or(0.0, |c| c.sagitta_m())))
+            })
+        })
+        .collect()
+}
+
 /// Whether a click at `p` closes a pending outline of `points`.
 /// The mean of a shape's corners (a centre to push labels away from).
 fn centroid(points: &[P2]) -> P2 {
@@ -286,6 +368,9 @@ pub enum Tool {
     Furniture,
     /// Two clicks, the centre and a point on the edge of a round area (`shape.add_circle`).
     Circle,
+    /// Two clicks, the centre and a corner of the box round an elliptical area
+    /// (`shape.add_ellipse`): the two distances are the semi-axes.
+    Ellipse,
     /// Puts a window, or a door, in the wall of a block that is clicked.
     Window,
     Door,
@@ -435,6 +520,8 @@ pub struct DrawState {
     /// The radius typed for the next arc (0: the edge's length).
     curve_radius: f32,
     dragging: Option<usize>,
+    /// The edge whose arc handle (the middle of its arc) is being dragged.
+    arc_dragging: Option<usize>,
     /// (shape id, text) of the name field while it has the keyboard.
     name_edit: Option<(String, String)>,
     /// Digits typed while drawing (the next segment's length), and a rectangle's width typed
@@ -521,7 +608,7 @@ impl DrawState {
             3
         } else if matches!(
             self.tool,
-            Tool::Wall | Tool::Fence | Tool::Stairs | Tool::Circle
+            Tool::Wall | Tool::Fence | Tool::Stairs | Tool::Circle | Tool::Ellipse
         ) {
             2
         } else {
@@ -537,6 +624,7 @@ impl DrawState {
                 | Tool::Bed
                 | Tool::Terrace
                 | Tool::Circle
+                | Tool::Ellipse
         ) && self.points.len() >= needed
         {
             self.finish(cx);
@@ -602,7 +690,7 @@ impl DrawState {
     fn drawing(&mut self, cx: &mut Cx, cursor: Option<P2>, radius: f32, top: &mut Vec<LineVertex>) {
         let closed_shape = !matches!(
             self.tool,
-            Tool::Wall | Tool::Fence | Tool::Stairs | Tool::Circle
+            Tool::Wall | Tool::Fence | Tool::Stairs | Tool::Circle | Tool::Ellipse
         );
         let existing = all_vertices(cx, None);
         let mut snap =
@@ -702,11 +790,14 @@ impl DrawState {
                 self.points.push(s.pos);
             }
         }
-        // Steps are two clicks: the bottom, then the top; a circle too: the centre, then the edge.
+        // Steps are two clicks: the bottom, then the top; a circle too: the centre, then the edge;
+        // an ellipse: the centre, then a corner of its box.
         // A flight that turns takes up to four, and Enter ends it at three.
         let turning = self.tool == Tool::Stairs && self.stairs_turn;
         let clicks = if turning { 4 } else { 2 };
-        if matches!(self.tool, Tool::Stairs | Tool::Circle) && self.points.len() >= clicks {
+        if matches!(self.tool, Tool::Stairs | Tool::Circle | Tool::Ellipse)
+            && self.points.len() >= clicks
+        {
             self.finish(cx);
             return;
         }
@@ -742,6 +833,17 @@ impl DrawState {
         {
             top.extend(outline_lines(
                 &circle_polygon(c, dist(c, e)),
+                true,
+                y,
+                ACCENT,
+                3.0,
+            ));
+        }
+        if self.tool == Tool::Ellipse
+            && let [c, e, ..] = pts[..]
+        {
+            top.extend(outline_lines(
+                &ellipse_polygon(c, (e[0] - c[0]).abs(), (e[1] - c[1]).abs()),
                 true,
                 y,
                 ACCENT,
@@ -872,6 +974,22 @@ impl DrawState {
                     "shape.add_circle",
                     material,
                     json!({"name": name(label), "center": points[0], "radius_m": radius, "kind": "area"}),
+                )
+            }
+            // An elliptical area: the centre and a corner of its box (the semi-axes).
+            Tool::Ellipse => {
+                let (label, material) = self.area_kind.spec();
+                let (rx, rz) = (
+                    (points[1][0] - points[0][0]).abs(),
+                    (points[1][1] - points[0][1]).abs(),
+                );
+                if rx < 0.05 || rz < 0.05 {
+                    return;
+                }
+                (
+                    "shape.add_ellipse",
+                    material,
+                    json!({"name": name(label), "center": points[0], "radius_x": rx, "radius_z": rz, "kind": "area"}),
                 )
             }
             // A raised bed starts 40 cm high with timber walls and soil (the command does both).
@@ -1142,6 +1260,43 @@ impl DrawState {
                 self.dragging = vertex_hit(points, pressed, radius);
                 if self.dragging.is_some() {
                     self.vertex = self.dragging;
+                } else {
+                    // The middle of an arc: dragging it changes the arc.
+                    self.arc_dragging = arc_handles(shape, self.edge)
+                        .into_iter()
+                        .filter(|(_, p)| dist(*p, pressed) <= radius * 1.3)
+                        .min_by(|a, b| dist(a.1, pressed).total_cmp(&dist(b.1, pressed)))
+                        .map(|(i, _)| i);
+                    if self.arc_dragging.is_some() {
+                        self.edge = self.arc_dragging;
+                    }
+                }
+            }
+            if let Some(i) = self.arc_dragging {
+                let (a, b) = (points[i], points[(i + 1) % points.len()]);
+                if cx.input.dragging {
+                    let base =
+                        cx.s.project()
+                            .shapes
+                            .iter()
+                            .find(|x| x.id() == shape.id())
+                            .cloned();
+                    if let Some(base) = base {
+                        let s = dragged_sagitta(a, b, c, cx.input.alt);
+                        cx.s.set_draft(Some(crate::studio::Draft::Shape(with_sagitta(
+                            &base, i, s,
+                        ))));
+                    }
+                }
+                if cx.input.drag_stopped {
+                    self.arc_dragging = None;
+                    let s = dragged_sagitta(a, b, c, cx.input.alt);
+                    cx.s.set_draft(None);
+                    // On release: one command, so one undo step.
+                    cx.run(
+                        "shape.set_curve",
+                        json!({"id": shape.id(), "edge": i, "sagitta_m": s}),
+                    );
                 }
             }
             if let Some(i) = self.dragging {
@@ -1225,6 +1380,7 @@ impl DrawState {
         if cx.input.escape {
             self.selected = None;
             self.vertex = None;
+            self.arc_dragging = None;
         }
         // Outline of the selection.
         if let Some(shape) = self.shape(cx) {
@@ -1254,6 +1410,15 @@ impl DrawState {
                     if sel { 13.0 } else { 9.0 },
                 ));
             }
+            for (i, p) in arc_handles(&shape, self.edge) {
+                let live = self.arc_dragging == Some(i);
+                top.extend(dot(
+                    p,
+                    y + 0.01,
+                    if live { ACCENT } else { [120, 220, 140, 255] },
+                    if live { 13.0 } else { 9.0 },
+                ));
+            }
             let centre = centroid(&tess.pts);
             for (i, run) in runs.iter().enumerate() {
                 let (Some(&a), Some(&b)) = (run.first(), run.last()) else {
@@ -1266,7 +1431,7 @@ impl DrawState {
                     let len = outline_length(run, false);
                     let mut text = format!("{len:.2} m");
                     if let Some(c) = shape.curves().get(&i) {
-                        text.push_str(&format!(" R {:.2}", c.radius_m(dist(a, b))));
+                        text.push_str(&format!(" R {:.2} m", c.radius_m(dist(a, b))));
                     }
                     self.label_at(cx, run[run.len() / 2], &text, centre);
                 }
@@ -1301,7 +1466,7 @@ impl DrawState {
             ui.separator();
         }
         // Above the tools, so they stay put.
-        if matches!(self.tool, Tool::Area | Tool::Circle) {
+        if matches!(self.tool, Tool::Area | Tool::Circle | Tool::Ellipse) {
             ui.horizontal_wrapped(|ui| {
                 for kind in AreaKind::ALL {
                     if ui
@@ -1325,6 +1490,7 @@ impl DrawState {
                 (Tool::Terrace, t::TOOL_TERRACE),
                 (Tool::Furniture, t::TOOL_FURNITURE),
                 (Tool::Circle, t::TOOL_CIRCLE),
+                (Tool::Ellipse, t::TOOL_ELLIPSE),
                 (Tool::Window, t::TOOL_WINDOW),
                 (Tool::Door, t::TOOL_DOOR),
                 (Tool::Plan, t::TOOL_PLAN),
@@ -1360,6 +1526,7 @@ impl DrawState {
             Tool::Wall | Tool::Fence => t::WALL_HINT,
             Tool::Stairs => t::STAIRS_HINT,
             Tool::Circle => t::CIRCLE_HINT,
+            Tool::Ellipse => t::ELLIPSE_HINT,
             Tool::Furniture => t::FURNITURE_HINT,
             Tool::Terrace => t::TERRACE_HINT,
             Tool::Window | Tool::Door => t::OPENING_HINT,
@@ -1827,7 +1994,7 @@ fn stairs_panel(ui: &mut egui::Ui, cx: &mut Cx, x: &visioncraft_core::shape::Ext
         .and_then(|_| visioncraft_core::setin::build_in(cx.s.project(), x));
     let geometry = match &built {
         Some(b) => Ok(b.geometry.clone()),
-        None => st.geometry(&x.points, x.height),
+        None => st.geometry_curved(&x.points, &x.curves, x.height),
     };
     if let Ok(g) = geometry {
         ui.label(format!(
@@ -2233,6 +2400,58 @@ fn house_panel(ui: &mut egui::Ui, cx: &mut Cx, x: &visioncraft_core::shape::Extr
 
 #[cfg(test)]
 mod tests {
+    /// The arc's handle sits the sagitta off the chord's middle, and dragging it back gives the
+    /// sagitta (signed, held to a semicircle, rounded to a centimetre unless exact).
+    #[test]
+    fn the_arc_handle_and_its_drag_agree() {
+        let (a, b) = ([0.0, 0.0], [6.0, 0.0]);
+        // Left of the eastward edge is north (-Z).
+        assert_eq!(arc_apex(a, b, 1.0), [3.0, -1.0]);
+        assert_eq!(arc_apex(a, b, -2.0), [3.0, 2.0]);
+        assert_eq!(arc_apex(a, b, 0.0), [3.0, 0.0]);
+        for s in [-2.5, -0.01, 0.0, 0.8, 3.0] {
+            let p = arc_apex(a, b, s);
+            assert!((dragged_sagitta(a, b, p, true) - s).abs() < 1e-5, "{s}");
+        }
+        // Past a semicircle it stops at half the chord; a drag is rounded to a centimetre.
+        assert_eq!(dragged_sagitta(a, b, [3.0, -9.0], true), 3.0);
+        assert_eq!(dragged_sagitta(a, b, [3.0, -1.2349], false), 1.23);
+        // The shape gets the arc, and loses it again at about zero.
+        let shape = Shape::Area(visioncraft_core::shape::Area {
+            id: "S1".into(),
+            name: "A".into(),
+            layer: "shapes".into(),
+            points: vec![[0.0, 0.0], [6.0, 0.0], [6.0, 4.0]],
+            curves: Default::default(),
+            smooth: false,
+            elevation: 0.0,
+            drape: false,
+            edge_blend_m: 0.0,
+            edge: None,
+            terrace: None,
+            extensions: Default::default(),
+        });
+        let bent = with_sagitta(&shape, 0, 1.0);
+        assert_eq!(bent.curves().len(), 1);
+        assert_eq!(arc_handles(&bent, None), [(0, [3.0, -1.0])]);
+        // A straight edge has a handle only once it is picked.
+        assert_eq!(arc_handles(&shape, None), []);
+        assert_eq!(arc_handles(&shape, Some(1)), [(1, [6.0, 2.0])]);
+        assert!(with_sagitta(&bent, 0, 0.0).curves().is_empty());
+    }
+
+    /// The Ellipse tool's preview is the outline `shape.add_ellipse` draws.
+    #[test]
+    fn the_ellipse_preview_is_the_ellipse() {
+        let pts = ellipse_polygon([5.0, 5.0], 4.0, 2.5);
+        let area = visioncraft_core::measure::polygon_area(&pts);
+        assert!(
+            (area / (std::f32::consts::PI * 10.0) - 1.0).abs() < 0.002,
+            "{area}"
+        );
+        // A box too long and thin to be an ellipse shows its diagonal.
+        assert_eq!(ellipse_polygon([0.0, 0.0], 30.0, 0.5).len(), 2);
+    }
 
     /// Walk from Draw (`App::toggle_walk`): the area being drawn is kept as Enter would keep it,
     /// a two-point start is dropped, and leaving Draw leaves the plan for the 3D view.

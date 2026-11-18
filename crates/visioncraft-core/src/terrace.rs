@@ -193,6 +193,7 @@ impl Terrace {
     pub fn beams(
         &self,
         outline: &[P2],
+        ctrl: &[usize],
         floor: f32,
         ground: &dyn Fn(f32, f32) -> f32,
         cell: f32,
@@ -209,7 +210,7 @@ impl Terrace {
         let courses = (((hi - lo) / bed::BEAM_H).round() as usize).max(1);
         let ch = (hi - lo) / courses as f32;
         let wall_at = |p: P2| self.profile(floor, ground(p[0], p[1]));
-        bed::beams(&self.bed(), &outer, lo, hi)
+        bed::beams_curved(&self.bed(), &outer, ctrl, lo, hi)
             .into_iter()
             .filter_map(|mut b| {
                 let n = (((b.u.1 - b.u.0) / step).ceil() as usize).max(1);
@@ -235,6 +236,7 @@ impl Terrace {
         &self,
         s: &mut dyn Sink,
         outline: &[P2],
+        ctrl: &[usize],
         floor: f32,
         ground: &dyn Fn(f32, f32) -> f32,
         cell: f32,
@@ -242,7 +244,7 @@ impl Terrace {
         use bed::{COPING_H, COPING_OUT, FLANGE_H, FLANGE_IN, FLANGE_OUT, LIP_H, RIM, WALL, quad};
         if self.style == BedStyle::Sleepers {
             let t = self.thickness();
-            for b in self.beams(outline, floor, ground, cell) {
+            for b in self.beams(outline, ctrl, floor, ground, cell) {
                 bed::beam(s, &b, t);
             }
             return;
@@ -377,6 +379,7 @@ impl Terrace {
     pub fn report(
         &self,
         outline: &[P2],
+        ctrl: &[usize],
         floor: f32,
         ground: &dyn Fn(f32, f32) -> f32,
         cell: f32,
@@ -399,7 +402,7 @@ impl Terrace {
         }
         let wall_length_m = (outer_len + inner_len) / 2.0;
         let beams = (self.style == BedStyle::Sleepers).then(|| {
-            let beams = self.beams(outline, floor, ground, cell);
+            let beams = self.beams(outline, ctrl, floor, ground, cell);
             let length = beams.iter().map(|b| b.u.1 - b.u.0).sum();
             (beams.len(), length)
         });
@@ -563,7 +566,8 @@ pub fn terrain_ground(project: &Project) -> (impl Fn(f32, f32) -> f32 + '_, f32)
 pub fn report_for(project: &Project, a: &crate::shape::Area) -> Option<Report> {
     let t = a.terrace.as_ref()?;
     let (ground, cell) = terrain_ground(project);
-    Some(t.report(&a.outline(), a.elevation, &ground, cell))
+    let tess = crate::curve::tessellate(&a.points, true, &a.curves, a.smooth);
+    Some(t.report(&tess.pts, &tess.ctrl, a.elevation, &ground, cell))
 }
 
 /// What to tell the person about terrace area `a`: a wall that needs an engineer, no terrain
@@ -890,7 +894,7 @@ mod tests {
             .unwrap();
         assert!((downhill.hi - downhill.lo - (0.45 + (-1.0 - downhill.ground))).abs() < 1e-4);
         // The report: a wall of 32 m round, taller downhill than at the cut's end.
-        let r = t.report(&rect(5.0, 2.0, 15.0, 8.0), -1.0, &plane, 1.0);
+        let r = t.report(&rect(5.0, 2.0, 15.0, 8.0), &[], -1.0, &plane, 1.0);
         assert!((r.wall_length_m - 32.0).abs() < 1.0, "{}", r.wall_length_m);
         assert!(r.max_height_m > 1.2, "{}", r.max_height_m);
         assert!(r.outer_face_m2 > 10.0 && r.inner_face_m2 > 10.0);

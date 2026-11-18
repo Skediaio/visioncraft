@@ -149,6 +149,30 @@ pub struct Geometry {
     /// the bottom and the first direction, `length` is the length of the path and `tread` the
     /// mean going.
     pub turned: Option<Turned>,
+    /// The curved front of a straight flight (an arc on its bottom edge), `None` when straight.
+    pub fan: Option<Fan>,
+}
+
+/// The curved front of a flight: the arc on its bottom edge, and every riser an arc concentric
+/// with it. `origin` of the [`Geometry`] is the arc's apex, so the goings count from it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Fan {
+    /// How far the arc bulges from its chord (metres): positive away from the flight (a round
+    /// front, a bullnose), negative into it (a hollow front).
+    pub bow: f32,
+    /// The radius of the bottom arc.
+    pub radius: f32,
+}
+
+impl Fan {
+    /// Where, along the flight from the apex, the riser that stands `u` along the axis lies at
+    /// `w` across: the concentric arc of radius `radius - u` (round front) or `radius + u`
+    /// (hollow), seen at the side.
+    pub fn front_at(&self, u: f32, w: f32) -> f32 {
+        let sigma = self.bow.signum();
+        let r = self.radius - sigma * u;
+        sigma * (self.radius - (r * r - w * w).max(0.0).sqrt())
+    }
 }
 
 impl Geometry {
@@ -237,6 +261,74 @@ impl Stairs {
         self.geometry_with(outline, height, None)
     }
 
+    /// [`Stairs::geometry`] for a flight whose outline carries `curves`: the only arc it takes is
+    /// on its bottom edge (the one opposite `up_edge`), a round front or a hollow one whose
+    /// risers are concentric arcs ([`Fan`]). The goings count from the arc's apex.
+    pub fn geometry_curved(
+        &self,
+        outline: &[P2],
+        curves: &crate::curve::Curves,
+        height: f32,
+    ) -> Result<Geometry, String> {
+        if curves.is_empty() {
+            return self.geometry(outline, height);
+        }
+        if self.path.is_some() || self.set_in.is_some() {
+            return Err("a flight that turns or is set into the slope needs a straight front: clear its curves (`shape.clear_curve`)".into());
+        }
+        if outline.len() != 4 || self.up_edge >= 4 {
+            return Err("stairs need a 4-point rectangular outline".into());
+        }
+        let bottom = (self.up_edge + 2) % 4;
+        if let Some(e) = curves.keys().find(|&&e| e != bottom) {
+            return Err(format!(
+                "stairs take an arc on their bottom edge only (edge {bottom}, opposite the top edge {}), not on edge {e}: clear it (`shape.clear_curve`)",
+                self.up_edge
+            ));
+        }
+        let sagitta = curves[&bottom].sagitta_m();
+        let straight = self.geometry(outline, height)?;
+        let (p, q) = (outline[bottom], outline[(bottom + 1) % 4]);
+        let width = (q[0] - p[0]).hypot(q[1] - p[1]);
+        // Seen along the edge from its first point, the arc bulges to the left for a positive
+        // sagitta; that is away from the flight when the left normal points against `dir`.
+        let left = [(q[1] - p[1]) / width, -(q[0] - p[0]) / width];
+        let away = -(left[0] * straight.dir[0] + left[1] * straight.dir[1]) * sagitta.signum();
+        let bow = if away > 0.0 {
+            sagitta.abs()
+        } else {
+            -sagitta.abs()
+        };
+        let radius = (width * width / 4.0 + sagitta * sagitta) / (2.0 * sagitta.abs());
+        // The outline with the bottom edge moved to the apex: the flight runs from there.
+        let mut moved = outline.to_vec();
+        for i in [bottom, (bottom + 1) % 4] {
+            moved[i] = [
+                outline[i][0] - straight.dir[0] * bow,
+                outline[i][1] - straight.dir[1] * bow,
+            ];
+        }
+        let mut g = self.geometry(&moved, height)?;
+        let fan = Fan { bow, radius };
+        let hw = width / 2.0;
+        let last = offsets(&g.goings)[g.steps - 1];
+        let r_last = radius - bow.signum() * last;
+        if r_last < hw * 1.001 {
+            return Err(format!(
+                "the curved front is too tight for {} steps: the riser of the top step would be an arc of {:.2} m radius, narrower than the flight ({:.2} m wide); use a larger radius or a smaller bow",
+                g.steps, r_last, width
+            ));
+        }
+        if fan.front_at(last, hw) > g.length - 0.02 {
+            return Err(
+                "the curved front runs past the top edge: use a larger radius or a smaller bow"
+                    .into(),
+            );
+        }
+        g.fan = Some(fan);
+        Ok(g)
+    }
+
     /// [`Stairs::geometry`] with the ground: `ground(x, z)` is its height above the bottom of the
     /// flight. A flight that is set into the slope ([`SetIn`]) spaces its steps along it; without
     /// ground (or without `set_in`) the treads are equal.
@@ -311,6 +403,7 @@ impl Stairs {
                 goings: fit.goings,
                 warnings,
                 turned: None,
+                fan: None,
             });
         }
         let tread = match self.tread_m {
@@ -349,6 +442,7 @@ impl Stairs {
             goings: even_goings(steps, tread, length),
             warnings,
             turned: None,
+            fan: None,
         })
     }
 
@@ -528,6 +622,7 @@ impl Stairs {
                 landings,
                 blocks,
             }),
+            fan: None,
         })
     }
 }
@@ -891,13 +986,18 @@ pub fn step_bottoms(
     let us = offsets(&g.goings);
     (1..=g.steps)
         .map(|k| {
-            let u0 = us[k - 1];
-            let u1 = if k == g.steps { g.length } else { us[k] };
             let mut low = f32::INFINITY;
             for i in 0..=4 {
                 for j in 0..=4 {
-                    let u = u0 + (u1 - u0) * i as f32 / 4.0;
                     let w = -hw + g.width * j as f32 / 4.0;
+                    // A curved front's step is cut by concentric arcs, so its ends move with `w`.
+                    let at = |k: usize| match &g.fan {
+                        Some(f) if k < g.steps => f.front_at(us[k], w),
+                        _ if k == g.steps => g.length,
+                        _ => us[k],
+                    };
+                    let (u0, u1) = (at(k - 1), at(k));
+                    let u = u0 + (u1 - u0) * i as f32 / 4.0;
                     let (x, z) = (
                         g.origin[0] + d[0] * u + n[0] * w,
                         g.origin[1] + d[1] * u + n[1] * w,
@@ -917,6 +1017,9 @@ pub fn step_bottoms(
 pub(crate) fn mesh(s: &mut dyn Sink, g: &Geometry, lo: f32, bottoms: &[f32]) {
     if let Some(t) = &g.turned {
         return mesh_blocks(s, &t.blocks, lo, bottoms);
+    }
+    if let Some(fan) = &g.fan {
+        return mesh_fan(s, g, fan, lo, bottoms);
     }
     let d = g.dir;
     let n = [-d[1], d[0]];
@@ -976,6 +1079,113 @@ pub(crate) fn mesh(s: &mut dyn Sink, g: &Geometry, lo: f32, bottoms: &[f32]) {
                 s,
                 SIDES,
                 [p(u0, w, yb), p(u1, w, yb), p(u1, w, y1), p(u0, w, y1)],
+                out,
+            );
+        }
+    }
+}
+
+/// Draws a flight with a curved front: each step lies between two concentric arcs and the two
+/// sides of the flight, the last one up to the straight top edge. Same faces and the same solid
+/// blocks as [`mesh`] makes of a straight flight.
+fn mesh_fan(s: &mut dyn Sink, g: &Geometry, fan: &Fan, lo: f32, bottoms: &[f32]) {
+    let d = g.dir;
+    let nrm = [-d[1], d[0]];
+    let hw = g.width / 2.0;
+    let us = offsets(&g.goings);
+    let p = |u: f32, w: f32, y: f32| {
+        [
+            g.origin[0] + d[0] * u + nrm[0] * w,
+            y,
+            g.origin[1] + d[1] * u + nrm[1] * w,
+        ]
+    };
+    // Segments across: enough for the tightest arc to stay within 3 mm of its chords.
+    let r_min = (fan.radius - fan.bow.signum() * us[g.steps - 1]).max(hw * 1.001);
+    let dth = 2.0 * (1.0 - 0.003 / r_min.max(0.01)).clamp(-1.0, 1.0).acos();
+    let span = 2.0 * (hw / r_min).clamp(0.0, 1.0).asin();
+    let segs = ((span / dth.max(1e-3)).ceil() as usize).clamp(4, 64);
+    let ws: Vec<f32> = (0..=segs)
+        .map(|i| -hw + g.width * i as f32 / segs as f32)
+        .collect();
+    // The plan position along the flight of the riser `k` (the back of step `k`) at `w`.
+    let front = |k: usize, w: f32| {
+        if k >= g.steps {
+            g.length
+        } else {
+            fan.front_at(us[k], w)
+        }
+    };
+    let up = [0.0, 1.0, 0.0];
+    let hi = lo + g.riser * g.steps as f32;
+    let bottom = |k: usize| bottoms.get(k - 1).copied().unwrap_or(lo);
+    // Faces a vertical wall along riser `k` (every `ws` step of it) from `ya` to `yb`; `towards`
+    // is +1 for the wall that faces up the flight, -1 for the one that faces down.
+    let wall = |s: &mut dyn Sink, face: usize, k: usize, ya: f32, yb: f32, towards: f32| {
+        for i in 0..segs {
+            let (a, b) = (
+                p(front(k, ws[i]), ws[i], 0.0),
+                p(front(k, ws[i + 1]), ws[i + 1], 0.0),
+            );
+            let (dx, dz) = (b[0] - a[0], b[2] - a[2]);
+            // The perpendicular to the segment that points up the flight.
+            let mut out = [-dz, 0.0, dx];
+            if out[0] * d[0] + out[2] * d[1] < 0.0 {
+                out = out.map(|c| -c);
+            }
+            let out = out.map(|c| c * towards);
+            quad(
+                s,
+                face,
+                [
+                    [a[0], ya, a[2]],
+                    [b[0], ya, b[2]],
+                    [b[0], yb, b[2]],
+                    [a[0], yb, a[2]],
+                ],
+                out,
+            );
+        }
+    };
+    wall(s, SIDES, g.steps, bottom(g.steps), hi, 1.0);
+    let mut before = lo;
+    for k in 1..=g.steps {
+        let (y0, y1) = (lo + (k - 1) as f32 * g.riser, lo + k as f32 * g.riser);
+        let yb = bottom(k);
+        for i in 0..segs {
+            let (w0, w1) = (ws[i], ws[i + 1]);
+            let (a0, a1) = (front(k - 1, w0), front(k - 1, w1));
+            let (b0, b1) = (front(k, w0), front(k, w1));
+            quad(
+                s,
+                SIDES,
+                [p(a0, w0, yb), p(b0, w0, yb), p(b1, w1, yb), p(a1, w1, yb)],
+                [0.0, -1.0, 0.0],
+            );
+            quad(
+                s,
+                TREADS,
+                [p(a0, w0, y1), p(b0, w0, y1), p(b1, w1, y1), p(a1, w1, y1)],
+                up,
+            );
+        }
+        wall(s, RISERS, k - 1, y0, y1, -1.0);
+        if yb < before {
+            wall(s, SIDES, k - 1, yb, before, -1.0);
+        } else if yb > before && k > 1 {
+            wall(s, SIDES, k - 1, before, yb, 1.0);
+        }
+        before = yb;
+        for (w, out) in [(-hw, [-nrm[0], 0.0, -nrm[1]]), (hw, [nrm[0], 0.0, nrm[1]])] {
+            quad(
+                s,
+                SIDES,
+                [
+                    p(front(k - 1, w), w, yb),
+                    p(front(k, w), w, yb),
+                    p(front(k, w), w, y1),
+                    p(front(k - 1, w), w, y1),
+                ],
                 out,
             );
         }
@@ -1729,5 +1939,122 @@ mod tests {
         let t = g.turned.as_ref().unwrap();
         assert_eq!(bottoms.len(), t.blocks.len());
         assert!(bottoms.iter().all(|b| *b <= 0.0) && bottoms.iter().any(|b| *b < -0.1));
+    }
+
+    /// A flight like `flight`, its bottom edge (edge 0) an arc of `sagitta` (positive bulging
+    /// away from the flight, to -Z, which is the left of the eastward edge 0).
+    fn round_front(len: f32, width: f32, height: f32, sagitta: f32) -> Shape {
+        let mut shape = flight(
+            len,
+            width,
+            height,
+            Stairs {
+                tread_m: Some(0.30),
+                ..top_edge()
+            },
+        );
+        let Shape::Extrusion(e) = &mut shape else {
+            panic!()
+        };
+        e.curves = [(0, crate::curve::Curve::Arc { sagitta_m: sagitta })].into();
+        shape
+    }
+
+    #[test]
+    fn a_round_front_has_concentric_nosings_and_treads_that_fill_the_footprint() {
+        // 1.2 m wide, 1.8 m from the chord to the top, a front bowed 8 cm: a radius of 2.3 m,
+        // wide enough for the top step's arc (2.3 m less 1.4 m of going) to span the flight.
+        let (width, len, sagitta) = (1.2f32, 1.8f32, 0.08f32);
+        let shape = round_front(len, width, 0.68, sagitta);
+        let Shape::Extrusion(e) = &shape else {
+            panic!()
+        };
+        let g = e
+            .stairs
+            .as_ref()
+            .unwrap()
+            .geometry_curved(&e.points, &e.curves, e.height)
+            .unwrap();
+        let fan = g.fan.unwrap();
+        let radius = (width * width / 4.0 + sagitta * sagitta) / (2.0 * sagitta);
+        assert!((fan.radius - radius).abs() < 1e-5 && fan.bow > 0.0);
+        // The flight runs from the apex: the chord's length plus the bulge.
+        assert!((g.length - (len + sagitta)).abs() < 1e-5);
+        assert_eq!(g.steps, 4);
+        let centre = [
+            g.origin[0] + g.dir[0] * fan.radius,
+            g.origin[1] + g.dir[1] * fan.radius,
+        ];
+        let us = offsets(&g.goings);
+        let n = [-g.dir[1], g.dir[0]];
+        for (k, &going) in us.iter().enumerate().take(g.steps) {
+            // Every point of riser k, across the flight, is the same distance from the centre:
+            // the radius less the going so far.
+            for j in 0..=8 {
+                let w = -width / 2.0 + width * j as f32 / 8.0;
+                let u = fan.front_at(going, w);
+                let p = [
+                    g.origin[0] + g.dir[0] * u + n[0] * w,
+                    g.origin[1] + g.dir[1] * u + n[1] * w,
+                ];
+                let d = (p[0] - centre[0]).hypot(p[1] - centre[1]);
+                assert!((d - (fan.radius - going)).abs() < 1e-4, "{k} {j}: {d}");
+            }
+        }
+        // The same in the mesh: all risers' vertices are on the concentric arcs.
+        let m = shape_mesh(&shape).unwrap();
+        let risers = m.faces.iter().position(|f| f.name == "S1:risers").unwrap() as u32;
+        let wanted: Vec<f32> = (0..g.steps).map(|k| fan.radius - us[k]).collect();
+        let mut seen = vec![false; g.steps];
+        for (t, f) in m.triangles.iter().zip(&m.triangle_faces) {
+            if *f == risers {
+                for i in t {
+                    let v = m.positions[*i as usize];
+                    let d = (v[0] - centre[0]).hypot(v[2] - centre[1]);
+                    let k = wanted
+                        .iter()
+                        .position(|w| (w - d).abs() < 2e-3)
+                        .unwrap_or_else(|| panic!("a riser vertex at {d} from the centre"));
+                    seen[k] = true;
+                }
+            }
+        }
+        assert!(seen.iter().all(|s| *s));
+        // The treads tile the footprint: the rectangle and the bulge of the arc.
+        let treads = m.faces.iter().position(|f| f.name == "S1:treads").unwrap() as u32;
+        let area: f32 = m
+            .triangles
+            .iter()
+            .zip(&m.triangle_faces)
+            .filter(|(_, f)| **f == treads)
+            .map(|(t, _)| {
+                let [a, b, c] = t.map(|i| m.positions[i as usize]);
+                ((b[0] - a[0]) * (c[2] - a[2]) - (b[2] - a[2]) * (c[0] - a[0])).abs() / 2.0
+            })
+            .sum();
+        let tess = shape.outline();
+        let want = crate::measure::polygon_area(&tess);
+        assert!((area / want - 1.0).abs() < 0.005, "{area} {want}");
+        // Solid: the volume is at least the straight flight's less nothing, and the top is level.
+        let top = m.positions.iter().map(|p| p[1]).fold(f32::MIN, f32::max);
+        assert!((top - 0.68).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_round_front_that_is_too_tight_or_on_another_edge_is_refused() {
+        // A semicircle front on a 1.2 m flight of 4 steps: the top step's arc has no room.
+        let shape = round_front(1.2, 1.2, 0.68, 0.6);
+        let e = shape_mesh(&shape).unwrap_err().to_string();
+        assert!(e.contains("too tight"), "{e}");
+        let mut shape = round_front(1.8, 1.2, 0.68, 0.2);
+        let Shape::Extrusion(x) = &mut shape else {
+            panic!()
+        };
+        x.curves = [(1, crate::curve::Curve::Arc { sagitta_m: 0.2 })].into();
+        let e = shape_mesh(&shape).unwrap_err().to_string();
+        assert!(e.contains("bottom edge"), "{e}");
+        // A hollow front bulges into the flight; its risers are concentric and larger.
+        let hollow = round_front(1.8, 1.2, 0.68, -0.2);
+        assert!(shape_mesh(&hollow).is_ok());
     }
 }

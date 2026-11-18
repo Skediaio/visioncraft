@@ -154,16 +154,28 @@ nothing here is a promise of a date.
   smooth line for the styles that can.
 
 - **Curves:** a shape keeps its control points and draws a curved outline from them: an arc on
-  single edges typed as a radius and a side (`shape.set_curve`, `shape.clear_curve`), or a smooth
-  curve through all the points (`shape.set_smooth`), with the same typed-size precision as
-  straight edges (a circle of radius 5 measures within 0.1% of a circle). `shape.add_circle`
-  makes exact round lawns, ponds and beds; `shape.add_area`, `shape.add_extrusion`, `bed.add` and
-  `fence.add` take `curves` and `smooth`; a fence spreads its posts by arc length along a curve,
-  and a round plain, masonry or corten bed follows it with soil inside. Draw has a Circle tool, an
-  edge panel (pick an edge with Shift-click or a number, type a radius, left or right) and a Smooth
-  checkbox. Next: curved houses (walls on many short edges with openings placed by arc length),
-  curved sleeper beds and steps, an arc through three picked points, the radius shown and dragged
-  on the plan, splitting an arc in two when a corner is added, and an elliptical circle tool.
+  single edges typed as a radius and a side, a sagitta or a point it passes through
+  (`shape.set_curve`, `shape.clear_curve`), or a smooth curve through all the points
+  (`shape.set_smooth`), with the same typed-size precision as straight edges (a circle of radius
+  5 measures within 0.1% of a circle). `shape.add_circle` makes exact round lawns, ponds and beds
+  and `shape.add_ellipse` elliptical ones (control points on the ellipse with an arc between each
+  pair, as few as measure within 0.1% of the true area and perimeter); `shape.add_area`,
+  `shape.add_extrusion`, `bed.add` and `fence.add` take `curves` and `smooth`; a fence spreads its
+  posts by arc length along a curve, and a round bed follows it with soil inside in any style.
+  Sleeper beds, sleeper edges on raised areas and sleeper terrace walls take curves: the beams are
+  chords of the curve, the fewest equal ones per course that keep each within 2 cm of the arc and
+  under 2.4 m (28 a course on a 3 m radius bed), with mitred ends so no gap shows, the joints
+  staggered by half a beam from course to course, and `beams` and `beam_length_m` in the
+  quantities. `shape.insert_vertex` on an arc splits it into two arcs on the same circle, the new
+  point projected onto it. A flight of steps takes an arc on its bottom edge (`front_bow_m` on
+  `stairs.add` and `stairs.set`, or `shape.set_curve`): the risers are concentric arcs, a round
+  or hollow front, the goings counted from the apex. Draw has Circle and Ellipse tools, an edge
+  panel (pick an edge with Shift-click or a number, type a radius, left or right), a Smooth
+  checkbox, the radius of every arc on the plan and a handle in the middle of each arc to drag
+  (one `shape.set_curve` on release). Recipes 23 and 35. Next: curved houses (walls on many
+  short edges with openings placed by arc length), an arc on the top edge of a flight (and so
+  fans of treads that converge), curved stairs that turn or are set into the slope, curved
+  cheek walls, and a rotation handle for an ellipse.
 
 ## Next
 

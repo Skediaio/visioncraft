@@ -718,6 +718,7 @@ impl Built {
                         ),
                         y,
                         top: mid + ch >= bhi,
+                        miter: (0.0, 0.0),
                     });
                 }
             }

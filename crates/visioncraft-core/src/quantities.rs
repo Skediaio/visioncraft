@@ -157,7 +157,8 @@ pub fn quantities_in(
         });
         let o = row.as_object_mut().expect("a row is an object");
         let (plan, volume);
-        let outline = shape.outline();
+        let tess = shape.tessellate();
+        let (outline, ctrl) = (tess.pts.clone(), &tess.ctrl);
         match shape {
             Shape::Area(a) => {
                 plan = f64::from(measure::polygon_area(&outline));
@@ -189,7 +190,7 @@ pub fn quantities_in(
                     if drawn {
                         match edge.style {
                             crate::bed::BedStyle::Sleepers => {
-                                let beams = crate::bed::skirt_beams(edge, &outline, lo, hi);
+                                let beams = crate::bed::skirt_beams(edge, &outline, ctrl, lo, hi);
                                 row["beams"] = beams.len().into();
                                 row["beam_length_m"] =
                                     f64::from(beams.iter().map(|b| b.u.1 - b.u.0).sum::<f32>())
@@ -217,7 +218,7 @@ pub fn quantities_in(
                     let built = st.set_in.and_then(|_| crate::setin::build_in(project, e));
                     let geometry = match &built {
                         Some(b) => Ok(b.geometry.clone()),
-                        None => st.geometry(&e.points, e.height),
+                        None => st.geometry_curved(&e.points, &e.curves, e.height),
                     };
                     if let Ok(g) = geometry {
                         let mut row = json!({
@@ -280,8 +281,13 @@ pub fn quantities_in(
                         });
                         match bed.style {
                             crate::bed::BedStyle::Sleepers => {
-                                let beams =
-                                    crate::bed::beams(bed, &outline, e.base, e.base + e.height);
+                                let beams = crate::bed::beams_curved(
+                                    bed,
+                                    &outline,
+                                    ctrl,
+                                    e.base,
+                                    e.base + e.height,
+                                );
                                 row["beams"] = beams.len().into();
                                 row["beam_length_m"] =
                                     f64::from(beams.iter().map(|b| b.u.1 - b.u.0).sum::<f32>())

@@ -19,7 +19,7 @@ pub fn recipes() -> Vec<Value> {
 #[test]
 fn every_recipe_of_the_guide_runs() {
     let recipes = recipes();
-    assert_eq!(recipes.len(), 34);
+    assert_eq!(recipes.len(), 35);
     for (n, recipe) in recipes.into_iter().enumerate() {
         let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("recipe-{n}"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -275,6 +275,32 @@ fn every_recipe_of_the_guide_runs() {
                 assert_eq!(end["shot"], 2, "{report}");
                 assert!(
                     end["sun"]["elevation_deg"].as_f64().unwrap() < 10.0,
+                    "{report}"
+                );
+            }
+            35 => {
+                // The round bed has 28 chords a course in two courses; the pond measures like
+                // an ellipse; the step has its round front.
+                let pond = &results[2]["result"];
+                let area = std::f64::consts::PI * 4.0 * 2.5;
+                assert!(
+                    (pond["area_m2"].as_f64().unwrap() / area - 1.0).abs() < 0.005,
+                    "{report}"
+                );
+                let step = &results[3]["result"];
+                assert_eq!(step["steps"], 1, "{report}");
+                let q = &results[4]["result"];
+                let row = |id: &Value| {
+                    q["shapes"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .find(|r| &r["id"] == id)
+                        .unwrap_or_else(|| panic!("no row: {report}"))
+                };
+                assert_eq!(
+                    row(&results[1]["result"]["id"])["raised_bed"]["beams"],
+                    56,
                     "{report}"
                 );
             }

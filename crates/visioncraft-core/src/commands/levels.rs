@@ -54,6 +54,7 @@ pub(super) fn register(s: &mut Session) {
         param("layer", T::String, "Layer id.").default(json!("shapes")),
         param("via", T::Outline, "One or two corner points [[x, z]] between `from` and `to`: the flight turns 90 degrees at each on a square landing of width x width centred on the corner (an L with one corner, a U or S with two). Segments must meet at right angles (within 1 degree). With two corners at least one width apart (exactly one width: a half-landing, the flights side by side with no gap; more: a wider landing with a well between the flights; less is refused). The steps share the height in proportion to each flight's clear run (the segment less half a landing at each corner end); a landing lies at the height of the last step reaching it. `to` is then the top centre of the last flight."),
     ];
+    add_params.push(param("front_bow_m", T::Number, "A curved front: the bottom edge becomes an arc that bulges this far (metres, from its chord) away from the flight, a round front or bullnose first step; negative makes it hollow, into the flight; 0 straightens it. Every riser is an arc concentric with it (the step is cut by the arcs and the flight's two sides), the goings counted from the arc's apex, so the first step is the widest. At most half the width (a semicircle); the arc of the top step must stay wider than the flight, which asks for a radius larger than the flight's run plus half its width. The shape's `curves` has it on the bottom edge (edge 0 for a flight made here; also `shape.set_curve`); a flight that turns or is set into the slope has no curved front.").unit("m"));
     add_params.extend(sizes());
     s.register_with_spec(
         spec(
@@ -90,6 +91,7 @@ pub(super) fn register(s: &mut Session) {
             "The whole centreline of a flight that turns, 2 (straight), 3 or 4 points: bottom centre, corners, top centre. Not with `via`, `from` or `to`.",
         ),
     ];
+    set_params.push(param("front_bow_m", T::Number, "A curved front: the bottom edge becomes an arc that bulges this far (metres, from its chord) away from the flight, a round front or bullnose first step; negative makes it hollow, into the flight; 0 straightens it. Every riser is an arc concentric with it (the step is cut by the arcs and the flight's two sides), the goings counted from the arc's apex, so the first step is the widest. At most half the width (a semicircle); the arc of the top step must stay wider than the flight, which asks for a radius larger than the flight's run plus half its width. The shape's `curves` has it on the bottom edge (edge 0 for a flight made here; also `shape.set_curve`); a flight that turns or is set into the slope has no curved front.").unit("m"));
     set_params.extend(sizes());
     s.register_with_spec(
         spec(
@@ -123,8 +125,8 @@ pub(super) fn register(s: &mut Session) {
             )
             .unit("m"),
             param("wall_thickness_m", T::Number, "Thickness of the walls: plain and masonry 0.05..0.3 (default 0.2), sleepers 0.1..0.2 (default 0.15, the beam's thickness), corten 0.005..0.02 (default 0.01; drawn at least 1 cm so it reads).").unit("m"),
-            param("curves", T::Object, "Arcs on single edges of the outline by edge index: {\"0\": {\"type\": \"arc\", \"sagitta_m\": 0.8}} (see `shape.set_curve`; a round bed is four quarter arcs, as `shape.add_circle` makes). Not with the sleeper style. `bed.set` with `outline` and no `curves` clears the arcs."),
-            param("smooth", T::Boolean, "A smooth curve through all the outline's points (not with the sleeper style)."),
+            param("curves", T::Object, "Arcs on single edges of the outline by edge index: {\"0\": {\"type\": \"arc\", \"sagitta_m\": 0.8}} (see `shape.set_curve`; a round bed is four quarter arcs, as `shape.add_circle` makes). A sleeper bed lays its beams as chords of the curve (within 2 cm), with mitred ends. `bed.set` with `outline` and no `curves` clears the arcs."),
+            param("smooth", T::Boolean, "A smooth curve through all the outline's points."),
             param("style", T::String, "The wall: plain (a solid timber ring, the default), masonry (brick with a coping slab), sleepers (stacked timber beams 0.2 m high with joints and overlapping corners) or corten (a thin weathering-steel plate with a folded top edge). `bed.set` with a new style gives the walls that style's material and default thickness.").allowed(&["plain", "masonry", "sleepers", "corten"]),
         ]
     };
@@ -331,7 +333,7 @@ fn stairs_report(project: &Project, id: &str) -> Value {
     let built = st.set_in.and_then(|_| crate::setin::build_in(project, e));
     let geometry = match &built {
         Some(b) => Ok(b.geometry.clone()),
-        None => st.geometry(&e.points, e.height),
+        None => st.geometry_curved(&e.points, &e.curves, e.height),
     };
     match geometry {
         Ok(g) => {
@@ -361,6 +363,55 @@ fn stairs_report(project: &Project, id: &str) -> Value {
     }
 }
 
+/// Puts an arc on the bottom edge (the one opposite `up_edge`) of the 4-point flight `outline`
+/// that bulges `bow` m away from the flight (into it when negative); none for 0.
+fn front_curve(
+    outline: &[P2],
+    up_edge: usize,
+    bow: f32,
+    curves: &mut crate::curve::Curves,
+) -> Result<(), CommandError> {
+    if !bow.is_finite() {
+        return Err(fail("`front_bow_m` must be a number"));
+    }
+    if outline.len() != 4 || up_edge >= 4 {
+        return Err(fail("a curved front needs a 4-point rectangular footprint"));
+    }
+    if bow.abs() < crate::curve::MIN_SAGITTA_M {
+        return Ok(());
+    }
+    let bottom = (up_edge + 2) % 4;
+    let mid = |i: usize| {
+        let (a, b) = (outline[i], outline[(i + 1) % 4]);
+        [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0]
+    };
+    let (top, front) = (mid(up_edge), mid(bottom));
+    let (p, q) = (outline[bottom], outline[(bottom + 1) % 4]);
+    let width = (q[0] - p[0]).hypot(q[1] - p[1]);
+    if bow.abs() > width / 2.0 * (1.0 + 1e-4) {
+        return Err(fail(format!(
+            "`front_bow_m` of {} m is more than half the width ({:.3} m): an arc reaches at most a semicircle",
+            bow.abs(),
+            width / 2.0
+        )));
+    }
+    // Left of the bottom edge's direction, and the way down the flight.
+    let left = [(q[1] - p[1]) / width, -(q[0] - p[0]) / width];
+    let down = [front[0] - top[0], front[1] - top[1]];
+    let sign = if left[0] * down[0] + left[1] * down[1] >= 0.0 {
+        1.0
+    } else {
+        -1.0
+    };
+    curves.insert(
+        bottom,
+        crate::curve::Curve::Arc {
+            sagitta_m: sign * bow,
+        },
+    );
+    Ok(())
+}
+
 fn add_stairs(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -376,6 +427,7 @@ fn add_stairs(project: &mut Project, params: &Value) -> Result<Value, CommandErr
         tread_m: Option<f32>,
         via: Option<Vec<P2>>,
         set_in: Option<SetIn>,
+        front_bow_m: Option<f32>,
     }
     let p: P = parse(params)?;
     if let Some(si) = &p.set_in {
@@ -402,13 +454,17 @@ fn add_stairs(project: &mut Project, params: &Value) -> Result<Value, CommandErr
         None => derived_height(project, &outline, before_top, p.to, base)?,
     };
     let width_m = path.as_ref().map(|_| p.width_m);
+    let mut curves = crate::curve::Curves::new();
+    if let Some(bow) = p.front_bow_m {
+        front_curve(&outline, 2, bow, &mut curves)?;
+    }
     let r = add(project, (p.layer, None), |id, layer| {
         Shape::Extrusion(Extrusion {
             id,
             name: p.name.unwrap_or_else(|| "Stairs".into()),
             layer,
             points: outline,
-            curves: Default::default(),
+            curves,
             smooth: false,
             closed: true,
             base,
@@ -465,6 +521,7 @@ fn set_stairs(project: &mut Project, params: &Value) -> Result<Value, CommandErr
         path: Option<Vec<P2>>,
         #[serde(default, deserialize_with = "double_set_in")]
         set_in: Option<Option<SetIn>>,
+        front_bow_m: Option<f32>,
     }
     let p: P = parse(params)?;
     if let Some(Some(si)) = &p.set_in {
@@ -501,7 +558,9 @@ fn set_stairs(project: &mut Project, params: &Value) -> Result<Value, CommandErr
             || p.path.is_some()
         {
             // What is not given stays as the flight is now.
-            let now = had.then(|| st.geometry(&e.points, e.height).ok()).flatten();
+            let now = had
+                .then(|| st.geometry_curved(&e.points, &e.curves, e.height).ok())
+                .flatten();
             let (cur_from, cur_to, cur_via) = match (&st.path, &now) {
                 (Some(path), _) => (
                     Some(path[0]),
@@ -560,6 +619,13 @@ fn set_stairs(project: &mut Project, params: &Value) -> Result<Value, CommandErr
                 st.path = Some(path);
                 st.width_m = Some(width);
             }
+        }
+        if let Some(bow) = p.front_bow_m {
+            e.curves.clear();
+            front_curve(&e.points, st.up_edge, bow, &mut e.curves)?;
+        } else {
+            // A new footprint may be too short for the arc it had.
+            crate::curve::fit(&e.points, true, &mut e.curves);
         }
         e.stairs = Some(st);
         if let Some(n) = p.name {

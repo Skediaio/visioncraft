@@ -267,13 +267,13 @@ fn inserting_and_removing_a_vertex_rekey_the_arcs() {
         .unwrap());
     let keys = |s: &Session| shape(s, &a).curves().keys().copied().collect::<Vec<_>>();
     assert_eq!(keys(&s), [0, 1, 3]);
-    // Splitting edge 1 drops its arc; edge 3 becomes 4.
+    // Splitting edge 1 splits its arc in two (edges 1 and 2); edge 3 becomes 4.
     s.run(
         "shape.insert_vertex",
         json!({"id": a, "edge": 1, "position": [10, 5]}),
     )
     .unwrap();
-    assert_eq!(keys(&s), [0, 4]);
+    assert_eq!(keys(&s), [0, 1, 2, 4]);
     assert!(s.undo());
     assert_eq!(keys(&s), [0, 1, 3]);
     // Removing vertex 2 joins edges 1 and 2: both lose their arcs; edge 3 becomes 2.
@@ -328,7 +328,7 @@ fn a_curved_wall_keeps_its_sides_per_control_edge() {
 }
 
 #[test]
-fn stairs_and_houses_refuse_curves() {
+fn stairs_take_an_arc_on_the_bottom_edge_only_and_houses_refuse_curves() {
     let mut s = session();
     let st = id(s
         .run(
@@ -339,10 +339,10 @@ fn stairs_and_houses_refuse_curves() {
     let e = s
         .run(
             "shape.set_curve",
-            json!({"id": st, "edge": 0, "radius_m": 3.0}),
+            json!({"id": st, "edge": 1, "radius_m": 3.0}),
         )
         .unwrap_err();
-    assert!(e.to_string().contains("straight"), "{e}");
+    assert!(e.to_string().contains("bottom edge"), "{e}");
     assert!(
         s.run("shape.set_smooth", json!({"id": st, "smooth": true}))
             .is_err()
@@ -361,27 +361,19 @@ fn stairs_and_houses_refuse_curves() {
         )
         .unwrap_err();
     assert!(e.to_string().contains("house"), "{e}");
-    // Sleeper beds and sleeper edges refuse too, the other styles take them.
+    // Sleeper beds take curves, laid as chords.
     let b = id(s
         .run(
             "bed.add",
             json!({"outline": [[0, 0], [3, 0], [3, 3], [0, 3]], "style": "sleepers"}),
         )
         .unwrap());
-    assert!(
-        s.run(
-            "shape.set_curve",
-            json!({"id": b, "edge": 0, "radius_m": 3.0})
-        )
-        .is_err()
-    );
-    s.run("bed.set", json!({"id": b, "style": "corten"}))
-        .unwrap();
     s.run(
         "shape.set_curve",
         json!({"id": b, "edge": 0, "radius_m": 3.0}),
     )
     .unwrap();
+    assert!(shape_mesh(shape(&s, &b)).is_ok());
 }
 
 #[test]
@@ -479,4 +471,358 @@ fn curves_and_smooth_survive_a_save_and_load() {
     let old = br#"{"format_version": 1, "shapes": [{"type": "area", "id": "S1", "name": "L", "layer": "shapes", "outline": [[0,0],[1,0],[1,1]], "elevation": 0.0}]}"#;
     let p = Project::from_json_bytes(old).unwrap();
     assert!(!p.shapes[0].is_curved());
+}
+
+// --- Arc through a point, split on insert, ellipse, curved sleepers and steps ------------------
+
+fn tess_of(s: &Session, id: &str) -> Vec<[f32; 2]> {
+    shape(s, id).tessellate().pts
+}
+
+#[test]
+fn an_arc_through_a_picked_point_passes_through_it_and_undoes() {
+    let mut s = session();
+    let a = id(s
+        .run(
+            "shape.add_area",
+            json!({"name": "Lawn", "outline": [[0, 0], [8, 0], [8, 6], [0, 6]]}),
+        )
+        .unwrap());
+    let r = s
+        .run(
+            "shape.set_curve",
+            json!({"id": a, "edge": 0, "through": [3, -1.5]}),
+        )
+        .unwrap();
+    // The circle through (0,0), (8,0) and (3,-1.5): the arc is on the left (north, -Z) of the
+    // eastward edge, so its sagitta is positive.
+    let sagitta = r["sagitta_m"].as_f64().unwrap() as f32;
+    assert!(sagitta > 1.5, "{r}");
+    let radius = r["radius_m"].as_f64().unwrap() as f32;
+    let centre = [4.0, -sagitta + radius];
+    for p in [[0.0, 0.0], [8.0, 0.0], [3.0, -1.5]] {
+        assert!((dist(p, centre) - radius).abs() < 1e-3, "{p:?}");
+    }
+    // The tessellated outline comes within a millimetre of the picked point.
+    let near = tess_of(&s, &a)
+        .iter()
+        .map(|p| dist(*p, [3.0, -1.5]))
+        .fold(f32::MAX, f32::min);
+    assert!(near < 0.25, "{near}");
+    // A point to the other side bends it the other way.
+    s.run(
+        "shape.set_curve",
+        json!({"id": a, "edge": 0, "through": [5, 0.8]}),
+    )
+    .unwrap();
+    let Curve::Arc { sagitta_m } = shape(&s, &a).curves()[&0];
+    assert!(sagitta_m < 0.0);
+    assert!(s.undo());
+    let Curve::Arc { sagitta_m: back } = shape(&s, &a).curves()[&0];
+    assert_eq!(back, sagitta);
+    // On the chord line, outside the ends, a semicircle too far, or with a second size: refused.
+    for bad in [
+        json!({"id": a, "edge": 0, "through": [4, 0]}),
+        json!({"id": a, "edge": 0, "through": [-1, -1]}),
+        json!({"id": a, "edge": 0, "through": [9, 1]}),
+        json!({"id": a, "edge": 0, "through": [4, -7]}),
+        json!({"id": a, "edge": 0, "through": [4, -1], "radius_m": 5}),
+        json!({"id": a, "edge": 0, "through": [4, -1], "side": "left"}),
+    ] {
+        assert!(s.run("shape.set_curve", bad.clone()).is_err(), "{bad}");
+    }
+    let Curve::Arc { sagitta_m: kept } = shape(&s, &a).curves()[&0];
+    assert_eq!(kept, sagitta);
+}
+
+#[test]
+fn inserting_a_vertex_on_an_arc_splits_it_on_the_same_circle() {
+    let mut s = session();
+    let c = id(s
+        .run(
+            "shape.add_circle",
+            json!({"name": "Round", "center": [10, 20], "radius_m": 4.0}),
+        )
+        .unwrap());
+    let before = shape(&s, &c).clone();
+    // A point a little off the first quarter arc (east to south), at 30 degrees.
+    let (sn, cs) = 30f32.to_radians().sin_cos();
+    let want = [10.0 + 4.0 * cs, 20.0 + 4.0 * sn];
+    let r = s
+        .run(
+            "shape.insert_vertex",
+            json!({"id": c, "edge": 0, "position": [10.0 + 4.3 * cs, 20.0 + 4.3 * sn]}),
+        )
+        .unwrap();
+    let placed = [
+        r["position"][0].as_f64().unwrap() as f32,
+        r["position"][1].as_f64().unwrap() as f32,
+    ];
+    assert!(dist(placed, want) < 1e-3, "{placed:?}");
+    let sh = shape(&s, &c);
+    assert_eq!(sh.points().len(), 5);
+    assert_eq!(sh.points()[1], placed);
+    // Every arc keeps its place: five arcs now, edges 0 and 1 the halves of the old edge 0.
+    assert_eq!(
+        sh.curves().keys().copied().collect::<Vec<_>>(),
+        [0, 1, 2, 3, 4]
+    );
+    // Every tessellated point is within a millimetre of the original circle.
+    for p in tess_of(&s, &c) {
+        assert!((dist(p, [10.0, 20.0]) - 4.0).abs() < 1e-3, "{p:?}");
+    }
+    // The outline measures the same circle.
+    let area = f64::from(polygon_area(&tess_of(&s, &c)));
+    assert!(
+        (area / (std::f64::consts::PI * 16.0) - 1.0).abs() < 0.002,
+        "{area}"
+    );
+    assert!(s.undo());
+    assert_eq!(shape(&s, &c), &before);
+    // A straight edge is split without an arc, as before.
+    let a = id(s
+        .run(
+            "shape.add_area",
+            json!({"name": "Lawn", "outline": square()}),
+        )
+        .unwrap());
+    s.run(
+        "shape.insert_vertex",
+        json!({"id": a, "edge": 0, "position": [5, 0.2]}),
+    )
+    .unwrap();
+    assert!(shape(&s, &a).curves().is_empty());
+    assert_eq!(shape(&s, &a).points()[1], [5.0, 0.2]);
+}
+
+#[test]
+fn an_ellipse_measures_like_one_survives_a_save_and_undoes() {
+    let mut s = session();
+    let r = s
+        .run(
+            "shape.add_ellipse",
+            json!({"name": "Pond", "center": [11, 20], "radius_x": 4.0, "radius_z": 2.5,
+                   "rotation_deg": 20, "material": "water"}),
+        )
+        .unwrap();
+    let e = id(r.clone());
+    let (a, b) = (4.0f64, 2.5f64);
+    let area = std::f64::consts::PI * a * b;
+    let h = ((a - b) / (a + b)).powi(2);
+    let perimeter =
+        std::f64::consts::PI * (a + b) * (1.0 + 3.0 * h / (10.0 + (4.0 - 3.0 * h).sqrt()));
+    assert!(
+        (r["area_m2"].as_f64().unwrap() / area - 1.0).abs() < 0.005,
+        "{r}"
+    );
+    assert!(
+        (r["perimeter_m"].as_f64().unwrap() / perimeter - 1.0).abs() < 0.005,
+        "{r}"
+    );
+    let pts = tess_of(&s, &e);
+    assert!((f64::from(polygon_area(&pts)) / area - 1.0).abs() < 0.005);
+    assert!(r["arcs"].as_u64().unwrap() >= 8);
+    let sh = shape(&s, &e);
+    assert_eq!(sh.curves().len(), sh.points().len());
+    // Rotated by 20 degrees: the long axis points that way (clockwise seen from above).
+    let far = pts
+        .iter()
+        .max_by(|p, q| dist(**p, [11.0, 20.0]).total_cmp(&dist(**q, [11.0, 20.0])))
+        .unwrap();
+    let ang = (far[1] - 20.0).atan2(far[0] - 11.0).to_degrees();
+    assert!(
+        ang.abs() - 20.0 < 2.0 && (ang - 20.0).abs() < 2.0 || (ang + 160.0).abs() < 2.0,
+        "{ang}"
+    );
+    // A material came with it; the shape meshes.
+    assert!(shape_mesh(sh).is_ok());
+    assert!(!s.project().assignments.is_empty());
+    // Serde round trip.
+    let bytes = s.project().to_json_bytes();
+    let back = Project::from_json_bytes(&bytes).unwrap();
+    assert_eq!(back.shapes, s.project().shapes);
+    // An extrusion takes the same parameters.
+    let x = id(s
+        .run(
+            "shape.add_ellipse",
+            json!({"center": [0, 0], "radius_x": 1.0, "radius_z": 3.0, "kind": "extrusion", "height": 0.5}),
+        )
+        .unwrap());
+    assert!(matches!(shape(&s, &x), Shape::Extrusion(_)));
+    // Bad numbers are refused and add nothing.
+    let count = s.project().shapes.len();
+    for bad in [
+        json!({"center": [0, 0], "radius_x": 0.0, "radius_z": 1.0}),
+        json!({"center": [0, 0], "radius_x": 1.0, "radius_z": -1.0}),
+        json!({"center": [0, 0], "radius_x": 100.0, "radius_z": 1.0}),
+        json!({"center": [0, 0], "radius_x": 1.0, "radius_z": 1.0, "kind": "roof"}),
+    ] {
+        assert!(s.run("shape.add_ellipse", bad.clone()).is_err(), "{bad}");
+    }
+    assert_eq!(s.project().shapes.len(), count);
+    assert!(s.undo());
+    assert!(s.undo());
+    assert!(s.project().shapes.is_empty());
+}
+
+fn round_outline(r: f32) -> Value {
+    json!([[r, 0.0], [0.0, r], [-r, 0.0], [0.0, -r]])
+}
+
+fn quarter_arcs(r: f32) -> Value {
+    let a = json!({"type": "arc", "sagitta_m": r * (1.0 - std::f32::consts::FRAC_1_SQRT_2)});
+    json!({"0": a, "1": a, "2": a, "3": a})
+}
+
+#[test]
+fn a_round_sleeper_bed_counts_its_beams_and_their_real_length() {
+    let mut s = session();
+    let b = s
+        .run(
+            "bed.add",
+            json!({"name": "Round bed", "outline": round_outline(3.0), "curves": quarter_arcs(3.0),
+                   "style": "sleepers", "height": 0.4}),
+        )
+        .unwrap();
+    let bed = id(b.clone());
+    let m = shape_mesh(shape(&s, &bed)).unwrap();
+    assert!(!m.triangles.is_empty());
+    let q = s.run("query.quantities", json!({})).unwrap();
+    let row = q["shapes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == b["id"])
+        .unwrap();
+    let rb = &row["raised_bed"];
+    // Two courses of 28 chords: the chords stay within 2 cm of a 3 m radius arc.
+    assert_eq!(rb["beams"], 56, "{rb}");
+    let length = rb["beam_length_m"].as_f64().unwrap();
+    let circle = std::f64::consts::TAU * 3.0;
+    assert!(
+        length < 2.0 * circle && length > 2.0 * 0.985 * circle,
+        "{length}"
+    );
+    // The soil is inside the ring.
+    assert!(b["soil"].is_string());
+    // A curve can be given to a straight sleeper bed afterwards.
+    let straight = id(s
+        .run(
+            "bed.add",
+            json!({"outline": [[10, 0], [14, 0], [14, 3], [10, 3]], "style": "sleepers"}),
+        )
+        .unwrap());
+    s.run(
+        "shape.set_curve",
+        json!({"id": straight, "edge": 1, "radius_m": 3.0}),
+    )
+    .unwrap();
+    assert!(shape_mesh(shape(&s, &straight)).is_ok());
+}
+
+#[test]
+fn a_curved_terrace_wall_and_a_curved_area_edge_in_sleepers() {
+    let mut s = session();
+    let t = s
+        .run(
+            "terrace.add",
+            json!({"name": "Round terrace", "outline": round_outline(3.0), "curves": quarter_arcs(3.0),
+                   "floor": 0.0, "style": "sleepers", "parapet_m": 0.4}),
+        )
+        .unwrap();
+    assert!(t["beams"].as_u64().unwrap() >= 28, "{t}");
+    assert!(shape_mesh(shape(&s, t["id"].as_str().unwrap())).is_ok());
+    let lawn = id(s
+        .run(
+            "shape.add_circle",
+            json!({"name": "Round deck", "center": [20, 0], "radius_m": 2.5, "elevation": 0.4, "drape": false}),
+        )
+        .unwrap());
+    let e = s
+        .run("area.set_edge", json!({"id": lawn, "style": "sleepers"}))
+        .unwrap();
+    assert!(e["style"] == "sleepers");
+    assert!(shape_mesh(shape(&s, &lawn)).is_ok());
+    let q = s.run("query.quantities", json!({})).unwrap();
+    let row = q["shapes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == json!(lawn))
+        .unwrap();
+    assert!(row["edge"]["beams"].as_u64().unwrap() > 20, "{row}");
+}
+
+#[test]
+fn a_flight_with_a_round_front_has_concentric_steps_and_takes_the_arc_on_its_bottom_edge() {
+    let mut s = session();
+    let r = s
+        .run(
+            "stairs.add",
+            json!({"from": [10, 14], "to": [10, 12], "width_m": 1.2, "height": 0.51,
+                   "tread_m": 0.5, "front_bow_m": 0.1}),
+        )
+        .unwrap();
+    let st = id(r.clone());
+    assert_eq!(r["steps"], 3);
+    let sh = shape(&s, &st);
+    // The bottom edge (edge 0) is the arc.
+    assert_eq!(sh.curves().keys().copied().collect::<Vec<_>>(), [0]);
+    let m = shape_mesh(sh).unwrap();
+    assert!(!m.triangles.is_empty());
+    // The arc bulges away from the flight: towards +Z, the way down the flight.
+    let far = m.positions.iter().map(|p| p[2]).fold(f32::MIN, f32::max);
+    assert!((far - 14.1).abs() < 1e-3, "{far}");
+    // The quantities see the flight: 3 steps of 0.5 m (the last runs on to the back).
+    let q = s.run("query.quantities", json!({})).unwrap();
+    let row = q["shapes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|x| x["id"] == json!(st))
+        .unwrap();
+    assert_eq!(row["stairs"]["steps"], 3);
+    assert!(
+        (row["stairs"]["run_m"].as_f64().unwrap() - 1.5).abs() < 1e-3,
+        "{row}"
+    );
+    // The command straightens it, and the shape command curves it again.
+    s.run("stairs.set", json!({"id": st, "front_bow_m": 0}))
+        .unwrap();
+    assert!(shape(&s, &st).curves().is_empty());
+    s.run(
+        "shape.set_curve",
+        json!({"id": st, "edge": 0, "sagitta_m": 0.1, "side": "right"}),
+    )
+    .unwrap();
+    assert!(shape_mesh(shape(&s, &st)).is_ok());
+    // A hollow front.
+    s.run("stairs.set", json!({"id": st, "front_bow_m": -0.2}))
+        .unwrap();
+    assert!(shape_mesh(shape(&s, &st)).is_ok());
+    // The side edges and a flight that turns refuse an arc; so does a bow past a semicircle.
+    for bad in [
+        json!({"id": st, "edge": 1, "radius_m": 3.0}),
+        json!({"id": st, "edge": 2, "radius_m": 3.0}),
+    ] {
+        assert!(s.run("shape.set_curve", bad).is_err());
+    }
+    assert!(
+        s.run("stairs.set", json!({"id": st, "front_bow_m": 0.9}))
+            .is_err()
+    );
+    assert!(
+        s.run(
+            "stairs.add",
+            json!({"from": [0, 0], "to": [0, -4], "via": [[0, -2], [3, -2]], "width_m": 1.2,
+                   "height": 0.51, "front_bow_m": 0.1}),
+        )
+        .is_err()
+    );
+    // And it all survives a save.
+    let bytes = s.project().to_json_bytes();
+    assert_eq!(
+        Project::from_json_bytes(&bytes).unwrap().shapes,
+        s.project().shapes
+    );
 }

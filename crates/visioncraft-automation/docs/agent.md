@@ -588,13 +588,22 @@ of radius 5 has an area within 0.1% of 25 pi).
   arc keep it under `smooth`.
 - **`shape.add_circle {center, radius_m, kind}`** is an exact circle: 4 points and 4 quarter arcs. `kind`
   `area` takes the arguments of `shape.add_area`, `extrusion` those of `shape.add_extrusion`.
-  A round raised bed is `bed.add` with such an outline and `curves` (plain, masonry and corten
-  styles; sleepers need straight edges).
-- **Editing**: `shape.insert_vertex` drops the arc of the edge it splits; `shape.remove_vertex` drops
-  the arcs of the two edges it joins; later arcs keep their edges (renumbered). Moving a vertex
-  eases an arc that would bulge more than half its new chord to a semicircle.
+  A round raised bed is `bed.add` with such an outline and `curves` (any style; recipe 35 has it
+  in sleepers). `shape.add_ellipse {center, radius_x, radius_z, rotation_deg}` is the same for an
+  ellipse (recipe 35).
+- **Through a point**: `shape.set_curve {id, edge, through: [x, z]}` is the third way to size an arc,
+  next to `radius_m` and `sagitta_m`: it passes through that point. The point must lie between the
+  edge's ends (its foot on the chord inside it) and off the chord line, and the arc through it
+  may not run past a semicircle; the side follows from where the point is.
+- **Editing**: `shape.insert_vertex` on an arc splits it into two arcs on the same circle: the new
+  point is projected onto the arc (the answer's `position` is where it went) and each half gets
+  the sagitta that keeps it on that circle. `shape.remove_vertex` drops the arcs of the two edges
+  it joins; later arcs keep their edges (renumbered). Moving a vertex eases an arc that would
+  bulge more than half its new chord to a semicircle. Draw shows the radius of every arc and a
+  green handle in the middle of it: drag it to bend the arc (one `shape.set_curve` on release).
 - **Faces keep their meaning**: a curved edge `n` of an extrusion is many triangles, all
-  `<id>:side(n)`. Stairs and houses refuse curves (the message says so); a fence follows them:
+  `<id>:side(n)`. Houses refuse curves (the message says so), and stairs take an arc on their bottom
+  edge only (recipe 35); a fence follows them:
   its posts are spread by arc length along the curve (never at every point of it), the slats
   between them are straight and the spans closer together where the curve is tight, and a gate
   needs a straight edge.
@@ -1044,6 +1053,46 @@ outline moved out by its wall. The answer's `set_in` and the `stairs.set_in` row
 `plate_area_m2`, and `cut_m3` and `fill_m3`, the earth above and below the treads. `stairs.set`
 with `"set_in": null` stands the flight on the ground again. Draw's stairs panel has a "Set into
 the slope" checkbox and the cheek styles.
+
+### 35. A round sleeper bed, an elliptical pond and a round-fronted step
+
+```json recipe
+{"intent": "a round bed of railway sleepers, an elliptical pond and a step with a round front on a lawn", "steps": [
+  {"id": "shape.add_area", "params": {"name": "Lawn", "outline": [[0, 0], [24, 0], [24, 18], [0, 18]], "material": "lawn"}},
+  {"id": "bed.add", "params": {"name": "Round sleeper bed", "outline": [[9, 5], [6, 8], [3, 5], [6, 2]], "curves": {"0": {"type": "arc", "sagitta_m": 0.8787}, "1": {"type": "arc", "sagitta_m": 0.8787}, "2": {"type": "arc", "sagitta_m": 0.8787}, "3": {"type": "arc", "sagitta_m": 0.8787}}, "style": "sleepers", "height": 0.4}},
+  {"id": "shape.add_ellipse", "params": {"name": "Pond", "center": [17, 6], "radius_x": 4, "radius_z": 2.5, "rotation_deg": 20, "kind": "area", "elevation": -0.05, "drape": false, "material": "water"}},
+  {"id": "stairs.add", "params": {"name": "Bullnose step", "from": [12, 15], "to": [12, 14.4], "width_m": 1.6, "height": 0.17, "tread_m": 0.3, "front_bow_m": 0.6}},
+  {"id": "query.quantities", "params": {}},
+  {"id": "view.render", "params": {"camera": {"position": [13, 7, 24], "target": [11, 0, 8]}, "width": 960, "height": 540, "path": "curves-sleepers-pond-step.png"}}
+]}
+```
+
+Three more things drawn with curves.
+
+- **Sleepers on a curve.** A sleeper bed (`bed.add` with `style: sleepers`), a sleeper edge on a
+  raised area (`area.set_edge`) and a sleeper terrace wall (`terrace.add`) take curved outlines.
+  Along a curve the sleepers are laid as straight beams, each a chord of it: every course of the
+  curve gets the fewest equal chords that keep each within 2 cm of the arc (and none over the
+  usual 2.4 m), so a 3 m radius bed has 28 beams a course. The ends are mitred, so two chords meet
+  without a gap on the outside, and the joints of one course lie over the middle of the beams
+  below. A straight edge keeps its long beams and overlapping corners; a corner of more than
+  15 degrees between a straight and a curved edge is a corner, a gentler one is mitred like a
+  curve. `query.quantities` counts `beams` and `beam_length_m`, the sum of their lengths (the
+  outer face's chords).
+- **`shape.add_ellipse {center, radius_x, radius_z, rotation_deg, kind, ...}`** takes the arguments
+  of `shape.add_circle`. The outline is control points on the ellipse with an arc between each pair
+  (through the ellipse's point halfway between them), as few as measure within 0.1% of the true
+  area and perimeter (Ramanujan's formula, for the perimeter): 8 to 96 arcs; the answer has
+  `arcs`, `area_m2` and `perimeter_m`. `rotation_deg` turns the x axis towards +Z (clockwise
+  seen from above). Draw has an Ellipse tool next to Circle: the centre, then a corner of the box.
+- **A round front on steps.** `stairs.add` and `stairs.set` take `front_bow_m`: the bottom edge
+  becomes an arc that bulges that far away from the flight (negative: into it), and every riser
+  is an arc concentric with it, so the first step is a bullnose and the goings count from the
+  arc's apex. `shape.set_curve` on the flight's bottom edge (edge 0 for a flight from
+  `stairs.add`) does the same. Only that edge takes an arc, and the arc of the top step must
+  stay wider than the flight: a flight of several steps needs a large radius (or a hollow front),
+  a single step takes any bow up to a semicircle. A flight that turns or is set into the slope has
+  a straight front, and an arc on the top edge is not supported.
 
 ## Known traps
 
