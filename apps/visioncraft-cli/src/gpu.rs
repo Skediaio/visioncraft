@@ -118,6 +118,8 @@ impl Pictures for GpuPictures {
         s.lamp_level = request.lamp_level;
         s.exposure = request.exposure_offset_ev;
         s.grade_mix = request.grade_mix;
+        // A picture shows its own weather, never the last one's on the way to it.
+        s.weather_shown = None;
         s.sync();
         let (position, target, fov) = match request.camera {
             Some((p, t, fov)) => {

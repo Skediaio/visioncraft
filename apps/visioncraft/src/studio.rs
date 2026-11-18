@@ -120,6 +120,9 @@ pub struct Studio {
     /// A second colour grade mixed over the project's: the grade and its share, 0..1 (a film's
     /// `grade` span).
     pub grade_mix: Option<(visioncraft_core::Grade, f32)>,
+    /// The weather drawn and the clock it was drawn at: eased towards the project's over its
+    /// `weather_transition_s` (`shown_weather`). `None`: the project's at once (a picture).
+    pub weather_shown: Option<(Weather, f64)>,
     pub draft: Option<Draft>,
     /// The species editor's plant: drawn, never part of the session's project.
     pub species_preview: Option<(visioncraft_core::CustomSpecies, Generator)>,
@@ -392,6 +395,7 @@ impl Studio {
             exposure: 0.0,
             lamp_level: 1.0,
             grade_mix: None,
+            weather_shown: None,
             draft: None,
             species_preview: None,
             time_draft: None,
@@ -1387,9 +1391,33 @@ impl Studio {
         true
     }
 
+    /// The weather to draw: the project's, or on the way to it over `weather_transition_s`
+    /// (each value approaching it exponentially, 95 % of the way in that time). A jump of the
+    /// clock (a picture at its own time, a paused window) takes the project's at once.
+    fn shown_weather(&mut self, v: &visioncraft_core::ViewState) -> Weather {
+        let target = Weather::of(v);
+        let now = self.clock;
+        let shown = match self.weather_shown {
+            Some((w, at)) if v.weather_transition_s > 0.0 && (0.0..=1.0).contains(&(now - at)) => {
+                let k = 1.0 - (-3.0 * (now - at) as f32 / v.weather_transition_s).exp();
+                w.toward(&target, k)
+            }
+            _ => target,
+        };
+        self.weather_shown = Some((shown, now));
+        shown
+    }
+
+    /// The weather drawn is still easing towards the project's.
+    pub fn weather_easing(&self) -> bool {
+        self.weather_shown
+            .is_some_and(|(w, _)| w != Weather::of(&self.project().view))
+    }
+
     /// Sky, haze, ground, wind, exposure and lights from the project's view state.
     fn apply_view(&mut self, elevation: f32) {
         let v = self.project().view.clone();
+        let weather = self.shown_weather(&v);
         let snow = self.project().snow();
         let lamps = self.lights_on() && self.project().lights.iter().any(|l| l.enabled);
         let (brighter, power, saturation) = look_grade(v.look, elevation);
@@ -1398,8 +1426,8 @@ impl Studio {
         // so far that sunlit snow clips or the rest of the picture lifts (`SNOW_EV`).
         self.renderer.set_grade(power, saturation);
         self.renderer.set_snow(snow);
-        self.renderer.set_wet(v.wetness, v.rain);
-        self.renderer.set_mist(v.mist);
+        self.renderer.set_wet(weather.wetness, weather.rain);
+        self.renderer.set_mist(weather.mist);
         self.renderer.set_shafts(v.shafts);
         self.renderer.set_vignette_grain(v.vignette, v.grain);
         self.renderer.set_white_balance(match v.white_balance {
@@ -1426,11 +1454,13 @@ impl Studio {
         self.renderer
             .set_sky_occlusion(v.sky_occlusion.unwrap_or(true));
         self.renderer.set_clouds(&visioncraft_render::Clouds {
-            cover: match clouds.kind {
-                visioncraft_core::CloudKind::Clear => 0.0,
-                _ => clouds.cover,
-            },
-            overcast: clouds.kind == visioncraft_core::CloudKind::Overcast,
+            cover: weather.cover,
+            overcast: weather.overcast,
+            storm: weather.storm,
+            volumetric: clouds.volumetric,
+            altitude_m: clouds.altitude_m,
+            speed_mps: clouds.speed_mps,
+            sun_gap: clouds.sun_gap,
         });
         // Light bounced up from what lies under the camera (paving under a canopy, lawn in the
         // garden), with most of its colour taken out: a green lawn tints a wall only a little.
@@ -1494,7 +1524,7 @@ impl Studio {
         self.adapted_at = self.clock;
         // A mist takes the sun's beam and gives it back as a dim, even light, and the camera
         // meters the white veil down to grey: a photographer opens up for fog (`MIST_EV`).
-        let target = auto - brighter - snow * SNOW_EV - v.mist * MIST_EV - adapted;
+        let target = auto - brighter - snow * SNOW_EV - weather.mist * MIST_EV - adapted;
         let ev = v.exposure_ev.unwrap_or(target) - self.exposure;
         self.ev_used = (ev, elevation);
         self.renderer.set_exposure(ev);
@@ -1540,9 +1570,9 @@ impl Studio {
                     .site
                     .bearing_to_drawing(f64::from(v.wind_direction_deg)),
             ),
-            speed_mps: v.wind_speed_mps,
+            speed_mps: weather.wind_speed_mps,
             gustiness: v.wind_gustiness,
-            gusts: v.gustiness,
+            gusts: weather.gustiness,
         });
         self.renderer.set_time(self.clock);
         let mut lights = if self.lights_on() {
@@ -1663,6 +1693,7 @@ impl Studio {
         (p.view.wind_speed_mps > 0.0 && (!p.generators.is_empty() || p.view.gustiness > 0.0))
             || p.sea.is_some()
             || p.view.rain > 0.0
+            || self.weather_easing()
     }
 
     /// Lowest point of a model in its own space, and its local bounds.
@@ -2980,5 +3011,67 @@ mod open_tests {
         assert!(s.missing_models().is_empty(), "{:?}", r.errors);
         assert_eq!(r.files, [("m1".to_string(), dir.join("house.3dcraft"))]);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// The weather as the renderer draws it (`Studio::shown_weather`): the clouds' shape, the rain,
+/// the wetness, the mist, the gusts and the wind speed.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Weather {
+    pub cover: f32,
+    pub overcast: f32,
+    pub storm: f32,
+    pub rain: f32,
+    pub wetness: f32,
+    pub mist: f32,
+    pub gustiness: f32,
+    pub wind_speed_mps: f32,
+}
+
+impl Weather {
+    fn of(v: &visioncraft_core::ViewState) -> Weather {
+        let c = v.clouds.shape();
+        Weather {
+            cover: c.cover,
+            overcast: c.overcast,
+            storm: c.storm,
+            rain: v.rain,
+            wetness: v.wetness,
+            mist: v.mist,
+            gustiness: v.gustiness,
+            wind_speed_mps: v.wind_speed_mps,
+        }
+    }
+
+    fn fields(&self) -> [f32; 8] {
+        [
+            self.cover,
+            self.overcast,
+            self.storm,
+            self.rain,
+            self.wetness,
+            self.mist,
+            self.gustiness,
+            self.wind_speed_mps,
+        ]
+    }
+
+    /// `k` (0..1) of the way to `target`; what is within a thousandth of it arrives.
+    fn toward(&self, target: &Weather, k: f32) -> Weather {
+        let (a, b) = (self.fields(), target.fields());
+        let f: [f32; 8] = std::array::from_fn(|i| {
+            let x = a[i] + (b[i] - a[i]) * k;
+            if (b[i] - x).abs() < 1e-3 { b[i] } else { x }
+        });
+        Weather {
+            cover: f[0],
+            overcast: f[1],
+            storm: f[2],
+            rain: f[3],
+            wetness: f[4],
+            mist: f[5],
+            gustiness: f[6],
+            wind_speed_mps: f[7],
+        }
     }
 }

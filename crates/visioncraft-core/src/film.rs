@@ -132,6 +132,15 @@ pub struct Shot {
     /// Light shafts at the start and the end of the shot (as `view.set shafts`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shafts: Option<Span<f32>>,
+    /// The weather at the start and the end of the shot (as `view.set weather`): two are
+    /// mixed over the shot, eased in and out, so a sky clears or closes in. Rain, mist, gusts,
+    /// wetness and clouds given on the shot as well win.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weather: Option<Span<crate::Weather>>,
+    /// The clouds' cover 0..1 at the start and the end of the shot (as `view.set clouds`'
+    /// `cover`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clouds: Option<Span<f32>>,
     /// How much of the lamps' light is on, 0..1, at the start and the end of the shot: lamps
     /// fade in instead of popping on at sunset. Any value forces the lamps on or off (else they
     /// follow the sun).
@@ -294,6 +303,8 @@ pub const COMMON_FIELDS: &[&str] = &[
     "mist",
     "gustiness",
     "shafts",
+    "weather",
+    "clouds",
     "lights",
     "white_balance",
     "grade",
@@ -519,6 +530,7 @@ impl Shot {
             ("mist", self.mist),
             ("gustiness", self.gustiness),
             ("shafts", self.shafts),
+            ("clouds", self.clouds),
         ] {
             if let Some(s) = span
                 && (!(0.0..=1.0).contains(&s.from) || !(0.0..=1.0).contains(&s.to))
@@ -789,6 +801,16 @@ pub struct Overrides {
     pub gustiness: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shafts: Option<f32>,
+    /// The weather, and when two are mixed the second and how much of it (0..1).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weather: Option<crate::Weather>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weather_to: Option<crate::Weather>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weather_mix: Option<f32>,
+    /// The clouds' cover 0..1.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clouds: Option<f32>,
     /// Lamp light 0..1.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lights: Option<f32>,
@@ -848,6 +870,18 @@ impl Overrides {
         }
         if let Some(s) = self.shafts {
             m.insert("shafts".into(), json!(s));
+        }
+        if let Some(w) = self.weather {
+            m.insert("weather".into(), w.name().into());
+        }
+        if let Some(w) = self.weather_to {
+            m.insert("weather_to".into(), w.name().into());
+        }
+        if let Some(x) = self.weather_mix {
+            m.insert("weather_mix".into(), json!(x));
+        }
+        if let Some(c) = self.clouds {
+            m.insert("clouds".into(), json!(c));
         }
         if let Some(s) = self.lights {
             m.insert("lights".into(), json!(s));
@@ -1232,6 +1266,18 @@ fn overrides_at(shot: &Shot, base: Overrides, u: f32) -> Overrides {
     }
     if let Some(s) = shot.shafts {
         o.shafts = Some(s.at(u));
+    }
+    if let Some(s) = shot.weather {
+        o.weather = Some(s.from);
+        (o.weather_to, o.weather_mix) = if s.from == s.to {
+            (None, None)
+        } else {
+            // Eased in and out: a front arrives and settles.
+            (Some(s.to), Some(u * u * (3.0 - 2.0 * u)))
+        };
+    }
+    if let Some(s) = shot.clouds {
+        o.clouds = Some(s.at(u));
     }
     if let Some(s) = shot.lights {
         o.lights = Some(s.at(u));

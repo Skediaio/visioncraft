@@ -53,6 +53,7 @@ use glam::{Mat4, Vec2, Vec3, Vec4};
 
 mod atmosphere;
 pub mod bc;
+mod clouds;
 mod coverage;
 pub use bc::UploadJob;
 pub mod demo;
@@ -156,7 +157,7 @@ const CLUSTER_CELL: f32 = 8.0;
 /// `set_time` wraps here (seconds) to keep f32 precision in the shaders.
 const TIME_WRAP: f64 = 4096.0;
 /// Byte offset of the SH in the globals (written by the GPU, see env.rs).
-const SH_OFFSET: u64 = 9 * 64 + 57 * 16;
+const SH_OFFSET: u64 = 9 * 64 + 60 * 16;
 /// The roughness up to which a metal is a mirror (`Material::mirror`, scene.wgsl `light`).
 const MIRROR_ROUGHNESS: f32 = 0.1;
 
@@ -444,6 +445,9 @@ pub struct Quality {
     /// the slower presets use (the 3x3 shadow filter) is left out, so integrated GPUs keep
     /// their shading in registers. Changing it compiles the scene's pipelines again.
     pub fast_shading: bool,
+    /// Volumetric clouds (clouds.wgsl, when `Clouds::volumetric` asks for them): the cloud
+    /// image's divisor of the render size (2 half, 3 a third, 4 quarter), 0 for the flat cloud layer.
+    pub clouds: u32,
 }
 
 // `render_scale` is clamped to 0.5..=1 everywhere it is used, never NaN, so
@@ -473,6 +477,7 @@ impl Quality {
         impostor_resolution: 256,
         screen_reflections: 0,
         fast_shading: true,
+        clouds: 0,
     };
     pub const MEDIUM: Quality = Quality {
         shadow_resolution: 1024,
@@ -492,6 +497,7 @@ impl Quality {
         impostor_resolution: 256,
         screen_reflections: 2,
         fast_shading: true,
+        clouds: 4,
     };
     pub const HIGH: Quality = Quality {
         shadow_resolution: 2048,
@@ -509,6 +515,7 @@ impl Quality {
         impostor_resolution: 256,
         screen_reflections: 1,
         fast_shading: false,
+        clouds: 3,
     };
     /// For GPUs with headroom (a desktop card at 100+ fps on HIGH): 4096
     /// shadow maps, full-resolution AO with more taps and a full-resolution
@@ -532,6 +539,7 @@ impl Quality {
         impostor_resolution: 512,
         screen_reflections: 1,
         fast_shading: false,
+        clouds: 2,
     };
     pub const PRESETS: [(&'static str, Quality); 4] = [
         ("low", Quality::LOW),
@@ -542,6 +550,15 @@ impl Quality {
 
     fn samples(&self) -> u32 {
         if self.msaa { MSAA_SAMPLES } else { 1 }
+    }
+
+    /// The volumetric clouds' march steps through the layer and towards the sun.
+    fn cloud_steps(&self) -> (u32, u32) {
+        match (self.clouds, self.fast_shading) {
+            (0..=2, _) => (64, 6),
+            (3, _) | (_, false) => (48, 6),
+            (_, true) => (32, 5),
+        }
     }
 }
 
@@ -748,6 +765,8 @@ struct Layouts {
     /// The air passes (shafts.wgsl): shadow map, its sampler, linear depth, the half-size
     /// shafts, the aerial perspective LUT, its sampler, the sun's openness.
     shafts: wgpu::BindGroupLayout,
+    /// The volumetric clouds' image and its sampler (group 2 of the sky pipelines).
+    sky_clouds: wgpu::BindGroupLayout,
 }
 
 /// Pipelines that depend on the MSAA sample count. Depth and forward are
@@ -1020,6 +1039,15 @@ pub struct Renderer {
     sky_occlusion: bool,
     /// The procedural cloud layer of the analytic skies (`set_clouds`).
     clouds: Clouds,
+    /// The volumetric clouds' march and its images (clouds.rs).
+    cloud_volume: clouds::CloudVolume,
+    /// How far the volumetric clouds have drifted (m, wrapped to `clouds::CLOUD_PERIOD`),
+    /// integrated by `set_time` with the clouds' speed of the moment.
+    cloud_drift: [f64; 2],
+    /// The clouds changed too much since the last frame for its clouds to blend into this one's.
+    cloud_jump: bool,
+    /// The next frame is a picture of its own (`finish_environment`): its clouds start over.
+    cloud_picture: bool,
     /// Snow cover 0..1 (`set_snow`), and the top-down depth map of what lies over the ground
     /// around the eye (the last shadow layer): where it shows something overhead, no snow.
     snow: f32,
@@ -1313,6 +1341,7 @@ impl Renderer {
             layout: &layouts.material,
             entries: &ground_entries,
         });
+        let cloud_volume = clouds::CloudVolume::new(device, queue, &layouts);
         let layouts_terrain = layouts.terrain.clone();
         let layouts_sea = layouts.sea.clone();
         let baker = impostor::Baker::new(
@@ -1384,6 +1413,10 @@ impl Renderer {
             sky_occ_box: None,
             sky_occlusion: false,
             clouds: Clouds::default(),
+            cloud_volume,
+            cloud_drift: [0.0; 2],
+            cloud_jump: false,
+            cloud_picture: false,
             snow: 0.0,
             snow_cover: None,
             wetness: 0.0,
@@ -1529,20 +1562,51 @@ impl Renderer {
         self.sun.color * self.sun.illuminance * self.sun_share()
     }
 
-    /// The cloud layer drawn, as (cover, overcast 0..1): the caller's (`set_clouds`), and in rain
-    /// thickened to a closed grey one, the more so the harder it rains (cover 0.3 + 0.7 rain,
-    /// overcast from a drizzle of 0.1 to 0.6). Without rain exactly the caller's.
-    fn cloud_state(&self) -> (f32, f32) {
+    /// The cloud layer drawn, as (cover, overcast 0..1, storm 0..1): the caller's
+    /// (`set_clouds`; a storm is overcast too), and in rain thickened to a closed grey one, the
+    /// more so the harder it rains (cover 0.3 + 0.7 rain, overcast from a drizzle of 0.1 to
+    /// 0.6). Without rain exactly the caller's.
+    fn cloud_state(&self) -> (f32, f32, f32) {
         let cover = self.clouds.cover.clamp(0.0, 1.0);
-        let overcast = if self.clouds.overcast { 1.0 } else { 0.0 };
+        let storm = self.clouds.storm.clamp(0.0, 1.0);
+        let overcast = self.clouds.overcast.clamp(0.0, 1.0).max(storm);
         if self.rain <= 0.0 {
-            return (cover, overcast);
+            return (cover, overcast, storm);
         }
         let t = ((self.rain - 0.1) / 0.5).clamp(0.0, 1.0);
         (
             cover.max((0.3 + 1.4 * self.rain).min(1.0)),
             overcast.max(t * t * (3.0 - 2.0 * t)),
+            storm,
         )
+    }
+
+    /// Volumetric clouds are drawn: asked for (`Clouds::volumetric`), at a quality that has
+    /// them (`Quality::clouds`), under an analytic sky (an HDRI brings its own) with clouds in it.
+    fn volumetric_clouds(&self) -> bool {
+        self.clouds.volumetric
+            && self.quality.clouds > 0
+            && !matches!(self.sky_source, SkySource::Hdri { .. })
+            && self.cloud_state().0 > 0.0
+    }
+
+    /// The strength of the volumetric clouds' shadows on the ground (common.wgsl
+    /// `cloud_shadow`) for a camera with `proj`: the broken part of the sky (1 - overcast); the
+    /// closed part dims the sun everywhere (`sun_share`). None in a plan or an elevation.
+    fn cloud_shadows(&self, proj: Mat4) -> f32 {
+        if !self.volumetric_clouds() || shadow::is_orthographic(proj) {
+            return 0.0;
+        }
+        1.0 - self.cloud_state().1
+    }
+
+    /// The clouds' drift speed (m/s): the caller's, else faster than the wind at the ground as
+    /// the wind aloft is.
+    fn cloud_speed(&self) -> f32 {
+        self.clouds
+            .speed_mps
+            .unwrap_or(4.0 + 1.2 * self.wind.speed_mps)
+            .max(0.0)
     }
 
     /// How much of the sun's direct light gets through: the caller's clouds (`Clouds::sun_share`)
@@ -1551,13 +1615,23 @@ impl Renderer {
     ///
     /// Mist dims the sun too, by its optical depth along the sun's path down through the layer
     /// (`atmosphere::mist_sun_share`): a low sun in a morning mist is a pale disc.
+    ///
+    /// With volumetric clouds the broken part of the sky does not dim the sun everywhere: its
+    /// clouds cast their own shadows, which drift over the ground (`cloud_shadows`).
     fn sun_share(&self) -> f32 {
         let t = ((self.rain - 0.1) / 0.9).clamp(0.0, 1.0);
         let rain = 1.0 - 0.97 * t * t * (3.0 - 2.0 * t);
-        let share = if self.rain <= 0.0 {
-            self.clouds.sun_share()
+        let clouds = if self.cloud_shadows(self.proj) > 0.0 {
+            let c = &self.clouds;
+            let closed = c.cover.clamp(0.0, 1.0) * (0.85 + 0.12 * c.storm.clamp(0.0, 1.0));
+            1.0 - closed * c.overcast.max(c.storm).clamp(0.0, 1.0)
         } else {
-            self.clouds.sun_share() * rain
+            self.clouds.sun_share()
+        };
+        let share = if self.rain <= 0.0 {
+            clouds
+        } else {
+            clouds * rain
         };
         if self.mist <= 0.0 {
             share
@@ -1641,7 +1715,23 @@ impl Renderer {
 
     /// Animation time in seconds (wind, water). The water's clock wraps every 4096 s; the wind's
     /// phases are integrated here with the wind of the moment (never a jump).
+    ///
+    /// The volumetric clouds drift with the wind of the moment from the last time, or, after a
+    /// jump back or of more than 5 s (a picture at its own time), by the time at the current speed.
     pub fn set_time(&mut self, seconds: f64) {
+        let dt = seconds - self.clock;
+        let wind = Vec2::new(self.wind.direction.x, self.wind.direction.z).normalize_or_zero();
+        let speed = f64::from(self.cloud_speed());
+        for (k, d) in self.cloud_drift.iter_mut().enumerate() {
+            let v = f64::from(wind[k]) * speed;
+            let at = if (0.0..=5.0).contains(&dt) {
+                *d + v * dt
+            } else {
+                self.cloud_jump = true;
+                v * seconds
+            };
+            *d = at.rem_euclid(clouds::CLOUD_PERIOD);
+        }
         self.time = seconds.rem_euclid(TIME_WRAP) as f32;
         self.clock = seconds;
         self.wind_phases.advance(seconds, self.wind.speed_mps);
@@ -1866,6 +1956,8 @@ impl Renderer {
     pub fn set_wet(&mut self, wetness: f32, rain: f32) {
         self.wetness = wetness.clamp(0.0, 1.0);
         let rain = rain.clamp(0.0, 1.0);
+        // The rain closes the sky: a jump starts the clouds' image over.
+        self.cloud_jump |= (rain - self.rain).abs() > 0.3;
         if rain != self.rain {
             // The rain closes the sky: the environment and the ambient light follow.
             self.rain = rain;
@@ -2042,6 +2134,14 @@ impl Renderer {
 
     pub fn set_clouds(&mut self, clouds: &Clouds) {
         if *clouds != self.clouds {
+            let (a, b) = (&self.clouds, clouds);
+            // An eased weather moves a little a frame; a jump starts the clouds' image over.
+            self.cloud_jump |= (a.cover - b.cover).abs() > 0.15
+                || (a.overcast - b.overcast).abs() > 0.3
+                || (a.storm - b.storm).abs() > 0.3
+                || (a.altitude_m - b.altitude_m).abs() > 200.0
+                || a.volumetric != b.volumetric
+                || a.sun_gap != b.sun_gap;
             self.clouds = *clouds;
             self.update_ambient(true);
         }
@@ -3022,8 +3122,11 @@ impl Renderer {
     /// The next `render` finishes the environment cube instead of spreading
     /// it over frames: a single-frame picture after a change of sky or sun
     /// would otherwise keep the old sky in its haze and reflections.
+    ///
+    /// The volumetric clouds of that frame start over too, with more jitters (clouds.rs).
     pub fn finish_environment(&mut self) {
         self.env.finish();
+        self.cloud_picture = true;
     }
 
     /// Records every pass of a frame; returns the output view. Submit the
@@ -3286,6 +3389,35 @@ impl Renderer {
                     None,
                 );
             }
+            // The volumetric clouds, for the sky pass to read.
+            if self.volumetric_clouds() && !shadow::is_orthographic(self.proj) {
+                let (steps, light_steps) = self.quality.cloud_steps();
+                let ts = self.timer.as_ref().and_then(|t| t.pass("clouds"));
+                self.cloud_volume.draw(
+                    &self.device,
+                    &self.queue,
+                    encoder,
+                    clouds::Draw {
+                        layouts: &self.layouts,
+                        globals: &self.globals_bind,
+                        size: t.size,
+                        div: self.quality.clouds,
+                        steps,
+                        light_steps,
+                        view: self.view,
+                        proj: self.proj,
+                        jumped: self.cloud_jump,
+                        picture: self.cloud_picture,
+                        sun: self.sun.direction,
+                    },
+                    ts,
+                );
+                self.cloud_jump = false;
+                self.cloud_picture = false;
+            } else {
+                self.cloud_volume.off();
+            }
+            self.counters.split("clouds");
             if let Some(m) = mirror {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("reflection"),
@@ -3329,6 +3461,7 @@ impl Renderer {
                     self.draw_ground(&mut pass, &[&self.pipelines.reflect_ground]);
                 }
                 pass.set_pipeline(&self.pipelines.reflect_sky);
+                pass.set_bind_group(2, self.cloud_volume.sky_bind(), &[]);
                 pass.draw(0..3, 0..1);
             }
             self.counters.split("reflection");
@@ -3361,6 +3494,7 @@ impl Renderer {
                     self.draw_ground(&mut pass, parts);
                 }
                 pass.set_pipeline(&self.sampled.sky);
+                pass.set_bind_group(2, self.cloud_volume.sky_bind(), &[]);
                 pass.draw(0..3, 0..1);
                 self.draw_sea(&mut pass);
                 if ssr {
@@ -4453,7 +4587,7 @@ impl Renderer {
             (f64::from(wind.x) * travelled) as f32,
             (f64::from(wind.y) * travelled) as f32,
         );
-        let (cloud_cover, overcast) = self.cloud_state();
+        let (cloud_cover, overcast, storm) = self.cloud_state();
         b.floats(&[cloud_cover, overcast, drift.x, drift.y]);
         b.floats(&self.snow_cover.unwrap_or(Mat4::ZERO).to_cols_array());
         b.floats(&[
@@ -4574,6 +4708,37 @@ impl Renderer {
                 .filter(|_| self.sky_occlusion && clip.is_none())
                 .unwrap_or([0.0; 8]),
         );
+        // The volumetric clouds (clouds.wgsl, common.wgsl `cloud_shadow`): drawn in this view
+        // (not in the water's mirrored one, which keeps the flat layer, nor in a plan); their
+        // base, lower for a closed or stormy sky; the layer's thickness and the clouds' type.
+        let ortho = shadow::is_orthographic(proj);
+        let drawn = self.volumetric_clouds() && clip.is_none() && !ortho;
+        let closed = overcast.max(storm);
+        let base = self.clouds.altitude_m.max(100.0) * (1.0 - 0.45 * closed);
+        let thickness = 2500.0 + 4500.0 * storm;
+        let fair_type = 0.55 + 0.1 * cloud_cover;
+        let kind = fair_type + (0.15 - fair_type) * overcast;
+        let kind = kind + (1.0 - kind) * storm;
+        b.floats(&[f32::from(u8::from(drawn)), base, thickness, kind]);
+        // Their shadows, and the gap over the site: where the sun's ray through the site's
+        // origin crosses the clouds' lower part (common.wgsl `cloud_coverage`).
+        let shade = self.cloud_shadows(proj);
+        let sun = self.sun.direction;
+        let gap = if self.clouds.sun_gap && shade > 0.0 && sun.y > 0.02 {
+            let mid = base + 0.15 * thickness;
+            let centre = (Vec2::new(sun.x, sun.z) / sun.y * mid).clamp_length_max(30_000.0);
+            [1.0 - closed, centre.x, centre.y]
+        } else {
+            [0.0; 3]
+        };
+        b.floats(&[shade, gap[0], gap[1], gap[2]]);
+        let extinction = 0.03 * (1.0 + 0.25 * overcast + storm);
+        b.floats(&[
+            self.cloud_drift[0] as f32,
+            self.cloud_drift[1] as f32,
+            extinction,
+            storm,
+        ]);
         debug_assert_eq!(b.0.len() as u64, SH_OFFSET);
         self.queue.write_buffer(buffer, 0, &b.0);
     }
@@ -4840,29 +5005,57 @@ fn snow_cover_matrix(eye: Vec3, lo: Vec3, hi: Vec3, resolution: u32) -> Mat4 {
 const SNOW_COVER_M: f32 = 160.0;
 
 fn globals_size() -> u64 {
-    // 9 matrices, 55 vec4s, the 9 SH vec4s last; see common.wgsl.
+    // 9 matrices, 60 vec4s, the 9 SH vec4s last; see common.wgsl.
     SH_OFFSET + 9 * 16
 }
 
-/// A procedural cloud layer (fractal noise on a plane 1.5 km up, lit by the sun and the sky).
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+/// The clouds over the analytic skies: a flat procedural layer (fractal noise on a plane 1.5 km
+/// up, lit by the sun and the sky), or volumetric clouds (clouds.wgsl) where `volumetric` asks
+/// for them and the quality has them (`Quality::clouds`).
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Clouds {
     /// 0 clear .. 1 covered.
     pub cover: f32,
-    /// A closed grey layer instead of separate fair-weather clouds.
-    pub overcast: bool,
+    /// 0 separate fair-weather clouds .. 1 a closed grey layer; in between a sky closing in.
+    pub overcast: f32,
+    /// 0 .. 1 storm clouds: towering cumulonimbus, dark and dense (and overcast).
+    pub storm: f32,
+    /// Volumetric clouds with their shadows on the ground (off: the flat layer).
+    pub volumetric: bool,
+    /// The volumetric clouds' base over the ground (m); a closed or stormy sky lowers it.
+    pub altitude_m: f32,
+    /// The clouds' drift (m/s, downwind); `None`: from the wind at the ground.
+    pub speed_mps: Option<f32>,
+    /// A gap in the broken clouds in front of the sun over the site, so the design stays in
+    /// the sun; off, cloud shadows drift over it.
+    pub sun_gap: bool,
+}
+
+impl Default for Clouds {
+    fn default() -> Self {
+        Clouds {
+            cover: 0.0,
+            overcast: 0.0,
+            storm: 0.0,
+            volumetric: false,
+            altitude_m: 1500.0,
+            speed_mps: None,
+            sun_gap: true,
+        }
+    }
 }
 
 impl Clouds {
     /// How much of the sun's direct light comes through: fair-weather clouds pass most of it
-    /// on average, an overcast layer little (soft shadows, a low sun to sky ratio).
+    /// on average, an overcast layer little (soft shadows, a low sun to sky ratio), a storm
+    /// least.
     pub fn sun_share(&self) -> f32 {
         let cover = self.cover.clamp(0.0, 1.0);
-        if self.overcast {
-            1.0 - 0.85 * cover
-        } else {
-            1.0 - 0.15 * cover
-        }
+        let storm = self.storm.clamp(0.0, 1.0);
+        let overcast = self.overcast.clamp(0.0, 1.0).max(storm);
+        let fair = 1.0 - 0.15 * cover;
+        let closed = 1.0 - cover * (0.85 + 0.12 * storm);
+        fair + (closed - fair) * overcast
     }
 }
 
@@ -5395,6 +5588,13 @@ impl Layouts {
                     texture_entry(6, unfilterable, D::D2, false),
                 ],
             ),
+            sky_clouds: layout(
+                "sky clouds",
+                &[
+                    texture_entry(0, filterable, D::D2, false),
+                    sampler_entry(1, B::Filtering),
+                ],
+            ),
         }
     }
 }
@@ -5773,7 +5973,7 @@ fn sky_pipeline(
             module: module(modules, "sky"),
             vs: "vs_sky",
             fs: Some("fs_sky"),
-            groups: &[Some(&l.globals)],
+            groups: &[Some(&l.globals), None, Some(&l.sky_clouds)],
             buffers: &[],
             target: Some(HDR.into()),
             depth: Some(depth_state(

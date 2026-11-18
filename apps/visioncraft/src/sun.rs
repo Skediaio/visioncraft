@@ -668,6 +668,21 @@ fn view_fields(ui: &mut egui::Ui, cx: &mut Cx) {
         }
     });
     ui.horizontal(|ui| {
+        ui.label(t::WEATHER).on_hover_text(t::WEATHER_TIP);
+        for (key, label) in t::WEATHERS {
+            if ui
+                .small_button(label)
+                .on_hover_text(t::WEATHER_TIP)
+                .clicked()
+            {
+                cx.run(
+                    "view.set",
+                    json!({"weather": key, "weather_transition_s": t::WEATHER_PANEL_TRANSITION_S}),
+                );
+            }
+        }
+    });
+    ui.horizontal(|ui| {
         ui.label(t::CLOUDS);
         let c = v.clouds;
         let now = serde_json::to_value(c.kind).unwrap_or_default();
@@ -680,6 +695,14 @@ fn view_fields(ui: &mut egui::Ui, cx: &mut Cx) {
                 };
                 cx.run("view.set", json!({"clouds": {"kind": key, "cover": cover}}));
             }
+        }
+        let mut volumetric = c.volumetric;
+        if ui
+            .checkbox(&mut volumetric, t::VOLUMETRIC_CLOUDS)
+            .on_hover_text(t::VOLUMETRIC_CLOUDS_TIP)
+            .changed()
+        {
+            cx.run("view.set", json!({"clouds": {"volumetric": volumetric}}));
         }
     });
     if v.clouds.kind != visioncraft_core::CloudKind::Clear {

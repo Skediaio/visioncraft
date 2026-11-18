@@ -772,7 +772,8 @@ gently; `look_at` is a point or `"ahead"`; `fov_y_deg` = 60. Along a shot the pi
 {month, day}]` or `season` (the date's season shows, so a shot from March to September goes
 through spring and summer), `years` `[from, to]` (the garden growing), `snow` (winter only), `wetness` and `rain` (each `[from, to]` 0..1, so a
 shot can ease from dry to wet and into rain; recipe 36), `haze` (a turbidity, 0 to 50), `mist`, `gustiness` and `shafts`
-(0..1; recipes 39 and 40).
+(0..1; recipes 39 and 40), and the `weather` (`["fair", "storm"]`) and the `clouds`' cover
+(recipe 45).
 
 The plan for a garden: ask for its layout first (`document.inspect`: shapes and their outlines;
 `query.quantities`: where the plants are and how many), and choose paths from it: a walk from the
@@ -1524,6 +1525,51 @@ the camera and dissolving towards that edge: stones on scree (fewer on rock and 
 of moss in the shade, twigs on soil, and leaf litter under deciduous crowns all year. The values
 multiply the built-in densities (0..4). It is made again only when the camera moves to another
 8 m cell, and left out at LOW quality and under snow.
+
+### 45. Four weathers over the garden, and a fair morning closing into a storm
+
+```json recipe
+{"intent": "the example garden at midsummer noon under fair, overcast and stormy skies and on a cloudy sunrise, then a film shot in which the fair sky closes into a storm", "steps": [
+  {"id": "project.load_example", "params": {"name": "garden"}},
+  {"id": "time.set", "params": {"month": 6, "day": 21, "hour": 13}},
+  {"id": "view.set", "params": {"weather": "fair"}},
+  {"id": "view.render", "params": {"camera": {"position": [21, 1.7, 31], "target": [6, 6, 13], "fov_y_deg": 65}, "width": 1280, "height": 720, "path": "weather-fair.png"}},
+  {"id": "view.render", "params": {"camera": {"position": [21, 1.7, 31], "target": [6, 6, 13], "fov_y_deg": 65}, "width": 1280, "height": 720, "weather": "overcast", "path": "weather-overcast.png"}},
+  {"id": "view.render", "params": {"camera": {"position": [21, 1.7, 31], "target": [6, 6, 13], "fov_y_deg": 65}, "width": 1280, "height": 720, "weather": "storm", "path": "weather-storm.png"}},
+  {"id": "view.render", "params": {"camera": {"position": [21, 1.7, 31], "target": [6, 6, 13], "fov_y_deg": 65}, "width": 1280, "height": 720, "weather": "cloudy", "time": {"hour": 5.5}, "path": "weather-sunrise.png"}},
+  {"id": "view.set", "params": {"weather": "cloudy", "weather_transition_s": 20, "clouds": {"altitude_m": 1200}}},
+  {"id": "film.add", "params": {"name": "Front", "fps": 25}},
+  {"id": "film.add_shot", "params": {"id": "f1", "shot": {"kind": "hold", "eye": [21, 1.7, 31], "target": [6, 6, 13], "fov_y_deg": 65, "duration_s": 8, "weather": ["fair", "storm"]}}},
+  {"id": "film.preview", "params": {"id": "f1", "t": 4}},
+  {"id": "film.render", "params": {"id": "f1", "dir": "front", "width": 640, "height": 360, "every": 25}}
+]}
+```
+
+`view.set {"weather": ...}` sets the sky and the air together: `clear` (no clouds, still air),
+`fair` (cumulus over a third of the sky, a light breeze), `cloudy` (cumulus over most of it, some
+taller, a fresh breeze with gusts), `overcast` (a closed grey layer, soft shadows), `rain` (a low
+rain sky, steady rain, everything wet) or `storm` (towering storm clouds, a downpour, strong
+gusting wind). It writes the clouds' kind and cover, `rain`, `wetness`, `mist`, `gustiness` and
+`wind_speed_mps`; any of them given in the same call wins, and each can be changed on its own
+afterwards (the name is not kept). With `weather_transition_s` (0 to 600) the window eases into
+every change of those fields instead of switching, so a sky clears or closes in while you watch;
+pictures always show the stored weather.
+
+The clouds are volumetric (Medium quality and up): a layer about 2.5 km thick from
+`clouds.altitude_m` (1500 m; an overcast or stormy sky lowers it), shaped from a weather map, a
+Perlin-Worley noise and a detail noise after the public Nubis talks, lit by the sun through the
+cloud and by the sky, with a bright silver lining towards the sun and dark, dense bases under a
+storm. The broken part of the sky casts shadows that drift over the ground with the clouds
+(`clouds.speed_mps`, by default faster than the wind at the ground); the closed part dims the sun
+everywhere, as rain does. `clouds.sun_gap` (true by default) keeps a gap in broken clouds in front
+of the sun over the site, so a fair-weather picture keeps the design in the sun; set it to false
+for a film in which cloud shadows sweep over the garden. `clouds: {"volumetric": false}` (or Low
+quality, or an HDRI sky) draws the flat cloud layer instead. `view.set clouds` merges what it is
+given into the current clouds: `{"clouds": {"cover": 0.5}}` changes only the cover.
+`view.render` takes `weather` (and `weather_to` with `weather_mix` for a sky between two) and
+`clouds` (a cover, or an object as `view.set` takes it) for one picture (the CLI's `--weather`
+and `--clouds`); a film shot takes
+`weather` `[from, to]`, eased in and out over the shot, and `clouds` (the cover) `[from, to]`.
 
 ## Known traps
 

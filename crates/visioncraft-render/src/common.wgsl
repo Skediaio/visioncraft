@@ -67,6 +67,9 @@ struct Globals {
     color_grade: array<vec4<f32>, 3>, // grade matrix columns (linear Rec.709); [0].w contrast exponent about mid grey, [1].w grade on (0/1)
     sky_occ: vec4<f32>,         // baked sky visibility (`sky_occ_at`): xy (x, z) of the first column (m), z 1 / cell (m), w the lowest layer's height over the ground (m)
     sky_occ_size: vec4<f32>,    // x columns along x, y layers, z columns along z, w the layers' height span (m; 0: sky occlusion off)
+    cloud_vol: vec4<f32>,       // volumetric clouds (clouds.wgsl): x drawn in this view (0/1), y base altitude (m), z layer thickness (m), w cloud type 0 (stratus) .. 1 (cumulonimbus)
+    cloud_shade: vec4<f32>,     // x cloud shadows on the ground 0..1 (0 off), y the gap over the site 0..1, zw the gap's centre (world x, z; m)
+    cloud_wind: vec4<f32>,      // xy the clouds' drift (m, wrapped to CLOUD_PERIOD), z extinction per unit density (1/m), w storm 0..1
     sh: array<vec4<f32>, 9>,    // sky irradiance as L2 SH (kcd/m2 * sr), written on the GPU (env.wgsl)
 }
 @group(0) @binding(0) var<uniform> g: Globals;
@@ -629,4 +632,73 @@ fn wind_sway(ws: WindState, rel: vec3<f32>, origin: vec3<f32>, w: f32, phase: f3
 // grows about as h^1.5 up a stem, and 1 at the top; the limb phase is the mean.
 fn impostor_sway(ws: WindState, rel: vec3<f32>, origin: vec3<f32>, h: f32, hz: f32) -> vec3<f32> {
     return wind_sway(ws, rel, origin, pow(clamp(h, 0.0, 1.0), 1.5), 0.0, hz);
+}
+
+// ---- the clouds' weather map ------------------------------------------------
+// Shared by the volumetric clouds (clouds.wgsl, through a texture made once from
+// `cloud_weather`, cloud_noise.wgsl) and the cloud shadows on the ground
+// (`cloud_shadow`, evaluated here directly): both see the same coverage.
+
+// The weather map repeats every CLOUD_PERIOD metres; the clouds' noise tiles divide it, so the
+// drift can wrap without a jump.
+const CLOUD_PERIOD: f32 = 40960.0;
+const CLOUD_BASE_TILE: f32 = 2560.0;
+const CLOUD_DETAIL_TILE: f32 = 320.0;
+// The gap kept in the clouds in front of the sun over the site (`cloud_shade.y`), metres.
+const CLOUD_GAP_M: f32 = 900.0;
+
+// Value noise on a lattice of `n` cells that repeats every `n` cells.
+fn cloud_lattice(i: vec2<i32>, n: i32) -> f32 {
+    let w = ((i % n) + n) % n;
+    return unit(pcg(u32(w.x) + pcg(u32(w.y) + 40503u)));
+}
+
+fn cloud_value(p: vec2<f32>, n: i32) -> f32 {
+    let i = vec2<i32>(floor(p));
+    let f = p - floor(p);
+    let u = f * f * (3.0 - 2.0 * f);
+    let a = cloud_lattice(i, n);
+    let b = cloud_lattice(i + vec2<i32>(1, 0), n);
+    let c = cloud_lattice(i + vec2<i32>(0, 1), n);
+    let d = cloud_lattice(i + vec2<i32>(1, 1), n);
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+// The weather at `uv` (one period, 0..1): x where clouds form (spread to about 0..1, so a cover
+// c clouds about a share c of the sky), y a slow variation of their type.
+fn cloud_weather(uv: vec2<f32>) -> vec2<f32> {
+    let p = uv * 20.0;
+    let n = 0.55 * cloud_value(p, 20) + 0.3 * cloud_value(p * 2.0 + 0.37, 40) + 0.15 * cloud_value(p * 4.0 + 0.71, 80);
+    let spread = clamp((n - 0.5) * 2.2 + 0.5, 0.0, 1.0);
+    return vec2<f32>(spread, cloud_value(uv * 6.0, 6));
+}
+
+// The coverage 0..1 the weather `w` gives at world (x, z): fair-weather cells where the noise
+// passes the cover, an even layer as the sky turns overcast, less in the gap over the site.
+fn cloud_coverage(w: vec2<f32>, xz: vec2<f32>) -> f32 {
+    let cover = g.clouds.x;
+    let fair = smoothstep(1.0 - cover - 0.04, 1.0 - cover + 0.3, w.x);
+    let even = min(cover * 1.1, 1.0) * mix(0.6, 1.0, w.x);
+    var c = mix(fair, even, g.clouds.y);
+    if g.cloud_shade.y > 0.0 {
+        let d = xz - g.cloud_shade.zw;
+        c *= 1.0 - g.cloud_shade.y * exp(-dot(d, d) / (CLOUD_GAP_M * CLOUD_GAP_M));
+    }
+    return c;
+}
+
+// The share of the sun the clouds let through to `world`: the coverage where the sun's ray
+// crosses the clouds' lower part, as a transmittance (Beer-Lambert over the optical depth a
+// cloud of that coverage has). The overcast part of the sky dims the sun globally (lib.rs
+// `sun_share`); this is only the broken part's shadows, which drift with the clouds.
+fn cloud_shadow(world: vec3<f32>) -> f32 {
+    if g.cloud_shade.x <= 0.0 || g.sun_dir.y <= 0.02 {
+        return 1.0;
+    }
+    let mid = g.cloud_vol.y + 0.15 * g.cloud_vol.z;
+    let l = g.sun_dir.xyz;
+    let xz = world.xz + l.xz / l.y * max(mid - world.y, 0.0);
+    let w = cloud_weather(fract((xz + g.cloud_wind.xy) / CLOUD_PERIOD));
+    let c = cloud_coverage(w, xz);
+    return 1.0 - g.cloud_shade.x * (1.0 - exp(-10.0 * c));
 }

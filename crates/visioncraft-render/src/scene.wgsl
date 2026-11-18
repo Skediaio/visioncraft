@@ -591,10 +591,16 @@ fn cascade_shadow(c: u32, world: vec3<f32>, n: vec3<f32>, nol: f32) -> f32 {
     return sum * 0.25;
 }
 
+// The sun's visibility at `world`: the cascades' shadow times the clouds' (common.wgsl
+// `cloud_shadow`, 1 without volumetric clouds).
+fn sun_shadow(world: vec3<f32>, n: vec3<f32>, nol: f32, depth: f32) -> f32 {
+    return cascades_shadow(world, n, nol, depth) * cloud_shadow(world);
+}
+
 // Cascade selection by view depth, blending into the next cascade over the
 // last 15% of each range and fading out at the end of the last one; a point
 // a cascade does not cover falls through to the next.
-fn sun_shadow(world: vec3<f32>, n: vec3<f32>, nol: f32, depth: f32) -> f32 {
+fn cascades_shadow(world: vec3<f32>, n: vec3<f32>, nol: f32, depth: f32) -> f32 {
     let count = u32(g.shadow.x);
     var c = 0u;
     while c < count && depth > g.splits[c] {

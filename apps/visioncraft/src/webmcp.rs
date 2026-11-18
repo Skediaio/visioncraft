@@ -240,6 +240,9 @@ fn resolve(defs: &[Def], docs: &[CommandDoc]) -> Result<Vec<Tool>, String> {
                     if def.group == Design {
                         t.description.push_str(" When the person says \"this\", \"here\" or \"the selected one\", check the current selection first with visioncraft_get_selection.");
                     }
+                    if id == "view.set" {
+                        t.description.push_str(" For a change of weather give `weather` (clear, fair, cloudy, overcast, rain or storm) with `weather_transition_s` (say 10) so the person sees the sky clear or close in rather than switch.");
+                    }
                     if id == "film.render" {
                         t.description.push_str(" In the browser the frames cannot be written to disk (pictures cannot be read back): check a film with visioncraft_film_preview and visioncraft_snapshot, and render it with visioncraft-cli on a computer. Only one render runs at a time.");
                     }

@@ -179,9 +179,13 @@ pub struct ViewState {
     /// `natural`, the default.
     #[serde(skip_serializing_if = "Look::is_natural")]
     pub look: Look,
-    /// The cloud layer over the analytic sky. Not written while the default.
+    /// The clouds over the analytic sky. Not written while the default.
     #[serde(skip_serializing_if = "Clouds::is_default")]
     pub clouds: Clouds,
+    /// How long the live view takes to ease into a change of the weather (clouds, rain,
+    /// wetness, mist, gusts and wind), in seconds; 0 (the default, not written): at once.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub weather_transition_s: f32,
     /// Years after planting to show the plants at (`growth`), 0..=60; `None` shows every plant
     /// at its full size, as projects did before growth existed (the default).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -297,13 +301,66 @@ fn is_true(v: &bool) -> bool {
 /// The longest look ahead the years setting allows.
 pub const YEARS_MAX: f32 = 60.0;
 
-/// A procedural cloud layer: what kind, and how much of the sky it covers.
+/// The longest weather transition (s).
+pub const WEATHER_TRANSITION_MAX_S: f32 = 600.0;
+
+/// The clouds: what kind, how much of the sky they cover, and how they are drawn. Volumetric
+/// clouds (the default) cast drifting shadows; the flat layer is what the lowest quality and an
+/// HDRI sky fall back on.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Clouds {
     pub kind: CloudKind,
     /// 0..1 of the sky.
     pub cover: f32,
+    /// The clouds' base over the ground (m), `CLOUD_ALTITUDE_M`; a closed or stormy sky lowers
+    /// it. Not written while 1500.
+    #[serde(skip_serializing_if = "is_default_altitude")]
+    pub altitude_m: f32,
+    /// How fast the clouds drift downwind (m/s); `None` (not written): faster than the wind at
+    /// the ground, as the wind aloft is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speed_mps: Option<f32>,
+    /// Volumetric clouds (on by default, not written then) where the quality has them; off: the
+    /// flat layer, as before they existed.
+    #[serde(skip_serializing_if = "is_true")]
+    pub volumetric: bool,
+    /// A gap in the broken clouds in front of the sun over the site (on by default, not
+    /// written then), so pictures of fair weather keep the design in the sun; off, the clouds'
+    /// shadows drift over it.
+    #[serde(skip_serializing_if = "is_true")]
+    pub sun_gap: bool,
+    /// Another kind mixed in (a weather between two states, `weather::apply`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blend: Option<CloudBlend>,
+}
+
+/// A second kind of cloud mixed into `Clouds::kind` by `share` (0..1).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CloudBlend {
+    pub kind: CloudKind,
+    pub share: f32,
+}
+
+/// The clouds' base by default (m).
+pub const CLOUD_ALTITUDE_M: f32 = 1500.0;
+/// The clouds' base a project takes (m).
+pub const CLOUD_ALTITUDES_M: std::ops::RangeInclusive<f32> = 300.0..=5000.0;
+
+fn is_default_altitude(v: &f32) -> bool {
+    *v == CLOUD_ALTITUDE_M
+}
+
+/// The clouds as numbers a renderer draws (`Clouds::shape`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CloudShape {
+    /// 0 clear .. 1 covered.
+    pub cover: f32,
+    /// 0 separate fair-weather clouds .. 1 a closed grey layer.
+    pub overcast: f32,
+    /// 0 .. 1 storm clouds (towering cumulonimbus).
+    pub storm: f32,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -315,6 +372,19 @@ pub enum CloudKind {
     Cumulus,
     /// A closed grey layer: soft shadows, little direct sun.
     Overcast,
+    /// Towering, dark storm clouds (cumulonimbus): a closed sky, the least sun.
+    Storm,
+}
+
+impl CloudKind {
+    /// (overcast, storm) of the kind.
+    fn shape(self) -> (f32, f32) {
+        match self {
+            CloudKind::Clear | CloudKind::Cumulus => (0.0, 0.0),
+            CloudKind::Overcast => (1.0, 0.0),
+            CloudKind::Storm => (1.0, 1.0),
+        }
+    }
 }
 
 impl Default for Clouds {
@@ -322,6 +392,11 @@ impl Default for Clouds {
         Clouds {
             kind: CloudKind::Cumulus,
             cover: 0.35,
+            altitude_m: CLOUD_ALTITUDE_M,
+            speed_mps: None,
+            volumetric: true,
+            sun_gap: true,
+            blend: None,
         }
     }
 }
@@ -329,6 +404,48 @@ impl Default for Clouds {
 impl Clouds {
     fn is_default(&self) -> bool {
         *self == Clouds::default()
+    }
+
+    /// The clouds as a renderer draws them: clear has no cover (unless mixed with another
+    /// kind, when `cover` is the mix's), a blend eases overcast and storm between the kinds.
+    pub fn shape(&self) -> CloudShape {
+        let (mut overcast, mut storm) = self.kind.shape();
+        let mut cover = self.cover;
+        match self.blend {
+            Some(b) => {
+                let (o, s) = b.kind.shape();
+                let t = b.share.clamp(0.0, 1.0);
+                overcast += (o - overcast) * t;
+                storm += (s - storm) * t;
+            }
+            None if self.kind == CloudKind::Clear => cover = 0.0,
+            None => {}
+        }
+        CloudShape {
+            cover,
+            overcast,
+            storm,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if !(0.0..=1.0).contains(&self.cover) {
+            return Err("`clouds.cover` must be from 0 to 1".into());
+        }
+        if !CLOUD_ALTITUDES_M.contains(&self.altitude_m) {
+            return Err(format!(
+                "`clouds.altitude_m` must be from {} to {} m",
+                CLOUD_ALTITUDES_M.start(),
+                CLOUD_ALTITUDES_M.end()
+            ));
+        }
+        if self.speed_mps.is_some_and(|v| !(0.0..=60.0).contains(&v)) {
+            return Err("`clouds.speed_mps` must be from 0 to 60 m/s".into());
+        }
+        if self.blend.is_some_and(|b| !(0.0..=1.0).contains(&b.share)) {
+            return Err("`clouds.blend.share` must be from 0 to 1".into());
+        }
+        Ok(())
     }
 }
 
@@ -455,6 +572,7 @@ impl Default for ViewState {
             view_distance: 1.0,
             look: Look::Natural,
             clouds: Clouds::default(),
+            weather_transition_s: 0.0,
             years: None,
             lights: None,
             clutter: true,
@@ -504,7 +622,8 @@ impl ViewState {
             && (0.0..=1.0).contains(&self.wind_gustiness)
             && finite(self.wind_direction_deg)
             && VIEW_DISTANCE_RANGE.contains(&self.view_distance)
-            && (0.0..=1.0).contains(&self.clouds.cover)
+            && self.clouds.validate().is_ok()
+            && (0.0..=WEATHER_TRANSITION_MAX_S).contains(&self.weather_transition_s)
             && self.years.is_none_or(|y| (0.0..=YEARS_MAX).contains(&y))
             && (0.0..=1.0).contains(&self.snow)
             && (0.0..=1.0).contains(&self.weathering)

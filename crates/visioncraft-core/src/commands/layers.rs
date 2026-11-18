@@ -107,9 +107,11 @@ pub(super) fn register(s: &mut Session) {
         spec(
             "view.set",
             "Set View",
-            "Sets the season, snow, weathering, wetness, rain, mist, light shafts, exposure, white balance, grade, vignette, film grain, look, sky, clouds, years after planting, haze, wind and gusts, the ground plane, the surroundings, ground clutter, sky occlusion and the view distance stored with the project; only the fields given change.",
+            "Sets the season, the weather, snow, weathering, wetness, rain, mist, light shafts, exposure, white balance, grade, vignette, film grain, look, sky, clouds, years after planting, haze, wind and gusts, the ground plane, the surroundings, ground clutter, sky occlusion and the view distance stored with the project; only the fields given change.",
             vec![
                 param("season", T::String, "spring, summer, autumn or winter: the plants as they are then, and the project's date set to the season's day at the site (20 April, 21 June, 20 October, 15 January in the north; six months on in the south), the hour kept. An exact date (time.set) maps back to its season."),
+                param("weather", T::String, "A weather as one preset of the clouds, rain, wetness, mist, gusts and wind speed: clear (no clouds, still air), fair (cumulus over a third of the sky, a light breeze), cloudy (cumulus over most of it, a fresh breeze with gusts), overcast (a closed grey layer, soft shadows), rain (a low rain sky, steady rain, everything wet) or storm (towering storm clouds, a downpour, strong gusting wind). It writes those fields (`clouds` kind and cover, `rain`, `wetness`, `mist`, `gustiness`, `wind_speed_mps`); any of them given in the same call wins, and each can be changed on its own afterwards. The live view eases into it over `weather_transition_s`."),
+                param("weather_transition_s", T::Number, "How long the live view takes to ease into a change of the clouds, rain, wetness, mist, gusts and wind, 0 to 600 s: a sky clears or closes in instead of switching. Pictures (`view.render`) always show the stored weather; films ease with their shots' `weather`. 0: at once.").unit("s").default(json!(0)),
                 param("snow", T::Number, "Snow cover 0..1 on the ground, lawns, roofs, terraces, hedge tops, evergreen crowns, branches, wall tops and sills, not under roofs or dense evergreens; about 0.7 for a snowy winter. 0: none.").default(json!(0)),
                 param("weathering", T::Number, "Weathering 0..1 of every standard material at once: dirt, moss, wear and rain streaks with the default mix (see material.update's `weathering`), added to each material's own. Keep it explicit: `years` does not drive it. 0: none.").default(json!(0)),
                 param("wetness", T::Number, "Wet surfaces 0..1: porous materials (soil, wood, stone, concrete, brick, fabric) darken and turn glossy, leaves take a sheen, metal and glass barely change; above about 0.5 puddles form on flat, open, upward-facing paving, terraces, paths and soil (not on lawns, plants, steep surfaces or under roofs), growing with the value. Rain implies it: the wetness drawn is the larger of `wetness` and `rain`. 0: dry.").default(json!(0)),
@@ -132,7 +134,7 @@ pub(super) fn register(s: &mut Session) {
                 param("wind_direction_deg", T::Number, "Direction the wind blows towards, true bearing clockwise from north seen from above (drawing -Z unless site.set north_deg turns it).").unit("deg").default(json!(0)),
                 param("ground", T::Object, "Ground plane {height: m, color: [r, g, b] linear}; null for none.")
                     .default(json!({"height": 0, "color": [0.065, 0.12, 0.035]})),
-                param("clouds", T::Object, "The cloud layer over the analytic sky: {kind: \"clear\" | \"cumulus\" (light fair-weather clouds) | \"overcast\", cover: 0..1}; overcast softens shadows and dims the sun.").default(json!({"kind": "cumulus", "cover": 0.35})),
+                param("clouds", T::Object, "The clouds over the analytic sky, merged into the current ones (give only what changes): {kind: \"clear\" | \"cumulus\" (fair-weather clouds) | \"overcast\" (a closed grey layer: soft shadows, little sun) | \"storm\" (towering dark cumulonimbus, the least sun), cover: 0..1, altitude_m: the base, 300 to 5000 (1500; a closed or stormy sky lowers it), speed_mps: their drift downwind, 0 to 60 (null: faster than the wind at the ground), volumetric: true (volumetric clouds, lit by the sun and the sky, whose shadows drift over the ground; MEDIUM quality and up) or false (the flat layer), sun_gap: true (a gap in broken clouds in front of the sun over the site, so pictures stay sunny) or false (their shadows drift over the design too)}.").default(json!({"kind": "cumulus", "cover": 0.35})),
                 param("lights", T::Boolean, "Lamps and lit rooms on (true) or off (false); null: on while the sun is below the horizon at the time shown."),
                 param("sky_occlusion", T::Boolean, "Sky occlusion: the sky's light on every surface in proportion to the sky it sees, baked over the design (buildings, shapes, models, terrain, and crowns by their species' leaf density): the ground under trees and the corners by walls and the house go gently darker, the inside of a backlit crown keeps the sky that comes through its leaves, and wet paving and windows under a tree stop mirroring the open sky. Rebaked when the design, the years or the leaves change. null: the host decides (on in the window and its pictures)."),
                 param("clutter", T::Boolean, "Ground clutter: fallen leaves under deciduous trees (most in October and November), stones and twigs on soil and gravel, grass hanging over the lawn's edge. Off at LOW quality whatever this says.").default(json!(true)),
@@ -336,14 +338,37 @@ fn view_set(project: &mut Project, params: &Value) -> Result<Value, CommandError
     if let (Some(v), Some(o)) = (speed, params.as_object_mut()) {
         o.insert("wind_speed_mps".into(), json!(v));
     }
+    // A weather writes its fields first; the fields given with it win.
+    let mut base = project.view.clone();
+    if let Some(w) = params.as_object_mut().and_then(|o| o.remove("weather")) {
+        let weather = w.as_str().and_then(crate::Weather::parse).ok_or_else(|| {
+            crate::session::bad(&format!(
+                "`weather` must be one of {}",
+                crate::WEATHERS.join(", ")
+            ))
+        })?;
+        crate::weather::apply(&mut base, weather, None);
+    }
+    // The clouds merge into the current ones; setting them directly ends a weather's mix.
+    if let Some(Value::Object(given)) = params.get("clouds").cloned() {
+        let mut clouds = serde_json::to_value(base.clouds).unwrap_or_default();
+        if let Some(c) = clouds.as_object_mut() {
+            c.remove("blend");
+            c.extend(given);
+        }
+        if let Some(o) = params.as_object_mut() {
+            o.insert("clouds".into(), clouds);
+        }
+    }
     // `view_distance` is not written while it is 1, `look` while natural, `clouds` while default.
     let view = super::merge_update(
-        &project.view,
+        &base,
         &params,
         &[
             "view_distance",
             "look",
             "clouds",
+            "weather_transition_s",
             "years",
             "lights",
             "clutter",

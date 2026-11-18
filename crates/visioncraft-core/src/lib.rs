@@ -52,6 +52,7 @@ pub mod underlay;
 pub mod viewpoint;
 pub mod wall_photo;
 pub mod water;
+pub mod weather;
 pub mod wind;
 
 pub use catalog::{Asset, Catalog, CatalogError, attribution_markdown, validate_open_licences};
@@ -79,9 +80,10 @@ pub use planting::{
 };
 pub use presets::{PlantingPreset, planting_presets};
 pub use project::{
-    CloudKind, Clouds, CustomSpecies, Grade, GroundPlane, Layer, Look, ModelKind, ModelRef,
-    Project, ProjectError, RenderStyle, Site, SkyChoice, SunTime, Surroundings, Transform,
-    ViewState, WHITE_BALANCE_KELVIN, WhiteBalance, YEARS_MAX,
+    CLOUD_ALTITUDE_M, CLOUD_ALTITUDES_M, CloudBlend, CloudKind, CloudShape, Clouds, CustomSpecies,
+    Grade, GroundPlane, Layer, Look, ModelKind, ModelRef, Project, ProjectError, RenderStyle, Site,
+    SkyChoice, SunTime, Surroundings, Transform, ViewState, WEATHER_TRANSITION_MAX_S,
+    WHITE_BALANCE_KELVIN, WhiteBalance, YEARS_MAX,
 };
 pub use raycast::{Hit, ground_height, raycast, raycast_any};
 pub use season::Season;
@@ -104,3 +106,4 @@ pub use underlay::{Placement as UnderlayPlacement, Underlay};
 pub use viewpoint::{Viewpoint, interpolate};
 pub use wall_photo::WallPhoto;
 pub use water::{Sea, WaterKind, keep_dry};
+pub use weather::{WEATHERS, Weather};

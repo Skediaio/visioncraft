@@ -224,10 +224,40 @@ fn ground_kcd(sky_up: vec3<f32>) -> vec3<f32> {
 
 // `sky_up_sh` (the sky's irradiance on a horizontal surface) is in common.wgsl.
 
+// The volumetric clouds of this view (clouds.wgsl, at a quarter or half of the render size):
+// rgb their light (kcd/m2, hazed by the air in front), a what they leave of the sky behind.
+// Only the sky pass binds them (lib.rs `sky_pipeline`); read while `g.cloud_vol.x` is set.
+@group(2) @binding(0) var cloud_image: texture_2d<f32>;
+@group(2) @binding(1) var cloud_sampler: sampler;
+
+// The volumetric clouds at a pixel (render size, top-left origin), from their image, whose
+// texel centres sample the same viewport fractions: a cubic B-spline in four bilinear taps
+// (Sigg & Hadwiger, "Fast Third-Order Texture Filtering", GPU Gems 2, 2005), so a bright edge
+// against the sky does not show the image's texels as steps.
+fn volume_clouds(pixel: vec2<f32>) -> vec4<f32> {
+    let size = vec2<f32>(textureDimensions(cloud_image));
+    let at = pixel * g.viewport.zw * size - 0.5;
+    let i = floor(at);
+    let f = at - i;
+    let w0 = (1.0 - f) * (1.0 - f) * (1.0 - f) / 6.0;
+    let w1 = (4.0 - 6.0 * f * f + 3.0 * f * f * f) / 6.0;
+    let w3 = f * f * f / 6.0;
+    let w2 = 1.0 - w0 - w1 - w3;
+    let s0 = w0 + w1;
+    let s1 = w2 + w3;
+    let p0 = (i - 1.0 + w1 / s0 + 0.5) / size;
+    let p1 = (i + 1.0 + w3 / s1 + 0.5) / size;
+    return s0.y * (s0.x * textureSampleLevel(cloud_image, cloud_sampler, vec2<f32>(p0.x, p0.y), 0.0)
+        + s1.x * textureSampleLevel(cloud_image, cloud_sampler, vec2<f32>(p1.x, p0.y), 0.0))
+        + s1.y * (s0.x * textureSampleLevel(cloud_image, cloud_sampler, vec2<f32>(p0.x, p1.y), 0.0)
+        + s1.x * textureSampleLevel(cloud_image, cloud_sampler, vec2<f32>(p1.x, p1.y), 0.0));
+}
+
 // The background as seen (pre-exposed): the source above the horizon, and
 // below it the horizon dimmed (Preetham) or the source as is, never the flat
-// ground radiance (the infinite ground plane draws the ground).
-fn background(dir: vec3<f32>) -> vec3<f32> {
+// ground radiance (the infinite ground plane draws the ground). `vol`: the volumetric clouds
+// at this pixel, used instead of the flat layer while they are drawn.
+fn background(dir: vec3<f32>, vol: vec4<f32>) -> vec3<f32> {
     let source = u32(g.sky.x + 0.5);
     var c: vec3<f32>;
     if source == 2u {
@@ -243,9 +273,13 @@ fn background(dir: vec3<f32>) -> vec3<f32> {
         // The haze between the eye and the cloud layer (1.5 km up) hides far clouds in the sky
         // behind them, as aerial perspective does: at a clear day's 30 km visibility a cloud
         // 3 degrees up keeps a tenth of its contrast, one 10 degrees up half.
-        let cl = cloud(dir);
-        let through = fog_transmittance(g.camera.y, dir.y, max(1500.0 - g.camera.y, 0.0) / max(dir.y, 0.01));
-        c = mix(c + stars(dir), cl.rgb, cl.a * through);
+        if g.cloud_vol.x > 0.5 {
+            c = (c + stars(dir)) * vol.a + vol.rgb;
+        } else {
+            let cl = cloud(dir);
+            let through = fog_transmittance(g.camera.y, dir.y, max(1500.0 - g.camera.y, 0.0) / max(dir.y, 0.01));
+            c = mix(c + stars(dir), cl.rgb, cl.a * through);
+        }
     }
     return c * g.night.w;
 }
@@ -316,13 +350,20 @@ fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
         // A plan or elevation: one plain backdrop along the view axis.
         dir = -normalize(vec3<f32>(g.view[0][2], g.view[1][2], g.view[2][2]));
     }
-    var color = background(dir);
+    var vol = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    if g.cloud_vol.x > 0.5 {
+        vol = volume_clouds(in.clip.xy);
+    }
+    var color = background(dir, vol);
     // Sun disc with a soft, slightly limb-darkened edge. Its luminance is the
     // sun's illuminance over the disc's solid angle (clamped on the CPU).
     let cos_sun = dot(dir, g.sun_dir.xyz);
     let edge = smoothstep(g.sun_light.w - 2e-5, g.sun_light.w + 2e-5, cos_sun);
     let tint = g.sun_light.rgb / max(dot(g.sun_light.rgb, vec3<f32>(0.2126, 0.7152, 0.0722)), 1e-9);
-    let behind = select(0.0, cloud(dir).a, u32(g.sky.x + 0.5) != 2u);
+    var behind = select(0.0, cloud(dir).a, u32(g.sky.x + 0.5) != 2u);
+    if g.cloud_vol.x > 0.5 {
+        behind = 1.0 - vol.a;
+    }
     color += tint * g.sun_dir.w * edge * mix(0.6, 1.0, smoothstep(g.sun_light.w, 1.0, cos_sun)) * (1.0 - behind);
     // Haze to infinity below the horizon, and above it over a band that grows with the haze:
     // the sky models already carry clear air's scattering, so on a clear day (0.13 / km) the

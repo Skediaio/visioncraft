@@ -704,7 +704,7 @@ pub fn host_docs() -> Vec<CommandDoc> {
         host_doc(
             "film.preview",
             "Preview Film",
-            "Reads a film without drawing it: its length, frame count and where each shot starts, and with `t` the camera at that time (eye, target, field of view), the shot it is in, how far through it, what changes for that picture (time of day, date or season, years, snow, wetness, rain, haze, mist, gustiness, shafts) and the sun then. The walk follows the real ground of the project (terrain, areas, models), so this is how to check the shots before film.render.",
+            "Reads a film without drawing it: its length, frame count and where each shot starts, and with `t` the camera at that time (eye, target, field of view), the shot it is in, how far through it, what changes for that picture (time of day, date or season, years, snow, wetness, rain, haze, mist, gustiness, shafts, weather, clouds) and the sun then. The walk follows the real ground of the project (terrain, areas, models), so this is how to check the shots before film.render.",
             vec![
                 p("id", "string", None, true, None, &[], "Film id"),
                 p(
@@ -753,14 +753,14 @@ pub fn host_docs() -> Vec<CommandDoc> {
                     "With `sheet`: the renderer's quality preset, as view.render",
                 ),
             ],
-            "{id, name, fps, duration_s, frame_count, shots: [{index, kind, start_s, duration_s}], t?, shot?, progress?, camera?: {position, target, fov_y_deg}, overrides?: {time_of_day?, date?, season?, years?, snow?, wetness?, rain?, haze?, mist?, gustiness?, shafts?, lights?, white_balance?, grade?, grade_to?, grade_mix?, exposure_ev?}, time?, sun?, with `sheet`: mime, base64, sheet: {columns, frames, cell_px, size_px, times_s, shots, order}}",
+            "{id, name, fps, duration_s, frame_count, shots: [{index, kind, start_s, duration_s}], t?, shot?, progress?, camera?: {position, target, fov_y_deg}, overrides?: {time_of_day?, date?, season?, years?, snow?, wetness?, rain?, haze?, mist?, gustiness?, shafts?, weather?, weather_to?, weather_mix?, clouds?, lights?, white_balance?, grade?, grade_to?, grade_mix?, exposure_ev?}, time?, sun?, with `sheet`: mime, base64, sheet: {columns, frames, cell_px, size_px, times_s, shots, order}}",
             json!({"id": "f1", "t": 2.5}),
             false,
         ),
         host_doc(
             "film.render",
             "Render Film",
-            "Draws a film as numbered PNGs `frame_00000.png`... in a folder beneath the write root, one view.render per frame: the film's camera, the animation clock set to the film time (so wind and water move) and the shot's time of day, date or season, years, snow, wetness, rain, haze, mist, gustiness, shafts, lamp light, white balance, grade and exposure compensation for that picture only; the project does not change. Frames are counted from 0 in what is drawn, so `every` 5 gives a film of fps / 5. At most 10000 frames per call: render a long film in parts (`from`, `to`). A video needs a program such as ffmpeg: the result's `ffmpeg` is the command to run on the frames.",
+            "Draws a film as numbered PNGs `frame_00000.png`... in a folder beneath the write root, one view.render per frame: the film's camera, the animation clock set to the film time (so wind and water move) and the shot's time of day, date or season, years, snow, wetness, rain, haze, mist, gustiness, shafts, weather, clouds, lamp light, white balance, grade and exposure compensation for that picture only; the project does not change. Frames are counted from 0 in what is drawn, so `every` 5 gives a film of fps / 5. At most 10000 frames per call: render a long film in parts (`from`, `to`). A video needs a program such as ffmpeg: the result's `ffmpeg` is the command to run on the frames.",
             vec![
                 p("id", "string", None, true, None, &[], "Film id"),
                 p(
@@ -1132,6 +1132,42 @@ pub fn host_docs() -> Vec<CommandDoc> {
                     Some("the project's"),
                     &[],
                     "Light shafts 0..1 for this picture only: beams of sun through the mist, rain fog or haze where crowns and houses shadow it",
+                ),
+                p(
+                    "weather",
+                    "string",
+                    None,
+                    false,
+                    Some("the project's"),
+                    &["clear", "fair", "cloudy", "overcast", "rain", "storm"],
+                    "A weather for this picture only (as view.set `weather`): the clouds, rain, wetness, mist, gusts and wind of that preset; rain, mist, wetness, gustiness and clouds given as well win",
+                ),
+                p(
+                    "weather_to",
+                    "string",
+                    None,
+                    false,
+                    Some("not set"),
+                    &["clear", "fair", "cloudy", "overcast", "rain", "storm"],
+                    "A second weather mixed over `weather` by `weather_mix`: a sky between two weathers, as a film's `weather` [from, to] eases through them",
+                ),
+                p(
+                    "weather_mix",
+                    "number",
+                    None,
+                    false,
+                    Some("0.5"),
+                    &[],
+                    "With `weather_to`: its share, 0 to 1",
+                ),
+                p(
+                    "clouds",
+                    "any",
+                    None,
+                    false,
+                    Some("the project's"),
+                    &[],
+                    "The clouds for this picture only: a cover 0..1, or an object merged into the project's as view.set `clouds` takes it ({kind, cover, altitude_m, speed_mps, volumetric, sun_gap})",
                 ),
                 p(
                     "sky_occlusion",
@@ -2152,6 +2188,10 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
             "mist",
             "gustiness",
             "shafts",
+            "weather",
+            "weather_to",
+            "weather_mix",
+            "clouds",
             "sky_occlusion",
             "white_balance",
             "grade",
@@ -2259,6 +2299,62 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
         if snow > 0.0 && season.is_none() && a.get("time").is_none() {
             project.time =
                 visioncraft_core::Season::Winter.time(project.time, project.site.latitude);
+        }
+    }
+    // A weather first, so the fields given with it win.
+    let weather = |key: &str| -> Result<Option<visioncraft_core::Weather>, String> {
+        a.str(key)?
+            .map(|w| {
+                visioncraft_core::Weather::parse(w).ok_or_else(|| {
+                    format!(
+                        "{id}: `{key}` must be one of {}",
+                        visioncraft_core::WEATHERS.join(", ")
+                    )
+                })
+            })
+            .transpose()
+    };
+    let (from, to) = (weather("weather")?, weather("weather_to")?);
+    let mix = a.number("weather_mix")?;
+    if mix.is_some_and(|m| !(0.0..=1.0).contains(&m)) {
+        return Err(format!("{id}: `weather_mix` must be from 0 to 1"));
+    }
+    if from.is_some() || to.is_some() {
+        if to.is_none() && mix.is_some() {
+            return Err(format!("{id}: `weather_mix` needs `weather_to`"));
+        }
+        let from = from.unwrap_or(visioncraft_core::Weather::Fair);
+        let to = to.map(|w| (w, mix.unwrap_or(0.5) as f32));
+        visioncraft_core::weather::apply(&mut project.view, from, to);
+    }
+    match a.get("clouds") {
+        None | Some(Value::Null) => {}
+        Some(Value::Number(n)) => {
+            let cover = n
+                .as_f64()
+                .filter(|c| (0.0..=1.0).contains(c))
+                .ok_or_else(|| format!("{id}: `clouds` as a cover must be from 0 to 1"))?;
+            let clouds = &mut project.view.clouds;
+            clouds.cover = cover as f32;
+            if cover > 0.0 && clouds.kind == visioncraft_core::CloudKind::Clear {
+                clouds.kind = visioncraft_core::CloudKind::Cumulus;
+            }
+        }
+        Some(Value::Object(given)) => {
+            let mut clouds = serde_json::to_value(project.view.clouds).unwrap_or_default();
+            if let Some(c) = clouds.as_object_mut() {
+                c.remove("blend");
+                c.extend(given.clone());
+            }
+            let clouds: visioncraft_core::Clouds =
+                serde_json::from_value(clouds).map_err(|e| format!("{id}: `clouds`: {e}"))?;
+            clouds.validate().map_err(|e| format!("{id}: {e}"))?;
+            project.view.clouds = clouds;
+        }
+        Some(_) => {
+            return Err(format!(
+                "{id}: `clouds` must be a cover 0..1 or an object as view.set takes it"
+            ));
         }
     }
     for (key, field) in [

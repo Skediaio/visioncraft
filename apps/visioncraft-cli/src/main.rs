@@ -122,7 +122,8 @@ Usage: visioncraft-cli render FILE --out PNG [--size WxH] [--viewpoint V]
                               [--date YYYY-MM-DD] [--time HH:MM]
                               [--season S] [--snow N] [--wetness N] [--rain N]
                               [--haze T] [--mist N] [--gustiness N]
-                              [--shafts N] [--white-balance WB] [--grade G]
+                              [--shafts N] [--weather W] [--clouds N]
+                              [--white-balance WB] [--grade G]
                               [--sky-occlusion on|off]
                               [--quality low|medium|high|ultra|photo] [--samples N]
                               [--aperture F] [--focus M|auto|target] [--focus-point X,Y]
@@ -149,6 +150,9 @@ Options:
                   (with --animation-s to place them in time)
   --shafts N      Light shafts 0..1 for this picture: beams of sun through mist, rain
                   fog or thick haze where crowns and houses shadow it
+  --weather W     clear, fair, cloudy, overcast, rain or storm for this picture: the
+                  clouds, rain, wetness, mist, gusts and wind of that weather
+  --clouds N      The clouds' cover 0..1 for this picture
   --white-balance WB  daylight, auto or a temperature in kelvin (2000..12000)
   --grade G       Colour grade: neutral, warm, cool or soft
   --sky-occlusion on|off  Light every surface by the sky it sees (baked over the
@@ -750,6 +754,8 @@ fn cmd_render(raw: &[String]) -> Res {
             "--mist",
             "--gustiness",
             "--shafts",
+            "--weather",
+            "--clouds",
             "--white-balance",
             "--grade",
             "--sky-occlusion",
@@ -815,6 +821,7 @@ fn cmd_render(raw: &[String]) -> Res {
         ("--mist", "mist", "0..1"),
         ("--gustiness", "gustiness", "0..1"),
         ("--shafts", "shafts", "0..1"),
+        ("--clouds", "clouds", "0..1"),
     ] {
         if let Some(s) = a.value(flag)? {
             params[key] = s
@@ -831,6 +838,9 @@ fn cmd_render(raw: &[String]) -> Res {
     }
     if let Some(s) = a.value("--grade")? {
         params["grade"] = s.into();
+    }
+    if let Some(s) = a.value("--weather")? {
+        params["weather"] = s.into();
     }
     if let Some(s) = a.value("--sky-occlusion")? {
         params["sky_occlusion"] = match s {

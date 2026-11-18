@@ -405,11 +405,26 @@ pub const YEARS_GROW: &str = "Show growth";
 pub const YEARS_TIP: &str = "Years after planting: plants grow from their planting age along their species' curve. Library plants change form as they grow; catalogue models only scale.";
 pub const YEARS_CONFLICTS: &str = "Growing into each other";
 pub const CLOUDS: &str = "Clouds";
-pub const CLOUD_KINDS: [(&str, &str); 3] = [
+pub const CLOUD_KINDS: [(&str, &str); 4] = [
     ("clear", "Clear"),
     ("cumulus", "Fair"),
     ("overcast", "Overcast"),
+    ("storm", "Storm"),
 ];
+pub const WEATHER: &str = "Weather";
+pub const WEATHER_TIP: &str = "Sets the clouds, rain, wetness, mist, gusts and wind together; the view eases into the new weather over a few seconds.";
+pub const WEATHERS: [(&str, &str); 6] = [
+    ("clear", "Clear"),
+    ("fair", "Fair"),
+    ("cloudy", "Cloudy"),
+    ("overcast", "Overcast"),
+    ("rain", "Rain"),
+    ("storm", "Storm"),
+];
+/// How long the window takes to ease into a weather picked in the panel (s).
+pub const WEATHER_PANEL_TRANSITION_S: f32 = 8.0;
+pub const VOLUMETRIC_CLOUDS: &str = "Volumetric";
+pub const VOLUMETRIC_CLOUDS_TIP: &str = "Volumetric clouds lit by the sun and the sky, whose shadows drift over the ground (Medium quality and up); off: the flat cloud layer.";
 pub const CLOUD_COVER: &str = "Cover";
 pub const LOOKS: [(&str, &str); 3] = [
     ("neutral", "Neutral"),

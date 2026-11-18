@@ -9,6 +9,42 @@ use visioncraft_core::{
 
 const PLATE: &[u8] = include_bytes!("data/plate.3dcraft");
 
+#[test]
+fn a_weather_sets_the_sky_and_the_air_together() {
+    let mut s = Session::new(Project::default());
+    s.run(
+        "view.set",
+        json!({"weather": "rain", "weather_transition_s": 12}),
+    )
+    .unwrap();
+    let v = &s.project().view;
+    assert_eq!(v.clouds.kind, visioncraft_core::CloudKind::Overcast);
+    assert_eq!((v.rain, v.wetness), (0.6, 0.8));
+    assert_eq!(v.weather_transition_s, 12.0);
+    // A field given with the weather wins; the clouds' own settings stay.
+    s.run("view.set", json!({"clouds": {"altitude_m": 900}}))
+        .unwrap();
+    s.run("view.set", json!({"weather": "storm", "rain": 0.5}))
+        .unwrap();
+    let v = &s.project().view;
+    assert_eq!(v.clouds.kind, visioncraft_core::CloudKind::Storm);
+    assert_eq!(v.clouds.altitude_m, 900.0);
+    assert_eq!(v.rain, 0.5);
+    assert!(s.run("view.set", json!({"weather": "drizzle"})).is_err());
+    assert!(
+        s.run("view.set", json!({"weather_transition_s": 900}))
+            .is_err()
+    );
+    // Undo takes the whole weather back.
+    assert!(s.undo());
+    assert_eq!(
+        s.project().view.clouds.kind,
+        visioncraft_core::CloudKind::Overcast
+    );
+    let p = Project::from_json_bytes(&s.project().to_json_bytes()).unwrap();
+    assert_eq!(&p.view, &s.project().view);
+}
+
 fn id(r: Value) -> String {
     r["id"].as_str().unwrap().to_string()
 }
@@ -572,7 +608,19 @@ fn clouds_are_a_view_setting_absent_from_files_while_default() {
         .is_err()
     );
     assert!(
-        s.run("view.set", json!({"clouds": {"kind": "storm"}}))
+        s.run("view.set", json!({"clouds": {"kind": "hail"}}))
+            .is_err()
+    );
+    // What is given merges into the clouds: a storm keeps the overcast sky's cover.
+    s.run("view.set", json!({"clouds": {"kind": "storm"}}))
+        .unwrap();
+    assert_eq!(
+        s.project().view.clouds.kind,
+        visioncraft_core::CloudKind::Storm
+    );
+    assert_eq!(s.project().view.clouds.cover, 1.0);
+    assert!(
+        s.run("view.set", json!({"clouds": {"altitude_m": 9000}}))
             .is_err()
     );
     let p = Project::from_json_bytes(&s.project().to_json_bytes()).unwrap();

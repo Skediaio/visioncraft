@@ -1763,7 +1763,7 @@ fn p_dusk_after_noon_matches_a_fresh_dusk() {
         });
         r.set_clouds(&visioncraft_render::Clouds {
             cover,
-            overcast: false,
+            ..Default::default()
         });
         r.finish_environment();
         capture(r, W, H)
@@ -1955,4 +1955,105 @@ fn underlay_shows_in_its_own_colours_the_right_way_up() {
     r.set_underlays(&[]);
     let px = capture(&mut r, W, H);
     assert_eq!(sample(&r, &px, Vec3::new(2.0, 0.0, 2.0)), bare);
+}
+
+/// Volumetric clouds: drawn over the sky where asked for (some cloud, some sky, nothing
+/// non-finite), a storm darker than fair weather, and at a quality without them (LOW) exactly
+/// the flat layer, so the cheapest preset keeps its look and cost.
+#[test]
+fn volumetric_clouds_fall_back_to_the_flat_layer() {
+    let aspect = W as f32 / H as f32;
+    let up = demo::camera(Vec3::new(0.0, 1.5, 6.0), Vec3::new(0.0, 8.0, -20.0), aspect);
+    let frame = |quality: Quality, clouds: visioncraft_render::Clouds| {
+        let mut r = renderer(W, H);
+        r.set_quality(quality);
+        demo::spheres(&mut r);
+        setup(&mut r, up, demo::noon_sun(), 15.0);
+        r.set_sky(&Sky::Physical).unwrap();
+        r.set_clouds(&clouds);
+        r.finish_environment();
+        settle(&mut r);
+        capture(&mut r, W, H)
+    };
+    let fair = visioncraft_render::Clouds {
+        cover: 0.5,
+        volumetric: true,
+        ..Default::default()
+    };
+    let flat = visioncraft_render::Clouds {
+        volumetric: false,
+        ..fair
+    };
+    assert_eq!(frame(Quality::LOW, fair), frame(Quality::LOW, flat));
+    let lit = frame(Quality::HIGH, fair);
+    let sky = |px: &[u8]| {
+        let rows = (0..H / 3).flat_map(|y| (0..W).map(move |x| (x, y)));
+        let lum: Vec<f32> = rows
+            .map(|(x, y)| {
+                let i = ((y * W + x) * 4) as usize;
+                (px[i] as f32 + px[i + 1] as f32 + px[i + 2] as f32) / 3.0
+            })
+            .collect();
+        let mean = lum.iter().sum::<f32>() / lum.len() as f32;
+        let spread = lum.iter().map(|l| (l - mean).abs()).sum::<f32>() / lum.len() as f32;
+        (mean, spread)
+    };
+    let (fair_mean, fair_spread) = sky(&lit);
+    assert!(
+        fair_spread > 4.0,
+        "clouds and sky in the fair sky: {fair_spread}"
+    );
+    let storm = frame(
+        Quality::HIGH,
+        visioncraft_render::Clouds {
+            cover: 1.0,
+            overcast: 1.0,
+            storm: 1.0,
+            ..fair
+        },
+    );
+    let (storm_mean, _) = sky(&storm);
+    assert!(
+        storm_mean < fair_mean,
+        "a storm sky is darker: {storm_mean} vs {fair_mean}"
+    );
+    write_png(&out_dir().join("clouds_fair.png"), &lit, W, H);
+    write_png(&out_dir().join("clouds_storm.png"), &storm, W, H);
+}
+
+/// The volumetric clouds' cost a frame once their image is settled, per preset at 1280x720
+/// (prints it; `cargo test -p visioncraft-render --test reference -- --ignored cloud_cost
+/// --nocapture`).
+#[test]
+#[ignore]
+fn cloud_cost() {
+    let (w, h) = (1280, 720);
+    let up = demo::camera(
+        Vec3::new(0.0, 1.5, 6.0),
+        Vec3::new(0.0, 6.0, -20.0),
+        w as f32 / h as f32,
+    );
+    for (name, quality) in Quality::PRESETS {
+        let mut r = renderer(w, h);
+        r.set_quality(quality);
+        demo::spheres(&mut r);
+        setup(&mut r, up, demo::noon_sun(), 15.0);
+        r.set_sky(&Sky::Physical).unwrap();
+        r.set_clouds(&visioncraft_render::Clouds {
+            cover: 0.6,
+            volumetric: true,
+            ..Default::default()
+        });
+        let mut ms = Vec::new();
+        for _ in 0..24 {
+            capture_any(&mut r);
+            let stats = r.stats();
+            if let Some(t) = stats.gpu_passes.iter().find(|p| p.0 == "clouds") {
+                ms.push(t.1);
+            }
+        }
+        ms.sort_by(f32::total_cmp);
+        let median = ms.get(ms.len() / 2).copied().unwrap_or(0.0);
+        eprintln!("{name}: clouds {median:.2} ms a frame ({} timed)", ms.len());
+    }
 }

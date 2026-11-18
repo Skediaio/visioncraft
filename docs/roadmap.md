@@ -298,14 +298,32 @@ nothing here is a promise of a date.
      faces of a leaf through its translucency, SSAO only on the sky the grid leaves, a cone of
      the reflection lobe against the visibility as specular occlusion, and the occluders' bounce
      from one reflectance per probe. `query.sky_view` answers how open a spot is. Recipe 43.
-     Next: GTAO, soft shadows (PCSS on the four cascades, contact shadows, cloud shadows), SSR
+     Done too: cloud shadows (see 6). Next: GTAO, soft shadows (PCSS on the four cascades,
+     contact shadows), SSR
      with a sky fallback for water, windows and puddles, and later probe GI (DDGI traced against
      an SDF or voxels). Lumen is out of reach in the browser.
   5. Life: people, a furniture library of real CC0 models next to the parametric pieces, small
      props, falling leaves and birds as particles, and warm lit interiors behind windows at dusk.
-  6. Weather, finished: a top-down rain occlusion map, wetness that builds up and dries with
-     puddles that grow from their centre, drops on every wet surface, volumetric clouds after Nubis
-     (2015/2017) with weather transitions, and lightning.
+  6. Weather. Done: volumetric clouds after Nubis (Schneider, SIGGRAPH 2015 and 2017) and
+     Hillaire's Frostbite clouds (2016): a 128^3 Perlin-Worley and Worley base noise, a 32^3 Worley
+     detail noise and a 1024^2 weather map made once by compute shaders the first time clouds are
+     drawn, height gradients from stratus to cumulonimbus, a march over the curved ground at a
+     quarter (Medium, High) or half (Ultra) of the render size with six steps towards the sun,
+     dual-lobe Henyey-Greenstein, Wrenninge's multiple-scattering octaves, Beer-Powder and the
+     sky's SH as ambient, jittered by interleaved gradient noise and blended over frames
+     (reprojected by direction; four jitters on a frame that starts over), hazed by the aerosol
+     and the clear air in front, read by the sky pass; Low and HDRI skies keep the flat layer.
+     Cloud shadows: the broken part of the sky casts the weather map's coverage along the sun on
+     every lit surface (`cloud_shadow` in the sun's visibility), drifting with the clouds; the
+     closed part dims the sun as before, so overcast and rain stay dense, low and coherent with
+     the light. A gap over the site keeps fair-weather pictures sunny (`clouds.sun_gap`).
+     Weather states (`view.set weather`: clear, fair, cloudy, overcast, rain, storm) write the
+     clouds, rain, wetness, mist, gusts and wind; the window eases into a change over
+     `weather_transition_s`; `view.render weather`/`weather_to`/`weather_mix` and a film shot's
+     `weather` `[from, to]` mix two. Recipe 45. Next: lightning in storms (a flash lighting the
+     clouds and the scene, a bolt), a top-down rain occlusion map, wetness that builds up and dries
+     with puddles that grow from their centre, drops on every wet surface, clouds in reflections
+     (the water's mirror keeps the flat layer) and a flyable view through the cloud layer.
 - **More leaf sets:** the remaining CC0 atlases, then coverage reported again.
 - **Growth data checked against open data,** with the source of each value recorded. The table
   is estimated today, and so are the light needs per species (`plant_light.rs`: the hours of direct
