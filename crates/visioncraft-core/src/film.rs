@@ -4,7 +4,7 @@
 //! A [`Film`] is a list of [`Shot`]s played one after the other, each with its own camera
 //! (the join between two shots is a cut). A shot moves the camera along a path (walk, glide,
 //! flyover), up (rise), round a spot (orbit) or not at all (hold). Inside a shot the camera is
-//! eased by arc length (`ease`), and the sun, the date, the years of growth and the snow can
+//! eased by arc length (`ease`), and the sun, the date, the years of growth and the snow, the wetness and the rain can
 //! change along it. [`Timeline::camera_at`] answers where the camera is at a time, as a pure
 //! function of the film and an [`Env`] (the ground the camera walks on, the viewpoints).
 //!
@@ -112,6 +112,13 @@ pub struct Shot {
     pub years: Option<Span<f32>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub snow: Option<Span<f32>>,
+    /// Wet surfaces at the start and the end of the shot (as `view.set wetness`): a shot can
+    /// ease from dry to wet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wetness: Option<Span<f32>>,
+    /// Rain at the start and the end of the shot (as `view.set rain`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rain: Option<Span<f32>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -202,6 +209,8 @@ const COMMON_FIELDS: &[&str] = &[
     "season",
     "years",
     "snow",
+    "wetness",
+    "rain",
 ];
 
 pub const SHOT_KINDS: &[&str] = &["walk", "glide", "rise", "orbit", "flyover", "hold"];
@@ -376,6 +385,13 @@ impl Shot {
             && (!(0.0..=1.0).contains(&s.from) || !(0.0..=1.0).contains(&s.to))
         {
             return err("`snow` must be from 0 to 1");
+        }
+        for (name, span) in [("wetness", self.wetness), ("rain", self.rain)] {
+            if let Some(s) = span
+                && (!(0.0..=1.0).contains(&s.from) || !(0.0..=1.0).contains(&s.to))
+            {
+                return err(&format!("`{name}` must be from 0 to 1"));
+            }
         }
         if self.date.is_some() && self.season.is_some() {
             return err("give `date` or `season`, not both");
@@ -588,6 +604,10 @@ pub struct Overrides {
     pub years: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub snow: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wetness: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rain: Option<f32>,
 }
 
 impl Overrides {
@@ -613,6 +633,12 @@ impl Overrides {
         }
         if let Some(s) = self.snow {
             m.insert("snow".into(), json!(s));
+        }
+        if let Some(s) = self.wetness {
+            m.insert("wetness".into(), json!(s));
+        }
+        if let Some(s) = self.rain {
+            m.insert("rain".into(), json!(s));
         }
         m
     }
@@ -816,6 +842,12 @@ fn overrides_at(shot: &Shot, base: Overrides, u: f32) -> Overrides {
     }
     if let Some(s) = shot.snow {
         o.snow = Some(s.at(u));
+    }
+    if let Some(s) = shot.wetness {
+        o.wetness = Some(s.at(u));
+    }
+    if let Some(s) = shot.rain {
+        o.rain = Some(s.at(u));
     }
     o
 }
@@ -1282,6 +1314,38 @@ mod tests {
         assert_eq!(end.overrides.time_of_day, None);
         let params = mid.overrides.render_params();
         assert_eq!(params["time"], json!({"hour": 18.0, "month": 6, "day": 1}));
+    }
+
+    #[test]
+    fn wetness_and_rain_ease_from_dry_to_wet() {
+        let ground: &dyn Fn(f32, f32) -> f32 = &flat;
+        let f = film(vec![shot(
+            json!({"kind": "hold", "eye": [0, 2, 5], "target": [0, 1, 0], "duration_s": 4,
+            "wetness": [0, 0.8], "rain": 0.6}),
+        )]);
+        let e = env(ground, &[]);
+        let start = camera_at(&f, 0.0, &e).unwrap().overrides;
+        assert_eq!((start.wetness, start.rain), (Some(0.0), Some(0.6)));
+        let mid = camera_at(&f, 2.0, &e).unwrap().overrides;
+        assert!((mid.wetness.unwrap() - 0.4).abs() < 1e-5);
+        let params = mid.render_params();
+        assert_eq!(params["rain"], json!(0.6f32));
+        assert!((params["wetness"].as_f64().unwrap() - 0.4).abs() < 1e-5);
+        // Out of range is refused, and a shot without them carries nothing.
+        let bad = Shot::from_value(
+            &json!({"kind": "hold", "eye": [0, 2, 5], "target": [0, 1, 0], "duration_s": 1, "rain": 1.5}),
+            52.0,
+        );
+        assert!(bad.unwrap_err().contains("`rain` must be from 0 to 1"));
+        let dry = camera_at(
+            &film(vec![shot(
+                json!({"kind": "hold", "eye": [0, 2, 5], "target": [0, 1, 0], "duration_s": 1}),
+            )]),
+            0.5,
+            &e,
+        )
+        .unwrap();
+        assert!(dry.overrides.render_params().is_empty());
     }
 
     #[test]

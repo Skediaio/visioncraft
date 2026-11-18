@@ -494,7 +494,7 @@ pub fn host_docs() -> Vec<CommandDoc> {
         host_doc(
             "film.preview",
             "Preview Film",
-            "Reads a film without drawing it: its length, frame count and where each shot starts, and with `t` the camera at that time (eye, target, field of view), the shot it is in, how far through it, what changes for that picture (time of day, date or season, years, snow) and the sun then. The walk follows the real ground of the project (terrain, areas, models), so this is how to check the shots before film.render.",
+            "Reads a film without drawing it: its length, frame count and where each shot starts, and with `t` the camera at that time (eye, target, field of view), the shot it is in, how far through it, what changes for that picture (time of day, date or season, years, snow, wetness, rain) and the sun then. The walk follows the real ground of the project (terrain, areas, models), so this is how to check the shots before film.render.",
             vec![
                 p("id", "string", None, true, None, &[], "Film id"),
                 p(
@@ -507,14 +507,14 @@ pub fn host_docs() -> Vec<CommandDoc> {
                     "Film time in seconds, 0 to the duration (later is the last frame); without it only the shot list comes back",
                 ),
             ],
-            "{id, name, fps, duration_s, frame_count, shots: [{index, kind, start_s, duration_s}], t?, shot?, progress?, camera?: {position, target, fov_y_deg}, overrides?: {time_of_day?, date?, season?, years?, snow?}, time?, sun?}",
+            "{id, name, fps, duration_s, frame_count, shots: [{index, kind, start_s, duration_s}], t?, shot?, progress?, camera?: {position, target, fov_y_deg}, overrides?: {time_of_day?, date?, season?, years?, snow?, wetness?, rain?}, time?, sun?}",
             json!({"id": "f1", "t": 2.5}),
             false,
         ),
         host_doc(
             "film.render",
             "Render Film",
-            "Draws a film as numbered PNGs `frame_00000.png`... in a folder beneath the write root, one view.render per frame: the film's camera, the animation clock set to the film time (so wind and water move) and the shot's time of day, date or season, years and snow for that picture only; the project does not change. Frames are counted from 0 in what is drawn, so `every` 5 gives a film of fps / 5. At most 10000 frames per call: render a long film in parts (`from`, `to`). A video needs a program such as ffmpeg: the result's `ffmpeg` is the command to run on the frames.",
+            "Draws a film as numbered PNGs `frame_00000.png`... in a folder beneath the write root, one view.render per frame: the film's camera, the animation clock set to the film time (so wind and water move) and the shot's time of day, date or season, years, snow, wetness and rain for that picture only; the project does not change. Frames are counted from 0 in what is drawn, so `every` 5 gives a film of fps / 5. At most 10000 frames per call: render a long film in parts (`from`, `to`). A video needs a program such as ffmpeg: the result's `ffmpeg` is the command to run on the frames.",
             vec![
                 p("id", "string", None, true, None, &[], "Film id"),
                 p(
@@ -715,6 +715,24 @@ pub fn host_docs() -> Vec<CommandDoc> {
                     Some("the project's"),
                     &[],
                     "Snow 0..1 for this picture only; on its own it brings winter, with another season it is refused",
+                ),
+                p(
+                    "wetness",
+                    "number",
+                    None,
+                    false,
+                    Some("the project's"),
+                    &[],
+                    "Wet surfaces 0..1 for this picture only (darker, glossier, puddles above about 0.5)",
+                ),
+                p(
+                    "rain",
+                    "number",
+                    None,
+                    false,
+                    Some("the project's"),
+                    &[],
+                    "Rain 0..1 for this picture only: streaks, ripples, overcast, wet surfaces",
                 ),
             ],
             "{path? | mime, base64; width, height, camera, time, years, ...the renderer's info}",
@@ -1307,6 +1325,8 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
             "time",
             "season",
             "snow",
+            "wetness",
+            "rain",
             "quality",
             "years",
             "samples",
@@ -1420,6 +1440,17 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
         if snow > 0.0 && season.is_none() && a.get("time").is_none() {
             project.time =
                 visioncraft_core::Season::Winter.time(project.time, project.site.latitude);
+        }
+    }
+    for (key, field) in [
+        ("wetness", &mut project.view.wetness),
+        ("rain", &mut project.view.rain),
+    ] {
+        if let Some(v) = a.number(key)? {
+            if !(0.0..=1.0).contains(&v) {
+                return Err(format!("{id}: `{key}` must be from 0 to 1"));
+            }
+            *field = v as f32;
         }
     }
     if project.view.snow > 0.0 && project.season() != visioncraft_core::Season::Winter {

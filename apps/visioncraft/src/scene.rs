@@ -31,7 +31,7 @@ pub struct Loaded {
     pub version: u64,
 }
 
-pub type LookKey = [u32; 22];
+pub type LookKey = [u32; 23];
 
 /// What a surface looks like to the renderer.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -61,6 +61,9 @@ pub struct Look {
     /// A straightened wall photo, drawn by its own UVs: 1 + its index in `Scene::photo_faces`
     /// (0: none). Only the pieces of a photo's region carry it; a face's own look never does.
     pub photo: u32,
+    /// Puddles may form on the surface when it is wet: false for a lawn (it stays damp, but
+    /// holds no standing water).
+    pub puddles: bool,
 }
 
 impl Look {
@@ -81,6 +84,7 @@ impl Look {
             stripes: 0,
             parallax_m: 0.0,
             photo: 0,
+            puddles: true,
         }
     }
 
@@ -117,6 +121,7 @@ impl Look {
             self.aging[3],
             self.north[0],
             self.north[1],
+            self.puddles as u32 as f32,
         ]
         .map(f32::to_bits)
     }
@@ -236,6 +241,7 @@ fn look_of(
                 relief: ov.as_ref().map_or(0.0, |o| o.relief),
                 gloss: ov.as_ref().map_or(0.0, |o| o.gloss),
                 stripes: stripes_packed(&turned_lawn(l, site)),
+                puddles: false,
                 ..plain
             }
         }
@@ -287,6 +293,7 @@ fn gpu_material(look: &Look) -> visioncraft_render::Material {
         aging_north: look.north,
         variation: look.variation,
         stripes: look.stripes,
+        puddles: look.puddles,
         parallax_depth_m: look.parallax_m,
         projection: visioncraft_render::Projection::Triplanar {
             scale_m: look.scale_m.max(0.01),
@@ -3061,20 +3068,20 @@ mod tests {
 
     #[test]
     fn classify_picks_the_cheapest_update() {
-        let a = key(1, vec![[0; 22]], true);
+        let a = key(1, vec![[0; 23]], true);
         let (i, t) = (Mat4::IDENTITY, Mat4::from_translation(Vec3::X));
         assert_eq!(classify(&a, &a.clone(), &i, &i), Change::Keep);
         assert_eq!(classify(&a, &a.clone(), &i, &t), Change::Transform);
         assert_eq!(
-            classify(&a, &key(2, vec![[0; 22]], true), &i, &i),
+            classify(&a, &key(2, vec![[0; 23]], true), &i, &i),
             Change::Rebuild
         );
         assert_eq!(
-            classify(&a, &key(1, vec![[1; 22]], true), &i, &i),
+            classify(&a, &key(1, vec![[1; 23]], true), &i, &i),
             Change::Rebuild
         );
         assert_eq!(
-            classify(&a, &key(1, vec![[0; 22]], false), &i, &t),
+            classify(&a, &key(1, vec![[0; 23]], false), &i, &t),
             Change::Rebuild
         );
     }

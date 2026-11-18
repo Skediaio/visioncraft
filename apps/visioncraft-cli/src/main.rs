@@ -120,7 +120,7 @@ const HELP_RENDER: &str = "\
 Usage: visioncraft-cli render FILE --out PNG [--size WxH] [--viewpoint V]
                               [--camera X,Y,Z,TX,TY,TZ] [--fov DEG]
                               [--date YYYY-MM-DD] [--time HH:MM]
-                              [--season S] [--snow N]
+                              [--season S] [--snow N] [--wetness N] [--rain N]
                               [--quality low|medium|high|ultra|photo] [--samples N]
                               [--aperture M] [--focus M] [--animation-s S]
 
@@ -137,6 +137,8 @@ Options:
   --date, --time  Local date and time of the sun, for this picture only
   --season S      spring, summer, autumn or winter, for this picture only
   --snow N        Snow 0..1 for this picture (on its own it brings winter)
+  --wetness N     Wet surfaces 0..1 for this picture (puddles above about 0.5)
+  --rain N        Rain 0..1 for this picture (streaks, ripples, overcast; implies wet)
   --quality Q     low, medium, high (default), ultra or photo (many frames averaged
                   at ULTRA: soft shadows, smooth edges; slower)
   --samples N     Photo: frames averaged, 1 to 1024. Default 64
@@ -174,7 +176,7 @@ Usage: visioncraft-cli film FILE --out DIR [--film ID] [--size WxH] [--quality Q
 Renders a film of the project (film.add, film.add_shot; the only film when --film is
 left out) as DIR/frame_00000.png and on: each frame has the film's camera, the
 animation clock at the film's time (so wind and water move) and the shot's time of day,
-date or season, years and snow, for that picture only. Prints the result as one line of
+date or season, years, snow, wetness and rain, for that picture only. Prints the result as one line of
 JSON, with the ffmpeg command that makes a video of the frames.
 
 Options:
@@ -707,6 +709,8 @@ fn cmd_render(raw: &[String]) -> Res {
             "--animation-s",
             "--season",
             "--snow",
+            "--wetness",
+            "--rain",
         ],
         &[],
     )?;
@@ -761,6 +765,14 @@ fn cmd_render(raw: &[String]) -> Res {
             .parse::<f64>()
             .map_err(|_| CliError::Usage(format!("`--snow` must be a number 0..1, got `{s}`")))?
             .into();
+    }
+    for (flag, key) in [("--wetness", "wetness"), ("--rain", "rain")] {
+        if let Some(s) = a.value(flag)? {
+            params[key] = s
+                .parse::<f64>()
+                .map_err(|_| CliError::Usage(format!("`{flag}` must be a number 0..1, got `{s}`")))?
+                .into();
+        }
     }
     for (flag, key) in [
         ("--samples", "samples"),

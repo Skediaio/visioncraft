@@ -203,6 +203,15 @@ pub struct ViewState {
     /// `weathering` (`Weathering::strengths`). Explicit: the view's `years` does not drive it.
     #[serde(skip_serializing_if = "is_zero")]
     pub weathering: f32,
+    /// Wet surfaces, 0 (dry, the default; not written) to 1: porous materials darken and turn
+    /// glossy, and above about 0.5 puddles form on flat, open, upward-facing paving and soil.
+    /// Rain implies it: the wetness drawn is `max(wetness, rain)` (`ViewState::wet`).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub wetness: f32,
+    /// Rain falling, 0 (none, the default; not written) to 1: slanted streaks (by the wind),
+    /// ripples on puddles and water, an overcast sky and a weaker sun.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub rain: f32,
     /// What lies round the design on the endless ground, beyond its plot. Not written while the
     /// default (fields).
     #[serde(skip_serializing_if = "Surroundings::is_default")]
@@ -332,6 +341,8 @@ impl Default for ViewState {
             clutter: true,
             snow: 0.0,
             weathering: 0.0,
+            wetness: 0.0,
+            rain: 0.0,
             surroundings: Surroundings::default(),
             sun_map: None,
         }
@@ -339,6 +350,11 @@ impl Default for ViewState {
 }
 
 impl ViewState {
+    /// The wetness drawn: rain wets everything, whatever `wetness` says.
+    pub fn wet(&self) -> f32 {
+        self.wetness.max(self.rain)
+    }
+
     /// Maps the old relative `wind_strength` (files and commands from before wind had units) to
     /// m/s, once: it then stays out of the project.
     pub fn migrate_wind(&mut self) {
@@ -364,6 +380,8 @@ impl ViewState {
             && self.years.is_none_or(|y| (0.0..=YEARS_MAX).contains(&y))
             && (0.0..=1.0).contains(&self.snow)
             && (0.0..=1.0).contains(&self.weathering)
+            && (0.0..=1.0).contains(&self.wetness)
+            && (0.0..=1.0).contains(&self.rain)
             && self.ground.is_none_or(|g| {
                 finite(g.height) && g.color.iter().all(|c| c.is_finite() && *c >= 0.0)
             })

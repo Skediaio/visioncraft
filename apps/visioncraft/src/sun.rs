@@ -585,6 +585,24 @@ fn view_fields(ui: &mut egui::Ui, cx: &mut Cx) {
             json!({"weathering": (age * 100.0).round() / 100.0}),
         );
     }
+    // Rain: wet surfaces and falling rain, one `view.set` when let go.
+    ui.label(egui::RichText::new(t::RAIN_SECTION).small());
+    for (label, tip, key, value) in [
+        (t::WETNESS, t::WETNESS_TIP, "wetness", v.wetness),
+        (t::RAIN, t::RAIN_TIP, "rain", v.rain),
+    ] {
+        let mut x = value;
+        let r = ui
+            .add(
+                egui::Slider::new(&mut x, 0.0..=1.0)
+                    .text(label)
+                    .max_decimals(2),
+            )
+            .on_hover_text(tip);
+        if r.drag_stopped() || (r.changed() && !r.dragged() && x != value) {
+            cx.run("view.set", json!({key: (x * 100.0).round() / 100.0}));
+        }
+    }
     ui.horizontal(|ui| {
         ui.label(t::LOOK);
         let now = serde_json::to_value(v.look).unwrap_or_default();

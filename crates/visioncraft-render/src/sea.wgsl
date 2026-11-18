@@ -302,8 +302,13 @@ fn sea_surface(p: vec2<f32>, footprint: f32) -> SeaSurface {
     let q = p - sea.flow.xy * t;
     let slope = (wave_slope(q * 2.1 + wind * t * 0.4) * 0.06 + wave_slope(q * 6.3 - vec2<f32>(0.23, -0.19) * t) * 0.03) * ripple;
     variance += sea.extra.y * 0.002 * (1.0 - ripple / max(sea.extra.y, 1e-4));
+    // Rain's rings, where a pixel is small enough to show them.
+    var rings = vec2<f32>(0.0);
+    if g.wet.y > 0.0 {
+        rings = rain_ripple_slope(p, g.wet.y, 1.0 - smoothstep(0.04, 0.25, footprint));
+    }
     var out: SeaSurface;
-    out.n = normalize(vec3<f32>(nx - slope.x, max(ny, 0.2), nz - slope.y));
+    out.n = normalize(vec3<f32>(nx - slope.x - rings.x, max(ny, 0.2), nz - slope.y - rings.y));
     out.variance = variance;
     out.jacobian = jxx * jzz - jxz * jxz;
     return out;

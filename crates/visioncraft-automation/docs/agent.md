@@ -749,7 +749,8 @@ decide (a walk is 1.2 m/s, a glide 2, a flyover 8 unless told); not both. `ease`
 gently; `look_at` is a point or `"ahead"`; `fov_y_deg` = 60. Along a shot the picture can change:
 `time_of_day` `[from, to]` (hours, the sun's course; one number holds it), `date` `[{month, day},
 {month, day}]` or `season` (the date's season shows, so a shot from March to September goes
-through spring and summer), `years` `[from, to]` (the garden growing) and `snow` (winter only).
+through spring and summer), `years` `[from, to]` (the garden growing), `snow` (winter only), `wetness` and `rain` (each `[from, to]` 0..1, so a
+shot can ease from dry to wet and into rain; recipe 36).
 
 The plan for a garden: ask for its layout first (`document.inspect`: shapes and their outlines;
 `query.quantities`: where the plants are and how many), and choose paths from it: a walk from the
@@ -1093,6 +1094,47 @@ Three more things drawn with curves.
   stay wider than the flight: a flight of several steps needs a large radius (or a hollow front),
   a single step takes any bow up to a semicircle. A flight that turns or is set into the slope has
   a straight front, and an arc on the top edge is not supported.
+
+### 36. A wet terrace after rain, and a shot easing from dry into a downpour
+
+```json recipe
+{"intent": "a paved terrace beside a lawn and a pond after rain, with puddles and dark wet timber, then a film shot that eases from dry into rain", "steps": [
+  {"id": "shape.add_area", "params": {"name": "Lawn", "outline": [[0, 0], [24, 0], [24, 18], [0, 18]], "material": "lawn"}},
+  {"id": "shape.add_area", "params": {"name": "Terrace", "outline": [[4, 4], [14, 4], [14, 11], [4, 11]], "elevation": 0.04, "drape": false, "material": "paving"}},
+  {"id": "shape.add_extrusion", "params": {"name": "Bench", "outline": [[5, 5], [8.5, 5], [8.5, 5.5], [5, 5.5]], "closed": true, "thickness": 0.5, "height": 0.45, "material": "timber"}},
+  {"id": "shape.add_ellipse", "params": {"name": "Pond", "center": [19, 7], "radius_x": 3, "radius_z": 2, "kind": "area", "elevation": -0.05, "drape": false, "material": "water"}},
+  {"id": "view.set", "params": {"wetness": 0.8}},
+  {"id": "view.render", "params": {"camera": {"position": [2, 3, 16], "target": [10, 0, 7]}, "width": 960, "height": 540, "path": "terrace-wet.png"}},
+  {"id": "view.render", "params": {"camera": {"position": [2, 3, 16], "target": [10, 0, 7]}, "width": 960, "height": 540, "rain": 0.8, "path": "terrace-rain.png"}},
+  {"id": "view.set", "params": {"wetness": 0}},
+  {"id": "film.add", "params": {"name": "Rain comes in", "fps": 25}},
+  {"id": "film.add_shot", "params": {"id": "f1", "shot": {"kind": "hold", "eye": [2, 3, 16], "target": [10, 0, 7], "duration_s": 6, "rain": [0, 0.8]}}},
+  {"id": "film.preview", "params": {"id": "f1", "t": 3}},
+  {"id": "film.render", "params": {"id": "f1", "dir": "rain-in", "width": 640, "height": 360, "every": 25}}
+]}
+```
+
+`view.set {wetness: 0..1}` wets every surface at once and `rain: 0..1` makes it rain; both are stored
+with the project (0, the default, is not written), are undo steps, and in the window are the Wetness
+and Rain sliders under Sun & sky. Rain implies wetness: what is drawn is the larger of the two.
+`view.render` takes both for one picture (`wetness`, `rain`; the CLI has `--wetness` and `--rain`),
+and a film shot takes `wetness` and `rain` as `[from, to]` (or one number), as it does `snow`.
+
+- **Wet surfaces.** Porous materials (soil, wood, stone, concrete, brick, plaster, fabric) darken, about
+  as the square of their albedo when soaked, and turn glossy; leaves take a slight sheen; metal,
+  glass and polished paint barely change. How porous a surface is follows from its roughness and
+  metalness (no extra setting): rough dielectrics soak, smooth or metallic ones do not. It also
+  covers the picture's textures and the terrain's layers. A roof, a pergola or a dense crown keeps
+  what is under it damp, not wet.
+- **Puddles** form from a wetness of about 0.5 and grow with it: low-frequency patches on flat,
+  open, upward-facing paving, terraces, paths and soil, as mirror-like water films that reflect the
+  sky and the buildings. Lawns, plants, slopes steeper than about 15 degrees and ground under cover
+  stay without.
+- **Rain** falls in thin streaks slanted downwind (`wind_speed_mps`, `wind_direction_deg`), thicker
+  with the value and fewer under a roof; rings spread over puddles, ponds and lakes; the sky closes
+  to a grey overcast layer (from a drizzle of about 0.1, fully at 0.6) and the sun weakens. A plan or
+  elevation view (orthographic) shows the wet surfaces, not the streaks. Snow and rain can be set
+  together; snow stays dry.
 
 ## Known traps
 

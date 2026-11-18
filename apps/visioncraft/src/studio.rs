@@ -1350,6 +1350,7 @@ impl Studio {
         // so far that sunlit snow clips or the rest of the picture lifts (`SNOW_EV`).
         self.renderer.set_grade(power, saturation);
         self.renderer.set_snow(snow);
+        self.renderer.set_wet(v.wetness, v.rain);
         self.renderer.set_clouds(&visioncraft_render::Clouds {
             cover: match clouds.kind {
                 visioncraft_core::CloudKind::Clear => 0.0,

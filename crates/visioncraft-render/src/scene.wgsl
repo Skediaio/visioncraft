@@ -53,7 +53,7 @@ struct Material {
     emissive: vec4<f32>,   // rgb emitted luminance (cd/m2), w weathering
     alpha: vec4<f32>,      // x cutout threshold, y 1 / triplanar scale (0: UVs), z surface (0 standard, 1 glass, 2 water), w foliage
     flags: vec4<u32>,      // x texture bits (1 base, 2 normal, 4 orm, 8 roughness, 16 metallic, 32 occlusion, 64 height in the occlusion slot), y double-sided, z macro variation (f32 bits), w mowing stripes (cm | deg << 16)
-    relief: vec4<f32>,     // x parallax depth of the height map (m; 0 off), yz true north's direction on the ground (x, z; unit)
+    relief: vec4<f32>,     // x parallax depth of the height map (m; 0 off), yz true north's direction on the ground (x, z; unit), w puddles may form (0/1)
     aging: vec4<f32>,      // how strongly dirt, moss, wear and rain streaks show (0..1 each; all 0 off)
 }
 @group(1) @binding(0) var<uniform> material: Material;
@@ -751,6 +751,7 @@ struct Surface {
     ao: f32,             // from the maps only
     emissive: vec3<f32>,
     self_shadow: f32,    // 0 lit .. 1: the sun's direct light blocked by the height map's relief
+    puddle: f32,         // 0..1: how far puddles may form here when it is wet (0 on lawns, leaves, glass; wet.wgsl)
 }
 
 // Base colour, normal and the occlusion / roughness / metallic maps, for
@@ -819,9 +820,12 @@ fn surface(in: Varying, front: bool, ground: bool) -> Surface {
         }
     }
     s.emissive = material.emissive.rgb;
+    s.puddle = select(0.0, material.relief.w, material.alpha.z == 0.0 && material.alpha.w == 0.0);
     s = macro_variation(s, in.world, bitcast<f32>(material.flags.z));
     if ground && in.face == GROUND_FACE {
         s = surroundings(s, in.world, length(dwx) + length(dwy));
+        // The endless ground is grass, fields and woods: no puddles.
+        s.puddle = 0.0;
     }
     // Mowing stripes: the blades of each pass lean the way the mower went, so a band is lighter
     // seen along its lean and darker seen against it, alternating band by band.
@@ -1103,6 +1107,16 @@ fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, aging: Agin
     if in.face == g.highlight.y && draw.mesh.x == g.highlight.x {
         base = mix(base, vec3<f32>(0.25, 0.55, 1.0), 0.35);
     }
+    // Wet surfaces and puddles (wet.wgsl): the wetness here and the puddle on it, and a puddle's
+    // flat normal with the rain's ripples. The darker, glossier surface follows the weathering.
+    var wet = vec2<f32>(0.0);
+    if g.wet.x > 0.0 && !clay {
+        wet = wet_state(in.world, s.geometric, s.puddle, foliage, snow);
+        if wet.y > 0.0 {
+            let ripple = rain_ripple_slope(in.world.xz, g.wet.y, 1.0 - smoothstep(6.0, 24.0, length(to_eye(in.world))));
+            s.n = normalize(mix(s.n, normalize(s.geometric + vec3<f32>(-ripple.x, 0.0, -ripple.y)), wet.y));
+        }
+    }
     let n = s.n;
     let v = normalize(to_eye(in.world));
     let l = g.sun_dir.xyz;
@@ -1131,6 +1145,14 @@ fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, aging: Agin
             let k = sin(w.x * 3.1 + 1.7 * sin(w.z * 2.3)) * sin(w.z * 2.7 + w.y * 1.9);
             base *= vec3<f32>(1.0 + 0.16 * k, 1.0 + 0.05 * k, 1.0 - 0.14 * k);
         }
+    }
+    var wet_boost = 1.0;
+    if wet.x > 0.0 {
+        let wetted = wet_apply(base, s.roughness, s.metallic, wet.x, wet.y, foliage);
+        base = wetted.albedo;
+        s.roughness = wetted.roughness;
+        s.metallic = wetted.metallic;
+        wet_boost = wetted.boost;
     }
     base = mix(base, SNOW_ALBEDO, snow);
     // After the weathering, which changes the roughness.
@@ -1182,7 +1204,7 @@ fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, aging: Agin
                 // A card is many leaves facing every way, so the sun's mirror image is spread
                 // over them: kept below a third of a sunlit leaf's diffuse (about 0.1 / PI in
                 // green). At 0.06 it was twice the diffuse, and white: pale crown tops from above.
-                fr = min(fr, vec3<f32>(0.01));
+                fr = min(fr, vec3<f32>(0.01 + 0.04 * wet.x));
             }
         }
         let dc = select(diffuse_color, diffuse_color * mix(vec3<f32>(1.0), t_tint / LEAF_T, 1.0 - smoothstep(-0.1, 0.1, nol_raw * dot(n, v))), foliage);
@@ -1256,8 +1278,14 @@ fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, aging: Agin
         reflected = environment(r, s.roughness) * open + room_seen(vis, bounce, r) * (1.0 - open);
         let ssr = screen_reflection(in.world, r);
         reflected = mix(reflected, ssr.rgb, ssr.a);
+    } else if wet.y > 0.0 {
+        // A puddle mirrors the sky, and the room's light where the sky volume says a wall or a
+        // crown stands in the way (the screen-space copy of the scene is not there yet in this pass).
+        let open = ray_open(in.world, r);
+        let mirrored = environment(r, s.roughness) * open + room_seen(vis, bounce, r) * (1.0 - open);
+        reflected = mix(reflected, mirrored, wet.y);
     }
-    let ambient_specular = env_brdf_approx(f0, s.roughness, nov) * reflected * spec_ao;
+    let ambient_specular = env_brdf_approx(f0, s.roughness, nov) * reflected * spec_ao * wet_boost;
     let local = local_lights(in.world, n, v, nov, diffuse_color, f0, a, foliage);
     let emitted = s.emissive * g.time.y;
     return Shaded(apply_fog(sun + ambient_diffuse + ambient_specular + local + emitted, in.world), s.base.a);
@@ -2025,6 +2053,11 @@ fn water(in: Varying) -> vec4<f32> {
     let p = in.world.xz;
     let slope = wave_slope(p * 1.7 + wind * t * 0.35) * 0.08 + wave_slope(p * 5.3 - vec2<f32>(0.23, -0.19) * t) * 0.04;
     var n = normalize(vec3<f32>(-slope.x * calm, 1.0, -slope.y * calm));
+    // Rain's rings spread over the pond.
+    if g.wet.y > 0.0 {
+        let rings = rain_ripple_slope(p, g.wet.y, 1.0 - smoothstep(8.0, 40.0, dist));
+        n = normalize(n + vec3<f32>(-rings.x, 0.0, -rings.y));
+    }
     // Distant water is mirror-like: fade the waves as they shrink below a pixel.
     n = normalize(mix(n, vec3<f32>(0.0, 1.0, 0.0), clamp(depth / 120.0, 0.0, 0.8)));
     let nov = max(dot(n, v), 1e-4);

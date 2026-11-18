@@ -19,7 +19,7 @@ pub fn recipes() -> Vec<Value> {
 #[test]
 fn every_recipe_of_the_guide_runs() {
     let recipes = recipes();
-    assert_eq!(recipes.len(), 35);
+    assert_eq!(recipes.len(), 36);
     for (n, recipe) in recipes.into_iter().enumerate() {
         let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("recipe-{n}"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -277,6 +277,12 @@ fn every_recipe_of_the_guide_runs() {
                     end["sun"]["elevation_deg"].as_f64().unwrap() < 10.0,
                     "{report}"
                 );
+            }
+            36 => {
+                // The view is wet and not raining, and halfway through the shot it rains 0.4.
+                let mid = &results[8]["result"];
+                let rain = mid["overrides"]["rain"].as_f64().unwrap();
+                assert!((rain - 0.4).abs() < 1e-3, "{report}");
             }
             35 => {
                 // The round bed has 28 chords a course in two courses; the pond measures like

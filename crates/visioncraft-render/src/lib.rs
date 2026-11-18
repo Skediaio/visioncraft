@@ -115,7 +115,7 @@ const CLUSTER_CELL: f32 = 8.0;
 /// `set_time` wraps here (seconds) to keep f32 precision in the shaders.
 const TIME_WRAP: f64 = 4096.0;
 /// Byte offset of the SH in the globals (written by the GPU, see env.rs).
-const SH_OFFSET: u64 = 9 * 64 + 44 * 16;
+const SH_OFFSET: u64 = 9 * 64 + 45 * 16;
 /// The roughness up to which a metal is a mirror (`Material::mirror`, scene.wgsl `light`).
 const MIRROR_ROUGHNESS: f32 = 0.1;
 
@@ -133,6 +133,7 @@ const SHADERS: [(&str, &[&str]); 13] = [
             include_str!("terrain.wgsl"),
             include_str!("impostor.wgsl"),
             include_str!("sea.wgsl"),
+            include_str!("wet.wgsl"),
         ],
     ),
     ("sky", &[COMMON, SKY]),
@@ -268,6 +269,10 @@ pub struct Material {
     /// Mowing stripes: width in centimetres in the low 16 bits, direction in degrees clockwise
     /// from north in the high 16; 0 for none.
     pub stripes: u32,
+    /// Puddles may form on this surface when it is wet (`set_wet`): flat, open, upward-facing
+    /// ground. False on lawns, which stay damp but hold no standing water. Plant leaves, glass and
+    /// water never take puddles.
+    pub puddles: bool,
 }
 
 impl Default for Material {
@@ -298,6 +303,7 @@ impl Default for Material {
             surface: Surface::Standard,
             variation: 0.0,
             stripes: 0,
+            puddles: true,
         }
     }
 }
@@ -714,6 +720,8 @@ struct SampledPipelines {
     /// The last mesh level handing over to an impostor (by double-sided).
     depth_fade: [wgpu::RenderPipeline; 2],
     sky: wgpu::RenderPipeline,
+    /// Falling rain: depth-tested streaks over the finished forward pass (wet.wgsl).
+    rain: wgpu::RenderPipeline,
     resolve: wgpu::RenderPipeline,
     sea: sea::SeaPipelines,
 }
@@ -946,6 +954,9 @@ pub struct Renderer {
     /// around the eye (the last shadow layer): where it shows something overhead, no snow.
     snow: f32,
     snow_cover: Option<Mat4>,
+    /// Wet surfaces and rain, 0..1 each (`set_wet`).
+    wetness: f32,
+    rain: f32,
     /// A photo's sample (`still::Photo`): the shadow's light direction moved within the sun's
     /// disc, and the noise seed of ambient occlusion; zero for live frames.
     shadow_jitter: Vec3,
@@ -1281,6 +1292,8 @@ impl Renderer {
             clouds: Clouds::default(),
             snow: 0.0,
             snow_cover: None,
+            wetness: 0.0,
+            rain: 0.0,
             shadow_jitter: Vec3::ZERO,
             photo_seed: 0.0,
             photo_pipes: None,
@@ -1410,7 +1423,36 @@ impl Renderer {
 
     /// The sun's illuminance on a surface facing it (lux, linear RGB), after the clouds' share.
     pub fn sun_lux(&self) -> Vec3 {
-        self.sun.color * self.sun.illuminance * self.clouds.sun_share()
+        self.sun.color * self.sun.illuminance * self.sun_share()
+    }
+
+    /// The cloud layer drawn, as (cover, overcast 0..1): the caller's (`set_clouds`), and in rain
+    /// thickened to a closed grey one, the more so the harder it rains (cover 0.3 + 0.7 rain,
+    /// overcast from a drizzle of 0.1 to 0.6). Without rain exactly the caller's.
+    fn cloud_state(&self) -> (f32, f32) {
+        let cover = self.clouds.cover.clamp(0.0, 1.0);
+        let overcast = if self.clouds.overcast { 1.0 } else { 0.0 };
+        if self.rain <= 0.0 {
+            return (cover, overcast);
+        }
+        let t = ((self.rain - 0.1) / 0.5).clamp(0.0, 1.0);
+        (
+            cover.max((0.3 + 1.4 * self.rain).min(1.0)),
+            overcast.max(t * t * (3.0 - 2.0 * t)),
+        )
+    }
+
+    /// How much of the sun's direct light gets through: the caller's clouds (`Clouds::sun_share`)
+    /// and, in rain, a share that falls steeply with it: about 0.15 of dry at 0.8 and 0.03 at 1,
+    /// so hard shadows all but vanish under a rain sky and some sun is left in a drizzle (0.3: 0.9).
+    fn sun_share(&self) -> f32 {
+        let t = ((self.rain - 0.1) / 0.9).clamp(0.0, 1.0);
+        let rain = 1.0 - 0.97 * t * t * (3.0 - 2.0 * t);
+        if self.rain <= 0.0 {
+            self.clouds.sun_share()
+        } else {
+            self.clouds.sun_share() * rain
+        }
     }
 
     pub fn set_sun(&mut self, sun: &Sun) {
@@ -1696,6 +1738,22 @@ impl Renderer {
     /// Snow over the up-facing surfaces, 0 (none) to 1, except where something lies over them.
     pub fn set_snow(&mut self, amount: f32) {
         self.snow = amount.clamp(0.0, 1.0);
+    }
+
+    /// Wet surfaces and rain, each 0 (none) to 1. Rain wets everything: the wetness drawn is the
+    /// larger of the two. Wet porous materials darken and turn glossy, puddles form on flat open
+    /// ground (`Material::puddles`) from about half wet, rain falls in streaks slanted by the wind
+    /// (an orthographic plan has none), and rings spread over puddles and water. Rain also
+    /// thickens the clouds to a grey overcast layer and weakens the sun (`cloud_state`,
+    /// `sun_share`). Both 0 draws nothing at all.
+    pub fn set_wet(&mut self, wetness: f32, rain: f32) {
+        self.wetness = wetness.clamp(0.0, 1.0);
+        let rain = rain.clamp(0.0, 1.0);
+        if rain != self.rain {
+            // The rain closes the sky: the environment and the ambient light follow.
+            self.rain = rain;
+            self.update_ambient(true);
+        }
     }
 
     pub fn set_clouds(&mut self, clouds: &Clouds) {
@@ -2740,10 +2798,12 @@ impl Renderer {
         }
         // The snow cover map: straight down over a square round the eye, in whole texels. The
         // sea reads it too, as the height of the bed and the beach under the water.
-        self.snow_cover = (self.snow > 0.0 || self.sea().is_some())
-            .then_some(self.scene_bounds)
-            .flatten()
-            .map(|(lo, hi)| snow_cover_matrix(self.eye, lo, hi, self.quality.shadow_resolution));
+        self.snow_cover = (self.snow > 0.0
+            || self.wetness.max(self.rain) > 0.0
+            || self.sea().is_some())
+        .then_some(self.scene_bounds)
+        .flatten()
+        .map(|(lo, hi)| snow_cover_matrix(self.eye, lo, hi, self.quality.shadow_resolution));
         let view_proj = self.proj * self.view;
         // The sea, seen from above, takes the planar reflection over any pond.
         let water = (self.quality.water_reflection > 0)
@@ -3009,6 +3069,12 @@ impl Renderer {
                 self.draw_items(&mut pass, view_proj, true, Pass::Mirrors);
             }
             self.draw_transparent(&mut pass, view_proj);
+            if self.rain > 0.0 && !shadow::is_orthographic(self.proj) {
+                pass.set_pipeline(&self.sampled.rain);
+                pass.set_bind_group(0, &self.globals_bind, &[]);
+                pass.set_bind_group(3, &t.forward_bind, &[]);
+                pass.draw(0..3, 0..1);
+            }
         }
         self.counters.split("forward");
         let post = |encoder: &mut wgpu::CommandEncoder,
@@ -3899,7 +3965,7 @@ impl Renderer {
         for m in &cascades.view_proj {
             b.floats(&m.to_cols_array());
         }
-        let sun_light = self.sun.color * self.sun.illuminance * exposure * self.clouds.sun_share();
+        let sun_light = self.sun.color * self.sun.illuminance * exposure * self.sun_share();
         let disc_solid_angle = std::f32::consts::PI * sky::SUN_DISC_RADIUS * sky::SUN_DISC_RADIUS;
         let disc = (self.sun.illuminance / disc_solid_angle * exposure).min(64.0);
         b.floats(&[eye.x, eye.y, eye.z, self.atmosphere.clear_m]);
@@ -4018,12 +4084,8 @@ impl Renderer {
             (f64::from(wind.x) * travelled) as f32,
             (f64::from(wind.y) * travelled) as f32,
         );
-        b.floats(&[
-            self.clouds.cover.clamp(0.0, 1.0),
-            if self.clouds.overcast { 1.0 } else { 0.0 },
-            drift.x,
-            drift.y,
-        ]);
+        let (cloud_cover, overcast) = self.cloud_state();
+        b.floats(&[cloud_cover, overcast, drift.x, drift.y]);
         b.floats(&self.snow_cover.unwrap_or(Mat4::ZERO).to_cols_array());
         b.floats(&[
             self.snow,
@@ -4054,6 +4116,13 @@ impl Renderer {
             step.max(1.0),
             if step > 1.0 { 40.0 } else { 80.0 },
             0.25,
+        ]);
+        // Wet surfaces and rain: the wetness drawn is the larger of the two.
+        b.floats(&[
+            self.wetness.max(self.rain),
+            self.rain,
+            self.sun_share(),
+            0.0,
         ]);
         debug_assert_eq!(b.0.len() as u64, SH_OFFSET);
         self.queue.write_buffer(buffer, 0, &b.0);
@@ -4287,7 +4356,7 @@ fn material_bytes(material: &Material, bits: u32) -> Vec<u8> {
         material.parallax_depth_m.clamp(0.0, 0.1),
         north.x,
         north.y,
-        0.0,
+        material.puddles as u32 as f32,
     ]);
     b.floats(&material.aging.map(|k| k.clamp(0.0, 1.0)));
     debug_assert_eq!(b.0.len() as u64, MATERIAL_SIZE);
@@ -4320,7 +4389,7 @@ fn snow_cover_matrix(eye: Vec3, lo: Vec3, hi: Vec3, resolution: u32) -> Mat4 {
 const SNOW_COVER_M: f32 = 160.0;
 
 fn globals_size() -> u64 {
-    // 9 matrices, 44 vec4s, the 9 SH vec4s last; see common.wgsl.
+    // 9 matrices, 45 vec4s, the 9 SH vec4s last; see common.wgsl.
     SH_OFFSET + 9 * 16
 }
 
@@ -5279,6 +5348,48 @@ fn sky_pipeline(
     )
 }
 
+/// The rain's streaks (wet.wgsl `fs_rain`): premultiplied alpha over the HDR scene, tested
+/// against its depth (each streak's fragments take their layer's depth), nothing written.
+fn rain_pipeline(
+    device: &wgpu::Device,
+    l: &Layouts,
+    modules: &[wgpu::ShaderModule],
+    samples: u32,
+) -> wgpu::RenderPipeline {
+    pipeline(
+        device,
+        PipelineDesc {
+            label: "rain",
+            module: module(modules, "scene"),
+            vs: "vs_rain",
+            fs: Some("fs_rain"),
+            groups: &[Some(&l.globals), None, None, Some(&l.forward)],
+            buffers: &[],
+            target: Some(wgpu::ColorTargetState {
+                format: HDR,
+                blend: Some(wgpu::BlendState {
+                    color: wgpu::BlendComponent {
+                        src_factor: wgpu::BlendFactor::One,
+                        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                        operation: wgpu::BlendOperation::Add,
+                    },
+                    alpha: wgpu::BlendComponent::OVER,
+                }),
+                write_mask: wgpu::ColorWrites::ALL,
+            }),
+            depth: Some(depth_state(
+                false,
+                wgpu::CompareFunction::LessEqual,
+                Default::default(),
+            )),
+            cull: None,
+            samples,
+            constants: &[],
+            front_cw: false,
+        },
+    )
+}
+
 impl SampledPipelines {
     fn new(
         device: &wgpu::Device,
@@ -5494,6 +5605,7 @@ impl SampledPipelines {
             ground: [1, 2]
                 .map(|part| ground_pipeline(device, l, modules, "fs_ground", samples, part)),
             sky: sky_pipeline(device, l, modules, samples),
+            rain: rain_pipeline(device, l, modules, samples),
             resolve,
             sea: sea::SeaPipelines::new(device, l, modules, samples),
         }

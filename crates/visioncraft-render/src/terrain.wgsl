@@ -16,6 +16,7 @@
 struct TerrainLayer {
     color: vec4<f32>,  // rgb linear base colour factor, a added to the roughness
     params: vec4<f32>, // x roughness, y 1 / scale (m), z macro variation, w normal map strength
+    extra: vec4<f32>,  // x puddles may form on this layer (0/1; 0 on lawns)
 }
 
 struct Terrain {
@@ -132,6 +133,7 @@ fn terrain_surface(in: TerrainVarying) -> Surface {
     var ao = 0.0;
     var metal = 0.0;
     var variation = 0.0;
+    var puddles = 0.0;
     var total = 0.0;
     for (var i = 0; i < 8; i++) {
         if weights[i] > 0.004 {
@@ -145,6 +147,7 @@ fn terrain_surface(in: TerrainVarying) -> Surface {
                 metal += orm[i].b * b;
                 ao += orm[i].r * b;
                 variation += layer.params.z * b;
+                puddles += layer.extra.x * b;
                 total += b;
             }
         }
@@ -157,6 +160,7 @@ fn terrain_surface(in: TerrainVarying) -> Surface {
     s.metallic = metal * k;
     s.ao = mix(1.0, ao * k, 0.6);
     s.emissive = vec3<f32>(0.0);
+    s.puddle = puddles * k;
     s = macro_variation(s, in.world, variation * k);
     // The outer band blends into the infinite ground: no border.
     if terrain.ground.w > 0.0 {
@@ -165,6 +169,7 @@ fn terrain_surface(in: TerrainVarying) -> Surface {
         let t = 1.0 - smoothstep(0.0, terrain.ground.w, d);
         s.base = vec4<f32>(mix(s.base.rgb, terrain.ground.rgb, t), 1.0);
         s.n = normalize(mix(s.n, vec3<f32>(0.0, 1.0, 0.0), t));
+        s.puddle *= 1.0 - t;
     }
     return s;
 }

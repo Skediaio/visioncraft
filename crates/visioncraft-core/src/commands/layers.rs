@@ -107,11 +107,13 @@ pub(super) fn register(s: &mut Session) {
         spec(
             "view.set",
             "Set View",
-            "Sets the season, snow, weathering, exposure, look, sky, clouds, years after planting, haze, wind, the ground plane, the surroundings, ground clutter and the view distance stored with the project; only the fields given change.",
+            "Sets the season, snow, weathering, wetness, rain, exposure, look, sky, clouds, years after planting, haze, wind, the ground plane, the surroundings, ground clutter and the view distance stored with the project; only the fields given change.",
             vec![
                 param("season", T::String, "spring, summer, autumn or winter: the plants as they are then, and the project's date set to the season's day at the site (20 April, 21 June, 20 October, 15 January in the north; six months on in the south), the hour kept. An exact date (time.set) maps back to its season."),
                 param("snow", T::Number, "Snow cover 0..1 on the ground, lawns, roofs, terraces, hedge tops, evergreen crowns, branches, wall tops and sills, not under roofs or dense evergreens; about 0.7 for a snowy winter. 0: none.").default(json!(0)),
                 param("weathering", T::Number, "Weathering 0..1 of every standard material at once: dirt, moss, wear and rain streaks with the default mix (see material.update's `weathering`), added to each material's own. Keep it explicit: `years` does not drive it. 0: none.").default(json!(0)),
+                param("wetness", T::Number, "Wet surfaces 0..1: porous materials (soil, wood, stone, concrete, brick, fabric) darken and turn glossy, leaves take a sheen, metal and glass barely change; above about 0.5 puddles form on flat, open, upward-facing paving, terraces, paths and soil (not on lawns, plants, steep surfaces or under roofs), growing with the value. Rain implies it: the wetness drawn is the larger of `wetness` and `rain`. 0: dry.").default(json!(0)),
+                param("rain", T::Number, "Rain 0..1: falling streaks slanted by the wind, ripple rings on puddles and ponds, an overcast sky and a weaker sun, and everything wet as `wetness` of the same value. About 0.4 a drizzle, 0.8 a downpour. 0: none.").default(json!(0)),
                 param("exposure_ev", T::Number, "Exposure offset in stops; null for automatic exposure."),
                 param("sky", T::Object, "{type: \"physical\"} or {type: \"hdri\", id: string, rotation_deg: number, intensity: number >= 0}.")
                     .default(json!({"type": "physical"})),
@@ -322,6 +324,8 @@ fn view_set(project: &mut Project, params: &Value) -> Result<Value, CommandError
             "clutter",
             "snow",
             "weathering",
+            "wetness",
+            "rain",
             "surroundings",
         ],
     )?;

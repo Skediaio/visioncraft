@@ -231,6 +231,7 @@ impl TerrainGpu {
                     variation: look.variation,
                     relief: look.relief,
                     roughness_offset: -look.gloss,
+                    puddles: look.puddles,
                 }
             })
             .collect();

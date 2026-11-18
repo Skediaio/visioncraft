@@ -142,32 +142,51 @@ fn cloud(dir: vec3<f32>) -> vec4<f32> {
     if clouds_off || cover <= 0.0 || dir.y <= 0.0 {
         return vec4<f32>(0.0);
     }
-    let overcast = g.clouds.y > 0.5;
+    // g.clouds.y is how overcast the layer is, 0 (fair-weather clouds) to 1 (a closed grey layer);
+    // in between (rain thickening the sky, lib.rs `cloud_state`) both are drawn and mixed.
+    let o = g.clouds.y;
     let p = (dir.xz / max(dir.y, 0.04) * 1500.0 + g.clouds.zw) * 0.0011;
     let n = cloud_fbm(p);
-    var a: f32;
-    if overcast {
-        a = cover * mix(0.9, 1.0, n);
-    } else {
-        a = smoothstep(1.0 - cover - 0.06, 1.0 - cover + 0.22, n);
+    var a_over = 0.0;
+    var a_fair = 0.0;
+    if o > 0.0 {
+        a_over = cover * mix(0.9, 1.0, n);
+    }
+    if o < 1.0 {
+        a_fair = smoothstep(1.0 - cover - 0.06, 1.0 - cover + 0.22, n);
+    }
+    var a = select(a_fair, a_over, o > 0.5);
+    if o > 0.0 && o < 1.0 {
+        a = mix(a_fair, a_over, o);
+    }
+    // A rain sky is closed: no blue shows through by 0.7.
+    if g.wet.y > 0.0 {
+        a = mix(a, 1.0, smoothstep(0.45, 0.7, g.wet.y) * o);
     }
     // Far clouds thin into the haze at the horizon.
     a *= smoothstep(0.02, 0.15, dir.y);
     if a <= 0.0 {
         return vec4<f32>(0.0);
     }
-    let share = select(1.0 - 0.15 * cover, 1.0 - 0.85 * cover, overcast);
+    // In rain the renderer says how much sun gets through (wet.z).
+    let share = select(mix(1.0 - 0.15 * cover, 1.0 - 0.85 * cover, o), g.wet.z, g.wet.y > 0.0);
     let sun = g.sun_light.rgb / max(g.night.w, 1e-12) / max(share, 0.05);
     let high = max(g.sun_dir.y, 0.05);
     let sky = sky_up_sh();
-    var rad: vec3<f32>;
-    if overcast {
-        rad = (sun * high * 0.35 + sky * 0.5) / PI * mix(0.8, 1.05, n);
-    } else {
+    var rad_over = vec3<f32>(0.0);
+    var rad_fair = vec3<f32>(0.0);
+    if o > 0.0 {
+        rad_over = (sun * high * 0.35 + sky * 0.5) / PI * mix(0.8, 1.05, n) * (1.0 + 0.5 * smoothstep(0.1, 0.8, g.wet.y));
+    }
+    if o < 1.0 {
         let toward = cloud_fbm(p + normalize(g.sun_dir.xz + vec2<f32>(1e-4, 0.0)) * 0.08);
         let lit = clamp(0.6 + (n - toward) * 3.0, 0.3, 1.0);
         let glow = 1.0 + 1.2 * pow(max(dot(dir, g.sun_dir.xyz), 0.0), 12.0);
-        rad = (sun * high * lit * glow * 0.85 + sky * 0.6) / PI;
+        rad_fair = (sun * high * lit * glow * 0.85 + sky * 0.6) / PI;
+    }
+    var rad = select(rad_fair, rad_over, o > 0.5);
+    if o > 0.0 && o < 1.0 {
+        rad = mix(rad_fair, rad_over, o);
     }
     return vec4<f32>(rad, a);
 }

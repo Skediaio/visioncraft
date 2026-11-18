@@ -56,6 +56,7 @@ struct Globals {
     coast: array<vec4<f32>, 8>, // the coastline, two [x, z] points per entry, the sea to its right
     surround: vec4<f32>,        // the plot's rectangle (min x, min z, max x, max z) for the surroundings (kind in coast_info.w)
     ssr: vec4<f32>,             // screen-space reflections: x on (0/1), y step (px), z most steps, w thickness (m)
+    wet: vec4<f32>,             // x wetness drawn 0..1 (the larger of wetness and rain), y rain 0..1
     sh: array<vec4<f32>, 9>,    // sky irradiance as L2 SH (kcd/m2 * sr), written on the GPU (env.wgsl)
 }
 @group(0) @binding(0) var<uniform> g: Globals;

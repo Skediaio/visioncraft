@@ -15,7 +15,7 @@ pub const LAYER_SIZE: u32 = 512;
 /// Width of the band at the terrain's outer edge that blends into the
 /// infinite ground (metres), when a ground is set.
 pub const EDGE_BAND_M: f32 = 8.0;
-pub(crate) const UNIFORM_SIZE: u64 = (MAX_LAYERS as u64) * 32 + 32;
+pub(crate) const UNIFORM_SIZE: u64 = (MAX_LAYERS as u64) * 48 + 32;
 
 /// One terrain chunk: per vertex position, normal and the weights of up to
 /// eight layers (u8, summing to 255), indices as triangles.
@@ -50,6 +50,8 @@ pub struct TerrainLayer {
     pub relief: f32,
     /// Added to the roughness after the map (negative glossier, positive rougher).
     pub roughness_offset: f32,
+    /// Puddles may form on this layer when it is wet (`Material::puddles`; false for lawn).
+    pub puddles: bool,
 }
 
 impl Default for TerrainLayer {
@@ -65,6 +67,7 @@ impl Default for TerrainLayer {
             variation: 0.4,
             relief: 1.0,
             roughness_offset: 0.0,
+            puddles: true,
         }
     }
 }
@@ -280,6 +283,7 @@ impl TerrainGpu {
                 l.variation.clamp(0.0, 1.0),
                 l.relief.clamp(0.0, 2.0),
             ]);
+            b.floats(&[l.puddles as u32 as f32, 0.0, 0.0, 0.0]);
         }
         b.floats(&self.edge);
         let (rgb, band) = ground.map_or(([0.0; 3], 0.0), |c| (c, EDGE_BAND_M));

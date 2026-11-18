@@ -265,6 +265,11 @@ pub const WEATHER_WEAR: &str = "Wear";
 pub const WEATHER_STREAKS: &str = "Streaks";
 pub const AGE: &str = "Age";
 pub const AGE_TIP: &str = "Weathers every material at once: dirt, moss, wear and rain streaks, added to each material's own weathering. Years after planting does not change it.";
+pub const RAIN_SECTION: &str = "Rain";
+pub const WETNESS: &str = "Wetness";
+pub const WETNESS_TIP: &str = "Wet surfaces: porous materials darken and turn glossy, and above about half, puddles form on flat open paving and soil. Rain implies it.";
+pub const RAIN: &str = "Rain";
+pub const RAIN_TIP: &str = "Falling rain slanted by the wind, rings on puddles and ponds, an overcast sky and a weaker sun; everything is wet.";
 pub const MATERIALS_HINT: &str =
     "Hover a surface and click it to choose a material. Drop a .mcmat file to add one.";
 pub const MATERIAL_ADDED: &str = "Material added";

@@ -176,6 +176,22 @@ nothing here is a promise of a date.
   short edges with openings placed by arc length), an arc on the top edge of a flight (and so
   fans of treads that converge), curved stairs that turn or are set into the slope, curved
   cheek walls, and a rotation handle for an ellipse.
+- **Rain and wet surfaces:** `view.set {wetness: 0..1, rain: 0..1}` (both 0 by default and not
+  written then; rain implies wetness, the one drawn is the larger of the two), also per picture in
+  `view.render` (`--wetness`, `--rain` in the CLI) and as `[from, to]` keys of a film shot, so a
+  shot eases from dry into rain. Wet porous surfaces (soil, wood, stone, concrete, brick, plaster;
+  porosity follows from the roughness and metalness a material already has) darken about as the
+  square of their albedo and turn glossy, leaves take a sheen, metal and glass hardly change.
+  From about 0.5 wet, puddles form on flat, open, upward-facing paving, terraces, paths and soil
+  (not lawns, plants, slopes or ground under a roof or crown, by the snow cover map) in
+  low-frequency world-space patches that grow with the value, as smooth water films mirroring the
+  sky and the buildings. Rain draws depth-tested streaks in five screen-space layers slanted by
+  the wind, fewer under cover, with ripple rings on puddles, ponds and lakes; the sky closes to
+  a grey overcast layer and the sun weakens with it. All in the renderer, a few noise lookups
+  and nothing when off (the pixel references are unchanged). In the window: Wetness and Rain
+  sliders under Sun & sky. Recipe 36. Next: drips and runoff from roofs and edges, splashes where
+  drops land, wet-surface darkening that follows the lowest points (puddles in hollows of the
+  terrain), mist and steam after rain, a per-material porosity, and rain on glass.
 
 ## Next
 
@@ -217,7 +233,6 @@ nothing here is a promise of a date.
 - User species made of several models as growth stages.
 - Live reload of a linked 3dcraft model in the browser (desktop has it).
 - Interiors and closed buildings.
-- Rain and wet surfaces.
 - Importers for other CAD sources.
 - Hosting the asset library publicly, so the web version works outside a local setup.
 
