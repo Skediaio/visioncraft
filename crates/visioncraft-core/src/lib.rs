@@ -15,6 +15,7 @@ pub mod export;
 pub mod fence;
 pub mod film;
 pub mod furniture;
+pub mod grass;
 pub mod growth;
 pub mod house;
 mod import;

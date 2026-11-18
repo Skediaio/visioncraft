@@ -750,7 +750,10 @@ impl Studio {
             // project made without a window has none yet).
             lamp_problems.extend(self.reconcile_lamps());
             steps += 1;
-            if self.plants_pending() == 0
+            // A quality step in this frame (to LOW and back: tufts or GPU grass) asks for the
+            // scene again (`synced` cleared): that sync starts the lawns' work, so wait for it.
+            if self.synced.is_some()
+                && self.plants_pending() == 0
                 && self.scene.library.idle()
                 && !self.sky_volume_pending()
                 && !self.sky_vis.pending()
@@ -1837,6 +1840,10 @@ impl Studio {
         self.scene.flora.leaf_scale = if fine { 2 } else { 1 };
         if self.scene.set_dense_lawns(&mut self.renderer, fine) {
             self.synced = None; // the lawns are made again on the next sync
+        }
+        // MEDIUM and up draw the lawns' blades on the GPU; LOW keeps the tufts.
+        if self.scene.set_gpu_grass(&mut self.renderer, q.grass > 0) {
+            self.synced = None;
         }
         let budget = self.gpu_lawn_budget * if preset_name(&q) == "ultra" { 2.0 } else { 1.0 };
         if self.scene.set_lawn_budget(&mut self.renderer, budget) {

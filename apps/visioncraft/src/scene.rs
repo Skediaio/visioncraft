@@ -231,12 +231,19 @@ fn look_of(
             scale_m: ov.as_ref().map_or(*map_scale_m, |o| o.scale_m),
             ..plain
         },
-        // The tufts are scattered separately (`Scene::sync_lawns`); the ground under them is this.
+        // The tufts or the GPU grass are made separately (`Scene::sync_lawns`); the ground under
+        // them is this.
         SurfaceKind::Lawn3d(l) => {
             let t = lawn_season(month);
-            let c = plain.color;
+            // Under long grass the ground is the sward's shaded floor, darker than a mown lawn's.
+            let floor = if l.blade_height_m > MEADOW_FROM_M {
+                0.6
+            } else {
+                1.0
+            };
+            let c = plain.color.map(|k| k * floor);
             Look {
-                color: [c[0] * t[0], c[1] * t[1], c[2] * t[2], c[3]],
+                color: [c[0] * t[0], c[1] * t[1], c[2] * t[2], plain.color[3]],
                 variation: plain.variation.max(0.6),
                 scale_m: ov.as_ref().map_or(1.0, |o| o.scale_m),
                 relief: ov.as_ref().map_or(0.0, |o| o.relief),
@@ -772,6 +779,75 @@ fn start_lawn(geom: Arc<ImportedModel>, job: LawnScatter) -> plants::Slot<Vec<Ve
         slot
     }
 }
+
+/// Grass taller than this (m) is a meadow's: a darker floor, drying from midsummer.
+const MEADOW_FROM_M: f32 = 0.15;
+
+/// A shape's lawn faces: face, its lawn (turned into the drawing), its blades' colour.
+type LawnFaces = Vec<(usize, visioncraft_core::material::Lawn3d, [f32; 3])>;
+/// Outlines in world x, z.
+type Holes = Vec<Vec<[f32; 2]>>;
+/// What a grass mask was made from (`Scene::sync_grass`).
+type GrassKey = (Vec<Geom>, Vec<u32>);
+
+/// The share of dead, straw-coloured blades in a month: a lawn's few all summer, more in winter;
+/// a meadow's long grass (over 15 cm) dries out from midsummer, as hay.
+fn grass_dry(month: u32, blade_height_m: f32) -> f32 {
+    let lawn = match month {
+        12 | 1 | 2 => 0.3,
+        3 | 11 => 0.15,
+        _ => 0.04,
+    };
+    let meadow = match month {
+        7 | 8 => 0.18,
+        9 | 10 => 0.3,
+        _ => 0.0,
+    };
+    if blade_height_m > MEADOW_FROM_M {
+        f32::max(lawn, meadow)
+    } else {
+        lawn
+    }
+}
+
+/// How much of a meadow's flowers bloom in a month: from April, most in May to July, the last
+/// in September.
+fn flower_season(month: u32) -> f32 {
+    match month {
+        4 => 0.5,
+        5..=7 => 1.0,
+        8 => 0.75,
+        9 => 0.35,
+        _ => 0.0,
+    }
+}
+
+/// The flowers of a grassland in a month (linear RGB): buttercup, daisy, cuckooflower and
+/// dandelion in spring; daisy, red clover, knapweed and cornflower in summer; yarrow, knapweed,
+/// hawkbit and scabious late in the summer.
+fn flower_colors(month: u32) -> [[f32; 3]; 4] {
+    match month {
+        1..=5 => [
+            [0.62, 0.42, 0.01],
+            [0.72, 0.72, 0.66],
+            [0.45, 0.36, 0.55],
+            [0.68, 0.38, 0.0],
+        ],
+        6 | 7 => [
+            [0.72, 0.72, 0.66],
+            [0.5, 0.12, 0.25],
+            [0.3, 0.09, 0.38],
+            [0.08, 0.17, 0.6],
+        ],
+        _ => [
+            [0.66, 0.63, 0.55],
+            [0.3, 0.09, 0.38],
+            [0.62, 0.4, 0.01],
+            [0.3, 0.26, 0.55],
+        ],
+    }
+}
+
 /// Snow deeper than this (`view.snow`) covers the lawn's blades.
 const LAWN_SNOW_BURIES: f32 = 0.55;
 /// Linear mean of the grass picture a plain lawn shows from the library (grass001), so the
@@ -962,6 +1038,11 @@ pub struct Scene {
     people: Option<ItemId>,
     /// Denser, finer lawn tufts (HIGH and ULTRA; `set_dense_lawns`).
     dense_lawns: bool,
+    /// The renderer draws the lawns' grass on the GPU (`Quality::grass` above 0; `set_gpu_grass`):
+    /// no tufts, a grass mask instead.
+    gpu_grass: bool,
+    /// What the grass mask given to the renderer was made from (`sync_grass`).
+    grass_key: Option<GrassKey>,
     /// The eye's cell (`LAWN_EYE_CELL_M` squares): lawns over their tuft budget are scattered
     /// around it (`lawns_follow`), and again when it moves to another cell.
     lawn_eye: [i32; 2],
@@ -1558,6 +1639,11 @@ impl Scene {
         self.lawn_jobs.len()
     }
 
+    /// The renderer items of the lawns' tufts drawn (none when the GPU draws the grass).
+    pub fn lawn_items(&self) -> usize {
+        self.lawns.values().map(|l| l.items.len()).sum()
+    }
+
     /// Every lawn's tufts, drawn and half drawn.
     fn drop_lawns(&mut self, r: &mut Renderer) {
         for (_, l) in self.lawns.drain() {
@@ -1576,6 +1662,19 @@ impl Scene {
         }
         self.dense_lawns = dense;
         self.drop_lawns(r);
+        true
+    }
+
+    /// Grass drawn on the GPU (`Quality::grass` above 0) or as tufts. True when it changed: the
+    /// lawns are then dropped, for the next sync to make again the one way or the other.
+    pub fn set_gpu_grass(&mut self, r: &mut Renderer, on: bool) -> bool {
+        if self.gpu_grass == on {
+            return false;
+        }
+        self.gpu_grass = on;
+        self.drop_lawns(r);
+        self.grass_key = None;
+        r.set_grass(None);
         true
     }
 
@@ -1606,22 +1705,23 @@ impl Scene {
     fn sync_lawns(&mut self, r: &mut Renderer, project: &Project) {
         let month = project.plant_month();
         let mut live: Vec<String> = Vec::new();
-        let Some(res) = plants::resolve(project, LAWN_SPECIES) else {
-            return;
-        };
-        let class = plants::class(&res.params, month);
         // Grass thins under the crowns of trees (as grown for the years shown): their circles,
         // a little inside the drip line.
         let crowns: Vec<[f32; 3]> = tree_crowns(project)
             .into_iter()
             .map(|(_, c)| [c[0], c[1], c[2] * 0.4])
             .collect();
-        let mut owners: Vec<&String> = self.owners.keys().collect();
-        owners.sort();
-        type Faces = Vec<(usize, visioncraft_core::material::Lawn3d, [f32; 3])>;
-        let mut todo: Vec<(String, Faces)> = Vec::new();
-        // Deep snow buries the lawn's blades: only the snow over the lawn shows.
-        let buried = project.snow() > LAWN_SNOW_BURIES;
+        let todo = self.lawn_faces(project);
+        if self.gpu_grass {
+            self.drop_lawns(r);
+            self.lawns_follow = false;
+            self.sync_grass(r, project, &todo, &crowns);
+            return;
+        }
+        let Some(res) = plants::resolve(project, LAWN_SPECIES) else {
+            return;
+        };
+        let class = plants::class(&res.params, month);
         let (max_density, max_tufts, narrow) = if self.dense_lawns {
             (LAWN_MAX_DENSITY * 2.0, LAWN_MAX_TUFTS * 4, 0.7)
         } else {
@@ -1629,30 +1729,6 @@ impl Scene {
         };
         let max_tufts = (max_tufts as f32 * self.lawn_budget.max(1.0)) as usize;
         self.lawns_follow = false;
-        for id in owners {
-            let o = &self.owners[id];
-            if !o.key.visible || !o.is_shape || buried {
-                continue;
-            }
-            let faces: Faces = resolve_materials(project, id, &o.geom)
-                .into_iter()
-                .enumerate()
-                .filter_map(|(f, m)| {
-                    let m = project.materials.get(m?)?;
-                    match &m.kind {
-                        SurfaceKind::Lawn3d(l) => Some((
-                            f,
-                            turned_lawn(l, &project.site),
-                            self.blade_color(m, u32::from(project.plant_month())),
-                        )),
-                        _ => None,
-                    }
-                })
-                .collect();
-            if !faces.is_empty() {
-                todo.push((id.clone(), faces));
-            }
-        }
         let on_ground = self.ground_faces.clone();
         for (id, faces) in todo {
             live.push(id.clone());
@@ -1785,6 +1861,150 @@ impl Scene {
                 l.items.into_iter().for_each(|i| r.remove_item(i));
             }
         }
+    }
+
+    /// The visible lawn shapes and their lawn faces (face, its lawn turned into the drawing, its
+    /// blades' colour), by shape id; none under deep snow, which buries the blades.
+    fn lawn_faces(&self, project: &Project) -> Vec<(String, LawnFaces)> {
+        if project.snow() > LAWN_SNOW_BURIES {
+            return Vec::new();
+        }
+        let mut owners: Vec<&String> = self.owners.keys().collect();
+        owners.sort();
+        let mut todo = Vec::new();
+        for id in owners {
+            let o = &self.owners[id];
+            if !o.key.visible || !o.is_shape {
+                continue;
+            }
+            let faces: LawnFaces = resolve_materials(project, id, &o.geom)
+                .into_iter()
+                .enumerate()
+                .filter_map(|(f, m)| {
+                    let m = project.materials.get(m?)?;
+                    match &m.kind {
+                        SurfaceKind::Lawn3d(l) => Some((
+                            f,
+                            turned_lawn(l, &project.site),
+                            self.blade_color(m, u32::from(project.plant_month())),
+                        )),
+                        _ => None,
+                    }
+                })
+                .collect();
+            if !faces.is_empty() {
+                todo.push((id.clone(), faces));
+            }
+        }
+        todo
+    }
+
+    /// The GPU grass's mask over every lawn face (`visioncraft_core::grass`), given to the
+    /// renderer when what it is made of changed: the lawns, what lies on them, the crowns over
+    /// them and the month.
+    fn sync_grass(
+        &mut self,
+        r: &mut Renderer,
+        project: &Project,
+        todo: &[(String, LawnFaces)],
+        crowns: &[[f32; 3]],
+    ) {
+        let month = u32::from(project.plant_month());
+        let on_ground = self.ground_faces.clone();
+        // Each lawn with what lies on it (world x, z) and their soft edges.
+        let lawns: Vec<(Holes, Vec<f32>)> = todo
+            .iter()
+            .map(|(id, _)| {
+                let o = &self.owners[id];
+                let to_world = |p: &[f32; 2]| {
+                    let w = o.xf.transform_point3(Vec3::new(p[0], 0.0, p[1]));
+                    [w.x, w.z]
+                };
+                let mut holes: Holes = areas_over(&project.shapes, id)
+                    .iter()
+                    .map(|a| a.iter().map(to_world).collect())
+                    .collect();
+                holes.extend(on_ground.iter().map(|t| t.to_vec()));
+                (holes, blends_over(&project.shapes, id))
+            })
+            .collect();
+        let mut bits: Vec<u32> = vec![month];
+        bits.extend(crowns.iter().flat_map(|c| c.map(f32::to_bits)));
+        let mut geoms = Vec::new();
+        for ((id, faces), (holes, blends)) in todo.iter().zip(&lawns) {
+            let o = &self.owners[id];
+            geoms.push(o.key.geom.clone());
+            bits.extend(o.xf.to_cols_array().map(f32::to_bits));
+            for (f, l, c) in faces {
+                bits.push(*f as u32);
+                bits.extend(
+                    [
+                        l.density_per_m2,
+                        l.blade_height_m,
+                        l.stripes_m,
+                        l.stripes_deg,
+                        l.flowers,
+                    ]
+                    .map(f32::to_bits),
+                );
+                bits.extend(c.map(f32::to_bits));
+            }
+            bits.extend(holes.iter().flatten().flat_map(|p| p.map(f32::to_bits)));
+            bits.extend(blends.iter().map(|b| b.to_bits()));
+        }
+        let key = (geoms, bits);
+        if self.grass_key.as_ref() == Some(&key) {
+            return;
+        }
+        let mut kinds: Vec<visioncraft_render::GrassKind> = Vec::new();
+        let mut patches = Vec::new();
+        for ((id, faces), (holes, blends)) in todo.iter().zip(&lawns) {
+            let o = &self.owners[id];
+            for (f, l, color) in faces {
+                let a = l.stripes_deg.to_radians();
+                let kind = visioncraft_render::GrassKind {
+                    color: *color,
+                    stripes_m: l.stripes_m,
+                    stripes_dir: [a.sin(), -a.cos()],
+                    dry: grass_dry(month, l.blade_height_m),
+                };
+                let k = match kinds.iter().position(|x| *x == kind) {
+                    Some(k) => k,
+                    None if kinds.len() < visioncraft_render::GRASS_KINDS => {
+                        kinds.push(kind);
+                        kinds.len() - 1
+                    }
+                    // shortcut: past eight lawn looks the rest take the first's colour
+                    None => 0,
+                };
+                patches.push(visioncraft_core::grass::GrassPatch {
+                    model: &o.geom,
+                    face: *f,
+                    xf: o.xf.to_cols_array(),
+                    lawn: visioncraft_core::material::Lawn3d {
+                        flowers: l.flowers * flower_season(month),
+                        ..*l
+                    },
+                    kind: k as u8,
+                    holes,
+                    hole_blends: blends,
+                });
+            }
+        }
+        let mask = visioncraft_core::grass::grass_mask(&patches, crowns);
+        match &mask {
+            Some(m) => r.set_grass(Some(&visioncraft_render::GrassField {
+                origin: m.origin,
+                cell_m: m.cell_m,
+                size: m.size,
+                params: &m.params,
+                heights: &m.heights,
+                kinds: &kinds,
+                flowers: flower_colors(month),
+            })),
+            None => r.set_grass(None),
+        }
+        self.grass_key = Some(key);
     }
 
     fn build_pieces(

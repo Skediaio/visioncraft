@@ -1575,6 +1575,36 @@ given into the current clouds: `{"clouds": {"cover": 0.5}}` changes only the cov
 and `--clouds`); a film shot takes
 `weather` `[from, to]`, eased in and out over the shot, and `clouds` (the cover) `[from, to]`.
 
+### 46. A flowering meadow beyond a striped lawn, with gusts rolling over both
+
+```json recipe
+{"intent": "a mown lawn in stripes by the terrace and a knee-high flowering meadow beyond it, seen at eye level on a June evening with gusts running through the grass", "steps": [
+  {"id": "shape.add_area", "params": {"name": "Lawn", "outline": [[0, 0], [24, 0], [24, 14], [0, 14]], "material": "lawn"}},
+  {"id": "shape.add_area", "params": {"name": "Meadow", "outline": [[0, 14], [24, 14], [24, 44], [0, 44]], "material": "meadow"}},
+  {"id": "material.update", "params": {"id": "lawn", "kind": {"type": "lawn3d", "density_per_m2": 2000, "blade_height_m": 0.05, "seed": 1, "stripes_m": 1.5, "stripes_deg": 0}}},
+  {"id": "material.update", "params": {"id": "meadow", "kind": {"type": "lawn3d", "density_per_m2": 1600, "blade_height_m": 0.55, "seed": 2, "flowers": 0.5}}},
+  {"id": "planting.add_single", "params": {"name": "Oak", "asset": "flora:quercus-robur", "position": [17, 0, 30]}},
+  {"id": "time.set", "params": {"month": 6, "day": 12, "hour": 19.5}},
+  {"id": "view.render", "params": {"camera": {"position": [12, 1.6, -3], "target": [12, 0.4, 18], "fov_y_deg": 55}, "width": 1280, "height": 720, "gustiness": 0.6, "animation_s": 4, "path": "meadow.png"}}
+]}
+```
+
+A lawn material (`lawn3d`) grows real blades at MEDIUM quality and up: every frame the GPU
+generates them round the camera over every face that carries one, in clumps that share a height
+and lean out of their centre, densest near the camera and thinning and widening with the
+distance until they sink into the lawn's own texture (about 10 m for a mown lawn at HIGH, three
+times as far for a meadow). `blade_height_m` sets the grass from a mown lawn (0.03 to 0.06) to a
+meadow (0.3 to 0.8, up to 1.2); taller grass has fewer, broader blades and seed stems over them.
+`flowers` (0 to 1) scatters small wild flowers among the blades from April to September, in the
+colours of the month (buttercups and daisies in spring, clover, knapweed and cornflowers in
+summer). The palette's `meadow` is such a material (0.45 m, flowers 0.35); `shape.add_area`
+adds it to an older project that lacks it. The blades take the sun's shadow and the sky they see,
+glow when the sun is behind them, are paler at the foot and darker deep in the sward, dry out
+in winter (and a meadow from midsummer), lean the way the mower went in `stripes_m` bands, and
+bow over in the gusts (`gustiness`) as paler waves. No grass grows under the areas drawn on
+top of a lawn (a path, a terrace, a pond), and it thins under tree crowns. At LOW quality a lawn
+is drawn as before, with scattered tufts.
+
 ## Known traps
 
 - **Ids are not names**: `S2`, not `House`; viewpoints are `v1`, lights `li1`. Film commands and

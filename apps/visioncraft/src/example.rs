@@ -115,6 +115,36 @@ mod parity_tests {
 mod walk_tests {
     use crate::studio::Studio;
 
+    /// From MEDIUM up the lawn's blades are the renderer's GPU grass: a mask, no tufts; at LOW
+    /// the tufts come back and the mask goes.
+    #[test]
+    fn medium_and_up_draw_the_lawn_on_the_gpu_and_low_as_tufts() {
+        let p = visioncraft_core::example("garden").unwrap();
+        let Ok((device, queue)) = pollster::block_on(visioncraft_render::headless_device()) else {
+            eprintln!("no GPU adapter: skipped");
+            return;
+        };
+        let renderer =
+            visioncraft_render::Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+        let mut studio = Studio::new(renderer, p);
+        studio.assets.extend(crate::fixtures::assets());
+        studio.resize(320, 200);
+        studio.quality_auto = false;
+        studio.quality = 0;
+        studio.settle_for_picture();
+        assert!(!studio.renderer.has_grass());
+        let tufts = studio.scene.lawn_items();
+        assert!(tufts > 0, "LOW draws tufts");
+        studio.quality = 1;
+        studio.settle_for_picture();
+        assert!(studio.renderer.has_grass());
+        assert_eq!(studio.scene.lawn_items(), 0);
+        studio.quality = 0;
+        studio.settle_for_picture();
+        assert!(!studio.renderer.has_grass());
+        assert_eq!(studio.scene.lawn_items(), tufts, "the tufts are back");
+    }
+
     #[test]
     fn walking_leaves_no_tufts_behind() {
         let p = visioncraft_core::example("garden").unwrap();
@@ -127,8 +157,11 @@ mod walk_tests {
         let mut studio = Studio::new(renderer, p);
         studio.assets.extend(crate::fixtures::assets());
         studio.resize(320, 200);
-        // A budget far under the lawn's need: its tufts follow the eye.
+        // A budget far under the lawn's need: its tufts follow the eye (at LOW: from MEDIUM up
+        // the blades are drawn on the GPU, no tufts).
         studio.gpu_lawn_budget = 0.02;
+        studio.quality_auto = false;
+        studio.quality = 0;
         let start = studio.camera.pivot;
         studio.settle_for_picture();
         let settled = studio.renderer.item_count();
@@ -156,6 +189,8 @@ mod walk_tests {
         other.assets.extend(crate::fixtures::assets());
         other.resize(320, 200);
         other.gpu_lawn_budget = 0.02;
+        other.quality_auto = false;
+        other.quality = 0;
         other.camera.pivot = glam::Vec3::new(10.0, 0.0, 20.0);
         let t0 = std::time::Instant::now();
         while other.scene.lawns_pending() == 0 && t0.elapsed().as_secs() < 60 {

@@ -2125,3 +2125,74 @@ fn cloud_cost() {
         eprintln!("{name}: clouds {median:.2} ms a frame ({} timed)", ms.len());
     }
 }
+
+/// GPU grass (`set_grass`) over the grey ground of the house scene: green blades in the lower
+/// half of the picture at HIGH, none at LOW (where the app draws its tufts), and the mask
+/// removed again leaves the picture as it was.
+#[test]
+fn grass_grows_on_its_mask_and_not_at_low() {
+    let mut r = renderer(W, H);
+    demo::house(&mut r);
+    setup(
+        &mut r,
+        demo::camera(
+            Vec3::new(3.0, 0.6, 12.0),
+            Vec3::new(0.0, 0.0, 6.0),
+            W as f32 / H as f32,
+        ),
+        demo::noon_sun(),
+        14.0,
+    );
+    // Green, minus red and blue, summed over the lower half of the picture.
+    let green = |px: &[u8]| -> i64 {
+        px[(W * H * 2) as usize..]
+            .chunks(4)
+            .map(|p| 2 * i64::from(p[1]) - i64::from(p[0]) - i64::from(p[2]))
+            .sum()
+    };
+    let bare = capture(&mut r, W, H);
+    let (side, cell) = (200u32, 0.08f32);
+    let n = (side * side) as usize;
+    // A lawn 16 m square in front of the house, 5 cm high, no flowers.
+    let params = vec![[255u8, ((0.05f32 / 1.2).sqrt() * 255.0) as u8, 0, 0]; n];
+    let heights = vec![0.0f32; n];
+    let kinds = [visioncraft_render::GrassKind {
+        color: [0.1, 0.18, 0.04],
+        stripes_m: 0.0,
+        stripes_dir: [1.0, 0.0],
+        dry: 0.0,
+    }];
+    let field = visioncraft_render::GrassField {
+        origin: [-8.0, 4.0],
+        cell_m: cell,
+        size: [side, side],
+        params: &params,
+        heights: &heights,
+        kinds: &kinds,
+        flowers: [[1.0; 3]; 4],
+    };
+    r.set_grass(Some(&field));
+    let grown = capture(&mut r, W, H);
+    assert!(
+        green(&grown) > green(&bare) + i64::from(W * H) * 4,
+        "{} vs {}",
+        green(&grown),
+        green(&bare)
+    );
+    r.set_quality(Quality::LOW);
+    let low_bare = {
+        r.set_grass(None);
+        capture(&mut r, W, H)
+    };
+    r.set_grass(Some(&field));
+    assert_eq!(capture(&mut r, W, H), low_bare, "LOW draws no GPU grass");
+    r.set_quality(Quality::HIGH);
+    r.set_grass(None);
+    let again = capture(&mut r, W, H);
+    let differ = again
+        .chunks(4)
+        .zip(bare.chunks(4))
+        .filter(|(a, b)| a.iter().zip(*b).any(|(x, y)| x.abs_diff(*y) > TOLERANCE))
+        .count();
+    assert!(differ <= MAX_DIFFERING, "{differ} pixels differ");
+}

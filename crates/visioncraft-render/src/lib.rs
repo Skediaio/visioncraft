@@ -58,6 +58,7 @@ mod coverage;
 pub use bc::UploadJob;
 pub mod demo;
 mod env;
+mod grass;
 pub mod hardware;
 mod hdri;
 mod impostor;
@@ -78,6 +79,7 @@ pub mod wind;
 pub use atmosphere::{
     Atmosphere, fog_transmittance, mist_extinction, mist_sun_share, rain_extinction,
 };
+pub use grass::{GrassField, GrassKind, MAX_KINDS as GRASS_KINDS};
 pub use hardware::{GpuKind, HardwareProbe, Score, calibrate, relative_cost, starting_quality};
 pub use hdri::{HdriCalibration, HdriImage, OVERCAST_LUX, calibrate_hdri, estimate_sun};
 pub use impostor::{ImpostorId, atlas_layout, impostor_views};
@@ -448,6 +450,10 @@ pub struct Quality {
     /// Volumetric clouds (clouds.wgsl, when `Clouds::volumetric` asks for them): the cloud
     /// image's divisor of the render size (2 half, 3 a third, 4 quarter), 0 for the flat cloud layer.
     pub clouds: u32,
+    /// Grass blades generated on the GPU over the lawns and meadows (`grass.rs`, when the app
+    /// gives a `GrassField`): 0 off (the app draws its own lawn tufts), 1 to 3 ever further and
+    /// denser.
+    pub grass: u32,
 }
 
 // `render_scale` is clamped to 0.5..=1 everywhere it is used, never NaN, so
@@ -478,6 +484,7 @@ impl Quality {
         screen_reflections: 0,
         fast_shading: true,
         clouds: 0,
+        grass: 0,
     };
     pub const MEDIUM: Quality = Quality {
         shadow_resolution: 1024,
@@ -498,6 +505,7 @@ impl Quality {
         screen_reflections: 2,
         fast_shading: true,
         clouds: 4,
+        grass: 1,
     };
     pub const HIGH: Quality = Quality {
         shadow_resolution: 2048,
@@ -516,6 +524,7 @@ impl Quality {
         screen_reflections: 1,
         fast_shading: false,
         clouds: 3,
+        grass: 2,
     };
     /// For GPUs with headroom (a desktop card at 100+ fps on HIGH): 4096
     /// shadow maps, full-resolution AO with more taps and a full-resolution
@@ -540,6 +549,7 @@ impl Quality {
         screen_reflections: 1,
         fast_shading: false,
         clouds: 2,
+        grass: 3,
     };
     pub const PRESETS: [(&'static str, Quality); 4] = [
         ("low", Quality::LOW),
@@ -1023,6 +1033,8 @@ pub struct Renderer {
     ground_slot: u32,
     terrain: terrain::TerrainGpu,
     sea: sea::SeaGpu,
+    /// GPU grass over the lawns and meadows (`set_grass`).
+    grass: grass::GrassGpu,
     baker: impostor::Baker,
     impostors: Vec<Option<impostor::GpuImpostor>>,
     bloom_strength: f32,
@@ -1438,6 +1450,7 @@ impl Renderer {
             ground_slot: 0,
             terrain: terrain::TerrainGpu::new(device, queue, &layouts_terrain),
             sea: sea::SeaGpu::new(device, &layouts_sea),
+            grass: grass::GrassGpu::new(device),
             baker,
             impostors: Vec::new(),
             bloom_strength: 0.025,
@@ -3048,6 +3061,17 @@ impl Renderer {
         self.queue.write_buffer(&item.instances, 0, &b.0);
     }
 
+    /// Where GPU grass grows (`grass.rs`), or none. Drawn when `Quality::grass` is above 0; the
+    /// field stays across quality changes.
+    pub fn set_grass(&mut self, field: Option<&GrassField>) {
+        self.grass.set_field(&self.device, &self.queue, field);
+    }
+
+    /// A grass mask is set (`set_grass`).
+    pub fn has_grass(&self) -> bool {
+        self.grass.has_field()
+    }
+
     /// An item's plants are lawn grass: with gusts on they bend far more than a stem of wood
     /// (`common.wgsl` `wind_sway`). Carried as a negative sway frequency.
     pub fn set_item_grass(&mut self, id: ItemId, grass: bool) {
@@ -3341,8 +3365,33 @@ impl Renderer {
             self.timer.as_ref(),
         );
 
-        let t = &self.targets;
+        // This frame's grass blades, for the depth pre-pass and the forward pass to draw.
         let develop = matches!(part, FramePart::Develop(_));
+        let grass_level =
+            if develop || shadow::is_orthographic(self.proj) || !self.grass.has_field() {
+                0
+            } else {
+                self.quality.grass
+            };
+        let timestamps = (grass_level > 0)
+            .then(|| self.timer.as_ref().and_then(|t| t.pass("grass")))
+            .flatten();
+        self.grass.generate(
+            &self.device,
+            &self.queue,
+            encoder,
+            grass::Frame {
+                view_proj,
+                eye: self.eye,
+                pixels_per_m: self.proj.y_axis.y * self.targets.size.1 as f32 * 0.5,
+                level: grass_level,
+                samples: self.quality.samples(),
+                fast_shading: self.quality.fast_shading,
+                layouts: &self.layouts,
+                timestamps,
+            },
+        );
+        let t = &self.targets;
         if !develop {
             for (c, layer) in t.shadow_layers.iter().enumerate() {
                 // The last layer is the snow cover map, drawn after the cascades.
@@ -3397,6 +3446,7 @@ impl Renderer {
                 );
                 pass.set_bind_group(0, &self.globals_bind, &[]);
                 self.draw_items(&mut pass, view_proj, true, Pass::Depth);
+                self.grass.draw_depth(&mut pass);
             }
             self.counters.split("depth");
             {
@@ -3545,6 +3595,11 @@ impl Renderer {
                 pass.set_bind_group(0, &self.globals_bind, &[]);
                 pass.set_bind_group(3, &t.forward_bind, &[]);
                 self.draw_items(&mut pass, view_proj, true, Pass::Forward);
+                self.grass.draw(
+                    &mut pass,
+                    &self.draw_bind,
+                    (self.ground_slot as u64 * SLOT) as u32,
+                );
                 if self.ground.is_some() {
                     // The cells near the sky volume only when there is one, and after the others:
                     // all ground lies at one depth, so of two cells over the same pixel the last
@@ -5737,6 +5792,15 @@ struct PipelineDesc<'a> {
 }
 
 fn pipeline(device: &wgpu::Device, d: PipelineDesc) -> wgpu::RenderPipeline {
+    pipeline_with(device, d, wgpu::PrimitiveTopology::TriangleList)
+}
+
+/// `pipeline` drawing `topology` (the grass's blades are triangle strips).
+fn pipeline_with(
+    device: &wgpu::Device,
+    d: PipelineDesc,
+    topology: wgpu::PrimitiveTopology,
+) -> wgpu::RenderPipeline {
     let options = wgpu::PipelineCompilationOptions {
         constants: d.constants,
         ..Default::default()
@@ -5765,6 +5829,7 @@ fn pipeline(device: &wgpu::Device, d: PipelineDesc) -> wgpu::RenderPipeline {
             targets: &targets[..usize::from(has_target)],
         }),
         primitive: wgpu::PrimitiveState {
+            topology,
             cull_mode: d.cull,
             front_face: if d.front_cw {
                 wgpu::FrontFace::Cw

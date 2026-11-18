@@ -19,7 +19,7 @@ pub fn recipes() -> Vec<Value> {
 #[test]
 fn every_recipe_of_the_guide_runs() {
     let recipes = recipes();
-    assert_eq!(recipes.len(), 45);
+    assert_eq!(recipes.len(), 46);
     for (n, recipe) in recipes.into_iter().enumerate() {
         let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("recipe-{n}"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -332,6 +332,31 @@ fn every_recipe_of_the_guide_runs() {
                     "{report}"
                 );
                 assert_eq!(t["openings"], 2, "{report}");
+            }
+            46 => {
+                // The meadow came from the palette with its flowers changed; the lawn mown in
+                // stripes; each area carries its own.
+                use visioncraft_core::SurfaceKind;
+                let project = host.session.project();
+                let lawn =
+                    |id: &str| match &project.materials.iter().find(|m| m.id == id).unwrap().kind {
+                        SurfaceKind::Lawn3d(l) => *l,
+                        k => panic!("{id}: {k:?}"),
+                    };
+                assert_eq!(lawn("meadow").flowers, 0.5);
+                assert_eq!(lawn("meadow").blade_height_m, 0.55);
+                assert_eq!(lawn("lawn").stripes_m, 1.5);
+                let assigned = |owner: &str| {
+                    project
+                        .assignments
+                        .iter()
+                        .find(|a| {
+                            matches!(&a.target, visioncraft_core::Target::Owner { owner: o } if o == owner)
+                        })
+                        .map(|a| a.material.clone())
+                };
+                assert_eq!(assigned("S1").as_deref(), Some("lawn"), "{report}");
+                assert_eq!(assigned("S2").as_deref(), Some("meadow"), "{report}");
             }
             45 => {
                 // The cloudy weather is the project's, with its own cloud base and transition;

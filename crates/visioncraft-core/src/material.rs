@@ -40,7 +40,14 @@ pub struct Lawn3d {
     pub stripes_m: f32,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub stripes_deg: f32,
+    /// Small wild flowers among the blades, 0 (none, not written) to 1 (a flowering meadow):
+    /// drawn with the GPU grass in their season (spring to late summer).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub flowers: f32,
 }
+
+/// The tallest grass a lawn or meadow material may ask for (m).
+pub const MAX_BLADE_HEIGHT_M: f32 = 1.2;
 
 fn is_zero(v: &f32) -> bool {
     *v == 0.0
@@ -231,8 +238,10 @@ impl Material {
                     && l.density_per_m2 > 0.0
                     && l.blade_height_m.is_finite()
                     && l.blade_height_m > 0.0
+                    && l.blade_height_m <= MAX_BLADE_HEIGHT_M
                     && (l.stripes_m == 0.0 || (0.3..=5.0).contains(&l.stripes_m))
                     && l.stripes_deg.is_finite()
+                    && unit(l.flowers)
             }
         };
         if ok {
@@ -452,6 +461,22 @@ pub fn builtin_palette() -> Vec<Material> {
                 density_per_m2: 2000.0,
                 blade_height_m: 0.04,
                 seed: 1,
+                ..Default::default()
+            }),
+        ),
+        // Uncut grass: mixed grasses about knee-high with seed heads and wild flowers, as a
+        // flowering hay meadow. Fewer, taller blades than the lawn; its ground is a duller green.
+        plain(
+            "meadow",
+            "Meadow",
+            [0.075, 0.14, 0.045],
+            0.0,
+            0.95,
+            SurfaceKind::Lawn3d(Lawn3d {
+                density_per_m2: 1400.0,
+                blade_height_m: 0.45,
+                seed: 1,
+                flowers: 0.35,
                 ..Default::default()
             }),
         ),
@@ -719,10 +744,10 @@ mod tests {
     #[test]
     fn palette_is_valid_and_unique() {
         let p = builtin_palette();
-        assert_eq!(p.len(), 22);
+        assert_eq!(p.len(), 23);
         assert!(p.iter().all(|m| m.validate().is_ok()));
         let ids: std::collections::BTreeSet<_> = p.iter().map(|m| &m.id).collect();
-        assert_eq!(ids.len(), 22);
+        assert_eq!(ids.len(), 23);
     }
 
     #[test]

@@ -13,7 +13,7 @@ pub(super) fn register(s: &mut Session) {
         param(
             "material",
             T::String,
-            "Material id: also assigned to the whole new shape, in the same undo step.",
+            "Material id: also assigned to the whole new shape, in the same undo step. A built-in palette material the project lacks (`meadow` in an older project) is added.",
         )
     };
     let outline = |doc: &str| param("outline", T::Outline, doc).required();
@@ -314,6 +314,15 @@ pub(super) fn add(
 ) -> Result<Value, CommandError> {
     let layer = layer.unwrap_or_else(|| LAYER_SHAPES.into());
     check_layer(project, &layer)?;
+    // A project from before the palette had it (the meadow) gets the built-in one now.
+    if let Some(m) = &material
+        && project.materials.iter().all(|x| &x.id != m)
+        && let Some(b) = crate::material::builtin_palette()
+            .into_iter()
+            .find(|b| &b.id == m)
+    {
+        project.materials.push(b);
+    }
     if let Some(m) = &material
         && project.materials.iter().all(|x| &x.id != m)
     {

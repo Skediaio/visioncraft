@@ -286,9 +286,21 @@ nothing here is a promise of a date.
      download the catalogued CC0 library into checkouts, hex tiling and height blending on paving,
      joints and relief (boards, tiles, parallax up close), heather and ferns as cover, cover that
      follows the season, and rocks and deadwood in the sky visibility bake.
-  3. Plants: lawn blades generated in compute with clumping and backlit translucency (as in
-     Ghost of Tsushima, GDC 2021), tall and ornamental grasses that glow against the sun, flowers
-     and fine leaves up close (more leaf sets), and fuller crowns (see Tree form).
+  3. Plants. Done: GPU grass (after Wohllaib, "Procedural Grass in Ghost of Tsushima", GDC
+     2021): a grass mask made once per design change (core `grass`: density, blade height,
+     flowers and lawn material per 8 cm cell, the ground's height, holes under the areas on the
+     lawn, thinner under crowns), and every frame a compute pass that fills three instance lists
+     round the eye (near blades, far blades, flowers) from 2 m tiles culled against the frustum,
+     drawn with indirect draws in the depth pre-pass and the forward pass: R2 prefixes per tile
+     so the density falls as 1 / distance without popping, widening blades, Voronoi clumps,
+     quadratic Bezier blades bent by the shared gust field, rounded and view-turned normals, lit
+     as leaves (sun shadow, sky visibility, translucency against the sun), a colour from foot to
+     tip, the sward's occlusion low down and dry blades by season. A meadow (`meadow` in the
+     palette, or any `lawn3d` with a taller `blade_height_m`) has seed stems and wild flowers
+     (`flowers`) in the month's colours. MEDIUM, HIGH and ULTRA reach further and denser; LOW
+     keeps the tufts. Recipe 46. Next: grass on the terrain's lawn layers, tall ornamental
+     grasses that glow against the sun, fine leaves up close (more leaf sets), grass that casts
+     a shadow at a low sun, and fuller crowns (see Tree form).
   4. Light in the shade. Done: sky visibility baked per design change as L2 SH and multiplied by
      the live sky (Ghost of Tsushima, Advances 2021; `view.set sky_occlusion`, on in the window
      and its pictures): a ground-following grid of probes a metre apart, twelve layers crowding
