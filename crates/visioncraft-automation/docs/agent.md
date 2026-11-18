@@ -1607,10 +1607,32 @@ and `--clouds`); a film shot takes
   returns `Some`). `HostUi` has `tabs`, `file_bar`, `view_bar`, `mode_panel_frame` (all true by
   default; false draws the open mode's panel without frame and fold button), `start_mode` (a
   built-in mode id or an extension id) and `quiet_missing_assets` (no startup notice when there
-  is no asset library). At run time `ui.set {"tabs", "file_bar", "view_bar", "mode_panel_frame"}`
-  changes them and `ui.get` reports them under `ui`, so an extension's own "view in 3D" button
-  can show the bars and switch back. Hiding only hides buttons: every action stays a command and
+  is no asset library), `agent_toggle` (the *Allow AI agents* box on the desktop, the
+  *Experimental: browser AI agent (WebMCP)* box in the browser; hiding it only hides the box, it
+  does not switch the agent bridge on or off and the browser agent's questions still appear) and
+  `replace_prompt: Option<ReplacePrompt {title, body, confirm, cancel}>`, the wording of the
+  *Replace the current project?* question the person's own Open or New asks when there are
+  unsaved changes (`None`: the built-in text, no title). At run time
+  `ui.set {"tabs", "file_bar", "view_bar", "mode_panel_frame", "agent_toggle"}` changes the flags,
+  `ui.set {"replace_prompt": {"title", "body", "confirm", "cancel"}}` the question (keys left out
+  keep the built-in text; `null` restores it) and `ui.get` reports them under `ui`, so an
+  extension's own "view in 3D" button can show the bars and switch back. Hiding only hides buttons: every action stays a command and
   Ctrl+Z, Ctrl+Shift+Z and `ui.set {"mode"}` keep working.
+- **Embedding: undo state and unsaved changes.** `edit.state` (`{}`) returns
+  `{can_undo, can_redo, dirty, revision}`. `dirty` is true when the project differs from the
+  project as last opened, created or saved, so undoing back to that point is clean again and a
+  redo makes it dirty; `revision` grows with every change, undo and redo. It works headless
+  (`visioncraft-cli`) and in the window, where a save, open or new from the person's own buttons
+  counts too, and it is not noted in the agent log. An extension reads the same with
+  `ExtensionCx::edit_state()`.
+- **Embedding: opening without the question.** The commands never ask: `file.open`, `file.new`
+  and `project.load_example` replace the project at once (the browser agent's own confirmation
+  is a separate step). Only the person's Open and New ask before dropping unsaved changes. An
+  extension that asked already, or has nothing to lose, calls
+  `ExtensionCx::open_project(name, bytes)` (a `.visioncraft` or bundle `.zip`; no question) or
+  `ExtensionCx::open_example(name, title)`; `ExtensionCx::open_project_asking` asks as the
+  person's Open does, with the host's `replace_prompt` wording. The window runs these after the
+  frame.
 - **Embedding: a generated mesh.** An extension can show a mesh it made, without a server:
   `ExtensionCx::import_object(name, glb_bytes)` checks the `.glb`, keeps its bytes in the window
   and runs `object.add` (one undo step). It returns `user:<id>`, the asset reference that

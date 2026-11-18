@@ -85,7 +85,7 @@ pub fn host_docs() -> Vec<CommandDoc> {
         host_doc(
             "agent.log",
             "Agent log",
-            "What agents did in this session, newest first (at most limit, 1 to 500 of the last 500): entries {client, timeMs, command, label, ok, message, created, changed, intent}. Session state, not saved; reading commands (agent.log, document.inspect) are not in it.",
+            "What agents did in this session, newest first (at most limit, 1 to 500 of the last 500): entries {client, timeMs, command, label, ok, message, created, changed, intent}. Session state, not saved; reading commands (agent.log, document.inspect, edit.state) are not in it.",
             vec![p(
                 "limit",
                 "integer",
@@ -168,6 +168,15 @@ pub fn host_docs() -> Vec<CommandDoc> {
             "Does the change last undone again.",
             vec![],
             "{can_undo, can_redo}",
+            json!({}),
+            false,
+        ),
+        host_doc(
+            "edit.state",
+            "Edit state",
+            "Whether there is something to undo or redo, whether the project has unsaved changes (it differs from the project as last opened, created or saved: undoing back to that point is clean again) and the session's revision, which grows with every change, undo and redo. Does not change anything.",
+            vec![],
+            "{can_undo, can_redo, dirty, revision}",
             json!({}),
             false,
         ),
@@ -1342,6 +1351,11 @@ pub fn execute(host: &mut dyn Host, id: &str, params: &Value) -> Result<Value, S
         "file.open" => file_open(host, params),
         "file.save" => file_save(host, params),
         "edit.undo" | "edit.redo" => history(host, id, params),
+        "edit.state" => {
+            Fields::new(id, "parameter", Some(params), &[])?;
+            let (session, state) = host.parts();
+            Ok(EditState::of(session, state.saved.as_ref()).to_json())
+        }
         "document.inspect" => {
             let a = Fields::new(
                 id,
@@ -1798,6 +1812,32 @@ fn history(host: &mut dyn Host, id: &str, params: &Value) -> Result<Value, Strin
     }
     state.sync_models(session.project());
     Ok(json!({"can_undo": session.can_undo(), "can_redo": session.can_redo()}))
+}
+
+/// What `edit.state` reports: the history and whether there is unsaved work.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EditState {
+    pub can_undo: bool,
+    pub can_redo: bool,
+    /// The project differs from `saved`, the project as last opened, created or saved.
+    pub dirty: bool,
+    /// The session's revision: grows with every change, undo and redo.
+    pub revision: u64,
+}
+
+impl EditState {
+    pub fn of(session: &Session, saved: Option<&Project>) -> Self {
+        Self {
+            can_undo: session.can_undo(),
+            can_redo: session.can_redo(),
+            dirty: saved != Some(session.project()),
+            revision: session.revision(),
+        }
+    }
+
+    pub fn to_json(self) -> Value {
+        json!({"can_undo": self.can_undo, "can_redo": self.can_redo, "dirty": self.dirty, "revision": self.revision})
+    }
 }
 
 fn file_new(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
@@ -2546,7 +2586,7 @@ pub fn clean_intent(text: &str) -> Option<String> {
 
 /// Runs a command for an agent and notes it in the agent log (`agent.log`), as 3dcraft's
 /// window does: who (the MCP client's name), when, the command, how it went, what it made or
-/// changed, and the intent. Reading commands (`agent.log`, `document.inspect`) are not noted.
+/// changed, and the intent. Reading commands (`agent.log`, `document.inspect`, `edit.state`) are not noted.
 pub fn execute_logged(
     host: &mut dyn Host,
     id: &str,
@@ -2554,7 +2594,7 @@ pub fn execute_logged(
     intent: Option<&str>,
 ) -> Result<Value, String> {
     let outcome = execute(host, id, params);
-    if matches!(id, "agent.log" | "document.inspect") {
+    if matches!(id, "agent.log" | "document.inspect" | "edit.state") {
         return outcome;
     }
     let label = docs(host.session())

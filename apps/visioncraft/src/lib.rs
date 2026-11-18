@@ -63,8 +63,9 @@ pub mod work_pool;
 
 pub use eframe::egui;
 pub use extension::{Extension, ExtensionCx, Overlay};
-pub use host_ui::HostUi;
+pub use host_ui::{HostUi, ReplacePrompt};
 pub use shell::Shell;
+pub use visioncraft_automation::commands::EditState;
 
 use eframe::egui::{Align2, Key, PointerButton, Vec2};
 use files::{Inbox, Msg, Watcher};
@@ -193,6 +194,8 @@ pub struct App {
     relink_dir: Option<PathBuf>,
     saved_revision: u64,
     saving_revision: u64,
+    /// The project as it was when Save was pressed: what the file holds once it is written.
+    saving_project: Option<Project>,
     stored_revision: Option<u64>,
     last_time: f64,
     fps: f64,
@@ -301,6 +304,7 @@ impl App {
                 .map(PathBuf::from),
             saved_revision: 0,
             saving_revision: 0,
+            saving_project: None,
             stored_revision: None,
             last_time: 0.0,
             fps: 0.0,
@@ -467,6 +471,29 @@ impl App {
         }
     }
 
+    /// The project as it is now is the saved one (opened, created): not dirty, for the window
+    /// and for `edit.state`.
+    fn mark_saved(&mut self) {
+        self.saved_revision = self.studio.session.revision();
+        self.agents.state.saved = Some(self.studio.project().clone());
+    }
+
+    /// What extensions asked for this frame: open a project (asking first when the extension
+    /// wants the person's question), or an example.
+    fn run_requests(&mut self, ctx: &egui::Context) {
+        for r in std::mem::take(&mut self.studio.requests) {
+            match r {
+                extension::Request::Open { name, bytes, ask } if ask => {
+                    self.handle_file(ctx, name, bytes, None, None)
+                }
+                extension::Request::Open { name, bytes, .. } => {
+                    self.open_project(&name, &bytes, None)
+                }
+                extension::Request::Example { name, title } => self.open_example(&name, &title),
+            }
+        }
+    }
+
     fn dirty(&self) -> bool {
         // An agent's `file.new`, `file.open` or `file.save` replaces or stores the session without
         // this window's revision: the project it left is not unsaved work (opening a file over an
@@ -540,7 +567,7 @@ impl App {
         self.studio.people.clear();
         self.project_name = None;
         self.project_path = None;
-        self.saved_revision = self.studio.session.revision();
+        self.mark_saved();
         self.hud.mode = None;
         self.modelui = Default::default();
     }
@@ -970,7 +997,7 @@ impl App {
                 self.drape_old_areas();
                 self.studio.sync();
                 self.studio.frame_all();
-                self.saved_revision = self.studio.session.revision();
+                self.mark_saved();
                 self.hud.mode = None;
                 let hidden = ui::hidden_layers_in_use(self.studio.project());
                 if !hidden.is_empty() {
@@ -1199,6 +1226,7 @@ impl App {
                     e.leave(&mut extension::ExtensionCx {
                         cx: &mut cx,
                         overlay: &mut Default::default(),
+                        saved: self.agents.state.saved.as_ref(),
                     });
                 }
             }
@@ -1364,24 +1392,27 @@ impl App {
             Vec2::new(-10.0, 64.0)
         };
         let mut on = self.agents.allowed();
-        ui::floating(ctx, "agents", Align2::RIGHT_TOP, offset, 300.0, |ui| {
-            ui.horizontal(|ui| {
-                let label = match self.agents.port() {
-                    Some(p) if !narrow => format!("{} · {p}", strings::ALLOW_AGENTS),
-                    _ => strings::ALLOW_AGENTS.to_string(),
-                };
-                ui.checkbox(&mut on, label)
-                    .on_hover_text(strings::ALLOW_AGENTS_TIP);
-                if let Some((cmd, t)) = &self.agents.last
-                    && now - t < 120.0
-                {
-                    ui.small(format!("{} {cmd}", strings::AGENT_LAST));
+        // Hidden: only the box goes; whether agents are allowed does not change.
+        if self.hud.host.agent_toggle {
+            ui::floating(ctx, "agents", Align2::RIGHT_TOP, offset, 300.0, |ui| {
+                ui.horizontal(|ui| {
+                    let label = match self.agents.port() {
+                        Some(p) if !narrow => format!("{} · {p}", strings::ALLOW_AGENTS),
+                        _ => strings::ALLOW_AGENTS.to_string(),
+                    };
+                    ui.checkbox(&mut on, label)
+                        .on_hover_text(strings::ALLOW_AGENTS_TIP);
+                    if let Some((cmd, t)) = &self.agents.last
+                        && now - t < 120.0
+                    {
+                        ui.small(format!("{} {cmd}", strings::AGENT_LAST));
+                    }
+                });
+                if let Some(e) = &self.agents.error {
+                    ui.small(e.as_str());
                 }
             });
-            if let Some(e) = &self.agents.error {
-                ui.small(e.as_str());
-            }
-        });
+        }
         if on != self.agents.allowed() {
             self.agents.allow(on, ctx, None);
         }
@@ -1397,22 +1428,26 @@ impl App {
         } else {
             Vec2::new(-10.0, 64.0)
         };
+        let show = self.hud.host.agent_toggle;
         let web = &mut self.agents.webmcp;
         let mut on = web.on;
-        ui::floating(ctx, "agents", Align2::RIGHT_TOP, offset, 300.0, |ui| {
-            ui.horizontal(|ui| {
-                ui.checkbox(&mut on, strings::WEBMCP)
-                    .on_hover_text(strings::WEBMCP_TIP);
-                if let Some((cmd, t)) = &self.agents.last
-                    && now - t < 120.0
-                {
-                    ui.small(format!("{} {cmd}", strings::AGENT_LAST));
+        // Hidden: only the box goes; the bridge stays as it is, and its questions still show.
+        if show {
+            ui::floating(ctx, "agents", Align2::RIGHT_TOP, offset, 300.0, |ui| {
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut on, strings::WEBMCP)
+                        .on_hover_text(strings::WEBMCP_TIP);
+                    if let Some((cmd, t)) = &self.agents.last
+                        && now - t < 120.0
+                    {
+                        ui.small(format!("{} {cmd}", strings::AGENT_LAST));
+                    }
+                });
+                if web.on && !web.status.is_empty() {
+                    ui.small(web.status.as_str());
                 }
             });
-            if web.on && !web.status.is_empty() {
-                ui.small(web.status.as_str());
-            }
-        });
+        }
         web.on = on;
         let mut answer = None;
         if let Some((id, text)) = web.pending.first() {
@@ -1472,6 +1507,7 @@ impl App {
             Action::Open => files::pick(&self.inbox, ctx, None, &files::OPEN_EXTENSIONS),
             Action::Save => {
                 self.saving_revision = self.studio.session.revision();
+                self.saving_project = Some(self.studio.project().clone());
                 let stem = self
                     .project_name
                     .clone()
@@ -1679,6 +1715,9 @@ impl eframe::App for App {
                 Msg::Saved(name, path) => {
                     self.toasts.info(format!("{} {name}", strings::SAVED));
                     self.saved_revision = self.saving_revision;
+                    if let Some(p) = self.saving_project.take() {
+                        self.agents.state.saved = Some(p);
+                    }
                     self.project_name = Some(stem(&name));
                     if path.is_some() {
                         self.project_path = path;
@@ -1863,6 +1902,7 @@ impl eframe::App for App {
                 e.update(&mut extension::ExtensionCx {
                     cx: &mut cx,
                     overlay: &mut overlay,
+                    saved: self.agents.state.saved.as_ref(),
                 });
             }
             e.overlay(cx.s.project(), &mut overlay);
@@ -2080,6 +2120,7 @@ impl eframe::App for App {
                                 &mut extension::ExtensionCx {
                                     cx: &mut cx,
                                     overlay: &mut Default::default(),
+                                    saved: self.agents.state.saved.as_ref(),
                                 },
                             )
                         },
@@ -2274,6 +2315,7 @@ impl eframe::App for App {
                 });
             busy = true;
         }
+        self.run_requests(&ctx);
         self.agents_pill(&ctx, now);
         busy |= self.poll_still_textures(now);
         busy |= self.poll_export(&ctx);
@@ -2281,6 +2323,7 @@ impl eframe::App for App {
         busy |= self.poll_export_all(&ctx);
         let mut confirm = None;
         if self.pending_replace.is_some() {
+            let prompt = self.hud.host.replace_prompt.clone().unwrap_or_default();
             ui::floating(
                 &ctx,
                 "confirm",
@@ -2288,12 +2331,15 @@ impl eframe::App for App {
                 Vec2::ZERO,
                 340.0,
                 |ui| {
-                    ui.label(strings::REPLACE_PROJECT);
+                    if !prompt.title.is_empty() {
+                        ui.heading(prompt.title.as_str());
+                    }
+                    ui.label(prompt.body.as_str());
                     ui.horizontal(|ui| {
-                        if ui.button(strings::REPLACE_ANYWAY).clicked() {
+                        if ui.button(prompt.confirm.as_str()).clicked() {
                             confirm = Some(true);
                         }
-                        if ui.button(strings::CANCEL).clicked() {
+                        if ui.button(prompt.cancel.as_str()).clicked() {
                             confirm = Some(false);
                         }
                     });

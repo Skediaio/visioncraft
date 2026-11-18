@@ -140,6 +140,9 @@ pub struct Studio {
     /// A tool uses the primary drag (a handle, a stroke): the camera does not orbit. Tools set it
     /// every frame; the window reads and clears it.
     pub pointer_captured: bool,
+    /// What extensions asked the window to do (open a project, an example); the window does
+    /// them after the frame.
+    pub(crate) requests: Vec<crate::extension::Request>,
     /// A tool finishes on a double click: the camera does not re-aim.
     pub double_click_captured: bool,
     /// Seconds since start, for the wind animation.
@@ -406,6 +409,7 @@ impl Studio {
             site_draft: None,
             highlight: None,
             pointer_captured: false,
+            requests: Vec::new(),
             double_click_captured: false,
             clock: 0.0,
             people: Vec::new(),

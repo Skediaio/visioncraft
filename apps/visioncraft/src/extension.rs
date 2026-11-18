@@ -20,6 +20,10 @@
 //! - may choose which built-in UI is shown and the mode the window starts in
 //!   ([`Extension::host_ui`], or the shell's `.host_ui(..)`, which wins), and show a mesh it
 //!   generated with [`ExtensionCx::import_object`];
+//! - may read the undo state and whether there are unsaved changes ([`ExtensionCx::edit_state`],
+//!   the same as the `edit.state` command) and open a project without the window's *Replace the
+//!   current project?* question ([`ExtensionCx::open_project`]) when it asked already; the
+//!   wording of that question is the host's ([`HostUi::replace_prompt`](crate::HostUi));
 //! - draws lines, points and labels over the scene ([`Extension::overlay`]), in the same overlay
 //!   pass as the Draw tool;
 //! - makes its own kinds of objects from the existing primitives: a command that writes core
@@ -30,7 +34,21 @@ use crate::scene::line;
 use crate::ui::{Cx, Input};
 use glam::Vec3;
 use serde_json::Value;
+use visioncraft_automation::commands::EditState;
 use visioncraft_core::{Project, Session};
+
+/// What an extension asks the window to do after its frame (the window does it with the
+/// person's own open and new, which an extension has no hold of).
+pub(crate) enum Request {
+    /// Open a project file's bytes; `ask`: ask first when there is unsaved work.
+    Open {
+        name: String,
+        bytes: Vec<u8>,
+        ask: bool,
+    },
+    /// Replace the project with a bundled example, as `project.load_example`.
+    Example { name: String, title: String },
+}
 
 pub trait Extension: 'static {
     /// Its namespace, as in `extensions` maps and command names: `"example.pipe-length"`.
@@ -116,6 +134,8 @@ impl Overlay {
 pub struct ExtensionCx<'a, 'b> {
     pub(crate) cx: &'a mut Cx<'b>,
     pub overlay: &'a mut Overlay,
+    /// The project as last opened, created or saved (`edit.state`'s `dirty` compares to it).
+    pub(crate) saved: Option<&'a Project>,
 }
 
 impl ExtensionCx<'_, '_> {
@@ -163,7 +183,124 @@ impl ExtensionCx<'_, '_> {
         self.cx.s.import_object(name, glb_bytes)
     }
 
+    /// Whether there is something to undo or redo, whether the project has unsaved changes
+    /// (it differs from the project as last opened, created or saved) and the revision: what
+    /// the `edit.state` command reports.
+    pub fn edit_state(&self) -> EditState {
+        EditState::of(&self.cx.s.session, self.saved)
+    }
+
+    /// Opens a `.visioncraft` project (JSON or the bundled `.zip`; `name` says which) now,
+    /// without the *Replace the current project?* question: the caller has asked already, or
+    /// there is nothing to lose. Unsaved changes are lost. A failure becomes a toast.
+    pub fn open_project(&mut self, name: &str, bytes: Vec<u8>) {
+        self.cx.s.requests.push(Request::Open {
+            name: name.into(),
+            bytes,
+            ask: false,
+        });
+    }
+
+    /// As the person's Open: asks first when there are unsaved changes, with the host's wording
+    /// ([`HostUi::replace_prompt`](crate::HostUi)).
+    pub fn open_project_asking(&mut self, name: &str, bytes: Vec<u8>) {
+        self.cx.s.requests.push(Request::Open {
+            name: name.into(),
+            bytes,
+            ask: true,
+        });
+    }
+
+    /// Replaces the project with a bundled example (`project.load_example`: `garden`,
+    /// `estate`, `beach-house` or `coast`) named `title`, without asking.
+    pub fn open_example(&mut self, name: &str, title: &str) {
+        self.cx.s.requests.push(Request::Example {
+            name: name.into(),
+            title: title.into(),
+        });
+    }
+
     pub fn info(&mut self, text: impl Into<String>) {
         self.cx.toasts.info(text.into());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ExtensionCx, Overlay, Request};
+    use crate::studio::Studio;
+    use crate::ui::{Cx, Input, Toasts};
+    use serde_json::json;
+    use visioncraft_core::Project;
+
+    /// A window's pieces over a headless device, or nothing where there is no adapter.
+    fn with_cx(saved: Option<Project>, f: impl FnOnce(&mut ExtensionCx)) {
+        let Ok((device, queue)) = pollster::block_on(visioncraft_render::headless_device()) else {
+            return;
+        };
+        let renderer =
+            visioncraft_render::Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let mut studio = Studio::new(renderer, Project::default());
+        let (mut toasts, input, ctx) = (
+            Toasts::default(),
+            Input::default(),
+            egui::Context::default(),
+        );
+        let mut cx = Cx {
+            s: &mut studio,
+            toasts: &mut toasts,
+            input: &input,
+            ctx: &ctx,
+        };
+        let mut overlay = Overlay::default();
+        f(&mut ExtensionCx {
+            cx: &mut cx,
+            overlay: &mut overlay,
+            saved: saved.as_ref(),
+        });
+    }
+
+    #[test]
+    fn edit_state_before_and_after_an_edit_an_undo_and_a_save() {
+        let saved = Project::default();
+        with_cx(Some(saved.clone()), |x| {
+            let s = x.edit_state();
+            assert!(!s.can_undo && !s.can_redo && !s.dirty);
+            let rev = s.revision;
+            x.run("time.set", json!({"hour": 20.5})).unwrap();
+            let s = x.edit_state();
+            assert!(s.can_undo && s.dirty && s.revision > rev);
+            assert!(x.cx.s.session.undo());
+            let s = x.edit_state();
+            assert!(!s.can_undo && s.can_redo && !s.dirty);
+        });
+        // Without a saved copy (nothing recorded yet) the project counts as unsaved.
+        with_cx(None, |x| assert!(x.edit_state().dirty));
+    }
+
+    #[test]
+    fn opening_without_asking_is_a_request_that_does_not_ask() {
+        with_cx(None, |x| {
+            x.open_project("a.visioncraft", b"{}".to_vec());
+            x.open_project_asking("b.visioncraft", b"{}".to_vec());
+            x.open_example("garden", "Garden");
+            let asks: Vec<_> =
+                x.cx.s
+                    .requests
+                    .iter()
+                    .map(|r| match r {
+                        Request::Open { name, ask, .. } => (name.clone(), Some(*ask)),
+                        Request::Example { name, .. } => (name.clone(), None),
+                    })
+                    .collect();
+            assert_eq!(
+                asks,
+                [
+                    ("a.visioncraft".into(), Some(false)),
+                    ("b.visioncraft".into(), Some(true)),
+                    ("garden".into(), None)
+                ]
+            );
+        });
     }
 }

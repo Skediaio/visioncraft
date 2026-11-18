@@ -751,3 +751,48 @@ fn sun_hours_refuses_both_neither_and_too_many_cells() {
         "{many}"
     );
 }
+
+#[test]
+fn edit_state_follows_edits_undo_and_save() {
+    let mut h = Headless::new(Access::any());
+    let state = |h: &mut Headless, id| execute(h, id, "edit.state", json!({}))["result"].clone();
+    assert_eq!(
+        state(&mut h, 1),
+        json!({"can_undo": false, "can_redo": false, "dirty": false, "revision": 0})
+    );
+    execute(&mut h, 2, "time.set", json!({"hour": 20.5}));
+    let edited = state(&mut h, 3);
+    assert_eq!(
+        (edited["can_undo"].clone(), edited["dirty"].clone()),
+        (json!(true), json!(true))
+    );
+    assert!(edited["revision"].as_u64().unwrap() > 0);
+    // Undoing back to the opened project is clean again, and redo is possible.
+    execute(&mut h, 4, "edit.undo", json!({}));
+    let undone = state(&mut h, 5);
+    assert_eq!(
+        (
+            undone["can_undo"].clone(),
+            undone["can_redo"].clone(),
+            undone["dirty"].clone()
+        ),
+        (json!(false), json!(true), json!(false))
+    );
+    execute(&mut h, 6, "edit.redo", json!({}));
+    assert_eq!(state(&mut h, 7)["dirty"], json!(true));
+    // Saving makes it the baseline.
+    let file = dir("edit-state").join("a.visioncraft");
+    let saved = execute(
+        &mut h,
+        8,
+        "file.save",
+        json!({"path": file.display().to_string()}),
+    );
+    assert_eq!(saved["ok"], json!(true), "{saved}");
+    let after = state(&mut h, 9);
+    assert_eq!(
+        (after["dirty"].clone(), after["can_undo"].clone()),
+        (json!(false), json!(true))
+    );
+    assert!(execute(&mut h, 10, "edit.state", json!({"x": 1}))["error"].is_string());
+}

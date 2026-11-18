@@ -124,6 +124,7 @@ loaded geometry or a GPU:
 | `file.open` | `{path}` | `{path, models, shapes, generators, lights, viewpoints, missingModels}`; loads the models it refers to; a new history |
 | `file.save` | `{path?, overwrite? = false}` | `{path, bytes}`; model paths follow the file to a new folder |
 | `edit.undo`, `edit.redo` | `{}` | `{can_undo, can_redo}` |
+| `edit.state` | `{}` | `{can_undo, can_redo, dirty, revision}` |
 | `document.inspect` | `{faces? = true, measures? = true, placements? = false, full? = false}` | below |
 | `query.ground_length` | `{path}` | `{ground_length_m}`: a walk over terrain, areas and models |
 | `query.sky_view` | `{point: [x, z] \| [x, y, z], normal?, years?}` | `{point, normal, sky_view, crowns, years, month}`: how open a spot is, the cosine-weighted share of the sky it sees (0..1), with buildings, shapes, models, terrain and crowns by their leaf density |
