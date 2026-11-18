@@ -118,8 +118,17 @@ pub fn mist_uniform(mist: f32, rain: f32, base_y: f32, glow: f32) -> [f32; 4] {
 pub(crate) const SKY_VIEW: (u32, u32) = (192, 108);
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
+/// The aerial perspective LUT (atmosphere.wgsl `fs_aerial`): 32 slices of 32x32 side by side.
+pub(crate) const AERIAL: (u32, u32) = (32 * 32, 32);
+
+/// The farthest slice of the aerial perspective LUT (km): the horizon of fields and hills.
+pub(crate) const AERIAL_KM: f32 = 32.0;
+
 pub(crate) struct PhysicalSky {
     pub sky_view: wgpu::TextureView,
+    /// The aerial perspective LUT, filled by `update_aerial` (`Rgba16Float`).
+    pub aerial: wgpu::TextureView,
+    aerial_pipeline: wgpu::RenderPipeline,
     targets: [wgpu::TextureView; 3],
     binds: [wgpu::BindGroup; 3],
     pipelines: [wgpu::RenderPipeline; 3],
@@ -154,6 +163,7 @@ impl PhysicalSky {
         let transmittance = texture("transmittance LUT", (256, 64));
         let multi = texture("multiple scattering LUT", (32, 32));
         let sky_view = texture("sky-view LUT", SKY_VIEW);
+        let aerial = texture("aerial perspective LUT", AERIAL);
         let dummy = texture("LUT placeholder", (1, 1));
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("atmosphere"),
@@ -204,7 +214,13 @@ impl PhysicalSky {
             bind(&transmittance, &dummy),
             bind(&transmittance, &multi),
         ];
-        let pipelines = ["fs_transmittance", "fs_multi_scattering", "fs_sky_view"].map(|fs| {
+        let pipelines = [
+            "fs_transmittance",
+            "fs_multi_scattering",
+            "fs_sky_view",
+            "fs_aerial",
+        ]
+        .map(|fs| {
             pipeline(
                 device,
                 PipelineDesc {
@@ -223,13 +239,42 @@ impl PhysicalSky {
                 },
             )
         });
+        let [t, m, v, aerial_pipeline] = pipelines;
         Self {
             targets: [transmittance, multi, sky_view.clone()],
             sky_view,
+            aerial,
+            aerial_pipeline,
             binds,
-            pipelines,
+            pipelines: [t, m, v],
             luts_done: false,
         }
+    }
+
+    /// Whether the fixed LUTs the aerial perspective reads are drawn.
+    pub fn ready(&self) -> bool {
+        self.luts_done
+    }
+
+    /// Records the aerial perspective pass for the camera and sun in the globals.
+    pub fn update_aerial(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        globals: &wgpu::BindGroup,
+        timer: Option<&crate::timing::Timer>,
+    ) {
+        let mut pass = crate::color_pass(
+            encoder,
+            "aerial perspective",
+            &self.aerial,
+            None,
+            None,
+            timer.and_then(|t| t.pass("aerial")),
+        );
+        pass.set_pipeline(&self.aerial_pipeline);
+        pass.set_bind_group(0, globals, &[]);
+        pass.set_bind_group(1, &self.binds[2], &[]);
+        pass.draw(0..3, 0..1);
     }
 
     /// Records the sky-view pass (and, the first time, the two fixed LUTs);

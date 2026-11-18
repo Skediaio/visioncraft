@@ -40,3 +40,54 @@ fn view_set_stores_mist_and_gusts() {
     assert!(s.undo());
     assert_eq!(s.project().view.mist, 0.6);
 }
+
+#[test]
+fn shafts_white_balance_and_grade_are_stored_and_not_written_by_default() {
+    let p = Project::default();
+    let v = written(&p);
+    for key in ["shafts", "white_balance", "grade"] {
+        assert!(v["view"].get(key).is_none(), "{key}");
+    }
+    let mut s = Session::new(Project::default());
+    let before = s.project().to_json_bytes();
+    s.run(
+        "view.set",
+        json!({"shafts": 0.8, "white_balance": "auto", "grade": "warm"}),
+    )
+    .unwrap();
+    let v = written(s.project());
+    assert_eq!(v["view"]["white_balance"], json!("auto"));
+    assert_eq!(v["view"]["grade"], json!("warm"));
+    let back = Project::from_json_bytes(&s.project().to_json_bytes()).unwrap();
+    assert_eq!(back.view.shafts, 0.8);
+    assert_eq!(
+        back.view.white_balance,
+        visioncraft_core::WhiteBalance::Auto
+    );
+    assert_eq!(back.view.grade, visioncraft_core::Grade::Warm);
+    s.run("view.set", json!({"white_balance": 3200})).unwrap();
+    assert_eq!(
+        s.project().view.white_balance,
+        visioncraft_core::WhiteBalance::Kelvin(3200.0)
+    );
+    assert_eq!(written(s.project())["view"]["white_balance"], json!(3200.0));
+    for bad in [
+        json!({"shafts": 1.5}),
+        json!({"white_balance": 900}),
+        json!({"white_balance": "tungsten"}),
+        json!({"grade": "sepia"}),
+    ] {
+        assert!(s.run("view.set", bad.clone()).is_err(), "{bad}");
+    }
+    s.run(
+        "view.set",
+        json!({"shafts": 0, "white_balance": "daylight", "grade": "neutral"}),
+    )
+    .unwrap();
+    assert_eq!(s.project().to_json_bytes(), before);
+    assert!(s.undo());
+    assert_eq!(
+        s.project().view.white_balance,
+        visioncraft_core::WhiteBalance::Kelvin(3200.0)
+    );
+}

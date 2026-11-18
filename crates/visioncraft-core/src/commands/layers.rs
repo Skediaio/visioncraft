@@ -107,7 +107,7 @@ pub(super) fn register(s: &mut Session) {
         spec(
             "view.set",
             "Set View",
-            "Sets the season, snow, weathering, wetness, rain, mist, exposure, look, sky, clouds, years after planting, haze, wind and gusts, the ground plane, the surroundings, ground clutter and the view distance stored with the project; only the fields given change.",
+            "Sets the season, snow, weathering, wetness, rain, mist, light shafts, exposure, white balance, grade, look, sky, clouds, years after planting, haze, wind and gusts, the ground plane, the surroundings, ground clutter and the view distance stored with the project; only the fields given change.",
             vec![
                 param("season", T::String, "spring, summer, autumn or winter: the plants as they are then, and the project's date set to the season's day at the site (20 April, 21 June, 20 October, 15 January in the north; six months on in the south), the hour kept. An exact date (time.set) maps back to its season."),
                 param("snow", T::Number, "Snow cover 0..1 on the ground, lawns, roofs, terraces, hedge tops, evergreen crowns, branches, wall tops and sills, not under roofs or dense evergreens; about 0.7 for a snowy winter. 0: none.").default(json!(0)),
@@ -115,6 +115,9 @@ pub(super) fn register(s: &mut Session) {
                 param("wetness", T::Number, "Wet surfaces 0..1: porous materials (soil, wood, stone, concrete, brick, fabric) darken and turn glossy, leaves take a sheen, metal and glass barely change; above about 0.5 puddles form on flat, open, upward-facing paving, terraces, paths and soil (not on lawns, plants, steep surfaces or under roofs), growing with the value. Rain implies it: the wetness drawn is the larger of `wetness` and `rain`. 0: dry.").default(json!(0)),
                 param("rain", T::Number, "Rain 0..1: falling streaks slanted by the wind, ripple rings on puddles and ponds, an overcast sky and a weaker sun, and everything wet as `wetness` of the same value. About 0.4 a drizzle, 0.8 a downpour. Rain also brings fog: the visibility falls to about 1.1 km in a drizzle and 400 m in a downpour (distant hedges and the horizon fade into grey, the garden 10-30 m off only softens). 0: none.").default(json!(0)),
                 param("mist", T::Number, "Mist 0..1: a low layer of droplets over the ground, under the haze, thinning with a scale height of 25 m. The visibility falls from 1.3 km at 0.3 (a light morning haze) to 330 m at 0.6 (a misty morning) and 120 m at 1 (fog); the distance and the horizon fade into a white veil (grey under a rain sky), the near garden softens, the sun glows through it and is dimmed on the ground. Adds to the fog rain brings. 0: none.").default(json!(0)),
+                param("shafts", T::Number, "Light shafts 0..1: the sun's light in the haze, mist and rain fog is shadowed by crowns, hedges and houses (a march through the four shadow cascades with the fog's own density and phase), so soft beams and darker lanes run through the air where the sun shines through gaps; strongest looking towards a low sun. 1 is the physical amount. They need a medium: mist 0.2-0.4, rain or thick haze; in clear air nothing shows (and nothing is computed). 0: none.").default(json!(0)),
+                param("white_balance", T::Any, "The camera's white balance: \"daylight\" (fixed at 6500 K: a low sun reads orange, as on film), \"auto\" (from the sun's and the sky's light at the time shown, as a camera's automatic white balance: most of a warm or cool cast is taken out, some of the mood kept) or a colour temperature in kelvin, 2000 to 12000 (light of that temperature reads white: 3200 makes daylight blue, 9000 warms an overcast day).").default(json!("daylight")),
+                param("grade", T::String, "A colour grade before the tone map: neutral (none), warm (a little warmer and richer), cool (a little cooler and calmer) or soft (lower contrast and colour, a matte print).").default(json!("neutral")),
                 param("exposure_ev", T::Number, "Exposure offset in stops; null for automatic exposure."),
                 param("sky", T::Object, "{type: \"physical\"} or {type: \"hdri\", id: string, rotation_deg: number, intensity: number >= 0}.")
                     .default(json!({"type": "physical"})),
@@ -330,6 +333,9 @@ fn view_set(project: &mut Project, params: &Value) -> Result<Value, CommandError
             "rain",
             "mist",
             "gustiness",
+            "shafts",
+            "white_balance",
+            "grade",
             "surroundings",
         ],
     )?;

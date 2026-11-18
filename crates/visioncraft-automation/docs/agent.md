@@ -752,8 +752,8 @@ gently; `look_at` is a point or `"ahead"`; `fov_y_deg` = 60. Along a shot the pi
 `time_of_day` `[from, to]` (hours, the sun's course; one number holds it), `date` `[{month, day},
 {month, day}]` or `season` (the date's season shows, so a shot from March to September goes
 through spring and summer), `years` `[from, to]` (the garden growing), `snow` (winter only), `wetness` and `rain` (each `[from, to]` 0..1, so a
-shot can ease from dry to wet and into rain; recipe 36), `haze` (a turbidity, 0 to 50), `mist` and `gustiness`
-(0..1; recipe 39).
+shot can ease from dry to wet and into rain; recipe 36), `haze` (a turbidity, 0 to 50), `mist`, `gustiness` and `shafts`
+(0..1; recipes 39 and 40).
 
 The plan for a garden: ask for its layout first (`document.inspect`: shapes and their outlines;
 `query.quantities`: where the plants are and how many), and choose paths from it: a walk from the
@@ -1270,6 +1270,39 @@ a lawn as waves of bending grass whose tips turn paler, sway trunks (slowly), br
 pictures, give `view.render` an `animation_s`: three pictures half a second apart show a gust
 crossing the lawn. `view.render` takes `haze`, `mist` and `gustiness` for one picture (the CLI's
 `--haze`, `--mist` and `--gustiness`), and a film shot eases each as `[from, to]`.
+
+### 40. Golden hour towards the sun, with light shafts through a tree
+
+```json recipe
+{"intent": "a golden-hour picture of the example garden looking into the low sun through the field maple, in a light mist, with light shafts and the sun's glare through the crown; the same without shafts; and a short hold shot that brings the shafts in", "steps": [
+  {"id": "project.load_example", "params": {"name": "garden"}},
+  {"id": "time.set", "params": {"month": 9, "day": 5, "hour": 19.0}},
+  {"id": "view.set", "params": {"mist": 0.3, "shafts": 1}},
+  {"id": "view.render", "params": {"camera": {"position": [18.8, 1.4, 26.4], "target": [6, 4.6, 27.1], "fov_y_deg": 60}, "width": 1280, "height": 720, "path": "golden-hour-shafts.png"}},
+  {"id": "view.render", "params": {"camera": {"position": [18.8, 1.4, 26.4], "target": [6, 4.6, 27.1], "fov_y_deg": 60}, "width": 1280, "height": 720, "shafts": 0, "path": "golden-hour-plain.png"}},
+  {"id": "film.add", "params": {"name": "Into the light", "fps": 25}},
+  {"id": "film.add_shot", "params": {"id": "f1", "shot": {"kind": "hold", "eye": [18.8, 1.4, 26.4], "target": [6, 4.6, 27.1], "duration_s": 4, "shafts": [0, 1]}}},
+  {"id": "film.preview", "params": {"id": "f1", "t": 2}}
+]}
+```
+
+`view.set {"shafts": 0..1}` (0, the default, is not written; the Light shafts slider under
+Weather) shadows the sun's light in the haze, the mist and the rain fog: the renderer marches
+through the four sun shadow cascades along each view ray, at half resolution, with the fog's own
+density and phase, and takes the light out where crowns, hedges and houses shade the air. What is
+left are beams through the gaps of a crown, a dark lane behind a trunk and a wedge of shade past a
+house's edge, strongest looking into a low sun; shadowed, the medium also scatters its full forward
+glow, so the air round the sun brightens. Shafts need a medium: in clear air nothing shows (and
+nothing is computed); mist 0.3 gives a soft glow with faint beams, 0.6 and more clear ones. The
+sun's glare (a halo round the disc, as bright as the share of the disc the leaves leave open) and
+the clear air's own colour kilometres off (blue at noon, warm at a low sun: Hillaire's aerial
+perspective) are always on. `white_balance` is `"daylight"` (the default: a low sun stays orange),
+`"auto"` (from the sun's and the sky's light, as a camera's automatic white balance: most of the
+cast is taken out, some of the mood kept, so a golden hour is a little less orange and a rain
+sky a little cooler) or a temperature in kelvin (2000 to 12000). `grade` is `neutral` (the
+default), `warm`, `cool` or `soft`. `view.render` takes `shafts`, `white_balance` and `grade` for
+one picture (the CLI's `--shafts`, `--white-balance` and `--grade`), and a film shot eases
+`shafts` as `[from, to]`.
 
 ## Known traps
 

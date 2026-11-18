@@ -122,6 +122,7 @@ Usage: visioncraft-cli render FILE --out PNG [--size WxH] [--viewpoint V]
                               [--date YYYY-MM-DD] [--time HH:MM]
                               [--season S] [--snow N] [--wetness N] [--rain N]
                               [--haze T] [--mist N] [--gustiness N]
+                              [--shafts N] [--white-balance WB] [--grade G]
                               [--quality low|medium|high|ultra|photo] [--samples N]
                               [--aperture M] [--focus M] [--animation-s S]
 
@@ -144,6 +145,10 @@ Options:
   --mist N        Mist 0..1 for this picture (visibility 1.3 km at 0.3, 330 m at 0.6, 120 m at 1)
   --gustiness N   Gusts 0..1 for this picture: wind rolling over lawns and through crowns
                   (with --animation-s to place them in time)
+  --shafts N      Light shafts 0..1 for this picture: beams of sun through mist, rain
+                  fog or thick haze where crowns and houses shadow it
+  --white-balance WB  daylight, auto or a temperature in kelvin (2000..12000)
+  --grade G       Colour grade: neutral, warm, cool or soft
   --quality Q     low, medium, high (default), ultra or photo (many frames averaged
                   at ULTRA: soft shadows, smooth edges; slower)
   --samples N     Photo: frames averaged, 1 to 1024. Default 64
@@ -181,8 +186,8 @@ Usage: visioncraft-cli film FILE --out DIR [--film ID] [--size WxH] [--quality Q
 Renders a film of the project (film.add, film.add_shot; the only film when --film is
 left out) as DIR/frame_00000.png and on: each frame has the film's camera, the
 animation clock at the film's time (so wind and water move) and the shot's time of day,
-date or season, years, snow, wetness, rain, haze, mist and gustiness, for that picture
-only. Prints the result as one line of JSON, with the ffmpeg command that makes a
+date or season, years, snow, wetness, rain, haze, mist, gustiness and shafts, for that
+picture only. Prints the result as one line of JSON, with the ffmpeg command that makes a
 video of the frames.
 
 Options:
@@ -720,6 +725,9 @@ fn cmd_render(raw: &[String]) -> Res {
             "--haze",
             "--mist",
             "--gustiness",
+            "--shafts",
+            "--white-balance",
+            "--grade",
         ],
         &[],
     )?;
@@ -781,6 +789,7 @@ fn cmd_render(raw: &[String]) -> Res {
         ("--haze", "haze", "0..50"),
         ("--mist", "mist", "0..1"),
         ("--gustiness", "gustiness", "0..1"),
+        ("--shafts", "shafts", "0..1"),
     ] {
         if let Some(s) = a.value(flag)? {
             params[key] = s
@@ -790,6 +799,13 @@ fn cmd_render(raw: &[String]) -> Res {
                 })?
                 .into();
         }
+    }
+    if let Some(s) = a.value("--white-balance")? {
+        // A number is a temperature in kelvin; the command checks the range and the names.
+        params["white_balance"] = s.parse::<f64>().map_or_else(|_| s.into(), Into::into);
+    }
+    if let Some(s) = a.value("--grade")? {
+        params["grade"] = s.into();
     }
     for (flag, key) in [
         ("--samples", "samples"),

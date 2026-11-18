@@ -83,16 +83,89 @@ fn night_vision(hdr: vec3<f32>) -> vec3<f32> {
     return mix(hdr, v * exposure * vec3<f32>(1.05, 0.97, 1.27), sigma);
 }
 
+// ---- white balance and grade -----------------------------------------------
+// tonemap.rs has the same on the CPU (`adapt`, `grade_matrix`), with the sources.
+
+// Bradford cone response (XYZ -> LMS) times linear Rec.709 -> XYZ, and its inverse.
+const RGB_TO_XYZ = mat3x3<f32>(
+    vec3<f32>(0.4124, 0.2126, 0.0193),
+    vec3<f32>(0.3576, 0.7152, 0.1192),
+    vec3<f32>(0.1805, 0.0722, 0.9505),
+);
+const XYZ_TO_RGB = mat3x3<f32>(
+    vec3<f32>(3.2406, -0.9689, 0.0557),
+    vec3<f32>(-1.5372, 1.8758, -0.2040),
+    vec3<f32>(-0.4986, 0.0415, 1.0570),
+);
+const BRADFORD = mat3x3<f32>(
+    vec3<f32>(0.8951, -0.7502, 0.0389),
+    vec3<f32>(0.2664, 1.7135, -0.0685),
+    vec3<f32>(-0.1614, 0.0367, 1.0296),
+);
+const BRADFORD_INV = mat3x3<f32>(
+    vec3<f32>(0.9869929, 0.4323053, -0.0085287),
+    vec3<f32>(-0.1470543, 0.5183603, 0.0400428),
+    vec3<f32>(0.1599627, 0.0492912, 0.9684867),
+);
+
+// The light falling on open ground: the sun on a horizontal surface and the sky's irradiance,
+// as the atmosphere model and the clouds have them (both pre-exposed lux), as a camera's
+// automatic white balance estimates the scene's illuminant (grey world over an open view).
+fn scene_white() -> vec3<f32> {
+    let sun = g.sun_light.rgb * max(g.sun_dir.y, 0.0);
+    return sun + sky_up_sh() * g.night.w;
+}
+
+// Von Kries adaptation in Bradford space from `white` to `g.white_ref`, `g.white_ref.w` of the
+// way (Lam 1985; as Unreal's and most cameras' temperature setting work).
+fn white_balance(c: vec3<f32>) -> vec3<f32> {
+    let mode = u32(g.white.w + 0.5);
+    if mode == 0u {
+        return c;
+    }
+    var white = g.white.rgb;
+    if mode == 2u {
+        let e = scene_white();
+        let y = luminance(e);
+        if y <= 0.0 {
+            return c;
+        }
+        white = e / y;
+    }
+    let lms_w = BRADFORD * (RGB_TO_XYZ * max(white, vec3<f32>(1e-6)));
+    let lms_t = BRADFORD * (RGB_TO_XYZ * g.white_ref.rgb);
+    let gain = 1.0 + (lms_t / lms_w - 1.0) * g.white_ref.w;
+    return max(XYZ_TO_RGB * (BRADFORD_INV * (gain * (BRADFORD * (RGB_TO_XYZ * c)))), vec3<f32>(0.0));
+}
+
+// A grade (tonemap.rs `grade_matrix`): a matrix in linear Rec.709, then a contrast exponent
+// about mid grey (in units of the exposure), before AgX as Frostbite grades before the display
+// transform (Fry, "High Dynamic Range Color Grading and Display in Frostbite", GDC 2017).
+fn color_grade(c: vec3<f32>) -> vec3<f32> {
+    if g.color_grade[1].w < 0.5 {
+        return c;
+    }
+    let m = mat3x3<f32>(g.color_grade[0].xyz, g.color_grade[1].xyz, g.color_grade[2].xyz);
+    let graded = max(m * c, vec3<f32>(0.0));
+    let k = g.color_grade[0].w;
+    if k == 1.0 {
+        return graded;
+    }
+    let grey = vec3<f32>(0.18);
+    return grey * pow(graded / grey, vec3<f32>(k));
+}
+
 @fragment
 fn fs_tonemap(in: Out) -> @location(0) vec4<f32> {
-    var hdr = textureLoad(src, vec2<i32>(in.clip.xy), 0).rgb;
+    // Never below zero: the light shafts take light out of the HDR image (shafts.wgsl).
+    var hdr = max(textureLoad(src, vec2<i32>(in.clip.xy), 0).rgb, vec3<f32>(0.0));
     if g.options.y > 0.0 {
         // Four summed bloom levels (lib.rs BLOOM_LEVELS): their mean keeps
         // the energy.
         let bloom = textureSampleLevel(src2, smp, in.clip.xy * g.viewport.zw, 0.0).rgb * 0.25;
         hdr = mix(hdr, bloom, g.options.y);
     }
-    let c = agx(night_vision(hdr));
+    let c = agx(color_grade(white_balance(night_vision(hdr))));
     // Dither by +-0.5 LSB (interleaved gradient noise) in the encoded domain.
     let n = ign(in.clip.xy) - 0.5;
     let encoded = clamp(srgb_encode(c) + n / 255.0, vec3<f32>(0.0), vec3<f32>(1.0));

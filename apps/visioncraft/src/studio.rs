@@ -1355,6 +1355,24 @@ impl Studio {
         self.renderer.set_snow(snow);
         self.renderer.set_wet(v.wetness, v.rain);
         self.renderer.set_mist(v.mist);
+        self.renderer.set_shafts(v.shafts);
+        self.renderer.set_white_balance(match v.white_balance {
+            visioncraft_core::WhiteBalance::Daylight => visioncraft_render::WhiteBalance::Daylight,
+            visioncraft_core::WhiteBalance::Auto => visioncraft_render::WhiteBalance::Auto,
+            visioncraft_core::WhiteBalance::Kelvin(k) => {
+                visioncraft_render::WhiteBalance::Kelvin(k)
+            }
+        });
+        self.renderer.set_color_grade(match v.grade {
+            visioncraft_core::Grade::Neutral => visioncraft_render::ColorGrade::Neutral,
+            visioncraft_core::Grade::Warm => visioncraft_render::ColorGrade::Warm,
+            visioncraft_core::Grade::Cool => visioncraft_render::ColorGrade::Cool,
+            visioncraft_core::Grade::Soft => visioncraft_render::ColorGrade::Soft,
+        });
+        // A camera sees the sun's glare and the air's own colour far off; both are part of
+        // the photographic look, not settings.
+        self.renderer.set_sun_glare(1.0);
+        self.renderer.set_aerial_perspective(true);
         self.renderer.set_clouds(&visioncraft_render::Clouds {
             cover: match clouds.kind {
                 visioncraft_core::CloudKind::Clear => 0.0,

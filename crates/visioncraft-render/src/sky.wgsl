@@ -222,12 +222,7 @@ fn ground_kcd(sky_up: vec3<f32>) -> vec3<f32> {
     return g.ground.rgb * (sky_up + sun) / PI;
 }
 
-// The sky's irradiance on a horizontal surface from the SH (env.wgsl fs_sh
-// integrates it directly; the cube faces take it from here).
-fn sky_up_sh() -> vec3<f32> {
-    let e = g.sh[0].rgb * 0.282095 + g.sh[1].rgb * 0.488603 - g.sh[6].rgb * 0.315392 - g.sh[8].rgb * 0.546274;
-    return max(e, vec3<f32>(0.0));
-}
+// `sky_up_sh` (the sky's irradiance on a horizontal surface) is in common.wgsl.
 
 // The background as seen (pre-exposed): the source above the horizon, and
 // below it the horizon dimmed (Preetham) or the source as is, never the flat

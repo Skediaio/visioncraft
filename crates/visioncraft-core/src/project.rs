@@ -223,6 +223,19 @@ pub struct ViewState {
     /// crown after another (the slow swell is `wind_gustiness`).
     #[serde(skip_serializing_if = "is_zero")]
     pub gustiness: f32,
+    /// Light shafts, 0 (none, the default; not written) to 1: the sun's light in the haze, mist
+    /// and rain fog is shadowed by crowns, hedges and houses, so beams and darker lanes run
+    /// through the air towards a low sun. 1 is the physical amount; there must be a medium
+    /// (mist, rain or thick haze) for them to show.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub shafts: f32,
+    /// The camera's white balance: fixed for daylight (the default, not written), automatic
+    /// from the light of the sun and sky, or a colour temperature in kelvin.
+    #[serde(skip_serializing_if = "WhiteBalance::is_daylight")]
+    pub white_balance: WhiteBalance,
+    /// A colour grade before the tone map. Not written while `neutral`, the default.
+    #[serde(skip_serializing_if = "Grade::is_neutral")]
+    pub grade: Grade,
     /// What lies round the design on the endless ground, beyond its plot. Not written while the
     /// default (fields).
     #[serde(skip_serializing_if = "Surroundings::is_default")]
@@ -321,6 +334,84 @@ impl Look {
     }
 }
 
+/// The colour temperatures `white_balance` takes (kelvin).
+pub const WHITE_BALANCE_KELVIN: std::ops::RangeInclusive<f32> = 2000.0..=12000.0;
+
+/// The camera's white balance, as on a camera: what light it takes for white.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "WhiteBalanceRepr", into = "WhiteBalanceRepr")]
+pub enum WhiteBalance {
+    /// Fixed for daylight (6500 K): a low sun reads orange, an overcast sky a little blue, as
+    /// on film. The default, as pictures were before white balance existed.
+    #[default]
+    Daylight,
+    /// From the light of the sun and the sky at the time shown, as a camera on automatic white
+    /// balance: most of a warm or cool cast is taken out, some of the mood is kept.
+    Auto,
+    /// A colour temperature in kelvin (2000..=12000): light of that temperature reads white.
+    Kelvin(f32),
+}
+
+impl WhiteBalance {
+    fn is_daylight(&self) -> bool {
+        *self == WhiteBalance::Daylight
+    }
+}
+
+/// `white_balance` as written: "daylight", "auto" or a number of kelvin.
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum WhiteBalanceRepr {
+    Name(String),
+    Kelvin(f32),
+}
+
+impl TryFrom<WhiteBalanceRepr> for WhiteBalance {
+    type Error = String;
+
+    fn try_from(r: WhiteBalanceRepr) -> Result<Self, String> {
+        match r {
+            WhiteBalanceRepr::Name(n) if n == "daylight" => Ok(WhiteBalance::Daylight),
+            WhiteBalanceRepr::Name(n) if n == "auto" => Ok(WhiteBalance::Auto),
+            WhiteBalanceRepr::Name(n) => Err(format!(
+                "white balance `{n}`: give \"daylight\", \"auto\" or a temperature in kelvin"
+            )),
+            WhiteBalanceRepr::Kelvin(k) => Ok(WhiteBalance::Kelvin(k)),
+        }
+    }
+}
+
+impl From<WhiteBalance> for WhiteBalanceRepr {
+    fn from(w: WhiteBalance) -> Self {
+        match w {
+            WhiteBalance::Daylight => WhiteBalanceRepr::Name("daylight".into()),
+            WhiteBalance::Auto => WhiteBalanceRepr::Name("auto".into()),
+            WhiteBalance::Kelvin(k) => WhiteBalanceRepr::Kelvin(k),
+        }
+    }
+}
+
+/// A colour grade applied before the tone map, as a photographer picks a preset.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Grade {
+    /// No grade: the picture as before grades existed.
+    #[default]
+    Neutral,
+    /// A little warmer and richer: late afternoon.
+    Warm,
+    /// A little cooler and calmer.
+    Cool,
+    /// Lower contrast and colour: a matte, misty print.
+    Soft,
+}
+
+impl Grade {
+    fn is_neutral(&self) -> bool {
+        *self == Grade::Neutral
+    }
+}
+
 fn is_one(v: &f32) -> bool {
     *v == 1.0
 }
@@ -356,6 +447,9 @@ impl Default for ViewState {
             rain: 0.0,
             mist: 0.0,
             gustiness: 0.0,
+            shafts: 0.0,
+            white_balance: WhiteBalance::Daylight,
+            grade: Grade::Neutral,
             surroundings: Surroundings::default(),
             sun_map: None,
         }
@@ -397,6 +491,11 @@ impl ViewState {
             && (0.0..=1.0).contains(&self.rain)
             && (0.0..=1.0).contains(&self.mist)
             && (0.0..=1.0).contains(&self.gustiness)
+            && (0.0..=1.0).contains(&self.shafts)
+            && match self.white_balance {
+                WhiteBalance::Kelvin(k) => WHITE_BALANCE_KELVIN.contains(&k),
+                _ => true,
+            }
             && self.ground.is_none_or(|g| {
                 finite(g.height) && g.color.iter().all(|c| c.is_finite() && *c >= 0.0)
             })

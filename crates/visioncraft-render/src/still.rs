@@ -119,6 +119,7 @@ impl Renderer {
             &self.shadow_sampler,
             &self.post_sampler,
             &self.white,
+            &self.physical.aerial,
             false,
         );
         let stride = (width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
@@ -438,6 +439,7 @@ impl Renderer {
             &self.shadow_sampler,
             &self.post_sampler,
             &self.white,
+            &self.physical.aerial,
             true,
         );
         let sampled = self.offscreen_pipelines(quality);

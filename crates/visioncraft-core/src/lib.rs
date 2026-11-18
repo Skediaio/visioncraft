@@ -72,9 +72,9 @@ pub use planting::{
 };
 pub use presets::{PlantingPreset, planting_presets};
 pub use project::{
-    CloudKind, Clouds, CustomSpecies, GroundPlane, Layer, Look, ModelKind, ModelRef, Project,
-    ProjectError, RenderStyle, Site, SkyChoice, SunTime, Surroundings, Transform, ViewState,
-    YEARS_MAX,
+    CloudKind, Clouds, CustomSpecies, Grade, GroundPlane, Layer, Look, ModelKind, ModelRef,
+    Project, ProjectError, RenderStyle, Site, SkyChoice, SunTime, Surroundings, Transform,
+    ViewState, WHITE_BALANCE_KELVIN, WhiteBalance, YEARS_MAX,
 };
 pub use raycast::{Hit, ground_height, raycast, raycast_any};
 pub use season::Season;

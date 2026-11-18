@@ -594,7 +594,7 @@ pub fn host_docs() -> Vec<CommandDoc> {
         host_doc(
             "film.preview",
             "Preview Film",
-            "Reads a film without drawing it: its length, frame count and where each shot starts, and with `t` the camera at that time (eye, target, field of view), the shot it is in, how far through it, what changes for that picture (time of day, date or season, years, snow, wetness, rain, haze, mist, gustiness) and the sun then. The walk follows the real ground of the project (terrain, areas, models), so this is how to check the shots before film.render.",
+            "Reads a film without drawing it: its length, frame count and where each shot starts, and with `t` the camera at that time (eye, target, field of view), the shot it is in, how far through it, what changes for that picture (time of day, date or season, years, snow, wetness, rain, haze, mist, gustiness, shafts) and the sun then. The walk follows the real ground of the project (terrain, areas, models), so this is how to check the shots before film.render.",
             vec![
                 p("id", "string", None, true, None, &[], "Film id"),
                 p(
@@ -607,14 +607,14 @@ pub fn host_docs() -> Vec<CommandDoc> {
                     "Film time in seconds, 0 to the duration (later is the last frame); without it only the shot list comes back",
                 ),
             ],
-            "{id, name, fps, duration_s, frame_count, shots: [{index, kind, start_s, duration_s}], t?, shot?, progress?, camera?: {position, target, fov_y_deg}, overrides?: {time_of_day?, date?, season?, years?, snow?, wetness?, rain?, haze?, mist?, gustiness?}, time?, sun?}",
+            "{id, name, fps, duration_s, frame_count, shots: [{index, kind, start_s, duration_s}], t?, shot?, progress?, camera?: {position, target, fov_y_deg}, overrides?: {time_of_day?, date?, season?, years?, snow?, wetness?, rain?, haze?, mist?, gustiness?, shafts?}, time?, sun?}",
             json!({"id": "f1", "t": 2.5}),
             false,
         ),
         host_doc(
             "film.render",
             "Render Film",
-            "Draws a film as numbered PNGs `frame_00000.png`... in a folder beneath the write root, one view.render per frame: the film's camera, the animation clock set to the film time (so wind and water move) and the shot's time of day, date or season, years, snow, wetness, rain, haze, mist and gustiness for that picture only; the project does not change. Frames are counted from 0 in what is drawn, so `every` 5 gives a film of fps / 5. At most 10000 frames per call: render a long film in parts (`from`, `to`). A video needs a program such as ffmpeg: the result's `ffmpeg` is the command to run on the frames.",
+            "Draws a film as numbered PNGs `frame_00000.png`... in a folder beneath the write root, one view.render per frame: the film's camera, the animation clock set to the film time (so wind and water move) and the shot's time of day, date or season, years, snow, wetness, rain, haze, mist, gustiness and shafts for that picture only; the project does not change. Frames are counted from 0 in what is drawn, so `every` 5 gives a film of fps / 5. At most 10000 frames per call: render a long film in parts (`from`, `to`). A video needs a program such as ffmpeg: the result's `ffmpeg` is the command to run on the frames.",
             vec![
                 p("id", "string", None, true, None, &[], "Film id"),
                 p(
@@ -860,6 +860,33 @@ pub fn host_docs() -> Vec<CommandDoc> {
                     Some("the project's"),
                     &[],
                     "Gusts 0..1 for this picture only: patches of wind rolling over lawns and through crowns (set `animation_s` to move them)",
+                ),
+                p(
+                    "shafts",
+                    "number",
+                    None,
+                    false,
+                    Some("the project's"),
+                    &[],
+                    "Light shafts 0..1 for this picture only: beams of sun through the mist, rain fog or haze where crowns and houses shadow it",
+                ),
+                p(
+                    "white_balance",
+                    "any",
+                    None,
+                    false,
+                    Some("the project's"),
+                    &[],
+                    "White balance for this picture only: \"daylight\", \"auto\" or a temperature in kelvin (2000 to 12000)",
+                ),
+                p(
+                    "grade",
+                    "string",
+                    None,
+                    false,
+                    Some("the project's"),
+                    &["neutral", "warm", "cool", "soft"],
+                    "Colour grade for this picture only",
                 ),
             ],
             "{path? | mime, base64; width, height, camera, time, years, ...the renderer's info}",
@@ -1656,6 +1683,9 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
             "haze",
             "mist",
             "gustiness",
+            "shafts",
+            "white_balance",
+            "grade",
             "quality",
             "years",
             "samples",
@@ -1776,6 +1806,7 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
         ("rain", &mut project.view.rain),
         ("mist", &mut project.view.mist),
         ("gustiness", &mut project.view.gustiness),
+        ("shafts", &mut project.view.shafts),
     ] {
         if let Some(v) = a.number(key)? {
             if !(0.0..=1.0).contains(&v) {
@@ -1790,6 +1821,28 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
             return Err(format!("{id}: `haze` must be from 0 to {max}"));
         }
         project.view.haze = v as f32;
+    }
+    if let Some(v) = a.get("white_balance") {
+        let wb: visioncraft_core::WhiteBalance = serde_json::from_value(v.clone())
+            .map_err(|_| {
+                format!("{id}: `white_balance` must be \"daylight\", \"auto\" or a temperature in kelvin")
+            })?;
+        if let visioncraft_core::WhiteBalance::Kelvin(k) = wb
+            && !visioncraft_core::WHITE_BALANCE_KELVIN.contains(&k)
+        {
+            return Err(format!(
+                "{id}: `white_balance` in kelvin must be from 2000 to 12000"
+            ));
+        }
+        project.view.white_balance = wb;
+    }
+    if let Some(v) = a.str("grade")? {
+        project.view.grade = serde_json::from_value(serde_json::json!(v)).map_err(|_| {
+            format!(
+                "{id}: `grade` must be neutral, warm, cool or soft, got `{}`",
+                shorten(v)
+            )
+        })?;
     }
     if project.view.snow > 0.0 && project.season() != visioncraft_core::Season::Winter {
         return Err(format!(

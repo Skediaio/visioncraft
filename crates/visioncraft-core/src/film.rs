@@ -129,6 +129,9 @@ pub struct Shot {
     /// Gusts at the start and the end of the shot (as `view.set gustiness`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gustiness: Option<Span<f32>>,
+    /// Light shafts at the start and the end of the shot (as `view.set shafts`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shafts: Option<Span<f32>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -224,6 +227,7 @@ const COMMON_FIELDS: &[&str] = &[
     "haze",
     "mist",
     "gustiness",
+    "shafts",
 ];
 
 /// The highest haze (a turbidity) a shot or a picture takes: thick fog-like haze.
@@ -407,6 +411,7 @@ impl Shot {
             ("rain", self.rain),
             ("mist", self.mist),
             ("gustiness", self.gustiness),
+            ("shafts", self.shafts),
         ] {
             if let Some(s) = span
                 && (!(0.0..=1.0).contains(&s.from) || !(0.0..=1.0).contains(&s.to))
@@ -640,6 +645,8 @@ pub struct Overrides {
     pub mist: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gustiness: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shafts: Option<f32>,
 }
 
 impl Overrides {
@@ -680,6 +687,9 @@ impl Overrides {
         }
         if let Some(s) = self.gustiness {
             m.insert("gustiness".into(), json!(s));
+        }
+        if let Some(s) = self.shafts {
+            m.insert("shafts".into(), json!(s));
         }
         m
     }
@@ -898,6 +908,9 @@ fn overrides_at(shot: &Shot, base: Overrides, u: f32) -> Overrides {
     }
     if let Some(s) = shot.gustiness {
         o.gustiness = Some(s.at(u));
+    }
+    if let Some(s) = shot.shafts {
+        o.shafts = Some(s.at(u));
     }
     o
 }
@@ -1364,6 +1377,26 @@ mod tests {
         assert_eq!(end.overrides.time_of_day, None);
         let params = mid.overrides.render_params();
         assert_eq!(params["time"], json!({"hour": 18.0, "month": 6, "day": 1}));
+    }
+
+    #[test]
+    fn shafts_ease_along_a_shot() {
+        let ground: &dyn Fn(f32, f32) -> f32 = &flat;
+        let f = film(vec![shot(
+            json!({"kind": "hold", "eye": [0, 2, 5], "target": [0, 1, 0], "duration_s": 4,
+            "shafts": [0.0, 1.0]}),
+        )]);
+        let e = env(ground, &[]);
+        assert_eq!(camera_at(&f, 0.0, &e).unwrap().overrides.shafts, Some(0.0));
+        let mid = camera_at(&f, 2.0, &e).unwrap().overrides;
+        assert!((mid.shafts.unwrap() - 0.5).abs() < 1e-5);
+        assert!((mid.render_params()["shafts"].as_f64().unwrap() - 0.5).abs() < 1e-5);
+        let bad = Shot::from_value(
+            &json!({"kind": "hold", "eye": [0, 2, 5], "target": [0, 1, 0], "duration_s": 1,
+            "shafts": 1.5}),
+            52.0,
+        );
+        assert!(bad.unwrap_err().contains("`shafts` must be from 0 to 1"));
     }
 
     #[test]

@@ -23,6 +23,10 @@
 //!    ground, the sky, then glass, water and alpha-blended materials sorted
 //!    back to front (not in the depth pre-pass, so not in AO and not
 //!    depth-writing); distance haze on everything
+//!    Then the air (shafts.wgsl), when any of it is on: light shafts (a march against the
+//!    cascades at half size, `Rgba16Float`, blurred across and down), the sun's glare (its
+//!    disc's openness into one texel), the aerial perspective LUT (`Rgba16Float` 32^3 as
+//!    1024x32, atmosphere.wgsl), composited onto the HDR image in one full-size pass
 //! 7. bloom: 4 half-size `Rgba16Float` levels down, then back up
 //! 8. AgX tone map (bloom mixed in) to 8-bit sRGB-encoded values: straight
 //!    into the output, or into an LDR target at render size for
@@ -84,6 +88,7 @@ pub use still::Photo;
 pub use still::Still;
 pub use terrain::{TerrainChunk, TerrainLayer};
 pub use texture::{ColorSpace, TextureDesc, TextureId, mip_count};
+pub use tonemap::{ColorGrade, WhiteBalance};
 pub use underlay::UnderlayQuad;
 pub use wind::Wind;
 
@@ -106,6 +111,30 @@ const AO_INTENSITY: f32 = 1.5;
 /// Four half-size levels (render size / 2 .. / 16): a fifth (/ 32) widened
 /// the halo by a margin no one saw and cost two of a frame's ~22 passes.
 const BLOOM_LEVELS: usize = 4;
+/// The light shafts' resolution divisor of the render size.
+const SHAFTS_DIV: u32 = 2;
+/// How far the shafts' march reaches at most (m; the shadow distance otherwise).
+const SHAFTS_REACH_M: f32 = 30.0;
+/// The sun's glare at `set_sun_glare(1)`: the share of the sun's light a lens scatters round
+/// it, and its two lobes (shafts.wgsl `glare_lobe`): a narrow core (rad), a wide halo (rad)
+/// and the halo's share. A share of a few per cent is what a clean camera lens and the eye
+/// show (Spencer et al. 1995 put the eye's scattered light at about 10 % within 10 degrees).
+const SUN_GLARE: [f32; 4] = [0.03, 0.025, 0.14, 0.35];
+
+/// What of the air runs this frame (`Renderer::air`): the shafts' strength and the glare's
+/// (0 off), and the aerial perspective.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Air {
+    shafts: f32,
+    glare: f32,
+    aerial: bool,
+}
+
+impl Air {
+    fn any(&self) -> bool {
+        self.shafts > 0.0 || self.glare > 0.0 || self.aerial
+    }
+}
 /// Solar illuminance at the top of the atmosphere (lux; Filament's
 /// documentation, "Physically based units"), in kcd/m2 per unit of the
 /// physical sky's LUTs.
@@ -117,7 +146,7 @@ const CLUSTER_CELL: f32 = 8.0;
 /// `set_time` wraps here (seconds) to keep f32 precision in the shaders.
 const TIME_WRAP: f64 = 4096.0;
 /// Byte offset of the SH in the globals (written by the GPU, see env.rs).
-const SH_OFFSET: u64 = 9 * 64 + 47 * 16;
+const SH_OFFSET: u64 = 9 * 64 + 55 * 16;
 /// The roughness up to which a metal is a mirror (`Material::mirror`, scene.wgsl `light`).
 const MIRROR_ROUGHNESS: f32 = 0.1;
 
@@ -126,7 +155,7 @@ const SKY: &str = include_str!("sky.wgsl");
 const POST: &str = include_str!("post.wgsl");
 /// Every shader module as (name, source parts); WGSL has no includes, so the
 /// shared declarations are prepended. Also validated with naga in a unit test.
-const SHADERS: [(&str, &[&str]); 13] = [
+const SHADERS: [(&str, &[&str]); 14] = [
     (
         "scene",
         &[
@@ -153,6 +182,7 @@ const SHADERS: [(&str, &[&str]); 13] = [
     ),
     ("post", &[COMMON, POST]),
     ("dilate", &[include_str!("dilate.wgsl")]),
+    ("shafts", &[COMMON, include_str!("shafts.wgsl")]),
 ];
 
 /// Triangle mesh in plain slices. `normals` match `positions`; `face_ids`
@@ -705,6 +735,9 @@ struct Layouts {
     blur: wgpu::BindGroupLayout,
     /// A plan underlay's image and its sampler (group 2 of the underlay pipeline).
     underlay: wgpu::BindGroupLayout,
+    /// The air passes (shafts.wgsl): shadow map, its sampler, linear depth, the half-size
+    /// shafts, the aerial perspective LUT, its sampler, the sun's openness.
+    shafts: wgpu::BindGroupLayout,
 }
 
 /// Pipelines that depend on the MSAA sample count. Depth and forward are
@@ -751,6 +784,12 @@ struct Pipelines {
     upscale: wgpu::RenderPipeline,
     overlay: wgpu::RenderPipeline,
     underlay: wgpu::RenderPipeline,
+    /// The air (shafts.wgsl): the shafts' march, their blur across and down, the sun's
+    /// openness, the composite onto the HDR image.
+    shafts_march: wgpu::RenderPipeline,
+    shafts_blur: [wgpu::RenderPipeline; 2],
+    sun_seen: wgpu::RenderPipeline,
+    air: wgpu::RenderPipeline,
 }
 
 /// Everything sized by the viewport or the quality settings.
@@ -796,6 +835,14 @@ struct Targets {
     forward_bind: wgpu::BindGroup,
     /// For the reflection pass: no screen-space inputs.
     reflect_forward_bind: wgpu::BindGroup,
+    /// The light shafts at half the render size, marched into [0], blurred across into [1]
+    /// and down into [0] again (rgb the light to take out, a the linear depth).
+    shafts: [wgpu::TextureView; 2],
+    /// One texel: the share of the sun's disc the scene leaves open (shafts.wgsl).
+    sun_seen: wgpu::TextureView,
+    /// The air passes' inputs: for the march and the sun's openness, the blur across, the blur
+    /// down, the composite.
+    air_bind: [wgpu::BindGroup; 4],
     bytes: u64,
 }
 
@@ -963,6 +1010,13 @@ pub struct Renderer {
     rain: f32,
     /// Mist 0..1 (`set_mist`).
     mist: f32,
+    /// Light shafts 0..1 (`set_shafts`), the sun's glare (`set_sun_glare`), the aerial
+    /// perspective (`set_aerial_perspective`), white balance and colour grade.
+    shafts: f32,
+    sun_glare: f32,
+    aerial_perspective: bool,
+    white_balance: WhiteBalance,
+    color_grade: ColorGrade,
     /// A photo's sample (`still::Photo`): the shadow's light direction moved within the sun's
     /// disc, and the noise seed of ambient occlusion; zero for live frames.
     shadow_jitter: Vec3,
@@ -1200,6 +1254,7 @@ impl Renderer {
             &shadow_sampler,
             &post_sampler,
             &white,
+            &physical.aerial,
             false,
         );
         let mipmapper = texture::Mipmapper::new(device, module(&modules, "mip"));
@@ -1301,6 +1356,11 @@ impl Renderer {
             wetness: 0.0,
             rain: 0.0,
             mist: 0.0,
+            shafts: 0.0,
+            sun_glare: 0.0,
+            aerial_perspective: false,
+            white_balance: WhiteBalance::Daylight,
+            color_grade: ColorGrade::Neutral,
             shadow_jitter: Vec3::ZERO,
             photo_seed: 0.0,
             photo_pipes: None,
@@ -1785,6 +1845,100 @@ impl Renderer {
             self.mist = mist;
             self.update_ambient(true);
         }
+    }
+
+    /// Light shafts 0..1: the sun's light the haze, the mist and the rain fog scatter towards
+    /// the camera is taken out again where the medium lies in shadow (a march through the sun's
+    /// cascades, shafts.wgsl), so beams and darker lanes run through the air behind crowns and
+    /// past house edges. 1 is the physical amount, 0 (the default) draws nothing of it. Nothing
+    /// is computed without a medium to light (`Renderer::shafts_on`), at night, or in a plan or
+    /// an elevation.
+    pub fn set_shafts(&mut self, strength: f32) {
+        self.shafts = strength.clamp(0.0, 1.0);
+    }
+
+    /// The sun's glare, 0 (none, the default) to 1 (as a camera lens sees it): a halo of the
+    /// sun's light round its direction (`SUN_GLARE`), as bright as the share of its disc the
+    /// scene leaves open, so a sun behind leaves glows through their gaps.
+    pub fn set_sun_glare(&mut self, strength: f32) {
+        self.sun_glare = strength.clamp(0.0, 1.0);
+    }
+
+    /// The clear air's own colour on what lies far off (the physical sky only; off by
+    /// default): the aerial perspective LUT of Hillaire (EGSR 2020) adds the light the air's
+    /// molecules scatter towards the camera and takes out what they absorb, blue at noon and
+    /// warm at a low sun, on top of the aerosol haze and the mist. Kilometres off it shows;
+    /// in a garden it is a few thousandths.
+    pub fn set_aerial_perspective(&mut self, on: bool) {
+        self.aerial_perspective = on;
+    }
+
+    /// The camera's white balance, before the grade and the tone map (tonemap.wgsl):
+    /// `Daylight` (the default) applies nothing.
+    pub fn set_white_balance(&mut self, balance: WhiteBalance) {
+        self.white_balance = balance;
+    }
+
+    /// A colour grade before the tone map (`tonemap::grade_matrix`); `Neutral` (the default)
+    /// applies nothing.
+    pub fn set_color_grade(&mut self, grade: ColorGrade) {
+        self.color_grade = grade;
+    }
+
+    /// What of the air runs this frame for a camera with `proj` (`Air`).
+    fn air(&self, proj: Mat4) -> Air {
+        let ortho = shadow::is_orthographic(proj);
+        let sun_up = self.sun.direction.y > 0.0 && self.sun.illuminance > 0.0;
+        let shafts = if self.shafts_on(ortho, sun_up) {
+            self.shafts
+        } else {
+            0.0
+        };
+        // The sun near enough the picture to glare into it.
+        let glare = if self.sun_glare > 0.0 && !ortho && self.sun.direction.y > -0.02 {
+            let clip = (proj * self.view) * (self.eye + self.sun.direction * 1000.0).extend(1.0);
+            let ndc = clip.truncate().truncate() / clip.w.max(1e-6);
+            if clip.w > 0.0 && ndc.abs().max_element() < 2.0 {
+                self.sun_glare
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        };
+        let aerial = self.aerial_perspective
+            && !ortho
+            && matches!(self.sky_source, SkySource::Physical)
+            && self.physical.ready();
+        Air {
+            shafts,
+            glare,
+            aerial,
+        }
+    }
+
+    /// Light shafts are drawn: asked for, the sun up and shining, and a medium thick enough
+    /// near the camera that its shadowed part could change a pixel (an optical depth of 0.002
+    /// over the shadow distance: mist, rain or a thick haze; a clear day's haze is not).
+    fn shafts_on(&self, ortho: bool, sun_up: bool) -> bool {
+        if self.shafts <= 0.0 || ortho || !sun_up || self.sun_share() < 0.01 {
+            return false;
+        }
+        let a = &self.atmosphere;
+        let height = self.eye.y - self.haze_base();
+        let haze = a.haze / 1000.0 * (-height / a.haze_height_m).exp();
+        let [m, falloff, _, _] = atmosphere::mist_uniform(self.mist, self.rain, 0.0, 0.0);
+        let mist = m * (-falloff * height.max(0.0)).exp();
+        (haze + mist) * self.shadow_distance.min(SHAFTS_REACH_M) > 0.002
+    }
+
+    /// The height the haze and the mist thin upwards from: the lowest open ground (with a
+    /// coast, the sea).
+    fn haze_base(&self) -> f32 {
+        let ground_height = self.ground.map_or(0.0, |g| g.height);
+        self.sea()
+            .filter(|s| s.coast.len() >= 2)
+            .map_or(ground_height, |s| ground_height.min(s.level))
     }
 
     pub fn set_clouds(&mut self, clouds: &Clouds) {
@@ -3136,6 +3290,53 @@ impl Renderer {
             pass.draw(0..3, 0..1);
             self.counters.add(1, 1, false);
         };
+        // The air: light shafts, the sun's glare and the aerial perspective, onto the HDR image.
+        let air = self.air(self.proj);
+        if air.any() {
+            if air.aerial {
+                self.physical
+                    .update_aerial(encoder, &self.globals_only_bind, self.timer.as_ref());
+            }
+            let p = &self.pipelines;
+            if air.shafts > 0.0 {
+                post(
+                    encoder,
+                    "shafts",
+                    &t.shafts[0],
+                    None,
+                    &p.shafts_march,
+                    &t.air_bind[0],
+                );
+                let blur = &p.shafts_blur;
+                post(
+                    encoder,
+                    "shafts blur",
+                    &t.shafts[1],
+                    None,
+                    &blur[0],
+                    &t.air_bind[1],
+                );
+                post(
+                    encoder,
+                    "shafts blur",
+                    &t.shafts[0],
+                    None,
+                    &blur[1],
+                    &t.air_bind[2],
+                );
+            }
+            if air.glare > 0.0 {
+                post(
+                    encoder,
+                    "sun glare",
+                    &t.sun_seen,
+                    None,
+                    &p.sun_seen,
+                    &t.air_bind[0],
+                );
+            }
+            post(encoder, "air", &t.hdr, Some(()), &p.air, &t.air_bind[3]);
+        }
         if self.quality.bloom && self.bloom_strength > 0.0 {
             for (i, target) in t.bloom.iter().enumerate() {
                 let p = &self.pipelines.bloom[(i > 0) as usize];
@@ -4075,10 +4276,7 @@ impl Renderer {
             a.haze
         };
         // The haze thins upwards from the lowest open ground: with a coast, the sea.
-        let haze_base = self
-            .sea()
-            .filter(|s| s.coast.len() >= 2)
-            .map_or(ground_height, |s| ground_height.min(s.level));
+        let haze_base = self.haze_base();
         b.floats(&[haze / 1000.0, 1.0 / a.haze_height_m, haze_base, a.sun_glow]);
         let (source, rotation, scale, mips) = match &self.sky_source {
             SkySource::Preetham => (0.0, 0.0, 1.0, 1.0),
@@ -4185,6 +4383,55 @@ impl Renderer {
         };
         b.floats(&mist);
         b.floats(&wind::Uniforms::new(&self.wind, &self.wind_phases).gust);
+        // The air (shafts.wgsl); none of it in the water's mirrored view.
+        let air = if clip.is_some() {
+            Air {
+                shafts: 0.0,
+                glare: 0.0,
+                aerial: false,
+            }
+        } else {
+            self.air(proj)
+        };
+        let steps = if q.fast_shading { 12.0 } else { 16.0 };
+        b.floats(&[
+            air.shafts,
+            steps,
+            self.shadow_distance.min(SHAFTS_REACH_M),
+            SHAFTS_DIV as f32,
+        ]);
+        let [share, narrow, wide, halo] = SUN_GLARE;
+        b.floats(&[air.glare * share, narrow, wide, halo]);
+        b.floats(&[
+            if air.aerial { 1.0 } else { 0.0 },
+            atmosphere::AERIAL_KM,
+            0.002 + eye.y.max(0.0) / 1000.0,
+            0.0,
+        ]);
+        let (white, reference) = match self.white_balance {
+            WhiteBalance::Daylight => ([0.0; 4], [1.0, 1.0, 1.0, 0.0]),
+            WhiteBalance::Auto => (
+                [0.0, 0.0, 0.0, 2.0],
+                [1.0, 1.0, 1.0, tonemap::AUTO_ADAPTATION],
+            ),
+            WhiteBalance::Kelvin(k) => (
+                tonemap::kelvin_white(k).extend(1.0).to_array(),
+                tonemap::kelvin_white(tonemap::DAYLIGHT_KELVIN)
+                    .extend(1.0)
+                    .to_array(),
+            ),
+        };
+        b.floats(&white);
+        b.floats(&reference);
+        let (m, contrast) = tonemap::grade_matrix(self.color_grade);
+        let on = if self.color_grade == ColorGrade::Neutral {
+            0.0
+        } else {
+            1.0
+        };
+        b.floats(&m.x_axis.extend(contrast).to_array());
+        b.floats(&m.y_axis.extend(on).to_array());
+        b.floats(&m.z_axis.extend(0.0).to_array());
         debug_assert_eq!(b.0.len() as u64, SH_OFFSET);
         self.queue.write_buffer(buffer, 0, &b.0);
     }
@@ -4234,6 +4481,7 @@ impl Renderer {
             &self.shadow_sampler,
             &self.post_sampler,
             &self.white,
+            &self.physical.aerial,
             false,
         );
     }
@@ -4450,7 +4698,7 @@ fn snow_cover_matrix(eye: Vec3, lo: Vec3, hi: Vec3, resolution: u32) -> Mat4 {
 const SNOW_COVER_M: f32 = 160.0;
 
 fn globals_size() -> u64 {
-    // 9 matrices, 47 vec4s, the 9 SH vec4s last; see common.wgsl.
+    // 9 matrices, 55 vec4s, the 9 SH vec4s last; see common.wgsl.
     SH_OFFSET + 9 * 16
 }
 
@@ -5013,6 +5261,18 @@ impl Layouts {
                 &[
                     texture_entry(0, filterable, D::D2, false),
                     sampler_entry(1, B::Filtering),
+                ],
+            ),
+            shafts: layout(
+                "air",
+                &[
+                    texture_entry(0, S::Depth, D::D2Array, false),
+                    sampler_entry(1, B::Comparison),
+                    texture_entry(2, unfilterable, D::D2, false),
+                    texture_entry(3, unfilterable, D::D2, false),
+                    texture_entry(4, filterable, D::D2, false),
+                    sampler_entry(5, B::Filtering),
+                    texture_entry(6, unfilterable, D::D2, false),
                 ],
             ),
         }
@@ -5764,6 +6024,7 @@ impl Pipelines {
             )
         });
         let post = [Some(&l.globals), Some(&l.post)];
+        let air = [Some(&l.globals), Some(&l.shafts)];
         let add = wgpu::ColorTargetState {
             format: HDR,
             blend: Some(wgpu::BlendState {
@@ -5844,6 +6105,50 @@ impl Pipelines {
                 ),
             ],
             fxaa: fullscreen("fxaa", "post", "fs_fxaa", &post, unorm.into(), &[]),
+            shafts_march: fullscreen("shafts", "shafts", "fs_march", &air, HDR.into(), &[]),
+            shafts_blur: [
+                fullscreen(
+                    "shafts blur",
+                    "shafts",
+                    "fs_blur",
+                    &air,
+                    HDR.into(),
+                    &[("HORIZONTAL", 1.0)],
+                ),
+                fullscreen(
+                    "shafts blur",
+                    "shafts",
+                    "fs_blur",
+                    &air,
+                    HDR.into(),
+                    &[("HORIZONTAL", 0.0)],
+                ),
+            ],
+            sun_seen: fullscreen("sun seen", "shafts", "fs_sun_seen", &air, HDR.into(), &[]),
+            air: fullscreen(
+                "air",
+                "shafts",
+                "fs_composite",
+                &air,
+                wgpu::ColorTargetState {
+                    format: HDR,
+                    // The image times the air's transmittance (alpha), plus its light.
+                    blend: Some(wgpu::BlendState {
+                        color: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::SrcAlpha,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                        alpha: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::Zero,
+                            dst_factor: wgpu::BlendFactor::One,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                    }),
+                    write_mask: wgpu::ColorWrites::ALL,
+                },
+                &[],
+            ),
             upscale: fullscreen("upscale", "post", "fs_upscale", &post, unorm.into(), &[]),
             underlay: pipeline(
                 device,
@@ -5908,6 +6213,7 @@ impl Targets {
         shadow_sampler: &wgpu::Sampler,
         post_sampler: &wgpu::Sampler,
         white: &wgpu::TextureView,
+        aerial: &wgpu::TextureView,
         photo: bool,
     ) -> Self {
         let samples = quality.samples();
@@ -6077,6 +6383,31 @@ impl Targets {
                 ],
             )
         };
+        // The light shafts at half size (rounded up, as the occlusion), the sun's openness.
+        let shafts_size = (width.div_ceil(SHAFTS_DIV), height.div_ceil(SHAFTS_DIV));
+        let shafts = [0, 1].map(|_| view(texture_sized("shafts", HDR, 1, sampled, shafts_size)));
+        let sun_seen = view(texture_sized("sun seen", HDR, 1, sampled, (1, 1)));
+        let air = |source: &wgpu::TextureView, seen: &wgpu::TextureView| {
+            bind(
+                "air",
+                &l.shafts,
+                &[
+                    (0, wgpu::BindingResource::TextureView(&shadow_array)),
+                    (1, wgpu::BindingResource::Sampler(shadow_sampler)),
+                    (2, wgpu::BindingResource::TextureView(&linear_depth)),
+                    (3, wgpu::BindingResource::TextureView(source)),
+                    (4, wgpu::BindingResource::TextureView(aerial)),
+                    (5, wgpu::BindingResource::Sampler(post_sampler)),
+                    (6, wgpu::BindingResource::TextureView(seen)),
+                ],
+            )
+        };
+        let air_bind = [
+            air(white, white),
+            air(&shafts[0], white),
+            air(&shafts[1], white),
+            air(&shafts[0], &sun_seen),
+        ];
         let resolve_bind = if samples > 1 {
             bind("resolve", &l.depth_ms, &[(0, tv(&depth))])
         } else {
@@ -6143,6 +6474,9 @@ impl Targets {
             reflection,
             reflection_depth,
             shadow_layers,
+            shafts,
+            sun_seen,
+            air_bind,
             bytes: bytes.get(),
         }
     }

@@ -109,7 +109,11 @@ mist, gustiness}`. `mist` is a low layer of droplets (visibility 1.3 km at 0.3, 
 the dry-air `haze` (a turbidity), and rain brings its own fog (400 m of visibility at 0.8); both fade the distance
 and the horizon into a veil lit by the sun and the sky. `gustiness` is gusts travelling downwind at the wind speed
 over lawns (waves of bending, paler grass), through crowns and in the rain's slant; `wind_gustiness` remains the
-slow swell of the wind. The host adds what needs files, history,
+slow swell of the wind. `shafts` (0..1, not written while 0) shadows the sun's light in the haze, mist and
+rain fog with the sun's cascades (beams through crowns, lanes past house edges; nothing without a medium).
+The camera is view fields too: `white_balance` (`"daylight"`, the default and not written; `"auto"` from the
+sun's and the sky's light; or kelvin 2000..12000) and `grade` (`neutral`, the default and not written; `warm`,
+`cool`, `soft`). The host adds what needs files, history,
 loaded geometry or a GPU:
 
 | Command | Params | Result |
@@ -143,7 +147,7 @@ loaded geometry or a GPU:
 | `wall_photo.remove` | `{id}` | `null` |
 | `film.preview` | `{id, t?}` | `{id, name, fps, duration_s, frame_count, shots: [{index, kind, start_s, duration_s}]}` and, with `t` (seconds, clamped into the film), `{t, shot, progress, camera: {position, target, fov_y_deg}, overrides: {time_of_day?, date?, season?, years?, snow?, wetness?, rain?, haze?, mist?, gustiness?}, time, sun}`: read-only, no picture; a walk follows the project's real ground (terrain, areas, models) |
 | `film.render` | `{id, dir, width? = 960, height? = 540, quality? = "high", from?, to?, every? = 1}` | `{dir, frames, framePattern: "frame_%05d.png", fps, width, height, duration_s, first_t, last_t, renderer, ffmpeg}`; one `view.render` per frame into `dir` (beneath the write root, as `view.render`'s `path`): the film's camera, `animation_s` = the film time, and the shot's time of day, date or season, years, snow, wetness, rain, haze, mist and gustiness for that picture only; frames are numbered from 0 in what is drawn, `every` N makes a film of fps / N; at most 10000 frames a call; `ffmpeg` is the command that makes a video of them (VisionCraft has no codec; `visioncraft-cli film --video` runs ffmpeg when it is on the PATH) |
-| `view.render` | `{path?, width? = 800, height? = 600, viewpoint?, camera?, time?, years?, season?, snow?, wetness?, rain?, haze?, mist?, gustiness?, animation_s?, quality? = "high", samples? = 64, aperture_m? = 0, focus_m?}`; the weather keys hold for that picture only; quality `"photo"` averages `samples` frames at ULTRA (soft shadows, smooth edges; `aperture_m`/`focus_m` for depth of field) | a PNG: to `path`, else `{mime: "image/png", base64}`; with `camera`, `sun`, `time`, `plantsPending`, `renderer` |
+| `view.render` | `{path?, width? = 800, height? = 600, viewpoint?, camera?, time?, years?, season?, snow?, wetness?, rain?, haze?, mist?, gustiness?, shafts?, white_balance?, grade?, animation_s?, quality? = "high", samples? = 64, aperture_m? = 0, focus_m?}`; the weather keys hold for that picture only; quality `"photo"` averages `samples` frames at ULTRA (soft shadows, smooth edges; `aperture_m`/`focus_m` for depth of field) | a PNG: to `path`, else `{mime: "image/png", base64}`; with `camera`, `sun`, `time`, `plantsPending`, `renderer` |
 
 The film commands (`film.add {name, fps? = 25}`, `film.update {id, name?, fps?}`,
 `film.add_shot {id, shot, index?}`, `film.update_shot {id, index, shot}`, `film.remove_shot {id, index}`,

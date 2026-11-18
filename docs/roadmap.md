@@ -234,10 +234,19 @@ nothing here is a promise of a date.
   Sources and costs are in the research report (kept outside the repo). Done first: analytic
   height fog with in-scattering and travelling wind gusts (see the rain item).
   1. Light and mood (AgX, threshold-free bloom, SSAO with contact shadows and EV100 exposure are
-     already in): light shafts at a low sun (a half-resolution march against the four cascades),
-     an aerial perspective LUT so the haze takes the sun's tint, a wider bloom for the sun glow,
-     white balance from the sky and a grading LUT before AgX, and a photo mode that accumulates
-     jittered frames (real anti-aliasing, depth of field, motion blur, light vignette and grain).
+     already in). Done: light shafts at a low sun (`view.set shafts`: a half-resolution march
+     against the four cascades with the fog's own density and phase, IGN jitter, a bilateral
+     blur and a depth-aware upsample; about 1.2 ms at 720p on an Iris Xe, skipped without a
+     medium), an aerial perspective LUT (Hillaire's 32^3 froxels of the clear air's Rayleigh
+     light and transmittance on top of the aerosol haze and the mist), the sun's glare (a
+     two-lobe point spread function scaled by the share of the disc the scene leaves open,
+     instead of more bloom levels), white balance from the sky (`white_balance`: daylight, auto
+     from the sun's and the sky's irradiance with 70 % von Kries adaptation in Bradford space, or
+     kelvin) and grade presets before AgX (`grade`: neutral, warm, cool, soft, as a matrix and a
+     contrast exponent). Recipe 40. Next: a photo mode that accumulates jittered frames (real
+     anti-aliasing, depth of field, motion blur, light vignette and grain), with the shafts'
+     jitter averaged across its samples, and shafts that read at thin mist (a froxel volume with
+     a stronger droplet lobe).
   2. Materials and ground: download the catalogued CC0 library (ambientCG, Poly Haven) into
      checkouts, hex tiling and height blending on terrain and paving, joints and relief (boards,
      tiles, parallax up close), and leaf litter, pebbles and moss as scatter that follows the season.

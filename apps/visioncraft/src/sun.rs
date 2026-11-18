@@ -585,13 +585,15 @@ fn view_fields(ui: &mut egui::Ui, cx: &mut Cx) {
             json!({"weathering": (age * 100.0).round() / 100.0}),
         );
     }
-    // Weather: wet surfaces, falling rain, mist and gusts, one `view.set` when let go.
+    // Weather: wet surfaces, falling rain, mist, gusts and light shafts, one `view.set` when
+    // let go.
     ui.label(egui::RichText::new(t::RAIN_SECTION).small());
     for (label, tip, key, value) in [
         (t::WETNESS, t::WETNESS_TIP, "wetness", v.wetness),
         (t::RAIN, t::RAIN_TIP, "rain", v.rain),
         (t::MIST, t::MIST_TIP, "mist", v.mist),
         (t::GUSTS, t::GUSTS_TIP, "gustiness", v.gustiness),
+        (t::SHAFTS, t::SHAFTS_TIP, "shafts", v.shafts),
     ] {
         let mut x = value;
         let r = ui
@@ -605,6 +607,48 @@ fn view_fields(ui: &mut egui::Ui, cx: &mut Cx) {
             cx.run("view.set", json!({key: (x * 100.0).round() / 100.0}));
         }
     }
+    // White balance: daylight, auto or a temperature (a slider while one is set).
+    ui.horizontal(|ui| {
+        ui.label(t::WHITE_BALANCE)
+            .on_hover_text(t::WHITE_BALANCE_TIP);
+        let now = match v.white_balance {
+            visioncraft_core::WhiteBalance::Daylight => "daylight",
+            visioncraft_core::WhiteBalance::Auto => "auto",
+            visioncraft_core::WhiteBalance::Kelvin(_) => "kelvin",
+        };
+        for (key, label) in t::WHITE_BALANCES {
+            if ui.selectable_label(now == key, label).clicked() && now != key {
+                let value = if key == "kelvin" {
+                    json!(5000)
+                } else {
+                    json!(key)
+                };
+                cx.run("view.set", json!({"white_balance": value}));
+            }
+        }
+    });
+    if let visioncraft_core::WhiteBalance::Kelvin(k) = v.white_balance {
+        let mut kelvin = k;
+        if ui
+            .add(
+                egui::Slider::new(&mut kelvin, visioncraft_core::WHITE_BALANCE_KELVIN)
+                    .text(t::KELVIN)
+                    .step_by(100.0),
+            )
+            .drag_stopped()
+        {
+            cx.run("view.set", json!({"white_balance": kelvin.round()}));
+        }
+    }
+    ui.horizontal(|ui| {
+        ui.label(t::GRADE).on_hover_text(t::GRADE_TIP);
+        let now = serde_json::to_value(v.grade).unwrap_or_default();
+        for (key, label) in t::GRADES {
+            if ui.selectable_label(now == key, label).clicked() && now != key {
+                cx.run("view.set", json!({"grade": key}));
+            }
+        }
+    });
     ui.horizontal(|ui| {
         ui.label(t::LOOK);
         let now = serde_json::to_value(v.look).unwrap_or_default();

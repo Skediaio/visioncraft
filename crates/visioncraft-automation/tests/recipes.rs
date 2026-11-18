@@ -19,7 +19,7 @@ pub fn recipes() -> Vec<Value> {
 #[test]
 fn every_recipe_of_the_guide_runs() {
     let recipes = recipes();
-    assert_eq!(recipes.len(), 39);
+    assert_eq!(recipes.len(), 40);
     for (n, recipe) in recipes.into_iter().enumerate() {
         let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("recipe-{n}"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -331,6 +331,14 @@ fn every_recipe_of_the_guide_runs() {
                     "{report}"
                 );
                 assert_eq!(t["openings"], 2, "{report}");
+            }
+            40 => {
+                // Halfway through the hold shot the shafts are at half strength.
+                let mid = &results[5]["result"]["overrides"];
+                assert!(
+                    (mid["shafts"].as_f64().unwrap() - 0.5).abs() < 1e-3,
+                    "{report}"
+                );
             }
             39 => {
                 // The garden is misty, then halfway through the shower shot the rain is 0.5 and

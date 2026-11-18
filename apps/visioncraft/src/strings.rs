@@ -274,6 +274,23 @@ pub const MIST: &str = "Mist";
 pub const MIST_TIP: &str = "A low mist over the ground: the distance fades into a white or grey veil, the near garden only softens, the sun glows through it and weakens. 0.3 a light morning haze, 0.6 a misty morning, 1 fog. Rain brings its own.";
 pub const GUSTS: &str = "Gusts";
 pub const GUSTS_TIP: &str = "Gusts of wind travelling downwind: they roll across the lawn as waves of bending, paler grass, sway one crown after another and swing the rain. Stronger with the wind speed.";
+pub const SHAFTS: &str = "Light shafts";
+pub const SHAFTS_TIP: &str = "Beams of sunlight through the air where crowns, hedges and houses shadow it, strongest looking towards a low sun. They need something in the air to light: mist (0.2 to 0.4), rain or a thick haze.";
+pub const WHITE_BALANCE: &str = "White balance";
+pub const WHITE_BALANCE_TIP: &str = "Daylight keeps a low sun orange and shade blue, as on film. Auto takes most of the colour of the light out, as a camera does, and keeps some of the mood. A temperature makes light of that colour read white.";
+pub const WHITE_BALANCES: [(&str, &str); 3] = [
+    ("daylight", "Daylight"),
+    ("auto", "Auto"),
+    ("kelvin", "Kelvin"),
+];
+pub const GRADE: &str = "Grade";
+pub const GRADE_TIP: &str = "A colour grade before the picture is developed: warm, cool, or soft (lower contrast and colour).";
+pub const GRADES: [(&str, &str); 4] = [
+    ("neutral", "Neutral"),
+    ("warm", "Warm"),
+    ("cool", "Cool"),
+    ("soft", "Soft"),
+];
 pub const MATERIALS_HINT: &str =
     "Hover a surface and click it to choose a material. Drop a .mcmat file to add one.";
 pub const MATERIAL_ADDED: &str = "Material added";

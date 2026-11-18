@@ -38,7 +38,8 @@ fn box4(uv: vec2<f32>, t: vec2<f32>, a: vec2<f32>, b: vec2<f32>, c: vec2<f32>, d
 // A texel, held to the largest half float: an overflowed (infinite) pixel made the Karis weight
 // inf * 0 = NaN, and the bloom chain spread it into a black square (seen in Chromium).
 fn tap(uv: vec2<f32>) -> vec3<f32> {
-    return min(textureSampleLevel(src, smp, uv, 0.0).rgb, vec3<f32>(65504.0));
+    // Never below zero either (the light shafts subtract, shafts.wgsl).
+    return clamp(textureSampleLevel(src, smp, uv, 0.0).rgb, vec3<f32>(0.0), vec3<f32>(65504.0));
 }
 
 fn karis(c: vec3<f32>, w: f32) -> vec4<f32> {

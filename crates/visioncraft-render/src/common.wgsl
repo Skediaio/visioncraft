@@ -59,6 +59,12 @@ struct Globals {
     wet: vec4<f32>,             // x wetness drawn 0..1 (the larger of wetness and rain), y rain 0..1, z sun share in rain, w the share the mist leaves of the sun
     mist: vec4<f32>,            // x mist and rain fog extinction at mist.z (1/m), y height falloff (1/m), z base height (m), w sun glow
     gust: vec4<f32>,            // x, y the gust pattern's coarse and fine layers travelled downwind (m, wrapped), z gusts 0..1
+    shafts: vec4<f32>,          // light shafts (shafts.wgsl): x strength 0..1 (0 off), y march steps, z march distance (m), w half-res divisor
+    glare: vec4<f32>,           // sun glare (shafts.wgsl): x strength (0 off), y narrow lobe width (rad), z wide lobe width (rad), w wide lobe share
+    aerial: vec4<f32>,          // aerial perspective LUT (atmosphere.wgsl): x on (0/1), y farthest slice (km), z camera altitude (km)
+    white: vec4<f32>,           // white balance (tonemap.wgsl): rgb the light taken for white, w mode (0 off, 1 fixed, 2 auto from the sun and sky)
+    white_ref: vec4<f32>,       // rgb the white it is adapted to, w degree of adaptation 0..1
+    color_grade: array<vec4<f32>, 3>, // grade matrix columns (linear Rec.709); [0].w contrast exponent about mid grey, [1].w grade on (0/1)
     sh: array<vec4<f32>, 9>,    // sky irradiance as L2 SH (kcd/m2 * sr), written on the GPU (env.wgsl)
 }
 @group(0) @binding(0) var<uniform> g: Globals;
@@ -267,6 +273,14 @@ fn unit(h: u32) -> f32 {
 
 fn hash2(p: vec2<i32>) -> f32 {
     return hash3(vec3<i32>(p, 0));
+}
+
+// The sky's irradiance on a horizontal surface from the SH (kcd/m2 * sr; env.wgsl fs_sh
+// integrates it directly; the cube faces take it from here). Shared by the sky and the
+// automatic white balance (tonemap.wgsl).
+fn sky_up_sh() -> vec3<f32> {
+    let e = g.sh[0].rgb * 0.282095 + g.sh[1].rgb * 0.488603 - g.sh[6].rgb * 0.315392 - g.sh[8].rgb * 0.546274;
+    return max(e, vec3<f32>(0.0));
 }
 
 fn luminance(c: vec3<f32>) -> f32 {

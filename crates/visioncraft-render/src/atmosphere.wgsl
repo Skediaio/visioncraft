@@ -259,3 +259,48 @@ fn fs_sky_view(in: Out) -> @location(0) vec4<f32> {
     }
     return vec4<f32>(l, 1.0);
 }
+
+// 4. Aerial perspective (Hillaire 2020, section 5.4): a 32^3 froxel volume over the camera's
+//    frustum holding the light the clear air scatters into the view ray up to each slice
+//    (rgb, kcd/m2 before exposure) and the mean transmittance (a), stored as 32 slices of
+//    32x32 side by side (1024x32). Slices are spaced quadratically up to `g.aerial.y` km, so
+//    the near ones are short. Only the air's molecules (Rayleigh, and ozone's absorption):
+//    the aerosol haze and the mist are the analytic fog's (common.wgsl), whose density the
+//    project sets; this adds the blue of distance at noon and the warm, pink veil of a low
+//    sun on what lies kilometres off. Every frame the camera moves (a 1024x32 pass).
+const AERIAL_SLICES: f32 = 32.0;
+
+@fragment
+fn fs_aerial(in: Out) -> @location(0) vec4<f32> {
+    let texel = vec2<i32>(in.clip.xy);
+    let slice = f32(texel.x / 32);
+    let uv = (vec2<f32>(f32(texel.x % 32), f32(texel.y)) + 0.5) / AERIAL_SLICES;
+    let ndc = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+    let p = g.inv_view_proj * vec4<f32>(ndc, 0.5, 1.0);
+    let dir = normalize(p.xyz / p.w - g.camera.xyz);
+    let s = (slice + 0.5) / AERIAL_SLICES;
+    let t_max = g.aerial.y * s * s;
+    let sun = g.sun_dir.xyz;
+    let c = dot(dir, sun);
+    let pr = phase_rayleigh(c);
+    let origin = vec3<f32>(0.0, BOTTOM + g.aerial.z, 0.0);
+    let steps = 12;
+    let dt = t_max / f32(steps);
+    var l = vec3<f32>(0.0);
+    var through = vec3<f32>(1.0);
+    for (var i = 0; i < steps; i++) {
+        let q = origin + dir * ((f32(i) + 0.5) * dt);
+        let rp = length(q);
+        let h = max(rp - BOTTOM, 0.0);
+        let rayleigh = RAYLEIGH * exp(-h / RAYLEIGH_H);
+        let extinction = rayleigh + OZONE * max(0.0, 1.0 - abs(h - 25.0) / 15.0);
+        let mu_s = dot(q / rp, sun);
+        let single = rayleigh * pr * transmittance(rp, mu_s);
+        let multi = rayleigh * multi_scattering(rp, mu_s);
+        let step_t = exp(-extinction * dt);
+        l += through * (single + multi) * (1.0 - step_t) / max(extinction, vec3<f32>(1e-9));
+        through *= step_t;
+    }
+    // Clouds, rain and mist take the sun's share off the light it scatters (`g.wet.z`).
+    return vec4<f32>(l * g.sky.z * g.wet.z, dot(through, vec3<f32>(1.0 / 3.0)));
+}
