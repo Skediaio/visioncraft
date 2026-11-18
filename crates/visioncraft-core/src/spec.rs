@@ -428,6 +428,14 @@ pub fn example_project(command: &str) -> crate::project::Project {
         )
         .expect("the example project builds");
     }
+    // The terrace commands work on S4, a terrace at 0.5 m.
+    if command.starts_with("terrace.") && command != "terrace.add" {
+        s.run(
+            "terrace.add",
+            json!({"name": "Terrace", "outline": [[11, 1], [16, 1], [16, 6], [11, 6]], "floor": 0.5}),
+        )
+        .expect("the example project builds");
+    }
     s.project().clone()
 }
 

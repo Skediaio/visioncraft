@@ -127,8 +127,9 @@ fn cast(project: &Project, owners: &[Owner], origin: [f32; 3], dir: [f32; 3]) ->
             }),
         ));
     }
-    if let Some(t) = &project.terrain
-        && let Some((d, point, normal)) = t.raycast(origin, dir)
+    // The terrain as it is drawn: a terrace's footprint is cut out of it.
+    if let Some((d, point, normal)) =
+        visioncraft_core::terrace::project_raycast(project, origin, dir)
         && best.as_ref().is_none_or(|(b, _)| d < *b)
     {
         best = Some((
@@ -142,7 +143,7 @@ fn cast(project: &Project, owners: &[Owner], origin: [f32; 3], dir: [f32; 3]) ->
 /// Height of the ground plants stand on at `(x, z)`: terrain, areas and models (`models`
 /// false: terrain and areas only, the open ground of the building rule).
 fn ground_at(project: &Project, owners: &[Owner], x: f32, z: f32, models: bool) -> Option<f32> {
-    let terrain = project.terrain.as_ref().and_then(|t| t.height_at(x, z));
+    let terrain = visioncraft_core::terrace::ground_fn(project)(x, z);
     owners
         .iter()
         .filter(|o| o.ground && (models || o.kind == "shape"))
@@ -637,6 +638,8 @@ struct Shadows {
     /// The owners a ray can hit: (index into `owners`, world box).
     casters: Vec<(usize, [[f32; 3]; 2])>,
     crowns: Vec<Occluder>,
+    /// The terraces, whose footprints are cut out of the terrain.
+    zones: Vec<visioncraft_core::terrace::Zone>,
 }
 
 impl Shadows {
@@ -666,6 +669,7 @@ impl Shadows {
             owners,
             casters,
             crowns,
+            zones: visioncraft_core::terrace::zones(&project.shapes),
         }
     }
 
@@ -691,7 +695,7 @@ impl Shadows {
             }
         }
         if let Some(t) = &self.project.terrain
-            && t.raycast(origin, dir).is_some()
+            && visioncraft_core::terrace::terrain_raycast(t, &self.zones, origin, dir).is_some()
         {
             return 0.0;
         }

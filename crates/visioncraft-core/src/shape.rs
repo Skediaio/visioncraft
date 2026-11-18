@@ -59,6 +59,11 @@ pub struct Area {
     /// with `drape`. Faces `<id>:edge` and `<id>:edge_rim` then come after `<id>:top`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub edge: Option<crate::bed::AreaEdge>,
+    /// A terrace cut into the terrain (`crate::terrace`): a flat area whose floor is `elevation`
+    /// and that replaces the ground inside its outline, held by a retaining wall; not with `drape`
+    /// or `edge`. Faces `<id>:wall` and `<id>:wall_rim` then come after `<id>:top`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terrace: Option<crate::terrace::Terrace>,
     /// Data of other tools by namespace, kept untouched.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extensions: Extensions,
@@ -292,6 +297,8 @@ pub enum ShapeError {
     BadCurve(String),
     /// A retaining edge an area cannot have.
     BadEdge(String),
+    /// A terrace an area cannot have.
+    BadTerrace(String),
 }
 
 impl fmt::Display for ShapeError {
@@ -306,6 +313,7 @@ impl fmt::Display for ShapeError {
             Self::BadFurniture(why) => write!(f, "the furniture cannot be drawn: {why}"),
             Self::BadCurve(why) => write!(f, "the curves cannot be drawn: {why}"),
             Self::BadEdge(why) => write!(f, "the area's edge cannot be drawn: {why}"),
+            Self::BadTerrace(why) => write!(f, "the terrace cannot be drawn: {why}"),
         }
     }
 }
@@ -558,16 +566,18 @@ pub fn shape_mesh(shape: &Shape) -> Result<ImportedModel, ShapeError> {
 /// [`shape_mesh`] for an area whose retaining edge ends at `floor` (the lowest ground under it,
 /// see [`footing`]); anything else is as [`shape_mesh`] makes it.
 pub fn shape_mesh_floor(shape: &Shape, floor: f32) -> Result<ImportedModel, ShapeError> {
-    shape_mesh_with(shape, floor, None)
+    shape_mesh_with(shape, floor, None, crate::terrace::DEFAULT_CELL_M)
 }
 
 /// [`shape_mesh_floor`] with the terrain's ground function: the blocks of a flight of stairs go
 /// down to the lowest ground under each step ([`crate::stairs::step_bottoms`], relative to
-/// [`footing`], the height the shape is placed at).
+/// [`footing`], the height the shape is placed at), and a terrace's wall follows it, sampled
+/// every `cell / 2` metres (without one the ground is flat at 0).
 fn shape_mesh_with(
     shape: &Shape,
     floor: f32,
     ground: Option<&dyn Fn(f32, f32) -> Option<f32>>,
+    cell: f32,
 ) -> Result<ImportedModel, ShapeError> {
     curve::check(shape.points(), shape.is_closed(), shape.curves())
         .map_err(ShapeError::BadCurve)?;
@@ -593,6 +603,40 @@ fn shape_mesh_with(
                             .into(),
                     ));
                 }
+            }
+            if let Some(t) = &a.terrace {
+                if a.drape {
+                    return Err(ShapeError::BadTerrace(
+                        "a terrace has its own floor; set `drape` to false".into(),
+                    ));
+                }
+                if a.edge.is_some() {
+                    return Err(ShapeError::BadTerrace(
+                        "an area has an `edge` or a `terrace`, not both".into(),
+                    ));
+                }
+                t.check().map_err(ShapeError::BadTerrace)?;
+                if shape.is_curved() && t.style == crate::bed::BedStyle::Sleepers {
+                    return Err(ShapeError::BadTerrace(
+                        "a sleeper wall needs straight edges; use the plain, masonry, gabion or corten style on a curved terrace"
+                            .into(),
+                    ));
+                }
+                check_simple(&t.hole(&tess.pts), true).map_err(|e| {
+                    ShapeError::BadTerrace(format!("the wall does not fit round this outline: {e}"))
+                })?;
+                let mut names = vec![format!("{id}:top")];
+                names.extend(crate::terrace::FACES.iter().map(|n| format!("{id}:{n}")));
+                let mut b = Builder {
+                    model: ImportedModel::default(),
+                    triangles: vec![Vec::new(); names.len()],
+                    edge: Vec::new(),
+                    soft: false,
+                };
+                b.cap(0, &tess.pts, a.elevation, 1.0);
+                let at = |x: f32, z: f32| ground.and_then(|g| g(x, z)).unwrap_or(0.0);
+                t.draw(&mut Shifted(&mut b, 1), &tess.pts, a.elevation, &at, cell);
+                return Ok(b.finish(id, &a.name, names));
             }
             let band = (a.edge_blend_m > 0.0 && a.edge_blend_m.is_finite())
                 .then(|| inset_band(&tess.pts, a.edge_blend_m.min(MAX_EDGE_BLEND_M)))
@@ -800,10 +844,11 @@ pub fn shape_mesh_on(
     ground: &dyn Fn(f32, f32) -> Option<f32>,
 ) -> Result<ImportedModel, ShapeError> {
     let Shape::Area(a) = shape else {
-        return shape_mesh_with(shape, 0.0, Some(ground));
+        return shape_mesh_with(shape, 0.0, Some(ground), crate::terrace::DEFAULT_CELL_M);
     };
     if !a.drape {
-        return shape_mesh_floor(shape, footing(&shape.outline(), ground));
+        let floor = footing(&shape.outline(), ground);
+        return shape_mesh_with(shape, floor, Some(ground), crate::terrace::DEFAULT_CELL_M);
     }
     let flat = shape_mesh(shape)?;
     let h = |x: f32, z: f32| ground(x, z).unwrap_or(0.0) + a.elevation;
@@ -1282,6 +1327,7 @@ mod tests {
             drape: false,
             edge_blend_m: 0.0,
             edge: None,
+            terrace: None,
             extensions: Default::default(),
         });
         let m = shape_mesh(&a).unwrap();
@@ -1341,6 +1387,7 @@ mod edge_tests {
             drape,
             edge_blend_m: blend,
             edge: None,
+            terrace: None,
             extensions: Default::default(),
         })
     }
@@ -1438,6 +1485,7 @@ mod drape_tests {
             drape: true,
             edge_blend_m: 0.0,
             edge: None,
+            terrace: None,
             extensions: Default::default(),
         };
         let slope = |x: f32, _: f32| Some(0.5 * x);
@@ -1487,6 +1535,7 @@ mod stacking_tests {
             drape: true,
             edge_blend_m: 0.0,
             edge: None,
+            terrace: None,
             extensions: Default::default(),
         })
     }
@@ -1555,15 +1604,38 @@ pub fn shape_mesh_on_terrain(
     terrain: &crate::Terrain,
     holes: &[&[P2]],
 ) -> Result<ImportedModel, ShapeError> {
-    let ground = |x: f32, z: f32| terrain.height_at(x, z);
+    shape_mesh_on_terrain_with(shape, terrain, holes, &[])
+}
+
+/// [`shape_mesh_on_terrain`] with the terraces of the project (`crate::terrace::zones`): blocks,
+/// raised areas and stairs stand on a terrace's floor where they are inside one, and a draped
+/// area is cut out under the terraces. A terrace's own wall follows the terrain's real ground.
+pub fn shape_mesh_on_terrain_with(
+    shape: &Shape,
+    terrain: &crate::Terrain,
+    holes: &[&[P2]],
+    zones: &[crate::terrace::Zone],
+) -> Result<ImportedModel, ShapeError> {
+    let raw = |x: f32, z: f32| terrain.height_at(x, z);
+    let ground = |x: f32, z: f32| crate::terrace::ground_at(Some(terrain), zones, x, z);
+    let cell = terrain.cell_m;
     let Shape::Area(a) = shape else {
-        return shape_mesh_with(shape, 0.0, Some(&ground));
+        return shape_mesh_with(shape, 0.0, Some(&ground), cell);
     };
+    if a.terrace.is_some() {
+        return shape_mesh_with(shape, 0.0, Some(&raw), cell);
+    }
     if !a.drape {
-        return shape_mesh_floor(shape, footing(&shape.outline(), &ground));
+        let floor = footing(&shape.outline(), &ground);
+        return shape_mesh_with(shape, floor, Some(&ground), cell);
     }
     let flat = shape_mesh(shape)?;
-    let cell = terrain.cell_m;
+    // The ground inside a terrace is its floor: a lawn on the slope gives way to it.
+    let holes: Vec<&[P2]> = holes
+        .iter()
+        .copied()
+        .chain(zones.iter().map(|z| z.hole.as_slice()))
+        .collect();
     let [ox, oz] = terrain.origin;
     // Grid coordinates: cell edges at whole u and v, the cells' (0,0)-(1,1) diagonals at whole u - v.
     let to_uv = |p: P2| [(p[0] - ox) / cell, (p[1] - oz) / cell];
@@ -1642,7 +1714,7 @@ pub fn shape_mesh_on_terrain(
 }
 
 /// Cuts a convex polygon along the lines `dir . p = k` for every whole `k` across it.
-fn slice(poly: Vec<P2>, dir: P2) -> Vec<Vec<P2>> {
+pub(crate) fn slice(poly: Vec<P2>, dir: P2) -> Vec<Vec<P2>> {
     let d = |p: &P2| dir[0] * p[0] + dir[1] * p[1];
     let (lo, hi) = poly
         .iter()
@@ -1670,7 +1742,7 @@ fn slice(poly: Vec<P2>, dir: P2) -> Vec<Vec<P2>> {
 }
 
 /// The convex pieces of convex `poly` that lie outside triangle `t`.
-fn subtract_triangle(poly: Vec<P2>, t: &[P2; 3]) -> Vec<Vec<P2>> {
+pub(crate) fn subtract_triangle(poly: Vec<P2>, t: &[P2; 3]) -> Vec<Vec<P2>> {
     let (lo, hi) = poly.iter().fold(
         ([f32::INFINITY; 2], [f32::NEG_INFINITY; 2]),
         |(lo, hi), p| {
@@ -1712,7 +1784,7 @@ fn subtract_triangle(poly: Vec<P2>, t: &[P2; 3]) -> Vec<Vec<P2>> {
 }
 
 /// The parts of a convex polygon below and above the line `dir . p = k`.
-fn cut(poly: &[P2], dir: P2, k: f32) -> (Vec<P2>, Vec<P2>) {
+pub(crate) fn cut(poly: &[P2], dir: P2, k: f32) -> (Vec<P2>, Vec<P2>) {
     let d = |p: &P2| dir[0] * p[0] + dir[1] * p[1] - k;
     let (mut below, mut above) = (Vec::new(), Vec::new());
     for i in 0..poly.len() {
@@ -1759,6 +1831,7 @@ mod hill_tests {
             drape: true,
             edge_blend_m: 0.0,
             edge: None,
+            terrace: None,
             extensions: Default::default(),
         };
         let m = shape_mesh_on_terrain(&Shape::Area(a.clone()), &t, &[]).unwrap();

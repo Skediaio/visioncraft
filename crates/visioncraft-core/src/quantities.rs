@@ -130,7 +130,6 @@ pub fn quantities_in(
 
     let lifts: HashMap<String, f32> = area_lifts(&project.shapes).into_iter().collect();
     let water = water_areas(project);
-    let terrain = project.terrain.as_deref();
 
     let mut shapes = Vec::new();
     // Furniture by kind: the pieces with their dimensions.
@@ -205,6 +204,11 @@ pub fn quantities_in(
                         }
                     }
                     o.insert("edge".into(), row);
+                }
+                if let Some(t) = &a.terrace
+                    && let Some(r) = crate::terrace::report_for(project, a)
+                {
+                    o.insert("terrace".into(), r.json(t));
                 }
             }
             Shape::Extrusion(e) if e.closed => {
@@ -340,7 +344,8 @@ pub fn quantities_in(
         }
     }
 
-    let ground = |x: f32, z: f32| terrain.and_then(|t| t.height_at(x, z)).or(Some(0.0));
+    let floors = crate::terrace::ground_fn(project);
+    let ground = |x: f32, z: f32| floors(x, z).or(Some(0.0));
     let mut plantings = Vec::new();
     let mut by_asset: BTreeMap<String, usize> = BTreeMap::new();
     let (mut plants, mut placements) = (0, 0);

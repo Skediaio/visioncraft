@@ -279,6 +279,8 @@ pub enum Tool {
     Stairs,
     /// A closed outline drawn as a raised bed with soil (`bed.add`).
     Bed,
+    /// A closed outline cut into the terrain as a level with a retaining wall (`terrace.add`).
+    Terrace,
     /// A click on the plan places a piece of furniture or a set (`furniture.add`,
     /// `furniture.add_set`).
     Furniture,
@@ -308,6 +310,35 @@ impl Default for OpeningForm {
         }
     }
 }
+
+/// What the Terrace tool cuts: the floor (the mean of the ground under the outline, or a height),
+/// the wall's style (an index into [`WALL_STYLES`]) and its parapet.
+pub struct TerraceForm {
+    pub mean: bool,
+    pub floor: f32,
+    pub style: usize,
+    pub parapet: f32,
+}
+
+impl Default for TerraceForm {
+    fn default() -> Self {
+        Self {
+            mean: true,
+            floor: 0.0,
+            style: 0,
+            parapet: 0.0,
+        }
+    }
+}
+
+/// The styles of a terrace's wall: key and label.
+const WALL_STYLES: [(&str, &str); 5] = [
+    ("plain", t::BED_PLAIN),
+    ("masonry", t::BED_MASONRY),
+    ("sleepers", t::BED_SLEEPERS),
+    ("corten", t::BED_CORTEN),
+    ("gabion", t::BED_GABION),
+];
 
 /// What the Furniture tool places: a piece of one of the kinds, or a set (the entries after the
 /// kinds); sizes at 0 are the piece's own.
@@ -417,6 +448,8 @@ pub struct DrawState {
     pub opening: OpeningForm,
     /// What the Furniture tool places.
     pub furniture: FurnitureForm,
+    /// What the Terrace tool cuts.
+    pub terrace: TerraceForm,
     /// The plan underlay's fields and clicks (the Plan tool).
     pub plan: crate::underlay_ui::PlanState,
 }
@@ -502,6 +535,7 @@ impl DrawState {
                 | Tool::Fence
                 | Tool::Stairs
                 | Tool::Bed
+                | Tool::Terrace
                 | Tool::Circle
         ) && self.points.len() >= needed
         {
@@ -846,6 +880,22 @@ impl DrawState {
                 "",
                 json!({"name": name(t::TOOL_BED), "outline": points}),
             ),
+            // A level cut into the slope: the floor at the mean of the ground under it, or at a
+            // height, with a wall in the chosen style.
+            Tool::Terrace => {
+                let f = &self.terrace;
+                let mut p = json!({
+                    "name": name(t::TOOL_TERRACE), "outline": points,
+                    "style": WALL_STYLES[f.style.min(WALL_STYLES.len() - 1)].0,
+                    "parapet_m": f.parapet,
+                });
+                if f.mean {
+                    p["floor_from"] = json!("mean");
+                } else {
+                    p["floor"] = json!(f.floor);
+                }
+                ("terrace.add", "paving", p)
+            }
             Tool::Select | Tool::Window | Tool::Door | Tool::Plan | Tool::Furniture => return,
         };
         let mut params = params;
@@ -855,6 +905,11 @@ impl DrawState {
         let block = self.tool == Tool::Block;
         if let Some(r) = cx.run(cmd, params) {
             let id = r["id"].as_str().unwrap_or_default().to_string();
+            for w in r["warnings"].as_array().into_iter().flatten() {
+                if let Some(w) = w.as_str() {
+                    cx.toasts.warn(w);
+                }
+            }
             if block {
                 roof_tiles(cx, &id);
             }
@@ -999,6 +1054,40 @@ impl DrawState {
     }
 
     /// The piece or set the Furniture tool places, its sizes and its turn.
+    fn terrace_form_panel(&mut self, ui: &mut egui::Ui) {
+        let f = &mut self.terrace;
+        f.style = f.style.min(WALL_STYLES.len() - 1);
+        ui.checkbox(&mut f.mean, t::TERRACE_FLOOR_MEAN);
+        ui.add_enabled_ui(!f.mean, |ui| {
+            drag_field(
+                ui,
+                t::TERRACE_FLOOR,
+                &mut f.floor,
+                0.05,
+                -100.0..=1000.0,
+                " m",
+            );
+        });
+        ui.horizontal(|ui| {
+            ui.label(t::TERRACE_WALL);
+            egui::ComboBox::from_id_salt("terrace-style")
+                .selected_text(WALL_STYLES[f.style].1)
+                .show_ui(ui, |ui| {
+                    for (i, (_, label)) in WALL_STYLES.iter().enumerate() {
+                        ui.selectable_value(&mut f.style, i, *label);
+                    }
+                });
+        });
+        drag_field(
+            ui,
+            t::TERRACE_PARAPET,
+            &mut f.parapet,
+            0.01,
+            0.0..=1.0,
+            " m",
+        );
+    }
+
     fn furniture_form_panel(&mut self, ui: &mut egui::Ui) {
         let choices = furniture_choices();
         let f = &mut self.furniture;
@@ -1233,6 +1322,7 @@ impl DrawState {
                 (Tool::Fence, t::TOOL_FENCE),
                 (Tool::Stairs, t::TOOL_STAIRS),
                 (Tool::Bed, t::TOOL_BED),
+                (Tool::Terrace, t::TOOL_TERRACE),
                 (Tool::Furniture, t::TOOL_FURNITURE),
                 (Tool::Circle, t::TOOL_CIRCLE),
                 (Tool::Window, t::TOOL_WINDOW),
@@ -1257,6 +1347,9 @@ impl DrawState {
         if self.tool == Tool::Furniture {
             self.furniture_form_panel(ui);
         }
+        if self.tool == Tool::Terrace {
+            self.terrace_form_panel(ui);
+        }
         if self.tool == Tool::Stairs && ui.checkbox(&mut self.stairs_turn, t::STAIRS_TURN).changed()
         {
             self.points.clear();
@@ -1268,6 +1361,7 @@ impl DrawState {
             Tool::Stairs => t::STAIRS_HINT,
             Tool::Circle => t::CIRCLE_HINT,
             Tool::Furniture => t::FURNITURE_HINT,
+            Tool::Terrace => t::TERRACE_HINT,
             Tool::Window | Tool::Door => t::OPENING_HINT,
             Tool::Plan => "",
             _ => t::DRAW_HINT,
@@ -1433,7 +1527,14 @@ impl DrawState {
                     params.insert("elevation".into(), json!(a.elevation));
                 }
                 edit = e;
-                edge_panel(ui, cx, a);
+                if a.terrace.is_some() {
+                    terrace_panel(ui, cx, a);
+                } else {
+                    edge_panel(ui, cx, a);
+                    if !a.drape && a.edge.is_none() && ui.button(t::TERRACE_MAKE).clicked() {
+                        cx.run("terrace.set", json!({"id": a.id, "style": "plain"}));
+                    }
+                }
             }
             Shape::Extrusion(x) if x.closed && x.raised_bed.is_some() => bed_panel(ui, cx, x),
             Shape::Extrusion(x) if x.closed && x.furniture.is_some() => {
@@ -1734,6 +1835,85 @@ fn stairs_panel(ui: &mut egui::Ui, cx: &mut Cx, x: &visioncraft_core::shape::Ext
             cx.run("stairs.clear", json!({"id": x.id}));
         }
     });
+}
+
+/// A terrace's floor, wall style, coping and parapet, and what it moves and builds; each change
+/// one command. The numbers are worked out again only when the terrace or the terrain changed.
+fn terrace_panel(ui: &mut egui::Ui, cx: &mut Cx, a: &visioncraft_core::shape::Area) {
+    use std::hash::{Hash, Hasher};
+    let Some(terrace) = a.terrace else {
+        return;
+    };
+    ui.horizontal_wrapped(|ui| {
+        ui.label(t::TERRACE_WALL);
+        for (key, label) in WALL_STYLES {
+            let now = serde_json::to_value(terrace.style).ok();
+            let is = now.as_ref().and_then(|v| v.as_str()) == Some(key);
+            if ui.selectable_label(is, label).clicked() && !is {
+                cx.run("terrace.set", json!({"id": a.id, "style": key}));
+            }
+        }
+    });
+    let (mut floor, mut coping, mut parapet) = (a.elevation, terrace.coping_m, terrace.parapet_m);
+    let ef = drag_field(
+        ui,
+        t::TERRACE_FLOOR,
+        &mut floor,
+        0.05,
+        -100.0..=1000.0,
+        " m",
+    );
+    let ec = drag_field(ui, t::TERRACE_COPING, &mut coping, 0.01, 0.0..=1.0, " m");
+    let ep = drag_field(ui, t::TERRACE_PARAPET, &mut parapet, 0.01, 0.0..=1.0, " m");
+    if ef == Edit::Done || ec == Edit::Done || ep == Edit::Done {
+        cx.run(
+            "terrace.set",
+            json!({"id": a.id, "floor": floor, "coping_m": coping, "parapet_m": parapet}),
+        );
+    }
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    format!("{a:?}").hash(&mut h);
+    cx.s.project()
+        .terrain
+        .as_ref()
+        .map(|t| std::sync::Arc::as_ptr(t) as usize)
+        .hash(&mut h);
+    let key = h.finish();
+    let slot = egui::Id::new(("terrace-numbers", a.id.as_str()));
+    let cached: Option<(u64, Vec<String>, Vec<String>)> = ui.data(|d| d.get_temp(slot));
+    let (lines, warnings) = match cached {
+        Some((k, lines, warnings)) if k == key => (lines, warnings),
+        _ => {
+            let p = cx.s.project();
+            let (lines, warnings) = match visioncraft_core::terrace::report_for(p, a) {
+                Some(r) => (
+                    vec![
+                        format!("{} {:.1} m3", t::TERRACE_CUT, r.cut_m3),
+                        format!("{} {:.1} m3", t::TERRACE_FILL, r.fill_m3),
+                        format!(
+                            "{} {:.1} m, {:.1} m2",
+                            t::TERRACE_WALL,
+                            r.wall_length_m,
+                            r.outer_face_m2
+                        ),
+                    ],
+                    visioncraft_core::terrace::warnings(p, a, &r),
+                ),
+                None => (Vec::new(), Vec::new()),
+            };
+            ui.data_mut(|d| d.insert_temp(slot, (key, lines.clone(), warnings.clone())));
+            (lines, warnings)
+        }
+    };
+    for l in lines {
+        ui.label(l);
+    }
+    for w in warnings {
+        ui.colored_label(egui::Color32::from_rgb(230, 170, 70), w);
+    }
+    if ui.button(t::TERRACE_CLEAR).clicked() {
+        cx.run("terrace.clear", json!({"id": a.id}));
+    }
 }
 
 /// A raised area's retaining edge: none or a style; each change one command.

@@ -929,6 +929,49 @@ the flights would overlap, so it is refused. The outline is derived from the pat
 flight that turns. The Stairs tool in Draw has a Turn option: click the bottom, each corner and
 the top, with every segment held at a right angle to the one before.
 
+### 32. A terrace cut into a slope behind the house
+
+```json recipe
+{"intent": "a sloping garden with a level cut into the slope behind the house, held by a sleeper wall", "steps": [
+  {"id": "terrain.create", "params": {"origin": [0, 0], "width_m": 40, "depth_m": 30, "cell_m": 0.5, "base_material": "lawn"}},
+  {"id": "terrain.stroke", "params": {"tool": "raise", "points": [[5, 1], [35, 1]], "radius_m": 12, "strength": 0.12, "falloff": 0.8}},
+  {"id": "shape.add_extrusion", "params": {"name": "House", "outline": [[10, 17], [24, 17], [24, 25], [10, 25]], "height": 3.0, "roof": {"kind": "gable"}}},
+  {"id": "terrace.add", "params": {"name": "Back terrace", "outline": [[8, 6], [26, 6], [26, 13], [8, 13]], "floor_from": "mean", "style": "sleepers", "parapet_m": 0.45, "material": "paving"}},
+  {"id": "query.ground_height", "params": {"x": 17, "z": 9.5}},
+  {"id": "query.quantities", "params": {}},
+  {"id": "view.render", "params": {"camera": {"position": [30, 7, 30], "target": [16, 0.5, 9]}, "width": 960, "height": 540, "path": "terrace-cut.png"}}
+]}
+```
+
+`terrace.add` cuts a level into the terrain. It makes a flat area (not draped) whose `floor` is an
+absolute height, or `floor_from` the `lowest`, `highest` or `mean` of the ground under the outline,
+and the ground inside the outline is that floor from then on. The terrain's height grid is not
+edited: its mesh gets the footprint (the outline moved out by the wall's thickness) cut out
+exactly, and a retaining wall closes the hole, standing outside the outline so the floor keeps its
+size. The wall follows the ground along the edge, sampled at half the terrain's cell size: where the
+terrace is cut into the slope it runs from the floor up to the ground plus `coping_m` (0.1 m to
+begin with); where the terrace is built up it runs from the ground up to the floor plus
+`parapet_m` (0 to begin with: a seat wall when you give it 0.45). The `style` is `plain`,
+`masonry` (brick with a coping slab), `sleepers` (courses of timber beams 0.2 m high, the top
+stepping with the slope), `corten` or `gabion` (a stone-filled wire cage, 0.2 to 0.6 m thick);
+`thickness_m` changes the wall. The faces are `<id>:top` (the floor), `<id>:wall` and
+`<id>:wall_rim`, each with the style's material; `material` is for the floor. Inside the outline
+everything that asks for the ground gets the floor: plants and scatters, stairs, raised beds,
+fences, blocks, `query.ground_height`, `query.raycast`, sun hours and the walking camera.
+
+The answer has `cut_m3` and `fill_m3` (the original ground against the floor over the outline: the
+part above the floor is cut, the part below it filled), `wall_length_m`, `max_height_m` and
+`warnings`: a wall taller than 1.2 m needs an engineer's design, a terrace with no terrain under it
+(the ground is then flat at 0), and a floor above the ground everywhere, which cuts nothing: use
+`area.set_edge` on a raised area for that. `query.quantities` adds a `terrace` row to the area
+with the same numbers plus the wall's face area on the terrain's side and on the floor's,
+`beams` and `beam_length_m` for sleepers or `plate_area_m2` for corten. `terrace.set` changes the
+floor, style, thickness, coping or parapet (and turns a plain flat area into a terrace),
+`terrace.clear` makes it a plain area again. A terrace replaces `edge`: an area has one or the
+other. Draped areas (a lawn on the slope) are cut out under a terrace. Draw has a Terrace tool: draw
+the outline, with the floor at the mean ground by default, a wall style and a parapet; the area
+panel shows the terrace's fields and its cut and fill.
+
 ## Known traps
 
 - **Ids are not names**: `S2`, not `House`; viewpoints are `v1`, lights `li1`.

@@ -22,6 +22,7 @@ mod planting;
 mod queries;
 mod shapes;
 mod species;
+mod terraces;
 mod terrain;
 mod underlays;
 mod viewpoints;
@@ -43,6 +44,7 @@ pub(crate) fn register(s: &mut Session) {
     wall_photos::register(s);
     queries::register(s);
     terrain::register(s);
+    terraces::register(s);
     materials::register(s);
     planting::register(s);
     growth::register(s);

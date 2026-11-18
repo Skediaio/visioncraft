@@ -19,7 +19,7 @@ pub fn recipes() -> Vec<Value> {
 #[test]
 fn every_recipe_of_the_guide_runs() {
     let recipes = recipes();
-    assert_eq!(recipes.len(), 31);
+    assert_eq!(recipes.len(), 32);
     for (n, recipe) in recipes.into_iter().enumerate() {
         let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("recipe-{n}"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -275,6 +275,29 @@ fn every_recipe_of_the_guide_runs() {
                 assert_eq!(end["shot"], 2, "{report}");
                 assert!(
                     end["sun"]["elevation_deg"].as_f64().unwrap() < 10.0,
+                    "{report}"
+                );
+            }
+            32 => {
+                // A mean floor cuts and fills; the sleeper wall counts its beams; the ground
+                // inside the terrace is the floor.
+                let t = &results[3]["result"];
+                assert!(t["cut_m3"].as_f64().unwrap() > 1.0, "{report}");
+                assert!(t["fill_m3"].as_f64().unwrap() > 1.0, "{report}");
+                assert!(t["beams"].as_u64().unwrap() > 20, "{report}");
+                let floor = t["floor"].as_f64().unwrap();
+                let ground = results[4]["result"]["height"].as_f64().unwrap();
+                assert!((ground - floor).abs() < 1e-3, "{ground} {floor}: {report}");
+                let q = &results[5]["result"];
+                let row = q["shapes"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|r| r["id"] == t["id"])
+                    .unwrap_or_else(|| panic!("no terrace row: {report}"));
+                assert_eq!(row["terrace"]["style"], "sleepers", "{report}");
+                assert!(
+                    row["terrace"]["outer_face_area_m2"].as_f64().unwrap() > 5.0,
                     "{report}"
                 );
             }

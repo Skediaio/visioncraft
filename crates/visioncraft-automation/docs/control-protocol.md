@@ -91,7 +91,7 @@ unknown keys are refused with the nearest name, unless `openParams` is true.
 ### Commands
 
 The core's commands (`model.*`, `shape.*`, `material.*`, `planting.*`, `species.add|update|remove`,
-`fence.*`, `stairs.*`, `bed.*`, `furniture.add|set|clear|add_set`, `underlay.*`, `wall_photo.*`, `light.*`, `viewpoint.*`, `film.add|update|add_shot|update_shot|remove_shot|remove`, `layer.*`, `terrain.*`, `site.set`, `time.set`, `view.set`, `view.set_sun_map`,
+`fence.*`, `stairs.*`, `bed.*`, `terrace.add|set|clear`, `furniture.add|set|clear|add_set`, `underlay.*`, `wall_photo.*`, `light.*`, `viewpoint.*`, `film.add|update|add_shot|update_shot|remove_shot|remove`, `layer.*`, `terrain.*`, `site.set`, `time.set`, `view.set`, `view.set_sun_map`,
 `view.clear_sun_map`, `style.set`) change the project, each one undo step; its queries (`query.sun {time?}`,
 `query.measure {kind, points?, outline?}`, `query.quantities {ids?, layer?}`) never do. Curves are `shape.*` commands too:
 `shape.set_curve {id, edge, radius_m?, sagitta_m?, side?}`, `shape.clear_curve {id, edge}`,

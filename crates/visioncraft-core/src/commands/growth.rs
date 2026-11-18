@@ -128,13 +128,8 @@ pub(super) fn crowns(
     years: f32,
     shrubs: bool,
 ) -> Vec<([f32; 2], f32)> {
-    let ground = |x: f32, z: f32| {
-        project
-            .terrain
-            .as_deref()
-            .and_then(|t| t.height_at(x, z))
-            .or(Some(0.0))
-    };
+    let floor = crate::terrace::ground_fn(project);
+    let ground = |x: f32, z: f32| floor(x, z).or(Some(0.0));
     crate::planting::evaluate(g, &ground)
         .placements
         .iter()
@@ -217,18 +212,13 @@ fn growth_conflicts(project: &mut Project, params: &Value) -> Result<Value, Comm
     // where they are placed): (planting id, name, x, z, growth, planted age, scale). Scattered
     // plantings count their trees only, and at most `MAX_PLANTS` plants are compared.
     let mut plants = Vec::new();
+    let floor = crate::terrace::ground_fn(project);
     for g in &project.generators {
         if matches!(g, Generator::SurfaceFill(_)) {
             continue; // placed on a model's faces: the app knows those, the core does not
         }
         let single = matches!(g, Generator::Single(_));
-        let ground = |x: f32, z: f32| {
-            project
-                .terrain
-                .as_deref()
-                .and_then(|t| t.height_at(x, z))
-                .or(Some(0.0))
-        };
+        let ground = |x: f32, z: f32| floor(x, z).or(Some(0.0));
         for (k, pl) in crate::planting::evaluate(g, &ground)
             .placements
             .iter()

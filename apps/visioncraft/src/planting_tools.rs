@@ -822,12 +822,7 @@ pub fn merge(a: Edit, b: Edit) -> Edit {
 pub fn ground_at(cx: &Cx, pos: Pos2) -> Option<Vec3> {
     let (o, d) = cx.s.pointer_ray(Vec2::new(pos.x, pos.y), cx.size());
     let mut best = cx.s.scene.raycast(o, d, false).map(|h| h.distance);
-    if let Some(t) =
-        cx.s.project()
-            .terrain
-            .as_ref()
-            .and_then(|t| t.raycast(o.to_array(), d.to_array()))
-    {
+    if let Some(t) = cx.s.scene.terrain_raycast(o, d) {
         best = Some(best.map_or(t.0, |b| b.min(t.0)));
     }
     match best {
@@ -839,12 +834,7 @@ pub fn ground_at(cx: &Cx, pos: Pos2) -> Option<Vec3> {
 /// Distance along the pointer ray to the nearest ground, if any.
 fn ground_distance(cx: &Cx, o: Vec3, d: Vec3) -> Option<f32> {
     let a = cx.s.scene.raycast(o, d, false).map(|h| h.distance);
-    let b =
-        cx.s.project()
-            .terrain
-            .as_ref()
-            .and_then(|t| t.raycast(o.to_array(), d.to_array()))
-            .map(|t| t.0);
+    let b = cx.s.scene.terrain_raycast(o, d).map(|t| t.0);
     match (a, b) {
         (Some(a), Some(b)) => Some(a.min(b)),
         (a, b) => a.or(b),

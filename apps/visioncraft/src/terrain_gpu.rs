@@ -4,11 +4,11 @@
 use crate::library::{Library, TexSrc};
 use crate::scene::{Look, MaterialId, MeshId};
 use glam::Mat4;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 use visioncraft_core::Project;
 use visioncraft_core::terrain::{
-    CHUNK_CELLS, DirtyRect, Terrain, terrain_chunk_mesh_on, terrain_chunks,
+    CHUNK_CELLS, DirtyRect, Terrain, terrain_chunk_mesh_holes, terrain_chunks,
 };
 use visioncraft_render::{ItemId, Renderer, TerrainChunk, TerrainLayer};
 
@@ -27,6 +27,38 @@ pub struct TerrainGpu {
     ground: Option<u32>,
     chunks: HashMap<(u32, u32), Chunk>,
     layers: Vec<TerrainLayer>,
+    /// The footprints of terraces cut out of the chunks (`visioncraft_core::terrace`).
+    holes: Vec<Vec<[f32; 2]>>,
+}
+
+/// The chunks of `t` the polygons `polys` reach.
+fn chunks_under(t: &Terrain, polys: &[&Vec<[f32; 2]>]) -> BTreeSet<(u32, u32)> {
+    let (cx, cz) = terrain_chunks(t);
+    let span = |lo: f32, hi: f32, origin: f32, n: u32| {
+        let at =
+            |v: f32| (((v - origin) / t.cell_m).floor() as i64).div_euclid(i64::from(CHUNK_CELLS));
+        let last = i64::from(n) - 1;
+        at(lo - t.cell_m).clamp(0, last)..=at(hi + t.cell_m).clamp(0, last)
+    };
+    let mut out = BTreeSet::new();
+    for poly in polys {
+        let (mut lo, mut hi) = ([f32::MAX; 2], [f32::MIN; 2]);
+        for p in poly.iter() {
+            for k in 0..2 {
+                lo[k] = lo[k].min(p[k]);
+                hi[k] = hi[k].max(p[k]);
+            }
+        }
+        if cx == 0 || cz == 0 || lo[0] > hi[0] {
+            continue;
+        }
+        for z in span(lo[1], hi[1], t.origin[1], cz) {
+            for x in span(lo[0], hi[0], t.origin[0], cx) {
+                out.insert((x as u32, z as u32));
+            }
+        }
+    }
+    out
 }
 
 /// The grid of `t`, to know whether a new terrain fits the chunks there are.
@@ -55,18 +87,31 @@ impl TerrainGpu {
         r: &mut Renderer,
         terrain: Option<&Arc<Terrain>>,
         ground: Option<f32>,
+        holes: &[Vec<[f32; 2]>],
         material: MaterialId,
     ) -> Option<DirtyRect> {
         if self.ground != ground.map(f32::to_bits) {
             self.clear(r);
             self.ground = ground.map(f32::to_bits);
         }
+        // Which footprints changed: the chunks they touch (before and after) are made again.
+        let old_holes = std::mem::replace(&mut self.holes, holes.to_vec());
+        let moved: Vec<&Vec<[f32; 2]>> = old_holes
+            .iter()
+            .filter(|h| !holes.contains(h))
+            .chain(holes.iter().filter(|h| !old_holes.contains(h)))
+            .collect();
         let Some(t) = terrain else {
             let had = self.shown.as_ref().map(|t| t.whole());
             self.clear(r);
             return had;
         };
         if self.shown.as_ref().is_some_and(|s| Arc::ptr_eq(s, t)) {
+            for (x, z) in chunks_under(t, &moved) {
+                if self.chunks.contains_key(&(x, z)) {
+                    self.remake(r, t, x, z, ground, material);
+                }
+            }
             return None;
         }
         let dirty = match &self.shown {
@@ -77,10 +122,12 @@ impl TerrainGpu {
             }
         };
         self.shown = Some(t.clone());
-        let d = dirty?;
-        if d.is_empty() {
+        let Some(d) = dirty.filter(|d| !d.is_empty()) else {
+            for (x, z) in chunks_under(t, &moved) {
+                self.remake(r, t, x, z, ground, material);
+            }
             return None;
-        }
+        };
         // Chunks whose vertices (shared edges included) the rectangle touches.
         let (cx, cz) = terrain_chunks(t);
         let span = |lo: u32, hi: u32, n: u32| {
@@ -88,8 +135,15 @@ impl TerrainGpu {
             let b = (hi / CHUNK_CELLS).min(n.saturating_sub(1));
             a..=b
         };
+        let mut made = BTreeSet::new();
         for z in span(d.z0, d.z1, cz) {
             for x in span(d.x0, d.x1, cx) {
+                self.remake(r, t, x, z, ground, material);
+                made.insert((x, z));
+            }
+        }
+        for (x, z) in chunks_under(t, &moved) {
+            if !made.contains(&(x, z)) {
                 self.remake(r, t, x, z, ground, material);
             }
         }
@@ -107,7 +161,7 @@ impl TerrainGpu {
     ) {
         let mut meshes = Vec::new();
         for (step, _) in LEVELS {
-            let m = terrain_chunk_mesh_on(t, x, z, step, ground);
+            let m = terrain_chunk_mesh_holes(t, x, z, step, ground, &self.holes);
             let chunk = TerrainChunk {
                 positions: &m.positions,
                 normals: &m.normals,

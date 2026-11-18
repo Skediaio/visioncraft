@@ -2284,6 +2284,7 @@ mod tests {
             drape: false,
             edge_blend_m: 0.0,
             edge: None,
+            terrace: None,
             extensions: Default::default(),
         });
         let m = shape_mesh(&s).unwrap();
@@ -2391,6 +2392,7 @@ mod tests {
             drape: false,
             edge_blend_m: 0.0,
             edge: None,
+            terrace: None,
             extensions: Default::default(),
         });
         shape_mesh(&lawn).unwrap()
@@ -2943,6 +2945,7 @@ mod layer_tests {
             drape: false,
             edge_blend_m: 0.0,
             edge: None,
+            terrace: None,
             extensions: Default::default(),
         }))
         .unwrap();

@@ -10,7 +10,7 @@ use visioncraft_core::{
     SurfaceKind, Terrain, area_lifts, areas_over, blends_over, blocked_by_buildings,
     evaluate_in_scene, evaluate_surface_fill, ground_height, inside_outline, lawn_area,
     lawn_scatter_blended, placed_shape, raycast, resolve_materials, shape_mesh,
-    shape_mesh_on_terrain, water_areas,
+    shape_mesh_on_terrain_with, water_areas,
 };
 use visioncraft_flora as flora;
 use visioncraft_render::{ImpostorId, ItemId, LineVertex, Renderer};
@@ -942,6 +942,8 @@ pub struct Scene {
     /// Where the ground changed since which stamp: generators depend on it.
     dirty: DirtyLog,
     terrain: Option<Arc<Terrain>>,
+    /// The terraces: inside one the ground is its floor (`visioncraft_core::terrace`).
+    zones: Vec<visioncraft_core::terrace::Zone>,
     /// The project's sea level as last synced: plantings are kept off its bed.
     sea: Option<visioncraft_core::Sea>,
     terrain_gpu: crate::terrain_gpu::TerrainGpu,
@@ -1096,6 +1098,7 @@ impl Scene {
         self.clutter.clear(r);
         self.terrain_gpu.clear(r);
         self.terrain = None;
+        self.zones.clear();
         self.dirty.mark(EVERYTHING);
     }
 
@@ -1129,6 +1132,31 @@ impl Scene {
         let mut live: Vec<String> = Vec::new();
         // The terrain: chunks remade where it changed, and generators there re-evaluated.
         let old = self.terrain.clone();
+        // The terraces: their footprints are cut out of the terrain, and what stood on the old
+        // ground there (or stands on the floor now) is placed again.
+        let zones = visioncraft_core::terrace::zones(&project.shapes);
+        if self.zones != zones {
+            let moved: Vec<&visioncraft_core::terrace::Zone> = self
+                .zones
+                .iter()
+                .filter(|z| !zones.contains(z))
+                .chain(zones.iter().filter(|z| !self.zones.contains(z)))
+                .collect();
+            for z in moved {
+                let (lo, hi) = z
+                    .hole
+                    .iter()
+                    .fold(([f32::MAX; 2], [f32::MIN; 2]), |(lo, hi), p| {
+                        (
+                            [lo[0].min(p[0]), lo[1].min(p[1])],
+                            [hi[0].max(p[0]), hi[1].max(p[1])],
+                        )
+                    });
+                self.dirty.mark([lo, hi]);
+            }
+            self.zones = zones;
+        }
+        let holes = visioncraft_core::terrace::holes(&self.zones);
         self.pinned.insert(CLAY.key());
         let any = self.material(r, &CLAY); // terrain items ignore their material
         let terrain = crate::load_stats::time("terrain sync (main thread)", || {
@@ -1136,6 +1164,7 @@ impl Scene {
                 r,
                 project.terrain.as_ref(),
                 project.view.ground.map(|g| g.height),
+                &holes,
                 any,
             )
         });
@@ -1191,7 +1220,7 @@ impl Scene {
                         let f = Arc::new(visioncraft_core::ground_faces(
                             &l.model,
                             &|p| mx.transform_point3(Vec3::from(p)).into(),
-                            &|x, z| t.and_then(|t| t.height_at(x, z)),
+                            &|x, z| visioncraft_core::terrace::ground_at(t, &self.zones, x, z),
                         ));
                         self.model_ground.insert(m.id.clone(), (key, f.clone()));
                         f
@@ -1239,6 +1268,13 @@ impl Scene {
         // How shapes sit on the ground: `visioncraft_core::shape`'s module docs.
         let lifts: HashMap<String, f32> = area_lifts(&project.shapes).into_iter().collect();
         let terrain = project.terrain.clone();
+        let zones_key = self.zones.iter().fold(0usize, |k, z| {
+            z.hole
+                .iter()
+                .fold(k.rotate_left(11) ^ (z.floor.to_bits() as usize), |k, p| {
+                    k.rotate_left(7) ^ (p[0].to_bits() as usize) ^ ((p[1].to_bits() as usize) << 1)
+                })
+        });
         // Water areas: the areas under them are cut out there (the pond's bed is the terrain's).
         let water = water_areas(project);
         for s in &project.shapes {
@@ -1250,7 +1286,9 @@ impl Scene {
             if draped {
                 holes.extend(self.ground_faces.iter().map(|f| f.as_slice()));
             }
-            // What the mesh depends on besides the shape: the terrain and the water on top.
+            // What the mesh depends on besides the shape: the terrain and the water on top, and
+            // the terraces (what stands in one stands on its floor; a lawn is cut out of it).
+            let terrace_area = matches!(&placed, Shape::Area(a) if a.terrace.is_some());
             let depends = if draped {
                 holes
                     .iter()
@@ -1260,8 +1298,11 @@ impl Scene {
                             ^ (p[0].to_bits() as usize)
                             ^ ((p[1].to_bits() as usize) << 1)
                     })
+                    ^ zones_key
+            } else if terrace_area {
+                terrain_key
             } else {
-                0
+                zones_key
             };
             let geom = Geom::Shape(Box::new(placed.clone()), depends);
             let visible = project.layer_visible(s.layer());
@@ -1270,7 +1311,7 @@ impl Scene {
                 Some(o) if o.key.geom == geom => o.geom.clone(),
                 _ => match match terrain.as_deref() {
                     // Cut along the terrain's own triangles: no hill edge pokes through.
-                    Some(t) => shape_mesh_on_terrain(&placed, t, &holes),
+                    Some(t) => shape_mesh_on_terrain_with(&placed, t, &holes, &self.zones),
                     None => shape_mesh(&placed),
                 } {
                     Ok(m) => Arc::new(m),
@@ -1923,11 +1964,26 @@ impl Scene {
 
     // ---- planting ----
 
+    /// The terrain's height at `(x, z)`, or a terrace's floor inside one (`terrace::ground_at`).
+    pub fn terrain_at(&self, x: f32, z: f32) -> Option<f32> {
+        visioncraft_core::terrace::ground_at(self.terrain.as_deref(), &self.zones, x, z)
+    }
+
+    /// The first hit of a ray with the terrain as it is drawn: a terrace's footprint is cut out.
+    pub fn terrain_raycast(&self, origin: Vec3, dir: Vec3) -> Option<(f32, [f32; 3], [f32; 3])> {
+        visioncraft_core::terrace::terrain_raycast(
+            self.terrain.as_deref()?,
+            &self.zones,
+            origin.to_array(),
+            dir.to_array(),
+        )
+    }
+
     /// The ground plants stand on: the terrain, areas and imported models, the highest wins.
     pub fn ground_fn(&self) -> impl Fn(f32, f32) -> Option<f32> + '_ {
         // Planting stands on areas and imported models, not on the roof of a house block.
         move |x, z| {
-            let terrain = self.terrain.as_ref().and_then(|t| t.height_at(x, z));
+            let terrain = self.terrain_at(x, z);
             self.owners
                 .values()
                 .filter(|o| !o.is_shape || o.is_area)
@@ -2599,7 +2655,7 @@ impl Scene {
 
     /// The terrain and areas at `(x, z)`, models and blocks left out.
     pub fn open_ground(&self, x: f32, z: f32) -> Option<f32> {
-        let terrain = self.terrain.as_ref().and_then(|t| t.height_at(x, z));
+        let terrain = self.terrain_at(x, z);
         self.owners
             .values()
             .filter(|o| o.is_area && o.key.visible)
@@ -2700,11 +2756,7 @@ impl Scene {
     /// model (anything more than 30 cm above the ground there), not in water.
     pub fn free_to_stand(&self, project: &Project, x: f32, z: f32) -> bool {
         let ground = self.floor_below(x, 500.0, z).unwrap_or(0.0);
-        let terrain = self
-            .terrain
-            .as_ref()
-            .and_then(|t| t.height_at(x, z))
-            .unwrap_or(ground);
+        let terrain = self.terrain_at(x, z).unwrap_or(ground);
         if self
             .raycast(Vec3::new(x, terrain + 200.0, z), Vec3::NEG_Y, false)
             .is_some_and(|p| p.point.y > terrain + 0.3)
@@ -2879,8 +2931,15 @@ impl Scene {
 
     /// Height of the floor under `(x, z)`, looking down from `from_y`.
     pub fn floor_below(&self, x: f32, from_y: f32, z: f32) -> Option<f32> {
-        self.raycast(Vec3::new(x, from_y, z), Vec3::NEG_Y, false)
-            .map(|h| h.point.y)
+        let hit = self
+            .raycast(Vec3::new(x, from_y, z), Vec3::NEG_Y, false)
+            .map(|h| h.point.y);
+        // The terrain (a terrace's floor inside one) is a floor too, when it is below the cast.
+        let ground = self.terrain_at(x, z).filter(|g| *g <= from_y);
+        match (hit, ground) {
+            (Some(h), Some(g)) => Some(h.max(g)),
+            (h, g) => h.or(g),
+        }
     }
 
     pub fn highlight(&self, owner: &str, face: usize) -> Option<(MeshId, u32)> {

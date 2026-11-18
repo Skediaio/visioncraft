@@ -664,13 +664,8 @@ fn add_border(project: &mut Project, params: &Value) -> Result<Value, CommandErr
     })?;
     let id = r["id"].as_str().unwrap_or_default().to_string();
     let g = project.generators.iter().find(|g| g.id() == id);
-    let ground = |x: f32, z: f32| {
-        project
-            .terrain
-            .as_deref()
-            .and_then(|t| t.height_at(x, z))
-            .or(Some(0.0))
-    };
+    let floor = crate::terrace::ground_fn(project);
+    let ground = |x: f32, z: f32| floor(x, z).or(Some(0.0));
     let plants = g.map_or(0, |g| {
         crate::planting::evaluate(g, &ground).placements.len()
     });

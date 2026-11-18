@@ -450,6 +450,17 @@ impl Terrain {
     /// traversal) and tests the two triangles of each (the surface the meshes draw, which differs
     /// slightly from the bilinear `height_at` inside a cell).
     pub fn raycast(&self, origin: [f32; 3], dir: [f32; 3]) -> Option<(f32, [f32; 3], [f32; 3])> {
+        self.raycast_where(origin, dir, &|_| true)
+    }
+
+    /// [`Terrain::raycast`] where a hit only counts if `accept(point)`: the first accepted one
+    /// (a terrace's footprint is cut out of the terrain: the ray goes on through it).
+    pub fn raycast_where(
+        &self,
+        origin: [f32; 3],
+        dir: [f32; 3],
+        accept: &dyn Fn([f32; 3]) -> bool,
+    ) -> Option<(f32, [f32; 3], [f32; 3])> {
         let ext = self.extent();
         // Clip the ray to the terrain's footprint.
         let (mut t0, mut t1) = (0.0f32, f32::INFINITY);
@@ -504,7 +515,9 @@ impl Terrain {
             },
         ];
         loop {
-            if let Some(hit) = self.hit_cell(ix as u32, iz as u32, origin, dir) {
+            if let Some(hit) = self.hit_cell(ix as u32, iz as u32, origin, dir)
+                && accept(hit.1)
+            {
                 return Some(hit);
             }
             let k = if t_max[0] < t_max[1] { 0 } else { 1 };
@@ -1156,6 +1169,31 @@ pub fn terrain_chunk_mesh_on(
     lod: u32,
     ground: Option<f32>,
 ) -> TerrainChunk {
+    terrain_chunk_mesh_holes(t, chunk_x, chunk_z, lod, ground, &[])
+}
+
+/// A hole's bounding box and its triangles.
+type HoleBox = ([[f32; 2]; 2], Vec<[[f32; 2]; 3]>);
+
+/// A point of a chunk: world `(x, z)` with its attributes, to be mixed by barycentric weights.
+struct Corner {
+    p: [f32; 3],
+    n: [f32; 3],
+    w: [u8; 8],
+}
+
+/// [`terrain_chunk_mesh_on`] with `holes` cut out (the footprints of terraces, which replace the
+/// ground inside them). A triangle that a hole touches is clipped against it exactly: what is
+/// left outside keeps the heights, normals and weights the surface had there, so the terrain meets
+/// the wall that closes the hole at the original ground. Skirts are the chunk's own and stay.
+pub fn terrain_chunk_mesh_holes(
+    t: &Terrain,
+    chunk_x: u32,
+    chunk_z: u32,
+    lod: u32,
+    ground: Option<f32>,
+    holes: &[Vec<[f32; 2]>],
+) -> TerrainChunk {
     let mut m = TerrainChunk::default();
     let (cx, cz) = terrain_chunks(t);
     if chunk_x >= cx || chunk_z >= cz {
@@ -1207,10 +1245,33 @@ pub fn terrain_chunk_mesh_on(
         }
     }
     let at = |i: usize, j: usize| grid[j * xs.len() + i];
+    // The holes this chunk can see, each as its bounding box and triangles.
+    let cut: Vec<HoleBox> = holes
+        .iter()
+        .filter(|h| h.len() >= 3)
+        .map(|h| (bounds(h, 0.0), hole_triangles(h)))
+        .collect();
     for j in 0..zs.len() - 1 {
         for i in 0..xs.len() - 1 {
             let (v00, v10, v01, v11) = (at(i, j), at(i + 1, j), at(i, j + 1), at(i + 1, j + 1));
-            m.indices.extend([v00, v01, v11, v00, v11, v10]);
+            let (p0, p1) = (m.positions[v00 as usize], m.positions[v11 as usize]);
+            let near: Vec<&Vec<[[f32; 2]; 3]>> = cut
+                .iter()
+                .filter(|(b, _)| {
+                    b[0][0] < p1[0].max(p0[0])
+                        && b[1][0] > p0[0].min(p1[0])
+                        && b[0][1] < p1[2].max(p0[2])
+                        && b[1][1] > p0[2].min(p1[2])
+                })
+                .map(|(_, tris)| tris)
+                .collect();
+            if near.is_empty() {
+                m.indices.extend([v00, v01, v11, v00, v11, v10]);
+                continue;
+            }
+            for tri in [[v00, v01, v11], [v00, v11, v10]] {
+                clip_triangle(&mut m, tri, &near);
+            }
         }
     }
     // Skirts: a copy of each edge vertex, lowered, joined by a strip facing outwards. Deep enough
@@ -1256,45 +1317,68 @@ pub fn terrain_chunk_mesh_on(
         let keep: Vec<bool> = (0..top.len() - 1)
             .map(|k| !(outer && flush(m, top[k]) && flush(m, top[k + 1])))
             .collect();
-        let mut low: Vec<Option<u32>> = vec![None; top.len()];
-        for k in 0..top.len() - 1 {
-            if !keep[k] {
-                continue;
-            }
-            for e in [k, k + 1] {
-                if low[e].is_none() {
-                    let v = top[e];
-                    let (p, nrm, w, uv) = (
-                        m.positions[v as usize],
-                        m.normals[v as usize],
-                        m.weights[v as usize],
-                        m.uv[v as usize],
-                    );
-                    // An outer skirt above the ground plane stops at it: the plane is drawn
-                    // behind everything, so a skirt hanging below it showed through as a dark
-                    // or sky-blue sliver wherever an edge vertex sat a hair off the ground.
-                    // Below the plane there is nothing to hide: the plane shows through.
-                    // So does the end of a seam's skirt on the outer border.
-                    let bottom = match ground {
-                        Some(g) if outer || on_border(ring[e].0, ring[e].1) => {
-                            (p[1] - drop).max(g.min(p[1]))
-                        }
-                        _ => p[1] - drop,
-                    };
-                    m.positions.push([p[0], bottom, p[2]]);
-                    m.normals.push(nrm);
-                    m.weights.push(w);
-                    m.uv.push(uv);
-                    low[e] = Some(m.positions.len() as u32 - 1);
-                }
-            }
-            let (a, b) = (top[k], top[k + 1]);
-            let (a2, b2) = (low[k].unwrap(), low[k + 1].unwrap());
+        // A copy of vertex `v`, hung `drop` lower; `border` when it lies on the terrain's border.
+        let lowered = |m: &mut TerrainChunk, v: u32, border: bool| -> u32 {
+            let (p, nrm, w, uv) = (
+                m.positions[v as usize],
+                m.normals[v as usize],
+                m.weights[v as usize],
+                m.uv[v as usize],
+            );
+            // An outer skirt above the ground plane stops at it: the plane is drawn
+            // behind everything, so a skirt hanging below it showed through as a dark
+            // or sky-blue sliver wherever an edge vertex sat a hair off the ground.
+            // Below the plane there is nothing to hide: the plane shows through.
+            // So does the end of a seam's skirt on the outer border.
+            let bottom = match ground {
+                Some(g) if outer || border => (p[1] - drop).max(g.min(p[1])),
+                _ => p[1] - drop,
+            };
+            m.positions.push([p[0], bottom, p[2]]);
+            m.normals.push(nrm);
+            m.weights.push(w);
+            m.uv.push(uv);
+            m.positions.len() as u32 - 1
+        };
+        let strip = |m: &mut TerrainChunk, a: u32, b: u32, a2: u32, b2: u32| {
             if flip {
                 m.indices.extend([a, b2, b, a, a2, b2]);
             } else {
                 m.indices.extend([a, b, b2, a, b2, a2]);
             }
+        };
+        let mut low: Vec<Option<u32>> = vec![None; top.len()];
+        for k in 0..top.len() - 1 {
+            if !keep[k] {
+                continue;
+            }
+            let (a, b) = (top[k], top[k + 1]);
+            // Where a terrace's hole lies over the seam there is no ground to hang a skirt
+            // from: only the stretches outside the holes get one.
+            let spans = if cut.is_empty() {
+                vec![(0.0, 1.0)]
+            } else {
+                let xz = |v: u32| [m.positions[v as usize][0], m.positions[v as usize][2]];
+                outside_spans(xz(a), xz(b), holes)
+            };
+            if spans.as_slice() != [(0.0, 1.0)] {
+                for (t0, t1) in spans {
+                    let ends = [t0, t1].map(|f| {
+                        let v = mixed_vertex(m, a, b, f);
+                        let border = on_border(ring[k].0, ring[k].1)
+                            && on_border(ring[k + 1].0, ring[k + 1].1);
+                        (v, lowered(m, v, border))
+                    });
+                    strip(m, ends[0].0, ends[1].0, ends[0].1, ends[1].1);
+                }
+                continue;
+            }
+            for e in [k, k + 1] {
+                if low[e].is_none() {
+                    low[e] = Some(lowered(m, top[e], on_border(ring[e].0, ring[e].1)));
+                }
+            }
+            strip(m, a, b, low[k].unwrap(), low[k + 1].unwrap());
         }
     };
     let (nx, nz) = (xs.len() - 1, zs.len() - 1);
@@ -1305,6 +1389,156 @@ pub fn terrain_chunk_mesh_on(
     edge(&mut m, (0..=nz).map(|j| (0, j)).collect(), true, west);
     edge(&mut m, (0..=nz).map(|j| (nx, j)).collect(), false, east);
     m
+}
+
+/// The parts of the segment `a`-`b` (as parameter ranges 0..=1) that lie outside every polygon.
+fn outside_spans(a: [f32; 2], b: [f32; 2], polys: &[Vec<[f32; 2]>]) -> Vec<(f32, f32)> {
+    let mut cuts = vec![0.0f32, 1.0];
+    let d = [b[0] - a[0], b[1] - a[1]];
+    for poly in polys {
+        let n = poly.len();
+        for i in 0..n {
+            let (p, q) = (poly[i], poly[(i + 1) % n]);
+            let e = [q[0] - p[0], q[1] - p[1]];
+            let den = d[0] * e[1] - d[1] * e[0];
+            if den.abs() < 1e-12 {
+                continue;
+            }
+            let w = [p[0] - a[0], p[1] - a[1]];
+            let t = (w[0] * e[1] - w[1] * e[0]) / den;
+            let u = (w[0] * d[1] - w[1] * d[0]) / den;
+            if t > 0.0 && t < 1.0 && (0.0..=1.0).contains(&u) {
+                cuts.push(t);
+            }
+        }
+    }
+    cuts.sort_by(f32::total_cmp);
+    let mut out: Vec<(f32, f32)> = Vec::new();
+    for w in cuts.windows(2) {
+        let mid = (w[0] + w[1]) / 2.0;
+        if w[1] - w[0] < 1e-6 {
+            continue;
+        }
+        let at = [a[0] + d[0] * mid, a[1] + d[1] * mid];
+        if polys
+            .iter()
+            .any(|p| crate::planting::point_in_polygon(at, p))
+        {
+            continue;
+        }
+        match out.last_mut() {
+            Some(last) if (last.1 - w[0]).abs() < 1e-6 => last.1 = w[1],
+            _ => out.push((w[0], w[1])),
+        }
+    }
+    out
+}
+
+/// The vertex a fraction `f` of the way from `a` to `b` (both are vertices of `m`): `a` or `b`
+/// themselves at the ends, else a new one with mixed attributes.
+fn mixed_vertex(m: &mut TerrainChunk, a: u32, b: u32, f: f32) -> u32 {
+    if f <= 0.0 {
+        return a;
+    }
+    if f >= 1.0 {
+        return b;
+    }
+    let (ia, ib) = (a as usize, b as usize);
+    let lerp = |x: f32, y: f32| x + (y - x) * f;
+    let p = [0, 1, 2].map(|k| lerp(m.positions[ia][k], m.positions[ib][k]));
+    let n = normalise([0, 1, 2].map(|k| lerp(m.normals[ia][k], m.normals[ib][k])));
+    let mut w = [0u8; 8];
+    for (k, slot) in w.iter_mut().enumerate() {
+        *slot = lerp(f32::from(m.weights[ia][k]), f32::from(m.weights[ib][k]))
+            .round()
+            .clamp(0.0, 255.0) as u8;
+    }
+    let uv = [0, 1].map(|k| lerp(m.uv[ia][k], m.uv[ib][k]));
+    m.positions.push(p);
+    m.normals.push(n);
+    m.weights.push(w);
+    m.uv.push(uv);
+    m.positions.len() as u32 - 1
+}
+
+/// A polygon as triangles on the x/z plane.
+fn hole_triangles(poly: &[[f32; 2]]) -> Vec<[[f32; 2]; 3]> {
+    let flat: Vec<f64> = poly
+        .iter()
+        .flat_map(|p| [f64::from(p[0]), f64::from(p[1])])
+        .collect();
+    earcutr::earcut(&flat, &[], 2)
+        .unwrap_or_default()
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .map(|t| t.map(|i| poly[i]))
+        .collect()
+}
+
+/// Adds triangle `tri` (vertices of `m`) to the chunk's indices minus the `holes` (as triangles):
+/// the parts outside every hole, as new vertices on the same plane with mixed attributes.
+fn clip_triangle(m: &mut TerrainChunk, tri: [u32; 3], holes: &[&Vec<[[f32; 2]; 3]>]) {
+    let corners: [Corner; 3] = tri.map(|v| Corner {
+        p: m.positions[v as usize],
+        n: m.normals[v as usize],
+        w: m.weights[v as usize],
+    });
+    let xz = corners.each_ref().map(|c| [c.p[0], c.p[2]]);
+    let mut pieces = vec![xz.to_vec()];
+    for tris in holes {
+        for h in tris.iter() {
+            pieces = pieces
+                .into_iter()
+                .flat_map(|p| crate::shape::subtract_triangle(p, h))
+                .collect();
+        }
+    }
+    // Barycentric weights of `q` in the original triangle.
+    let det = (xz[1][1] - xz[2][1]) * (xz[0][0] - xz[2][0])
+        + (xz[2][0] - xz[1][0]) * (xz[0][1] - xz[2][1]);
+    let mix = |q: [f32; 2]| -> [f32; 3] {
+        if det.abs() < 1e-12 {
+            return [1.0, 0.0, 0.0];
+        }
+        let l0 = ((xz[1][1] - xz[2][1]) * (q[0] - xz[2][0])
+            + (xz[2][0] - xz[1][0]) * (q[1] - xz[2][1]))
+            / det;
+        let l1 = ((xz[2][1] - xz[0][1]) * (q[0] - xz[2][0])
+            + (xz[0][0] - xz[2][0]) * (q[1] - xz[2][1]))
+            / det;
+        [l0, l1, 1.0 - l0 - l1]
+    };
+    for piece in pieces {
+        let first = m.positions.len() as u32;
+        for q in &piece {
+            let l = mix(*q);
+            let blend = |f: &dyn Fn(&Corner) -> f32| {
+                l[0] * f(&corners[0]) + l[1] * f(&corners[1]) + l[2] * f(&corners[2])
+            };
+            m.positions.push([q[0], blend(&|c| c.p[1]), q[1]]);
+            m.normals.push(normalise([
+                blend(&|c| c.n[0]),
+                blend(&|c| c.n[1]),
+                blend(&|c| c.n[2]),
+            ]));
+            let mut w = [0u8; 8];
+            for (k, slot) in w.iter_mut().enumerate() {
+                *slot = blend(&|c| f32::from(c.w[k])).round().clamp(0.0, 255.0) as u8;
+            }
+            m.weights.push(w);
+            m.uv.push(*q);
+        }
+        for k in 1..piece.len().saturating_sub(1) {
+            // The cuts leave slivers of rounding size along an edge: they draw nothing.
+            let (a, b, c) = (piece[0], piece[k], piece[k + 1]);
+            let area = ((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])).abs() / 2.0;
+            if area > 1e-5 {
+                m.indices
+                    .extend([first, first + k as u32, first + k as u32 + 1]);
+            }
+        }
+    }
 }
 
 /// A coast across the terrain (`terrain.shore`): heights relative to the water `level` by the
@@ -1764,5 +1998,171 @@ mod tests {
         let ground = ground_height_over(Some(&t), &[], 10.0, 10.0);
         assert_eq!(ground, t.height_at(10.0, 10.0));
         assert_eq!(ground_height_over(Some(&t), &[], 100.0, 10.0), None);
+    }
+
+    /// The x/z area of every triangle with a face looking up or down (skirts stand on edge).
+    fn plan_area(m: &TerrainChunk, tri: &[u32]) -> f32 {
+        let p = |i: u32| m.positions[i as usize];
+        let (a, b, c) = (p(tri[0]), p(tri[1]), p(tri[2]));
+        ((b[0] - a[0]) * (c[2] - a[2]) - (b[2] - a[2]) * (c[0] - a[0])).abs() / 2.0
+    }
+
+    #[test]
+    fn a_triangle_is_clipped_exactly_against_a_polygon_that_is_not_convex() {
+        let mut m = TerrainChunk::default();
+        for (x, z, y) in [(0.0, 0.0, 0.0), (10.0, 0.0, 5.0), (0.0, 10.0, 10.0)] {
+            m.positions.push([x, y, z]);
+            m.normals.push([0.0, 1.0, 0.0]);
+            m.weights.push([255, 0, 0, 0, 0, 0, 0, 0]);
+            m.uv.push([x, z]);
+        }
+        // An L: 4 x 4 less a 2 x 2 corner = 12 m2, wholly inside the triangle (x + z < 10).
+        let l = vec![
+            [1.0, 1.0],
+            [5.0, 1.0],
+            [5.0, 3.0],
+            [3.0, 3.0],
+            [3.0, 5.0],
+            [1.0, 5.0],
+        ];
+        let tris = hole_triangles(&l);
+        clip_triangle(&mut m, [0, 1, 2], &[&tris]);
+        let n = m.indices.len() / 3;
+        let area: f32 = m.indices.chunks(3).map(|t| plan_area(&m, t)).sum();
+        assert!((area - (50.0 - 12.0)).abs() < 1e-3, "{area}");
+        for t in m.indices.chunks(3) {
+            let c = t.iter().fold([0.0; 2], |c, &i| {
+                [
+                    c[0] + m.positions[i as usize][0] / 3.0,
+                    c[1] + m.positions[i as usize][2] / 3.0,
+                ]
+            });
+            assert!(!crate::planting::point_in_polygon(c, &l), "{c:?}");
+        }
+        assert!(n > 3);
+        // The height is the plane's wherever a vertex lands: y = 0.5 x + z.
+        for p in &m.positions[3..] {
+            assert!((p[1] - (0.5 * p[0] + p[2])).abs() < 1e-4, "{p:?}");
+        }
+        // A hole clear of the triangle leaves it whole.
+        let mut m2 = TerrainChunk {
+            positions: m.positions[..3].to_vec(),
+            normals: m.normals[..3].to_vec(),
+            weights: m.weights[..3].to_vec(),
+            uv: m.uv[..3].to_vec(),
+            ..TerrainChunk::default()
+        };
+        let far = hole_triangles(&[[20.0, 20.0], [22.0, 20.0], [22.0, 22.0]]);
+        clip_triangle(&mut m2, [0, 1, 2], &[&far]);
+        assert_eq!(m2.indices.len(), 3);
+    }
+
+    #[test]
+    fn a_chunk_with_a_hole_has_nothing_inside_it_and_the_rest_keeps_its_heights() {
+        let mut t = Terrain::flat([0.0, 0.0], 40.0, 40.0, 0.5, "lawn").unwrap();
+        let w = t.width as usize + 1;
+        for (i, h) in t.heights.iter_mut().enumerate() {
+            *h = 3.0 - 0.2 * (i % w) as f32 * 0.5 + 0.05 * (i / w) as f32 * 0.5;
+        }
+        let plane = |x: f32, z: f32| 3.0 - 0.2 * x + 0.05 * z;
+        // A slanted rectangle plus a notch (not axis aligned, not convex).
+        let hole = vec![
+            [10.3, 8.2],
+            [20.1, 9.7],
+            [19.4, 14.3],
+            [15.2, 13.1],
+            [14.1, 18.6],
+            [9.2, 17.4],
+        ];
+        let hole_area = crate::measure::polygon_area(&hole);
+        for lod in [1, 2, 4] {
+            let m = terrain_chunk_mesh_holes(&t, 0, 0, lod, None, std::slice::from_ref(&hole));
+            let whole = terrain_chunk_mesh(&t, 0, 0, lod);
+            let (mut flat, mut whole_flat) = (0.0, 0.0);
+            for tri in m.indices.chunks(3) {
+                let a = plan_area(&m, tri);
+                flat += a;
+                let c = tri.iter().fold([0.0; 2], |c, &i| {
+                    [
+                        c[0] + m.positions[i as usize][0] / 3.0,
+                        c[1] + m.positions[i as usize][2] / 3.0,
+                    ]
+                });
+                if a > 1e-4 {
+                    assert!(
+                        !crate::planting::point_in_polygon(c, &hole),
+                        "lod {lod}: {c:?} {:?}",
+                        tri.iter()
+                            .map(|&i| m.positions[i as usize])
+                            .collect::<Vec<_>>()
+                    );
+                    // Every corner is on the surface the full mesh draws.
+                    for &i in tri {
+                        let p = m.positions[i as usize];
+                        assert!((p[1] - plane(p[0], p[2])).abs() < 1e-3, "{p:?}");
+                    }
+                }
+            }
+            for tri in whole.indices.chunks(3) {
+                whole_flat += plan_area(&whole, tri);
+            }
+            // The chunk covers 32 x 32 m; the hole is cut from it.
+            assert!((whole_flat - 1024.0).abs() < 1.0, "{whole_flat}");
+            assert!(
+                (flat - (whole_flat - hole_area)).abs() < 0.05,
+                "{lod}: {flat}"
+            );
+        }
+        // No hole: the same mesh as before.
+        assert_eq!(
+            terrain_chunk_mesh_holes(&t, 0, 0, 1, None, &[]),
+            terrain_chunk_mesh(&t, 0, 0, 1)
+        );
+        // A hole in another chunk changes nothing here.
+        let far = vec![[35.0, 35.0], [38.0, 35.0], [38.0, 38.0]];
+        let a = terrain_chunk_mesh_holes(&t, 0, 0, 1, None, &[far]);
+        assert_eq!(a, terrain_chunk_mesh(&t, 0, 0, 1));
+    }
+
+    #[test]
+    fn a_skirt_at_a_chunk_seam_does_not_hang_in_a_hole() {
+        let t = Terrain::flat([0.0, 0.0], 100.0, 30.0, 0.5, "lawn").unwrap();
+        assert_eq!(terrain_chunks(&t), (4, 1));
+        // 10 x 8 m across the seam at x = 32 (and x = 64 far away).
+        let hole = vec![[28.0, 10.0], [38.0, 10.0], [38.0, 18.0], [28.0, 18.0]];
+        for lod in [1, 4, 8] {
+            for chunk in [0, 1] {
+                let m =
+                    terrain_chunk_mesh_holes(&t, chunk, 0, lod, None, std::slice::from_ref(&hole));
+                let mut seam_skirt = 0;
+                for tri in m.indices.chunks(3) {
+                    let c = tri.iter().fold([0.0; 2], |c, &i| {
+                        [
+                            c[0] + m.positions[i as usize][0] / 3.0,
+                            c[1] + m.positions[i as usize][2] / 3.0,
+                        ]
+                    });
+                    assert!(
+                        !crate::planting::point_in_polygon(c, &hole),
+                        "lod {lod} chunk {chunk}: {c:?}"
+                    );
+                    if plan_area(&m, tri) < 1e-6 && (c[0] - 32.0).abs() < 1e-3 {
+                        seam_skirt += 1;
+                    }
+                }
+                // The seam still has its skirt, outside the hole.
+                assert!(seam_skirt > 0, "lod {lod} chunk {chunk}");
+            }
+        }
+        // Skirt vertices outside the hole keep their positions on the seam.
+        let m = terrain_chunk_mesh_holes(&t, 0, 0, 1, None, std::slice::from_ref(&hole));
+        let (mut lo, mut hi) = (f32::MAX, f32::MIN);
+        for p in &m.positions {
+            if (p[0] - 32.0).abs() < 1e-4 && p[1] < -0.2 {
+                lo = lo.min(p[2]);
+                hi = hi.max(p[2]);
+            }
+        }
+        assert!(lo <= 0.5 && hi >= 29.5, "{lo} {hi}");
     }
 }

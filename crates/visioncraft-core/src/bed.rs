@@ -16,8 +16,8 @@ type P2 = [f32; 2];
 
 /// Faces a bed has, in this order.
 pub const BED_FACES: [&str; 2] = ["wall", "rim"];
-const WALL: usize = 0;
-const RIM: usize = 1;
+pub(crate) const WALL: usize = 0;
+pub(crate) const RIM: usize = 1;
 
 /// The wall thickness a plain bed starts with (metres).
 pub const DEFAULT_WALL_M: f32 = 0.2;
@@ -28,18 +28,18 @@ pub const BEAM_H: f32 = 0.2;
 /// The longest sleeper; a longer wall is laid in several, with a joint.
 pub const BEAM_MAX_LEN: f32 = 2.4;
 /// The groove between sleepers (metres).
-const JOINT: f32 = 0.004;
+pub(crate) const JOINT: f32 = 0.004;
 /// A steel plate is drawn at least this thick so it reads (metres).
 pub const MIN_PLATE_M: f32 = 0.01;
 /// The folded edge of a steel bed: height of the flange, how far it reaches out past the plate and
 /// in over the soil, and how far the lip hangs down the outside.
-const FLANGE_H: f32 = 0.012;
-const FLANGE_OUT: f32 = 0.015;
-const FLANGE_IN: f32 = 0.02;
-const LIP_H: f32 = 0.05;
+pub(crate) const FLANGE_H: f32 = 0.012;
+pub(crate) const FLANGE_OUT: f32 = 0.015;
+pub(crate) const FLANGE_IN: f32 = 0.02;
+pub(crate) const LIP_H: f32 = 0.05;
 /// A masonry bed's coping: height and how far it overhangs.
-const COPING_H: f32 = 0.04;
-const COPING_OUT: f32 = 0.02;
+pub(crate) const COPING_H: f32 = 0.04;
+pub(crate) const COPING_OUT: f32 = 0.02;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -53,6 +53,9 @@ pub enum BedStyle {
     Sleepers,
     /// A thin weathering-steel plate with a folded top edge.
     Corten,
+    /// A stone-filled wire cage (a terrace's retaining wall): a thick stone wall with a rim of
+    /// steel and wire bars across its face.
+    Gabion,
 }
 
 impl BedStyle {
@@ -61,6 +64,7 @@ impl BedStyle {
             Self::Plain | Self::Masonry => DEFAULT_WALL_M,
             Self::Sleepers => 0.15,
             Self::Corten => 0.01,
+            Self::Gabion => 0.4,
         }
     }
 
@@ -70,6 +74,7 @@ impl BedStyle {
             Self::Plain | Self::Masonry => (0.05, 0.3),
             Self::Sleepers => (0.1, 0.2),
             Self::Corten => (0.005, 0.02),
+            Self::Gabion => (0.2, 0.6),
         }
     }
 
@@ -79,10 +84,19 @@ impl BedStyle {
             Self::Plain | Self::Sleepers => "timber",
             Self::Masonry => "brick",
             Self::Corten => "corten",
+            Self::Gabion => "gravel",
         }
     }
 
-    fn is_plain(&self) -> bool {
+    /// The palette material of the rim (a gabion's wire frame is steel).
+    pub fn rim_material(self) -> &'static str {
+        match self {
+            Self::Gabion => "metal",
+            _ => self.default_material(),
+        }
+    }
+
+    pub(crate) fn is_plain(&self) -> bool {
         *self == Self::Plain
     }
 }
@@ -214,13 +228,13 @@ pub fn beams(bed: &RaisedBed, outline: &[P2], lo: f32, hi: f32) -> Vec<Beam> {
     out
 }
 
-fn quad(s: &mut dyn Sink, face: usize, v: [[f32; 3]; 4], outward: [f32; 3]) {
+pub(crate) fn quad(s: &mut dyn Sink, face: usize, v: [[f32; 3]; 4], outward: [f32; 3]) {
     s.tri(face, [v[0], v[1], v[2]], outward);
     s.tri(face, [v[0], v[2], v[3]], outward);
 }
 
 /// One sleeper as a box.
-fn beam(s: &mut dyn Sink, b: &Beam, t: f32) {
+pub(crate) fn beam(s: &mut dyn Sink, b: &Beam, t: f32) {
     let p = |u: f32, w: f32, y: f32| {
         [
             b.from[0] + b.dir[0] * u + b.inward[0] * w,
@@ -409,7 +423,7 @@ pub(crate) fn mesh(
         bottom: Some(WALL),
     };
     match bed.style {
-        BedStyle::Plain => ring(s, outline, inner, (lo, hi), wall(Some(RIM))),
+        BedStyle::Plain | BedStyle::Gabion => ring(s, outline, inner, (lo, hi), wall(Some(RIM))),
         BedStyle::Masonry => {
             let out = crate::shape::offset_outline(outline, COPING_OUT);
             let y = hi - COPING_H;

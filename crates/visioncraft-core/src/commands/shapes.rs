@@ -340,6 +340,7 @@ pub(super) fn add_area(project: &mut Project, params: &Value) -> Result<Value, C
             drape,
             edge_blend_m: p.edge_blend_m,
             edge: p.edge,
+            terrace: None,
             extensions: Default::default(),
         })
     })?;

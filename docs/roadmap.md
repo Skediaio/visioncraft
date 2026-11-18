@@ -121,10 +121,21 @@ nothing here is a promise of a date.
   wider landing round a well. The outline is derived from the path, so the vertex commands refuse
   it and `stairs.set` takes `path` or `via` (`null` straightens it); the answer lists `flights`
   and `landings`, quantities count landings and their area and the total going, and the Stairs
-  tool has a Turn option that holds each segment at a right angle. Next: retaining walls that hold a slope, terraces cut into the
-  terrain (a level that moves the ground, not only sits on it), an edge that steps with a draped
-  area, stairs that follow the terrain, winders and curved stairs, a soil
-  that follows terrain edited after the bed.
+  tool has a Turn option that holds each segment at a right angle. Terraces cut into the terrain:
+  `terrace.add` makes a flat area whose floor (a height, or the lowest, highest or mean ground
+  under it) replaces the ground inside its outline, held by a retaining wall that follows the
+  slope along the edge (the floor plus a parapet where it is built up, the ground plus a coping
+  where it is cut in; plain, masonry, sleepers, corten or gabion; faces `<id>:wall`,
+  `<id>:wall_rim`). The terrain grid is not edited: its chunk meshes get the footprint clipped out
+  exactly, and everything that asks for the ground (plants, stairs, beds, fences, raycasts, sun
+  hours, the walking camera) gets the floor inside it. The answer and `query.quantities` give cut
+  and fill volumes, the wall's length and face areas and its beams or plate, and warn about a wall
+  over 1.2 m, no terrain, and a floor that cuts nothing; `terrace.set` and `terrace.clear` change
+  or undo it, and Draw has a Terrace tool and the options in the area panel. Next: an edge that
+  steps with a draped area, stairs that follow the terrain, winders and curved stairs, a soil
+  that follows terrain edited after the bed, walls that step in plan (a terrace with several
+  levels sharing one wall), drainage behind a wall, and a wall whose top follows the slope in a
+  smooth line for the styles that can.
 
 - **Curves:** a shape keeps its control points and draws a curved outline from them: an arc on
   single edges typed as a radius and a side (`shape.set_curve`, `shape.clear_curve`), or a smooth

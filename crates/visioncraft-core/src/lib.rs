@@ -37,6 +37,7 @@ pub mod stairs;
 pub mod sun;
 pub mod sun_hours;
 pub mod sun_map;
+pub mod terrace;
 pub mod terrain;
 pub mod tiers;
 pub mod underlay;
@@ -79,14 +80,14 @@ pub use session::{Command, CommandError, Session};
 pub use shape::{
     AREA_LIFT_M, GROUND_FACE_M, STACK_STEP_M, Shape, ShapeError, area_lifts, areas_over,
     blends_over, footing, ground_faces, ground_model_lift, inside_outline, offset_outline,
-    shape_mesh, shape_mesh_on, shape_mesh_on_terrain,
+    shape_mesh, shape_mesh_on, shape_mesh_on_terrain, shape_mesh_on_terrain_with,
 };
 pub use sky_volume::{Crown, Lamp, SkyVolume, sky_volume, sky_volume_with_canopy};
 pub use spec::{CommandSpec, ParamSpec, ParamType, example_project};
 pub use sun_map::SunMap;
 pub use terrain::{
     BrushStroke, DirtyRect, Terrain, TerrainChunk, Tool, apply_stroke, ground_height_over,
-    terrain_chunk_mesh, terrain_chunk_mesh_on, terrain_chunks,
+    terrain_chunk_mesh, terrain_chunk_mesh_holes, terrain_chunk_mesh_on, terrain_chunks,
 };
 pub use tiers::Tiers;
 pub use underlay::{Placement as UnderlayPlacement, Underlay};

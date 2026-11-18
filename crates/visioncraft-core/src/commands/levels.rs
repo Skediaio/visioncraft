@@ -222,10 +222,7 @@ fn footprint(from: P2, to: P2, width: f32) -> Result<Vec<P2>, CommandError> {
 /// The height of the surface at `(x, z)`: the terrain, or a flat or draped area lying over it
 /// (with its lift), whichever is higher; 0 with neither.
 fn surface_at(project: &Project, lifts: &std::collections::HashMap<String, f32>, p: P2) -> f32 {
-    let terrain = project
-        .terrain
-        .as_deref()
-        .and_then(|t| t.height_at(p[0], p[1]));
+    let terrain = crate::terrace::ground_fn(project)(p[0], p[1]);
     project
         .shapes
         .iter()
@@ -242,9 +239,8 @@ fn surface_at(project: &Project, lifts: &std::collections::HashMap<String, f32>,
 }
 
 fn lowest_ground(project: &Project, outline: &[P2]) -> f32 {
-    project.terrain.as_deref().map_or(0.0, |t| {
-        crate::shape::footing(outline, &|x, z| t.height_at(x, z))
-    })
+    let ground = crate::terrace::ground_fn(project);
+    crate::shape::footing(outline, &|x, z| ground(x, z))
 }
 
 /// The rise of a flight from `from` to `to` when none is given: the surface just past the top
@@ -639,7 +635,7 @@ fn clear_edge(project: &mut Project, params: &Value) -> Result<Value, CommandErr
     Ok(Value::Null)
 }
 
-fn find_area(project: &Project, id: &str) -> Result<(usize, Shape), CommandError> {
+pub(super) fn find_area(project: &Project, id: &str) -> Result<(usize, Shape), CommandError> {
     let at = project
         .shapes
         .iter()

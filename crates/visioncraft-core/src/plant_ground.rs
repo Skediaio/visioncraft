@@ -10,7 +10,9 @@ use crate::material::{SurfaceKind, resolve_materials};
 use crate::model::ImportedModel;
 use crate::planting::{Evaluation, Generator, Placement, blocked_by_buildings, evaluate_avoiding};
 use crate::project::Project;
-use crate::shape::{Shape, ShapeError, areas_over, footing, shape_mesh, shape_mesh_on_terrain};
+use crate::shape::{
+    Shape, ShapeError, areas_over, footing, shape_mesh, shape_mesh_on_terrain_with,
+};
 
 type P2 = [f32; 2];
 
@@ -47,12 +49,16 @@ pub fn placed_shape(
     let mut draped = false;
     match &mut placed {
         Shape::Area(a) => {
-            a.elevation += lifts.get(&a.id).copied().unwrap_or(0.0);
+            // A terrace's floor is exactly its elevation: the terrain is cut out under it.
+            if a.terrace.is_none() {
+                a.elevation += lifts.get(&a.id).copied().unwrap_or(0.0);
+            }
             draped = a.drape && terrain.is_some();
         }
         Shape::Extrusion(e) => {
-            if let Some(t) = terrain {
-                lift = footing(&e.outline(), &|x, z| t.height_at(x, z));
+            if terrain.is_some() {
+                let ground = crate::terrace::ground_fn(project);
+                lift = footing(&e.outline(), &|x, z| ground(x, z));
             }
         }
     }
@@ -81,7 +87,9 @@ pub fn placed_shape_mesh(
     let (placed, lift, holes) = placed_shape(project, shape, lifts, water);
     let holes: Vec<&[P2]> = holes.iter().map(Vec::as_slice).collect();
     let mesh = match project.terrain.as_deref() {
-        Some(t) => shape_mesh_on_terrain(&placed, t, &holes)?,
+        Some(t) => {
+            shape_mesh_on_terrain_with(&placed, t, &holes, &crate::terrace::zones(&project.shapes))?
+        }
         None => shape_mesh(&placed)?,
     };
     Ok((mesh, lift))

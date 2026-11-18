@@ -567,13 +567,9 @@ impl<'a> Env<'a> {
     }
 }
 
-/// The ground height at `(x, z)` the core knows: the terrain, else 0.
+/// The ground height at `(x, z)` the core knows: a terrace's floor, the terrain, else 0.
 pub fn terrain_ground(project: &Project, x: f32, z: f32) -> f32 {
-    project
-        .terrain
-        .as_ref()
-        .and_then(|t| t.height_at(x, z))
-        .unwrap_or(0.0)
+    crate::terrace::ground_fn(project)(x, z).unwrap_or(0.0)
 }
 
 // ---------------------------------------------------------------------------------- frames
