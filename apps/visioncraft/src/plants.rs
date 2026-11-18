@@ -851,7 +851,7 @@ impl Flora {
             #[cfg(target_arch = "wasm32")]
             return started == 0
                 && crate::texture_worker::meshes_waiting() + extra
-                    <= 2 * crate::texture_worker::WEB_WORKERS;
+                    <= 2 * crate::texture_worker::web_workers();
             #[cfg(not(target_arch = "wasm32"))]
             {
                 let _ = started;
@@ -1058,7 +1058,32 @@ fn start_tex(
         let answer = Answer::default();
         let slot = answer.clone();
         wasm_bindgen_futures::spawn_local(async move {
-            let got = crate::texture_worker::plant(&params, scale, &scans).await;
+            // The same key as on the desktop (`plant_cache`), in the browser's cache.
+            let json = serde_json::to_vec(&params).unwrap_or_default();
+            let key = crate::plant_cache::key(&[
+                b"plant textures",
+                &json,
+                &(scale as u32).to_le_bytes(),
+                &crate::plant_cache::digest(&scans.pack()),
+            ]);
+            let cached = crate::web_cache::get("tex", key)
+                .await
+                .and_then(|b| crate::plant_cache::decode_textures(&b));
+            let got = match cached {
+                Some(t) => Some(t),
+                None => {
+                    let t0 = crate::assets::now_ms();
+                    let got = crate::texture_worker::plant(&params, scale, &scans).await;
+                    crate::load_stats::add(
+                        "plant textures (texture worker, wall)",
+                        crate::assets::now_ms() - t0,
+                    );
+                    if let Some(t) = &got {
+                        crate::web_cache::put("tex", key, &crate::plant_cache::encode_textures(t));
+                    }
+                    got
+                }
+            };
             if let Ok(mut a) = slot.lock() {
                 *a = Some(got);
             }
@@ -1156,7 +1181,32 @@ fn start_variant(
         let slot = Slot::default();
         let out = slot.clone();
         wasm_bindgen_futures::spawn_local(async move {
-            let g = match crate::texture_worker::mesh(&params, v, month, detail).await {
+            // The same key as on the desktop (`plant_cache`), in the browser's cache.
+            let json = serde_json::to_vec(&params).unwrap_or_default();
+            let key = crate::plant_cache::key(&[&json, &v.to_le_bytes(), &[month, detail as u8]]);
+            let cached = crate::web_cache::get("mesh", key)
+                .await
+                .and_then(|b| crate::plant_cache::decode_levels(&b));
+            let made = match cached {
+                Some(m) => Some(m),
+                None => {
+                    let t0 = crate::assets::now_ms();
+                    let made = crate::texture_worker::mesh(&params, v, month, detail).await;
+                    crate::load_stats::add(
+                        "plant meshes (texture worker, wall)",
+                        crate::assets::now_ms() - t0,
+                    );
+                    if let Some((height, levels)) = &made {
+                        crate::web_cache::put(
+                            "mesh",
+                            key,
+                            &crate::plant_cache::encode_levels(*height, levels),
+                        );
+                    }
+                    made
+                }
+            };
+            let g = match made {
                 Some((height, levels)) => Generated {
                     height,
                     levels,

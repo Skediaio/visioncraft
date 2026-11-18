@@ -1681,6 +1681,30 @@ impl Studio {
         }
     }
 
+    /// Notes the load's milestones reached by now (`load_stats`), after a frame.
+    pub fn track_load(&self) {
+        use crate::load_stats::mark;
+        if self.scene.flora.rev > 0 {
+            mark("first plant generated");
+        }
+        let plants = self.plants_pending() == 0;
+        let models = self.models_pending() == 0;
+        let library = self.scene.library.idle();
+        let sky = !self.sky_volume_pending() && !self.sky_visibility_pending();
+        if plants {
+            mark("plants done");
+        }
+        if models {
+            mark("models imported");
+        }
+        if library {
+            mark("library idle");
+        }
+        if plants && models && library && sky {
+            mark("everything loaded");
+        }
+    }
+
     /// Plants still being generated.
     pub fn plants_pending(&self) -> usize {
         self.scene.flora.pending() + self.scene.lawns_pending() + self.scene.clutter_pending()
@@ -1826,7 +1850,14 @@ impl Studio {
             self.synced = None;
         }
         let rebake = q.impostor_resolution != self.renderer.quality().impostor_resolution;
+        let (t, builds) = (crate::assets::now_ms(), self.renderer.pipeline_builds());
         self.renderer.set_quality(q);
+        let ms = crate::assets::now_ms() - t;
+        if self.renderer.pipeline_builds() != builds {
+            crate::load_stats::add("quality change: every pipeline made (main thread)", ms);
+        } else if ms > 1.0 {
+            crate::load_stats::add("quality change: targets (main thread)", ms);
+        }
         if rebake || !self.impostors_reserved {
             // The atlases a load bakes, made before it (a few large ones on ULTRA).
             let count = match q.impostor_resolution {
@@ -2095,7 +2126,7 @@ impl Studio {
         });
         if self.sky_vis.note(inputs, scene.key()) {
             self.sky_vis
-                .start(visioncraft_automation::SkyVisJob::new(scene), now);
+                .start(scene, now);
         }
     }
 

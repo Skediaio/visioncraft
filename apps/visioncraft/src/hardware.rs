@@ -292,6 +292,19 @@ pub fn texture_budget(probe: &HardwareProbe) -> u64 {
     }
 }
 
+/// The quality the renderer's pipelines are first made for: the preset this machine chose
+/// before (when every stored choice agrees), else `None` (HIGH's). Made for another shading
+/// than the one the window then uses, every pipeline is compiled twice before the first frame.
+pub fn start_quality(st: Option<&dyn eframe::Storage>) -> Option<Quality> {
+    let all = stored(st?);
+    let mut presets = all.values().map(|m| m.preset.as_str());
+    let first = presets.next()?;
+    presets
+        .all(|p| p == first)
+        .then(|| all.values().next().map(Measured::quality))
+        .flatten()
+}
+
 fn stored(st: &dyn eframe::Storage) -> HashMap<String, Measured> {
     st.get_string(STORAGE_KEY)
         .and_then(|j| serde_json::from_str(&j).ok())

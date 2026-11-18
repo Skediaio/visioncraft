@@ -249,18 +249,6 @@ impl Scene {
         if self.clutter.key == Some(key) {
             return;
         }
-        // While plants are still being generated the drawn clutter stays (a rebuild costs the
-        // frame a tenth of a second, and each finished species would ask for one); it is made
-        // again once they are all there (the flora's `rev` moves on then).
-        if self.clutter.key.is_some() && self.flora.pending() > 0 {
-            return;
-        }
-        self.clutter.clear(r);
-        self.clutter.key = Some(key);
-        if !on {
-            return;
-        }
-
         // The species it needs: wanted when missing, drawn once they are there.
         let mut waiting = false;
         if let Some((class, params)) = &lawn
@@ -277,6 +265,19 @@ impl Scene {
                     .want(id, scan.as_deref(), class, month as u8, p, &[]);
                 waiting = true;
             }
+        }
+        // While plants are still being generated nothing is (re)built: the drawn clutter stays,
+        // and a load's first clutter waits for them (a build costs the frame up to a second and
+        // a half on a large garden, and each finished species would ask for another). It is
+        // made once they are all there (the flora's `rev` moves on then).
+        if on && self.flora.pending() > 0 {
+            self.clutter.waiting |= waiting;
+            return;
+        }
+        self.clutter.clear(r);
+        self.clutter.key = Some(key);
+        if !on {
+            return;
         }
         self.clutter.waiting = waiting;
 

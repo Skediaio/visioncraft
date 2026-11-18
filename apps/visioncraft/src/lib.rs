@@ -57,6 +57,7 @@ pub mod user_objects;
 pub mod views;
 pub mod wall_photo_ui;
 pub mod water_panel;
+pub mod web_cache;
 pub mod webmcp;
 pub mod work_pool;
 
@@ -241,8 +242,18 @@ impl App {
             .wgpu_render_state
             .as_ref()
             .expect("eframe must run on wgpu");
+        load_stats::startup("window and GPU device ready");
         // egui samples user textures as plain Rgba8Unorm holding sRGB bytes.
-        let renderer = Renderer::new(&state.device, &state.queue, wgpu::TextureFormat::Rgba8Unorm);
+        let start = hardware::start_quality(cc.storage).unwrap_or(Quality::HIGH);
+        let renderer = load_stats::time("renderer and pipelines (main thread)", || {
+            Renderer::with_quality(
+                &state.device,
+                &state.queue,
+                wgpu::TextureFormat::Rgba8Unorm,
+                start,
+            )
+        });
+        load_stats::startup("renderer and pipelines created");
         let stored = cc.storage.and_then(|s| s.get_string(KEY_PROJECT));
         let restored = stored.and_then(|j| Project::from_json_bytes(j.as_bytes()).ok());
         let was_restored = restored.is_some();
@@ -537,6 +548,7 @@ impl App {
     /// A bundled example (`project.load_example`: `garden`, `estate`, `beach-house` or
     /// `coast`), as a new unsaved project named `title`.
     fn open_example(&mut self, name: &str, title: &str) {
+        load_stats::reset(&format!("example {name}"));
         self.new_project();
         match self
             .studio
@@ -945,6 +957,7 @@ impl App {
         };
         match opened {
             Ok((p, files)) => {
+                load_stats::reset(&format!("open {name}"));
                 self.watcher.forget_all();
                 let dir = path.and_then(Path::parent);
                 let r = self.studio.open(p, dir, self.relink_dir.as_deref());
@@ -1888,6 +1901,7 @@ impl eframe::App for App {
             (size[0], size[1]),
             &mut self.studio.remeasure,
         ) {
+            load_stats::startup("hardware calibrated");
             self.studio.auto_quality = m.quality();
             self.studio.frame_ms.clear();
             hardware::note(&format!("starting quality: {}", m.line()));
@@ -1910,9 +1924,13 @@ impl eframe::App for App {
         let t = cpu_ms();
         self.studio.prepare();
         let prepare_ms = cpu_ms() - t;
+        if !self.studio.measuring {
+            self.studio.track_load();
+        }
         let mut encoder = self.device.create_command_encoder(&Default::default());
         let view = self.studio.renderer.render(&mut encoder);
         self.queue.submit([encoder.finish()]);
+        load_stats::first_frame_submitted(&self.queue);
         let render_ms = cpu_ms() - t - prepare_ms;
         let mut egui_renderer = self.egui_renderer.write();
         let id = match self.texture {
@@ -1945,6 +1963,7 @@ impl eframe::App for App {
         // a slow frame after a repaint request does (else Auto never sees a scene it cannot draw).
         let consecutive = raw_dt > 0.0 && (raw_dt < 0.1 || (self.repainting && raw_dt < 2.0));
         if consecutive {
+            load_stats::frame(raw_dt * 1000.0);
             self.studio.record_frame(raw_dt as f32 * 1000.0);
         } else {
             self.studio.frame_ms.clear();
@@ -2314,16 +2333,8 @@ impl eframe::App for App {
     }
 }
 
-/// Milliseconds for timing a frame's stages: `performance.now()` on the web (`now_ms` there
-/// is the whole-millisecond `Date`).
+/// Milliseconds for timing a frame's stages (`performance.now()` on the web).
 fn cpu_ms() -> f64 {
-    #[cfg(target_arch = "wasm32")]
-    {
-        web_sys::window()
-            .and_then(|w| w.performance())
-            .map_or_else(assets::now_ms, |p| p.now())
-    }
-    #[cfg(not(target_arch = "wasm32"))]
     assets::now_ms()
 }
 

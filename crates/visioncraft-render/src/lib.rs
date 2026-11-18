@@ -963,6 +963,13 @@ pub struct Renderer {
     modules: Vec<wgpu::ShaderModule>,
     pipelines: Pipelines,
     sampled: SampledPipelines,
+    /// The pipelines of the other shading made before (`set_quality`): by fast shading, its
+    /// modules and pipelines; by fast shading and samples, the sampled ones. A quality change
+    /// back and forth (Auto, the menu) takes them instead of compiling every pipeline again.
+    other_pipelines: Vec<(bool, Vec<wgpu::ShaderModule>, Pipelines)>,
+    other_sampled: Vec<(bool, u32, SampledPipelines)>,
+    /// Times every pipeline was made (`stats`): at the start, and per new shading.
+    pipeline_builds: u32,
     targets: Targets,
     size: (u32, u32),
     quality: Quality,
@@ -1139,13 +1146,36 @@ impl Renderer {
     /// expects of user textures). Either way the passes write sRGB-encoded
     /// values (the overlay blends through an sRGB view, in hardware).
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
+        Self::with_quality(device, queue, format, Quality::HIGH)
+    }
+
+    /// As `new`, with the scene's pipelines made for `start` (the quality the window will use:
+    /// made for another one, they are all compiled again at the first frame).
+    pub fn with_quality(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+        start: Quality,
+    ) -> Self {
         let layouts = Layouts::new(device);
         let coverage = coverage::Coverage::of(device);
-        let quality = coverage.quality(Quality::HIGH);
-        let modules = shader_modules(device, quality.fast_shading, coverage);
-        let pipelines = Pipelines::new(device, &layouts, &modules, format);
+        // The environment, sky, mips and impostor bakes always use the full shading (HIGH's).
+        let full = coverage.quality(Quality::HIGH);
+        let modules = shader_modules(device, full.fast_shading, coverage);
+        let start = Quality {
+            fast_shading: coverage.quality(start).fast_shading,
+            msaa: coverage.quality(start).msaa,
+            ..full
+        };
+        let scene_modules = if start.fast_shading == full.fast_shading {
+            modules.clone()
+        } else {
+            shader_modules(device, start.fast_shading, coverage)
+        };
+        let pipelines = Pipelines::new(device, &layouts, &scene_modules, format);
         let sampled =
-            SampledPipelines::new(device, &layouts, &modules, quality.samples(), coverage);
+            SampledPipelines::new(device, &layouts, &scene_modules, start.samples(), coverage);
+        let quality = start;
 
         let uniform = |label, size| {
             device.create_buffer(&wgpu::BufferDescriptor {
@@ -1355,9 +1385,12 @@ impl Renderer {
             queue: queue.clone(),
             output_format: format,
             layouts,
-            modules,
+            modules: scene_modules,
             pipelines,
             sampled,
+            other_pipelines: Vec::new(),
+            other_sampled: Vec::new(),
+            pipeline_builds: 1,
             coverage,
             targets,
             size: (1, 1),
@@ -1490,6 +1523,12 @@ impl Renderer {
         self.quality
     }
 
+    /// How many times every scene pipeline was made: once at the start, once more for each
+    /// other shading a quality change asked for (`set_quality` keeps them).
+    pub fn pipeline_builds(&self) -> u32 {
+        self.pipeline_builds
+    }
+
     /// On a Vulkan device that cannot shade per sample, MSAA stays off (`coverage.rs`).
     pub fn set_quality(&mut self, quality: Quality) {
         let quality = self.coverage.quality(quality);
@@ -1506,30 +1545,47 @@ impl Renderer {
         if quality == self.quality {
             return;
         }
-        if quality.fast_shading != self.quality.fast_shading {
-            // Other shaders: every pipeline of the scene and the sky is made again.
-            self.modules = shader_modules(&self.device, quality.fast_shading, self.coverage);
-            self.pipelines = Pipelines::new(
-                &self.device,
-                &self.layouts,
-                &self.modules,
-                self.output_format,
-            );
-            self.sampled = SampledPipelines::new(
-                &self.device,
-                &self.layouts,
-                &self.modules,
-                quality.samples(),
-                self.coverage,
-            );
-        } else if quality.msaa != self.quality.msaa {
-            self.sampled = SampledPipelines::new(
-                &self.device,
-                &self.layouts,
-                &self.modules,
-                quality.samples(),
-                self.coverage,
-            );
+        let (fast, samples) = (self.quality.fast_shading, self.quality.samples());
+        if quality.fast_shading != fast {
+            // Other shaders: every pipeline of the scene and the sky, made once per shading and
+            // kept for the next change back.
+            let i = self
+                .other_pipelines
+                .iter()
+                .position(|v| v.0 == quality.fast_shading);
+            let (modules, pipelines) = match i {
+                Some(i) => {
+                    let (_, m, p) = self.other_pipelines.swap_remove(i);
+                    (m, p)
+                }
+                None => {
+                    self.pipeline_builds += 1;
+                    let m = shader_modules(&self.device, quality.fast_shading, self.coverage);
+                    let p = Pipelines::new(&self.device, &self.layouts, &m, self.output_format);
+                    (m, p)
+                }
+            };
+            let old_m = std::mem::replace(&mut self.modules, modules);
+            let old_p = std::mem::replace(&mut self.pipelines, pipelines);
+            self.other_pipelines.push((fast, old_m, old_p));
+        }
+        if quality.fast_shading != fast || quality.samples() != samples {
+            let i = self
+                .other_sampled
+                .iter()
+                .position(|v| v.0 == quality.fast_shading && v.1 == quality.samples());
+            let sampled = match i {
+                Some(i) => self.other_sampled.swap_remove(i).2,
+                None => SampledPipelines::new(
+                    &self.device,
+                    &self.layouts,
+                    &self.modules,
+                    quality.samples(),
+                    self.coverage,
+                ),
+            };
+            let old = std::mem::replace(&mut self.sampled, sampled);
+            self.other_sampled.push((fast, samples, old));
         }
         self.quality = quality;
         self.rebuild_targets();

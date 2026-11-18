@@ -162,6 +162,14 @@ impl Agents {
         }
         let log = &self.state.log;
         if log.len() != self.seen_log {
+            // An agent opened another project: the load timeline starts again.
+            for e in log.iter().skip(self.seen_log) {
+                let cmd = e["command"].as_str().unwrap_or_default();
+                if matches!(cmd, "project.load_example" | "file.open" | "file.new") {
+                    let label = e["label"].as_str().unwrap_or(cmd);
+                    crate::load_stats::reset(&format!("agent: {label}"));
+                }
+            }
             self.seen_log = log.len();
             if let Some(cmd) = log.back().and_then(|e| e["command"].as_str()) {
                 self.last = Some((cmd.to_string(), now));
@@ -308,6 +316,11 @@ const UI_METHODS: &[Method] = &[
         name: "ui.get",
         params: "{}",
         summary: "What the window shows: mode, ui (tabs, file_bar, view_bar, mode_panel_frame: which built-in bars are drawn), camera (view, position, target, fov_y_deg), the selection, lights on, size, and what is still on its way (pending: plants to generate, library downloads, the sky volume). `selection` is what the person has picked, in any mode: {items: [{kind: shape|placement|planting|model|lamp|underlay, id, name, summary (one line: what it is, size, material or species, position), sub?: {edge?, vertex?, index?}}], point?: [x, y, z] (the last ground or surface point the person clicked, metres), revision (bumps on every change)}. A tree picked in a planting is kind `placement`: id is its planting, sub.index its plant number (for planting.replace_placement and planting.remove_placement). `selected` ({planting, model}) is the older form of the same. Poll it and compare `revision` to notice a new selection.",
+    },
+    Method {
+        name: "ui.load",
+        params: "{}",
+        summary: "The load timeline (docs/performance.md): `startup` (the program's start: renderer and pipelines, calibration, first frame on screen, ms since the program started), `load` (since the last project or example was opened: `milestones` such as first frame, first frame on screen, plants done, library idle, everything loaded; `stages` by total time with count and longest step, `breakdown` rows detail others; `frames` drawn, over 50 ms and the longest; `timeline`: the longer steps with start and duration, ms since the load began), `pending` (what is still on its way), `textures` (the store's cap and held bytes) and `lods`: per placed catalogue asset, nearest first, the level of detail its nearest instance needs, the levels resident, the level shown and why.",
     },
     Method {
         name: "ui.set",
@@ -469,6 +482,27 @@ impl Host for Bound<'_, '_> {
                     "sunMap": h.studio.sun_map_pending(),
                 },
             })),
+            "ui.load" => {
+                let s = &h.studio;
+                let lib = &s.scene.library;
+                let mut out = crate::load_stats::json();
+                out["pending"] = json!({
+                    "plants": s.plants_pending(),
+                    "models": s.models_pending(),
+                    "library": !lib.idle(),
+                    "skyVolume": s.sky_volume_pending(),
+                    "skyVisibility": s.sky_visibility_pending(),
+                });
+                out["textures"] = json!({
+                    "tier": lib.texture_tier,
+                    "cap_mb": lib.store.cap_bytes >> 20,
+                    "content_mb": lib.store.texture_bytes >> 20,
+                    "over_cap": lib.store.over_cap,
+                    "library_mb": lib.store.held_bytes(|_| true) >> 20,
+                });
+                out["lods"] = lib.lod_report();
+                Ok(out)
+            }
             "ui.set" => (|| {
                 h.host_ui.apply(params)?;
                 if let Some(m) = params.get("mode") {

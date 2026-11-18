@@ -369,6 +369,14 @@ try {
       r.settle_s = +s.s.toFixed(1);
       r.loaded = s.done;
       r.quality = s.ui.quality;
+      // The window's own load timeline (docs/performance.md): milestones and the costliest stages.
+      const lt = await rpc('ui.load').catch(() => null);
+      if (lt) {
+        r.timeline = { startup: lt.startup, milestones: lt.load.milestones, frames: lt.load.frames,
+          stages: lt.load.stages.filter(x => !x.breakdown).slice(0, 12), textures: lt.textures,
+          lods_not_needed: lt.lods.filter(l => l.shown !== l.needed).length };
+        log(`${ex} timeline`, JSON.stringify({ milestones: r.timeline.milestones, frames: r.timeline.frames }));
+      }
       check(`${ex}: everything arrives`, s.done, `${r.settle_s} s ${JSON.stringify(s.ui.pending)}`);
       const pic = await picture(`${ex}-open`);
       r.pictures.push(pic);

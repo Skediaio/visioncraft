@@ -1,6 +1,7 @@
 //! The web import worker (`import_task`, loaded by `index.html`): receives `[kind, bytes]`, posts
 //! back the meshed model as bytes, or an error message; or the sky visibility volume for
-//! `["sky", triangles, to_sun, crowns]` (`sky_task`) with its sun bounce. Natively it does nothing.
+//! `["sky", triangles, to_sun, crowns]` (`sky_task`) with its sun bounce, or the baked sky
+//! visibility for `["skyvis", scene floats]` (`sky_vis`). Natively it does nothing.
 
 #[cfg(target_arch = "wasm32")]
 fn main() {
@@ -11,6 +12,17 @@ fn main() {
     let on_message =
         Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |e: web_sys::MessageEvent| {
             let msg: js_sys::Array = e.data().unchecked_into();
+            // The baked sky visibility (`sky_vis`): the scene as floats in, the grid as floats
+            // out (none when nothing blocks the sky).
+            if msg.get(0).as_string().as_deref() == Some(visioncraft::sky_vis::SKY_VIS) {
+                let f = js_sys::Float32Array::new(&msg.get(1)).to_vec();
+                let grid = visioncraft_core::SkyScene::from_floats(&f)
+                    .and_then(|s| visioncraft_automation::SkyVisJob::new(s).run())
+                    .map(|g| g.to_floats())
+                    .unwrap_or_default();
+                let _ = reply_to.post_message(&js_sys::Float32Array::from(&grid[..]));
+                return;
+            }
             let bytes = msg.get(1).unchecked_into::<js_sys::Uint8Array>().to_vec();
             // The sky visibility volume and its sun bounce (`sky_task`): empty bytes when nothing
             // blocks the sky.

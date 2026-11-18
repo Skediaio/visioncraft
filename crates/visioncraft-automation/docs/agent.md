@@ -35,6 +35,10 @@ same over MCP (`visioncraft-cli mcp`), JSON lines (`visioncraft-cli serve`) and 
   so "put a tree here" has a position. When the person says "this", "here" or "the selected
   one", read the selection first. `ui.select {items: [{kind, id, sub?}]}` selects as a click
   would (`null` or `[]` clears; the window selects one thing at a time).
+- **Loading.** `ui.load` is the window's load timeline (docs/performance.md): when the first
+  frame reached the screen, when plants, library files and the sky bakes were done, the stages
+  by time, and per placed catalogue asset which level of detail it shows and why (`lods`). Read
+  it when the person says loading is slow or a model looks coarse up close.
 - **Editing one plant.** `planting.replace_placement {planting, index, asset?, scale?, offset?}`
   swaps, resizes or moves one plant; `planting.remove_placement {planting, index}` takes it out;
   `planting.reset_placements {planting, index?}` restores one or all. The planting stays one

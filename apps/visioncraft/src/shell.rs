@@ -115,6 +115,7 @@ impl Shell {
         let mut setup = egui_wgpu::WgpuSetupCreateNew::without_display_handle();
         setup.instance_descriptor.backends = wgpu::Backends::BROWSER_WEBGPU;
         options.wgpu_options.wgpu_setup = egui_wgpu::WgpuSetup::CreateNew(with_timestamps(setup));
+        crate::load_stats::startup("wasm module running");
         wasm_bindgen_futures::spawn_local(async move {
             // index.html checks WebGPU and shows the message itself when it is unusable.
             let window = web_sys::window().expect("window");

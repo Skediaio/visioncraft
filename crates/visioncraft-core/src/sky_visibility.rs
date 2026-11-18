@@ -417,9 +417,22 @@ impl SkyScene {
     }
 }
 
-/// The scene ready for rays: the triangles binned into columns over the ground.
+/// The scene ready for rays: the scene and its triangles binned into columns (`Bins`, made
+/// once per bake: the binning costs as much as a few hundred probes).
 struct Tracer<'a> {
     scene: &'a SkyScene,
+    bins: &'a Bins,
+}
+
+impl std::ops::Deref for Tracer<'_> {
+    type Target = Bins;
+    fn deref(&self) -> &Bins {
+        self.bins
+    }
+}
+
+/// The triangles of a scene binned into columns over the ground.
+struct Bins {
     /// The columns: origin (x, z), size, count.
     lo: [f32; 2],
     col: f32,
@@ -446,8 +459,8 @@ struct Ray {
     lost_albedo: f32,
 }
 
-impl<'a> Tracer<'a> {
-    fn new(scene: &'a SkyScene, lo: [f32; 2], hi: [f32; 2]) -> Self {
+impl Bins {
+    fn new(scene: &SkyScene, lo: [f32; 2], hi: [f32; 2]) -> Self {
         let col = ((hi[0] - lo[0]).max(hi[1] - lo[1]) / 256.0).max(1.0);
         let cols: [i32; 2] = std::array::from_fn(|k| ((hi[k] - lo[k]) / col).ceil() as i32 + 1);
         let n = (cols[0] * cols[1]) as usize;
@@ -494,7 +507,6 @@ impl<'a> Tracer<'a> {
         }
         starts.push(ids.len() as u32);
         Self {
-            scene,
             lo,
             col,
             cols,
@@ -507,7 +519,9 @@ impl<'a> Tracer<'a> {
             ground_top: ground_hi,
         }
     }
+}
 
+impl Tracer<'_> {
     /// The nearest triangle along the ray within `limit`: distance and the triangle's normal.
     fn triangle_hit(&self, p: [f32; 3], d: [f32; 3], limit: f32) -> Option<(f32, [f32; 3])> {
         // 2D DDA through the columns (Amanatides and Woo, "A Fast Voxel Traversal Algorithm
@@ -783,7 +797,11 @@ fn hit_triangle(t: &[[f32; 3]; 3], p: [f32; 3], d: [f32; 3]) -> Option<(f32, [f3
 /// the sky view factor of `query.sky_view`, 1 under the open sky.
 pub fn sky_view_at(scene: &SkyScene, p: [f32; 3], n: [f32; 3], rays: usize) -> f32 {
     let r = PAD_M + 60.0;
-    let tracer = Tracer::new(scene, [p[0] - r, p[2] - r], [p[0] + r, p[2] + r]);
+    let bins = Bins::new(scene, [p[0] - r, p[2] - r], [p[0] + r, p[2] + r]);
+    let tracer = Tracer {
+        scene,
+        bins: &bins,
+    };
     let near = tracer.near(p);
     let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt().max(1e-6);
     let n = n.map(|v| v / len);
@@ -956,7 +974,8 @@ impl SkyVisibility {
 pub struct SkyBake {
     scene: SkyScene,
     grid: SkyVisibility,
-    tracer_box: ([f32; 2], [f32; 2]),
+    /// The scene's triangles binned for rays, once for the whole bake.
+    bins: Bins,
     dirs: Vec<[f32; 3]>,
     next: usize,
 }
@@ -1017,10 +1036,11 @@ impl SkyBake {
             valid: Vec::with_capacity(n),
             albedo: Vec::with_capacity(n),
         };
+        let bins = Bins::new(&scene, lo, hi);
         Some(Self {
             scene,
             grid,
-            tracer_box: (lo, hi),
+            bins,
             dirs: sphere(RAYS),
             next: 0,
         })
@@ -1033,7 +1053,10 @@ impl SkyBake {
     }
 
     fn tracer(&self) -> Tracer<'_> {
-        Tracer::new(&self.scene, self.tracer_box.0, self.tracer_box.1)
+        Tracer {
+            scene: &self.scene,
+            bins: &self.bins,
+        }
     }
 
     /// Probe `i` of the grid.
@@ -1113,6 +1136,127 @@ impl SkyBake {
         #[cfg(target_arch = "wasm32")]
         while !self.step(1024) {}
         self.finish()
+    }
+}
+
+// ---- as floats (to a web worker and back) ---------------------------------------------------
+
+/// Reads floats off the front of a slice.
+struct Floats<'a>(&'a [f32]);
+
+impl Floats<'_> {
+    fn take(&mut self, n: usize) -> Option<&[f32]> {
+        let (a, b) = self.0.split_at_checked(n)?;
+        self.0 = b;
+        Some(a)
+    }
+    fn one(&mut self) -> Option<f32> {
+        Some(self.take(1)?[0])
+    }
+    /// A count written as a float (exact below 2^24).
+    fn count(&mut self) -> Option<usize> {
+        let v = self.one()?;
+        (v >= 0.0 && v.fract() == 0.0).then_some(v as usize)
+    }
+    fn arr<const N: usize>(&mut self) -> Option<[f32; N]> {
+        self.take(N)?.try_into().ok()
+    }
+}
+
+impl SkyScene {
+    /// The scene as floats, for a web worker (`from_floats`).
+    pub fn to_floats(&self) -> Vec<f32> {
+        let g = &self.ground;
+        let mut out = vec![self.triangles.len() as f32];
+        out.extend(self.triangles.as_flattened().as_flattened());
+        out.push(self.crowns.len() as f32);
+        for c in &self.crowns {
+            out.extend(c.center.into_iter().chain(c.radii).chain([c.extinction]));
+        }
+        out.extend(g.origin);
+        out.extend([g.cell, g.dims[0] as f32, g.dims[1] as f32, g.base]);
+        out.push(g.heights.len() as f32);
+        out.extend(&g.heights);
+        out
+    }
+
+    pub fn from_floats(f: &[f32]) -> Option<Self> {
+        let mut r = Floats(f);
+        let n = r.count()?;
+        let triangles = r
+            .take(n.checked_mul(9)?)?
+            .as_chunks::<9>()
+            .0
+            .iter()
+            .map(|t| std::array::from_fn(|v| std::array::from_fn(|k| t[3 * v + k])))
+            .collect();
+        let n = r.count()?;
+        let crowns = (0..n)
+            .map(|_| {
+                let c = r.arr::<7>()?;
+                Some(Canopy {
+                    center: [c[0], c[1], c[2]],
+                    radii: [c[3], c[4], c[5]],
+                    extinction: c[6],
+                })
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let origin = r.arr::<2>()?;
+        let [cell, dx, dz, base] = r.arr::<4>()?;
+        let n = r.count()?;
+        let heights = r.take(n)?.to_vec();
+        r.0.is_empty().then_some(Self {
+            triangles,
+            crowns,
+            ground: Ground {
+                origin,
+                cell,
+                dims: [dx as u32, dz as u32],
+                heights,
+                base,
+            },
+        })
+    }
+}
+
+impl SkyVisibility {
+    /// The grid as floats, for a web worker (`from_floats`).
+    pub fn to_floats(&self) -> Vec<f32> {
+        let mut out = Vec::with_capacity(16 + self.ground.len() + self.sh.len() * 11);
+        out.extend(self.origin);
+        out.extend([self.cell, self.lift, self.height]);
+        out.extend(self.dims.map(|d| d as f32));
+        out.push(self.ground.len() as f32);
+        out.extend(&self.ground);
+        out.push(self.sh.len() as f32);
+        out.extend(self.sh.as_flattened());
+        out.extend(&self.valid);
+        out.extend(&self.albedo);
+        out
+    }
+
+    pub fn from_floats(f: &[f32]) -> Option<Self> {
+        let mut r = Floats(f);
+        let origin = r.arr::<2>()?;
+        let [cell, lift, height] = r.arr::<3>()?;
+        let dims = r.arr::<3>()?.map(|d| d as u32);
+        let n = r.count()?;
+        let ground = r.take(n)?.to_vec();
+        let n = r.count()?;
+        let sh = r.take(n.checked_mul(9)?)?.as_chunks::<9>().0.to_vec();
+        let valid = r.take(n)?.to_vec();
+        let albedo = r.take(n)?.to_vec();
+        r.0.is_empty().then_some(Self {
+            origin,
+            cell,
+            dims,
+            lift,
+            height,
+            ground,
+            sh,
+            valid,
+            albedo,
+        })
     }
 }
 
@@ -1329,6 +1473,17 @@ mod tests {
         let mut job = SkyBake::new(scene.clone()).unwrap();
         while !job.step(97) {}
         assert_eq!(job.finish(), a);
+    }
+
+    #[test]
+    fn a_scene_and_its_bake_survive_the_trip_through_floats() {
+        let mut scene = tree();
+        scene.triangles = wall(4.0, -3.0, 3.0, 2.5);
+        scene.ground = Ground::sample([-5.0, -5.0], [5.0, 5.0], 1.0, |x, z| 0.1 * x + 0.05 * z);
+        assert_eq!(SkyScene::from_floats(&scene.to_floats()), Some(scene.clone()));
+        let v = bake(scene).unwrap();
+        assert_eq!(SkyVisibility::from_floats(&v.to_floats()), Some(v));
+        assert_eq!(SkyScene::from_floats(&[1.0]), None);
     }
 
     #[test]

@@ -464,23 +464,14 @@ mod native {
                     let _ = device.poll(wgpu::PollType::wait_indefinitely());
                     frames.push((t.elapsed().as_secs_f64() * 1000.0, cpu, i));
                 }
-                crate::load_stats::mark("first frame");
+                crate::load_stats::first_frame_submitted(queue);
             }
-            if s.scene.flora.rev > 0 {
-                crate::load_stats::mark("first plant generated");
-            }
-            if s.plants_pending() == 0 {
-                crate::load_stats::mark("plants done");
-            }
-            if s.scene.library.idle() {
-                crate::load_stats::mark("library idle");
-            }
+            s.track_load();
             if s.plants_pending() > 0 || !s.scene.library.idle() {
                 calm = 0;
                 std::thread::sleep(std::time::Duration::from_millis(1));
             } else {
                 calm += 1;
-                crate::load_stats::mark("everything loaded");
                 if calm >= 30 {
                     report(&mut frames);
                     return;
@@ -525,7 +516,10 @@ mod native {
         )?;
         std::fs::create_dir_all(out).map_err(|e| e.to_string())?;
         let (device, queue) = pollster::block_on(visioncraft_render::headless_device())?;
-        let renderer = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let renderer = crate::load_stats::time("renderer and pipelines (main thread)", || {
+            Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb)
+        });
+        crate::load_stats::startup("renderer and pipelines created");
         let mut s = Studio::new(renderer, Project::default());
         let mut plant = crate::planting_smoke::PlantSmoke::default();
         for (i, step) in steps.into_iter().enumerate() {
@@ -593,7 +587,7 @@ mod native {
                     let p = visioncraft_core::Project::from_json_bytes(&bytes)
                         .map_err(|e| at(format!("{path}: {e}")))?;
                     let file = std::path::absolute(&path).map_err(|e| at(e.to_string()))?;
-                    crate::load_stats::reset();
+                    crate::load_stats::reset(&format!("open {path}"));
                     let r = crate::load_stats::time("open project (main thread)", || {
                         s.open(p, file.parent(), None)
                     });
@@ -797,6 +791,9 @@ mod native {
                         library >> 20
                     ));
                     println!("texture memory: {}", parts.join(", "));
+                    for l in s.scene.library.lod_report().as_array().into_iter().flatten() {
+                        println!("lod: {l}");
+                    }
                     println!(
                         "worst upload: {} ({:.1} ms); worst library pump {:.1} ms",
                         s.scene.library.store.stats.worst_upload,

@@ -241,6 +241,9 @@ pub struct Library {
     garbage: Vec<Model>,
     /// Where each generator's library assets stand, to see how near the camera they are.
     wants: HashMap<String, Vec<(String, Vec<Vec3>)>>,
+    /// Per placed catalogue asset at the last scan: its nearest instance's distance (m) and the
+    /// level of detail it needs there (`lod_report`).
+    lod_seen: HashMap<String, (f32, usize)>,
     /// A want was noted since the last scan: its model may not be asked for yet.
     unscanned: bool,
     pub lamps_on: bool,
@@ -306,6 +309,7 @@ impl Library {
             uploading: Vec::new(),
             garbage: Vec::new(),
             wants: HashMap::new(),
+            lod_seen: HashMap::new(),
             unscanned: false,
             lamps_on: false,
             lamps_applied: None,
@@ -386,6 +390,69 @@ impl Library {
             );
         }
         Some(out)
+    }
+
+    /// Which level of detail each placed catalogue asset shows and why, for agents (`ui.load`):
+    /// the nearest instance's distance, the level that distance needs, the levels resident,
+    /// the level drawn there, and in words why it is not the one needed.
+    pub fn lod_report(&self) -> serde_json::Value {
+        let Some(cat) = self.catalog.as_ref() else {
+            return serde_json::json!([]);
+        };
+        let mut rows: Vec<(&String, &(f32, usize))> = self.lod_seen.iter().collect();
+        rows.sort_by(|a, b| a.1.0.total_cmp(&b.1.0));
+        let rows: Vec<serde_json::Value> = rows
+            .into_iter()
+            .filter_map(|(asset, &(d, need))| {
+                let a = cat.asset(asset)?;
+                let tier = (!a.lods.is_empty())
+                    .then(|| self.model_tier(asset))
+                    .flatten()
+                    .filter(|f| self.models.contains_key(f));
+                let resident: Vec<usize> = a
+                    .lods
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, l)| self.models.contains_key(&l.file) || (*i == 0 && tier.is_some()))
+                    .map(|(i, _)| i)
+                    .collect();
+                // As `parts`: the level itself, else the next coarser resident one, else a finer.
+                let shown = (need..a.lods.len())
+                    .find(|i| resident.contains(i))
+                    .or_else(|| (0..need).rev().find(|i| resident.contains(i)));
+                let file = &a.lods.get(need)?.file;
+                let why = if shown == Some(need) {
+                    "the level needed".to_string()
+                } else if self.awaiting.contains(file)
+                    || self.uploading.iter().any(|u| &u.path == file)
+                {
+                    "the level needed is loading".to_string()
+                } else if self.store.state(&Key::Glb(file.clone())) == State::Failed {
+                    "the level needed failed to load".to_string()
+                } else if self.store.over_cap && need > 0 {
+                    format!(
+                        "over the texture memory cap ({} of {} MB): only the coarsest level and the nearest are asked for",
+                        self.store.texture_bytes >> 20,
+                        self.store.cap_bytes >> 20
+                    )
+                } else if shown.is_none() {
+                    "nothing resident yet (placeholder)".to_string()
+                } else {
+                    "not asked for yet (the next scan)".to_string()
+                };
+                Some(serde_json::json!({
+                    "asset": asset,
+                    "nearest_m": (d * 10.0).round() / 10.0,
+                    "levels": a.lods.len(),
+                    "needed": need,
+                    "resident": resident,
+                    "shown": shown,
+                    "tier_2k": tier.is_some(),
+                    "why": why,
+                }))
+            })
+            .collect();
+        serde_json::Value::Array(rows)
     }
 
     // ---- textured project materials ----
@@ -679,6 +746,7 @@ impl Library {
         let Some(cat) = self.catalog.clone() else {
             return;
         };
+        self.lod_seen.clear();
         let mut nearest: HashMap<String, f32> = HashMap::new();
         for (asset, points) in self.wants.values().flatten() {
             let stride = (points.len() / 256).max(1);
@@ -698,10 +766,13 @@ impl Library {
                 .iter()
                 .position(|l| d <= l.max_distance_m)
                 .unwrap_or(n - 1);
+            self.lod_seen.insert(asset.clone(), (d, need));
             for (i, l) in a.lods.iter().enumerate() {
-                // Over the memory cap only the coarsest levels are asked for; the finer ones
-                // that are resident then stop being used and are the first to go.
-                if i == n - 1 || (i == need && !self.store.over_cap) {
+                // Over the memory cap only the coarsest levels are asked for, and the nearest
+                // one where the camera is right at the asset (else a bench at arm's length is
+                // its coarsest slab); the finer ones that are resident then stop being used and
+                // are the first to go.
+                if i == n - 1 || (i == need && (need == 0 || !self.store.over_cap)) {
                     self.request(&l.file, priority(d, i, n - 1));
                     // Decoded, a model takes several times its file (its JPEG pictures unpacked, with mips).
                     if i == 0

@@ -108,9 +108,16 @@ pub fn now_ms() -> f64 {
     START.get_or_init(Instant::now).elapsed().as_secs_f64() * 1000.0
 }
 
+/// `performance.now()` in the page and in a worker (each its own origin), else the date.
 #[cfg(target_arch = "wasm32")]
 pub fn now_ms() -> f64 {
-    js_sys::Date::now()
+    js_sys::Reflect::get(&js_sys::global(), &"performance".into())
+        .ok()
+        .and_then(|p| {
+            let now = js_sys::Reflect::get(&p, &"now".into()).ok()?;
+            js_sys::Function::from(now).call0(&p).ok()?.as_f64()
+        })
+        .unwrap_or_else(js_sys::Date::now)
 }
 
 /// A per-frame time allowance for GPU uploads. At least one upload always happens per frame.
@@ -282,6 +289,20 @@ impl AssetStore {
         // impostors), so a tier never pushes the GPU over the cap.
         self.lru.total.max(self.texture_bytes) + bytes <= self.cap_bytes / 100 * 85
     }
+}
+
+/// The renderer's texture memory that grows with what is loaded (material maps, model
+/// pictures, plant atlases, impostors, terrain), which the cap is about. The render targets and
+/// shadow maps grow with the canvas and the quality instead: counting them made a large canvas
+/// at ULTRA in the browser (700 MB cap) look over the cap with the scene half loaded, and the
+/// models near the camera stayed at their coarsest level.
+pub fn content_texture_bytes(r: &Renderer) -> u64 {
+    r.stats()
+        .texture_breakdown
+        .iter()
+        .filter(|(k, _)| matches!(*k, "textures" | "impostors" | "terrain"))
+        .map(|(_, b)| *b)
+        .sum()
 }
 
 /// Memory of an RGBA8 texture with its mip chain.
@@ -610,9 +631,28 @@ async fn compress_any(
     }
     #[cfg(target_arch = "wasm32")]
     {
+        let t = now_ms();
         let c = crate::texture_worker::compress(&px, w, h, kind, space).await;
+        crate::load_stats::add(
+            &format!("BC compression (texture worker, wall) {}", tier_of(w)),
+            now_ms() - t,
+        );
         (px, c)
     }
+}
+
+/// A map or model picture compressed on an earlier visit, out of the browser's cache.
+#[cfg(target_arch = "wasm32")]
+async fn web_compressed(key: u64) -> Option<Arc<Compressed>> {
+    let b = crate::web_cache::get("map", key).await?;
+    let (_, mut images) = crate::plant_cache::decode_textures(&b)?;
+    (images.len() == 1).then(|| images.remove(0).0)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn store_web_compressed(key: u64, c: &Arc<Compressed>) {
+    let bytes = crate::plant_cache::encode_textures(&([0.0; 3], vec![(c.clone(), false)]));
+    crate::web_cache::put("map", key, &bytes);
 }
 
 /// `compress`: block-compress library material maps and model pictures (on a device with BC
@@ -636,8 +676,8 @@ async fn load(
     Ok(match key {
         Key::Bytes(_) => Loaded::Bytes(bytes),
         Key::Image { path, srgb, .. } => {
-            // Natively, a map compressed before comes off the disk (`plant_cache`).
-            #[cfg(not(target_arch = "wasm32"))]
+            // A map compressed before comes off the disk (`plant_cache`), in the browser out of
+            // its cache (`web_cache`).
             let cache_key = crate::plant_cache::key(&[
                 b"library map",
                 path.as_bytes(),
@@ -650,6 +690,15 @@ async fn load(
                 && let Some(c) = crate::load_stats::time("disk cache read (library map)", || {
                     crate::plant_cache::compressed(cache_key)
                 })
+            {
+                let mut img = Rgba::new(c.width, c.height, Vec::new());
+                img.bc = Some(c);
+                return Ok(Loaded::Image(img));
+            }
+            #[cfg(target_arch = "wasm32")]
+            if compress
+                && bc_kind_of(path).is_some()
+                && let Some(c) = web_compressed(cache_key).await
             {
                 let mut img = Rgba::new(c.width, c.height, Vec::new());
                 img.bc = Some(c);
@@ -678,6 +727,8 @@ async fn load(
                 if let Some(c) = c {
                     #[cfg(not(target_arch = "wasm32"))]
                     crate::plant_cache::store_compressed(cache_key, &c);
+                    #[cfg(target_arch = "wasm32")]
+                    store_web_compressed(cache_key, &c);
                     img.bc = Some(c);
                     img.px = Vec::new();
                 }
@@ -705,12 +756,11 @@ async fn load(
                     }
                 }
             }
-            #[cfg(not(target_arch = "wasm32"))]
             let glb_digest = crate::plant_cache::digest(&bytes);
             for (i, encoded) in glb.images.iter().enumerate() {
                 let use_as = role.get(&i).copied().flatten().filter(|_| compress);
-                // Natively, a picture compressed before comes off the disk (`plant_cache`).
-                #[cfg(not(target_arch = "wasm32"))]
+                // A picture compressed before comes off the disk (`plant_cache`), in the browser
+                // out of its cache (`web_cache`).
                 let cache_key = use_as.map(|(kind, space)| {
                     crate::plant_cache::key(&[
                         b"model picture",
@@ -722,6 +772,15 @@ async fn load(
                 });
                 #[cfg(not(target_arch = "wasm32"))]
                 if let Some(c) = cache_key.and_then(crate::plant_cache::compressed) {
+                    let mut img = Rgba::new(c.width, c.height, Vec::new());
+                    img.bc = Some(c);
+                    images.push(img);
+                    continue;
+                }
+                #[cfg(target_arch = "wasm32")]
+                if let Some(k) = cache_key
+                    && let Some(c) = web_compressed(k).await
+                {
                     let mut img = Rgba::new(c.width, c.height, Vec::new());
                     img.bc = Some(c);
                     images.push(img);
@@ -744,6 +803,10 @@ async fn load(
                         #[cfg(not(target_arch = "wasm32"))]
                         if let Some(k) = cache_key {
                             crate::plant_cache::store_compressed(k, &c);
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        if let Some(k) = cache_key {
+                            store_web_compressed(k, &c);
                         }
                         img.bc = Some(c);
                         img.px = Vec::new();
@@ -1101,7 +1164,7 @@ impl AssetStore {
             }
         }
         let mut changed = false;
-        let texture_bytes = r.stats().texture_bytes;
+        let texture_bytes = content_texture_bytes(r);
         self.texture_bytes = texture_bytes;
         self.stats.peak_texture_bytes = self.stats.peak_texture_bytes.max(texture_bytes);
         let over = texture_bytes.saturating_sub(self.cap_bytes);

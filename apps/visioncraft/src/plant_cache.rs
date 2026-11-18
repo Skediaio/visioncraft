@@ -379,7 +379,7 @@ pub fn meshes(key: u64, make: impl FnOnce() -> (f32, Levels)) -> (f32, Levels) {
 /// `texture_worker::PlantCompressed`.
 pub type Textures = ([f32; 3], Vec<(Arc<Compressed>, bool)>);
 
-fn encode_textures(t: &Textures) -> Vec<u8> {
+pub fn encode_textures(t: &Textures) -> Vec<u8> {
     let mut w = W::default();
     t.0.iter().for_each(|v| w.f32(*v));
     w.u32(t.1.len() as u32);
@@ -395,7 +395,7 @@ fn encode_textures(t: &Textures) -> Vec<u8> {
     w.0
 }
 
-fn decode_textures(b: &[u8]) -> Option<Textures> {
+pub fn decode_textures(b: &[u8]) -> Option<Textures> {
     let mut r = R(b);
     let mean = [r.f32()?, r.f32()?, r.f32()?];
     let n = r.u32()?;

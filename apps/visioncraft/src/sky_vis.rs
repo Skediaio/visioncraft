@@ -4,23 +4,30 @@
 //!
 //! Baking: `visioncraft_automation::SkyVisJob`, the scene `query.sky_view` traces. Natively a
 //! thread runs it on all cores (the example garden's 13,104 probes in about 0.4 s on eight cores); on
-//! the web, with no threads, the window does [`PROBES_PER_FRAME`] probes a frame so the page keeps
-//! moving, as the sun-hours map does. It starts again only when what blocks the sky changed
-//! (`Key`: the shapes, models, plantings, terrain, materials and layers, the years and the
-//! leaves of the month), never for the hour or the weather; the old grid is drawn until the new
-//! one is ready.
+//! the web in the import worker (a `skyvis` job: the scene and the grid travel as floats,
+//! `SkyScene::to_floats`), so the page keeps its frame rate. When the worker cannot start, the
+//! window bakes a few probes a frame, within [`SLICE_MS`]. It starts again only when what blocks
+//! the sky changed (`Key`: the shapes, models, plantings, terrain, materials and layers, the
+//! years and the leaves of the month), never for the hour or the weather; the old grid is drawn
+//! until the new one is ready.
 
 use std::hash::{Hash, Hasher};
-use std::sync::Arc;
-#[cfg(not(target_arch = "wasm32"))]
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
-use visioncraft_automation::SkyVisJob;
-use visioncraft_core::{Project, SkyVisibility};
-
-/// Probes a frame the web window bakes (no threads there).
+use std::sync::{Arc, Mutex};
 #[cfg(target_arch = "wasm32")]
-pub const PROBES_PER_FRAME: usize = 160;
+use visioncraft_automation::SkyVisJob;
+use visioncraft_core::{Project, SkyScene, SkyVisibility};
+
+/// Milliseconds a frame the web window bakes for when there is no worker (a fixed count of
+/// probes cost a heavy scene 120 to 180 ms a frame).
+#[cfg(target_arch = "wasm32")]
+pub const SLICE_MS: f64 = 4.0;
+
+/// The worker job's kind (beside the model kinds of `import_task` and `sky_task::SKY`).
+pub const SKY_VIS: &str = "skyvis";
+
+/// The grid, once baked; `Err` when the worker failed (the window bakes it then).
+type Slot = Arc<Mutex<Option<Result<Option<SkyVisibility>, ()>>>>;
 
 /// What decides a bake, before its scene is built: a hash of the parts of the project that block
 /// the sky, the years and the leaves, and the loaded models.
@@ -49,8 +56,8 @@ pub fn inputs_key(p: &Project, models: u64) -> u64 {
 }
 
 enum Work {
-    #[cfg(not(target_arch = "wasm32"))]
-    Thread(Arc<Mutex<Option<Option<SkyVisibility>>>>),
+    /// A thread natively, the import worker on the web (with the scene, should it fail).
+    Off(Slot, Option<SkyScene>),
     #[cfg(target_arch = "wasm32")]
     Sliced(Option<SkyVisJob>),
 }
@@ -58,12 +65,77 @@ enum Work {
 struct Task {
     cancel: Arc<AtomicBool>,
     work: Work,
+    #[cfg(target_arch = "wasm32")]
+    worker: Option<web_sys::Worker>,
 }
 
 impl Drop for Task {
     fn drop(&mut self) {
         self.cancel.store(true, Ordering::Relaxed);
+        #[cfg(target_arch = "wasm32")]
+        if let Some(w) = &self.worker {
+            w.terminate();
+        }
     }
+}
+
+fn put(slot: &Slot, v: Result<Option<SkyVisibility>, ()>) {
+    if let Ok(mut s) = slot.lock() {
+        s.get_or_insert(v);
+    }
+}
+
+/// Bakes `scene` in the import worker; the grid lands in `slot` (`Err` when the worker fails).
+#[cfg(target_arch = "wasm32")]
+fn in_worker(scene: &SkyScene, slot: &Slot) -> Option<web_sys::Worker> {
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen::prelude::Closure;
+    let worker = web_sys::Worker::new("./import_worker_loader.js").ok()?;
+    let msg = js_sys::Array::new();
+    msg.push(&SKY_VIS.into());
+    msg.push(&js_sys::Float32Array::from(&scene.to_floats()[..]));
+    let (w, done) = (worker.clone(), slot.clone());
+    let t0 = crate::assets::now_ms();
+    let on_message =
+        Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |e: web_sys::MessageEvent| {
+            let data = e.data();
+            if data.as_string().as_deref() == Some(crate::import_task::READY) {
+                if w.post_message(&msg).is_err() {
+                    w.terminate();
+                    put(&done, Err(()));
+                }
+                return;
+            }
+            // The grid as floats; none: nothing blocks the sky.
+            let grid = data
+                .dyn_into::<js_sys::Float32Array>()
+                .map_err(|_| ())
+                .and_then(|a| {
+                    let f = a.to_vec();
+                    if f.is_empty() {
+                        Ok(None)
+                    } else {
+                        SkyVisibility::from_floats(&f).map(Some).ok_or(())
+                    }
+                });
+            crate::load_stats::add(
+                "sky visibility bake (worker, wall)",
+                crate::assets::now_ms() - t0,
+            );
+            put(&done, grid);
+            w.terminate();
+        });
+    worker.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
+    let (w, failed) = (worker.clone(), slot.clone());
+    let on_error = Closure::<dyn FnMut(wasm_bindgen::JsValue)>::new(move |_| {
+        w.terminate();
+        put(&failed, Err(()));
+    });
+    worker.set_onerror(Some(on_error.as_ref().unchecked_ref()));
+    // shortcut: two small closures leak per bake, fine for a change of the design
+    on_message.forget();
+    on_error.forget();
+    Some(worker)
 }
 
 /// The bake under way and what the drawn grid was made for.
@@ -97,41 +169,75 @@ impl SkyVisState {
         changed
     }
 
-    /// Starts `job`, dropping (cancelling) the one under way.
-    pub fn start(&mut self, job: SkyVisJob, now_ms: f64) {
+    /// Starts baking `scene`, dropping (cancelling) the bake under way.
+    pub fn start(&mut self, scene: SkyScene, now_ms: f64) {
         let cancel = Arc::new(AtomicBool::new(false));
         self.started_ms = now_ms;
+        let slot: Slot = Arc::default();
         #[cfg(not(target_arch = "wasm32"))]
-        let work = {
-            let slot: Arc<Mutex<Option<Option<SkyVisibility>>>> = Arc::default();
+        {
             let (out, stop) = (slot.clone(), cancel.clone());
             std::thread::spawn(move || {
-                let grid = job.run();
-                if !stop.load(Ordering::Relaxed)
-                    && let Ok(mut o) = out.lock()
-                {
-                    *o = Some(grid);
+                let grid = visioncraft_automation::SkyVisJob::new(scene).run();
+                if !stop.load(Ordering::Relaxed) {
+                    put(&out, Ok(grid));
                 }
             });
-            Work::Thread(slot)
-        };
+            self.task = Some(Task {
+                cancel,
+                work: Work::Off(slot, None),
+            });
+        }
         #[cfg(target_arch = "wasm32")]
-        let work = Work::Sliced(Some(job));
-        self.task = Some(Task { cancel, work });
+        {
+            let worker = in_worker(&scene, &slot);
+            let work = if worker.is_some() {
+                Work::Off(slot, Some(scene))
+            } else {
+                Work::Sliced(Some(SkyVisJob::new(scene)))
+            };
+            self.task = Some(Task {
+                cancel,
+                work,
+                worker,
+            });
+        }
     }
 
-    /// Moves the bake along (a slice on the web) and takes a finished grid (`Some(None)`:
-    /// nothing blocks the sky).
+    /// Moves the bake along (a slice on the web without a worker) and takes a finished grid
+    /// (`Some(None)`: nothing blocks the sky).
     pub fn poll(&mut self, now_ms: f64) -> Option<Option<SkyVisibility>> {
         let task = self.task.as_mut()?;
-        #[cfg(not(target_arch = "wasm32"))]
-        let grid = match &task.work {
-            Work::Thread(slot) => slot.lock().ok()?.take(),
-        };
-        #[cfg(target_arch = "wasm32")]
         let grid = match &mut task.work {
+            Work::Off(slot, scene) => {
+                let got = slot.lock().ok()?.take()?;
+                match got {
+                    Ok(grid) => Some(grid),
+                    Err(()) => {
+                        // The worker failed: the window bakes it, a slice a frame.
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            let job = scene.take().map(SkyVisJob::new);
+                            task.work = Work::Sliced(job);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        let _ = scene;
+                        None
+                    }
+                }
+            }
+            #[cfg(target_arch = "wasm32")]
             Work::Sliced(slot) => {
-                if slot.as_mut()?.step(PROBES_PER_FRAME) {
+                let t = crate::assets::now_ms();
+                let mut done = false;
+                while !done && crate::assets::now_ms() - t < SLICE_MS {
+                    done = slot.as_mut()?.step(8);
+                }
+                crate::load_stats::add(
+                    "sky visibility bake slice (main thread)",
+                    crate::assets::now_ms() - t,
+                );
+                if done {
                     slot.take().map(SkyVisJob::finish)
                 } else {
                     None

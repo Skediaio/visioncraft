@@ -1,4 +1,4 @@
-//! Block compression off the page's thread on the web: a few Web Workers (`WEB_WORKERS`, the
+//! Block compression off the page's thread on the web: a few Web Workers (`web_workers`, the
 //! `texture_worker` binary, the same crate built again, see `index.html`) compress decoded
 //! pictures with `visioncraft_render::bc` and send the mip levels back as bytes; a job goes to
 //! the worker with the fewest waiting. Natively the work pool compresses (`assets`,
@@ -13,8 +13,22 @@
 //! `scene::scatter_lawn`).
 
 /// Web Workers the page starts (each its own copy of the module): plant textures of several
-/// species and maps compress side by side, while the page keeps its thread.
-pub const WEB_WORKERS: usize = 3;
+/// species and maps compress side by side, while the page keeps its thread. The machine's
+/// threads (`navigator.hardwareConcurrency`) less two for the page and the browser, from 3 to
+/// 8: a fixed three left a desktop's cores idle while a garden's species were made one by one.
+pub fn web_workers() -> usize {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let n = js_sys::Reflect::get(&js_sys::global(), &"navigator".into())
+            .and_then(|nav| js_sys::Reflect::get(&nav, &"hardwareConcurrency".into()))
+            .ok()
+            .and_then(|v| v.as_f64())
+            .unwrap_or(4.0) as usize;
+        n.saturating_sub(2).clamp(3, 8)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    3
+}
 
 /// What the worker posts once it can take jobs.
 pub const READY: &str = "ready";
@@ -408,7 +422,7 @@ mod page {
     fn post(parts: &[wasm_bindgen::JsValue]) -> Option<futures_oneshot::Receiver> {
         WORKERS.with(|cell| {
             let mut cell = cell.borrow_mut();
-            let workers = cell.get_or_insert_with(|| (0..super::WEB_WORKERS).map(start).collect());
+            let workers = cell.get_or_insert_with(|| (0..super::web_workers()).map(start).collect());
             let worker = workers
                 .iter_mut()
                 .flatten()
