@@ -42,7 +42,7 @@ same over MCP (`visioncraft-cli mcp`), JSON lines (`visioncraft-cli serve`) and 
 4. **Render.** `doc_render_preview {"viewpoint": ...}`: a PNG and what was drawn (camera, sun,
    `plantsPending`: 0 means every plant is drawn). Its `time` changes the picture only.
 5. **Verify** against the plan: `doc_inspect` (`area_m2`, `footprint_m2`, plant `count`),
-   `query.measure`, `query.quantities {ids?, layer?}` (areas, lengths, volumes and plant counts per object, per material and per asset), `query.raycast`, `query.sun_hours {point | outline, season | date, cell_m?, years?, plants?}` (hours of direct sun at a spot or as a grid over an area, with shadow from models, shapes, terrain and plant crowns), `query.ground_height`, `query.ground_length`, `query.sun`.
+   `query.measure`, `query.quantities {ids?, layer?}` (areas, lengths, volumes and plant counts per object, per material and per asset), `query.raycast`, `query.sun_hours {point | outline, season | date, cell_m?, years?, plants?}` (hours of direct sun at a spot or as a grid over an area, with shadow from models, shapes, terrain and plant crowns; `view.set_sun_map` draws the same grid on the ground, recipe 26), `query.ground_height`, `query.ground_length`, `query.sun`.
    Save with `command_run file.save {"path": ...}`.
 
 ## Recipes
@@ -672,6 +672,38 @@ vertex is inserted or removed, and goes with its shape. In a bundle the image tr
 `photos/<name>`. Not yet: several photos on one face, removing what stands in front of the facade
 (trees, cars), matching the photo's colour to the sun, and a photo's EXIF rotation (turn it
 upright first).
+
+### 26. A sun map of the lawn in winter, seen from above
+
+```json recipe
+{"intent": "the hours of winter sun on the example garden's lawn, drawn on the ground", "steps": [
+  {"id": "project.load_example", "params": {"name": "garden"}},
+  {"id": "view.set", "params": {"season": "winter", "years": 10}},
+  {"id": "view.set_sun_map", "params": {"shape": "S3", "season": "winter"}},
+  {"id": "query.sun_hours", "params": {"outline": [[3, 12], [19, 12], [19, 29], [3, 29]], "season": "winter", "cell_m": 2}},
+  {"id": "view.render", "params": {"camera": {"position": [11, 44, 15.01], "target": [11, 0, 15], "fov_y_deg": 40}, "width": 1000, "height": 1000, "path": "sun-map-render.png"}}
+]}
+```
+
+`view.set_sun_map` draws the hours of direct sun a day gives over **one area** on the ground, as
+a colour map: deep violet for no sun, through blue, teal and green to amber at 8 hours or more
+(a ramp that also reads in grey and for colour-blind eyes); outside the area it is clear. Give
+the area as `shape` (an area's id, `S3` is the lawn: the map follows the shape when it changes)
+or as an `outline` `[[x, z], ...]` (the box round the plot, say). The day is a `season` (its
+solstice or equinox: 21 December for winter in the north) or a `date` `{month, day}`, else the
+project's date; `years` is the age of the plants (null follows `view.set {years}`). The sun is
+cast exactly as `query.sun_hours` casts it (models, shapes, terrain and plant crowns; clouds are
+not counted), on cells of `cell_m` (0.5 m, at most 10,000 inside the area), so ask
+`query.sun_hours` with the same outline for the numbers behind the picture (the shares in full
+sun, part shade and shade; recipe 10 for a spot through the day). The map is see-through
+(`opacity`, 0.6), flat a few centimetres over the area's height (over terrain too: a flat
+sheet), and `view.render` draws it, so seen from straight above (eye z a hair over the target's
+z, which keeps north up) you can read it: shadows sit **north** of what casts them, because the
+sun is in the south. In the example the house, north of the lawn, shades the terrace and the
+border but not the lawn; the hedge on the south side and the bare trees shade the strips north
+of them. `view.set_sun_map` again changes only the fields you give (`{"opacity": 0.4}`, `{"season":
+"summer"}`), `view.clear_sun_map` takes the map off; both are undo steps. In the window the
+same is in Sun & sky, with a legend in the corner of the view.
 
 ## Known traps
 

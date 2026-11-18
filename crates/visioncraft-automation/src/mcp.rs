@@ -301,7 +301,7 @@ Work in this order, and check after each stage:\n\
 2. Plan in numbers first: metres, Y up, +X east, -Z north (unless site.set north_deg turns it). Write down every outline as [[x, z], ...], every height, every plant species (command_run species.list with a category) and every light position.\n\
 3. Build in a few command_batch calls (all or nothing): shapes (shape.add_area for lawns, terraces and paths, with curves and smooth for curved edges, shape.set_curve for a typed radius and shape.add_circle for round lawns and beds; shape.add_extrusion for houses, walls and hedge blocks; fence.add for fences and screens along a line; stairs.add for steps between levels; bed.add for raised beds with soil), a plan image to trace over when there is one (underlay.add, then underlay.calibrate on a dimension you know), materials (material.assign), a photo of a facade on a wall face (wall_photo.add with the facade's four corners in the photo, bottom-left first, seen from outside), planting (planting.add_spline for hedges, planting.add_area for beds, planting.add_single for trees), lights (light.add), viewpoints (viewpoint.add).\n\
 4. After each batch: doc_inspect and compare areas, counts and positions with your plan; then doc_render_preview from a viewpoint and look at it.\n\
-5. Check the light: time.set to the hours that matter (morning, afternoon, dusk) and look again.\n\
+5. Check the light: time.set to the hours that matter (morning, afternoon, dusk) and look again; view.set_sun_map draws the hours of sun over a lawn or the plot on the ground (render it from straight above).\n\
 6. Save with command_run file.save {{\"path\": \"...\"}} and say what you built, with the numbers."
     )
 }
@@ -358,7 +358,7 @@ fn tools() -> Vec<Value> {
         }),
         json!({
             "name": "command_run",
-            "description": "Runs one command by id and returns its JSON result (its wall-clock milliseconds in the tool result's _meta.ms). A failed command returns isError with a message that starts with the command's id and names the parameter. Files: file.new, file.open, file.save; history: edit.undo, edit.redo; queries: query.measure, query.quantities, query.sun, query.sun_hours, query.raycast, query.ground_height, query.ground_length, catalog.search, species.list; agent.log.",
+            "description": "Runs one command by id and returns its JSON result (its wall-clock milliseconds in the tool result's _meta.ms). A failed command returns isError with a message that starts with the command's id and names the parameter. Files: file.new, file.open, file.save; history: edit.undo, edit.redo; queries: query.measure, query.quantities, query.sun, query.sun_hours (view.set_sun_map and view.clear_sun_map show its grid on the ground), query.raycast, query.ground_height, query.ground_length, catalog.search, species.list; agent.log.",
             "inputSchema": {"type": "object", "properties": {
                 "id": {"type": "string", "description": "A command id from command_list, e.g. \"shape.add_area\"."},
                 "params": {"type": "object", "description": "The command's parameters, as command_list documents them. Omit for none."},

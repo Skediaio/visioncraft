@@ -202,6 +202,10 @@ pub struct ViewState {
     /// default (fields).
     #[serde(skip_serializing_if = "Surroundings::is_default")]
     pub surroundings: Surroundings,
+    /// The hours of sun over an area drawn on the ground (`view.set_sun_map`); not written
+    /// while off, so files from before it existed round-trip unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sun_map: Option<crate::sun_map::SunMap>,
 }
 
 /// The land round a design, painted and shaped on the endless ground beyond the plot: never
@@ -323,6 +327,7 @@ impl Default for ViewState {
             clutter: true,
             snow: 0.0,
             surroundings: Surroundings::default(),
+            sun_map: None,
         }
     }
 }

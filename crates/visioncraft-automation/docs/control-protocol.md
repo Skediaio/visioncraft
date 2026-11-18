@@ -91,8 +91,8 @@ unknown keys are refused with the nearest name, unless `openParams` is true.
 ### Commands
 
 The core's commands (`model.*`, `shape.*`, `material.*`, `planting.*`, `species.add|update|remove`,
-`fence.*`, `stairs.*`, `bed.*`, `underlay.*`, `wall_photo.*`, `light.*`, `viewpoint.*`, `layer.*`, `terrain.*`, `site.set`, `time.set`, `view.set`,
-`style.set`) change the project, each one undo step; its queries (`query.sun {time?}`,
+`fence.*`, `stairs.*`, `bed.*`, `underlay.*`, `wall_photo.*`, `light.*`, `viewpoint.*`, `layer.*`, `terrain.*`, `site.set`, `time.set`, `view.set`, `view.set_sun_map`,
+`view.clear_sun_map`, `style.set`) change the project, each one undo step; its queries (`query.sun {time?}`,
 `query.measure {kind, points?, outline?}`, `query.quantities {ids?, layer?}`) never do. Curves are `shape.*` commands too:
 `shape.set_curve {id, edge, radius_m?, sagitta_m?, side?}`, `shape.clear_curve {id, edge}`,
 `shape.set_smooth {id, smooth}` and `shape.add_circle {center, radius_m, kind, ...}`; `shape.add_area`,
@@ -121,6 +121,8 @@ loaded geometry or a GPU:
 | `underlay.calibrate` | `{id, pixel_a, pixel_b, world_a, world_b}` | `{origin, metres_per_pixel, rotation_deg}`: scale, turn and origin from two image positions and the drawing points they land on |
 | `underlay.scale_by_distance` | `{id, pixel_a, pixel_b, distance_m}` | `{metres_per_pixel}`; origin and rotation stay |
 | `underlay.remove` | `{id}` | `null` |
+| `view.set_sun_map` | `{shape \| outline, season \| date {month, day}, years?, cell_m? = 0.5, opacity? = 0.6}` | `null`; draws the hours of direct sun a day gives over an area on the ground (`shape` an area's id, or an `outline` such as the box round the plot), in the app and in `view.render`: deep violet for no sun through blue, teal and green to amber at 8 hours or more, see-through (`opacity`), flat a few cm over the area (also on terrain). The sun is cast as `query.sun_hours` does it; `years` null follows the view's years. When a map is on, only the fields given change (a new target replaces the old, `date` and `season` replace each other, null clears `date`, `season` or `years`). Stored in `document.inspect`'s `view.sun_map`. |
+| `view.clear_sun_map` | `{}` | `null`; takes the map off |
 | `wall_photo.add` | `{file, target, corners_px?, region?, name?, size_px?}` | `{id}`; a photo of a facade on one wall face (`target` `{type: "face", owner, face}`), straightened by `corners_px` (the facade's four corners in the photo, bottom-left, bottom-right, top-right, top-left as seen from outside; default: the photo's own corners) to fill `region` `{u0, v0, u1, v1}` metres on the face (default: the whole face); the host reads the PNG or JPEG as for `underlay.add` and fills `size_px` |
 | `wall_photo.set` | `{id, name?, file?, target?, corners_px?, region?, size_px?}` | `null`; `region: null` is the whole face again |
 | `wall_photo.remove` | `{id}` | `null` |

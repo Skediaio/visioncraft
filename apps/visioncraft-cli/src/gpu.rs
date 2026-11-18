@@ -97,6 +97,12 @@ impl Pictures for GpuPictures {
                 store.provide(file, bytes.clone());
             }
         }
+        // Plants: the host's catalogue, for the sizes the sun-hours map casts crowns from.
+        for a in &request.assets {
+            if !s.assets.iter().any(|x| x.id == a.id) {
+                s.assets.push(a.clone());
+            }
+        }
         s.set_draft(None);
         s.quality_auto = false;
         s.quality = Quality::PRESETS

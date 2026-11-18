@@ -74,6 +74,9 @@ pub struct RenderRequest {
     /// The project's image files (plan underlays, wall photos) by their `file` (see
     /// [`HostState::images`]).
     pub images: Vec<(String, Arc<[u8]>)>,
+    /// The host's plant catalogue (what `query.sun_hours` sizes crowns from), for the sun-hours
+    /// map.
+    pub assets: Vec<visioncraft_core::Asset>,
 }
 
 /// A photo: `samples` frames averaged; depth of field when `aperture_m` is over 0, focused at

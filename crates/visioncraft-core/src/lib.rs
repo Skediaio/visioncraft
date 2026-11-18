@@ -33,6 +33,7 @@ pub mod spec;
 pub mod stairs;
 pub mod sun;
 pub mod sun_hours;
+pub mod sun_map;
 pub mod terrain;
 pub mod tiers;
 pub mod underlay;
@@ -78,6 +79,7 @@ pub use shape::{
 };
 pub use sky_volume::{Crown, Lamp, SkyVolume, sky_volume, sky_volume_with_canopy};
 pub use spec::{CommandSpec, ParamSpec, ParamType, example_project};
+pub use sun_map::SunMap;
 pub use terrain::{
     BrushStroke, DirtyRect, Terrain, TerrainChunk, Tool, apply_stroke, ground_height_over,
     terrain_chunk_mesh, terrain_chunk_mesh_on, terrain_chunks,

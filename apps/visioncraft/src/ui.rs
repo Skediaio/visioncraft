@@ -746,6 +746,7 @@ impl Hud {
                 self.layers(ui, cx, &mut actions)
             });
         }
+        crate::sun_map::legend(&ctx, cx);
         // Only over a bare view: a mode's panel would cover it.
         if walking && self.mode.is_none() {
             egui::Area::new(egui::Id::new("walkhint"))

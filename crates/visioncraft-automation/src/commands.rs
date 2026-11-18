@@ -1341,6 +1341,7 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
                 .filter_map(|f| Some((f.to_string(), state.images.get(f)?.clone())))
                 .collect()
         },
+        assets: host.state().catalog.assets.clone(),
     };
     let models = host.state().models.clone();
     let rendered = host

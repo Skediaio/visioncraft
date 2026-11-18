@@ -380,6 +380,82 @@ fn a_wall_photo_shows_straightened_and_the_right_way_up() {
     }
 }
 
+/// The sun-hours map on a lawn with a 3 m wall along its south side, seen from straight above
+/// (north up): the strip just north of the wall gets no sun (violet), the far north end most of
+/// the day (amber). Needs a GPU: `cargo test -p visioncraft-cli -- --ignored`.
+#[test]
+#[ignore]
+fn a_sun_map_is_drawn_on_the_lawn_with_shade_north_of_the_wall() {
+    let d = dir("sun-map");
+    let made = cli(
+        &[
+            "run",
+            "--cmd",
+            "shape.add_area",
+            "--params",
+            r#"{"name": "Lawn", "outline": [[0, 0], [10, 0], [10, 10], [0, 10]], "material": "lawn"}"#,
+            "--cmd",
+            "shape.add_extrusion",
+            "--params",
+            r#"{"name": "Wall", "outline": [[0, 9.4], [10, 9.4], [10, 9.7], [0, 9.7]], "height": 3}"#,
+            "--cmd",
+            "view.set_sun_map",
+            "--params",
+            r#"{"shape": "S1", "season": "spring", "opacity": 1}"#,
+            "--out",
+            "map.visioncraft",
+        ],
+        &d,
+    );
+    assert!(
+        made.status.success(),
+        "{}",
+        String::from_utf8_lossy(&made.stderr)
+    );
+    let out = cli(
+        &[
+            "render",
+            "map.visioncraft",
+            "--out",
+            "map.png",
+            "--size",
+            "600x600",
+            "--camera",
+            "5,30,5.01,5,0,5",
+            "--fov",
+            "40",
+        ],
+        &d,
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let bytes = std::fs::read(d.join("map.png")).unwrap();
+    let mut reader = png::Decoder::new(std::io::Cursor::new(&bytes))
+        .read_info()
+        .unwrap();
+    let mut buf = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buf).unwrap();
+    assert_eq!((info.width, info.height), (600, 600));
+    // 30 m up at 40 degrees: 21.8 m over 600 px, 27.5 px a metre about the centre (5, 5).
+    let at = |z: f32| {
+        let y = (300.0 + (z - 5.0) * 27.5) as usize;
+        let i = (y * 600 + 300) * 4;
+        [buf[i], buf[i + 1], buf[i + 2]].map(i32::from)
+    };
+    let (shade, sun) = (at(8.8), at(1.0));
+    assert!(
+        shade[2] > shade[0] + 20 && shade[2] > shade[1],
+        "shade {shade:?}"
+    );
+    assert!(sun[0] > sun[2] + 60 && sun[1] > sun[2] + 40, "sun {sun:?}");
+    if let Ok(target) = std::env::var("VISIONCRAFT_RENDER_OUT") {
+        std::fs::write(target, &bytes).unwrap();
+    }
+}
+
 /// Every recipe of the agent guide through `visioncraft-cli mcp`, pictures included. Needs a
 /// GPU: `cargo test -p visioncraft-cli -- --ignored`.
 #[test]

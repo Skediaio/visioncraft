@@ -90,6 +90,10 @@ pub fn panel(ui: &mut egui::Ui, cx: &mut Cx, terrain: &mut crate::terrain_tool::
             .id_salt("sun-sky")
             .default_open(false)
             .show(ui, |ui| crate::sky_panel::panel(ui, cx));
+        egui::CollapsingHeader::new(egui::RichText::new(t::SUN_MAP).small())
+            .id_salt("sun-map")
+            .default_open(cx.s.project().view.sun_map.is_some())
+            .show(ui, |ui| crate::sun_map::panel(ui, cx));
         egui::CollapsingHeader::new(egui::RichText::new(t::WA_HEADER).small())
             .id_salt("sun-water")
             .default_open(cx.s.project().sea.is_some())

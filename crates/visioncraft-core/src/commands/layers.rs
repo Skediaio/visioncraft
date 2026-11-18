@@ -137,6 +137,36 @@ pub(super) fn register(s: &mut Session) {
         ),
         view_set,
     );
+    s.register_with_spec(
+        spec(
+            "view.set_sun_map",
+            "Show Sun Hours on the Ground",
+            "Draws the hours of direct sun a day gives over an area on the ground, as a colour map (deep violet: no sun, through blue, teal and green to amber at 8 hours or more) lit like no surface: flat and see-through, a few centimetres over the area, in the app and in `view.render` pictures. The sun is cast as `query.sun_hours` does (models, shapes, terrain and plant crowns, `years` after planting). Give the area as `shape` (an area's id: the map follows it) or `outline`; when a map is already on, only the fields given change (a new target replaces the old, `date` and `season` replace each other, null clears `date`, `season` or `years`). On terrain the map is a flat sheet at the area's height. Undo takes it away again.",
+            vec![
+                param("shape", T::String, "An area shape's id (S1...); the map covers its outline."),
+                param("outline", T::Outline, "Or a polygon [[x, z], ...] in metres, for example the box round the plot. Not together with `shape`."),
+                param("date", T::Object, "{month, day}: the day studied. Not together with `season`. Neither: the project's date."),
+                param("season", T::String, "spring, summer, autumn or winter: studied on its solstice or equinox (21 March, 21 June, 21 September, 21 December in the north). Not together with `date`."),
+                param("years", T::Number, "Years after planting the crowns have grown, 0..60; null follows the view's years (else 0).").unit("years"),
+                param("cell_m", T::Number, "Cell size, 0.1 to 10; at most 10,000 cells inside the area are sampled.").unit("m").default(json!(0.5)),
+                param("opacity", T::Number, "0 (invisible) to 1 (opaque).").default(json!(0.6)),
+            ],
+            "null",
+            json!({"shape": "S1", "season": "winter", "years": 10}),
+        ),
+        view_set_sun_map,
+    );
+    s.register_with_spec(
+        spec(
+            "view.clear_sun_map",
+            "Hide Sun Hours",
+            "Takes the sun-hours map off the ground.",
+            vec![],
+            "null",
+            json!({}),
+        ),
+        view_clear_sun_map,
+    );
 }
 
 fn layer<'a>(project: &'a mut Project, id: &str) -> Result<&'a mut Layer, CommandError> {
@@ -307,4 +337,132 @@ fn view_set(project: &mut Project, params: &Value) -> Result<Value, CommandError
     project.view = view;
     project.time = time;
     Ok(Value::Null)
+}
+
+fn view_set_sun_map(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
+    let Some(given) = params.as_object() else {
+        return Err(crate::session::bad("expected an object"));
+    };
+    // The map as it is, or the first call's: the target must then come with it.
+    let mut map = match &project.view.sun_map {
+        Some(m) => serde_json::to_value(m).expect("a sun map serialises"),
+        None if given.contains_key("shape") || given.contains_key("outline") => json!({}),
+        None => {
+            return Err(crate::session::bad(
+                "no sun map is on yet: give `shape` or `outline`",
+            ));
+        }
+    };
+    let fields = map.as_object_mut().expect("a sun map is an object");
+    for (k, v) in given {
+        if ![
+            "shape", "outline", "date", "season", "years", "cell_m", "opacity",
+        ]
+        .contains(&k.as_str())
+        {
+            return Err(crate::session::bad(&format!("unknown parameter `{k}`")));
+        }
+        match k.as_str() {
+            "shape" if !v.is_null() => drop(fields.remove("outline")),
+            "outline" if !v.is_null() => drop(fields.remove("shape")),
+            "date" if !v.is_null() => drop(fields.remove("season")),
+            "season" if !v.is_null() => drop(fields.remove("date")),
+            _ => {}
+        }
+        if v.is_null() {
+            fields.remove(k);
+        } else {
+            fields.insert(k.clone(), v.clone());
+        }
+    }
+    let map: crate::SunMap = parse(&map)?;
+    map.validate(project).map_err(|e| crate::session::bad(&e))?;
+    project.view.sun_map = Some(map);
+    Ok(Value::Null)
+}
+
+fn view_clear_sun_map(project: &mut Project, _params: &Value) -> Result<Value, CommandError> {
+    project.view.sun_map = None;
+    Ok(Value::Null)
+}
+
+#[cfg(test)]
+mod sun_map_tests {
+    use crate::{Project, Session};
+    use serde_json::json;
+
+    fn session() -> Session {
+        let mut s = Session::new(Project::default());
+        s.run(
+            "shape.add_area",
+            json!({"name": "Lawn", "outline": [[0, 0], [10, 0], [10, 8], [0, 8]]}),
+        )
+        .unwrap();
+        s
+    }
+
+    #[test]
+    fn the_sun_map_is_set_changed_cleared_and_undone() {
+        let mut s = session();
+        // The target comes first.
+        assert!(s.run("view.set_sun_map", json!({"opacity": 0.3})).is_err());
+        s.run(
+            "view.set_sun_map",
+            json!({"shape": "S1", "season": "winter", "years": 10}),
+        )
+        .unwrap();
+        let m = s.project().view.sun_map.clone().unwrap();
+        assert_eq!(m.shape.as_deref(), Some("S1"));
+        assert_eq!((m.cell_m, m.opacity, m.years), (0.5, 0.6, Some(10.0)));
+        // Only the fields given change; a date replaces the season; null clears the years.
+        s.run(
+            "view.set_sun_map",
+            json!({"opacity": 0.3, "date": {"month": 6, "day": 21}, "years": null}),
+        )
+        .unwrap();
+        let m = s.project().view.sun_map.clone().unwrap();
+        assert_eq!((m.opacity, m.years, m.season), (0.3, None, None));
+        assert_eq!(m.date.map(|d| (d.month, d.day)), Some((6, 21)));
+        // An outline replaces the shape.
+        s.run(
+            "view.set_sun_map",
+            json!({"outline": [[0, 0], [4, 0], [4, 4]]}),
+        )
+        .unwrap();
+        let m = s.project().view.sun_map.clone().unwrap();
+        assert!(m.shape.is_none() && m.outline.is_some());
+        // Refused: leaves the map as it is.
+        for bad in [
+            json!({"shape": "S9"}),
+            json!({"cell_m": 0.0}),
+            json!({"colour": 1}),
+            json!({"season": "monsoon"}),
+        ] {
+            assert!(s.run("view.set_sun_map", bad.clone()).is_err(), "{bad}");
+        }
+        assert_eq!(s.project().view.sun_map.as_ref(), Some(&m));
+        s.run("view.clear_sun_map", json!({})).unwrap();
+        assert!(s.project().view.sun_map.is_none());
+        assert!(s.undo());
+        assert_eq!(s.project().view.sun_map.as_ref(), Some(&m));
+        assert!(s.undo());
+        assert_ne!(s.project().view.sun_map.as_ref(), Some(&m));
+    }
+
+    #[test]
+    fn view_set_leaves_the_map_alone_and_files_without_one_are_unchanged() {
+        let mut s = session();
+        let before = serde_json::to_string(s.project()).unwrap();
+        assert!(!before.contains("sun_map"));
+        s.run("view.set_sun_map", json!({"shape": "S1"})).unwrap();
+        s.run("view.set", json!({"haze": 3.0})).unwrap();
+        assert!(s.project().view.sun_map.is_some());
+        let json = serde_json::to_string(s.project()).unwrap();
+        let back: Project = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.view.sun_map, s.project().view.sun_map);
+        assert!(s.run("view.set", json!({"sun_map": null})).is_err());
+        // An old file reads with no map.
+        let old: Project = serde_json::from_str(&before).unwrap();
+        assert!(old.view.sun_map.is_none());
+    }
 }

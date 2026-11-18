@@ -49,8 +49,13 @@ nothing here is a promise of a date.
   or as a grid over an area, on any date or season, with shadow from models, shapes, terrain
   and plant crowns grown `years` (trees, palms, conifers, shrubs and hedges as ellipsoids; bare
   deciduous crowns let 60 % through). Area results come with the share in full sun (6+ h), part
-  shade (3-6 h) and shade. Next: the map shown in the app, plants filtered by the light a spot
-  gets, and what is left out: clouds, crowns as ellipsoids only (no leaf gaps, no climbers,
+  shade (3-6 h) and shade. The map is shown: `view.set_sun_map` (an area's id or an outline, a season or date,
+  `years`, `cell_m`, `opacity`; `view.clear_sun_map`) draws the hours on the ground as a see-through
+  colour map (violet to amber, colour-blind safe) in the window and in `view.render`; the window has
+  it in Sun & sky (an area or the whole plot, season buttons, years, opacity) with a legend of the
+  ramp, the day and the shares. It is a flat sheet at the area's height, also on terrain, and is
+  worked out again when the project changes (off the UI thread; in slices a frame on the web).
+  Next: plants filtered by the light a spot gets, the map draped on terrain, and what is left out: clouds, crowns as ellipsoids only (no leaf gaps, no climbers,
   perennials or lawn), custom species, the neighbours' volumes (see below).
 
 - **Fences and screens:** `fence.add` draws a line as posts (at every corner, both ends and

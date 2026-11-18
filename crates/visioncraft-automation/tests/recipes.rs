@@ -19,7 +19,7 @@ pub fn recipes() -> Vec<Value> {
 #[test]
 fn every_recipe_of_the_guide_runs() {
     let recipes = recipes();
-    assert_eq!(recipes.len(), 25);
+    assert_eq!(recipes.len(), 26);
     for (n, recipe) in recipes.into_iter().enumerate() {
         let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("recipe-{n}"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -226,6 +226,25 @@ fn every_recipe_of_the_guide_runs() {
                 assert!((size[0].as_f64().unwrap() - 12.0).abs() < 1e-3, "{size}");
                 assert!((size[1].as_f64().unwrap() - 6.0).abs() < 1e-3, "{size}");
                 assert_eq!(w["corners_px"][1], json!([450.0, 325.0]), "{report}");
+            }
+            26 => {
+                // The lawn in winter: sun everywhere but where the hedge, the trees and the pond's
+                // coping shade it, and the map is on the view.
+                let sun = &results[3]["result"];
+                assert_eq!(sun["date"], json!({"month": 12, "day": 21}), "{report}");
+                assert_eq!(sun["years"], 10.0, "{report}");
+                assert!(sun["full_sun_share"].as_f64().unwrap() > 0.3, "{report}");
+                assert!(sun["shade_share"].as_f64().unwrap() > 0.0, "{report}");
+                assert!(sun["max"].as_f64().unwrap() > 6.0, "{report}");
+                // The map is part of the view, and `document.inspect` shows it.
+                let inspect = visioncraft_automation::commands::execute(
+                    &mut host,
+                    "document.inspect",
+                    &json!({"faces": false}),
+                )
+                .unwrap();
+                assert_eq!(inspect["view"]["sun_map"]["shape"], "S3", "{report}");
+                assert_eq!(inspect["view"]["sun_map"]["season"], "winter", "{report}");
             }
             18 => {
                 // The beach 20 m out: 0.2 m above the water; the grass stops at the waterline.

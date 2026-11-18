@@ -190,6 +190,8 @@ pub struct Studio {
     pub extra: (Vec<LineVertex>, Vec<LineVertex>),
     /// What the renderer draws of the plan underlays, to change it only when it differs.
     underlay_quads: Vec<visioncraft_render::UnderlayQuad>,
+    /// The sun-hours map on the ground (`view.set_sun_map`).
+    pub sun_map: crate::sun_map::SunMapState,
     /// An opacity being dragged on a slider, shown before it is committed: (underlay id, value).
     pub underlay_live: Option<(String, f32)>,
     /// The plan panel asked for an image file; the window opens the picker.
@@ -418,6 +420,7 @@ impl Studio {
             last_lights: Vec::new(),
             extra: (Vec::new(), Vec::new()),
             underlay_quads: Vec::new(),
+            sun_map: Default::default(),
             underlay_live: None,
             pick_underlay: false,
             wall_photo_for: None,
@@ -529,6 +532,7 @@ impl Studio {
     /// another project state); its lamps get their lights at the next reconcile.
     pub fn set_session(&mut self, session: Session) {
         self.session = session;
+        self.drop_sun_map();
         self.lamps_reconciled = (u64::MAX, false);
         // A new session counts its revisions from zero again: the scene must look at it anew.
         self.synced = None;
@@ -547,6 +551,7 @@ impl Studio {
     /// Replaces the whole project (open, restore): clears history and the scene.
     pub fn replace_project(&mut self, project: Project) {
         self.session.replace_project(project);
+        self.drop_sun_map();
         self.scene.clear(&mut self.renderer);
         self.scene.flora.sweep();
         self.loaded.clear();
@@ -717,7 +722,10 @@ impl Studio {
             // project made without a window has none yet).
             lamp_problems.extend(self.reconcile_lamps());
             steps += 1;
-            if self.plants_pending() == 0 && self.scene.library.idle() && !self.sky_volume_pending()
+            if self.plants_pending() == 0
+                && self.scene.library.idle()
+                && !self.sky_volume_pending()
+                && !self.sun_map.pending()
             {
                 break;
             }
@@ -1639,6 +1647,7 @@ impl Studio {
         self.poll_example_imports();
         self.scene
             .sync_terrain_layers(&mut self.renderer, self.session.project());
+        self.sync_sun_map();
         self.sync_underlays();
         let (view, proj, eye) = self.camera.matrices(self.aspect());
         self.renderer.set_camera(view, proj, eye);
@@ -1842,6 +1851,77 @@ impl Studio {
             .collect()
     }
 
+    /// Forgets the sun-hours map (another project): its texture is freed, the next frame
+    /// starts the new project's, if it has one.
+    fn drop_sun_map(&mut self) {
+        if let Some(t) = self.sun_map.clear() {
+            self.renderer.remove_texture(t);
+        }
+    }
+
+    /// Keeps the sun-hours map up to date: takes a finished grid up to the GPU as a texture,
+    /// and starts the work again when the project, the loaded models or the setting changed.
+    fn sync_sun_map(&mut self) {
+        use crate::sun_map::{Done, Key};
+        let Some(map) = self.session.project().view.sun_map.clone() else {
+            self.drop_sun_map();
+            return;
+        };
+        if let Some((_, grid)) = self.sun_map.poll() {
+            let rgba = visioncraft_core::sun_map::texture_rgba(&grid.spec, &grid.hours);
+            match self.renderer.add_texture(&visioncraft_render::TextureDesc {
+                width: grid.spec.cols as u32,
+                height: grid.spec.rows as u32,
+                rgba8: &rgba,
+                color_space: visioncraft_render::ColorSpace::Srgb,
+                repeat: false,
+            }) {
+                Ok(texture) => {
+                    if let Some(old) = self.sun_map.done.take() {
+                        self.renderer.remove_texture(old.texture);
+                    }
+                    self.sun_map.done = Some(Done {
+                        spec: grid.spec,
+                        texture,
+                        stats: grid.stats(),
+                        years: grid.years,
+                    });
+                }
+                Err(e) => self.problems.push(format!("sun map: {e}")),
+            }
+        }
+        let models = self
+            .loaded
+            .iter()
+            .map(|(id, l)| {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                (id, l.version).hash(&mut h);
+                h.finish()
+            })
+            .fold(0u64, u64::wrapping_add);
+        let key = Key::new(self.session.revision(), models, &map);
+        if self.sun_map.is_current(&key) {
+            return;
+        }
+        let p = self.session.project();
+        let loaded = |id: &str| self.loaded.get(id).map(|l| l.model.clone());
+        match visioncraft_automation::SunGridJob::for_map(p, &loaded, &self.assets, &map) {
+            Ok(job) => self.sun_map.start(key, job),
+            Err(why) => {
+                if let Some(old) = self.sun_map.done.take() {
+                    self.renderer.remove_texture(old.texture);
+                }
+                self.sun_map.fail(key, why);
+            }
+        }
+    }
+
+    /// Whether the sun-hours map is being worked out.
+    pub fn sun_map_pending(&self) -> bool {
+        self.sun_map.pending()
+    }
+
     /// Gives the renderer the visible underlays whose image has arrived, flat on the ground.
     fn sync_underlays(&mut self) {
         let p = self.session.project();
@@ -1878,6 +1958,17 @@ impl Studio {
                     opacity,
                 });
             }
+        }
+        // The sun-hours map over the plans, flat just over its area.
+        if let (Some(map), Some(done)) = (&p.view.sun_map, &self.sun_map.done)
+            && map.opacity > 0.0
+        {
+            let y = map.elevation(p);
+            quads.push(visioncraft_render::UnderlayQuad {
+                texture: done.texture,
+                corners: done.spec.corners().map(|c| [c[0], y, c[1]]),
+                opacity: map.opacity,
+            });
         }
         if quads != self.underlay_quads {
             self.renderer.set_underlays(&quads);

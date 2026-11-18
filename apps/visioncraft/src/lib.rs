@@ -42,6 +42,7 @@ pub mod species_editor;
 pub mod strings;
 pub mod studio;
 pub mod sun;
+pub mod sun_map;
 pub mod terrain_gpu;
 pub mod terrain_tool;
 pub mod texture_worker;
@@ -1684,6 +1685,7 @@ impl eframe::App for App {
         busy |= self.studio.animating()
             || self.studio.plants_pending() > 0
             || self.studio.sky_volume_pending()
+            || self.studio.sun_map_pending()
             || !self.studio.scene.library.idle();
         #[cfg(not(target_arch = "wasm32"))]
         if std::mem::take(&mut self.studio.compare_requested) {

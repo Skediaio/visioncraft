@@ -17,6 +17,7 @@ const SOURCES: &[(&str, &str)] = &[
     ("sky_panel.rs", include_str!("sky_panel.rs")),
     ("studio.rs", include_str!("studio.rs")),
     ("sun.rs", include_str!("sun.rs")),
+    ("sun_map.rs", include_str!("sun_map.rs")),
     ("ui.rs", include_str!("ui.rs")),
     ("views.rs", include_str!("views.rs")),
     ("smoke.rs", include_str!("smoke.rs")),
