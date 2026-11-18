@@ -1,4 +1,4 @@
-//! Wind for vegetation, in real units: a speed in m/s, a direction and a gustiness. This module
+//! Wind for vegetation, in real units: a speed in m/s, a direction, a gustiness and gusts. This module
 //! turns the speed into what the vertex shader needs (lean, detail amplitude, phases) and keeps
 //! the CPU mirror of the shader's sway (`common.wgsl` `wind_sway`), which `tests/wind.rs` checks
 //! against the GPU. Nothing here is per frame heavy: a few multiplications and one uniform.
@@ -16,6 +16,9 @@
 //!   gives f ~ H^-0.75. Jackson et al. 2019 find the cantilever law fails for leafed broadleaves,
 //!   whose frequency is lower: a plain factor tuned by eye.
 //! - The Beaufort scale is NOAA/WMO's: v = 0.836 B^1.5 m/s.
+//! - Gusts (`Wind::gusts`) are a field in the world carried downwind at the wind speed
+//!   (Taylor's frozen turbulence hypothesis: eddies drift with the mean flow), so a gust crosses
+//!   a lawn as a travelling wave and reaches one crown after another (`gust_field`).
 
 use glam::Vec3;
 
@@ -26,6 +29,14 @@ pub const RELATIVE_MPS: f32 = 6.5;
 pub const LEAN_SATURATION: f32 = 0.08;
 /// Gusts are a travelling pattern of this wavelength (m); it moves at the wind speed.
 pub const GUST_WAVELENGTH: f32 = 80.0;
+/// The gust field's lattice repeats every this many cells along the wind (`common.wgsl`
+/// `GUST_CELLS`), so the distance it has travelled wraps exactly.
+pub const GUST_CELLS: i32 = 64;
+/// Metres per cell of the gust field's coarse and fine layers, along and across the wind.
+pub const GUST_COARSE: [f32; 2] = [14.0, 22.0];
+pub const GUST_FINE: [f32; 2] = [5.0, 7.0];
+/// The fine layer drifts slower than the coarse one, so the patches change shape as they go.
+pub const GUST_FINE_SPEED: f64 = 0.8;
 /// The sway clock wraps here (s). Per-plant frequencies are whole cycles per wrap, so the
 /// wrap is invisible (`common.wgsl` `WIND_CLOCK`).
 pub const SWAY_CLOCK: f64 = 64.0;
@@ -37,8 +48,11 @@ pub struct Wind {
     pub direction: Vec3,
     /// Wind speed in m/s (0: perfectly still air).
     pub speed_mps: f32,
-    /// 0..1: how much the strength varies in travelling gusts.
+    /// 0..1: how much the strength swells and fades along the wind (a slow travelling wave).
     pub gustiness: f32,
+    /// 0..1: gusts as patches of stronger wind travelling downwind through grass and crowns
+    /// (`gust_field`); lawn grass bends with them. 0: none (the sway as it was before them).
+    pub gusts: f32,
 }
 
 impl Default for Wind {
@@ -47,6 +61,7 @@ impl Default for Wind {
             direction: Vec3::X,
             speed_mps: 0.0,
             gustiness: 0.5,
+            gusts: 0.0,
         }
     }
 }
@@ -89,9 +104,17 @@ pub fn plant_hz(height_m: f32, conifer: bool) -> f32 {
 /// culling bounds never clip a swaying tip: twice the mean lean (a full gust) times the extent,
 /// plus the detail amplitude doubled by a gust, times the shader's `0.02 + 0.01 min(size, 6)`.
 /// Never less than the old fixed room of 10 % of the extent and 0.1 m (still air and breezes).
-pub fn bounds_pad(extent: f32, u: f32) -> f32 {
-    let physical = 2.0 * lean(u) * extent + 2.0 * detail(u) * (0.02 + 0.01 * extent.min(6.0));
-    physical.max(0.1 * extent + 0.1)
+/// `gusts` (0..1) raises a full gust's factor from 2 to 3 (`gust_factor`); lawn `grass` in gusts
+/// bends up to 50 degrees, which moves a tip by up to 0.85 of its length.
+pub fn bounds_pad(extent: f32, u: f32, gusts: f32, grass: bool) -> f32 {
+    let gust = 2.0 + gusts.clamp(0.0, 1.0);
+    let physical = gust * lean(u) * extent + gust * detail(u) * (0.02 + 0.01 * extent.min(6.0));
+    let pad = physical.max(0.1 * extent + 0.1);
+    if grass && gusts > 0.0 && u > 0.0 {
+        pad.max(0.9 * extent + 0.05)
+    } else {
+        pad
+    }
 }
 
 /// Phases integrated on the CPU. The wind's phases advance by the frequency of the moment times
@@ -107,6 +130,11 @@ pub struct Phases {
     pub sway: f64,
     /// Leaf flutter, cycles 0..1.
     pub flutter: f64,
+    /// How far the gust field's coarse layer has travelled downwind (m, wraps every
+    /// `GUST_CELLS` of its cells).
+    pub gust_coarse_m: f64,
+    /// The same for the fine layer, which drifts at `GUST_FINE_SPEED` of the wind.
+    pub gust_fine_m: f64,
 }
 
 impl Phases {
@@ -120,15 +148,21 @@ impl Phases {
         self.gust = (self.gust + dt * speed / f64::from(GUST_WAVELENGTH)).rem_euclid(1.0);
         self.flutter = (self.flutter + dt * f64::from(flutter_hz(speed as f32))).rem_euclid(1.0);
         self.sway = (self.sway + dt).rem_euclid(SWAY_CLOCK);
+        let coarse = f64::from(GUST_CELLS) * f64::from(GUST_COARSE[0]);
+        let fine = f64::from(GUST_CELLS) * f64::from(GUST_FINE[0]);
+        self.gust_coarse_m = (self.gust_coarse_m + dt * speed).rem_euclid(coarse);
+        self.gust_fine_m = (self.gust_fine_m + dt * speed * GUST_FINE_SPEED).rem_euclid(fine);
     }
 }
 
-/// What the shaders read: `Globals.wind`, `.wind_phase` and `.wind_amp` (`common.wgsl`).
+/// What the shaders read: `Globals.wind`, `.wind_phase`, `.wind_amp` and `.gust`
+/// (`common.wgsl`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Uniforms {
     pub wind: [f32; 4],
     pub phase: [f32; 4],
     pub amp: [f32; 4],
+    pub gust: [f32; 4],
 }
 
 impl Uniforms {
@@ -149,8 +183,68 @@ impl Uniforms {
                 u,
             ],
             amp: [lean(u), detail(u), 0.0, 0.0],
+            gust: [
+                phases.gust_coarse_m as f32,
+                phases.gust_fine_m as f32,
+                wind.gusts.clamp(0.0, 1.0),
+                0.0,
+            ],
         }
     }
+}
+
+/// `common.wgsl` `pcg`: Jarzynski & Olano, "Hash Functions for GPU Rendering", JCGT 2020.
+fn pcg(v: u32) -> u32 {
+    let state = v.wrapping_mul(747_796_405).wrapping_add(2_891_336_453);
+    let word = ((state >> ((state >> 28) + 4)) ^ state).wrapping_mul(277_803_737);
+    (word >> 22) ^ word
+}
+
+/// `common.wgsl` `hash3`.
+fn hash3(p: [i32; 3]) -> f32 {
+    let h = pcg((p[0] as u32).wrapping_add(pcg((p[1] as u32).wrapping_add(pcg(p[2] as u32)))));
+    (h >> 8) as f32 / 16_777_216.0
+}
+
+fn gust_lattice(cell: [i32; 2], layer: i32) -> f32 {
+    hash3([cell[0].rem_euclid(GUST_CELLS), cell[1], layer])
+}
+
+fn gust_noise(p: [f32; 2], layer: i32) -> f32 {
+    let i = [p[0].floor() as i32, p[1].floor() as i32];
+    let f = [p[0] - p[0].floor(), p[1] - p[1].floor()];
+    let u = f.map(|f| f * f * f * (f * (f * 6.0 - 15.0) + 10.0));
+    let a = gust_lattice(i, layer);
+    let b = gust_lattice([i[0] + 1, i[1]], layer);
+    let c = gust_lattice([i[0], i[1] + 1], layer);
+    let d = gust_lattice([i[0] + 1, i[1] + 1], layer);
+    let mix = |x: f32, y: f32, t: f32| x + (y - x) * t;
+    mix(mix(a, b, u[0]), mix(c, d, u[0]), u[1])
+}
+
+/// `common.wgsl` `gust_field`: the gust at world (x, z), 0 (a lull) to 1 (a gust's core).
+pub fn gust_field(u: &Uniforms, at: [f32; 2]) -> f32 {
+    let along = at[0] * u.wind[0] + at[1] * u.wind[1];
+    let across = -at[0] * u.wind[1] + at[1] * u.wind[0];
+    let coarse = gust_noise(
+        [
+            (along - u.gust[0]) / GUST_COARSE[0],
+            across / GUST_COARSE[1],
+        ],
+        0,
+    );
+    let fine = gust_noise(
+        [(along - u.gust[1]) / GUST_FINE[0], across / GUST_FINE[1]],
+        1,
+    );
+    let x = ((0.7 * coarse + 0.3 * fine - 0.42) / 0.4).clamp(0.0, 1.0);
+    x * x * (3.0 - 2.0 * x)
+}
+
+/// `common.wgsl` `gust_factor`: the swell times what a lull leaves, plus a gust's push.
+pub fn gust_factor(u: &Uniforms, swell: f32, at: [f32; 2]) -> f32 {
+    let k = u.gust[2];
+    swell * (1.0 - 0.4 * k) + 1.8 * k * gust_field(u, at)
 }
 
 fn smooth_triangle(x: f32) -> f32 {
@@ -159,11 +253,14 @@ fn smooth_triangle(x: f32) -> f32 {
 }
 
 /// `common.wgsl` `wind_sway` on the CPU: the point `rel` (from the plant's origin at `origin`,
-/// bend weight `w`, limb phase `phase`, plant sway frequency `hz`) displaced by the wind.
-pub fn sway(u: &Uniforms, rel: Vec3, origin: Vec3, w: f32, phase: f32, hz: f32) -> Vec3 {
+/// bend weight `w`, limb phase `phase`, plant sway frequency `hz_in`, negative for lawn grass)
+/// displaced by the wind.
+pub fn sway(u: &Uniforms, rel: Vec3, origin: Vec3, w: f32, phase: f32, hz_in: f32) -> Vec3 {
     if w <= 0.0 || u.amp[0] <= 0.0 {
         return rel;
     }
+    let hz = hz_in.abs();
+    let grass = hz_in < 0.0;
     let clock = SWAY_CLOCK as f32;
     let dir = Vec3::new(u.wind[0], 0.0, u.wind[1]);
     let instance_phase = (origin.x * 0.754_877_7 + origin.z * 0.569_840_3).fract();
@@ -177,12 +274,24 @@ pub fn sway(u: &Uniforms, rel: Vec3, origin: Vec3, w: f32, phase: f32, hz: f32) 
         wave(u.phase[1] * (kb / clock) + phase + instance_phase),
         wave(u.phase[2] + phase * 1.7),
     ];
-    let gust = 1.0 + u.wind[3] * waves[0];
+    let mut gust = 1.0 + u.wind[3] * waves[0];
+    let mut gust_detail = gust;
     let size = rel.length();
-    let bend = u.amp[0] * gust * (0.6 + 0.4 * waves[1]);
+    if u.gust[2] > 0.0 {
+        let swell = gust;
+        gust = gust_factor(u, swell, [origin.x, origin.z]);
+        gust_detail = gust;
+        if !grass {
+            gust_detail = gust_factor(u, swell, [origin.x + rel.x, origin.z + rel.z]);
+        }
+    }
+    let mut bend = u.amp[0] * gust * (0.6 + 0.4 * waves[1]);
+    if grass {
+        bend = (bend * (1.0 + 5.0 * u.gust[2])).min(1.2);
+    }
     let mut q = rel + dir * (w * w * bend * size);
     q *= size / q.length().max(1e-6);
-    let detail = u.amp[1] * gust * w * (0.02 + 0.01 * size.min(6.0)) * (size * 2.0).min(1.0);
+    let detail = u.amp[1] * gust_detail * w * (0.02 + 0.01 * size.min(6.0)) * (size * 2.0).min(1.0);
     q + (dir * waves[2] + Vec3::new(0.0, 0.6, 0.0) * waves[3]) * detail
 }
 

@@ -56,7 +56,9 @@ struct Globals {
     coast: array<vec4<f32>, 8>, // the coastline, two [x, z] points per entry, the sea to its right
     surround: vec4<f32>,        // the plot's rectangle (min x, min z, max x, max z) for the surroundings (kind in coast_info.w)
     ssr: vec4<f32>,             // screen-space reflections: x on (0/1), y step (px), z most steps, w thickness (m)
-    wet: vec4<f32>,             // x wetness drawn 0..1 (the larger of wetness and rain), y rain 0..1
+    wet: vec4<f32>,             // x wetness drawn 0..1 (the larger of wetness and rain), y rain 0..1, z sun share in rain, w the share the mist leaves of the sun
+    mist: vec4<f32>,            // x mist and rain fog extinction at mist.z (1/m), y height falloff (1/m), z base height (m), w sun glow
+    gust: vec4<f32>,            // x, y the gust pattern's coarse and fine layers travelled downwind (m, wrapped), z gusts 0..1
     sh: array<vec4<f32>, 9>,    // sky irradiance as L2 SH (kcd/m2 * sr), written on the GPU (env.wgsl)
 }
 @group(0) @binding(0) var<uniform> g: Globals;
@@ -280,9 +282,14 @@ fn luminance(c: vec3<f32>) -> f32 {
 // the same function (`fog_transmittance`), unit-tested against numerical
 // integration. The sky passes a very large `t` (1e9 m).
 fn fog_transmittance(origin_y_in: f32, dir_y: f32, t_in: f32) -> f32 {
+    return exp(-fog_depth(origin_y_in, dir_y, t_in));
+}
+
+// The haze's optical depth along the ray (`fog_transmittance` is e^-depth).
+fn fog_depth(origin_y_in: f32, dir_y: f32, t_in: f32) -> f32 {
     let a = g.fog.x;
     if a <= 0.0 {
-        return 1.0;
+        return 0.0;
     }
     // The first camera.w metres of the ray are clear air.
     let skip = min(t_in, g.camera.w);
@@ -296,7 +303,67 @@ fn fog_transmittance(origin_y_in: f32, dir_y: f32, t_in: f32) -> f32 {
         // (1 - e^{-k t}) / k; the exponent is clamped so it never overflows.
         path = (1.0 - exp(min(-k * t, 80.0))) / k;
     }
-    return exp(-start * path);
+    return start * path;
+}
+
+// Mist and rain fog: a second, low layer of water droplets under the aerosol haze (lib.rs
+// `mist_uniform`): dense at the ground and thinning with a scale height of tens of metres
+// (radiation mist) to a few hundred (the air under a rain cloud), the same closed form as the
+// haze (Wenzel 2007; Hillaire, "Physically Based and Unified Volumetric Rendering in
+// Frostbite", SIGGRAPH 2015, for height fog as a participating medium). Its optical depth.
+fn mist_depth(origin_y: f32, dir_y: f32, t: f32) -> f32 {
+    let a = g.mist.x;
+    if a <= 0.0 {
+        return 0.0;
+    }
+    let b = g.mist.y;
+    let start = a * exp(min(-b * (origin_y - g.mist.z), 80.0));
+    let k = b * dir_y;
+    var path = t;
+    if abs(k * t) > 1e-4 {
+        path = (1.0 - exp(min(-k * t, 80.0))) / k;
+    }
+    return start * path;
+}
+
+// Light scattered into the view ray by the mist, per unit (1 - T). Droplets are large next to
+// the wavelength, so they scatter all colours alike (a white or grey veil, never blue) and
+// strongly forwards: a Henyey-Greenstein lobe of g = 0.75 (cloud and fog droplets, after Mie
+// theory) for the sun, plus the rest of the sun's light scattered many times, spread evenly,
+// and the whole sky's light (a wide, blurred lobe of the environment above the view's
+// azimuth: a mist reflects the sky it lies under, grey under a rain sky). The sun's light is
+// the one that reaches the ground (`g.sun_light`, already cut by clouds, rain and the mist).
+fn mist_inscatter(dir: vec3<f32>) -> vec3<f32> {
+    let up = normalize(vec3<f32>(dir.x, max(dir.y, 0.35), dir.z));
+    let sky = textureSampleLevel(env_map, env_sampler, up, g.time.z * 0.7).rgb * g.night.w;
+    let c = dot(dir, g.sun_dir.xyz);
+    let gg = 0.75;
+    let hg = (1.0 - gg * gg) / (4.0 * PI * pow(1.0 + gg * gg - 2.0 * gg * c, 1.5));
+    let sun = g.sun_light.rgb * (g.mist.w * hg + 0.35 / (4.0 * PI)) * smoothstep(-0.05, 0.05, g.sun_dir.y);
+    return sky * 0.9 + sun;
+}
+
+// The haze and the mist between the eye and the point `t` metres along `dir`: rgb the light
+// they scatter into the ray, w what is left of the light from behind. Without mist exactly the
+// haze alone; with it each medium's light in proportion to its optical depth.
+fn veil(dir: vec3<f32>, t: f32) -> vec4<f32> {
+    let ta = fog_depth(g.camera.y, dir.y, t);
+    if g.mist.x <= 0.0 {
+        let transmit = exp(-ta);
+        return vec4<f32>(fog_inscatter(dir, 1.0) * fog_near(transmit) * (1.0 - transmit), transmit);
+    }
+    let tb = mist_depth(g.camera.y, dir.y, t);
+    let transmit = exp(-(ta + tb));
+    var light = mist_inscatter(dir);
+    if ta > 0.0 {
+        light = (fog_inscatter(dir, 1.0) * ta + light * tb) / (ta + tb);
+    }
+    return vec4<f32>(light * fog_near(transmit) * (1.0 - transmit), transmit);
+}
+
+// Whether anything hazes the view (the haze or the mist).
+fn veiled() -> bool {
+    return g.fog.x > 0.0 || g.mist.x > 0.0;
 }
 
 // Light scattered into the view ray by the haze, per unit (1 - T): the sky
@@ -317,14 +384,14 @@ fn fog_inscatter(dir: vec3<f32>, sun_visibility: f32) -> vec3<f32> {
 // Haze between the camera and a surface at `world` (pre-exposed colour in
 // and out).
 fn apply_fog(color: vec3<f32>, world: vec3<f32>) -> vec3<f32> {
-    if g.fog.x <= 0.0 {
+    if !veiled() {
         return color;
     }
     let to = -to_eye(world);
     let t = length(to);
     let dir = to / max(t, 1e-6);
-    let transmit = fog_transmittance(g.camera.y, dir.y, t);
-    return color * transmit + fog_inscatter(dir, 1.0) * fog_near(transmit) * (1.0 - transmit);
+    let v = veil(dir, t);
+    return color * v.w + v.rgb;
 }
 
 // Haze over a short path is lit by the whole sphere around it, darker
@@ -362,10 +429,59 @@ struct WindState {
     wind: vec4<f32>,
     phase: vec4<f32>,
     amp: vec4<f32>,
+    gust: vec4<f32>,
 }
 
 fn wind_state() -> WindState {
-    return WindState(g.wind, g.wind_phase, g.wind_amp);
+    return WindState(g.wind, g.wind_phase, g.wind_amp, g.gust);
+}
+
+// ---- gusts ------------------------------------------------------------------
+//
+// Gusts as a field in the world: a low-frequency noise pattern carried downwind at the wind
+// speed (Taylor's frozen turbulence: eddies drift with the mean flow), stretched across the
+// wind, so a gust is a patch of stronger wind that crosses a lawn as a rolling wave of bent
+// blades and reaches one crown after the other. One field drives the grass, the trees and the
+// rain's slant, as in the public talks on wind over a field ("Procedural Grass in Ghost of
+// Tsushima", GDC 2021) and on vegetation (Sousa, GPU Gems 3 ch. 16). Two layers, a coarse one
+// (about 14 m along the wind, 22 m across) and a finer one drifting a little slower, so the
+// patches change shape as they travel. Value noise on a lattice that repeats every
+// `GUST_CELLS` cells along the wind, so the distance travelled wraps exactly (wind.rs keeps
+// it, and `gust_field` there is the same function on the CPU).
+const GUST_CELLS: i32 = 64;
+const GUST_COARSE: vec2<f32> = vec2<f32>(14.0, 22.0); // metres per cell along and across the wind
+const GUST_FINE: vec2<f32> = vec2<f32>(5.0, 7.0);
+
+fn gust_lattice(cell: vec2<i32>, layer: i32) -> f32 {
+    let x = ((cell.x % GUST_CELLS) + GUST_CELLS) % GUST_CELLS;
+    return hash3(vec3<i32>(x, cell.y, layer));
+}
+
+fn gust_noise(p: vec2<f32>, layer: i32) -> f32 {
+    let i = vec2<i32>(floor(p));
+    let f = p - floor(p);
+    let u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+    let a = gust_lattice(i, layer);
+    let b = gust_lattice(i + vec2<i32>(1, 0), layer);
+    let c = gust_lattice(i + vec2<i32>(0, 1), layer);
+    let d = gust_lattice(i + vec2<i32>(1, 1), layer);
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+// The gust at `at` (world x, z), 0 (a lull) to 1 (the core of a gust): mostly calm with patches.
+fn gust_field(ws: WindState, at: vec2<f32>) -> f32 {
+    let along = dot(at, ws.wind.xy);
+    let across = dot(at, vec2<f32>(-ws.wind.y, ws.wind.x));
+    let coarse = gust_noise(vec2<f32>((along - ws.gust.x) / GUST_COARSE.x, across / GUST_COARSE.y), 0);
+    let fine = gust_noise(vec2<f32>((along - ws.gust.y) / GUST_FINE.x, across / GUST_FINE.y), 1);
+    return smoothstep(0.42, 0.82, 0.7 * coarse + 0.3 * fine);
+}
+
+// The wind's strength factor with the gusts at a point: the slow swell (`wind.w`, the old
+// travelling wave) times what a lull leaves, plus a gust's push. Gusts 0: the swell alone.
+fn gust_factor(ws: WindState, swell: f32, at: vec2<f32>) -> f32 {
+    let k = ws.gust.z;
+    return swell * (1.0 - 0.4 * k) + 1.8 * k * gust_field(ws, at);
 }
 
 fn smooth_triangle(x: vec4<f32>) -> vec4<f32> {
@@ -374,12 +490,15 @@ fn smooth_triangle(x: vec4<f32>) -> vec4<f32> {
 }
 
 // `rel`: the point from the plant's origin (world, m); `w`: bend weight 0..1
-// (0 at the base); `phase`: the limb's phase (cycles); `hz`: the plant's sway
-// frequency. Returns the displaced point, still relative to the origin.
-fn wind_sway(ws: WindState, rel: vec3<f32>, origin: vec3<f32>, w: f32, phase: f32, hz: f32) -> vec3<f32> {
+// (0 at the base); `phase`: the limb's phase (cycles); `hz_in`: the plant's sway
+// frequency, negative for lawn grass (lib.rs `set_item_grass`). Returns the displaced point,
+// still relative to the origin.
+fn wind_sway(ws: WindState, rel: vec3<f32>, origin: vec3<f32>, w: f32, phase: f32, hz_in: f32) -> vec3<f32> {
     if w <= 0.0 || ws.amp.x <= 0.0 {
         return rel;
     }
+    let hz = abs(hz_in);
+    let grass = hz_in < 0.0;
     let dir = vec3<f32>(ws.wind.x, 0.0, ws.wind.y);
     // R2 low-discrepancy weights (Roberts 2018): neighbouring plants get
     // well-spread phases for two multiply-adds.
@@ -393,16 +512,33 @@ fn wind_sway(ws: WindState, rel: vec3<f32>, origin: vec3<f32>, w: f32, phase: f3
         ws.phase.y * (kb / WIND_CLOCK) + phase + instance_phase,   // branch motion
         ws.phase.z + phase * 1.7,                                  // leaf flutter
     )) * 2.0 - 1.0;
-    let gust = 1.0 + ws.wind.w * waves.x;
+    var gust = 1.0 + ws.wind.w * waves.x;
+    var gust_detail = gust;
     let size = length(rel);
+    if ws.gust.z > 0.0 {
+        // The gust field: at the plant's foot for the whole plant's bend (trunk and stem),
+        // at the point itself for its branches and leaves, so a gust runs through a big
+        // crown from its windward side; one lookup for a grass tuft.
+        let swell = gust;
+        gust = gust_factor(ws, swell, origin.xz);
+        gust_detail = gust;
+        if !grass {
+            gust_detail = gust_factor(ws, swell, origin.xz + rel.xz);
+        }
+    }
     // Main bend: tips lean downwind by `amp.x` of their distance from the
     // base, plus a sway around that.
-    let bend = ws.amp.x * gust * (0.6 + 0.4 * waves.y);
+    var bend = ws.amp.x * gust * (0.6 + 0.4 * waves.y);
+    if grass {
+        // A blade is far more pliant than a stem of wood: with gusts on, lawn grass bends with
+        // them, up to about 50 degrees in the core of a strong gust.
+        bend = min(bend * (1.0 + 5.0 * ws.gust.z), 1.2);
+    }
     var q = rel + dir * (w * w * bend * size);
     q = q * (size / max(length(q), 1e-6));
     // Detail: branches bob along the wind and vertically, leaves flutter.
     // (no detail right at the origin: the very foot of the stem stays put whatever its weight)
-    let detail = ws.amp.y * gust * w * (0.02 + 0.01 * min(size, 6.0)) * min(size * 2.0, 1.0);
+    let detail = ws.amp.y * gust_detail * w * (0.02 + 0.01 * min(size, 6.0)) * min(size * 2.0, 1.0);
     q += (dir * waves.z + vec3<f32>(0.0, 0.6, 0.0) * waves.w) * detail;
     return q;
 }

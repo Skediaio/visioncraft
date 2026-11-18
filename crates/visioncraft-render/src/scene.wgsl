@@ -841,6 +841,16 @@ fn surface(in: Varying, front: bool, ground: bool) -> Surface {
         let look = dot(normalize(to_eye_xz + vec2<f32>(1e-4)), along);
         s.base = vec4<f32>(s.base.rgb * (1.0 + 0.14 * lean * clamp(look * 1.5, -1.0, 1.0)), s.base.a);
     }
+    // A gust over a lawn: paler, glossier grass where it passes (`gust_sheen`). Lawn tufts and
+    // the lawn's ground are materials; the terrain's layers keep their look.
+    if g.gust.z > 0.0 {
+        let opaque = material.alpha.z == 0.0 && material.alpha.w == 0.0;
+        let sheen = gust_sheen(in.face, in.world, !opaque || material.relief.w > 0.0, n.y);
+        if sheen > 0.0 {
+            let c = s.base.rgb;
+            s.base = vec4<f32>(mix(c, vec3<f32>(luminance(c)), 0.35 * sheen) * (1.0 + 1.1 * sheen), s.base.a);
+        }
+    }
     return s;
 }
 
@@ -1070,6 +1080,24 @@ fn crown_sky(face: u32) -> f32 {
         return f32(face & 0xFFFFu) / 65535.0;
     }
     return 1.0;
+}
+
+// A gust over a lawn: the blades bow over and turn their paler, glossier sides and the light of
+// the sky to the eye, so a gust reads as a lighter wave travelling across the grass (the
+// familiar look of wind over a field). 0..1: strongest at the tufts' tips, which bend most; the
+// lawn's ground under them (the only opaque materials that never take puddles, `other` false
+// for any else, facing up) shows the sward's average, about half of it.
+fn gust_sheen(face: u32, world: vec3<f32>, other: bool, up: f32) -> f32 {
+    var reach = 0.0;
+    if (face & 0xFFFF0000u) == TUFT_TAG {
+        reach = smoothstep(0.45, 0.95, crown_sky(face));
+    } else if !other && up > 0.8 {
+        reach = 0.5;
+    }
+    if reach <= 0.0 {
+        return 0.0;
+    }
+    return g.gust.z * gust_field(wind_state(), world.xz) * reach;
 }
 
 // Lighting of a surface (any source: a material, the terrain layers, an
@@ -1725,7 +1753,7 @@ fn fs_ground(in_raw: Varying) -> @location(0) vec4<f32> {
     let ndc = vec2<f32>(in.clip.x * g.viewport.z * 2.0 - 1.0, 1.0 - in.clip.y * g.viewport.w * 2.0);
     let p = g.inv_view_proj * vec4<f32>(ndc, 0.5, 1.0);
     let ray = p.xyz / p.w - g.camera.xyz;
-    let hazed = g.fog.x > 0.0 && !is_ortho();
+    let hazed = veiled() && !is_ortho();
     if hazed {
         // The eye's horizon plus a hill's own: its top shows over the curve from further.
         let base = g.options.w;
@@ -1805,14 +1833,14 @@ fn reflected(in: Varying, front: bool, ground: bool) -> vec4<f32> {
 // attenuated and the in-scattered light added in proportion to its alpha;
 // what shows through already carries the haze of its own, longer path.
 fn fog_premultiplied(c: vec4<f32>, world: vec3<f32>) -> vec4<f32> {
-    if g.fog.x <= 0.0 {
+    if !veiled() {
         return c;
     }
     let to = -to_eye(world);
     let t = length(to);
     let dir = to / max(t, 1e-6);
-    let transmit = fog_transmittance(g.camera.y, dir.y, t);
-    return vec4<f32>(c.rgb * transmit + fog_inscatter(dir, 1.0) * fog_near(transmit) * (1.0 - transmit) * c.a, c.a);
+    let v = veil(dir, t);
+    return vec4<f32>(c.rgb * v.w + v.rgb * c.a, c.a);
 }
 
 // Thin architectural glass, drawn in two passes (lib.rs): first the

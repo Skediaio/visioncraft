@@ -70,7 +70,9 @@ pub mod tonemap;
 mod underlay;
 pub mod wind;
 
-pub use atmosphere::{Atmosphere, fog_transmittance};
+pub use atmosphere::{
+    Atmosphere, fog_transmittance, mist_extinction, mist_sun_share, rain_extinction,
+};
 pub use hardware::{GpuKind, HardwareProbe, Score, calibrate, relative_cost, starting_quality};
 pub use hdri::{HdriCalibration, HdriImage, OVERCAST_LUX, calibrate_hdri, estimate_sun};
 pub use impostor::{ImpostorId, atlas_layout, impostor_views};
@@ -115,7 +117,7 @@ const CLUSTER_CELL: f32 = 8.0;
 /// `set_time` wraps here (seconds) to keep f32 precision in the shaders.
 const TIME_WRAP: f64 = 4096.0;
 /// Byte offset of the SH in the globals (written by the GPU, see env.rs).
-const SH_OFFSET: u64 = 9 * 64 + 45 * 16;
+const SH_OFFSET: u64 = 9 * 64 + 47 * 16;
 /// The roughness up to which a metal is a mirror (`Material::mirror`, scene.wgsl `light`).
 const MIRROR_ROUGHNESS: f32 = 0.1;
 
@@ -621,6 +623,8 @@ struct Item {
     shadow_caster: Option<MeshId>,
     /// Sways like a conifer (`set_item_conifer`): the plant's natural frequency.
     conifer: bool,
+    /// Lawn grass (`set_item_grass`): bends far more with the gusts.
+    grass: bool,
 }
 
 /// Instances in one ground cell: culled as a unit, drawn as one range, one
@@ -957,6 +961,8 @@ pub struct Renderer {
     /// Wet surfaces and rain, 0..1 each (`set_wet`).
     wetness: f32,
     rain: f32,
+    /// Mist 0..1 (`set_mist`).
+    mist: f32,
     /// A photo's sample (`still::Photo`): the shadow's light direction moved within the sun's
     /// disc, and the noise seed of ambient occlusion; zero for live frames.
     shadow_jitter: Vec3,
@@ -1294,6 +1300,7 @@ impl Renderer {
             snow_cover: None,
             wetness: 0.0,
             rain: 0.0,
+            mist: 0.0,
             shadow_jitter: Vec3::ZERO,
             photo_seed: 0.0,
             photo_pipes: None,
@@ -1445,13 +1452,21 @@ impl Renderer {
     /// How much of the sun's direct light gets through: the caller's clouds (`Clouds::sun_share`)
     /// and, in rain, a share that falls steeply with it: about 0.15 of dry at 0.8 and 0.03 at 1,
     /// so hard shadows all but vanish under a rain sky and some sun is left in a drizzle (0.3: 0.9).
+    ///
+    /// Mist dims the sun too, by its optical depth along the sun's path down through the layer
+    /// (`atmosphere::mist_sun_share`): a low sun in a morning mist is a pale disc.
     fn sun_share(&self) -> f32 {
         let t = ((self.rain - 0.1) / 0.9).clamp(0.0, 1.0);
         let rain = 1.0 - 0.97 * t * t * (3.0 - 2.0 * t);
-        if self.rain <= 0.0 {
+        let share = if self.rain <= 0.0 {
             self.clouds.sun_share()
         } else {
             self.clouds.sun_share() * rain
+        };
+        if self.mist <= 0.0 {
+            share
+        } else {
+            share * atmosphere::mist_sun_share(self.mist, self.sun.direction.y)
         }
     }
 
@@ -1521,7 +1536,7 @@ impl Renderer {
     /// the leaves in every cascade but the cached far one, which keeps the
     /// rest pose (it is re-rendered only when the camera moves far).
     pub fn set_wind(&mut self, wind: &Wind) {
-        if self.wind.speed_mps != wind.speed_mps {
+        if self.wind.speed_mps != wind.speed_mps || self.wind.gusts != wind.gusts {
             // The culling bounds' room for the sway follows the speed.
             self.bounds_dirty = true;
         }
@@ -1752,6 +1767,22 @@ impl Renderer {
         if rain != self.rain {
             // The rain closes the sky: the environment and the ambient light follow.
             self.rain = rain;
+            self.update_ambient(true);
+        }
+    }
+
+    /// Mist 0..1: a low layer of water droplets over the ground, under the haze
+    /// (`set_atmosphere`), with a scale height of 25 m (`atmosphere::MIST_HEIGHT_M`): the
+    /// visibility at the ground falls from 1.3 km at 0.3 to 330 m at 0.6 and 120 m at 1
+    /// (`atmosphere::mist_extinction`). It veils every surface, the water, the rain and the sky
+    /// (the horizon dissolves), scatters the sun forwards (a glow towards it) and the sky's
+    /// light, and dims the sun on the ground. Rain brings its own fog on top
+    /// (`atmosphere::rain_extinction`). 0 draws nothing of it.
+    pub fn set_mist(&mut self, mist: f32) {
+        let mist = mist.clamp(0.0, 1.0);
+        if mist != self.mist {
+            // The sun on the ground and the light it bounces change with it.
+            self.mist = mist;
             self.update_ambient(true);
         }
     }
@@ -2488,6 +2519,7 @@ impl Renderer {
             cull_fade: 0.0,
             follows_reach: false,
             conifer: false,
+            grass: false,
         }));
         self.set_instances(id, instances);
         id
@@ -2593,11 +2625,25 @@ impl Renderer {
         for m in &item.transforms {
             let mut m = *m;
             if let Some(h) = height {
-                m.x_axis.w = wind::plant_hz(h * m.x_axis.truncate().length(), item.conifer);
+                let hz = wind::plant_hz(h * m.x_axis.truncate().length(), item.conifer);
+                m.x_axis.w = if item.grass { -hz } else { hz };
             }
             b.floats(&m.to_cols_array());
         }
         self.queue.write_buffer(&item.instances, 0, &b.0);
+    }
+
+    /// An item's plants are lawn grass: with gusts on they bend far more than a stem of wood
+    /// (`common.wgsl` `wind_sway`). Carried as a negative sway frequency.
+    pub fn set_item_grass(&mut self, id: ItemId, grass: bool) {
+        if let Some(Some(item)) = self.items.get_mut(id.0 as usize)
+            && item.grass != grass
+        {
+            item.grass = grass;
+            self.write_instances(id);
+            // Grass in gusts needs more room in its culling bounds (`wind::bounds_pad`).
+            self.bounds_dirty = true;
+        }
     }
 
     /// An item's plants sway like conifers (stiffer: a higher natural frequency than a leafed
@@ -3758,6 +3804,8 @@ impl Renderer {
                     let pad = Vec3::splat(wind::bounds_pad(
                         (hi - lo).max_element(),
                         self.wind.speed_mps,
+                        self.wind.gusts,
+                        item.grass,
                     ));
                     Some((lo - pad, hi + pad))
                 }
@@ -4122,8 +4170,21 @@ impl Renderer {
             self.wetness.max(self.rain),
             self.rain,
             self.sun_share(),
-            0.0,
+            if self.mist > 0.0 {
+                atmosphere::mist_sun_share(self.mist, self.sun.direction.y)
+            } else {
+                1.0
+            },
         ]);
+        // Mist and rain fog: one low layer of droplets (common.wgsl `mist_depth`); none in a
+        // plan or an elevation.
+        let mist = if shadow::is_orthographic(proj) {
+            [0.0; 4]
+        } else {
+            atmosphere::mist_uniform(self.mist, self.rain, haze_base, a.sun_glow)
+        };
+        b.floats(&mist);
+        b.floats(&wind::Uniforms::new(&self.wind, &self.wind_phases).gust);
         debug_assert_eq!(b.0.len() as u64, SH_OFFSET);
         self.queue.write_buffer(buffer, 0, &b.0);
     }
@@ -4389,7 +4450,7 @@ fn snow_cover_matrix(eye: Vec3, lo: Vec3, hi: Vec3, resolution: u32) -> Mat4 {
 const SNOW_COVER_M: f32 = 160.0;
 
 fn globals_size() -> u64 {
-    // 9 matrices, 45 vec4s, the 9 SH vec4s last; see common.wgsl.
+    // 9 matrices, 47 vec4s, the 9 SH vec4s last; see common.wgsl.
     SH_OFFSET + 9 * 16
 }
 

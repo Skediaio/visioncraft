@@ -740,6 +740,7 @@ pub fn forest(r: &mut Renderer, trees: usize, understory: usize, half: f32) -> u
         direction: Vec3::new(1.0, 0.0, 0.4),
         speed_mps: 0.6 * crate::wind::RELATIVE_MPS,
         gustiness: 0.5,
+        gusts: 0.0,
     });
     tree[0].triangles()
 }
@@ -1007,6 +1008,7 @@ pub fn foliage_tree(r: &mut Renderer) {
         direction: Vec3::new(1.0, 0.0, 0.3),
         speed_mps: 1.5 * crate::wind::RELATIVE_MPS,
         gustiness: 0.5,
+        gusts: 0.0,
     });
 }
 
@@ -1344,6 +1346,7 @@ pub fn budget_with(r: &mut Renderer, o: &BudgetOptions) -> (usize, usize) {
             0.0
         },
         gustiness: 0.5,
+        gusts: 0.0,
     });
     (static_tris, per * shrubs.len())
 }

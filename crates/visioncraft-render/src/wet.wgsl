@@ -129,6 +129,10 @@ fn wet_apply(albedo: vec3<f32>, roughness: f32, metallic: f32, w: f32, puddle: f
 // grid turned to the way the rain falls (`g.wind`: the drops lean downwind) and scrolling
 // along it at the drops' speed; a cell holds a streak or not, by a hash and the rain's density.
 // The nearest layer with a streak at a pixel wins. Under a roof (the snow cover map) there is none.
+// With gusts on (`g.gust.z`) the drops lean further where the gust field is strong: each layer's
+// pattern is skewed by the extra lean where it crosses the view's axis, so a passing gust sweeps
+// the streaks sideways and steepens their slant, and a lull lets them fall straighter. The streaks sit
+// in the haze and the mist like everything else (`veil`).
 const RAIN_LAYERS: i32 = 5;
 // Terminal speed of a raindrop of 1-2 mm (m/s).
 const RAIN_SPEED: f32 = 8.0;
@@ -173,8 +177,20 @@ fn fs_rain(@builtin(position) frag: vec4<f32>) -> RainOut {
         let cw = d * 0.045;
         let length_m = d * 0.08;
         let ch = length_m * 3.0;
+        let world = g.camera.xyz + transpose(rot) * vp;
+        var shear = 0.0;
+        if g.gust.z > 0.0 {
+            // The drops' extra lean in the gust (the swell left out: 1) where the layer crosses the
+            // view's axis, in the picture's plane across the streaks, per unit of their length:
+            // one skew per layer, so the streaks stay straight (a skew that varied over the
+            // picture bent them), and each layer sways on its own as gusts pass it.
+            let centre = g.camera.xyz + transpose(rot) * vec3<f32>(0.0, 0.0, -d);
+            let extra = lean * (gust_factor(wind_state(), 1.0, centre.xz) - 1.0);
+            let push = rot * vec3<f32>(g.wind.x * extra, 0.0, g.wind.y * extra);
+            shear = clamp(dot(push.xy, perp) / max(flat_len, 0.2), -0.6, 0.6);
+        }
         let along = dot(vp.xy, dir) - RAIN_SPEED * flat_len * g.time.x;
-        let across = dot(vp.xy, perp);
+        let across = dot(vp.xy, perp) - shear * dot(vp.xy, dir);
         let cell = vec2<i32>(floor(vec2<f32>(across / cw, along / ch)));
         let f = vec2<f32>(across / cw - floor(across / cw), along / ch - floor(along / ch));
         let seed = vec3<i32>(cell, i * 7919 + 13);
@@ -194,12 +210,15 @@ fn fs_rain(@builtin(position) frag: vec4<f32>) -> RainOut {
             continue;
         }
         // Nothing falls under a roof or a crown.
-        let world = g.camera.xyz + transpose(rot) * vp;
         if snow_open(world) < 0.5 {
             continue;
         }
         let sky = sh_irradiance(vec3<f32>(0.0, 1.0, 0.0)) / PI;
-        let radiance = sky * 1.1 + g.sun_light.rgb * max(g.sun_dir.y, 0.0) * 0.004;
+        var radiance = sky * 1.1 + g.sun_light.rgb * max(g.sun_dir.y, 0.0) * 0.004;
+        if veiled() {
+            let v = veil(normalize(world - g.camera.xyz), length(vp));
+            radiance = radiance * v.w + v.rgb;
+        }
         let clip = g.proj * vec4<f32>(vp.xy, -d, 1.0);
         let alpha = cover * 0.34 * exp(-d * 0.012) * smoothstep(0.0, 0.3, rain);
         // Premultiplied alpha (blend: One, OneMinusSrcAlpha).

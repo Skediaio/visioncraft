@@ -585,11 +585,13 @@ fn view_fields(ui: &mut egui::Ui, cx: &mut Cx) {
             json!({"weathering": (age * 100.0).round() / 100.0}),
         );
     }
-    // Rain: wet surfaces and falling rain, one `view.set` when let go.
+    // Weather: wet surfaces, falling rain, mist and gusts, one `view.set` when let go.
     ui.label(egui::RichText::new(t::RAIN_SECTION).small());
     for (label, tip, key, value) in [
         (t::WETNESS, t::WETNESS_TIP, "wetness", v.wetness),
         (t::RAIN, t::RAIN_TIP, "rain", v.rain),
+        (t::MIST, t::MIST_TIP, "mist", v.mist),
+        (t::GUSTS, t::GUSTS_TIP, "gustiness", v.gustiness),
     ] {
         let mut x = value;
         let r = ui

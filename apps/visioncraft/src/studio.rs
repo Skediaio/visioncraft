@@ -1354,6 +1354,7 @@ impl Studio {
         self.renderer.set_grade(power, saturation);
         self.renderer.set_snow(snow);
         self.renderer.set_wet(v.wetness, v.rain);
+        self.renderer.set_mist(v.mist);
         self.renderer.set_clouds(&visioncraft_render::Clouds {
             cover: match clouds.kind {
                 visioncraft_core::CloudKind::Clear => 0.0,
@@ -1414,7 +1415,9 @@ impl Studio {
         let adapted = self.adapted_ev.map_or(room, |a| adapt_ev(a, room, dt));
         self.adapted_ev = Some(adapted);
         self.adapted_at = self.clock;
-        let target = auto - brighter - snow * SNOW_EV - adapted;
+        // A mist takes the sun's beam and gives it back as a dim, even light, and the camera
+        // meters the white veil down to grey: a photographer opens up for fog (`MIST_EV`).
+        let target = auto - brighter - snow * SNOW_EV - v.mist * MIST_EV - adapted;
         let ev = v.exposure_ev.unwrap_or(target) - self.exposure;
         self.ev_used = (ev, elevation);
         self.renderer.set_exposure(ev);
@@ -1462,6 +1465,7 @@ impl Studio {
             ),
             speed_mps: v.wind_speed_mps,
             gustiness: v.wind_gustiness,
+            gusts: v.gustiness,
         });
         self.renderer.set_time(self.clock);
         let lights = if self.lights_on() {
@@ -1574,8 +1578,11 @@ impl Studio {
 
     pub fn animating(&self) -> bool {
         let p = self.project();
-        // The sea's waves run all the time.
-        (p.view.wind_speed_mps > 0.0 && !p.generators.is_empty()) || p.sea.is_some()
+        // The sea's waves run all the time, and the rain falls. Gusts also roll over lawns
+        // (which are materials, not generators).
+        (p.view.wind_speed_mps > 0.0 && (!p.generators.is_empty() || p.view.gustiness > 0.0))
+            || p.sea.is_some()
+            || p.view.rain > 0.0
     }
 
     /// Lowest point of a model in its own space, and its local bounds.
@@ -2554,6 +2561,10 @@ const METER_SKY_SHARE: f32 = 0.4;
 
 /// Stops the exposure opens up per unit of snow.
 const SNOW_EV: f32 = 1.2;
+
+/// Stops a photographer opens up in a thick mist (scaled by the mist, 0..1): fog meters grey
+/// like snow, and the light under it is the sun's scattered, weaker than the direct beam.
+const MIST_EV: f32 = 1.0;
 
 /// What a picture taken with `pending` plants still being made, or the library still loading,
 /// says about it.

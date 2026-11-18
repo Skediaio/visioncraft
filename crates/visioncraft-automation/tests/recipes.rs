@@ -19,7 +19,7 @@ pub fn recipes() -> Vec<Value> {
 #[test]
 fn every_recipe_of_the_guide_runs() {
     let recipes = recipes();
-    assert_eq!(recipes.len(), 38);
+    assert_eq!(recipes.len(), 39);
     for (n, recipe) in recipes.into_iter().enumerate() {
         let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("recipe-{n}"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -331,6 +331,19 @@ fn every_recipe_of_the_guide_runs() {
                     "{report}"
                 );
                 assert_eq!(t["openings"], 2, "{report}");
+            }
+            39 => {
+                // The garden is misty, then halfway through the shower shot the rain is 0.5 and
+                // the mist 0.1, with gusts on in the project.
+                let mid = &results[7]["result"]["overrides"];
+                assert!(
+                    (mid["rain"].as_f64().unwrap() - 0.5).abs() < 1e-3,
+                    "{report}"
+                );
+                assert!(
+                    (mid["mist"].as_f64().unwrap() - 0.1).abs() < 1e-3,
+                    "{report}"
+                );
             }
             36 => {
                 // The view is wet and not raining, and halfway through the shot it rains 0.4.

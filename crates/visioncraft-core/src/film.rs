@@ -4,8 +4,8 @@
 //! A [`Film`] is a list of [`Shot`]s played one after the other, each with its own camera
 //! (the join between two shots is a cut). A shot moves the camera along a path (walk, glide,
 //! flyover), up (rise), round a spot (orbit) or not at all (hold). Inside a shot the camera is
-//! eased by arc length (`ease`), and the sun, the date, the years of growth and the snow, the wetness and the rain can
-//! change along it. [`Timeline::camera_at`] answers where the camera is at a time, as a pure
+//! eased by arc length (`ease`), and the sun, the date, the years of growth and the snow, the wetness, the rain, the
+//! haze, the mist and the gusts can change along it. [`Timeline::camera_at`] answers where the camera is at a time, as a pure
 //! function of the film and an [`Env`] (the ground the camera walks on, the viewpoints).
 //!
 //! Conventions: metres, Y up, +X east, -Z north. An orbit's angle is measured at the centre
@@ -119,6 +119,16 @@ pub struct Shot {
     /// Rain at the start and the end of the shot (as `view.set rain`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rain: Option<Span<f32>>,
+    /// Haze as a turbidity at the start and the end of the shot (as `view.set haze`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub haze: Option<Span<f32>>,
+    /// Mist at the start and the end of the shot (as `view.set mist`): a shot can ease from a
+    /// misty morning into a clear one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mist: Option<Span<f32>>,
+    /// Gusts at the start and the end of the shot (as `view.set gustiness`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gustiness: Option<Span<f32>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -211,7 +221,13 @@ const COMMON_FIELDS: &[&str] = &[
     "snow",
     "wetness",
     "rain",
+    "haze",
+    "mist",
+    "gustiness",
 ];
+
+/// The highest haze (a turbidity) a shot or a picture takes: thick fog-like haze.
+pub const HAZE_MAX: f32 = 50.0;
 
 pub const SHOT_KINDS: &[&str] = &["walk", "glide", "rise", "orbit", "flyover", "hold"];
 
@@ -386,12 +402,22 @@ impl Shot {
         {
             return err("`snow` must be from 0 to 1");
         }
-        for (name, span) in [("wetness", self.wetness), ("rain", self.rain)] {
+        for (name, span) in [
+            ("wetness", self.wetness),
+            ("rain", self.rain),
+            ("mist", self.mist),
+            ("gustiness", self.gustiness),
+        ] {
             if let Some(s) = span
                 && (!(0.0..=1.0).contains(&s.from) || !(0.0..=1.0).contains(&s.to))
             {
                 return err(&format!("`{name}` must be from 0 to 1"));
             }
+        }
+        if let Some(s) = self.haze
+            && (!(0.0..=HAZE_MAX).contains(&s.from) || !(0.0..=HAZE_MAX).contains(&s.to))
+        {
+            return err(&format!("`haze` must be from 0 to {HAZE_MAX}"));
         }
         if self.date.is_some() && self.season.is_some() {
             return err("give `date` or `season`, not both");
@@ -608,6 +634,12 @@ pub struct Overrides {
     pub wetness: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rain: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub haze: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mist: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gustiness: Option<f32>,
 }
 
 impl Overrides {
@@ -639,6 +671,15 @@ impl Overrides {
         }
         if let Some(s) = self.rain {
             m.insert("rain".into(), json!(s));
+        }
+        if let Some(s) = self.haze {
+            m.insert("haze".into(), json!(s));
+        }
+        if let Some(s) = self.mist {
+            m.insert("mist".into(), json!(s));
+        }
+        if let Some(s) = self.gustiness {
+            m.insert("gustiness".into(), json!(s));
         }
         m
     }
@@ -848,6 +889,15 @@ fn overrides_at(shot: &Shot, base: Overrides, u: f32) -> Overrides {
     }
     if let Some(s) = shot.rain {
         o.rain = Some(s.at(u));
+    }
+    if let Some(s) = shot.haze {
+        o.haze = Some(s.at(u));
+    }
+    if let Some(s) = shot.mist {
+        o.mist = Some(s.at(u));
+    }
+    if let Some(s) = shot.gustiness {
+        o.gustiness = Some(s.at(u));
     }
     o
 }
@@ -1314,6 +1364,38 @@ mod tests {
         assert_eq!(end.overrides.time_of_day, None);
         let params = mid.overrides.render_params();
         assert_eq!(params["time"], json!({"hour": 18.0, "month": 6, "day": 1}));
+    }
+
+    #[test]
+    fn mist_haze_and_gusts_ease_along_a_shot() {
+        let ground: &dyn Fn(f32, f32) -> f32 = &flat;
+        let f = film(vec![shot(
+            json!({"kind": "hold", "eye": [0, 2, 5], "target": [0, 1, 0], "duration_s": 4,
+            "mist": [0.6, 0.0], "haze": [6, 2.5], "gustiness": 1}),
+        )]);
+        let e = env(ground, &[]);
+        let start = camera_at(&f, 0.0, &e).unwrap().overrides;
+        assert_eq!(
+            (start.mist, start.haze, start.gustiness),
+            (Some(0.6), Some(6.0), Some(1.0))
+        );
+        let mid = camera_at(&f, 2.0, &e).unwrap().overrides;
+        assert!((mid.mist.unwrap() - 0.3).abs() < 1e-5);
+        let params = mid.render_params();
+        assert!((params["mist"].as_f64().unwrap() - 0.3).abs() < 1e-5);
+        assert!((params["haze"].as_f64().unwrap() - 4.25).abs() < 1e-5);
+        assert_eq!(params["gustiness"], json!(1.0f32));
+        for (key, value, message) in [
+            ("mist", json!(1.2), "`mist` must be from 0 to 1"),
+            ("gustiness", json!(-0.1), "`gustiness` must be from 0 to 1"),
+            ("haze", json!(80), "`haze` must be from 0 to 50"),
+        ] {
+            let mut v =
+                json!({"kind": "hold", "eye": [0, 2, 5], "target": [0, 1, 0], "duration_s": 1});
+            v[key] = value;
+            let bad = Shot::from_value(&v, 52.0);
+            assert!(bad.unwrap_err().contains(message), "{key}");
+        }
     }
 
     #[test]

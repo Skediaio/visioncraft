@@ -101,7 +101,27 @@ fn sky_kcd(dir: vec3<f32>, lod: f32) -> vec3<f32> {
         c = preetham(dir) + g.night.rgb;
     }
     let cl = cloud(dir);
-    return mix(c, cl.rgb, cl.a);
+    return mist_over(mix(c, cl.rgb, cl.a), dir);
+}
+
+// The sky as seen from the ground through the mist (for the environment and the ambient light, so
+// what lights a garden under a mist is the mist): what the layer lets through of the sky, plus
+// the sun's light it took out of the beam on the way down (wet.w is the share it left), sent on
+// as diffuse light, most of it downwards and forwards: half spread evenly over the sky, half in
+// a Henyey-Greenstein glow round the sun (each part carries about half of it to a level
+// surface, so the light on the ground is kept: what leaves the beam arrives as sky). The sky's own light is scattered too but stays about
+// as bright on average, so it is left as it is. Rain fog alone takes no sun here (its sky is
+// already a closed overcast layer).
+fn mist_over(c: vec3<f32>, dir: vec3<f32>) -> vec3<f32> {
+    if g.mist.x <= 0.0 || dir.y <= 0.0 || g.wet.w >= 1.0 {
+        return c;
+    }
+    let share = max(g.wet.w, 1e-3);
+    let top = g.sun_light.rgb / max(g.night.w, 1e-12) / share;
+    let down = top * max(g.sun_dir.y, 0.0) * (1.0 - share) * 0.8;
+    let gg = 0.6;
+    let hg = (1.0 - gg * gg) / (4.0 * PI * pow(1.0 + gg * gg - 2.0 * gg * dot(dir, g.sun_dir.xyz), 1.5));
+    return c + down * (0.5 / PI + hg);
 }
 
 // ---- clouds over the analytic skies -----------------------------------------
@@ -319,6 +339,12 @@ fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
         let hazed = color * transmit + fog_inscatter(dir, 1.0) * (1.0 - transmit);
         let band = 0.25 * clamp(g.fog.x * 1000.0 / 2.5, 0.0, 1.0);
         color = mix(hazed, color, smoothstep(-0.02, band, dir.y));
+    }
+    // Mist and rain fog over the whole sky: it lies low, so the sky overhead shows through a thin
+    // veil while the horizon dissolves into it (the sky models carry none of it).
+    if g.mist.x > 0.0 {
+        let transmit = exp(-mist_depth(g.camera.y, dir.y, 1e9));
+        color = color * transmit + mist_inscatter(dir) * (1.0 - transmit);
     }
     return vec4<f32>(color, 1.0);
 }

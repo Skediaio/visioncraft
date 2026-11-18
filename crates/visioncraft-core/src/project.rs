@@ -162,7 +162,8 @@ pub struct ViewState {
     pub haze: f32,
     /// Wind speed in m/s (0: still air; `wind::BEAUFORT` names the steps).
     pub wind_speed_mps: f32,
-    /// 0..=1: how much the wind varies in travelling gusts.
+    /// 0..=1: how much the wind's strength swells and fades in a slow wave travelling downwind
+    /// (gust patches are `gustiness`).
     pub wind_gustiness: f32,
     pub wind_direction_deg: f32,
     /// The wind of files from before it had units: relative, 1 a moderate breeze. Read, never
@@ -212,6 +213,16 @@ pub struct ViewState {
     /// ripples on puddles and water, an overcast sky and a weaker sun.
     #[serde(skip_serializing_if = "is_zero")]
     pub rain: f32,
+    /// Mist, 0 (none, the default; not written) to 1: a low layer of droplets over the ground
+    /// under the haze; the visibility falls from 1.3 km at 0.3 to 330 m at 0.6 and 120 m at 1.
+    /// Rain brings its own fog on top.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub mist: f32,
+    /// Gusts, 0 (none, the default; not written) to 1: patches of stronger wind travelling
+    /// downwind at the wind speed, rolling over lawns as waves of bending grass and swaying one
+    /// crown after another (the slow swell is `wind_gustiness`).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub gustiness: f32,
     /// What lies round the design on the endless ground, beyond its plot. Not written while the
     /// default (fields).
     #[serde(skip_serializing_if = "Surroundings::is_default")]
@@ -343,6 +354,8 @@ impl Default for ViewState {
             weathering: 0.0,
             wetness: 0.0,
             rain: 0.0,
+            mist: 0.0,
+            gustiness: 0.0,
             surroundings: Surroundings::default(),
             sun_map: None,
         }
@@ -382,6 +395,8 @@ impl ViewState {
             && (0.0..=1.0).contains(&self.weathering)
             && (0.0..=1.0).contains(&self.wetness)
             && (0.0..=1.0).contains(&self.rain)
+            && (0.0..=1.0).contains(&self.mist)
+            && (0.0..=1.0).contains(&self.gustiness)
             && self.ground.is_none_or(|g| {
                 finite(g.height) && g.color.iter().all(|c| c.is_finite() && *c >= 0.0)
             })

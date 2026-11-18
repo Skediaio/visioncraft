@@ -62,6 +62,59 @@ pub fn fog_transmittance(
     (-start * path).exp()
 }
 
+/// Koschmieder's constant: the visibility (m) is 3.912 over the extinction (1/m), the distance at
+/// which a dark object's contrast against the horizon falls to 2 %.
+const KOSCHMIEDER: f32 = 3.912;
+
+/// Mist's scale height (m): a radiation mist lies in the lowest tens of metres.
+pub const MIST_HEIGHT_M: f32 = 25.0;
+
+/// The fog under a rain cloud fills the lower few hundred metres (m).
+pub const RAIN_FOG_HEIGHT_M: f32 = 600.0;
+
+/// Mist's extinction at the ground (1/m) for `Renderer::set_mist` 0..1: a visibility of
+/// 120 m / mist^2, so 0.3 is a light morning haze (1.3 km), 0.6 a misty morning (330 m) and 1 a
+/// fog (120 m; meteorology calls it fog under 1 km). 0: none.
+pub fn mist_extinction(mist: f32) -> f32 {
+    let mist = mist.clamp(0.0, 1.0);
+    if mist <= 0.0 {
+        return 0.0;
+    }
+    KOSCHMIEDER * mist * mist / 120.0
+}
+
+/// The extinction (1/m) of the air in rain 0..1: drops and the mist that forms under rain
+/// clouds. A visibility of 400 m (0.8 / rain)^1.5: about 1.1 km in a drizzle (0.4), 400 m in a
+/// downpour (0.8), 290 m at 1. 0: none.
+pub fn rain_extinction(rain: f32) -> f32 {
+    let rain = rain.clamp(0.0, 1.0);
+    if rain <= 0.0 {
+        return 0.0;
+    }
+    KOSCHMIEDER / (400.0 * (0.8 / rain).powf(1.5))
+}
+
+/// The share of the sun's direct light left on the ground under mist 0..1, with the sun at
+/// `sun_y` (the sine of its elevation): the layer's optical depth straight up is the extinction
+/// times the scale height, longer by 1 / sin along a slanting path.
+pub fn mist_sun_share(mist: f32, sun_y: f32) -> f32 {
+    let tau = mist_extinction(mist) * MIST_HEIGHT_M / sun_y.max(0.05);
+    (-tau).exp()
+}
+
+/// `Globals.mist` (common.wgsl): the mist's and the rain fog's extinction at `base_y` added,
+/// and one height falloff for both, their scale heights weighted by their extinctions; `glow`
+/// the sun glow (as the haze's). All zero without mist or rain.
+pub fn mist_uniform(mist: f32, rain: f32, base_y: f32, glow: f32) -> [f32; 4] {
+    let (m, r) = (mist_extinction(mist), rain_extinction(rain));
+    let sigma = m + r;
+    if sigma <= 0.0 {
+        return [0.0; 4];
+    }
+    let height = (m * MIST_HEIGHT_M + r * RAIN_FOG_HEIGHT_M) / sigma;
+    [sigma, 1.0 / height, base_y, glow]
+}
+
 pub(crate) const SKY_VIEW: (u32, u32) = (192, 108);
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
@@ -241,5 +294,49 @@ mod tests {
         // Along the horizon it never ends.
         assert!(fog_transmittance(1.7, 0.0, 1e6, sigma, falloff, base) < 1e-6);
         assert_eq!(fog_transmittance(1.7, 0.0, 1e6, 0.0, falloff, base), 1.0);
+    }
+
+    /// Visibility (Koschmieder) in metres for an extinction.
+    fn visibility(sigma: f32) -> f32 {
+        3.912 / sigma
+    }
+
+    #[test]
+    fn mist_and_rain_set_the_visibility() {
+        assert_eq!(mist_extinction(0.0), 0.0);
+        assert_eq!(rain_extinction(0.0), 0.0);
+        assert_eq!(mist_uniform(0.0, 0.0, 0.0, 0.5), [0.0; 4]);
+        assert!((visibility(mist_extinction(0.6)) - 333.3).abs() < 1.0);
+        assert!((visibility(mist_extinction(1.0)) - 120.0).abs() < 0.1);
+        // A downpour cuts the view to a few hundred metres, a drizzle to about a kilometre.
+        assert!((visibility(rain_extinction(0.8)) - 400.0).abs() < 0.5);
+        let drizzle = visibility(rain_extinction(0.4));
+        assert!(drizzle > 1000.0 && drizzle < 1300.0, "{drizzle}");
+        // More rain, less view.
+        let mut last = f32::INFINITY;
+        for i in 1..=10 {
+            let v = visibility(rain_extinction(i as f32 / 10.0));
+            assert!(v < last);
+            last = v;
+        }
+        // In rain at 0.8 the garden 30 m off keeps three quarters of its contrast, a hedge
+        // 300 m off under half of it.
+        let [sigma, falloff, base, _] = mist_uniform(0.0, 0.8, 0.0, 0.5);
+        let near = fog_transmittance(1.7, 0.0, 30.0, sigma, falloff, base);
+        let far = fog_transmittance(1.7, 0.0, 300.0, sigma, falloff, base);
+        assert!(near > 0.7 && near < 0.8, "{near}");
+        assert!(far < 0.1, "{far}");
+        // Mist and rain together: the scale height lies between theirs.
+        let both = mist_uniform(0.5, 0.5, 0.0, 0.5);
+        assert!((both[0] - mist_extinction(0.5) - rain_extinction(0.5)).abs() < 1e-9);
+        assert!(1.0 / both[1] > MIST_HEIGHT_M && 1.0 / both[1] < RAIN_FOG_HEIGHT_M);
+    }
+
+    #[test]
+    fn mist_dims_a_low_sun_most() {
+        assert_eq!(mist_sun_share(0.0, 0.2), 1.0);
+        let high = mist_sun_share(0.6, 0.9);
+        let low = mist_sun_share(0.6, 0.17);
+        assert!(high > 0.6 && low < 0.25 && low > 0.05, "{high} {low}");
     }
 }

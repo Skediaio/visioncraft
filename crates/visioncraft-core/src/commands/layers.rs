@@ -107,20 +107,22 @@ pub(super) fn register(s: &mut Session) {
         spec(
             "view.set",
             "Set View",
-            "Sets the season, snow, weathering, wetness, rain, exposure, look, sky, clouds, years after planting, haze, wind, the ground plane, the surroundings, ground clutter and the view distance stored with the project; only the fields given change.",
+            "Sets the season, snow, weathering, wetness, rain, mist, exposure, look, sky, clouds, years after planting, haze, wind and gusts, the ground plane, the surroundings, ground clutter and the view distance stored with the project; only the fields given change.",
             vec![
                 param("season", T::String, "spring, summer, autumn or winter: the plants as they are then, and the project's date set to the season's day at the site (20 April, 21 June, 20 October, 15 January in the north; six months on in the south), the hour kept. An exact date (time.set) maps back to its season."),
                 param("snow", T::Number, "Snow cover 0..1 on the ground, lawns, roofs, terraces, hedge tops, evergreen crowns, branches, wall tops and sills, not under roofs or dense evergreens; about 0.7 for a snowy winter. 0: none.").default(json!(0)),
                 param("weathering", T::Number, "Weathering 0..1 of every standard material at once: dirt, moss, wear and rain streaks with the default mix (see material.update's `weathering`), added to each material's own. Keep it explicit: `years` does not drive it. 0: none.").default(json!(0)),
                 param("wetness", T::Number, "Wet surfaces 0..1: porous materials (soil, wood, stone, concrete, brick, fabric) darken and turn glossy, leaves take a sheen, metal and glass barely change; above about 0.5 puddles form on flat, open, upward-facing paving, terraces, paths and soil (not on lawns, plants, steep surfaces or under roofs), growing with the value. Rain implies it: the wetness drawn is the larger of `wetness` and `rain`. 0: dry.").default(json!(0)),
-                param("rain", T::Number, "Rain 0..1: falling streaks slanted by the wind, ripple rings on puddles and ponds, an overcast sky and a weaker sun, and everything wet as `wetness` of the same value. About 0.4 a drizzle, 0.8 a downpour. 0: none.").default(json!(0)),
+                param("rain", T::Number, "Rain 0..1: falling streaks slanted by the wind, ripple rings on puddles and ponds, an overcast sky and a weaker sun, and everything wet as `wetness` of the same value. About 0.4 a drizzle, 0.8 a downpour. Rain also brings fog: the visibility falls to about 1.1 km in a drizzle and 400 m in a downpour (distant hedges and the horizon fade into grey, the garden 10-30 m off only softens). 0: none.").default(json!(0)),
+                param("mist", T::Number, "Mist 0..1: a low layer of droplets over the ground, under the haze, thinning with a scale height of 25 m. The visibility falls from 1.3 km at 0.3 (a light morning haze) to 330 m at 0.6 (a misty morning) and 120 m at 1 (fog); the distance and the horizon fade into a white veil (grey under a rain sky), the near garden softens, the sun glows through it and is dimmed on the ground. Adds to the fog rain brings. 0: none.").default(json!(0)),
                 param("exposure_ev", T::Number, "Exposure offset in stops; null for automatic exposure."),
                 param("sky", T::Object, "{type: \"physical\"} or {type: \"hdri\", id: string, rotation_deg: number, intensity: number >= 0}.")
                     .default(json!({"type": "physical"})),
                 param("haze", T::Number, "Atmospheric haze as a turbidity: 1 pure air, 2.5 a clear day (about 30 km visibility), 6 hazy (9 km), 20 misty (2.5 km); 0 turns the haze off.").default(json!(2.5)),
                 param("wind_speed_mps", T::Number, "Wind speed in m/s, 0 (perfectly still) to 60: plants lean with the drag (growing with the speed squared, saturating as crowns streamline), leaves flutter faster as it rises.").unit("m/s").default(json!(2.0)),
                 param("wind_beaufort", T::Any, "A Beaufort step as a preset for `wind_speed_mps` (v = 0.836 B^1.5 m/s): 0-10 or its name. 0 calm (smoke rises), 1 light air, 2 light breeze (leaves rustle), 3 gentle breeze (leaves and twigs in constant motion), 4 moderate breeze (small branches move), 5 fresh breeze (small trees begin to sway), 6 strong breeze (large branches move), 7 near gale (whole trees move), 8 gale (twigs break off), 9 strong gale, 10 storm. Not together with `wind_speed_mps`."),
-                param("wind_gustiness", T::Number, "How much the wind varies in gusts travelling downwind, 0 (steady) to 1.").default(json!(0.5)),
+                param("wind_gustiness", T::Number, "How much the wind's strength swells and fades in a slow wave travelling downwind, 0 (steady) to 1.").default(json!(0.5)),
+                param("gustiness", T::Number, "Gusts 0..1: patches of stronger wind (tens of metres across) travelling downwind at the wind speed. They roll over lawns as waves of bending grass whose tips turn paler, sway trunks, branches and leaves of one crown after another, and swing the rain's slant; at 1 a gust's core bends plants about 2.5 times as far as the mean wind, a lull a little over half as far. Scales with `wind_speed_mps`. 0: none (only the swell of `wind_gustiness`).").default(json!(0)),
                 param("wind_strength", T::Number, "Deprecated: the relative wind of older projects (1 is 6.5 m/s); use `wind_speed_mps`."),
                 param("wind_direction_deg", T::Number, "Direction the wind blows towards, true bearing clockwise from north seen from above (drawing -Z unless site.set north_deg turns it).").unit("deg").default(json!(0)),
                 param("ground", T::Object, "Ground plane {height: m, color: [r, g, b] linear}; null for none.")
@@ -326,6 +328,8 @@ fn view_set(project: &mut Project, params: &Value) -> Result<Value, CommandError
             "weathering",
             "wetness",
             "rain",
+            "mist",
+            "gustiness",
             "surroundings",
         ],
     )?;

@@ -208,10 +208,52 @@ nothing here is a promise of a date.
   and nothing when off (the pixel references are unchanged). In the window: Wetness and Rain
   sliders under Sun & sky. Recipe 36. Next: drips and runoff from roofs and edges, splashes where
   drops land, wet-surface darkening that follows the lowest points (puddles in hollows of the
-  terrain), mist and steam after rain, a per-material porosity, and rain on glass.
+  terrain), steam after rain, a per-material porosity, and rain on glass.
+- **Atmosphere and wind (done):** `view.set {mist: 0..1, gustiness: 0..1}` (0 by default and not
+  written then), also per picture in `view.render` (`--haze`, `--mist`, `--gustiness` in the CLI)
+  and as `[from, to]` keys of a film shot (with `haze`). Mist is a second exponential height-fog
+  layer of droplets under the dry-air haze (scale height 25 m; visibility 1.3 km at 0.3, 330 m at
+  0.6, 120 m at 1), and rain adds its own (400 m at 0.8, scale height 600 m): both veil every
+  surface, water, the rain streaks and the sky near the horizon in light scattered in from the sun
+  (Henyey-Greenstein, g = 0.75, lit by the sun share that reaches the ground, so a grey veil in rain
+  and a white haze with a glow towards a clear low sun) and from the sky, and dim the sun on the
+  ground by the layer's optical depth. Gusts are one world-space field, two layers of value noise
+  carried downwind at the wind speed: lawn grass bends with them (up to about 50 degrees in a
+  strong gust's core) and its tips turn paler where a gust passes, so gusts roll over a lawn as
+  waves; trunks, branches and leaves take the field at the foot and at each point, with a phase per
+  plant; the rain's slant swings with it. A CPU mirror of the sway with gusts is checked against
+  the shader. Mist 0 and gusts 0 draw exactly what was drawn before (the pixel references are
+  unchanged). In the window: Mist and Gusts sliders under Sun & sky. Recipe 39. Next: volumetric
+  clouds, rain particles as a 3D volume with splashes, drops on all wet surfaces and runoff on
+  walls, wetness that builds up and dries over time, lightning, and tone mapping and grading.
 
 ## Next
 
+- **Photographic quality (on par with commercial visualisers):** a side-by-side with public
+  showcase renders of a commercial visualiser showed the gaps, in order of how much they show.
+  Sources and costs are in the research report (kept outside the repo). Done first: analytic
+  height fog with in-scattering and travelling wind gusts (see the rain item).
+  1. Light and mood (AgX, threshold-free bloom, SSAO with contact shadows and EV100 exposure are
+     already in): light shafts at a low sun (a half-resolution march against the four cascades),
+     an aerial perspective LUT so the haze takes the sun's tint, a wider bloom for the sun glow,
+     white balance from the sky and a grading LUT before AgX, and a photo mode that accumulates
+     jittered frames (real anti-aliasing, depth of field, motion blur, light vignette and grain).
+  2. Materials and ground: download the catalogued CC0 library (ambientCG, Poly Haven) into
+     checkouts, hex tiling and height blending on terrain and paving, joints and relief (boards,
+     tiles, parallax up close), and leaf litter, pebbles and moss as scatter that follows the season.
+  3. Plants: lawn blades generated in compute with clumping and backlit translucency (as in
+     Ghost of Tsushima, GDC 2021), tall and ornamental grasses that glow against the sun, flowers
+     and fine leaves up close (more leaf sets), and fuller crowns (see Tree form).
+  4. Light in the shade: sky visibility baked per design change as SH and multiplied by the live
+     sky (Ghost of Tsushima, Advances 2021), GTAO with specular occlusion, soft shadows (PCSS on the
+     four cascades, contact shadows, cloud shadows), SSR with a sky fallback for water, windows and
+     puddles, and later probe GI (DDGI traced against an SDF or voxels). Lumen is out of reach in
+     the browser.
+  5. Life: people, a furniture library of real CC0 models next to the parametric pieces, small
+     props, falling leaves and birds as particles, and warm lit interiors behind windows at dusk.
+  6. Weather, finished: a top-down rain occlusion map, wetness that builds up and dries with
+     puddles that grow from their centre, drops on every wet surface, volumetric clouds after Nubis
+     (2015/2017) with weather transitions, and lightning.
 - **More leaf sets:** the remaining CC0 atlases, then coverage reported again.
 - **Growth data checked against open data,** with the source of each value recorded. The table
   is estimated today, and so are the light needs per species (`plant_light.rs`: the hours of direct

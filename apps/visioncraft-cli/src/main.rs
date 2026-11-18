@@ -121,6 +121,7 @@ Usage: visioncraft-cli render FILE --out PNG [--size WxH] [--viewpoint V]
                               [--camera X,Y,Z,TX,TY,TZ] [--fov DEG]
                               [--date YYYY-MM-DD] [--time HH:MM]
                               [--season S] [--snow N] [--wetness N] [--rain N]
+                              [--haze T] [--mist N] [--gustiness N]
                               [--quality low|medium|high|ultra|photo] [--samples N]
                               [--aperture M] [--focus M] [--animation-s S]
 
@@ -138,7 +139,11 @@ Options:
   --season S      spring, summer, autumn or winter, for this picture only
   --snow N        Snow 0..1 for this picture (on its own it brings winter)
   --wetness N     Wet surfaces 0..1 for this picture (puddles above about 0.5)
-  --rain N        Rain 0..1 for this picture (streaks, ripples, overcast; implies wet)
+  --rain N        Rain 0..1 for this picture (streaks, ripples, overcast, fog; implies wet)
+  --haze T        Haze as a turbidity 0..50 for this picture (2.5 a clear day, 20 misty)
+  --mist N        Mist 0..1 for this picture (visibility 1.3 km at 0.3, 330 m at 0.6, 120 m at 1)
+  --gustiness N   Gusts 0..1 for this picture: wind rolling over lawns and through crowns
+                  (with --animation-s to place them in time)
   --quality Q     low, medium, high (default), ultra or photo (many frames averaged
                   at ULTRA: soft shadows, smooth edges; slower)
   --samples N     Photo: frames averaged, 1 to 1024. Default 64
@@ -176,8 +181,9 @@ Usage: visioncraft-cli film FILE --out DIR [--film ID] [--size WxH] [--quality Q
 Renders a film of the project (film.add, film.add_shot; the only film when --film is
 left out) as DIR/frame_00000.png and on: each frame has the film's camera, the
 animation clock at the film's time (so wind and water move) and the shot's time of day,
-date or season, years, snow, wetness and rain, for that picture only. Prints the result as one line of
-JSON, with the ffmpeg command that makes a video of the frames.
+date or season, years, snow, wetness, rain, haze, mist and gustiness, for that picture
+only. Prints the result as one line of JSON, with the ffmpeg command that makes a
+video of the frames.
 
 Options:
   --film ID       The film's id (f1, ...)
@@ -711,6 +717,9 @@ fn cmd_render(raw: &[String]) -> Res {
             "--snow",
             "--wetness",
             "--rain",
+            "--haze",
+            "--mist",
+            "--gustiness",
         ],
         &[],
     )?;
@@ -766,11 +775,19 @@ fn cmd_render(raw: &[String]) -> Res {
             .map_err(|_| CliError::Usage(format!("`--snow` must be a number 0..1, got `{s}`")))?
             .into();
     }
-    for (flag, key) in [("--wetness", "wetness"), ("--rain", "rain")] {
+    for (flag, key, range) in [
+        ("--wetness", "wetness", "0..1"),
+        ("--rain", "rain", "0..1"),
+        ("--haze", "haze", "0..50"),
+        ("--mist", "mist", "0..1"),
+        ("--gustiness", "gustiness", "0..1"),
+    ] {
         if let Some(s) = a.value(flag)? {
             params[key] = s
                 .parse::<f64>()
-                .map_err(|_| CliError::Usage(format!("`{flag}` must be a number 0..1, got `{s}`")))?
+                .map_err(|_| {
+                    CliError::Usage(format!("`{flag}` must be a number {range}, got `{s}`"))
+                })?
                 .into();
         }
     }

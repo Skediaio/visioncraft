@@ -1515,6 +1515,8 @@ impl Scene {
                                 .collect();
                             let item = r.add_lod_item(&parts, list);
                             r.set_item_cull_fade(item, LAWN_FADE_BAND_M);
+                            // Blades bend with the gusts far more than stems of wood.
+                            r.set_item_grass(item, true);
                             item
                         })
                 };

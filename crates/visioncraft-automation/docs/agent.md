@@ -289,7 +289,9 @@ Wind is in real units: `view.set {"wind_speed_mps": 6.7, "wind_gustiness": 0.5,
 still; plants lean with the drag (growing with the speed squared, saturating as crowns streamline),
 leaves flutter faster as the wind rises, and each plant sways at its own natural frequency (tall
 trees slowly, shrubs and grasses fast). The old relative `wind_strength` (1 = 6.5 m/s) is still
-read from older projects and accepted by `view.set`, as a deprecated alias. To see motion in
+read from older projects and accepted by `view.set`, as a deprecated alias. `wind_gustiness` is a
+slow swell of the whole wind; gusts that roll over lawns and through crowns are `gustiness`
+(recipe 39). To see motion in
 pictures, `view.render` takes `animation_s` (the animation clock in seconds; the CLI's
 `--animation-s`).
 
@@ -750,7 +752,8 @@ gently; `look_at` is a point or `"ahead"`; `fov_y_deg` = 60. Along a shot the pi
 `time_of_day` `[from, to]` (hours, the sun's course; one number holds it), `date` `[{month, day},
 {month, day}]` or `season` (the date's season shows, so a shot from March to September goes
 through spring and summer), `years` `[from, to]` (the garden growing), `snow` (winter only), `wetness` and `rain` (each `[from, to]` 0..1, so a
-shot can ease from dry to wet and into rain; recipe 36).
+shot can ease from dry to wet and into rain; recipe 36), `haze` (a turbidity, 0 to 50), `mist` and `gustiness`
+(0..1; recipe 39).
 
 The plan for a garden: ask for its layout first (`document.inspect`: shapes and their outlines;
 `query.quantities`: where the plants are and how many), and choose paths from it: a walk from the
@@ -1229,6 +1232,44 @@ computation of `query.sun_hours` (the summer solstice unless `season` or `date` 
 In the window, Sun & sky under the sun-hours map has "Plants for this light" (the species for the
 area the map shows, by its mean hours) and a "Check plant light" button; the misfits are ringed on
 the plan in the Draw view, amber for too sunny and blue for too shady.
+
+### 39. A hazy autumn morning, and a windy rain shower
+
+```json recipe
+{"intent": "the example garden on a misty autumn morning with a low sun glowing through the mist, then a film shot of a windy rain shower with gusts rolling over the lawn and through the trees", "steps": [
+  {"id": "project.load_example", "params": {"name": "garden"}},
+  {"id": "view.set", "params": {"season": "autumn", "mist": 0.6}},
+  {"id": "time.set", "params": {"hour": 8.5}},
+  {"id": "view.render", "params": {"camera": {"position": [15, 3, 26], "target": [9, 0.3, 13], "fov_y_deg": 60}, "width": 960, "height": 540, "path": "misty-morning.png"}},
+  {"id": "view.set", "params": {"mist": 0, "wind_speed_mps": 12, "wind_direction_deg": 300, "gustiness": 1}},
+  {"id": "time.set", "params": {"hour": 15}},
+  {"id": "film.add", "params": {"name": "Shower", "fps": 25}},
+  {"id": "film.add_shot", "params": {"id": "f1", "shot": {"kind": "hold", "eye": [15, 3, 26], "target": [9, 0.3, 13], "duration_s": 6, "rain": [0.2, 0.8], "mist": [0, 0.2]}}},
+  {"id": "film.preview", "params": {"id": "f1", "t": 3}},
+  {"id": "film.render", "params": {"id": "f1", "dir": "shower", "width": 640, "height": 360, "every": 25}}
+]}
+```
+
+The air between the camera and the garden has two layers. `haze` is the aerosol of a dry day, as
+a turbidity (2.5 a clear day, about 30 km of visibility); it thins over 1.2 km of height and only
+the distance feels it. `mist` (0..1) is a low layer of water droplets that thins over 25 m: the
+visibility at the ground falls from 1.3 km at 0.3 (a light morning haze) to 330 m at 0.6 (a misty
+morning) and 120 m at 1 (fog). Rain brings its own fog on top, about 1.1 km of visibility in a
+drizzle (0.4) and 400 m in a downpour (0.8). Both are drawn as exponential height fog with light
+scattered in: distant hedges, trees and the horizon fade into the veil while the garden 10 to 30 m
+off only softens; the sky near the horizon dissolves into it, and water, glass and the rain's
+streaks sit in it like everything else. The droplets scatter all colours alike and mostly forwards,
+so the veil is white or grey (never blue), glows towards a low sun, takes the grey of a rain sky,
+and dims the sun on the ground (a low sun in a mist is a pale disc and casts faint shadows).
+
+Gusts are a field of stronger wind carried downwind at the wind speed: `view.set {"gustiness":
+0..1}` (0, the default, is not written; the window's Gusts slider under Sun & sky). They roll over
+a lawn as waves of bending grass whose tips turn paler, sway trunks (slowly), branches and leaves
+(faster) of one crown after another, and swing the rain's slant as they pass. The bend scales with
+`wind_speed_mps`; `wind_gustiness` stays the slow swell of the whole wind. To see them move in
+pictures, give `view.render` an `animation_s`: three pictures half a second apart show a gust
+crossing the lawn. `view.render` takes `haze`, `mist` and `gustiness` for one picture (the CLI's
+`--haze`, `--mist` and `--gustiness`), and a film shot eases each as `[from, to]`.
 
 ## Known traps
 

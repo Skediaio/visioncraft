@@ -11,7 +11,7 @@ struct Point {
 
 @group(0) @binding(40) var<storage, read> points: array<Point>;
 @group(0) @binding(41) var<storage, read_write> displaced: array<vec4<f32>>;
-@group(0) @binding(42) var<uniform> wind_in: array<vec4<f32>, 3>;
+@group(0) @binding(42) var<uniform> wind_in: array<vec4<f32>, 4>;
 
 @compute @workgroup_size(64)
 fn probe(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -19,7 +19,7 @@ fn probe(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
     let p = points[id.x];
-    let ws = WindState(wind_in[0], wind_in[1], wind_in[2]);
+    let ws = WindState(wind_in[0], wind_in[1], wind_in[2], wind_in[3]);
     var q: vec3<f32>;
     if p.extra.y > 0.5 {
         q = impostor_sway(ws, p.rel.xyz, p.origin.xyz, p.rel.w, p.extra.x);

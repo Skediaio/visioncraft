@@ -594,7 +594,7 @@ pub fn host_docs() -> Vec<CommandDoc> {
         host_doc(
             "film.preview",
             "Preview Film",
-            "Reads a film without drawing it: its length, frame count and where each shot starts, and with `t` the camera at that time (eye, target, field of view), the shot it is in, how far through it, what changes for that picture (time of day, date or season, years, snow, wetness, rain) and the sun then. The walk follows the real ground of the project (terrain, areas, models), so this is how to check the shots before film.render.",
+            "Reads a film without drawing it: its length, frame count and where each shot starts, and with `t` the camera at that time (eye, target, field of view), the shot it is in, how far through it, what changes for that picture (time of day, date or season, years, snow, wetness, rain, haze, mist, gustiness) and the sun then. The walk follows the real ground of the project (terrain, areas, models), so this is how to check the shots before film.render.",
             vec![
                 p("id", "string", None, true, None, &[], "Film id"),
                 p(
@@ -607,14 +607,14 @@ pub fn host_docs() -> Vec<CommandDoc> {
                     "Film time in seconds, 0 to the duration (later is the last frame); without it only the shot list comes back",
                 ),
             ],
-            "{id, name, fps, duration_s, frame_count, shots: [{index, kind, start_s, duration_s}], t?, shot?, progress?, camera?: {position, target, fov_y_deg}, overrides?: {time_of_day?, date?, season?, years?, snow?, wetness?, rain?}, time?, sun?}",
+            "{id, name, fps, duration_s, frame_count, shots: [{index, kind, start_s, duration_s}], t?, shot?, progress?, camera?: {position, target, fov_y_deg}, overrides?: {time_of_day?, date?, season?, years?, snow?, wetness?, rain?, haze?, mist?, gustiness?}, time?, sun?}",
             json!({"id": "f1", "t": 2.5}),
             false,
         ),
         host_doc(
             "film.render",
             "Render Film",
-            "Draws a film as numbered PNGs `frame_00000.png`... in a folder beneath the write root, one view.render per frame: the film's camera, the animation clock set to the film time (so wind and water move) and the shot's time of day, date or season, years, snow, wetness and rain for that picture only; the project does not change. Frames are counted from 0 in what is drawn, so `every` 5 gives a film of fps / 5. At most 10000 frames per call: render a long film in parts (`from`, `to`). A video needs a program such as ffmpeg: the result's `ffmpeg` is the command to run on the frames.",
+            "Draws a film as numbered PNGs `frame_00000.png`... in a folder beneath the write root, one view.render per frame: the film's camera, the animation clock set to the film time (so wind and water move) and the shot's time of day, date or season, years, snow, wetness, rain, haze, mist and gustiness for that picture only; the project does not change. Frames are counted from 0 in what is drawn, so `every` 5 gives a film of fps / 5. At most 10000 frames per call: render a long film in parts (`from`, `to`). A video needs a program such as ffmpeg: the result's `ffmpeg` is the command to run on the frames.",
             vec![
                 p("id", "string", None, true, None, &[], "Film id"),
                 p(
@@ -832,7 +832,34 @@ pub fn host_docs() -> Vec<CommandDoc> {
                     false,
                     Some("the project's"),
                     &[],
-                    "Rain 0..1 for this picture only: streaks, ripples, overcast, wet surfaces",
+                    "Rain 0..1 for this picture only: streaks, ripples, overcast, fog, wet surfaces",
+                ),
+                p(
+                    "haze",
+                    "number",
+                    None,
+                    false,
+                    Some("the project's"),
+                    &[],
+                    "Haze as a turbidity for this picture only (0 to 50; 2.5 a clear day, 20 misty)",
+                ),
+                p(
+                    "mist",
+                    "number",
+                    None,
+                    false,
+                    Some("the project's"),
+                    &[],
+                    "Mist 0..1 for this picture only (visibility 1.3 km at 0.3, 330 m at 0.6, 120 m at 1)",
+                ),
+                p(
+                    "gustiness",
+                    "number",
+                    None,
+                    false,
+                    Some("the project's"),
+                    &[],
+                    "Gusts 0..1 for this picture only: patches of wind rolling over lawns and through crowns (set `animation_s` to move them)",
                 ),
             ],
             "{path? | mime, base64; width, height, camera, time, years, ...the renderer's info}",
@@ -1626,6 +1653,9 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
             "snow",
             "wetness",
             "rain",
+            "haze",
+            "mist",
+            "gustiness",
             "quality",
             "years",
             "samples",
@@ -1744,6 +1774,8 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
     for (key, field) in [
         ("wetness", &mut project.view.wetness),
         ("rain", &mut project.view.rain),
+        ("mist", &mut project.view.mist),
+        ("gustiness", &mut project.view.gustiness),
     ] {
         if let Some(v) = a.number(key)? {
             if !(0.0..=1.0).contains(&v) {
@@ -1751,6 +1783,13 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
             }
             *field = v as f32;
         }
+    }
+    if let Some(v) = a.number("haze")? {
+        let max = f64::from(visioncraft_core::film::HAZE_MAX);
+        if !(0.0..=max).contains(&v) {
+            return Err(format!("{id}: `haze` must be from 0 to {max}"));
+        }
+        project.view.haze = v as f32;
     }
     if project.view.snow > 0.0 && project.season() != visioncraft_core::Season::Winter {
         return Err(format!(

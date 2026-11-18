@@ -18,7 +18,21 @@ fn wind_at(speed: f32, gustiness: f32) -> Wind {
         direction: Vec3::new(0.6, 0.0, 0.8),
         speed_mps: speed,
         gustiness,
+        gusts: 0.0,
     }
+}
+
+/// The uniforms at time `t` after a constant wind with gusts since 0.
+fn gusty(speed: f32, gusts: f32, t: f64) -> Uniforms {
+    let mut p = Phases::default();
+    p.advance(t, speed);
+    Uniforms::new(
+        &Wind {
+            gusts,
+            ..wind_at(speed, 0.5)
+        },
+        &p,
+    )
 }
 
 /// The uniforms at time `t` after a constant wind since 0.
@@ -192,14 +206,19 @@ fn the_lean_grows_with_the_wind_up_to_saturation() {
 
 #[test]
 fn nothing_leaves_its_bounds_in_a_storm() {
-    // Every point of a plant with any bend weight, in full gusts, for 10 minutes per speed.
-    for (extent, force) in [0.3_f32, 1.0, 2.0, 6.0, 20.0, 40.0]
+    // Every point of a plant with any bend weight, in full gusts, for 10 minutes per speed,
+    // with and without the gust field (and as lawn grass with it).
+    for (extent, force, gusts) in [0.3_f32, 1.0, 2.0, 6.0, 20.0, 40.0]
         .into_iter()
         .flat_map(|e| [0, 2, 5, 8, 10].map(|f| (e, f)))
+        .flat_map(|(e, f)| [0.0, 1.0].map(|g| (e, f, g)))
     {
         let speed = mps(force);
-        let pad = wind::bounds_pad(extent, speed);
+        // Lawn grass (a negative frequency) only as tufts.
+        let grass = extent <= 0.3 && gusts > 0.0;
+        let pad = wind::bounds_pad(extent, speed, gusts, grass);
         let hz = wind::plant_hz(extent, false);
+        let hz = if grass { -hz } else { hz };
         let mut seed = 12345u32;
         let mut rand = || {
             seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
@@ -212,7 +231,10 @@ fn nothing_leaves_its_bounds_in_a_storm() {
             })
             .collect();
         let mut p = Phases::default();
-        let wind = wind_at(speed, 1.0);
+        let wind = Wind {
+            gusts,
+            ..wind_at(speed, 1.0)
+        };
         let mut worst = 0.0f32;
         for i in 1..=12_000 {
             p.advance(f64::from(i) * 0.05, speed);
@@ -224,7 +246,7 @@ fn nothing_leaves_its_bounds_in_a_storm() {
             }
         }
         println!(
-            "extent {extent:5.1} m B{force}: worst axis excursion {worst:.3} m of pad {pad:.3} m"
+            "extent {extent:5.1} m B{force} gusts {gusts}: worst axis excursion {worst:.3} m of pad {pad:.3} m"
         );
         assert!(worst <= pad, "extent {extent}: {worst} over {pad}");
     }
@@ -310,6 +332,9 @@ fn the_shader_agrees_with_the_cpu() {
         let rel = Vec3::new((f * 7.3).sin() * 0.3 * h, f * h, (f * 5.1).cos() * 0.3 * h);
         let impostor = i % 5 == 0;
         let w = if impostor { f } else { (f * 1.3).fract() };
+        // Every seventh small one is lawn grass (a negative frequency).
+        let grass = !impostor && h < 1.0 && i % 7 == 0;
+        let hz = wind::plant_hz(h, i % 3 == 0);
         points.push([
             rel.x,
             rel.y,
@@ -319,7 +344,7 @@ fn the_shader_agrees_with_the_cpu() {
             origin.y,
             origin.z,
             (f * 3.1).fract(),
-            wind::plant_hz(h, i % 3 == 0),
+            if grass { -hz } else { hz },
             f32::from(impostor),
             0.0,
             0.0,
@@ -351,7 +376,7 @@ fn the_shader_agrees_with_the_cpu() {
     );
     let params = storage(
         "params",
-        48,
+        64,
         wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
     );
     let read = storage(
@@ -379,9 +404,27 @@ fn the_shader_agrees_with_the_cpu() {
         ],
     });
     let mut worst = 0.0f32;
-    for (force, t) in [(0, 3.0), (2, 1.7), (5, 40.0), (8, 5000.5), (10, 123.456)] {
-        let u = at(mps(force), 0.6, t);
-        let uniform: Vec<u8> = [u.wind, u.phase, u.amp]
+    for (force, t, gusts) in [
+        (0, 3.0, 0.0),
+        (2, 1.7, 0.0),
+        (5, 40.0, 0.0),
+        (8, 5000.5, 0.0),
+        (10, 123.456, 0.0),
+        (2, 1.7, 0.4),
+        (5, 40.0, 1.0),
+        (8, 5000.5, 1.0),
+        (10, 123.456, 0.7),
+    ] {
+        let mut p = Phases::default();
+        p.advance(t, mps(force));
+        let u = Uniforms::new(
+            &Wind {
+                gusts,
+                ..wind_at(mps(force), 0.6)
+            },
+            &p,
+        );
+        let uniform: Vec<u8> = [u.wind, u.phase, u.amp, u.gust]
             .iter()
             .flatten()
             .flat_map(|f| f.to_le_bytes())
@@ -427,5 +470,102 @@ fn the_shader_agrees_with_the_cpu() {
             );
         }
     }
-    println!("shader vs CPU mirror: worst difference {worst:.6} m over 1500 points");
+    println!("shader vs CPU mirror: worst difference {worst:.6} m over 2700 points");
+}
+
+#[test]
+fn gusts_off_is_the_sway_as_before() {
+    // Gusts 0 runs none of the gust field: the same as a wind without the field, also for a
+    // point flagged as grass.
+    for (force, t) in [(2, 1.7), (5, 40.0), (8, 5000.5)] {
+        let plain = at(mps(force), 0.5, t);
+        let off = gusty(mps(force), 0.0, t);
+        for i in 0..50 {
+            let f = i as f32 / 49.0;
+            let rel = Vec3::new(f - 0.5, f * 12.0, 0.3 - f);
+            let hz = wind::plant_hz(12.0, false);
+            let a = wind::sway(&plain, rel, TREE_ORIGIN, f, f, hz);
+            assert_eq!(a, wind::sway(&off, rel, TREE_ORIGIN, f, f, hz));
+            assert_eq!(a, wind::sway(&off, rel, TREE_ORIGIN, f, f, -hz));
+        }
+    }
+}
+
+#[test]
+fn gusts_travel_downwind_at_the_wind_speed() {
+    // The field one second on, a wind's speed further downwind, is the field now (Taylor's
+    // frozen turbulence), for the coarse layer that carries the gusts; the fine one drifts
+    // slower, so the pair is close, not equal.
+    let speed = mps(7);
+    let dir = [0.6f32, 0.8f32];
+    let (mut same, mut n) = (0.0f32, 0);
+    let mut spread = (f32::MAX, f32::MIN);
+    for i in 0..400 {
+        let x = (i % 20) as f32 * 3.1 - 20.0;
+        let z = (i / 20) as f32 * 2.7 - 25.0;
+        let now = wind::gust_field(&gusty(speed, 1.0, 10.0), [x, z]);
+        let later = wind::gust_field(
+            &gusty(speed, 1.0, 11.0),
+            [x + dir[0] * speed, z + dir[1] * speed],
+        );
+        same += (now - later).abs();
+        n += 1;
+        spread = (spread.0.min(now), spread.1.max(now));
+    }
+    let mean_gap = same / n as f32;
+    println!("gust field: mean change following the flow {mean_gap:.3}, range {spread:?}");
+    assert!(mean_gap < 0.15, "{mean_gap}");
+    // There are gusts and lulls: the field is not flat.
+    assert!(spread.0 < 0.05 && spread.1 > 0.8, "{spread:?}");
+    // Standing still, the field changes: gusts pass.
+    let (mut moved, mut m) = (0.0f32, 0);
+    for i in 0..400 {
+        let x = (i % 20) as f32 * 3.1 - 20.0;
+        let z = (i / 20) as f32 * 2.7 - 25.0;
+        let now = wind::gust_field(&gusty(speed, 1.0, 10.0), [x, z]);
+        let later = wind::gust_field(&gusty(speed, 1.0, 11.0), [x, z]);
+        moved += (now - later).abs();
+        m += 1;
+    }
+    assert!(
+        moved / m as f32 > 1.5 * mean_gap,
+        "{} {mean_gap}",
+        moved / m as f32
+    );
+}
+
+#[test]
+fn a_gust_bends_grass_far_more_than_wood() {
+    // At a gust's core lawn grass bends tens of degrees; the same small plant as wood barely.
+    let speed = mps(7);
+    // Without the slow swell, so only the gust field differs between the two places.
+    let mut u = gusty(speed, 1.0, 10.0);
+    u.wind[3] = 0.0;
+    // Find a gust's core and a lull.
+    let mut core = None;
+    let mut lull = None;
+    for i in 0..4000 {
+        let p = [(i % 80) as f32 * 1.3 - 50.0, (i / 80) as f32 * 1.3 - 30.0];
+        let g = wind::gust_field(&u, p);
+        if g > 0.95 && core.is_none() {
+            core = Some(p);
+        }
+        if g < 0.02 && lull.is_none() {
+            lull = Some(p);
+        }
+    }
+    let (core, lull) = (core.expect("a gust"), lull.expect("a lull"));
+    let tip = Vec3::new(0.0, 0.08, 0.0);
+    let hz = wind::plant_hz(0.08, false);
+    let angle = |at: [f32; 2], hz: f32| {
+        let q = wind::sway(&u, tip, Vec3::new(at[0], 0.0, at[1]), 1.0, 0.0, hz);
+        (q.y / q.length()).clamp(-1.0, 1.0).acos().to_degrees()
+    };
+    let (grass_core, grass_lull, wood_core) = (angle(core, -hz), angle(lull, -hz), angle(core, hz));
+    println!(
+        "blade tip lean: gust {grass_core:.1} deg, lull {grass_lull:.1} deg, wood {wood_core:.1} deg"
+    );
+    assert!(grass_core > 20.0 && grass_core < 60.0, "{grass_core}");
+    assert!(grass_core > 1.8 * grass_lull, "{grass_core} {grass_lull}");
+    assert!(wood_core < grass_core / 2.0, "{wood_core}");
 }
