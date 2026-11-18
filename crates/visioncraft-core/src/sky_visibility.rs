@@ -798,10 +798,7 @@ fn hit_triangle(t: &[[f32; 3]; 3], p: [f32; 3], d: [f32; 3]) -> Option<(f32, [f3
 pub fn sky_view_at(scene: &SkyScene, p: [f32; 3], n: [f32; 3], rays: usize) -> f32 {
     let r = PAD_M + 60.0;
     let bins = Bins::new(scene, [p[0] - r, p[2] - r], [p[0] + r, p[2] + r]);
-    let tracer = Tracer {
-        scene,
-        bins: &bins,
-    };
+    let tracer = Tracer { scene, bins: &bins };
     let near = tracer.near(p);
     let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt().max(1e-6);
     let n = n.map(|v| v / len);
@@ -1480,7 +1477,10 @@ mod tests {
         let mut scene = tree();
         scene.triangles = wall(4.0, -3.0, 3.0, 2.5);
         scene.ground = Ground::sample([-5.0, -5.0], [5.0, 5.0], 1.0, |x, z| 0.1 * x + 0.05 * z);
-        assert_eq!(SkyScene::from_floats(&scene.to_floats()), Some(scene.clone()));
+        assert_eq!(
+            SkyScene::from_floats(&scene.to_floats()),
+            Some(scene.clone())
+        );
         let v = bake(scene).unwrap();
         assert_eq!(SkyVisibility::from_floats(&v.to_floats()), Some(v));
         assert_eq!(SkyScene::from_floats(&[1.0]), None);

@@ -422,7 +422,8 @@ mod page {
     fn post(parts: &[wasm_bindgen::JsValue]) -> Option<futures_oneshot::Receiver> {
         WORKERS.with(|cell| {
             let mut cell = cell.borrow_mut();
-            let workers = cell.get_or_insert_with(|| (0..super::web_workers()).map(start).collect());
+            let workers =
+                cell.get_or_insert_with(|| (0..super::web_workers()).map(start).collect());
             let worker = workers
                 .iter_mut()
                 .flatten()

@@ -2125,8 +2125,7 @@ impl Studio {
             visioncraft_automation::sky_scene(p, &loaded, &self.assets, p.view.years, p.time.month)
         });
         if self.sky_vis.note(inputs, scene.key()) {
-            self.sky_vis
-                .start(scene, now);
+            self.sky_vis.start(scene, now);
         }
     }
 

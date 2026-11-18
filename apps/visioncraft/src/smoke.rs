@@ -791,7 +791,14 @@ mod native {
                         library >> 20
                     ));
                     println!("texture memory: {}", parts.join(", "));
-                    for l in s.scene.library.lod_report().as_array().into_iter().flatten() {
+                    for l in s
+                        .scene
+                        .library
+                        .lod_report()
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                    {
                         println!("lod: {l}");
                     }
                     println!(
