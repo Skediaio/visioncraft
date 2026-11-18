@@ -453,6 +453,40 @@ fn tier_of(w: u32) -> &'static str {
 /// read from a bundle), by path.
 pub type MemoryFiles = Arc<Mutex<HashMap<String, Arc<[u8]>>>>;
 
+/// The longest side a plan image keeps on the GPU, pixels.
+const MAX_PLAN_SIDE: u32 = 4096;
+
+/// Averages `img` down by a whole factor until its sides are at most `max` (blocks at the edge
+/// are smaller). Its picture stays the same; only the pixels get fewer.
+fn shrink(img: &mut Rgba, max: u32) {
+    let f = img.w.max(img.h).div_ceil(max.max(1));
+    if f <= 1 || img.bc.is_some() {
+        return;
+    }
+    let (w, h) = (img.w.div_ceil(f), img.h.div_ceil(f));
+    let mut out = vec![0u8; (w * h * 4) as usize];
+    for y in 0..h {
+        for x in 0..w {
+            let mut sum = [0u32; 4];
+            let mut n = 0;
+            for yy in y * f..((y + 1) * f).min(img.h) {
+                for xx in x * f..((x + 1) * f).min(img.w) {
+                    let at = ((yy * img.w + xx) * 4) as usize;
+                    for c in 0..4 {
+                        sum[c] += u32::from(img.px[at + c]);
+                    }
+                    n += 1;
+                }
+            }
+            let at = ((y * w + x) * 4) as usize;
+            for c in 0..4 {
+                out[at + c] = (sum[c] / n.max(1)) as u8;
+            }
+        }
+    }
+    (img.w, img.h, img.px) = (w, h, out);
+}
+
 /// Compresses on the work pool (natively), so that library maps, model pictures and plants
 /// share its cores and the frame's thread keeps one: several at once, finer tiers after the
 /// 1k maps. The pixels come back with the result (kept when it cannot compress).
@@ -546,6 +580,11 @@ async fn load(
                 &format!("material map decode {}", tier_of(img.w)),
                 now_ms() - t,
             );
+            // A plan image (anything that is not a library map) may be larger than a GPU takes:
+            // averaged down to at most `MAX_PLAN_SIDE`.
+            if bc_kind_of(path).is_none() && !path.starts_with("materials/") {
+                shrink(&mut img, MAX_PLAN_SIDE);
+            }
             if compress && let Some(kind) = bc_kind_of(path) {
                 let space = if *srgb {
                     ColorSpace::Srgb
@@ -1083,6 +1122,30 @@ impl AssetStore {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_large_plan_image_is_averaged_down_to_fit() {
+        // 5 x 3 pixels, left two columns black, the rest white; at most 2 on a side: factor 3
+        let mut px = Vec::new();
+        for _ in 0..3 {
+            for x in 0..5 {
+                px.extend(if x < 2 {
+                    [0, 0, 0, 255]
+                } else {
+                    [255, 255, 255, 255]
+                });
+            }
+        }
+        let mut img = super::Rgba::new(5, 3, px);
+        super::shrink(&mut img, 2);
+        assert_eq!((img.w, img.h), (2, 1));
+        // the first block holds two black and one white column, the second two white columns
+        assert_eq!(img.px[..4], [85, 85, 85, 255]);
+        assert_eq!(img.px[4..], [255, 255, 255, 255]);
+        let mut small = super::Rgba::new(1, 1, vec![9, 9, 9, 255]);
+        super::shrink(&mut small, 4096);
+        assert_eq!((small.w, small.px.len()), (1, 4));
+    }
+
     use super::*;
 
     fn k(p: &str) -> Key {

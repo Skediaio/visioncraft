@@ -87,6 +87,16 @@ impl Pictures for GpuPictures {
                 g.installed.insert(id.clone(), m.model.clone());
             }
         }
+        // Plan images: the host's bytes, held by the studio's asset store by their file.
+        for (file, bytes) in &request.underlays {
+            let store = &mut s.scene.library.store;
+            if store
+                .provided(file)
+                .is_none_or(|held| !Arc::ptr_eq(&held, bytes))
+            {
+                store.provide(file, bytes.clone());
+            }
+        }
         s.set_draft(None);
         s.quality_auto = false;
         s.quality = Quality::PRESETS

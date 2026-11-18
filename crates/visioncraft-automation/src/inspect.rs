@@ -387,8 +387,27 @@ pub(crate) fn inspect(session: &Session, state: &HostState, v: &Verbosity) -> Va
             let items = p.models.iter().filter(|m| m.layer == l.id).count()
                 + p.shapes.iter().filter(|s| s.layer() == l.id).count()
                 + p.generators.iter().filter(|g| g.layer() == l.id).count()
-                + p.lights.iter().filter(|x| x.layer == l.id).count();
+                + p.lights.iter().filter(|x| x.layer == l.id).count()
+                + p.underlays.iter().filter(|u| u.layer == l.id).count();
             json!({"id": l.id, "name": l.name, "visible": l.visible, "context": l.context, "items": items})
+        })
+        .collect();
+    let underlays: Vec<Value> = p
+        .underlays
+        .iter()
+        .map(|u| {
+            let mut o = json!({
+                "id": u.id, "name": u.name, "file": u.file, "layer": u.layer,
+                "origin": u.placement.origin, "metres_per_pixel": u.placement.metres_per_pixel,
+                "rotation_deg": u.placement.rotation_deg, "size_px": u.size_px,
+                "opacity": u.opacity, "elevation": u.elevation,
+                "corners": u.corners(), "bounds": u.bounds(),
+                "loaded": state.underlays.contains_key(&u.file),
+            });
+            if let Some(why) = state.underlay_missing.get(&u.file) {
+                o["error"] = why.as_str().into();
+            }
+            o
         })
         .collect();
     let species: Vec<Value> = p
@@ -427,6 +446,7 @@ pub(crate) fn inspect(session: &Session, state: &HostState, v: &Verbosity) -> Va
     out.insert("generators".into(), generators.into());
     out.insert("species".into(), species.into());
     out.insert("lights".into(), json!(p.lights));
+    out.insert("underlays".into(), underlays.into());
     out.insert("viewpoints".into(), json!(p.viewpoints));
     out.insert("terrain".into(), terrain.into());
     // The sea with what it means: the waves' height and length from its sea state.

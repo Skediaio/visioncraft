@@ -1866,3 +1866,93 @@ fn endless_ground_takes_the_sky_volume_near_it() {
         at(&none, far)
     );
 }
+
+/// A plan underlay lies flat and unlit on the ground, the right way up (image top-left at the
+/// first corner, north up in the plan view), in its own colours and at its opacity.
+#[test]
+fn underlay_shows_in_its_own_colours_the_right_way_up() {
+    use visioncraft_render::{ColorSpace, TextureDesc, UnderlayQuad};
+    let mut r = renderer(W, H);
+    // 2 x 2 pixels: top-left red, top-right green, bottom-left blue, bottom-right white.
+    let rgba8: [u8; 16] = [
+        255, 0, 0, 255, 0, 255, 0, 255, //
+        0, 0, 255, 255, 255, 255, 255, 255,
+    ];
+    let texture = r
+        .add_texture(&TextureDesc {
+            width: 2,
+            height: 2,
+            rgba8: &rgba8,
+            color_space: ColorSpace::Srgb,
+            repeat: false,
+        })
+        .unwrap();
+    let corners = [
+        [0.0, 0.02, 0.0],
+        [8.0, 0.02, 0.0],
+        [8.0, 0.02, 8.0],
+        [0.0, 0.02, 8.0],
+    ];
+    setup(
+        &mut r,
+        demo::garden_plan_camera(W as f32 / H as f32),
+        demo::afternoon_sun(),
+        14.7,
+    );
+    let sample = |r: &Renderer, px: &[u8], p: Vec3| {
+        let q = r.project(p).expect("in view");
+        mean(
+            px,
+            q.x as u32 - 1,
+            q.y as u32 - 1,
+            q.x as u32 + 2,
+            q.y as u32 + 2,
+        )
+    };
+    // Nothing drawn: the sample points are the empty background.
+    let empty = capture(&mut r, W, H);
+    let bare = sample(&r, &empty, Vec3::new(2.0, 0.0, 2.0));
+
+    r.set_underlays(&[UnderlayQuad {
+        texture,
+        corners,
+        opacity: 1.0,
+    }]);
+    let px = capture(&mut r, W, H);
+    let (red, green, blue, white) = (
+        sample(&r, &px, Vec3::new(2.0, 0.0, 2.0)),
+        sample(&r, &px, Vec3::new(6.0, 0.0, 2.0)),
+        sample(&r, &px, Vec3::new(2.0, 0.0, 6.0)),
+        sample(&r, &px, Vec3::new(6.0, 0.0, 6.0)),
+    );
+    // Each quarter is its image colour (bilinear filtering bleeds a little at the neighbours).
+    let all = format!("{red:?} {green:?} {blue:?} {white:?}");
+    assert!(red[0] > 220.0 && red[1] < 60.0 && red[2] < 60.0, "{all}");
+    assert!(
+        green[1] > 220.0 && green[0] < 60.0 && green[2] < 60.0,
+        "{all}"
+    );
+    assert!(blue[2] > 220.0 && blue[0] < 60.0 && blue[1] < 60.0, "{all}");
+    assert!(white.iter().all(|c| *c > 220.0), "{all}");
+    // outside the quad nothing changed
+    let outside = sample(&r, &px, Vec3::new(-6.0, 0.0, 2.0));
+    let outside_before = sample(&r, &empty, Vec3::new(-6.0, 0.0, 2.0));
+    assert_eq!(outside, outside_before);
+
+    // half see-through: between the plan's red and what lies under it
+    r.set_underlays(&[UnderlayQuad {
+        texture,
+        corners,
+        opacity: 0.5,
+    }]);
+    let px = capture(&mut r, W, H);
+    let half = sample(&r, &px, Vec3::new(2.0, 0.0, 2.0));
+    assert!(
+        half[0] > bare[0].min(255.0) * 0.5 && half[1] < 200.0 && half != red && half != bare,
+        "half {half:?}, bare {bare:?}"
+    );
+
+    r.set_underlays(&[]);
+    let px = capture(&mut r, W, H);
+    assert_eq!(sample(&r, &px, Vec3::new(2.0, 0.0, 2.0)), bare);
+}

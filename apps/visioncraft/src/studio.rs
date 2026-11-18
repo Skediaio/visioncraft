@@ -188,6 +188,12 @@ pub struct Studio {
     last_lights: Vec<visioncraft_render::Light>,
     /// Extra overlay lines from tools: (depth tested, on top).
     pub extra: (Vec<LineVertex>, Vec<LineVertex>),
+    /// What the renderer draws of the plan underlays, to change it only when it differs.
+    underlay_quads: Vec<visioncraft_render::UnderlayQuad>,
+    /// An opacity being dragged on a slider, shown before it is committed: (underlay id, value).
+    pub underlay_live: Option<(String, f32)>,
+    /// The plan panel asked for an image file; the window opens the picker.
+    pub pick_underlay: bool,
     /// Pictures (`render_png`) show the editor's overlays (light markers, tool lines, highlight).
     pub overlays_in_pictures: bool,
     /// The renderer's targets were made anew outside the window's frame (`render_png`): the
@@ -404,6 +410,9 @@ impl Studio {
             thumbs: Default::default(),
             last_lights: Vec::new(),
             extra: (Vec::new(), Vec::new()),
+            underlay_quads: Vec::new(),
+            underlay_live: None,
+            pick_underlay: false,
             overlays_in_pictures: false,
             targets_changed: false,
             size: [0, 0],
@@ -1616,6 +1625,7 @@ impl Studio {
         self.poll_example_imports();
         self.scene
             .sync_terrain_layers(&mut self.renderer, self.session.project());
+        self.sync_underlays();
         let (view, proj, eye) = self.camera.matrices(self.aspect());
         self.renderer.set_camera(view, proj, eye);
         let (sun, elevation) = self.sun();
@@ -1745,6 +1755,87 @@ impl Studio {
             )
             .map_err(|e| e.to_string())?;
         Ok(format!("user:{}", r["id"].as_str().unwrap_or_default()))
+    }
+
+    /// Imports a PNG or JPEG as a plan underlay: checked, its bytes held by the asset store and
+    /// recorded with `underlay.add`, centred on what the plan view looks at. Returns its id.
+    pub fn import_underlay(&mut self, name: &str, bytes: Vec<u8>) -> Result<String, String> {
+        if bytes.len() as u64 > visioncraft_core::underlay::MAX_FILE_BYTES {
+            return Err(format!(
+                "the image is {} MB; at most {} MB can be used",
+                bytes.len() / (1024 * 1024),
+                visioncraft_core::underlay::MAX_FILE_BYTES / (1024 * 1024)
+            ));
+        }
+        let size = visioncraft_core::underlay::image_size(&bytes)?;
+        let file = crate::underlay_ui::file_for(name, &bytes, &self.project().underlays);
+        let scale = visioncraft_core::UnderlayPlacement::default().metres_per_pixel;
+        let c = self.camera.top_center;
+        let origin = [
+            c.x - size[0] as f32 * scale / 2.0,
+            c.y - size[1] as f32 * scale / 2.0,
+        ];
+        self.scene.library.store.provide(&file, Arc::from(bytes));
+        let r = self
+            .run(
+                "underlay.add",
+                serde_json::json!({"name": name, "file": file, "size_px": size, "origin": origin}),
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(r["id"].as_str().unwrap_or_default().to_string())
+    }
+
+    /// Underlays whose image is not held (a project opened without its bundle).
+    pub fn missing_underlays(&self) -> Vec<&visioncraft_core::Underlay> {
+        let store = &self.scene.library.store;
+        self.project()
+            .underlays
+            .iter()
+            .filter(|u| store.provided(&u.file).is_none())
+            .collect()
+    }
+
+    /// Gives the renderer the visible underlays whose image has arrived, flat on the ground.
+    fn sync_underlays(&mut self) {
+        let p = self.session.project();
+        let live = self.underlay_live.clone();
+        let wanted: Vec<_> = p
+            .underlays
+            .iter()
+            .filter(|u| {
+                p.layers
+                    .iter()
+                    .find(|l| l.id == u.layer)
+                    .is_none_or(|l| l.visible)
+            })
+            .map(|u| {
+                let opacity = match &live {
+                    Some((id, v)) if *id == u.id => *v,
+                    _ => u.opacity,
+                };
+                let y = u.elevation;
+                (
+                    u.file.clone(),
+                    u.corners().map(|c| [c[0], y, c[1]]),
+                    opacity,
+                )
+            })
+            .filter(|(_, _, opacity)| *opacity > 0.0)
+            .collect();
+        let mut quads = Vec::new();
+        for (file, corners, opacity) in wanted {
+            if let Some(texture) = self.scene.library.store.texture(&file, true, false, 0.0) {
+                quads.push(visioncraft_render::UnderlayQuad {
+                    texture,
+                    corners,
+                    opacity,
+                });
+            }
+        }
+        if quads != self.underlay_quads {
+            self.renderer.set_underlays(&quads);
+            self.underlay_quads = quads;
+        }
     }
 
     /// Imported objects whose file is not held (a project opened without its bundle).

@@ -28,7 +28,9 @@
 //!    into the output, or into an LDR target at render size for
 //! 9. FXAA (when enabled) and
 //! 10. the upscale to the output size with RCAS sharpening (render scale < 1)
-//! 11. overlay lines and points, alpha-blended onto the output (`Rgba8UnormSrgb`)
+//! 11. plan underlays (`set_underlays`): flat, unlit images alpha-blended onto the output,
+//!     depth-tested against the scene
+//! 12. overlay lines and points, alpha-blended onto the output (`Rgba8UnormSrgb`)
 //!
 //! MSAA: only the pre-pass and forward pass are multisampled. AO, contact
 //! shadows, water depth and the overlay's depth test use sample 0 of each
@@ -65,6 +67,7 @@ mod terrain;
 mod texture;
 mod timing;
 pub mod tonemap;
+mod underlay;
 pub mod wind;
 
 pub use atmosphere::{Atmosphere, fog_transmittance};
@@ -79,6 +82,7 @@ pub use still::Photo;
 pub use still::Still;
 pub use terrain::{TerrainChunk, TerrainLayer};
 pub use texture::{ColorSpace, TextureDesc, TextureId, mip_count};
+pub use underlay::UnderlayQuad;
 pub use wind::Wind;
 
 const HDR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -120,7 +124,7 @@ const SKY: &str = include_str!("sky.wgsl");
 const POST: &str = include_str!("post.wgsl");
 /// Every shader module as (name, source parts); WGSL has no includes, so the
 /// shared declarations are prepended. Also validated with naga in a unit test.
-const SHADERS: [(&str, &[&str]); 12] = [
+const SHADERS: [(&str, &[&str]); 13] = [
     (
         "scene",
         &[
@@ -137,6 +141,7 @@ const SHADERS: [(&str, &[&str]); 12] = [
     ("blur", &[COMMON, include_str!("blur.wgsl")]),
     ("tonemap", &[COMMON, POST, include_str!("tonemap.wgsl")]),
     ("overlay", &[COMMON, include_str!("overlay.wgsl")]),
+    ("underlay", &[COMMON, include_str!("underlay.wgsl")]),
     ("env", &[COMMON, SKY, include_str!("env.wgsl")]),
     ("mip", &[include_str!("mip.wgsl")]),
     (
@@ -679,6 +684,8 @@ struct Layouts {
     depth_1x: wgpu::BindGroupLayout,
     texture: wgpu::BindGroupLayout,
     blur: wgpu::BindGroupLayout,
+    /// A plan underlay's image and its sampler (group 2 of the underlay pipeline).
+    underlay: wgpu::BindGroupLayout,
 }
 
 /// Pipelines that depend on the MSAA sample count. Depth and forward are
@@ -722,6 +729,7 @@ struct Pipelines {
     fxaa: wgpu::RenderPipeline,
     upscale: wgpu::RenderPipeline,
     overlay: wgpu::RenderPipeline,
+    underlay: wgpu::RenderPipeline,
 }
 
 /// Everything sized by the viewport or the quality settings.
@@ -986,6 +994,7 @@ pub struct Renderer {
     overlay: Option<wgpu::Buffer>,
     overlay_count: u32,
     overlay_on_top: u32,
+    underlays: underlay::Drawn,
     timer: Option<timing::Timer>,
     counters: Counters,
     last_stats: RenderStats,
@@ -1302,6 +1311,7 @@ impl Renderer {
             overlay: None,
             overlay_count: 0,
             overlay_on_top: 0,
+            underlays: underlay::Drawn::default(),
             timer: timing::Timer::new(device, queue),
             counters: Counters::default(),
             last_stats: RenderStats::default(),
@@ -2570,6 +2580,14 @@ impl Renderer {
     }
 
     /// Overlay segments drawn over everything (selection outlines, tools).
+    /// The plan images drawn flat on the ground (replaces the last list; an empty one clears
+    /// it). Upload each image with `add_texture` first.
+    pub fn set_underlays(&mut self, quads: &[UnderlayQuad]) {
+        let textures = &self.textures;
+        let view = |id: TextureId| Some(&textures.get(id.0 as usize)?.as_ref()?.view);
+        self.underlays = underlay::build(&self.device, &self.layouts.underlay, quads, view);
+    }
+
     pub fn set_overlay_lines_on_top(&mut self, lines: &[LineVertex]) {
         self.overlay_cpu.1 = lines.to_vec();
         self.upload_overlay();
@@ -3051,6 +3069,17 @@ impl Renderer {
                 &self.pipelines.upscale,
                 bind,
             );
+        }
+        if let Some(buffer) = &self.underlays.buffer {
+            let mut pass = color_pass(encoder, "underlay", &t.output_view, None, Some(()), None);
+            pass.set_pipeline(&self.pipelines.underlay);
+            pass.set_bind_group(0, &self.globals_bind, &[]);
+            pass.set_bind_group(1, &t.overlay_bind, &[]);
+            pass.set_vertex_buffer(0, buffer.slice(..));
+            for (i, bind) in self.underlays.binds.iter().enumerate() {
+                pass.set_bind_group(2, bind, &[]);
+                pass.draw(i as u32 * 6..i as u32 * 6 + 6, 0..1);
+            }
         }
         if let (Some(buffer), true) = (&self.overlay, self.overlay_count > 0) {
             let mut pass = color_pass(
@@ -4831,6 +4860,13 @@ impl Layouts {
                     texture_entry(1, unfilterable, D::D2, false),
                 ],
             ),
+            underlay: layout(
+                "underlay",
+                &[
+                    texture_entry(0, filterable, D::D2, false),
+                    sampler_entry(1, B::Filtering),
+                ],
+            ),
         }
     }
 }
@@ -5618,6 +5654,33 @@ impl Pipelines {
             ],
             fxaa: fullscreen("fxaa", "post", "fs_fxaa", &post, unorm.into(), &[]),
             upscale: fullscreen("upscale", "post", "fs_upscale", &post, unorm.into(), &[]),
+            underlay: pipeline(
+                device,
+                PipelineDesc {
+                    label: "underlay",
+                    module: module(modules, "underlay"),
+                    vs: "vs_main",
+                    fs: Some("fs_main"),
+                    groups: &[Some(&l.globals), Some(&l.texture), Some(&l.underlay)],
+                    buffers: &[Some(wgpu::VertexBufferLayout {
+                        array_stride: underlay::VERTEX_BYTES,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &wgpu::vertex_attr_array![
+                            0 => Float32x3, 1 => Float32x2, 2 => Float32
+                        ],
+                    })],
+                    target: Some(wgpu::ColorTargetState {
+                        format: format.add_srgb_suffix(),
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }),
+                    depth: None,
+                    cull: None,
+                    samples: 1,
+                    constants: &[],
+                    front_cw: false,
+                },
+            ),
             overlay: pipeline(
                 device,
                 PipelineDesc {

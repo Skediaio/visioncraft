@@ -108,6 +108,7 @@ impl Agents {
             return false;
         };
         host.models_to_agents(&mut self.state);
+        host.underlays_to_agents(&mut self.state);
         let before = host.studio.session.revision();
         let n = control.poll(&mut Bound {
             host: &mut host,
@@ -129,6 +130,7 @@ impl Agents {
             return false;
         }
         host.models_to_agents(&mut self.state);
+        host.underlays_to_agents(&mut self.state);
         let before = host.studio.session.revision();
         for line in lines {
             let mut bound = Bound {
@@ -145,6 +147,7 @@ impl Agents {
 impl Agents {
     fn answered(&mut self, mut host: WindowHost, before: u64, now: f64) -> bool {
         host.models_from_agents(&self.state);
+        host.underlays_from_agents(&self.state);
         if host.studio.session.revision() != before {
             host.studio.set_draft(None);
         }
@@ -204,6 +207,30 @@ impl WindowHost<'_> {
                     model: loaded.model.clone(),
                 },
             );
+        }
+    }
+
+    /// Plan images the person added are the agents' too (`document.inspect` says they are loaded).
+    fn underlays_to_agents(&self, state: &mut HostState) {
+        let store = &self.studio.scene.library.store;
+        for u in &self.studio.project().underlays {
+            if state.underlays.contains_key(&u.file) {
+                continue;
+            }
+            if let Some(bytes) = store.provided(&u.file) {
+                state.underlay_missing.remove(&u.file);
+                state.underlays.insert(u.file.clone(), bytes);
+            }
+        }
+    }
+
+    /// Plan images an agent read land in the window's asset store.
+    fn underlays_from_agents(&mut self, state: &HostState) {
+        let store = &mut self.studio.scene.library.store;
+        for (file, bytes) in &state.underlays {
+            if store.provided(file).is_none() {
+                store.provide(file, bytes.clone());
+            }
         }
     }
 

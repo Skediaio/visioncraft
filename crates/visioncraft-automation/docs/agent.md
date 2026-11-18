@@ -598,6 +598,42 @@ of radius 5 has an area within 0.1% of 25 pi).
   between them are straight and the spans closer together where the curve is tight, and a gate
   needs a straight edge.
 
+### 24. A plan as underlay: calibrate it, trace over it
+
+```json recipe
+{"intent": "a scanned site plan under the drawing, scaled on a known 10 m wall, with a lawn traced over it", "steps": [
+  {"id": "underlay.add", "params": {"file": "site-plan.png", "name": "Site plan", "opacity": 0.6}},
+  {"id": "underlay.calibrate", "params": {"id": "u1", "pixel_a": [40, 30], "pixel_b": [140, 30], "world_a": [0, 0], "world_b": [10, 0]}},
+  {"id": "shape.add_area", "params": {"name": "Lawn", "outline": [[-2, -2], [14, -2], [14, 8], [-2, 8]], "material": "lawn"}},
+  {"id": "document.inspect", "params": {"faces": false}},
+  {"id": "view.render", "params": {"camera": {"position": [6, 25, 2.99], "target": [6, 0, 3], "fov_y_deg": 40}, "width": 960, "height": 600, "path": "underlay-render.png"}}
+]}
+```
+
+`underlay.add` puts a PNG or JPEG (a floor plan, a site plan, a scan; at most 16384 pixels on a
+side and 64 MB) flat under the drawing. `file` is relative to the project file (or the read root),
+and the host reads its size into `size_px` itself (a missing, unreadable or other file is an
+error that says so; a caller that states `size_px` may name a file this host does not have, which
+`document.inspect` then reports with an `error`). The image's top-left lands on `origin`
+(`[0, 0]`), one pixel is `metres_per_pixel` (a guess of 0.05 until you set it); at rotation 0 image
++x runs along +X (east) and image +y along +Z (south), and `rotation_deg` turns it
+counter-clockwise seen from above, like a model's rotation. It is drawn flat, unlit and see-through
+(`opacity`, 0.5; `elevation` 0.02 m above the ground so it does not flicker), casts no shadow, is
+not picked, and shows in pictures. It sits on its own layer (`underlay`, made on demand), so `layer.set_visible` hides the plans;
+what stands above the ground draws over it.
+
+Set the scale from a dimension you know. **`underlay.calibrate`** takes two image positions in
+pixels (top-left is 0, 0, y down) and the two drawing points they must land on: the scale, the
+rotation and the origin follow exactly (the image is never mirrored or skewed), so the 10 m wall
+above, 100 px long, gives 0.1 m a pixel. **`underlay.scale_by_distance {id, pixel_a, pixel_b,
+distance_m}`** only sets the scale and keeps the origin and rotation. `underlay.set` changes any
+field (`opacity`, `origin`, `rotation_deg`, `layer`, `file`...), `underlay.remove` takes the plan
+out of the project (the file stays). In a bundle the image travels as `underlays/<name>`.
+`document.inspect` lists each underlay with its `corners` and `bounds` on the ground. Trace over
+it with the usual shape commands, reading drawing coordinates off the pixels with
+`origin + R * pixel * metres_per_pixel`, or ask `underlay.calibrate`'s result for the origin.
+A PDF page is not read yet: export it as a PNG first.
+
 ## Known traps
 
 - **Ids are not names**: `S2`, not `House`; viewpoints are `v1`, lights `li1`.

@@ -21,6 +21,7 @@ mod queries;
 mod shapes;
 mod species;
 mod terrain;
+mod underlays;
 mod viewpoints;
 mod water;
 
@@ -33,6 +34,7 @@ pub(crate) fn register(s: &mut Session) {
     shapes::register(s);
     species::register(s);
     objects::register(s);
+    underlays::register(s);
     queries::register(s);
     terrain::register(s);
     materials::register(s);

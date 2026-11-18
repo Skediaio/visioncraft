@@ -1,7 +1,8 @@
 //! `.visioncraft.zip`: a project with the files it needs, so it opens anywhere (a browser has no
 //! folders to find them in). Inside: `project.visioncraft` (the JSON), `objects/*.glb` (imported
-//! objects, at the `file` their `UserObject` names) and `models/*` (the sources of imported
-//! models, the project's `source` pointing at them). Stored without compression.
+//! objects, at the `file` their `UserObject` names), `underlays/*` (plan images, at the `file`
+//! their `Underlay` names) and `models/*` (the sources of imported models, the project's `source`
+//! pointing at them). Stored without compression.
 
 use std::io::Read;
 use std::sync::Arc;
@@ -42,6 +43,28 @@ pub fn pack(
             files.push((o.file.clone(), bytes.to_vec()));
         }
     }
+    // Plan images are held like objects, by their `file`; one named elsewhere (a path beside the
+    // project file) moves into `underlays/` in the packed project.
+    for u in &mut p.underlays {
+        if let Some(bytes) = object_file(&u.file) {
+            if !u.file.starts_with("underlays/") {
+                let base = u
+                    .file
+                    .rsplit(['/', '\\'])
+                    .next()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("plan");
+                let mut name = format!("underlays/{base}");
+                while files.iter().any(|(f, _)| *f == name) {
+                    name = format!("underlays/{}-{base}", files.len());
+                }
+                u.file = name;
+            }
+            if !files.iter().any(|(f, _)| *f == u.file) {
+                files.push((u.file.clone(), bytes.to_vec()));
+            }
+        }
+    }
     files.insert(0, (PROJECT_FILE.into(), p.to_json_bytes()));
     crate::files::zip_stored(&files)
 }
@@ -69,8 +92,8 @@ pub const LIMITS: Limits = Limits {
     total_bytes: MAX_BUNDLE_BYTES as u64,
 };
 
-/// A name a bundle may use: relative, no `..`, inside `project.visioncraft`, `objects/` or
-/// `models/`. `Err` for a name that tries to leave the bundle; `Ok(false)` for one to ignore.
+/// A name a bundle may use: relative, no `..`, inside `project.visioncraft`, `objects/`,
+/// `underlays/` or `models/`. `Err` for a name that tries to leave the bundle; `Ok(false)` for one to ignore.
 fn allowed(name: &str) -> Result<bool, String> {
     let climbs = name.split(['/', '\\']).any(|part| part == "..");
     let absolute = name.starts_with(['/', '\\'])
@@ -79,7 +102,10 @@ fn allowed(name: &str) -> Result<bool, String> {
     if climbs || absolute {
         return Err(format!("the bundle names a file outside itself: {name}"));
     }
-    Ok(name == PROJECT_FILE || name.starts_with("objects/") || name.starts_with("models/"))
+    Ok(name == PROJECT_FILE
+        || name.starts_with("objects/")
+        || name.starts_with("underlays/")
+        || name.starts_with("models/"))
 }
 
 /// Reads an untrusted bundle: a message for anything wrong, never a panic.
@@ -181,6 +207,34 @@ mod tests {
         assert_eq!(get("models/house.3dcraft"), Some(vec![9; 10]));
         assert!(unpack(b"PK nonsense").is_err());
         assert!(unpack(&bytes[..bytes.len() / 2]).is_err());
+    }
+
+    #[test]
+    fn plan_images_travel_in_the_bundle_under_underlays() {
+        let mut s = Session::new(Project::default());
+        for file in ["underlays/site.png", "plans/other.jpg"] {
+            s.run(
+                "underlay.add",
+                serde_json::json!({"file": file, "size_px": [20, 10]}),
+            )
+            .unwrap();
+        }
+        let png: Arc<[u8]> = Arc::from(vec![7u8; 5]);
+        let bytes = pack(s.project(), &|_| Some(png.clone()), &|_| None).unwrap();
+        let u = unpack(&bytes).unwrap();
+        let files: Vec<&str> = u
+            .project
+            .underlays
+            .iter()
+            .map(|u| u.file.as_str())
+            .collect();
+        assert_eq!(files, ["underlays/site.png", "underlays/other.jpg"]);
+        for f in files {
+            assert!(
+                u.files.iter().any(|(n, b)| n == f && **b == [7u8; 5]),
+                "{f}"
+            );
+        }
     }
 
     /// A file from a build with extensions this one does not know keeps their data byte for

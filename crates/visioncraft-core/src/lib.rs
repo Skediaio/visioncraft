@@ -35,6 +35,7 @@ pub mod sun;
 pub mod sun_hours;
 pub mod terrain;
 pub mod tiers;
+pub mod underlay;
 pub mod viewpoint;
 pub mod water;
 pub mod wind;
@@ -81,5 +82,6 @@ pub use terrain::{
     terrain_chunk_mesh, terrain_chunk_mesh_on, terrain_chunks,
 };
 pub use tiers::Tiers;
+pub use underlay::{Placement as UnderlayPlacement, Underlay};
 pub use viewpoint::{Viewpoint, interpolate};
 pub use water::{Sea, WaterKind, keep_dry};

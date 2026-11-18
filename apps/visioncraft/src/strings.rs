@@ -529,3 +529,36 @@ pub const WA_COLOR: &str = "Deep colour";
 pub const WA_BEACH: &str = "Beach across the view";
 pub const WA_BEACH_HINT: &str =
     "A sandy beach along a line through the middle of the view, the sea beyond it.";
+
+// ---- plan underlay ----
+pub const TOOL_PLAN: &str = "Plan image";
+pub const PLAN_ADD: &str = "Add plan image…";
+pub const PLAN_NONE: &str =
+    "No plan image yet. Add a PNG or JPEG of a floor plan or site plan to trace over.";
+pub const PLAN_IMPORTED: &str =
+    "is under the drawing as a plan image: set its scale with Set scale or Calibrate.";
+pub const PLAN_MISSING: &str =
+    "Plan image files not found (open the project's bundle, or put them beside the project file):";
+pub const PLAN_UNREADABLE: &str = "the plan image in the bundle cannot be read";
+pub const PLAN_FILE_MISSING: &str = "Image file not found";
+pub const PLAN_SHOW: &str = "Show";
+pub const PLAN_OPACITY: &str = "Opacity";
+pub const PLAN_REMOVE: &str = "Remove";
+pub const PLAN_SET_SCALE: &str = "Set scale";
+pub const PLAN_SET_SCALE_TIP: &str =
+    "Click two points on the image, then type the real distance between them.";
+pub const PLAN_CALIBRATE: &str = "Calibrate";
+pub const PLAN_CALIBRATE_TIP: &str = "Click two points on the image, then the two points in the drawing they must land on: scale, turn and position follow.";
+pub const PLAN_DISTANCE: &str = "Distance";
+pub const PLAN_APPLY: &str = "Apply";
+pub const PLAN_CANCEL: &str = "Cancel";
+pub const PLAN_SCALE_NOW: &str = "m per pixel";
+pub const PLAN_HINT_IDLE: &str = "Set scale or Calibrate to fit the image to the drawing. Then draw over it with the other tools.";
+pub const PLAN_HINT_A: &str =
+    "Click the first point on the image (an end of a dimension you know).";
+pub const PLAN_HINT_B: &str = "Click the second point on the image.";
+pub const PLAN_HINT_DISTANCE: &str =
+    "Type the real distance between the two points, then Apply (Enter).";
+pub const PLAN_HINT_WORLD_A: &str =
+    "Click where the first point must land in the drawing (it snaps to the grid and to corners).";
+pub const PLAN_HINT_WORLD_B: &str = "Click where the second point must land in the drawing.";

@@ -19,7 +19,7 @@ pub fn recipes() -> Vec<Value> {
 #[test]
 fn every_recipe_of_the_guide_runs() {
     let recipes = recipes();
-    assert_eq!(recipes.len(), 23);
+    assert_eq!(recipes.len(), 24);
     for (n, recipe) in recipes.into_iter().enumerate() {
         let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("recipe-{n}"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -30,6 +30,11 @@ fn every_recipe_of_the_guide_runs() {
                 "/../visioncraft-core/tests/data/plate.3dcraft"
             ),
             dir.join("plate.3dcraft"),
+        )
+        .unwrap();
+        std::fs::copy(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/site-plan.png"),
+            dir.join("site-plan.png"),
         )
         .unwrap();
         let mut host = Headless::new(Access::roots(Some(dir.clone()), Some(dir.clone())));
@@ -191,6 +196,21 @@ fn every_recipe_of_the_guide_runs() {
                     "{report}"
                 );
                 assert_eq!(shapes[3]["smooth"], true, "{report}");
+            }
+            24 => {
+                let u = &results[3]["result"]["underlays"][0];
+                assert_eq!(u["size_px"], json!([200, 120]), "{report}");
+                assert_eq!(u["loaded"], true, "{report}");
+                assert!((u["metres_per_pixel"].as_f64().unwrap() - 0.1).abs() < 1e-6);
+                assert!(
+                    (u["opacity"].as_f64().unwrap() - 0.6).abs() < 1e-6,
+                    "{report}"
+                );
+                // 200 x 120 px at 0.1 m: 20 x 12 m, its top-left at (-4, -3)
+                let b = &u["bounds"];
+                assert!((b[0][0].as_f64().unwrap() + 4.0).abs() < 1e-3, "{b}");
+                assert!((b[1][1].as_f64().unwrap() - 9.0).abs() < 1e-3, "{b}");
+                assert_eq!(results[3]["result"]["shapes"][0]["id"], "S1", "{report}");
             }
             18 => {
                 // The beach 20 m out: 0.2 m above the water; the grass stops at the waterline.

@@ -46,7 +46,10 @@ fn spawn(fut: impl Future<Output = ()> + 'static) {
     wasm_bindgen_futures::spawn_local(fut);
 }
 
-pub const OPEN_EXTENSIONS: [&str; 7] = [
+pub const OPEN_EXTENSIONS: [&str; 10] = [
+    "png",
+    "jpg",
+    "jpeg",
     "3dcraft",
     "obj",
     "visioncraft",

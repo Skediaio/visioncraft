@@ -887,3 +887,116 @@ fn extensions_of_objects_and_shapes_survive_load_and_save() {
     let text = String::from_utf8(plain.project().to_json_bytes()).unwrap();
     assert!(!text.contains("extensions"));
 }
+
+#[test]
+fn underlays_add_calibrate_scale_undo_and_remove() {
+    let mut s = Session::new(Project::default());
+    // The host fills size_px; the core alone refuses a missing one.
+    let err = s
+        .run("underlay.add", json!({"file": "plan.png"}))
+        .unwrap_err();
+    assert!(err.to_string().contains("size_px"), "{err}");
+    let u = id(s
+        .run(
+            "underlay.add",
+            json!({"file": "plans/site plan.png", "size_px": [800, 600]}),
+        )
+        .unwrap());
+    assert_eq!(u, "u1");
+    let first = s.project().underlays[0].clone();
+    assert_eq!(first.name, "site plan");
+    assert_eq!((first.opacity, first.elevation), (0.5, 0.02));
+    // its own layer was made, and a layer that holds it cannot be removed
+    assert!(s.project().layers.iter().any(|l| l.id == "underlay"));
+    assert!(s.run("layer.remove", json!({"id": "underlay"})).is_err());
+    s.run(
+        "layer.set_visible",
+        json!({"id": "underlay", "visible": false}),
+    )
+    .unwrap();
+
+    // 100 px to 500 px along the top edge is a 10 m wall from (0, 0) to (10, 0)
+    let r = s
+        .run(
+            "underlay.calibrate",
+            json!({"id": u, "pixel_a": [100, 200], "pixel_b": [500, 200], "world_a": [0, 0], "world_b": [10, 0]}),
+        )
+        .unwrap();
+    assert!((r["metres_per_pixel"].as_f64().unwrap() - 0.025).abs() < 1e-6);
+    let p = s.project().underlays[0].placement;
+    assert!((p.origin[0] + 2.5).abs() < 1e-4 && (p.origin[1] + 5.0).abs() < 1e-4);
+    let at = p.pixel_to_world([500.0, 200.0]);
+    assert!((at[0] - 10.0).abs() < 1e-3 && at[1].abs() < 1e-3);
+
+    s.run(
+        "underlay.scale_by_distance",
+        json!({"id": u, "pixel_a": [0, 0], "pixel_b": [300, 400], "distance_m": 25}),
+    )
+    .unwrap();
+    assert!((s.project().underlays[0].placement.metres_per_pixel - 0.05).abs() < 1e-6);
+    assert_eq!(s.project().underlays[0].placement.origin, p.origin);
+
+    s.run(
+        "underlay.set",
+        json!({"id": u, "opacity": 0.25, "rotation_deg": 15}),
+    )
+    .unwrap();
+    assert_eq!(s.project().underlays[0].opacity, 0.25);
+    for bad in [
+        json!({"id": u, "opacity": 1.5}),
+        json!({"id": u, "metres_per_pixel": 0}),
+        json!({"id": u, "layer": "nope"}),
+        json!({"id": u, "origin": [0, 0, 0]}),
+        json!({"id": "u9", "opacity": 0.1}),
+    ] {
+        assert!(s.run("underlay.set", bad.clone()).is_err(), "{bad}");
+    }
+    assert!(
+        s.run(
+            "underlay.calibrate",
+            json!({"id": u, "pixel_a": [1, 1], "pixel_b": [1, 1], "world_a": [0, 0], "world_b": [1, 0]}),
+        )
+        .is_err()
+    );
+
+    // every step is one undo
+    let after_set = s.project().underlays[0].clone();
+    assert!(s.undo());
+    assert_eq!(s.project().underlays[0].opacity, 0.5);
+    assert!(s.undo() && s.undo() && s.undo());
+    assert_eq!(s.project().underlays[0], first);
+    assert!(s.redo() && s.redo());
+    assert_ne!(s.project().underlays[0], first);
+    assert_ne!(s.project().underlays[0], after_set);
+    s.run("underlay.remove", json!({"id": u})).unwrap();
+    assert!(s.project().underlays.is_empty());
+    assert!(s.undo());
+    assert_eq!(s.project().underlays.len(), 1);
+    assert!(s.run("underlay.remove", json!({"id": "u9"})).is_err());
+}
+
+#[test]
+fn old_projects_have_no_underlays_and_they_are_not_written_while_none() {
+    let json = serde_json::to_value(Project::default()).unwrap();
+    assert!(json.get("underlays").is_none());
+    let back: Project = serde_json::from_value(json).unwrap();
+    assert!(back.underlays.is_empty());
+
+    let mut s = Session::new(Project::default());
+    s.run(
+        "underlay.add",
+        json!({"file": "plan.png", "size_px": [10, 10], "layer": "shapes"}),
+    )
+    .unwrap();
+    let json = serde_json::to_value(s.project()).unwrap();
+    assert_eq!(json["underlays"][0]["id"], "u1");
+    let back: Project = serde_json::from_value(json).unwrap();
+    assert_eq!(back.underlays, s.project().underlays);
+    // an underlay saved without the optional fields gets their defaults
+    let minimal: visioncraft_core::Underlay = serde_json::from_value(json!({
+        "id": "u1", "name": "P", "file": "p.png", "layer": "shapes",
+        "placement": {"origin": [0, 0], "metres_per_pixel": 0.1}, "size_px": [4, 4]
+    }))
+    .unwrap();
+    assert_eq!((minimal.opacity, minimal.elevation), (0.5, 0.02));
+}

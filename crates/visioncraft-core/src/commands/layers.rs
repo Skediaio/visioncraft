@@ -77,7 +77,7 @@ pub(super) fn register(s: &mut Session) {
         spec(
             "layer.assign",
             "Move to Layer",
-            "Moves a model, shape, generator or light to another layer.",
+            "Moves a model, shape, generator, light or underlay to another layer.",
             vec![
                 param(
                     "item",

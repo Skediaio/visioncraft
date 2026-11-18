@@ -46,6 +46,7 @@ pub mod terrain_gpu;
 pub mod terrain_tool;
 pub mod texture_worker;
 pub mod ui;
+pub mod underlay_ui;
 pub mod user_objects;
 pub mod views;
 pub mod water_panel;
@@ -365,6 +366,19 @@ impl App {
         let _ = project_dir;
     }
 
+    /// A native project's plan images, read from beside the project file.
+    fn load_underlays(&mut self, project_dir: Option<&Path>) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(dir) = project_dir {
+            for u in self.studio.project().underlays.clone() {
+                if let Ok(bytes) = std::fs::read(dir.join(&u.file)) {
+                    self.take_bundled(vec![(u.file.clone(), Arc::from(bytes))]);
+                }
+            }
+        }
+        let _ = project_dir;
+    }
+
     /// After a relink: the other missing models whose file lies in the same folder load too,
     /// and every model read from a new place keeps it as its source (so the next open finds it).
     #[cfg(not(target_arch = "wasm32"))]
@@ -433,6 +447,16 @@ impl App {
                 Ok(_) => {
                     self.toasts
                         .info(format!("{} {}", stem(&name), strings::OBJECT_IMPORTED));
+                }
+                Err(e) => self.toasts.error(format!("{name}: {e}")),
+            },
+            "png" | "jpg" | "jpeg" => match self.studio.import_underlay(&stem(&name), bytes) {
+                Ok(id) => {
+                    self.draw.plan.select(id);
+                    self.set_mode(ctx, Some(Mode::Draw));
+                    self.draw.tool = draw::Tool::Plan;
+                    self.toasts
+                        .info(format!("{} {}", stem(&name), strings::PLAN_IMPORTED));
                 }
                 Err(e) => self.toasts.error(format!("{name}: {e}")),
             },
@@ -869,6 +893,7 @@ impl App {
                 self.project_path = path.map(Path::to_path_buf);
                 self.loaded_sources(r);
                 self.load_objects(dir);
+                self.load_underlays(dir);
                 self.take_bundled(files);
                 self.drape_old_areas();
                 self.studio.sync();
@@ -896,6 +921,16 @@ impl App {
                         missing.join(", ")
                     ));
                 }
+                let missing: Vec<String> = self
+                    .studio
+                    .missing_underlays()
+                    .iter()
+                    .map(|u| format!("{} ({})", u.name, u.file))
+                    .collect();
+                if !missing.is_empty() {
+                    self.toasts
+                        .warn(format!("{} {}", strings::PLAN_MISSING, missing.join(", ")));
+                }
             }
             Err(e) => self.toasts.error(format!("{name}: {e}")),
         }
@@ -915,6 +950,21 @@ impl App {
                 } else {
                     self.toasts
                         .warn(format!("{file}: {}", strings::OBJECT_UNREADABLE));
+                }
+                continue;
+            }
+            if self
+                .studio
+                .project()
+                .underlays
+                .iter()
+                .any(|u| u.file == file)
+            {
+                if visioncraft_core::underlay::image_size(&bytes).is_ok() {
+                    self.studio.scene.library.store.provide(&file, bytes);
+                } else {
+                    self.toasts
+                        .warn(format!("{file}: {}", strings::PLAN_UNREADABLE));
                 }
                 continue;
             }
@@ -1185,6 +1235,7 @@ impl App {
                 // Imported objects (and, on the web, model files) only travel inside a bundle.
                 let p = self.studio.project();
                 let bundled = !p.objects.is_empty()
+                    || !p.underlays.is_empty()
                     || (cfg!(target_arch = "wasm32") && !self.studio.sources.is_empty());
                 if bundled {
                     let s = &self.studio;
@@ -1360,6 +1411,9 @@ impl eframe::App for App {
             }
         }
         busy |= self.serve_agents(&ctx, now);
+        if std::mem::take(&mut self.studio.pick_underlay) {
+            files::pick(&self.inbox, &ctx, None, &["png", "jpg", "jpeg"]);
+        }
         for m in self.inbox.take() {
             match m {
                 Msg::Opened {

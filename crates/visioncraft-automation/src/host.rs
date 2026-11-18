@@ -71,6 +71,8 @@ pub struct RenderRequest {
     pub photo: Option<PhotoRequest>,
     /// The animation clock (s) the picture is taken at: wind and water move with it.
     pub animation_s: f64,
+    /// The image files of the project's underlays, by their `file` (see [`HostState::underlays`]).
+    pub underlays: Vec<(String, Arc<[u8]>)>,
 }
 
 /// A photo: `samples` frames averaged; depth of field when `aperture_m` is over 0, focused at
@@ -188,6 +190,11 @@ pub struct HostState {
     /// Models that could not be loaded, by id: (source, why).
     pub missing: BTreeMap<String, (String, String)>,
     pub catalog: Catalog,
+    /// The image files of the underlays (PNG or JPEG bytes) by the `file` the project names,
+    /// read when an underlay is added or the project opened.
+    pub underlays: BTreeMap<String, Arc<[u8]>>,
+    /// Underlay files that could not be read, by `file`: why.
+    pub underlay_missing: BTreeMap<String, String>,
     /// The project as it was last opened or saved, for `dirty`.
     pub saved: Option<Project>,
     /// The agent's name (MCP `clientInfo.name`), for the agent log.
@@ -252,8 +259,50 @@ impl HostState {
         })
     }
 
+    /// Reads an underlay's image file (relative to the project file) and its size. A message for
+    /// a file that is missing, cannot be read or is not a PNG or JPEG.
+    pub fn load_underlay(&self, file: &str) -> Result<(Arc<[u8]>, [u32; 2]), String> {
+        if file.contains("://") {
+            return Err(format!("`{file}`: images from a URL are not loaded here"));
+        }
+        let path = self.access.resolve(file, false, self.base().as_deref())?;
+        let len = std::fs::metadata(&path)
+            .map_err(|e| format!("cannot read the image `{}`: {e}", path.display()))?
+            .len();
+        if len > visioncraft_core::underlay::MAX_FILE_BYTES {
+            return Err(format!(
+                "`{file}` is {} MB; an underlay image may be at most {} MB",
+                len / (1024 * 1024),
+                visioncraft_core::underlay::MAX_FILE_BYTES / (1024 * 1024)
+            ));
+        }
+        let bytes = std::fs::read(&path)
+            .map_err(|e| format!("cannot read the image `{}`: {e}", path.display()))?;
+        let size =
+            visioncraft_core::underlay::image_size(&bytes).map_err(|e| format!("`{file}`: {e}"))?;
+        Ok((Arc::from(bytes), size))
+    }
+
+    /// Reads the underlay images `project` names and that are not held yet.
+    pub fn sync_underlays(&mut self, project: &Project) {
+        for u in &project.underlays {
+            if self.underlays.contains_key(&u.file) || self.underlay_missing.contains_key(&u.file) {
+                continue;
+            }
+            match self.load_underlay(&u.file) {
+                Ok((bytes, _)) => {
+                    self.underlays.insert(u.file.clone(), bytes);
+                }
+                Err(why) => {
+                    self.underlay_missing.insert(u.file.clone(), why);
+                }
+            }
+        }
+    }
+
     /// Loads what `project` refers to and is not loaded yet (or was loaded for another source).
     pub fn sync_models(&mut self, project: &Project) {
+        self.sync_underlays(project);
         for m in &project.models {
             let have = self.models.get(&m.id).is_some_and(|l| l.source == m.source)
                 || self.missing.get(&m.id).is_some_and(|(s, _)| *s == m.source);

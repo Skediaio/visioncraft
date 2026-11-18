@@ -1,10 +1,17 @@
 # Roadmap
 
-What is planned, in rough order. Updated 2026-11-14. Items move up when they are picked up;
+What is planned, in rough order. Updated 2026-11-18. Items move up when they are picked up;
 nothing here is a promise of a date.
 
 ## In progress
 
+- **A plan as underlay:** `underlay.add` puts a PNG or JPEG (a floor plan, a site plan, a scan)
+  flat under the drawing, unlit and see-through (`opacity`, `elevation`, its own `underlay`
+  layer), casting no shadow and not picked; `underlay.calibrate` (two image points and the drawing
+  points they land on) and `underlay.scale_by_distance` (a known dimension) set scale, turn and
+  origin exactly. It travels in the bundle as `underlays/<name>`. In the window: Draw, Plan
+  image. Next: PDF pages (a pure-Rust rasteriser; export as PNG meanwhile), more than one page,
+  perspective-correcting a photographed plan, a plan that follows terrain instead of lying flat.
 - **Quantities:** `query.quantities` lists areas, lengths, volumes and plant counts per shape and
   planting, and totals per material and asset. Next: linked models, per-body quantities, the
   building rule in plant counts.
@@ -88,8 +95,6 @@ nothing here is a promise of a date.
   (`layer.set_context`) holds neighbours as plain extrusions or models that cast shadow, draw as
   grey massing and stay out of the quantities. Next: terrain beyond the plot as a caster, and
   neighbours from open data once "Ground from coordinates" exists.
-- **A plan as underlay:** a scaled image or PDF page of a floor plan or site plan under the
-  drawing, to trace over.
 - **Photos on walls:** a facade photo as the texture of a wall, straightened and scaled.
 - **Ground from coordinates:** give a latitude and longitude (or an address) and get the real
   ground under the model: terrain from an open elevation model, an aerial or satellite image as

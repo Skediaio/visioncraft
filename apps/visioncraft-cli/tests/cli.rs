@@ -301,6 +301,14 @@ fn recipes_render_through_the_mcp_server() {
             d.join("plate.3dcraft"),
         )
         .unwrap();
+        std::fs::copy(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../crates/visioncraft-automation/tests/data/site-plan.png"
+            ),
+            d.join("site-plan.png"),
+        )
+        .unwrap();
         let mut child = Command::new(env!("CARGO_BIN_EXE_visioncraft-cli"))
             .args([
                 "mcp",

@@ -267,6 +267,8 @@ pub enum Tool {
     /// Puts a window, or a door, in the wall of a block that is clicked.
     Window,
     Door,
+    /// The plan image under the drawing: its scale and place (`underlay.*`).
+    Plan,
 }
 
 /// The size and frame new windows and doors get.
@@ -351,6 +353,8 @@ pub struct DrawState {
     /// The project had nothing in it when Draw opened.
     started_empty: bool,
     pub opening: OpeningForm,
+    /// The plan underlay's fields and clicks (the Plan tool).
+    pub plan: crate::underlay_ui::PlanState,
 }
 
 const ACCENT: [u8; 4] = [255, 200, 70, 255];
@@ -408,6 +412,7 @@ impl DrawState {
         }
         cx.s.set_draft(None);
         cx.s.extra = Default::default();
+        self.plan.cancel(cx);
         self.points.clear();
         self.tool = Tool::Select;
     }
@@ -481,6 +486,7 @@ impl DrawState {
         match self.tool {
             Tool::Select => self.editing(cx, cursor, radius, &mut top),
             Tool::Window | Tool::Door => self.placing(cx, cursor, radius, &mut top),
+            Tool::Plan => self.plan.update(cx, cursor, radius, &mut top),
             _ => self.drawing(cx, cursor, radius, &mut top),
         }
         if cx.input.escape && self.tool != Tool::Select && self.points.is_empty() {
@@ -749,7 +755,7 @@ impl DrawState {
                 "",
                 json!({"name": name(t::TOOL_BED), "outline": points}),
             ),
-            Tool::Select | Tool::Window | Tool::Door => return,
+            Tool::Select | Tool::Window | Tool::Door | Tool::Plan => return,
         };
         let mut params = params;
         if !material.is_empty() {
@@ -997,13 +1003,20 @@ impl DrawState {
                 (Tool::Circle, t::TOOL_CIRCLE),
                 (Tool::Window, t::TOOL_WINDOW),
                 (Tool::Door, t::TOOL_DOOR),
+                (Tool::Plan, t::TOOL_PLAN),
             ] {
                 if ui.selectable_label(self.tool == tool, label).clicked() {
+                    if self.tool == Tool::Plan && tool != Tool::Plan {
+                        self.plan.cancel(cx);
+                    }
                     self.tool = tool;
                     self.points.clear();
                 }
             }
         });
+        if self.tool == Tool::Plan {
+            self.plan.panel(ui, cx);
+        }
         if matches!(self.tool, Tool::Window | Tool::Door) {
             self.opening_panel(ui);
         }
@@ -1013,6 +1026,7 @@ impl DrawState {
             Tool::Stairs => t::STAIRS_HINT,
             Tool::Circle => t::CIRCLE_HINT,
             Tool::Window | Tool::Door => t::OPENING_HINT,
+            Tool::Plan => "",
             _ => t::DRAW_HINT,
         });
     }

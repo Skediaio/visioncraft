@@ -868,9 +868,38 @@ fn run_core(host: &mut dyn Host, id: &str, params: &Value) -> Result<Value, Stri
     } else {
         None
     };
+    // An underlay's image is read here: its size is recorded when the caller gave none, and a
+    // file that is not there or not an image is refused with a message.
+    let mut params = std::borrow::Cow::Borrowed(params);
+    let mut underlay_file = None;
+    if matches!(id, "underlay.add" | "underlay.set")
+        && let Some(file) = take::<String>(id, &params, "file")?
+    {
+        let given: Option<[u32; 2]> = take(id, &params, "size_px")?;
+        match state.load_underlay(&file) {
+            Ok((bytes, size)) => {
+                if given.is_none() {
+                    params.to_mut()["size_px"] = json!(size);
+                }
+                underlay_file = Some((file, bytes));
+            }
+            // A caller that states the size may name a file this host does not have; it is
+            // then reported as missing, as a model's source is.
+            Err(why) if given.is_none() || why.contains("not a PNG or JPEG") => {
+                return Err(format!("{id}: {why}"));
+            }
+            Err(why) => {
+                state.underlay_missing.insert(file, why);
+            }
+        }
+    }
     let result = session
-        .run(id, params.clone())
+        .run(id, params.clone().into_owned())
         .map_err(|e| format!("{id}: {e}"))?;
+    if let Some((file, bytes)) = underlay_file {
+        state.underlay_missing.remove(&file);
+        state.underlays.insert(file, bytes);
+    }
     if let (Some(loaded), Some(new)) = (preloaded, result["id"].as_str()) {
         state.missing.remove(new);
         state.models.insert(new.to_string(), loaded);
@@ -1302,6 +1331,14 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
         quality: quality.to_string(),
         photo,
         animation_s,
+        underlays: {
+            let state = host.state();
+            project
+                .underlays
+                .iter()
+                .filter_map(|u| Some((u.file.clone(), state.underlays.get(&u.file)?.clone())))
+                .collect()
+        },
     };
     let models = host.state().models.clone();
     let rendered = host

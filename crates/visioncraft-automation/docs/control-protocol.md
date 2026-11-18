@@ -91,7 +91,7 @@ unknown keys are refused with the nearest name, unless `openParams` is true.
 ### Commands
 
 The core's commands (`model.*`, `shape.*`, `material.*`, `planting.*`, `species.add|update|remove`,
-`fence.*`, `stairs.*`, `bed.*`, `light.*`, `viewpoint.*`, `layer.*`, `terrain.*`, `site.set`, `time.set`, `view.set`,
+`fence.*`, `stairs.*`, `bed.*`, `underlay.*`, `light.*`, `viewpoint.*`, `layer.*`, `terrain.*`, `site.set`, `time.set`, `view.set`,
 `style.set`) change the project, each one undo step; its queries (`query.sun {time?}`,
 `query.measure {kind, points?, outline?}`, `query.quantities {ids?, layer?}`) never do. Curves are `shape.*` commands too:
 `shape.set_curve {id, edge, radius_m?, sagitta_m?, side?}`, `shape.clear_curve {id, edge}`,
@@ -116,6 +116,11 @@ loaded geometry or a GPU:
 | `catalog.search` | `{query?, category?, exposure?, max_height_m?, limit? = 50}` | `{total, assets: [{id, name, category, size_m, license, author, plant}]}` |
 | `species.list` | `{filter?, category?}` | `{species: [{asset: "flora:<id>", common_name, ...}], custom: [{asset, name, base}]}` |
 | `planting.list_presets` | `{}` | `{presets: [{id, name, layers}]}` |
+| `underlay.add` | `{file, name?, layer? = "underlay", origin? = [0, 0], metres_per_pixel? = 0.05, rotation_deg? = 0, opacity? = 0.5, elevation? = 0.02, size_px?}` | `{id}`; the host reads the PNG or JPEG (relative to the project file or the read root) and fills `size_px`; a missing, unreadable or other file is an error unless `size_px` is given for a file the host does not have |
+| `underlay.set` | `{id, name?, file?, layer?, origin?, metres_per_pixel?, rotation_deg?, opacity?, elevation?, size_px?}` | `null` |
+| `underlay.calibrate` | `{id, pixel_a, pixel_b, world_a, world_b}` | `{origin, metres_per_pixel, rotation_deg}`: scale, turn and origin from two image positions and the drawing points they land on |
+| `underlay.scale_by_distance` | `{id, pixel_a, pixel_b, distance_m}` | `{metres_per_pixel}`; origin and rotation stay |
+| `underlay.remove` | `{id}` | `null` |
 | `view.render` | `{path?, width? = 800, height? = 600, viewpoint?, camera?, time?, years?, quality? = "high", samples? = 64, aperture_m? = 0, focus_m?}`; quality `"photo"` averages `samples` frames at ULTRA (soft shadows, smooth edges; `aperture_m`/`focus_m` for depth of field) | a PNG: to `path`, else `{mime: "image/png", base64}`; with `camera`, `sun`, `time`, `plantsPending`, `renderer` |
 
 `view.render` draws with the app's own renderer (the window-free studio) on a headless GPU
@@ -147,6 +152,7 @@ plus what is computed:
   "assignments": [{"target": {"type": "owner", "owner": "S1"}, "material": "lawn"}],
   "generators": [{"id": "g1", "type": "spline_mass", "name": "Hedge", "layer": "planting", "assets": ["flora:carpinus-hedge"], "count": 26, "truncated": false}],
   "species": [], "lights": [{"id": "li1", "name": "Garden lamp", "...": "..."}], "viewpoints": [{"id": "v1", "...": "..."}],
+  "underlays": [{"id": "u1", "name": "Site plan", "file": "site-plan.png", "layer": "underlay", "origin": [-4, -3], "metres_per_pixel": 0.1, "rotation_deg": 0, "size_px": [200, 120], "opacity": 0.6, "elevation": 0.02, "corners": [[-4, -3], [16, -3], [16, 9], [-4, 9]], "bounds": [[-4, -3], [16, 9]], "loaded": true}],
   "terrain": null,
   "history": {"can_undo": true, "can_redo": false}
 }
@@ -156,7 +162,11 @@ Verbosity: `faces: false` leaves out the face names (a large 3dcraft house has h
 `measures: false` skips evaluating generators and measuring shapes; `placements: true` lists
 every plant (`asset, position, rotation_y_deg, scale`); `full: true` gives materials, generators
 and species with all their fields. A model whose file could not be read has `loaded: false` and
-`error`, and is listed under `missingModels`.
+`error`, and is listed under `missingModels`. An underlay is listed with its `corners` (top-left,
+top-right, bottom-right, bottom-left, `[x, z]`) and `bounds` on the ground, `loaded` (its image is
+held) and, when the file could not be read, `error`. A plan image is a picture under the
+drawing: `view.render` shows it (flat, unlit, see-through), it is not picked and not in
+`query.quantities`.
 
 ## MCP
 

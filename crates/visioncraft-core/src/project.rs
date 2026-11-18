@@ -476,6 +476,9 @@ pub struct Project {
     /// The user's own models, placed as the asset `user:<id>`.
     #[serde(default)]
     pub objects: Vec<UserObject>,
+    /// Plan images under the drawing to trace over; not written while there are none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub underlays: Vec<crate::underlay::Underlay>,
     #[serde(default)]
     pub view: ViewState,
     /// Behind an `Arc`: undo snapshots share it, and a command that edits it copies it once.
@@ -505,6 +508,7 @@ impl Default for Project {
             style: RenderStyle::default(),
             species: Vec::new(),
             objects: Vec::new(),
+            underlays: Vec::new(),
             view: ViewState::default(),
             terrain: None,
             sea: None,
@@ -581,6 +585,9 @@ impl Project {
         if let Some(g) = self.generators.iter_mut().find(|g| g.id() == id) {
             return Some(g.layer_mut());
         }
+        if let Some(u) = self.underlays.iter_mut().find(|u| u.id == id) {
+            return Some(&mut u.layer);
+        }
         self.lights
             .iter_mut()
             .find(|l| l.id == id)
@@ -593,6 +600,7 @@ impl Project {
             || self.shapes.iter().any(|s| s.layer() == layer)
             || self.generators.iter().any(|g| g.layer() == layer)
             || self.lights.iter().any(|l| l.layer == layer)
+            || self.underlays.iter().any(|u| u.layer == layer)
     }
 
     pub fn to_json_bytes(&self) -> Vec<u8> {
