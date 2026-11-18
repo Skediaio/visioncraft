@@ -1131,6 +1131,9 @@ impl SkyVisibility {
     }
 }
 
+/// Floats a probe takes in [`SkyBake::probe_floats`]: nine harmonics, outdoors, albedo.
+pub const PROBE_FLOATS: usize = 11;
+
 /// A bake under way, a few probes at a time: a host that must not stop (a window on the web)
 /// calls [`SkyBake::step`] every frame; [`bake`] runs it at once, on all cores natively.
 pub struct SkyBake {
@@ -1254,6 +1257,39 @@ impl SkyBake {
         made.into_iter().for_each(|m| self.push(m));
         self.next = end;
         self.next == total
+    }
+
+    /// Probes `start..end` (cut to the grid) as floats, [`PROBE_FLOATS`] each: the nine
+    /// harmonics, 1 or 0 for outdoors, the albedo. Probes are independent, so workers bake
+    /// ranges in any order and [`SkyBake::fill`] takes them back in order.
+    pub fn probe_floats(&self, start: usize, end: usize) -> Vec<f32> {
+        let end = end.min(self.progress().1);
+        let tracer = self.tracer();
+        let mut out = Vec::with_capacity(end.saturating_sub(start) * PROBE_FLOATS);
+        for i in start..end {
+            let (sh, outdoors, albedo) = self.probe(&tracer, i);
+            out.extend_from_slice(&sh);
+            out.push(if outdoors { 1.0 } else { 0.0 });
+            out.push(albedo);
+        }
+        out
+    }
+
+    /// Appends probes made by [`SkyBake::probe_floats`], the next ones after those done; false
+    /// (nothing taken) when the floats do not fit.
+    pub fn fill(&mut self, floats: &[f32]) -> bool {
+        let n = floats.len() / PROBE_FLOATS;
+        let (done, total) = self.progress();
+        if !floats.len().is_multiple_of(PROBE_FLOATS) || done + n > total {
+            return false;
+        }
+        for c in floats.as_chunks::<PROBE_FLOATS>().0 {
+            self.grid.sh.push(std::array::from_fn(|k| c[k]));
+            self.grid.valid.push(c[9]);
+            self.grid.albedo.push(c[10]);
+        }
+        self.next += n;
+        true
     }
 
     /// The grid; probes not done yet count as indoors.
@@ -1631,6 +1667,65 @@ mod tests {
         // The texture: three tiles of the weighted coefficients.
         let tex = v.texels();
         assert_eq!(tex.len(), 3 * v.sh.len());
+    }
+
+    #[test]
+    fn a_bake_assembled_from_ranges_made_out_of_order_equals_run() {
+        let mut scene = tree();
+        scene.triangles = wall(4.0, -3.0, 3.0, 2.5);
+        let whole = SkyBake::new(scene.clone()).unwrap().run();
+        let maker = SkyBake::new(scene.clone()).unwrap();
+        let total = maker.progress().1;
+        let size = 331;
+        let starts: Vec<usize> = (0..total).step_by(size).collect();
+        assert!(starts.len() > 3);
+        // Made last range first, as workers finishing in any order would.
+        let mut made: Vec<(usize, Vec<f32>)> = starts
+            .iter()
+            .rev()
+            .map(|&a| (a, maker.probe_floats(a, a + size)))
+            .collect();
+        made.sort_by_key(|m| m.0);
+        let mut bake = SkyBake::new(scene).unwrap();
+        for (_, f) in &made {
+            assert_eq!(f.len() % PROBE_FLOATS, 0);
+            assert!(bake.fill(f));
+        }
+        assert_eq!(bake.progress(), (total, total));
+        let got = bake.finish();
+        let bits = |v: &SkyVisibility| {
+            v.to_floats()
+                .iter()
+                .map(|f| f.to_bits())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(bits(&got), bits(&whole));
+        assert_eq!(got, whole);
+    }
+
+    #[test]
+    fn probe_floats_round_trip_and_reject_what_does_not_fit() {
+        let mut scene = tree();
+        scene.triangles = wall(4.0, -3.0, 3.0, 2.5);
+        let mut a = SkyBake::new(scene.clone()).unwrap();
+        let total = a.progress().1;
+        let f = a.probe_floats(5, 9);
+        assert_eq!(f.len(), 4 * PROBE_FLOATS);
+        assert!(a.probe_floats(total, total + 10).is_empty());
+        assert_eq!(
+            a.probe_floats(total - 2, total + 10).len(),
+            2 * PROBE_FLOATS
+        );
+        // Not a whole probe, or past the end: nothing taken.
+        assert!(!a.fill(&f[..PROBE_FLOATS + 1]));
+        assert_eq!(a.progress().0, 0);
+        assert!(a.fill(&f));
+        assert_eq!(a.progress().0, 4);
+        let mut b = SkyBake::new(scene).unwrap();
+        b.step(5);
+        assert!(b.fill(&b.probe_floats(5, 9)));
+        assert_eq!(b.progress().0, 9);
+        assert!(!b.fill(&vec![0.0; (total + 1) * PROBE_FLOATS]));
     }
 
     #[test]

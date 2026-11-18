@@ -1,7 +1,7 @@
 //! The web import worker (`import_task`, loaded by `index.html`): receives `[kind, bytes]`, posts
 //! back the meshed model as bytes, or an error message; or the sky visibility volume for
 //! `["sky", triangles, to_sun, crowns]` (`sky_task`) with its sun bounce, or the baked sky
-//! visibility for `["skyvis", scene floats]` (`sky_vis`). Natively it does nothing.
+//! visibility probes for `["skyvis", scene floats, start, end]` (`sky_vis`). Natively it does nothing.
 
 #[cfg(target_arch = "wasm32")]
 fn main() {
@@ -12,15 +12,30 @@ fn main() {
     let on_message =
         Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |e: web_sys::MessageEvent| {
             let msg: js_sys::Array = e.data().unchecked_into();
-            // The baked sky visibility (`sky_vis`): the scene as floats in, the grid as floats
-            // out (none when nothing blocks the sky).
+            // The baked sky visibility (`sky_vis`): `["skyvis", scene floats, start, end]`, the
+            // probes `start..end` as floats out (none: nothing blocks the sky, or the job is
+            // wrong). Empty scene floats: the scene of the last job of this worker (its binned
+            // triangles are kept for the next range).
             if msg.get(0).as_string().as_deref() == Some(visioncraft::sky_vis::SKY_VIS) {
+                thread_local! {
+                    static BAKE: std::cell::RefCell<Option<visioncraft_automation::SkyVisJob>> =
+                        const { std::cell::RefCell::new(None) };
+                }
                 let f = js_sys::Float32Array::new(&msg.get(1)).to_vec();
-                let grid = visioncraft_core::SkyScene::from_floats(&f)
-                    .and_then(|s| visioncraft_automation::SkyVisJob::new(s).run())
-                    .map(|g| g.to_floats())
-                    .unwrap_or_default();
-                let _ = reply_to.post_message(&js_sys::Float32Array::from(&grid[..]));
+                let end = msg.get(3).as_f64().map_or(usize::MAX, |v| v as usize);
+                let start = msg.get(2).as_f64().map_or(0, |v| v as usize);
+                let out = BAKE.with(|b| {
+                    let mut b = b.borrow_mut();
+                    if !f.is_empty() {
+                        *b = visioncraft_core::SkyScene::from_floats(&f)
+                            .map(visioncraft_automation::SkyVisJob::new);
+                    }
+                    b.as_ref().map_or_else(Vec::new, |job| {
+                        let total = job.progress().1;
+                        job.probe_floats(start, end.min(total))
+                    })
+                });
+                let _ = reply_to.post_message(&js_sys::Float32Array::from(&out[..]));
                 return;
             }
             let bytes = msg.get(1).unchecked_into::<js_sys::Uint8Array>().to_vec();

@@ -1910,6 +1910,18 @@ impl SkyVisJob {
         self.bake.map(|b| b.run_on(threads))
     }
 
+    /// Probes `start..end` as floats (`SkyBake::probe_floats`); none when nothing blocks the sky.
+    pub fn probe_floats(&self, start: usize, end: usize) -> Vec<f32> {
+        self.bake
+            .as_ref()
+            .map_or_else(Vec::new, |b| b.probe_floats(start, end))
+    }
+
+    /// Takes the next probes made elsewhere (`SkyBake::fill`); false when they do not fit.
+    pub fn fill(&mut self, floats: &[f32]) -> bool {
+        self.bake.as_mut().is_some_and(|b| b.fill(floats))
+    }
+
     /// The visibility; `None` when nothing blocks the sky.
     pub fn finish(self) -> Option<visioncraft_core::SkyVisibility> {
         self.bake.map(visioncraft_core::SkyBake::finish)

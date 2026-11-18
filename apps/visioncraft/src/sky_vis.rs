@@ -4,8 +4,8 @@
 //!
 //! Baking: `visioncraft_automation::SkyVisJob`, the scene `query.sky_view` traces. Natively a
 //! thread runs it on all cores (the example garden's 13,104 probes in about 0.4 s on eight cores); on
-//! the web in the import worker (a `skyvis` job: the scene and the grid travel as floats,
-//! `SkyScene::to_floats`), so the page keeps its frame rate. When the worker cannot start, the
+//! the web in several import workers (`skyvis` jobs for chunks of the probes: the scene and the probes
+//! travel as floats, `SkyScene::to_floats`, `SkyBake::probe_floats`), so the page keeps its frame rate. When the worker cannot start, the
 //! window bakes a few probes a frame, within [`SLICE_MS`]. It starts again only when what blocks
 //! the sky changed (`Key`: the shapes, models, plantings, terrain, materials and layers, the
 //! years and the leaves of the month), never for the hour or the weather; the old grid is drawn
@@ -65,17 +65,14 @@ enum Work {
 struct Task {
     cancel: Arc<AtomicBool>,
     work: Work,
+    /// The workers' run; dropping it stops them.
     #[cfg(target_arch = "wasm32")]
-    worker: Option<web_sys::Worker>,
+    _run: Option<std::rc::Rc<std::cell::RefCell<Run>>>,
 }
 
 impl Drop for Task {
     fn drop(&mut self) {
         self.cancel.store(true, Ordering::Relaxed);
-        #[cfg(target_arch = "wasm32")]
-        if let Some(w) = &self.worker {
-            w.terminate();
-        }
     }
 }
 
@@ -85,52 +82,188 @@ fn put(slot: &Slot, v: Result<Option<SkyVisibility>, ()>) {
     }
 }
 
-/// Bakes `scene` in the import worker; the grid lands in `slot` (`Err` when the worker fails).
+/// A bake over several import workers: the probe range is cut into chunks, each worker takes the
+/// next chunk when it answers (so a slow region does not leave one worker last), and the answers
+/// are put together in order.
 #[cfg(target_arch = "wasm32")]
-fn in_worker(scene: &SkyScene, slot: &Slot) -> Option<web_sys::Worker> {
+struct Run {
+    job: Option<SkyVisJob>,
+    /// The scene as floats, sent with a worker's first chunk only.
+    scene: Vec<f32>,
+    workers: Vec<web_sys::Worker>,
+    /// Per worker: whether it has the scene, and the chunk it is on.
+    has_scene: Vec<bool>,
+    on: Vec<usize>,
+    chunks: Vec<(usize, usize)>,
+    next: usize,
+    results: Vec<Option<Vec<f32>>>,
+    left: usize,
+    done: bool,
+    slot: Slot,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl Run {
+    fn stop(&mut self) {
+        self.done = true;
+        self.workers.iter().for_each(|w| w.terminate());
+    }
+
+    fn fail(&mut self) {
+        self.stop();
+        put(&self.slot, Err(()));
+    }
+
+    /// Gives worker `w` the next chunk, if any.
+    fn feed(&mut self, w: usize) {
+        let Some(&(a, b)) = self.chunks.get(self.next) else {
+            return;
+        };
+        let scene = if self.has_scene[w] {
+            js_sys::Float32Array::new_with_length(0)
+        } else {
+            js_sys::Float32Array::from(&self.scene[..])
+        };
+        let msg = js_sys::Array::of4(
+            &SKY_VIS.into(),
+            &scene,
+            &(a as f64).into(),
+            &(b as f64).into(),
+        );
+        if self.workers[w].post_message(&msg).is_err() {
+            return self.fail();
+        }
+        self.has_scene[w] = true;
+        self.on[w] = self.next;
+        self.next += 1;
+    }
+
+    /// Worker `w` answered with the probes of its chunk.
+    fn answer(&mut self, w: usize, floats: Vec<f32>) {
+        let c = self.on[w];
+        let (a, b) = self.chunks[c];
+        // A chunk is never empty: an empty answer is a worker that could not bake it.
+        if floats.len() != (b - a) * visioncraft_core::sky_visibility::PROBE_FLOATS {
+            return self.fail();
+        }
+        self.results[c] = Some(floats);
+        self.left -= 1;
+        if self.left > 0 {
+            return self.feed(w);
+        }
+        self.stop();
+        let grid = self.job.take().and_then(|mut job| {
+            let all = self.results.drain(..).flatten().all(|f| job.fill(&f));
+            all.then(|| job.finish())
+        });
+        put(&self.slot, grid.ok_or(()));
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl Drop for Run {
+    fn drop(&mut self) {
+        self.workers.iter().for_each(|w| w.terminate());
+    }
+}
+
+/// Workers that bake the sky visibility: the cores less two for the page and the GPU, two to
+/// eight (the texture workers run beside them).
+#[cfg(target_arch = "wasm32")]
+fn bake_workers() -> usize {
+    let n = js_sys::Reflect::get(&js_sys::global(), &"navigator".into())
+        .and_then(|nav| js_sys::Reflect::get(&nav, &"hardwareConcurrency".into()))
+        .ok()
+        .and_then(|v| v.as_f64())
+        .unwrap_or(4.0) as usize;
+    n.saturating_sub(2).clamp(2, 8)
+}
+
+/// Bakes `scene` over import workers; the grid lands in `slot` (`Err` when a worker fails). `None`
+/// when no worker starts. The bake stops when the returned run is dropped.
+#[cfg(target_arch = "wasm32")]
+fn in_workers(scene: &SkyScene, slot: &Slot) -> Option<std::rc::Rc<std::cell::RefCell<Run>>> {
+    use std::cell::RefCell;
+    use std::rc::Rc;
     use wasm_bindgen::JsCast;
     use wasm_bindgen::prelude::Closure;
-    let worker = web_sys::Worker::new("./import_worker_loader.js").ok()?;
-    let msg = js_sys::Array::new();
-    msg.push(&SKY_VIS.into());
-    msg.push(&js_sys::Float32Array::from(&scene.to_floats()[..]));
-    let (w, done) = (worker.clone(), slot.clone());
-    let on_message =
-        Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |e: web_sys::MessageEvent| {
-            let data = e.data();
-            if data.as_string().as_deref() == Some(crate::import_task::READY) {
-                if w.post_message(&msg).is_err() {
-                    w.terminate();
-                    put(&done, Err(()));
+    let job = SkyVisJob::new(scene.clone());
+    let total = job.progress().1;
+    if total == 0 {
+        // Nothing blocks the sky.
+        put(slot, Ok(None));
+        return Some(Rc::new(RefCell::new(Run {
+            job: None,
+            scene: Vec::new(),
+            workers: Vec::new(),
+            has_scene: Vec::new(),
+            on: Vec::new(),
+            chunks: Vec::new(),
+            next: 0,
+            results: Vec::new(),
+            left: 0,
+            done: true,
+            slot: slot.clone(),
+        })));
+    }
+    let k = bake_workers();
+    let size = total.div_ceil(4 * k).max(1);
+    let chunks: Vec<(usize, usize)> = (0..total)
+        .step_by(size)
+        .map(|a| (a, (a + size).min(total)))
+        .collect();
+    let workers: Vec<web_sys::Worker> = (0..k.min(chunks.len()))
+        .map(|_| web_sys::Worker::new("./import_worker_loader.js").ok())
+        .collect::<Option<_>>()?;
+    let n = workers.len();
+    let run = Rc::new(RefCell::new(Run {
+        job: Some(job),
+        scene: scene.to_floats(),
+        workers: workers.clone(),
+        has_scene: vec![false; n],
+        on: vec![0; n],
+        results: vec![None; chunks.len()],
+        left: chunks.len(),
+        chunks,
+        next: 0,
+        done: false,
+        slot: slot.clone(),
+    }));
+    for (w, worker) in workers.iter().enumerate() {
+        // The closures hold the run weakly: dropping it (the bake cancelled) ends the bake.
+        let weak = Rc::downgrade(&run);
+        let on_message =
+            Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |e: web_sys::MessageEvent| {
+                let Some(run) = weak.upgrade() else { return };
+                let mut run = run.borrow_mut();
+                if run.done {
+                    return;
                 }
-                return;
+                let data = e.data();
+                if data.as_string().as_deref() == Some(crate::import_task::READY) {
+                    return run.feed(w);
+                }
+                match data.dyn_into::<js_sys::Float32Array>() {
+                    Ok(a) => run.answer(w, a.to_vec()),
+                    Err(_) => run.fail(),
+                }
+            });
+        worker.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
+        let weak = Rc::downgrade(&run);
+        let on_error = Closure::<dyn FnMut(wasm_bindgen::JsValue)>::new(move |_| {
+            if let Some(run) = weak.upgrade() {
+                let mut run = run.borrow_mut();
+                if !run.done {
+                    run.fail();
+                }
             }
-            // The grid as floats; none: nothing blocks the sky.
-            let grid = data
-                .dyn_into::<js_sys::Float32Array>()
-                .map_err(|_| ())
-                .and_then(|a| {
-                    let f = a.to_vec();
-                    if f.is_empty() {
-                        Ok(None)
-                    } else {
-                        SkyVisibility::from_floats(&f).map(Some).ok_or(())
-                    }
-                });
-            put(&done, grid);
-            w.terminate();
         });
-    worker.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
-    let (w, failed) = (worker.clone(), slot.clone());
-    let on_error = Closure::<dyn FnMut(wasm_bindgen::JsValue)>::new(move |_| {
-        w.terminate();
-        put(&failed, Err(()));
-    });
-    worker.set_onerror(Some(on_error.as_ref().unchecked_ref()));
-    // shortcut: two small closures leak per bake, fine for a change of the design
-    on_message.forget();
-    on_error.forget();
-    Some(worker)
+        worker.set_onerror(Some(on_error.as_ref().unchecked_ref()));
+        // shortcut: two small closures leak per worker per bake, fine for a change of the design
+        on_message.forget();
+        on_error.forget();
+    }
+    Some(run)
 }
 
 /// The bake under way and what the drawn grid was made for.
@@ -188,8 +321,8 @@ impl SkyVisState {
         }
         #[cfg(target_arch = "wasm32")]
         {
-            let worker = in_worker(&scene, &slot);
-            let work = if worker.is_some() {
+            let run = in_workers(&scene, &slot);
+            let work = if run.is_some() {
                 Work::Off(slot, Some(scene))
             } else {
                 Work::Sliced(Some(SkyVisJob::new(scene)))
@@ -197,7 +330,7 @@ impl SkyVisState {
             self.task = Some(Task {
                 cancel,
                 work,
-                worker,
+                _run: run,
             });
         }
     }
