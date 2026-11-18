@@ -19,7 +19,7 @@ pub fn recipes() -> Vec<Value> {
 #[test]
 fn every_recipe_of_the_guide_runs() {
     let recipes = recipes();
-    assert_eq!(recipes.len(), 24);
+    assert_eq!(recipes.len(), 25);
     for (n, recipe) in recipes.into_iter().enumerate() {
         let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("recipe-{n}"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -32,11 +32,15 @@ fn every_recipe_of_the_guide_runs() {
             dir.join("plate.3dcraft"),
         )
         .unwrap();
-        std::fs::copy(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/site-plan.png"),
-            dir.join("site-plan.png"),
-        )
-        .unwrap();
+        for image in ["site-plan.png", "facade.png"] {
+            std::fs::copy(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/data")
+                    .join(image),
+                dir.join(image),
+            )
+            .unwrap();
+        }
         let mut host = Headless::new(Access::roots(Some(dir.clone()), Some(dir.clone())));
         let mut args = recipe.clone();
         args["steps"] = recipe["steps"]
@@ -211,6 +215,17 @@ fn every_recipe_of_the_guide_runs() {
                 assert!((b[0][0].as_f64().unwrap() + 4.0).abs() < 1e-3, "{b}");
                 assert!((b[1][1].as_f64().unwrap() - 9.0).abs() < 1e-3, "{b}");
                 assert_eq!(results[3]["result"]["shapes"][0]["id"], "S1", "{report}");
+            }
+            25 => {
+                let w = &results[2]["result"]["wall_photos"][0];
+                assert_eq!(w["size_px"], json!([500, 400]), "{report}");
+                assert_eq!(w["loaded"], true, "{report}");
+                assert!(w.get("face_error").is_none(), "{report}");
+                // the south wall of the 12 m block, 6 m high
+                let size = &w["face_size_m"];
+                assert!((size[0].as_f64().unwrap() - 12.0).abs() < 1e-3, "{size}");
+                assert!((size[1].as_f64().unwrap() - 6.0).abs() < 1e-3, "{size}");
+                assert_eq!(w["corners_px"][1], json!([450.0, 325.0]), "{report}");
             }
             18 => {
                 // The beach 20 m out: 0.2 m above the water; the grass stops at the waterline.

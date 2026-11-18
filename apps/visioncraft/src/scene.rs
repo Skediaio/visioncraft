@@ -4,6 +4,7 @@
 use glam::{Mat4, Vec3};
 use std::collections::HashMap;
 use std::sync::Arc;
+use visioncraft_core::wall_photo::{Corner, face_frame, rectified_size, split_by_region};
 use visioncraft_core::{
     Asset, Evaluation, Generator, ImportedModel, LawnWindow, Material, ModelRef, Project, Shape,
     SurfaceKind, Terrain, area_lifts, areas_over, blends_over, blocked_by_buildings,
@@ -30,7 +31,7 @@ pub struct Loaded {
     pub version: u64,
 }
 
-pub type LookKey = [u32; 15];
+pub type LookKey = [u32; 16];
 
 /// What a surface looks like to the renderer.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -53,6 +54,9 @@ pub struct Look {
     pub stripes: u32,
     /// Depth of the height map's relief in metres (0: off).
     pub parallax_m: f32,
+    /// A straightened wall photo, drawn by its own UVs: 1 + its index in `Scene::photo_faces`
+    /// (0: none). Only the pieces of a photo's region carry it; a face's own look never does.
+    pub photo: u32,
 }
 
 impl Look {
@@ -70,6 +74,15 @@ impl Look {
             tex: 0,
             stripes: 0,
             parallax_m: 0.0,
+            photo: 0,
+        }
+    }
+
+    /// The look of the region of wall photo number `photo` (1 + its index): the picture decides.
+    pub const fn of_photo(photo: u32) -> Self {
+        Self {
+            photo,
+            ..Self::plain(1.0, 1.0, 1.0, 0.85)
         }
     }
 
@@ -91,6 +104,7 @@ impl Look {
             f32::from_bits(self.tex),
             f32::from_bits(self.stripes),
             self.parallax_m,
+            f32::from_bits(self.photo),
         ]
         .map(f32::to_bits)
     }
@@ -442,6 +456,38 @@ fn upload(r: &mut Renderer, d: &MeshData, face_ids: bool) -> Option<MeshId> {
     upload_uvs(r, d, face_ids, None)
 }
 
+/// Triangles grouped by look: the look, whether it is a soft edge band, the mesh data, the UVs.
+type Groups = Vec<(Look, bool, MeshData, Vec<[f32; 2]>)>;
+
+/// Adds a triangle of `face` to the group of `look` (made when new), with its UVs when it has any.
+#[allow(clippy::too_many_arguments)]
+fn push_triangle(
+    groups: &mut Groups,
+    by_key: &mut HashMap<(LookKey, bool), usize>,
+    face_group: &mut [Option<usize>],
+    face: usize,
+    look: Look,
+    soft: bool,
+    corners: [Corner; 3],
+    uvs: Option<[[f32; 2]; 3]>,
+) {
+    let g = *by_key.entry((look.key(), soft)).or_insert_with(|| {
+        groups.push((look, soft, MeshData::default(), Vec::new()));
+        groups.len() - 1
+    });
+    face_group[face] = Some(g);
+    let (_, _, d, group_uvs) = &mut groups[g];
+    for (i, c) in corners.iter().enumerate() {
+        d.indices.push(d.positions.len() as u32);
+        d.positions.push(c.position);
+        d.normals.push(c.normal);
+        d.face_ids.push(face as u32);
+        if let Some(uvs) = uvs {
+            group_uvs.push(uvs[i]);
+        }
+    }
+}
+
 fn upload_uvs(
     r: &mut Renderer,
     d: &MeshData,
@@ -474,6 +520,19 @@ pub struct OwnerKey {
     pub geom: Geom,
     pub visible: bool,
     pub looks: Vec<LookKey>,
+    /// Per face: its wall photo (1 + its index in `Scene::photo_faces`), 0 for none; empty when
+    /// no face has one.
+    pub photos: Vec<u32>,
+}
+
+/// A wall photo ready to draw on a face: the straightened picture and where it lies on the face.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PhotoFace {
+    pub texture: visioncraft_render::TextureId,
+    /// The face's frame in the owner's own space.
+    pub frame: visioncraft_core::wall_photo::FaceFrame,
+    /// The rectangle of the frame the picture covers.
+    pub region: visioncraft_core::wall_photo::Region,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -842,6 +901,11 @@ pub struct Scene {
     materials: HashMap<LookKey, MaterialId>,
     /// The same looks as cutouts, for the soft edge bands of areas (`soft_material`).
     soft_materials: HashMap<LookKey, MaterialId>,
+    /// The wall photos shown, by content (a `Look::photo` is an index + 1 into it).
+    photo_faces: Vec<PhotoFace>,
+    /// What the last sync asked the store for: a photo's straightened picture and the texture it
+    /// had then (`photos_changed`).
+    photo_wanted: Vec<(String, Option<visioncraft_render::TextureId>)>,
     /// Looks made for placeholders and the figure: never pruned.
     pinned: std::collections::HashSet<LookKey>,
     protos: HashMap<String, Vec<(MeshId, MaterialId)>>,
@@ -905,6 +969,23 @@ impl Scene {
         if let Some(id) = self.materials.get(&look.key()) {
             return *id;
         }
+        if look.photo != 0
+            && let Some(pf) = self.photo_faces.get(look.photo as usize - 1)
+        {
+            // The picture decides, on the mesh's UVs; lit like any surface.
+            let m = visioncraft_render::Material {
+                base_color: [1.0, 1.0, 1.0, 1.0],
+                metallic: 0.0,
+                roughness: look.roughness,
+                base_color_map: Some(pf.texture),
+                relief: 0.0,
+                projection: visioncraft_render::Projection::Uv,
+                ..Default::default()
+            };
+            let id = r.add_material(&m);
+            self.materials.insert(look.key(), id);
+            return id;
+        }
         let m = gpu_material(look);
         let id = r.add_material(&m);
         if look.tex != 0 {
@@ -939,6 +1020,12 @@ impl Scene {
             .owners
             .values()
             .flat_map(|o| o.key.looks.iter().copied())
+            .chain(
+                self.owners
+                    .values()
+                    .flat_map(|o| o.key.photos.iter().filter(|p| **p != 0))
+                    .map(|p| Look::of_photo(*p).key()),
+            )
             .chain(self.pinned.iter().copied())
             .collect();
         if self.materials.len() <= used.len() + SPARE {
@@ -1170,6 +1257,7 @@ impl Scene {
             wanted.push((id, geom, model, xf, visible, true, is_area));
         }
 
+        self.photo_wanted.clear();
         for (id, geom, model, xf, visible, is_shape, is_area) in wanted {
             live.push(id.clone());
             let mut owner_looks = |project: &Project| -> Vec<Look> {
@@ -1204,10 +1292,17 @@ impl Scene {
                     .collect()
             };
             let looks = owner_looks(project);
+            // Context layers and clay show no photos, as they show no materials.
+            let photos = if clay || forced_look(project, &id).is_some() {
+                Vec::new()
+            } else {
+                self.photos_of(project, &id, &model, &xf)
+            };
             let key = OwnerKey {
                 geom,
                 visible,
                 looks: looks.iter().map(Look::key).collect(),
+                photos,
             };
             let change = match self.owners.get(&id) {
                 Some(o) => classify(&o.key, &key, &o.xf, &xf),
@@ -1232,7 +1327,7 @@ impl Scene {
                         Self::drop_owner(r, old);
                     }
                     let (pieces, face_piece) = if visible {
-                        self.build_pieces(r, &model, &looks, xf, &mut problems)
+                        self.build_pieces(r, &model, &looks, &key.photos, xf, &mut problems)
                     } else {
                         (Vec::new(), vec![None; model.faces.len()])
                     };
@@ -1603,14 +1698,17 @@ impl Scene {
         r: &mut Renderer,
         model: &ImportedModel,
         looks: &[Look],
+        photos: &[u32],
         xf: Mat4,
         problems: &mut Vec<String>,
     ) -> (Vec<Piece>, Vec<Option<usize>>) {
         // Triangles grouped by look, in first-seen order; those in an area's soft edge band
         // (`ImportedModel::edge` below 1 at a corner) in groups of their own, whose material
         // dithers (scene.wgsl `edge_coverage`) and which carry the edge value in their UVs: only
-        // the band pays for the cutout pass.
-        let mut groups: Vec<(Look, bool, MeshData, Vec<[f32; 2]>)> = Vec::new();
+        // the band pays for the cutout pass. A face with a wall photo is cut along the photo's
+        // region: the part inside is a group of its own with UVs from the face's frame, the rest
+        // keeps the face's look.
+        let mut groups: Groups = Vec::new();
         let mut by_key: HashMap<(LookKey, bool), usize> = HashMap::new();
         let mut face_group: Vec<Option<usize>> = vec![None; model.faces.len()];
         for (t, tri) in model.triangles.iter().enumerate() {
@@ -1619,26 +1717,70 @@ impl Scene {
             let soft = tri
                 .iter()
                 .any(|&v| model.edge.get(v as usize).is_some_and(|e| *e < 1.0));
-            let g = *by_key.entry((look.key(), soft)).or_insert_with(|| {
-                groups.push((look, soft, MeshData::default(), Vec::new()));
-                groups.len() - 1
+            let photo = photos.get(face).copied().unwrap_or(0);
+            let corners = tri.map(|v| Corner {
+                position: model.positions[v as usize],
+                normal: model.normals[v as usize],
             });
-            face_group[face] = Some(g);
-            let (_, _, d, uvs) = &mut groups[g];
-            for &v in tri {
-                d.indices.push(d.positions.len() as u32);
-                d.positions.push(model.positions[v as usize]);
-                d.normals.push(model.normals[v as usize]);
-                d.face_ids.push(face as u32);
-                if soft {
-                    uvs.push([model.edge[v as usize], 1.0]);
+            if photo != 0
+                && !soft
+                && let Some(pf) = self
+                    .photo_faces
+                    .get(photo as usize - 1)
+                    .copied()
+                    .filter(|pf| pf.frame.faces(corners.map(|c| c.position)))
+            {
+                let (inside, outside) = split_by_region(&pf.frame, &pf.region, corners);
+                let (w, h) = (pf.region.width(), pf.region.height());
+                let uv = |c: &Corner| {
+                    let [u, v] = pf.frame.uv(c.position);
+                    [(u - pf.region.u0) / w, 1.0 - (v - pf.region.v0) / h]
+                };
+                for part in inside {
+                    let uvs = part.map(|c| uv(&c));
+                    push_triangle(
+                        &mut groups,
+                        &mut by_key,
+                        &mut face_group,
+                        face,
+                        Look::of_photo(photo),
+                        false,
+                        part,
+                        Some(uvs),
+                    );
                 }
+                for part in outside {
+                    push_triangle(
+                        &mut groups,
+                        &mut by_key,
+                        &mut face_group,
+                        face,
+                        look,
+                        false,
+                        part,
+                        None,
+                    );
+                }
+                continue;
             }
+            let edge = soft.then(|| tri.map(|v| [model.edge[v as usize], 1.0]));
+            push_triangle(
+                &mut groups,
+                &mut by_key,
+                &mut face_group,
+                face,
+                look,
+                soft,
+                corners,
+                edge,
+            );
         }
         let mut pieces = Vec::new();
         let mut group_piece = vec![None; groups.len()];
         for (g, (look, soft, data, uvs)) in groups.iter().enumerate() {
-            let Some(mesh) = upload_uvs(r, data, true, soft.then_some(uvs.as_slice())) else {
+            // A group with UVs (a soft edge band, a photo) has them for every vertex.
+            let has_uvs = *soft || look.photo != 0;
+            let Some(mesh) = upload_uvs(r, data, true, has_uvs.then_some(uvs.as_slice())) else {
                 problems.push("a mesh was too large for the GPU and is not drawn".into());
                 continue;
             };
@@ -1657,6 +1799,94 @@ impl Scene {
                 .iter()
                 .map(|g| g.and_then(|g| group_piece[g]))
                 .collect(),
+        )
+    }
+
+    /// The wall photos of owner `id` that can be drawn now, per face: 1 + the index in
+    /// `photo_faces`, 0 for a face without one (or whose straightened picture has not arrived;
+    /// it is asked for, and `photos_changed` says when it is there). Empty when no face has one.
+    fn photos_of(
+        &mut self,
+        project: &Project,
+        id: &str,
+        model: &ImportedModel,
+        xf: &Mat4,
+    ) -> Vec<u32> {
+        let mut out = Vec::new();
+        for w in project
+            .wall_photos
+            .iter()
+            .filter(|w| w.target.owner() == id)
+        {
+            let visioncraft_core::Target::Face { face, .. } = &w.target else {
+                continue;
+            };
+            let Some(f) = model.faces.iter().position(|x| x.name == *face) else {
+                continue;
+            };
+            let up = xf.inverse().transform_vector3(Vec3::Y).to_array();
+            let Ok(frame) = face_frame(model, f, up) else {
+                continue;
+            };
+            let region = w.region.unwrap_or_else(|| frame.whole());
+            let Some(len) = self.library.store.provided(&w.file).map(|b| b.len()) else {
+                continue;
+            };
+            let size = rectified_size(region.width(), region.height(), w.size_px);
+            let path = crate::assets::photo_path(&w.file, len, w.size_px, w.corners_px, size);
+            let texture = self.library.store.texture(&path, true, false, 0.0);
+            self.photo_wanted.push((path, texture));
+            let Some(texture) = texture else { continue };
+            let pf = PhotoFace {
+                texture,
+                frame,
+                region,
+            };
+            let at = match self.photo_faces.iter().position(|p| *p == pf) {
+                Some(i) => i,
+                None => {
+                    self.photo_faces.push(pf);
+                    self.photo_faces.len() - 1
+                }
+            };
+            if out.is_empty() {
+                out = vec![0; model.faces.len()];
+            }
+            out[f] = at as u32 + 1;
+        }
+        out
+    }
+
+    /// A photo's straightened picture arrived (or left the store) since the last sync: the scene
+    /// has to be synced again. Called every frame.
+    pub fn photos_changed(&mut self) -> bool {
+        let store = &mut self.library.store;
+        self.photo_wanted
+            .iter()
+            .any(|(path, had)| store.texture(path, true, false, 0.0) != *had)
+    }
+
+    /// The frame of a face of owner `owner` in the owner's own space, and its size in metres:
+    /// what a region on it is measured in. A message for a face that is not there or not flat.
+    pub fn face_frame_of(
+        &self,
+        owner: &str,
+        face: &str,
+    ) -> Result<visioncraft_core::wall_photo::FaceFrame, String> {
+        let o = self
+            .owners
+            .get(owner)
+            .ok_or_else(|| format!("no `{owner}` in the scene"))?;
+        let f = o
+            .geom
+            .faces
+            .iter()
+            .position(|x| x.name == face)
+            .ok_or_else(|| format!("`{owner}` has no face `{face}`"))?;
+        face_frame(
+            &o.geom,
+            f,
+            o.xf.inverse().transform_vector3(Vec3::Y).to_array(),
         )
     }
 
@@ -2729,25 +2959,26 @@ mod tests {
             geom: Geom::Model(version, Vec::new()),
             visible,
             looks,
+            photos: Vec::new(),
         }
     }
 
     #[test]
     fn classify_picks_the_cheapest_update() {
-        let a = key(1, vec![[0; 15]], true);
+        let a = key(1, vec![[0; 16]], true);
         let (i, t) = (Mat4::IDENTITY, Mat4::from_translation(Vec3::X));
         assert_eq!(classify(&a, &a.clone(), &i, &i), Change::Keep);
         assert_eq!(classify(&a, &a.clone(), &i, &t), Change::Transform);
         assert_eq!(
-            classify(&a, &key(2, vec![[0; 15]], true), &i, &i),
+            classify(&a, &key(2, vec![[0; 16]], true), &i, &i),
             Change::Rebuild
         );
         assert_eq!(
-            classify(&a, &key(1, vec![[1; 15]], true), &i, &i),
+            classify(&a, &key(1, vec![[1; 16]], true), &i, &i),
             Change::Rebuild
         );
         assert_eq!(
-            classify(&a, &key(1, vec![[0; 15]], false), &i, &t),
+            classify(&a, &key(1, vec![[0; 16]], false), &i, &t),
             Change::Rebuild
         );
     }

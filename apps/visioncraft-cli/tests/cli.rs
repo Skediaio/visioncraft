@@ -279,6 +279,107 @@ fn render_draws_a_picture_that_is_not_blank() {
     }
 }
 
+/// A photo of a skewed facade on the south wall of a block, straightened by its four corners:
+/// seen from the front its red corner is top left, green top right, blue bottom left and yellow
+/// bottom right, its windows are dark blue and the wall between is beige (lit like any wall).
+/// Needs a GPU: `cargo test -p visioncraft-cli -- --ignored`.
+#[test]
+#[ignore]
+fn a_wall_photo_shows_straightened_and_the_right_way_up() {
+    let d = dir("wall-photo");
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../crates/visioncraft-automation/tests/data/facade.png"),
+        d.join("facade.png"),
+    )
+    .unwrap();
+    // a 12 x 6 m wall facing +Z (south) at z = 9, side 2 of the outline
+    let made = cli(
+        &[
+            "run",
+            "--cmd",
+            "shape.add_extrusion",
+            "--params",
+            r#"{"name": "Block", "outline": [[4, 2], [16, 2], [16, 9], [4, 9]], "height": 6}"#,
+            "--cmd",
+            "wall_photo.add",
+            "--params",
+            r#"{"file": "facade.png", "target": {"type": "face", "owner": "S1", "face": "S1:side(2)"},
+                "corners_px": [[50, 350], [450, 325], [410, 75], [80, 50]]}"#,
+            "--out",
+            "wall.visioncraft",
+        ],
+        &d,
+    );
+    assert!(
+        made.status.success(),
+        "{}",
+        String::from_utf8_lossy(&made.stderr)
+    );
+    let out = cli(
+        &[
+            "render",
+            "wall.visioncraft",
+            "--out",
+            "wall.png",
+            "--size",
+            "800x450",
+            "--camera",
+            "10,3,22,10,3,9",
+            "--fov",
+            "40",
+            "--time",
+            "12:00",
+        ],
+        &d,
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let bytes = std::fs::read(d.join("wall.png")).unwrap();
+    let mut reader = png::Decoder::new(std::io::Cursor::new(&bytes))
+        .read_info()
+        .unwrap();
+    let mut buf = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buf).unwrap();
+    assert_eq!((info.width, info.height), (800, 450));
+    // The wall is 12 m wide at 13 m from the eye: at 40 degrees the picture holds 16.8 m across
+    // and 9.5 m up, so the wall spans 572 x 286 pixels about the picture's centre.
+    let at = |s: f32, t: f32| {
+        let x = (400.0 + (s - 0.5) * 572.0) as usize;
+        let y = (225.0 + (0.5 - t) * 286.0) as usize;
+        let i = (y * 800 + x) * 4;
+        [buf[i], buf[i + 1], buf[i + 2]].map(i32::from)
+    };
+    let (red, green, blue, yellow) = (
+        at(0.04, 0.93),
+        at(0.96, 0.93),
+        at(0.04, 0.07),
+        at(0.96, 0.07),
+    );
+    let all = format!("{red:?} {green:?} {blue:?} {yellow:?}");
+    assert!(red[0] > 2 * red[1] && red[0] > 2 * red[2], "red: {all}");
+    assert!(
+        green[1] > green[0] + 40 && green[1] > green[2] + 60,
+        "green: {all}"
+    );
+    assert!(blue[2] > 2 * blue[0] && blue[2] > blue[1], "blue: {all}");
+    assert!(
+        yellow[0] > 2 * yellow[2] && yellow[1] > 2 * yellow[2],
+        "yellow: {all}"
+    );
+    // a window (dark blue) in the upper row and the beige wall beside it; the door below
+    let window = at(0.5, 0.66);
+    let wall = at(0.38, 0.66);
+    assert!(window[2] > window[0] + 20, "window {window:?}");
+    assert!(wall[0] > wall[2] + 20 && wall[0] > 100, "wall {wall:?}");
+    if let Ok(target) = std::env::var("VISIONCRAFT_RENDER_OUT") {
+        std::fs::write(target, &bytes).unwrap();
+    }
+}
+
 /// Every recipe of the agent guide through `visioncraft-cli mcp`, pictures included. Needs a
 /// GPU: `cargo test -p visioncraft-cli -- --ignored`.
 #[test]
@@ -301,14 +402,15 @@ fn recipes_render_through_the_mcp_server() {
             d.join("plate.3dcraft"),
         )
         .unwrap();
-        std::fs::copy(
-            concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../../crates/visioncraft-automation/tests/data/site-plan.png"
-            ),
-            d.join("site-plan.png"),
-        )
-        .unwrap();
+        for image in ["site-plan.png", "facade.png"] {
+            std::fs::copy(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../crates/visioncraft-automation/tests/data")
+                    .join(image),
+                d.join(image),
+            )
+            .unwrap();
+        }
         let mut child = Command::new(env!("CARGO_BIN_EXE_visioncraft-cli"))
             .args([
                 "mcp",

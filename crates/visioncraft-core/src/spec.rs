@@ -297,7 +297,7 @@ fn edit_distance(a: &str, b: &str) -> usize {
 
 /// A small project the examples of [`CommandSpec::example`] run on: model `m1`; layer `l1` (empty);
 /// shapes `S1` (area, material `lawn`), `S2` (closed extrusion "House") and `S3` (open extrusion);
-/// an unassigned material `mat1`; generators `g1` (brush) and `g2` (single); custom species `sp1`; user object `uo1`; underlay `u1` (on layer `underlay`);
+/// an unassigned material `mat1`; generators `g1` (brush) and `g2` (single); custom species `sp1`; user object `uo1`; underlay `u1` (on layer `underlay`); wall photo `p1` (on `S2:side(1)`);
 /// light `li1`; viewpoints `v1` and `v2`; a 40 by 30 m terrain with layers `lawn` and `gravel`.
 /// For `terrain.create` the terrain is left out.
 pub fn example_project(command: &str) -> crate::project::Project {
@@ -346,6 +346,10 @@ pub fn example_project(command: &str) -> crate::project::Project {
         (
             "underlay.add",
             json!({"file": "plan.png", "name": "Plan", "size_px": [800, 600]}),
+        ),
+        (
+            "wall_photo.add",
+            json!({"file": "facade.jpg", "name": "Facade", "target": {"type": "face", "owner": "S2", "face": "S2:side(1)"}, "size_px": [1000, 800]}),
         ),
         ("light.add", json!({"name": "Lamp", "position": [3, 2, 1]})),
         (

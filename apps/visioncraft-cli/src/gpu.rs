@@ -88,7 +88,7 @@ impl Pictures for GpuPictures {
             }
         }
         // Plan images: the host's bytes, held by the studio's asset store by their file.
-        for (file, bytes) in &request.underlays {
+        for (file, bytes) in &request.images {
             let store = &mut s.scene.library.store;
             if store
                 .provided(file)

@@ -49,6 +49,7 @@ pub mod ui;
 pub mod underlay_ui;
 pub mod user_objects;
 pub mod views;
+pub mod wall_photo_ui;
 pub mod water_panel;
 pub mod work_pool;
 
@@ -155,6 +156,7 @@ pub struct App {
     watcher: Watcher,
     draw: draw::DrawState,
     materials: materials::MaterialsState,
+    wall_photo: wall_photo_ui::WallPhotoUi,
     objects: objects::ObjectsState,
     terrain: terrain_tool::TerrainTool,
     views: views::ViewsState,
@@ -244,6 +246,7 @@ impl App {
             inbox,
             draw: Default::default(),
             materials: Default::default(),
+            wall_photo: Default::default(),
             objects: Default::default(),
             terrain: Default::default(),
             views: Default::default(),
@@ -366,13 +369,31 @@ impl App {
         let _ = project_dir;
     }
 
-    /// A native project's plan images, read from beside the project file.
-    fn load_underlays(&mut self, project_dir: Option<&Path>) {
+    /// A picture chosen for a wall photo: held by the store and opened in the straightening window.
+    fn begin_wall_photo(&mut self, name: &str, bytes: Vec<u8>) {
+        let Some(target) = self.studio.wall_photo_for.take() else {
+            return;
+        };
+        match self.studio.import_wall_photo_file(name, bytes) {
+            Ok((file, size)) => self.wall_photo.begin_new(target, &stem(name), file, size),
+            Err(e) => self.toasts.error(format!("{name}: {e}")),
+        }
+    }
+
+    /// A native project's images (plans, wall photos), read from beside the project file.
+    fn load_images(&mut self, project_dir: Option<&Path>) {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(dir) = project_dir {
-            for u in self.studio.project().underlays.clone() {
-                if let Ok(bytes) = std::fs::read(dir.join(&u.file)) {
-                    self.take_bundled(vec![(u.file.clone(), Arc::from(bytes))]);
+            let files: Vec<String> = self
+                .studio
+                .project()
+                .image_files()
+                .into_iter()
+                .map(str::to_string)
+                .collect();
+            for file in files {
+                if let Ok(bytes) = std::fs::read(dir.join(&file)) {
+                    self.take_bundled(vec![(file, Arc::from(bytes))]);
                 }
             }
         }
@@ -450,6 +471,9 @@ impl App {
                 }
                 Err(e) => self.toasts.error(format!("{name}: {e}")),
             },
+            "png" | "jpg" | "jpeg" if self.studio.wall_photo_for.is_some() => {
+                self.begin_wall_photo(&name, bytes);
+            }
             "png" | "jpg" | "jpeg" => match self.studio.import_underlay(&stem(&name), bytes) {
                 Ok(id) => {
                     self.draw.plan.select(id);
@@ -893,7 +917,7 @@ impl App {
                 self.project_path = path.map(Path::to_path_buf);
                 self.loaded_sources(r);
                 self.load_objects(dir);
-                self.load_underlays(dir);
+                self.load_images(dir);
                 self.take_bundled(files);
                 self.drape_old_areas();
                 self.studio.sync();
@@ -931,6 +955,19 @@ impl App {
                     self.toasts
                         .warn(format!("{} {}", strings::PLAN_MISSING, missing.join(", ")));
                 }
+                let missing: Vec<String> = self
+                    .studio
+                    .missing_wall_photos()
+                    .iter()
+                    .map(|w| format!("{} ({})", w.name, w.file))
+                    .collect();
+                if !missing.is_empty() {
+                    self.toasts.warn(format!(
+                        "{} {}",
+                        strings::WALL_PHOTO_MISSING,
+                        missing.join(", ")
+                    ));
+                }
             }
             Err(e) => self.toasts.error(format!("{name}: {e}")),
         }
@@ -953,13 +990,7 @@ impl App {
                 }
                 continue;
             }
-            if self
-                .studio
-                .project()
-                .underlays
-                .iter()
-                .any(|u| u.file == file)
-            {
+            if self.studio.project().image_files().contains(&file.as_str()) {
                 if visioncraft_core::underlay::image_size(&bytes).is_ok() {
                     self.studio.scene.library.store.provide(&file, bytes);
                 } else {
@@ -1411,7 +1442,9 @@ impl eframe::App for App {
             }
         }
         busy |= self.serve_agents(&ctx, now);
-        if std::mem::take(&mut self.studio.pick_underlay) {
+        if std::mem::take(&mut self.studio.pick_underlay)
+            || std::mem::take(&mut self.studio.pick_wall_photo)
+        {
             files::pick(&self.inbox, &ctx, None, &["png", "jpg", "jpeg"]);
         }
         for m in self.inbox.take() {
@@ -1720,6 +1753,7 @@ impl eframe::App for App {
             cx.toasts.info(strings::LIGHTS_SUGGEST);
         }
         let mut actions = self.hud.show(&mut cx, self.fps, walking);
+        self.wall_photo.window(&mut cx);
         self.modelui.show(&mut cx, &mut actions);
         let (w, _h) = (rect.width(), rect.height());
         let panel_width = (w - 20.0).min(380.0);

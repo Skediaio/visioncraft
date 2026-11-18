@@ -479,6 +479,9 @@ pub struct Project {
     /// Plan images under the drawing to trace over; not written while there are none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub underlays: Vec<crate::underlay::Underlay>,
+    /// Photos of facades on wall faces, straightened; not written while there are none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub wall_photos: Vec<crate::wall_photo::WallPhoto>,
     #[serde(default)]
     pub view: ViewState,
     /// Behind an `Arc`: undo snapshots share it, and a command that edits it copies it once.
@@ -509,6 +512,7 @@ impl Default for Project {
             species: Vec::new(),
             objects: Vec::new(),
             underlays: Vec::new(),
+            wall_photos: Vec::new(),
             view: ViewState::default(),
             terrain: None,
             sea: None,
@@ -601,6 +605,19 @@ impl Project {
             || self.generators.iter().any(|g| g.layer() == layer)
             || self.lights.iter().any(|l| l.layer == layer)
             || self.underlays.iter().any(|u| u.layer == layer)
+    }
+
+    /// The image files the project refers to (plan underlays and wall photos), each once.
+    pub fn image_files(&self) -> Vec<&str> {
+        let mut files: Vec<&str> = self
+            .underlays
+            .iter()
+            .map(|u| u.file.as_str())
+            .chain(self.wall_photos.iter().map(|p| p.file.as_str()))
+            .collect();
+        let mut seen = std::collections::HashSet::new();
+        files.retain(|f| seen.insert(*f));
+        files
     }
 
     pub fn to_json_bytes(&self) -> Vec<u8> {

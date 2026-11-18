@@ -101,6 +101,7 @@ impl MaterialsState {
     pub fn leave(&mut self, cx: &mut Cx) {
         self.picked = None;
         self.eyedropper = false;
+        cx.s.wall_photo_for = None;
         cx.s.highlight = None;
         cx.s.set_draft(None);
     }
@@ -185,6 +186,10 @@ impl MaterialsState {
             .input
             .hover
             .and_then(|p| cx.s.pick(glam::Vec2::new(p.x, p.y), cx.size(), false));
+        if cx.input.clicked {
+            // a photo asked for a face that was left is not wanted any more
+            cx.s.wall_photo_for = None;
+        }
         cx.s.highlight = hover
             .as_ref()
             .or(self.picked.as_ref().map(|p| &p.0))
@@ -336,6 +341,7 @@ impl MaterialsState {
                         self.eyedropper = !self.eyedropper;
                     }
                     self.sliders(ui, cx);
+                    wall_photo_row(ui, cx, &pick);
                 });
             });
     }
@@ -450,6 +456,33 @@ impl MaterialsState {
             cx.s.set_draft(Some(Draft::Material(m)));
         }
     }
+}
+
+/// "Photo on wall…" for the picked face, and for a face that has one: straighten it again,
+/// remove it.
+fn wall_photo_row(ui: &mut egui::Ui, cx: &mut Cx, pick: &Pick) {
+    let target = json!({"type": "face", "owner": pick.owner, "face": pick.face_name});
+    let has =
+        cx.s.project()
+            .wall_photos
+            .iter()
+            .find(|w| serde_json::to_value(&w.target).ok().as_ref() == Some(&target))
+            .cloned();
+    ui.separator();
+    ui.horizontal_wrapped(|ui| {
+        if ui.button(t::WALL_PHOTO_BUTTON).clicked() {
+            cx.s.wall_photo_for = Some(target.clone());
+            cx.s.pick_wall_photo = true;
+        }
+        if let Some(w) = &has {
+            if ui.button(t::WALL_PHOTO_EDIT).clicked() {
+                cx.s.wall_photo_edit = Some(w.id.clone());
+            }
+            if ui.button(t::WALL_PHOTO_REMOVE).clicked() {
+                cx.run("wall_photo.remove", json!({"id": w.id}));
+            }
+        }
+    });
 }
 
 /// What a person calls the surface: "Area 3 · top" rather than the face id "S3:top".

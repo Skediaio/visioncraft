@@ -91,7 +91,7 @@ unknown keys are refused with the nearest name, unless `openParams` is true.
 ### Commands
 
 The core's commands (`model.*`, `shape.*`, `material.*`, `planting.*`, `species.add|update|remove`,
-`fence.*`, `stairs.*`, `bed.*`, `underlay.*`, `light.*`, `viewpoint.*`, `layer.*`, `terrain.*`, `site.set`, `time.set`, `view.set`,
+`fence.*`, `stairs.*`, `bed.*`, `underlay.*`, `wall_photo.*`, `light.*`, `viewpoint.*`, `layer.*`, `terrain.*`, `site.set`, `time.set`, `view.set`,
 `style.set`) change the project, each one undo step; its queries (`query.sun {time?}`,
 `query.measure {kind, points?, outline?}`, `query.quantities {ids?, layer?}`) never do. Curves are `shape.*` commands too:
 `shape.set_curve {id, edge, radius_m?, sagitta_m?, side?}`, `shape.clear_curve {id, edge}`,
@@ -121,6 +121,9 @@ loaded geometry or a GPU:
 | `underlay.calibrate` | `{id, pixel_a, pixel_b, world_a, world_b}` | `{origin, metres_per_pixel, rotation_deg}`: scale, turn and origin from two image positions and the drawing points they land on |
 | `underlay.scale_by_distance` | `{id, pixel_a, pixel_b, distance_m}` | `{metres_per_pixel}`; origin and rotation stay |
 | `underlay.remove` | `{id}` | `null` |
+| `wall_photo.add` | `{file, target, corners_px?, region?, name?, size_px?}` | `{id}`; a photo of a facade on one wall face (`target` `{type: "face", owner, face}`), straightened by `corners_px` (the facade's four corners in the photo, bottom-left, bottom-right, top-right, top-left as seen from outside; default: the photo's own corners) to fill `region` `{u0, v0, u1, v1}` metres on the face (default: the whole face); the host reads the PNG or JPEG as for `underlay.add` and fills `size_px` |
+| `wall_photo.set` | `{id, name?, file?, target?, corners_px?, region?, size_px?}` | `null`; `region: null` is the whole face again |
+| `wall_photo.remove` | `{id}` | `null` |
 | `view.render` | `{path?, width? = 800, height? = 600, viewpoint?, camera?, time?, years?, quality? = "high", samples? = 64, aperture_m? = 0, focus_m?}`; quality `"photo"` averages `samples` frames at ULTRA (soft shadows, smooth edges; `aperture_m`/`focus_m` for depth of field) | a PNG: to `path`, else `{mime: "image/png", base64}`; with `camera`, `sun`, `time`, `plantsPending`, `renderer` |
 
 `view.render` draws with the app's own renderer (the window-free studio) on a headless GPU
@@ -166,7 +169,11 @@ and species with all their fields. A model whose file could not be read has `loa
 top-right, bottom-right, bottom-left, `[x, z]`) and `bounds` on the ground, `loaded` (its image is
 held) and, when the file could not be read, `error`. A plan image is a picture under the
 drawing: `view.render` shows it (flat, unlit, see-through), it is not picked and not in
-`query.quantities`.
+`query.quantities`. A wall photo is listed under `wall_photos` with `file`, `size_px`, `target`,
+`corners_px`, `region` (null: the whole face), `loaded`, `face_size_m` (`[width, height]` of the
+face it is on, in its own frame: `u` to the right seen from outside, `v` up) or `face_error` (no
+such face, flat or curved), and `error` when its file could not be read; `view.render` shows it
+on the wall, lit like any surface.
 
 ## MCP
 

@@ -12,6 +12,15 @@ nothing here is a promise of a date.
   origin exactly. It travels in the bundle as `underlays/<name>`. In the window: Draw, Plan
   image. Next: PDF pages (a pure-Rust rasteriser; export as PNG meanwhile), more than one page,
   perspective-correcting a photographed plan, a plan that follows terrain instead of lying flat.
+- **Photos on walls:** `wall_photo.add` puts a PNG or JPEG of a facade on one wall face as its
+  texture: its four corners in the photo (`corners_px`, bottom-left first as seen from outside) are
+  warped by a homography so the facade fills the face, or a typed `region` of it in metres (the
+  rest of the face keeps its material); lit like any surface, shadows fall on it, a window's
+  reveals keep the wall's material. `wall_photo.set` and `wall_photo.remove`; one photo a face; it
+  travels in the bundle as `photos/<name>` and `document.inspect` lists it with the face's size. In
+  the window: Materials, click a wall, Photo on wall…, drag four corner handles onto the facade,
+  type a region, Apply. Next: several photos on one face (a facade in tiles), removing what
+  stands in front of it (trees, cars), matching the photo's colour to the sun, EXIF rotation.
 - **Quantities:** `query.quantities` lists areas, lengths, volumes and plant counts per shape and
   planting, and totals per material and asset. Next: linked models, per-body quantities, the
   building rule in plant counts.
@@ -95,7 +104,6 @@ nothing here is a promise of a date.
   (`layer.set_context`) holds neighbours as plain extrusions or models that cast shadow, draw as
   grey massing and stay out of the quantities. Next: terrain beyond the plot as a caster, and
   neighbours from open data once "Ground from coordinates" exists.
-- **Photos on walls:** a facade photo as the texture of a wall, straightened and scaled.
 - **Ground from coordinates:** give a latitude and longitude (or an address) and get the real
   ground under the model: terrain from an open elevation model, an aerial or satellite image as
   ground texture, and outlines (parcel, buildings, roads, water) where open data has them, with

@@ -634,6 +634,45 @@ it with the usual shape commands, reading drawing coordinates off the pixels wit
 `origin + R * pixel * metres_per_pixel`, or ask `underlay.calibrate`'s result for the origin.
 A PDF page is not read yet: export it as a PNG first.
 
+### 25. A photo of a facade on a wall: straighten it with its four corners
+
+```json recipe
+{"intent": "a photographed facade, straightened, as the texture of a house's south wall", "steps": [
+  {"id": "shape.add_extrusion", "params": {"name": "House", "outline": [[4, 2], [16, 2], [16, 9], [4, 9]], "height": 6}},
+  {"id": "wall_photo.add", "params": {"file": "facade.png", "target": {"type": "face", "owner": "S1", "face": "S1:side(2)"}, "corners_px": [[50, 350], [450, 325], [410, 75], [80, 50]]}},
+  {"id": "document.inspect", "params": {"faces": false}},
+  {"id": "view.render", "params": {"camera": {"position": [10, 3, 22], "target": [10, 3, 9], "fov_y_deg": 40}, "width": 960, "height": 540, "time": {"hour": 12}, "path": "wall-photo-render.png"}}
+]}
+```
+
+`wall_photo.add` puts a PNG or JPEG (at most 16384 pixels on a side and 64 MB) on **one wall face**
+as its texture. `file` is relative to the project file (or the read root); the host reads its size
+into `size_px` itself, with the same errors as `underlay.add` (a missing, unreadable or other file
+is refused). `target` names the face: `{"type": "face", "owner": "S1", "face": "S1:side(2)"}`
+(a model's faces are named as `document.inspect` lists them). A photo of a building is seen at an
+angle, so give `corners_px`: the **facade's four corners as they stand in the photo**, in pixels
+(top-left of the image is 0, 0; y runs down), in the order **bottom-left, bottom-right,
+top-right, top-left as seen from outside the building**. The photo is warped so that this
+four-sided shape fills the wall (a perspective correction), whatever lies outside it in the photo
+(sky, ground, neighbours) is cut off. Without `corners_px` the photo is taken as already straight:
+its own four corners. A mirrored order is refused with a message that names the right one.
+
+By default the facade fills **the whole face**. `region` `{u0, v0, u1, v1}` (metres) puts it on a
+part of the face instead: `u` runs along the face to the right *seen from outside* from its lowest
+left point, `v` up (a south wall of `side(2)` has `u` running east); outside the region the face
+keeps its material, inside it the photo replaces the material's colour. `document.inspect`
+lists each photo with `face_size_m` (the face's `[width, height]`, to type a region against), its
+`loaded` state and any `error` or `face_error`. A face that lies flat (a floor, a flat roof) or is
+curved takes no photo; a window's reveals in a wall keep the wall's material. The photo is lit like
+any surface and casts and receives shadow as the wall does; it is straightened once to at most
+2048 px on its long side at the region's proportions. One photo a face: adding another to the
+same face replaces it. `wall_photo.set` changes any field (`region: null` makes it the whole face
+again), `wall_photo.remove` takes the photo away (the file stays). It follows its side when a
+vertex is inserted or removed, and goes with its shape. In a bundle the image travels as
+`photos/<name>`. Not yet: several photos on one face, removing what stands in front of the facade
+(trees, cars), matching the photo's colour to the sun, and a photo's EXIF rotation (turn it
+upright first).
+
 ## Known traps
 
 - **Ids are not names**: `S2`, not `House`; viewpoints are `v1`, lights `li1`.

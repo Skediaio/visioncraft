@@ -562,3 +562,26 @@ pub const PLAN_HINT_DISTANCE: &str =
 pub const PLAN_HINT_WORLD_A: &str =
     "Click where the first point must land in the drawing (it snaps to the grid and to corners).";
 pub const PLAN_HINT_WORLD_B: &str = "Click where the second point must land in the drawing.";
+
+// ---- photos on walls ----
+pub const WALL_PHOTO_BUTTON: &str = "Photo on wall…";
+pub const WALL_PHOTO_EDIT: &str = "Straighten photo…";
+pub const WALL_PHOTO_REMOVE: &str = "Remove photo";
+pub const WALL_PHOTO_TITLE: &str = "Photo on wall";
+pub const WALL_PHOTO_HINT: &str = "Drag the four handles onto the corners of the facade in the photo: 1 bottom left, 2 bottom right, 3 top right, 4 top left, as seen from outside. The photo is straightened to fit.";
+pub const WALL_PHOTO_LOADING: &str = "Loading the photo…";
+pub const WALL_PHOTO_WHOLE: &str = "Covers the whole wall";
+pub const WALL_PHOTO_REGION: &str =
+    "Where on the wall, in metres from its lower left corner (seen from outside):";
+pub const WALL_PHOTO_LEFT: &str = "from left";
+pub const WALL_PHOTO_RIGHT: &str = "to";
+pub const WALL_PHOTO_BOTTOM: &str = "from bottom";
+pub const WALL_PHOTO_TOP: &str = "to";
+pub const WALL_PHOTO_WALL_IS: &str = "The wall is";
+pub const WALL_PHOTO_APPLY: &str = "Apply";
+pub const WALL_PHOTO_CANCEL: &str = "Cancel";
+pub const WALL_PHOTO_BAD_REGION: &str =
+    "The region needs four numbers in metres, with the right and top above the left and bottom.";
+pub const WALL_PHOTO_MISSING: &str =
+    "Wall photo files not found (open the project's bundle, or put them beside the project file):";
+pub const WALL_PHOTO_UNREADABLE: &str = "the wall photo in the bundle cannot be read";

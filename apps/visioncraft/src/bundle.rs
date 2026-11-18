@@ -1,7 +1,7 @@
 //! `.visioncraft.zip`: a project with the files it needs, so it opens anywhere (a browser has no
 //! folders to find them in). Inside: `project.visioncraft` (the JSON), `objects/*.glb` (imported
 //! objects, at the `file` their `UserObject` names), `underlays/*` (plan images, at the `file`
-//! their `Underlay` names) and `models/*` (the sources of imported models, the project's `source`
+//! their `Underlay` names), `photos/*` (wall photos, likewise) and `models/*` (the sources of imported models, the project's `source`
 //! pointing at them). Stored without compression.
 
 use std::io::Read;
@@ -43,30 +43,45 @@ pub fn pack(
             files.push((o.file.clone(), bytes.to_vec()));
         }
     }
-    // Plan images are held like objects, by their `file`; one named elsewhere (a path beside the
-    // project file) moves into `underlays/` in the packed project.
+    // Plan images and wall photos are held like objects, by their `file`; one named elsewhere (a
+    // path beside the project file) moves into `underlays/` or `photos/` in the packed project.
     for u in &mut p.underlays {
-        if let Some(bytes) = object_file(&u.file) {
-            if !u.file.starts_with("underlays/") {
-                let base = u
-                    .file
-                    .rsplit(['/', '\\'])
-                    .next()
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or("plan");
-                let mut name = format!("underlays/{base}");
-                while files.iter().any(|(f, _)| *f == name) {
-                    name = format!("underlays/{}-{base}", files.len());
-                }
-                u.file = name;
-            }
-            if !files.iter().any(|(f, _)| *f == u.file) {
-                files.push((u.file.clone(), bytes.to_vec()));
-            }
-        }
+        place_image(&mut u.file, "underlays", "plan", object_file, &mut files);
+    }
+    for w in &mut p.wall_photos {
+        place_image(&mut w.file, "photos", "photo", object_file, &mut files);
     }
     files.insert(0, (PROJECT_FILE.into(), p.to_json_bytes()));
     crate::files::zip_stored(&files)
+}
+
+/// Adds the image `file` names to `files` (when held), moving it into `dir/` when it is
+/// somewhere else; `file` is the name it has in the bundle afterwards.
+fn place_image(
+    file: &mut String,
+    dir: &str,
+    fallback: &str,
+    held: &dyn Fn(&str) -> Option<Arc<[u8]>>,
+    files: &mut Vec<(String, Vec<u8>)>,
+) {
+    let Some(bytes) = held(file) else {
+        return;
+    };
+    if !file.starts_with(&format!("{dir}/")) {
+        let base = file
+            .rsplit(['/', '\\'])
+            .next()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(fallback);
+        let mut name = format!("{dir}/{base}");
+        while files.iter().any(|(f, _)| *f == name) {
+            name = format!("{dir}/{}-{base}", files.len());
+        }
+        *file = name;
+    }
+    if !files.iter().any(|(f, _)| f == file) {
+        files.push((file.clone(), bytes.to_vec()));
+    }
 }
 
 /// A bundle read back: the project and every other file in it, by path.
@@ -93,7 +108,7 @@ pub const LIMITS: Limits = Limits {
 };
 
 /// A name a bundle may use: relative, no `..`, inside `project.visioncraft`, `objects/`,
-/// `underlays/` or `models/`. `Err` for a name that tries to leave the bundle; `Ok(false)` for one to ignore.
+/// `underlays/`, `photos/` or `models/`. `Err` for a name that tries to leave the bundle; `Ok(false)` for one to ignore.
 fn allowed(name: &str) -> Result<bool, String> {
     let climbs = name.split(['/', '\\']).any(|part| part == "..");
     let absolute = name.starts_with(['/', '\\'])
@@ -105,6 +120,7 @@ fn allowed(name: &str) -> Result<bool, String> {
     Ok(name == PROJECT_FILE
         || name.starts_with("objects/")
         || name.starts_with("underlays/")
+        || name.starts_with("photos/")
         || name.starts_with("models/"))
 }
 
@@ -232,6 +248,40 @@ mod tests {
         for f in files {
             assert!(
                 u.files.iter().any(|(n, b)| n == f && **b == [7u8; 5]),
+                "{f}"
+            );
+        }
+    }
+
+    #[test]
+    fn wall_photos_travel_in_the_bundle_under_photos() {
+        let mut s = Session::new(Project::default());
+        s.run(
+            "shape.add_extrusion",
+            serde_json::json!({"name": "House", "outline": [[0, 0], [4, 0], [4, 4], [0, 4]], "height": 3.0}),
+        )
+        .unwrap();
+        for (file, side) in [("photos/front.jpg", 0), ("elsewhere/side.png", 1)] {
+            s.run(
+                "wall_photo.add",
+                serde_json::json!({"file": file, "size_px": [20, 10],
+                    "target": {"type": "face", "owner": "S1", "face": format!("S1:side({side})")}}),
+            )
+            .unwrap();
+        }
+        let jpg: Arc<[u8]> = Arc::from(vec![9u8; 6]);
+        let bytes = pack(s.project(), &|_| Some(jpg.clone()), &|_| None).unwrap();
+        let u = unpack(&bytes).unwrap();
+        let files: Vec<&str> = u
+            .project
+            .wall_photos
+            .iter()
+            .map(|w| w.file.as_str())
+            .collect();
+        assert_eq!(files, ["photos/front.jpg", "photos/side.png"]);
+        for f in files {
+            assert!(
+                u.files.iter().any(|(n, b)| n == f && **b == [9u8; 6]),
                 "{f}"
             );
         }

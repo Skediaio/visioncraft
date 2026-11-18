@@ -1000,3 +1000,155 @@ fn old_projects_have_no_underlays_and_they_are_not_written_while_none() {
     .unwrap();
     assert_eq!((minimal.opacity, minimal.elevation), (0.5, 0.02));
 }
+
+fn house_session() -> Session {
+    let mut s = Session::new(Project::default());
+    s.run(
+        "shape.add_extrusion",
+        json!({"name": "House", "outline": [[2, 2], [8, 2], [8, 8], [2, 8]], "height": 3.0}),
+    )
+    .unwrap();
+    s
+}
+
+#[test]
+fn wall_photos_add_set_undo_and_remove() {
+    let mut s = house_session();
+    // the host fills size_px; the core alone refuses a missing one
+    let err = s
+        .run(
+            "wall_photo.add",
+            json!({"file": "f.jpg", "target": face("S1", "S1:side(2)")}),
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("size_px"), "{err}");
+    let p = id(s
+        .run(
+            "wall_photo.add",
+            json!({"file": "photos/front facade.jpg", "target": face("S1", "S1:side(2)"), "size_px": [1000, 800]}),
+        )
+        .unwrap());
+    assert_eq!(p, "p1");
+    let first = s.project().wall_photos[0].clone();
+    assert_eq!(first.name, "front facade");
+    // without corners the photo is taken as straight; without a region it covers the face
+    assert_eq!(
+        first.corners_px,
+        [[0.0, 800.0], [1000.0, 800.0], [1000.0, 0.0], [0.0, 0.0]]
+    );
+    assert_eq!(first.region, None);
+
+    s.run(
+        "wall_photo.set",
+        json!({"id": p, "corners_px": [[100, 700], [900, 650], [820, 150], [160, 100]],
+               "region": {"u0": 0.5, "v0": 0, "u1": 5, "v1": 2.8}}),
+    )
+    .unwrap();
+    assert_eq!(s.project().wall_photos[0].region.unwrap().u1, 5.0);
+    s.run("wall_photo.set", json!({"id": p, "region": null}))
+        .unwrap();
+    assert_eq!(s.project().wall_photos[0].region, None);
+    for bad in [
+        // mirrored corner order
+        json!({"id": p, "corners_px": [[900, 650], [100, 700], [160, 100], [820, 150]]}),
+        json!({"id": p, "region": {"u0": 2, "v0": 0, "u1": 1, "v1": 1}}),
+        json!({"id": p, "target": {"type": "owner", "owner": "S1"}}),
+        json!({"id": p, "target": face("S9", "S9:side(0)")}),
+        json!({"id": "p9", "name": "x"}),
+    ] {
+        assert!(s.run("wall_photo.set", bad.clone()).is_err(), "{bad}");
+    }
+    // a face that is not there, a body or an owner as target
+    assert!(
+        s.run(
+            "wall_photo.add",
+            json!({"file": "f.jpg", "size_px": [10, 10], "target": {"type": "owner", "owner": "S1"}})
+        )
+        .is_err()
+    );
+    assert!(
+        s.run(
+            "wall_photo.add",
+            json!({"file": "f.jpg", "size_px": [10, 10], "target": face("S7", "S7:side(0)")})
+        )
+        .is_err()
+    );
+    // a second photo on the same face replaces the first
+    s.run(
+        "wall_photo.add",
+        json!({"file": "g.jpg", "size_px": [10, 10], "target": face("S1", "S1:side(2)")}),
+    )
+    .unwrap();
+    assert_eq!(s.project().wall_photos.len(), 1);
+    assert_eq!(s.project().wall_photos[0].file, "g.jpg");
+
+    // every step is one undo
+    assert!(s.undo());
+    assert_eq!(s.project().wall_photos[0].file, "photos/front facade.jpg");
+    assert!(s.undo() && s.undo());
+    assert_eq!(s.project().wall_photos[0], first);
+    assert!(s.undo());
+    assert!(s.project().wall_photos.is_empty());
+    assert!(s.redo());
+    s.run("wall_photo.remove", json!({"id": "p1"})).unwrap();
+    assert!(s.project().wall_photos.is_empty());
+    assert!(s.undo());
+    assert_eq!(s.project().wall_photos.len(), 1);
+    assert!(s.run("wall_photo.remove", json!({"id": "p9"})).is_err());
+
+    // it goes with its shape
+    s.run("shape.remove", json!({"id": "S1"})).unwrap();
+    assert!(s.project().wall_photos.is_empty());
+}
+
+#[test]
+fn a_wall_photo_follows_its_side_when_a_vertex_is_inserted() {
+    let mut s = house_session();
+    s.run(
+        "wall_photo.add",
+        json!({"file": "f.jpg", "size_px": [10, 10], "target": face("S1", "S1:side(2)")}),
+    )
+    .unwrap();
+    s.run(
+        "shape.insert_vertex",
+        json!({"id": "S1", "edge": 0, "position": [5, 2]}),
+    )
+    .unwrap();
+    let target = &s.project().wall_photos[0].target;
+    assert_eq!(
+        *target,
+        serde_json::from_value(face("S1", "S1:side(3)")).unwrap()
+    );
+}
+
+#[test]
+fn old_projects_have_no_wall_photos_and_they_are_not_written_while_none() {
+    let json = serde_json::to_value(Project::default()).unwrap();
+    assert!(json.get("wall_photos").is_none());
+    let back: Project = serde_json::from_value(json).unwrap();
+    assert!(back.wall_photos.is_empty());
+
+    let mut s = house_session();
+    s.run(
+        "wall_photo.add",
+        json!({"file": "f.jpg", "size_px": [10, 10], "target": face("S1", "S1:side(0)"),
+               "region": {"u0": 0, "v0": 0, "u1": 2, "v1": 2}}),
+    )
+    .unwrap();
+    let json = serde_json::to_value(s.project()).unwrap();
+    assert_eq!(json["wall_photos"][0]["id"], "p1");
+    assert_eq!(json["wall_photos"][0]["target"]["face"], "S1:side(0)");
+    let back: Project = serde_json::from_value(json).unwrap();
+    assert_eq!(back.wall_photos, s.project().wall_photos);
+    // a photo saved without a region is the whole face, and none is written
+    s.run("wall_photo.set", json!({"id": "p1", "region": null}))
+        .unwrap();
+    let json = serde_json::to_value(s.project()).unwrap();
+    assert!(json["wall_photos"][0].get("region").is_none());
+    assert!(
+        String::from_utf8(Project::default().to_json_bytes())
+            .unwrap()
+            .find("wall_photos")
+            .is_none()
+    );
+}

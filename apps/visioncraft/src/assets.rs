@@ -456,9 +456,85 @@ pub type MemoryFiles = Arc<Mutex<HashMap<String, Arc<[u8]>>>>;
 /// The longest side a plan image keeps on the GPU, pixels.
 const MAX_PLAN_SIDE: u32 = 4096;
 
+const PHOTO_PREFIX: &str = "wallphoto:";
+
+/// The store path of a wall photo straightened: the picture's own file plus what makes the
+/// straightened picture (its size, the facade's corners, the output size). It is no file: `load`
+/// decodes `file` (held in memory) and warps it, so the store, its cache and its upload path
+/// treat the result like any image.
+pub fn photo_path(
+    file: &str,
+    file_len: usize,
+    size_px: [u32; 2],
+    corners_px: [[f32; 2]; 4],
+    out: [u32; 2],
+) -> String {
+    let corners: Vec<String> = corners_px.iter().flatten().map(f32::to_string).collect();
+    format!(
+        "{PHOTO_PREFIX}{}x{}:{}x{}:{file_len}:{}:{file}",
+        out[0],
+        out[1],
+        size_px[0],
+        size_px[1],
+        corners.join(",")
+    )
+}
+
+struct PhotoSpec<'a> {
+    out: [u32; 2],
+    size_px: [u32; 2],
+    corners_px: [[f32; 2]; 4],
+    file: &'a str,
+}
+
+fn parse_photo_path(path: &str) -> Option<PhotoSpec<'_>> {
+    let mut parts = path.strip_prefix(PHOTO_PREFIX)?.splitn(5, ':');
+    let pair = |s: &str| -> Option<[u32; 2]> {
+        let (a, b) = s.split_once('x')?;
+        Some([a.parse().ok()?, b.parse().ok()?])
+    };
+    let out = pair(parts.next()?)?;
+    let size_px = pair(parts.next()?)?;
+    let _len = parts.next()?;
+    let nums: Vec<f32> = parts
+        .next()?
+        .split(',')
+        .map(|n| n.parse().ok())
+        .collect::<Option<_>>()?;
+    let [a, b, c, d, e, f, g, h] = nums[..] else {
+        return None;
+    };
+    Some(PhotoSpec {
+        out,
+        size_px,
+        corners_px: [[a, b], [c, d], [e, f], [g, h]],
+        file: parts.next()?,
+    })
+}
+
+/// Decodes the photo of `spec` (held in memory) and straightens it.
+async fn load_photo(spec: PhotoSpec<'_>, memory: &MemoryFiles) -> Result<Rgba, String> {
+    let bytes = memory
+        .lock()
+        .ok()
+        .and_then(|m| m.get(spec.file).cloned())
+        .ok_or_else(|| format!("the photo `{}` is not loaded", spec.file))?;
+    let t = now_ms();
+    let img = io::decode(bytes.to_vec()).await?;
+    // The decoder's size is the truth; the corners were given for the size the header said.
+    let k = [
+        img.w as f32 / spec.size_px[0].max(1) as f32,
+        img.h as f32 / spec.size_px[1].max(1) as f32,
+    ];
+    let corners = spec.corners_px.map(|c| [c[0] * k[0], c[1] * k[1]]);
+    let px = visioncraft_core::wall_photo::rectify(&img.px, [img.w, img.h], corners, spec.out)?;
+    crate::load_stats::add("wall photo decode and straighten", now_ms() - t);
+    Ok(Rgba::new(spec.out[0], spec.out[1], px))
+}
+
 /// Averages `img` down by a whole factor until its sides are at most `max` (blocks at the edge
 /// are smaller). Its picture stays the same; only the pixels get fewer.
-fn shrink(img: &mut Rgba, max: u32) {
+pub fn shrink(img: &mut Rgba, max: u32) {
     let f = img.w.max(img.h).div_ceil(max.max(1));
     if f <= 1 || img.bc.is_some() {
         return;
@@ -547,6 +623,11 @@ async fn load(
     memory: &MemoryFiles,
     compress: bool,
 ) -> Result<Loaded, String> {
+    if let Key::Image { path, .. } = key
+        && let Some(spec) = parse_photo_path(path)
+    {
+        return load_photo(spec, memory).await.map(Loaded::Image);
+    }
     let held = memory.lock().ok().and_then(|m| m.get(key.path()).cloned());
     let bytes = match held {
         Some(b) => b.to_vec(),
@@ -1122,6 +1203,19 @@ impl AssetStore {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_wall_photo_path_carries_its_parameters_and_a_file_with_colons() {
+        let corners = [[10.0, 90.5], [100.0, 80.0], [95.25, 10.0], [12.0, 5.0]];
+        let path = super::photo_path("photos/a:b.jpg", 1234, [120, 100], corners, [512, 256]);
+        let spec = super::parse_photo_path(&path).unwrap();
+        assert_eq!(spec.out, [512, 256]);
+        assert_eq!(spec.size_px, [120, 100]);
+        assert_eq!(spec.corners_px, corners);
+        assert_eq!(spec.file, "photos/a:b.jpg");
+        assert!(super::parse_photo_path("materials/brick/basecolor.jpg").is_none());
+        assert!(super::parse_photo_path("wallphoto:garbage").is_none());
+    }
+
     #[test]
     fn a_large_plan_image_is_averaged_down_to_fit() {
         // 5 x 3 pixels, left two columns black, the rest white; at most 2 on a side: factor 3

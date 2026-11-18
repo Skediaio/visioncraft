@@ -10,8 +10,9 @@ use visioncraft_core::sun_hours::{
     FULL_SUN_HOURS, Occluder, PART_SHADE_HOURS, SunSample, day_sun, days_in_month, lit_intervals,
     plant_occluder, season_date,
 };
+use visioncraft_core::wall_photo::face_frame;
 use visioncraft_core::{
-    Generator, ImportedModel, Project, Season, Session, Shape, Transform, area_lifts,
+    Generator, ImportedModel, Project, Season, Session, Shape, Target, Transform, area_lifts,
     evaluate_in_scene, evaluate_surface_fill, measure, placed_shape_mesh, plant_size, raycast,
     raycast_any, water_areas,
 };
@@ -402,14 +403,55 @@ pub(crate) fn inspect(session: &Session, state: &HostState, v: &Verbosity) -> Va
                 "rotation_deg": u.placement.rotation_deg, "size_px": u.size_px,
                 "opacity": u.opacity, "elevation": u.elevation,
                 "corners": u.corners(), "bounds": u.bounds(),
-                "loaded": state.underlays.contains_key(&u.file),
+                "loaded": state.images.contains_key(&u.file),
             });
-            if let Some(why) = state.underlay_missing.get(&u.file) {
+            if let Some(why) = state.image_missing.get(&u.file) {
                 o["error"] = why.as_str().into();
             }
             o
         })
         .collect();
+    let wall_photos: Vec<Value> = {
+        p.wall_photos
+            .iter()
+            .map(|w| {
+                let mut o = json!({
+                    "id": w.id, "name": w.name, "file": w.file, "size_px": w.size_px,
+                    "target": w.target, "corners_px": w.corners_px, "region": w.region,
+                    "loaded": state.images.contains_key(&w.file),
+                });
+                if let Some(why) = state.image_missing.get(&w.file) {
+                    o["error"] = why.as_str().into();
+                }
+                // The face's own frame, so a region can be typed against its size.
+                let face = match &w.target {
+                    Target::Face { owner, face } => owners
+                        .iter()
+                        .find(|x| x.id == *owner)
+                        .ok_or_else(|| format!("no visible owner `{owner}`"))
+                        .and_then(|x| {
+                            let at = x
+                                .mesh
+                                .faces
+                                .iter()
+                                .position(|f| f.name == *face)
+                                .ok_or_else(|| format!("`{owner}` has no face `{face}`"))?;
+                            let up = match &x.xf {
+                                Some(t) => to_local(t, [0.0, 1.0, 0.0], false),
+                                None => [0.0, 1.0, 0.0],
+                            };
+                            face_frame(&x.mesh, at, up)
+                        }),
+                    _ => Err("the target is not a face".to_string()),
+                };
+                match face {
+                    Ok(f) => o["face_size_m"] = json!(f.size),
+                    Err(why) => o["face_error"] = why.into(),
+                }
+                o
+            })
+            .collect()
+    };
     let species: Vec<Value> = p
         .species
         .iter()
@@ -447,6 +489,7 @@ pub(crate) fn inspect(session: &Session, state: &HostState, v: &Verbosity) -> Va
     out.insert("species".into(), species.into());
     out.insert("lights".into(), json!(p.lights));
     out.insert("underlays".into(), underlays.into());
+    out.insert("wall_photos".into(), wall_photos.into());
     out.insert("viewpoints".into(), json!(p.viewpoints));
     out.insert("terrain".into(), terrain.into());
     // The sea with what it means: the waves' height and length from its sea state.

@@ -492,6 +492,29 @@ fn remap_sides(project: &mut Project, id: &str, f: impl Fn(usize) -> Vec<usize>)
             project.assignments.push(moved);
         }
     }
+    // a wall photo follows its side the same way (one per face: the first copy stays)
+    let old = std::mem::take(&mut project.wall_photos);
+    for p in old {
+        let n = match &p.target {
+            Target::Face { owner, face } if owner == id => face
+                .strip_prefix(&prefix)
+                .and_then(|r| r.strip_suffix(')'))
+                .and_then(|n| n.parse::<usize>().ok()),
+            _ => None,
+        };
+        let Some(n) = n else {
+            project.wall_photos.push(p);
+            continue;
+        };
+        for m in f(n).into_iter().take(1) {
+            let mut moved = p.clone();
+            moved.target = Target::Face {
+                owner: id.into(),
+                face: format!("{prefix}{m})"),
+            };
+            project.wall_photos.push(moved);
+        }
+    }
 }
 
 fn insert_vertex(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
@@ -771,6 +794,7 @@ fn remove(project: &mut Project, params: &Value) -> Result<Value, CommandError> 
         return Err(fail(format!("no shape `{id}`")));
     }
     project.assignments.retain(|a| a.target.owner() != id);
+    project.wall_photos.retain(|p| p.target.owner() != id);
     if let Some(soil) = soil {
         project.shapes.retain(|s| s.id() != soil);
         project.assignments.retain(|a| a.target.owner() != soil);

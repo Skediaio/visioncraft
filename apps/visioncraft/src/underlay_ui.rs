@@ -38,6 +38,29 @@ pub fn file_for(name: &str, bytes: &[u8], taken: &[Underlay]) -> String {
     }
 }
 
+/// The file name an imported wall photo gets: `photos/<name>.png|jpg`, not in `taken` (the
+/// project's image files).
+pub fn photo_file_for(name: &str, bytes: &[u8], taken: &[&str]) -> String {
+    let stem = crate::files::file_stem(name, "photo");
+    let ext = if bytes.starts_with(&[0xFF, 0xD8]) {
+        "jpg"
+    } else {
+        "png"
+    };
+    let mut n = 1;
+    loop {
+        let f = if n == 1 {
+            format!("photos/{stem}.{ext}")
+        } else {
+            format!("photos/{stem}-{n}.{ext}")
+        };
+        if !taken.contains(&f.as_str()) {
+            return f;
+        }
+        n += 1;
+    }
+}
+
 /// Where the person is in fitting the image.
 #[derive(Clone, Debug, Default, PartialEq)]
 enum Step {

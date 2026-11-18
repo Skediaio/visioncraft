@@ -23,6 +23,7 @@ mod species;
 mod terrain;
 mod underlays;
 mod viewpoints;
+mod wall_photos;
 mod water;
 
 pub(crate) fn register(s: &mut Session) {
@@ -35,6 +36,7 @@ pub(crate) fn register(s: &mut Session) {
     species::register(s);
     objects::register(s);
     underlays::register(s);
+    wall_photos::register(s);
     queries::register(s);
     terrain::register(s);
     materials::register(s);

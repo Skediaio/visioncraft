@@ -37,6 +37,7 @@ pub mod terrain;
 pub mod tiers;
 pub mod underlay;
 pub mod viewpoint;
+pub mod wall_photo;
 pub mod water;
 pub mod wind;
 
@@ -84,4 +85,5 @@ pub use terrain::{
 pub use tiers::Tiers;
 pub use underlay::{Placement as UnderlayPlacement, Underlay};
 pub use viewpoint::{Viewpoint, interpolate};
+pub use wall_photo::WallPhoto;
 pub use water::{Sea, WaterKind, keep_dry};

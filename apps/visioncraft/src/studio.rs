@@ -194,6 +194,13 @@ pub struct Studio {
     pub underlay_live: Option<(String, f32)>,
     /// The plan panel asked for an image file; the window opens the picker.
     pub pick_underlay: bool,
+    /// The materials panel asked for a photo for this face (a `wall_photo.add` target); the
+    /// window opens the picker and then the straightening window.
+    pub wall_photo_for: Option<serde_json::Value>,
+    /// With `wall_photo_for`: the picker is to open now.
+    pub pick_wall_photo: bool,
+    /// The materials panel asked to straighten this wall photo again (its id).
+    pub wall_photo_edit: Option<String>,
     /// Pictures (`render_png`) show the editor's overlays (light markers, tool lines, highlight).
     pub overlays_in_pictures: bool,
     /// The renderer's targets were made anew outside the window's frame (`render_png`): the
@@ -413,6 +420,9 @@ impl Studio {
             underlay_quads: Vec::new(),
             underlay_live: None,
             pick_underlay: false,
+            wall_photo_for: None,
+            pick_wall_photo: false,
+            wall_photo_edit: None,
             overlays_in_pictures: false,
             targets_changed: false,
             size: [0, 0],
@@ -1619,6 +1629,10 @@ impl Studio {
             .library
             .set_user_objects(&self.session.project().objects);
         self.take_catalog();
+        // A wall photo's straightened picture arrived: the faces that show it are built again.
+        if self.scene.photos_changed() {
+            self.draft_serial += 1;
+        }
         self.sync();
         self.poll_sky_volume();
         #[cfg(target_arch = "wasm32")]
@@ -1783,6 +1797,39 @@ impl Studio {
             )
             .map_err(|e| e.to_string())?;
         Ok(r["id"].as_str().unwrap_or_default().to_string())
+    }
+
+    /// Takes a PNG or JPEG for a wall photo: checked, its bytes held by the asset store under a
+    /// file name inside `photos/` that no other photo or plan uses, and the decoded picture asked
+    /// for (for the straightening window). Returns the file and the image's size.
+    pub fn import_wall_photo_file(
+        &mut self,
+        name: &str,
+        bytes: Vec<u8>,
+    ) -> Result<(String, [u32; 2]), String> {
+        if bytes.len() as u64 > visioncraft_core::underlay::MAX_FILE_BYTES {
+            return Err(format!(
+                "the image is {} MB; at most {} MB can be used",
+                bytes.len() / (1024 * 1024),
+                visioncraft_core::underlay::MAX_FILE_BYTES / (1024 * 1024)
+            ));
+        }
+        let size = visioncraft_core::underlay::image_size(&bytes)?;
+        let file = crate::underlay_ui::photo_file_for(name, &bytes, &self.project().image_files());
+        let store = &mut self.scene.library.store;
+        store.provide(&file, Arc::from(bytes));
+        store.want(crate::assets::Key::Thumb(file.clone()), 1.0);
+        Ok((file, size))
+    }
+
+    /// Wall photos whose image is not held (a project opened without its bundle).
+    pub fn missing_wall_photos(&self) -> Vec<&visioncraft_core::WallPhoto> {
+        let store = &self.scene.library.store;
+        self.project()
+            .wall_photos
+            .iter()
+            .filter(|w| store.provided(&w.file).is_none())
+            .collect()
     }
 
     /// Underlays whose image is not held (a project opened without its bundle).
