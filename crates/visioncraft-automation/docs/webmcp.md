@@ -49,7 +49,7 @@ the ones `visioncraft_list_commands` reports.
 
 | Group | Tools |
 | --- | --- |
-| Inspect | `visioncraft_project_summary` (document.inspect), `visioncraft_list` (shapes, plantings, layers, materials, viewpoints, lights, films, species or models), `visioncraft_quantities`, `visioncraft_sun_hours`, `visioncraft_light_check`, `visioncraft_plants_for_light`, `visioncraft_window_state` (ui.get: mode, camera, the selection), `visioncraft_get_selection` (just `ui.get`'s `selection`), `visioncraft_select` (ui.select) |
+| Inspect | `visioncraft_project_summary` (document.inspect), `visioncraft_list` (shapes, plantings, layers, materials, viewpoints, lights, films, species, models, rocks or deadwood), `visioncraft_quantities`, `visioncraft_sun_hours`, `visioncraft_light_check`, `visioncraft_plants_for_light`, `visioncraft_window_state` (ui.get: mode, camera, the selection), `visioncraft_get_selection` (just `ui.get`'s `selection`), `visioncraft_select` (ui.select) |
 | Design | `visioncraft_shape_add_area`, `_shape_add_extrusion`, `_shape_move_vertex`, `_shape_remove`, `_terrace_add`, `_stairs_add`, `_fence_add`, `_bed_add`, `_furniture_add`, `_furniture_add_set`, `_planting_add_border`, `_planting_place` (planting.add_single), `_material_update` (all with the `visioncraft` prefix) |
 | View | `visioncraft_view_set` (sun, season, weather: rain, mist, light shafts, gustiness, white balance, grade), `visioncraft_time_set`, `visioncraft_camera_set` (the window's camera: position, target, field of view), `visioncraft_viewpoint_add` |
 | Film | `visioncraft_film_add`, `_film_add_shot`, `_film_update_shot`, `_film_remove`, `_film_orbit`, `_film_flythrough`, `_film_reveal`, `_film_preview`, `_film_render` |

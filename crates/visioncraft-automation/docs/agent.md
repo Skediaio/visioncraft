@@ -1468,6 +1468,63 @@ the house's back wall at window height, facing the garden). Read it with `query.
 with three hours of sun and a sky view of 0.7 is bright part shade, one with three hours under a
 dense crown at 0.3 is dark.
 
+### 44. A wooded hillside: rock on the steep faces, scree, moss, boulders and deadwood
+
+```json recipe
+{"intent": "a hillside above a small wood that reads as natural ground: bare rock on the steep faces, scree below it, moss in the hollows and on the shaded side, boulders gathered on the rocky ground, fallen logs, stumps and a dead standing tree in the wood, and stones, twigs and moss cushions near the camera", "steps": [
+  {"id": "terrain.create", "params": {"origin": [0, 0], "width_m": 80, "depth_m": 60, "cell_m": 0.5, "base_material": "lawn"}},
+  {"id": "terrain.stroke", "params": {"tool": "raise", "points": [[22, 14], [58, 12]], "radius_m": 13, "strength": 1.1, "falloff": 0.35}},
+  {"id": "terrain.stroke", "params": {"tool": "raise", "points": [[48, 10], [62, 18]], "radius_m": 7, "strength": 0.9, "falloff": 0.3}},
+  {"id": "terrain.stroke", "params": {"tool": "noise", "points": [[40, 25]], "radius_m": 45, "strength": 0.35, "falloff": 0.2}},
+  {"id": "planting.add_area", "params": {"name": "Wood", "asset_palette": [{"asset": "flora:quercus-robur", "weight": 2}, {"asset": "flora:betula-pendula", "weight": 1}], "outline": [[4, 32], [46, 32], [46, 58], [4, 58]], "density_per_m2": 0.012}},
+  {"id": "terrain.set_auto", "params": {}},
+  {"id": "terrain.set_tiling", "params": {"hex": true}},
+  {"id": "terrain.set_cover", "params": {}},
+  {"id": "rock.scatter", "params": {"outline": [[0, 0], [80, 0], [80, 60], [0, 60]], "density_per_100m2": 2.5, "seed": 4}},
+  {"id": "rock.add", "params": {"position": [36, 22], "size_m": 3.2, "shape": "outcrop", "yaw_deg": 20, "seed": 2}},
+  {"id": "deadwood.scatter", "params": {"planting": "g1", "density_per_100m2": 1.5, "seed": 2}},
+  {"id": "deadwood.add", "params": {"kind": "log", "position": [30, 40], "length_m": 6, "diameter_m": 0.45, "yaw_deg": 25, "seed": 3}},
+  {"id": "deadwood.add", "params": {"kind": "snag", "position": [22, 36], "length_m": 7, "diameter_m": 0.4, "seed": 4}},
+  {"id": "time.set", "params": {"month": 9, "day": 20, "hour": 16.0}},
+  {"id": "view.render", "params": {"camera": {"position": [62, 9, 62], "target": [36, 5, 20], "fov_y_deg": 55}, "width": 1280, "height": 720, "path": "wooded-hillside.png"}}
+]}
+```
+
+`terrain.set_auto` covers the terrain's base layer by the shape of the ground, recomputed whenever
+the ground changes: `rock` on slopes past `rock_slope_deg` (38 to begin with) and on convex edges,
+`scree` from `scree_slope_deg` (27) down to the foot of the slope, `moss` in hollows and on faces
+turned away from the sun (north, after `site.set north_deg`), and `soil` (the forest floor) where
+hollows collect. `rock_above_m` puts rock on gentler ground above a height too; `curvature`,
+`moisture` and `blend_deg` weigh the rules; low-frequency noise of `macro_scale_m` moves every
+boundary, so no two slopes look alike. Each class becomes a terrain layer (added when missing;
+the materials `rock`, `scree` and `moss` are CC0 maps from the library, added to the project
+when it lacks them). Paint on the other layers stays and wins: paint a path of gravel across the
+scree and it stays gravel. Give only the fields to change; `{"enabled": false}` turns it off. The
+layers blend by their height maps, so rock pokes up through the grass where its relief is high
+instead of fading in. `terrain.set_tiling {"hex": true}` hex-tiles every layer's maps seen from
+above, each hexagon shifted and turned at random, so no repeat of a tile shows over a field (three
+samples per layer instead of one).
+
+`rock.add` places one rock (`boulder`, `slab`, `outcrop` or `cobble`, `size_m` its width, a
+`seed` for its variant), generated with fracture faces and a rough surface, or a CC0 scan with
+`model` (`boulder_01`, `rock_07`, `namaqualand_boulder_02`; `catalog.search {"query": "rock"}`),
+which the generated rock stands in for while it loads. It sits on the lowest ground under its
+footprint, sunk by `sink` of its height (0.25) and tilted towards the slope by `align` (0.7), so
+no edge floats. `rock.scatter` scatters them over an outline in clusters, sizes skewed small, and
+with `follow_terrain` (the default) gathers them where the terrain shows rock or scree and on
+steep ground; the answer's `group` removes them together (`rock.remove {"group": "rs1"}`).
+`deadwood.add` places a `log` or `branch` lying along `yaw_deg` (pitched to the ground under its
+ends), a `stump` on its root flare or a `snag`, a dead standing tree with a broken top; sizes
+default by kind, the bark is `bark` and the cut ends `timber`. `deadwood.scatter` does the same
+over an outline or a woodland planting's ground (`planting`). `rock.set` and `deadwood.set`
+change any field, both lists are in `document.inspect` (`rocks`, `deadwood`).
+
+`terrain.set_cover` scatters small cover over the terrain from the same layers, within 25 m of
+the camera and dissolving towards that edge: stones on scree (fewer on rock and soil), cushions
+of moss in the shade, twigs on soil, and leaf litter under deciduous crowns all year. The values
+multiply the built-in densities (0..4). It is made again only when the camera moves to another
+8 m cell, and left out at LOW quality and under snow.
+
 ## Known traps
 
 - **Ids are not names**: `S2`, not `House`; viewpoints are `v1`, lights `li1`. Film commands and

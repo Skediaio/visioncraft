@@ -22,6 +22,7 @@ pub mod light;
 pub mod material;
 pub mod measure;
 mod model;
+pub mod natural;
 pub mod object;
 pub mod photo;
 pub mod plant_ground;

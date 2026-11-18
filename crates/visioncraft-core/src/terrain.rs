@@ -37,6 +37,15 @@ pub struct Terrain {
     pub layers: Vec<TerrainLayer>,
     /// Per vertex, per layer: `weights[vertex * layers.len() + layer]`; each vertex sums to 255.
     pub weights: Vec<u8>,
+    /// Automatic materials by slope, height, curvature and moisture (`terrain.set_auto`): they
+    /// share out the base layer's paint when the chunks are meshed; the heights and the painted
+    /// weights stay as they are.
+    pub auto: Option<crate::natural::AutoMaterials>,
+    /// Hex tiling of the layers' maps from above against visible repetition
+    /// (`terrain.set_tiling`).
+    pub hex_tiling: bool,
+    /// Ground cover scattered near the camera from the same masks (`terrain.set_cover`).
+    pub cover: Option<crate::natural::GroundCover>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -144,6 +153,12 @@ struct Repr {
     heights: String,
     /// u8, shuffled by the layer count, deflated, base64.
     weights: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    auto: Option<crate::natural::AutoMaterials>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    hex_tiling: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cover: Option<crate::natural::GroundCover>,
 }
 
 impl Serialize for Terrain {
@@ -157,6 +172,9 @@ impl Serialize for Terrain {
             layers: self.layers.clone(),
             heights: pack(&bytes, 4),
             weights: pack(&self.weights, self.layers.len().max(1)),
+            auto: self.auto.clone(),
+            hex_tiling: self.hex_tiling,
+            cover: self.cover.clone(),
         }
         .serialize(s)
     }
@@ -194,6 +212,9 @@ impl<'de> Deserialize<'de> for Terrain {
             heights,
             layers: r.layers,
             weights,
+            auto: r.auto,
+            hex_tiling: r.hex_tiling,
+            cover: r.cover,
         };
         t.validate().map_err(|e| bad(e.0))?;
         Ok(t)
@@ -270,6 +291,9 @@ impl Terrain {
                 material: base_material.into(),
             }],
             weights: vec![255; n],
+            auto: None,
+            hex_tiling: false,
+            cover: None,
         })
     }
 
@@ -338,7 +362,17 @@ impl Terrain {
                 }
             }
         }
-        let layers_changed = self.layers != old.layers;
+        let layers_changed = self.layers != old.layers || self.auto != old.auto;
+        // Automatic materials look a few cells round each vertex (its slope and curvature).
+        if self.auto.is_some() && !dirty.is_empty() {
+            let r = crate::natural::AUTO_REACH;
+            dirty = DirtyRect {
+                x0: dirty.x0.saturating_sub(r),
+                z0: dirty.z0.saturating_sub(r),
+                x1: (dirty.x1 + r).min(self.width),
+                z1: (dirty.z1 + r).min(self.depth),
+            };
+        }
         if dirty.is_empty() && !layers_changed {
             None
         } else if layers_changed {
@@ -352,12 +386,12 @@ impl Terrain {
         (self.width as usize + 1) * (self.depth as usize + 1)
     }
 
-    fn at(&self, ix: u32, iz: u32) -> usize {
+    pub(crate) fn at(&self, ix: u32, iz: u32) -> usize {
         iz as usize * (self.width as usize + 1) + ix as usize
     }
 
     /// World position of vertex `(ix, iz)`, without its height.
-    fn xz(&self, ix: u32, iz: u32) -> [f32; 2] {
+    pub(crate) fn xz(&self, ix: u32, iz: u32) -> [f32; 2] {
         [
             self.origin[0] + ix as f32 * self.cell_m,
             self.origin[1] + iz as f32 * self.cell_m,
@@ -375,7 +409,7 @@ impl Terrain {
         ]
     }
 
-    fn height_clamped(&self, ix: i64, iz: i64) -> f32 {
+    pub(crate) fn height_clamped(&self, ix: i64, iz: i64) -> f32 {
         let (x, z) = (
             ix.clamp(0, i64::from(self.width)) as u32,
             iz.clamp(0, i64::from(self.depth)) as u32,
@@ -1055,6 +1089,9 @@ impl Terrain {
             &self.layers[0].material,
         )?;
         new.layers = self.layers.clone();
+        new.auto.clone_from(&self.auto);
+        new.hex_tiling = self.hex_tiling;
+        new.cover.clone_from(&self.cover);
         let n = self.layers.len();
         new.weights = (0..new.vertex_count())
             .flat_map(|_| (0..n).map(|l| if l == 0 { 255 } else { 0 }))
@@ -1215,7 +1252,6 @@ pub fn terrain_chunk_mesh_holes(
         chunk_z * CHUNK_CELLS,
         ((chunk_z + 1) * CHUNK_CELLS).min(t.depth),
     );
-    let n = t.layers.len();
     let vertex = |m: &mut TerrainChunk, ix: u32, iz: u32, drop: f32| {
         let p = t.xz(ix, iz);
         let h = |dx: i64, dz: i64| t.height_clamped(i64::from(ix) + dx, i64::from(iz) + dz);
@@ -1228,9 +1264,7 @@ pub fn terrain_chunk_mesh_holes(
             1.0,
             -(h(0, 1) - h(0, -1)) / (sz * t.cell_m),
         ]);
-        let mut w = [0u8; 8];
-        let i = t.at(ix, iz) * n;
-        w[..n].copy_from_slice(&t.weights[i..i + n]);
+        let w = t.vertex_weights(ix, iz);
         m.positions
             .push([p[0], t.heights[t.at(ix, iz)] - drop, p[1]]);
         m.normals.push(normal);

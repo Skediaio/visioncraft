@@ -497,7 +497,7 @@ pub(crate) fn inspect(session: &Session, state: &HostState, v: &Verbosity) -> Va
         .collect();
     let terrain = p.terrain.as_ref().map(|t| {
         let e = t.extent();
-        json!({"extent": e, "vertices": t.vertex_count(), "cell_m": t.cell_m, "layers": t.layers.iter().map(|l| l.material.clone()).collect::<Vec<_>>()})
+        json!({"extent": e, "vertices": t.vertex_count(), "cell_m": t.cell_m, "layers": t.layers.iter().map(|l| l.material.clone()).collect::<Vec<_>>(), "auto": t.auto, "hex_tiling": t.hex_tiling, "cover": t.cover})
     });
     let mut out = Map::new();
     out.insert(
@@ -525,6 +525,8 @@ pub(crate) fn inspect(session: &Session, state: &HostState, v: &Verbosity) -> Va
     out.insert("viewpoints".into(), json!(p.viewpoints));
     out.insert("films".into(), json!(p.films));
     out.insert("terrain".into(), terrain.into());
+    out.insert("rocks".into(), json!(p.rocks));
+    out.insert("deadwood".into(), json!(p.deadwood));
     // The sea with what it means: the waves' height and length from its sea state.
     out.insert(
         "sea".into(),

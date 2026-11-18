@@ -52,6 +52,8 @@ pub struct TerrainLayer {
     pub roughness_offset: f32,
     /// Puddles may form on this layer when it is wet (`Material::puddles`; false for lawn).
     pub puddles: bool,
+    /// Hex tiling of the maps seen from above (terrain.wgsl), against visible repetition.
+    pub hex: bool,
 }
 
 impl Default for TerrainLayer {
@@ -68,6 +70,7 @@ impl Default for TerrainLayer {
             relief: 1.0,
             roughness_offset: 0.0,
             puddles: true,
+            hex: false,
         }
     }
 }
@@ -283,7 +286,7 @@ impl TerrainGpu {
                 l.variation.clamp(0.0, 1.0),
                 l.relief.clamp(0.0, 2.0),
             ]);
-            b.floats(&[l.puddles as u32 as f32, 0.0, 0.0, 0.0]);
+            b.floats(&[l.puddles as u32 as f32, l.hex as u32 as f32, 0.0, 0.0]);
         }
         b.floats(&self.edge);
         let (rgb, band) = ground.map_or(([0.0; 3], 0.0), |c| (c, EDGE_BAND_M));

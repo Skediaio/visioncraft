@@ -19,7 +19,7 @@ pub fn recipes() -> Vec<Value> {
 #[test]
 fn every_recipe_of_the_guide_runs() {
     let recipes = recipes();
-    assert_eq!(recipes.len(), 43);
+    assert_eq!(recipes.len(), 44);
     for (n, recipe) in recipes.into_iter().enumerate() {
         let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("recipe-{n}"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -546,6 +546,18 @@ fn every_recipe_of_the_guide_runs() {
                 assert!(maple < lawn - 0.1 && maple > 0.05, "{report}");
                 assert!(hedge < lawn && hedge > 0.3, "{report}");
                 assert!(wall > 0.2 && wall < 0.5, "{report}");
+            }
+            44 => {
+                // The hillside gets its four automatic layers; rocks and deadwood are placed.
+                assert_eq!(results[5]["result"]["added_layers"], 4, "{report}");
+                assert!(
+                    results[8]["result"]["count"].as_u64().unwrap() > 10,
+                    "{report}"
+                );
+                assert!(
+                    results[10]["result"]["count"].as_u64().unwrap() > 3,
+                    "{report}"
+                );
             }
             42 => {
                 // The walk is planned round the pond and the hedge and keeps its 19.6 s.

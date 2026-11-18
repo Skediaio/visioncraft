@@ -17,6 +17,7 @@ mod layers;
 mod levels;
 mod lights;
 mod materials;
+mod natural;
 mod objects;
 mod planting;
 mod queries;
@@ -46,6 +47,7 @@ pub(crate) fn register(s: &mut Session) {
     terrain::register(s);
     terraces::register(s);
     materials::register(s);
+    natural::register(s);
     planting::register(s);
     growth::register(s);
     lights::register(s);

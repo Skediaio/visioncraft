@@ -661,6 +661,12 @@ pub struct Project {
     /// The sea level (`water.set_sea`); not written while there is none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sea: Option<crate::water::Sea>,
+    /// Boulders, slabs and outcrops (`rock.*`); not written while there are none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rocks: Vec<crate::natural::Rock>,
+    /// Fallen logs, stumps, snags and branches (`deadwood.*`); not written while there are none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deadwood: Vec<crate::natural::Deadwood>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extensions: Extensions,
 }
@@ -688,6 +694,8 @@ impl Default for Project {
             view: ViewState::default(),
             terrain: None,
             sea: None,
+            rocks: Vec::new(),
+            deadwood: Vec::new(),
             extensions: Extensions::new(),
         }
     }

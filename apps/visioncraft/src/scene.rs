@@ -23,6 +23,7 @@ use crate::plant_scene::{self, DirtyLog, EVERYTHING, Inst, Rect};
 use crate::plants::{self, Flora, LAWN_SPECIES};
 
 mod clutter;
+mod natural;
 
 /// A loaded or generated design, with a counter that changes when its triangles do.
 #[derive(Clone)]
@@ -971,6 +972,8 @@ pub struct Scene {
     clutter: clutter::Clutter,
     /// LOW quality: no clutter whatever the project says (`set_clutter_low`).
     clutter_low: bool,
+    /// Rocks, deadwood and the terrain's ground cover (`natural`).
+    natural: natural::Natural,
     /// Each model's faces lying on the ground (`visioncraft_core::ground_faces`), with what
     /// they were found for: the model's version, its matrix and the terrain.
     model_ground: HashMap<String, ModelGround>,
@@ -1103,6 +1106,7 @@ impl Scene {
         }
         self.drop_lawns(r);
         self.clutter.clear(r);
+        self.natural.clear(r);
         self.terrain_gpu.clear(r);
         self.terrain = None;
         self.zones.clear();
@@ -1454,6 +1458,12 @@ impl Scene {
         let t = crate::assets::now_ms();
         self.sync_clutter(r, project);
         crate::load_stats::add("~scene sync: clutter", crate::assets::now_ms() - t);
+        let t = crate::assets::now_ms();
+        self.sync_natural(r, project);
+        crate::load_stats::add(
+            "~scene sync: rocks, deadwood, cover",
+            crate::assets::now_ms() - t,
+        );
         self.prune_materials(r);
         problems
     }
@@ -2563,7 +2573,10 @@ impl Scene {
         self.finish_lawns(r);
         let cell = [eye.x, eye.z].map(|v| (v / LAWN_EYE_CELL_M).floor() as i32);
         let moved = std::mem::replace(&mut self.lawn_eye, cell) != cell && self.lawns_follow;
-        self.flora.pump(r, eye) | library | moved
+        let cover = [eye.x, eye.z].map(|v| (v / natural::COVER_CELL_M).floor() as i32);
+        let cover_moved =
+            std::mem::replace(&mut self.natural.eye, cover) != cover && self.natural.follow;
+        self.flora.pump(r, eye) | library | moved | cover_moved
     }
 
     /// Screen pixels per texture repeat of each textured material at its nearest visible

@@ -272,9 +272,20 @@ nothing here is a promise of a date.
      by autofocus from the first sample's depth) as an off-axis frustum per lens point; a shutter
      time for motion blur of the wind and rain; and a light vignette and film grain (`view.set`).
      Recipe 41. Next: shafts that read at thin mist (a froxel volume with a stronger droplet lobe).
-  2. Materials and ground: download the catalogued CC0 library (ambientCG, Poly Haven) into
-     checkouts, hex tiling and height blending on terrain and paving, joints and relief (boards,
-     tiles, parallax up close), and leaf litter, pebbles and moss as scatter that follows the season.
+  2. Materials and ground. Done for natural ground: automatic terrain materials
+     (`terrain.set_auto`: rock, scree, moss and soil layers by slope, height, curvature and a
+     moisture/shade term, boundaries moved by macro noise, shared out of the base layer when the
+     chunks are meshed so painted layers stay), hex tiling of the terrain layers from above
+     (`terrain.set_tiling`, after Heitz & Neyret 2018 and Mikkelsen 2022, copies weighted by
+     their height), the existing height blend between layers, rocks (`rock.add`, `rock.scatter`:
+     generated boulders, slabs, outcrops and cobbles cut by fracture planes, or a CC0 scan from the
+     library, sunk and tilted to the slope, gathered on rocky ground), deadwood (`deadwood.add`,
+     `deadwood.scatter` over an outline or a woodland planting: logs, stumps with root flare, snags,
+     branches) and ground cover round the camera from the same masks (`terrain.set_cover`: stones
+     on scree, moss cushions in shade, twigs, leaf litter under crowns all year). Recipe 44. Next:
+     download the catalogued CC0 library into checkouts, hex tiling and height blending on paving,
+     joints and relief (boards, tiles, parallax up close), heather and ferns as cover, cover that
+     follows the season, and rocks and deadwood in the sky visibility bake.
   3. Plants: lawn blades generated in compute with clumping and backlit translucency (as in
      Ghost of Tsushima, GDC 2021), tall and ornamental grasses that glow against the sun, flowers
      and fine leaves up close (more leaf sets), and fuller crowns (see Tree form).

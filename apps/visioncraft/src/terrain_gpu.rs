@@ -232,6 +232,7 @@ impl TerrainGpu {
                     relief: look.relief,
                     roughness_offset: -look.gloss,
                     puddles: look.puddles,
+                    hex: t.hex_tiling,
                 }
             })
             .collect();

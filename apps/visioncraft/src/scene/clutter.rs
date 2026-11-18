@@ -286,6 +286,13 @@ impl Scene {
         let mut twigs: Vec<Mat4> = Vec::new();
         let mut edges: Vec<Vec<Mat4>> = vec![Vec::new(); variants];
         let mut edge_color = None;
+        // The terrain's ground cover (`terrain.set_cover`) keeps leaf litter under the crowns on
+        // it the whole year, as a forest floor does.
+        let terrain_litter = project
+            .terrain
+            .as_ref()
+            .and_then(|t| t.cover.as_ref())
+            .is_some_and(|c| c.litter > 0.0);
         {
             let ground = self.ground_fn();
             // The outlines of the forest floors: leaf litter lies under the crowns on them all year.
@@ -301,7 +308,12 @@ impl Scene {
                 .collect();
             for (i, (_, _, _, c)) in trees.iter().enumerate() {
                 let mut by_v = vec![Vec::new(); variants];
-                let litter_all_year = floors.iter().any(|f| inside_outline([c[0], c[1]], f));
+                let litter_all_year = floors.iter().any(|f| inside_outline([c[0], c[1]], f))
+                    || (terrain_litter
+                        && self
+                            .terrain
+                            .as_ref()
+                            .is_some_and(|t| t.height_at(c[0], c[1]).is_some()));
                 for (k, s) in leaf_spots(*c, month, i as u64, litter_all_year)
                     .into_iter()
                     .enumerate()
@@ -648,7 +660,7 @@ fn edge_spots(edges: &[([f32; 2], [f32; 2], [f32; 2])], spacing: f32, seed: u64)
 }
 
 /// The stone variants and the twig, with their materials.
-fn make_meshes(r: &mut Renderer) -> Vec<(MeshId, MaterialId)> {
+pub(super) fn make_meshes(r: &mut Renderer) -> Vec<(MeshId, MaterialId)> {
     let colors = [[0.16, 0.15, 0.13], [0.11, 0.1, 0.09], [0.2, 0.17, 0.14]];
     let mut out = Vec::new();
     let mut upload =
@@ -794,7 +806,7 @@ fn twig() -> (Vec<[f32; 3]>, Vec<u32>) {
 }
 
 /// Smooth vertex normals, area weighted.
-fn normals(p: &[[f32; 3]], idx: &[u32]) -> Vec<[f32; 3]> {
+pub(super) fn normals(p: &[[f32; 3]], idx: &[u32]) -> Vec<[f32; 3]> {
     let mut n = vec![Vec3::ZERO; p.len()];
     for t in idx.as_chunks::<3>().0 {
         let [a, b, c] = t.map(|i| Vec3::from(p[i as usize]));

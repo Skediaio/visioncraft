@@ -10,13 +10,19 @@
 // small depth of the highest weight+height contribute, so gravel fills the
 // gaps between paving stones instead of cross-fading over them. Near the
 // terrain's outer edge it blends into the infinite ground's colour.
+// Hex tiling (per layer, seen from above): the plane is covered by a lattice of hexagons, each
+// with its own random shift and turn of the maps, and every texel blends the three hexagons round
+// it by their barycentric weights sharpened by each copy's height, so no repeat of the tile shows
+// (Heitz & Neyret, "High-Performance By-Example Noise using a Histogram-Preserving Blending
+// Operator", HPG 2018; Mikkelsen, "Practical Real-Time Hex-Tiling", JCGT 11(3), 2022). The turned
+// copies' normals are turned back by the same angle.
 // Module: common.wgsl + scene.wgsl + this file (group 1 is the terrain's
 // own layout, bindings 13-17, so it never collides with the material's).
 
 struct TerrainLayer {
     color: vec4<f32>,  // rgb linear base colour factor, a added to the roughness
     params: vec4<f32>, // x roughness, y 1 / scale (m), z macro variation, w normal map strength
-    extra: vec4<f32>,  // x puddles may form on this layer (0/1; 0 on lawns)
+    extra: vec4<f32>,  // x puddles may form on this layer (0/1; 0 on lawns), y hex tiling (0/1)
 }
 
 struct Terrain {
@@ -100,6 +106,115 @@ fn terrain_normal_sample(l: Lookup, n: vec3<f32>, layer: i32, relief: f32) -> ve
 
 const HEIGHT_DEPTH: f32 = 0.2;
 
+// ---- hex tiling ----
+
+// Hexagon centres per texture repeat: a little under two, so a hexagon holds about half a tile.
+const HEX_DENSITY: f32 = 1.8;
+const SQRT3_2: f32 = 0.8660254;
+
+// The three hexagon centres round `uv` (lattice vertices of equilateral triangles) and the
+// barycentric weights of `uv` in their triangle.
+struct HexCell {
+    v: array<vec2<i32>, 3>,
+    w: vec3<f32>,
+}
+
+fn hex_cell(uv: vec2<f32>) -> HexCell {
+    let p = uv * HEX_DENSITY;
+    // Into the lattice's skewed frame: p = i * (1, 0) + j * (1/2, sqrt(3)/2).
+    let j = p.y / SQRT3_2;
+    let i = p.x - 0.5 * j;
+    let base = vec2<i32>(floor(vec2<f32>(i, j)));
+    let f = fract(vec2<f32>(i, j));
+    var c: HexCell;
+    if f.x + f.y < 1.0 {
+        c.v = array<vec2<i32>, 3>(base, base + vec2<i32>(1, 0), base + vec2<i32>(0, 1));
+        c.w = vec3<f32>(1.0 - f.x - f.y, f.x, f.y);
+    } else {
+        c.v = array<vec2<i32>, 3>(base + vec2<i32>(1, 1), base + vec2<i32>(0, 1), base + vec2<i32>(1, 0));
+        c.w = vec3<f32>(f.x + f.y - 1.0, 1.0 - f.x, 1.0 - f.y);
+    }
+    return c;
+}
+
+// A hexagon's turn (cos, sin) and shift, from its lattice vertex.
+fn hex_turn(v: vec2<i32>) -> vec2<f32> {
+    let a = hash3(vec3<i32>(v, 17)) * 6.2831853;
+    return vec2<f32>(cos(a), sin(a));
+}
+
+fn hex_rotate(r: vec2<f32>, v: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(r.x * v.x - r.y * v.y, r.y * v.x + r.x * v.y);
+}
+
+// `uv` as hexagon `v` maps it: turned about the hexagon's centre and shifted.
+fn hex_uv(v: vec2<i32>, r: vec2<f32>, uv: vec2<f32>) -> vec2<f32> {
+    let centre = vec2<f32>(f32(v.x) + 0.5 * f32(v.y), f32(v.y) * SQRT3_2) / HEX_DENSITY;
+    let shift = vec2<f32>(hash3(vec3<i32>(v, 3)), hash3(vec3<i32>(v, 5)));
+    return hex_rotate(r, uv - centre) + centre + shift;
+}
+
+// The blend weights of the three copies: the barycentric ones raised to a power (narrow seams)
+// and scaled by each copy's height, so the higher stones of one copy cover the other.
+fn hex_weights(w: vec3<f32>, heights: vec3<f32>) -> vec3<f32> {
+    let k = pow(w, vec3<f32>(6.0)) * mix(vec3<f32>(1.0), heights + 0.05, 0.75);
+    return k / max(k.x + k.y + k.z, 1e-6);
+}
+
+// One layer's maps from above through the hex tiling: the packed ORM (height in alpha) and the
+// three weights it gives.
+struct HexOrm {
+    orm: vec4<f32>,
+    w: vec3<f32>,
+}
+
+fn hex_orm(l: Lookup, layer: i32) -> HexOrm {
+    let c = hex_cell(l.uv[1]);
+    var s: array<vec4<f32>, 3>;
+    for (var k = 0; k < 3; k++) {
+        let r = hex_turn(c.v[k]);
+        s[k] = textureSampleGrad(terrain_orm, terrain_smp, hex_uv(c.v[k], r, l.uv[1]), layer, hex_rotate(r, l.dx[1]), hex_rotate(r, l.dy[1]));
+    }
+    var out: HexOrm;
+    out.w = hex_weights(c.w, vec3<f32>(s[0].a, s[1].a, s[2].a));
+    out.orm = s[0] * out.w.x + s[1] * out.w.y + s[2] * out.w.z;
+    return out;
+}
+
+fn hex_base(l: Lookup, layer: i32, w: vec3<f32>) -> vec4<f32> {
+    let c = hex_cell(l.uv[1]);
+    var sum = vec4<f32>(0.0);
+    for (var k = 0; k < 3; k++) {
+        if w[k] > 0.001 {
+            let r = hex_turn(c.v[k]);
+            sum += textureSampleGrad(terrain_base, terrain_smp, hex_uv(c.v[k], r, l.uv[1]), layer, hex_rotate(r, l.dx[1]), hex_rotate(r, l.dy[1])) * w[k];
+        }
+    }
+    return sum;
+}
+
+// The normal from above through the hex tiling: each copy's tangent normal turned back by its
+// hexagon's angle (the map was sampled turned by it), blended, then whiteout-blended onto `n` in
+// the top projection's frame (as terrain_normal_sample).
+fn hex_normal(l: Lookup, n: vec3<f32>, layer: i32, relief: f32, w: vec3<f32>) -> vec3<f32> {
+    let c = hex_cell(l.uv[1]);
+    var tn = vec3<f32>(0.0);
+    for (var k = 0; k < 3; k++) {
+        if w[k] > 0.001 {
+            let r = hex_turn(c.v[k]);
+            let s = decode_normal(textureSampleGrad(terrain_normal, terrain_smp, hex_uv(c.v[k], r, l.uv[1]), layer, hex_rotate(r, l.dx[1]), hex_rotate(r, l.dy[1])));
+            tn += vec3<f32>(hex_rotate(r, s.xy), s.z) * w[k];
+        }
+    }
+    tn = vec3<f32>(tn.xy * relief, max(tn.z, 1e-3));
+    let t = l.t[1];
+    let b = l.b[1];
+    let axis = cross(t, b);
+    let base = vec3<f32>(dot(n, t), dot(n, b), dot(n, axis));
+    let wo = vec3<f32>(tn.xy + base.xy, tn.z * base.z);
+    return wo.x * t + wo.y * b + wo.z * axis;
+}
+
 // One layer's projection: planar from above unless the slope is steep.
 fn layer_lookup(world: vec3<f32>, dwx: vec3<f32>, dwy: vec3<f32>, n: vec3<f32>, inv_scale: f32, steep: bool) -> Lookup {
     var l = triplanar(world, dwx, dwy, n, inv_scale);
@@ -118,11 +233,19 @@ fn terrain_surface(in: TerrainVarying) -> Surface {
     // The lookups are made again in the second loop: kept in an array of eight (over 300
     // floats) they spilled out of registers on Intel GPUs, which cost more than the arithmetic.
     var orm: array<vec4<f32>, 8>;
+    // The hex tiling's copy weights per layer (from above only: steep ground keeps triplanar).
+    var hexw: array<vec3<f32>, 8>;
     var top = 0.0;
     for (var i = 0; i < 8; i++) {
         if weights[i] > 0.004 {
             let l = layer_lookup(in.world, dwx, dwy, n, terrain.layers[i].params.y, steep);
-            orm[i] = terrain_sample(terrain_orm, l, i);
+            if !steep && terrain.layers[i].extra.y > 0.5 {
+                let h = hex_orm(l, i);
+                orm[i] = h.orm;
+                hexw[i] = h.w;
+            } else {
+                orm[i] = terrain_sample(terrain_orm, l, i);
+            }
             top = max(top, orm[i].a + weights[i]);
         }
     }
@@ -141,8 +264,13 @@ fn terrain_surface(in: TerrainVarying) -> Surface {
             if b > 0.0 {
                 let layer = terrain.layers[i];
                 let l = layer_lookup(in.world, dwx, dwy, n, layer.params.y, steep);
-                base += terrain_sample(terrain_base, l, i).rgb * layer.color.rgb * b;
-                nsum += terrain_normal_sample(l, n, i, layer.params.w) * b;
+                if !steep && layer.extra.y > 0.5 {
+                    base += hex_base(l, i, hexw[i]).rgb * layer.color.rgb * b;
+                    nsum += hex_normal(l, n, i, layer.params.w, hexw[i]) * b;
+                } else {
+                    base += terrain_sample(terrain_base, l, i).rgb * layer.color.rgb * b;
+                    nsum += terrain_normal_sample(l, n, i, layer.params.w) * b;
+                }
                 rough += (layer.params.x * orm[i].g + layer.color.a) * b;
                 metal += orm[i].b * b;
                 ao += orm[i].r * b;

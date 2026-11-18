@@ -458,6 +458,15 @@ pub fn example_project(command: &str) -> crate::project::Project {
         }
         s.run(name, params).expect("the example project builds");
     }
+    // The rock and deadwood commands work on rk1 and dw1.
+    if command.starts_with("rock.") && command != "rock.add" {
+        s.run("rock.add", json!({"position": [5, 5]}))
+            .expect("the example project builds");
+    }
+    if command.starts_with("deadwood.") && command != "deadwood.add" {
+        s.run("deadwood.add", json!({"position": [5, 5]}))
+            .expect("the example project builds");
+    }
     // The film commands work on f1, a walk and a hold.
     if command.starts_with("film.") && command != "film.add" {
         s.run("film.add", json!({"name": "Tour"}))

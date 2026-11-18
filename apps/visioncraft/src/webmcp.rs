@@ -175,6 +175,8 @@ const SECTIONS: &[(&str, &str)] = &[
     ("films", "films"),
     ("species", "species"),
     ("models", "models"),
+    ("rocks", "rocks"),
+    ("deadwood", "deadwood"),
 ];
 
 /// Commands that ask the person first: removing and clearing things, and replacing the
