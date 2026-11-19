@@ -208,6 +208,8 @@ pub struct Studio {
     /// revision, the loaded models, the years and the month.
     pub sky_vis: crate::sky_vis::SkyVisState,
     sky_vis_checked: Option<(u64, u64, Option<u32>, u32)>,
+    /// A bake waits for the plants and models still on their way (`sync_sky_visibility`).
+    sky_vis_waiting: bool,
     /// The plant light check and its marks on the plan.
     pub light: crate::light_ui::LightState,
     /// An opacity being dragged on a slider, shown before it is committed: (underlay id, value).
@@ -447,6 +449,7 @@ impl Studio {
             sun_map: Default::default(),
             sky_vis: Default::default(),
             sky_vis_checked: None,
+            sky_vis_waiting: false,
             light: crate::light_ui::LightState::new(),
             underlay_live: None,
             pick_underlay: false,
@@ -756,7 +759,7 @@ impl Studio {
                 && self.plants_pending() == 0
                 && self.scene.library.idle()
                 && !self.sky_volume_pending()
-                && !self.sky_vis.pending()
+                && !self.sky_visibility_pending()
                 && !self.sun_map.pending()
             {
                 break;
@@ -2104,10 +2107,18 @@ impl Studio {
                 None => self.renderer.set_sky_visibility(None),
             }
         }
-        let p = self.session.project();
-        if !p.view.sky_occlusion.unwrap_or(true) {
+        self.sky_vis_waiting = false;
+        if !self.session.project().view.sky_occlusion.unwrap_or(true) {
             return;
         }
+        // The plants and models first: a bake shares the cores with what makes them (on the
+        // web all the workers' for half a minute on the coast, which held its plants back by
+        // as long), and the models it waits for change what it bakes.
+        if self.plants_pending() > 0 || self.models_pending() > 0 {
+            self.sky_vis_waiting = true;
+            return;
+        }
+        let p = self.session.project();
         let models = self
             .loaded
             .iter()
@@ -2141,9 +2152,9 @@ impl Studio {
         }
     }
 
-    /// Whether the sky visibility is being baked.
+    /// Whether the sky visibility is being baked, or waits for plants and models to bake.
     pub fn sky_visibility_pending(&self) -> bool {
-        self.sky_vis.pending()
+        self.sky_vis.pending() || self.sky_vis_waiting
     }
 
     /// Whether the sun-hours map is being worked out.
