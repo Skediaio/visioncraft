@@ -9,6 +9,29 @@ from `visioncraft-cli` and over MCP (see [CLI and MCP](#cli-and-mcp)).
 
 Status: version 0.0.0, not published.
 
+## Gallery
+
+Pictures of the built-in examples, rendered with VisionCraft's own renderer on a laptop's
+integrated GPU (Intel Iris Xe), about 20 seconds each at 1600x900. Nothing is painted over or
+edited afterwards.
+
+![Golden hour on the coast example: the sun low over the sea, the house behind the dunes](docs/images/coast-golden-hour.jpg)
+
+| | |
+|---|---|
+| ![Entrance court with clipped standards, cypresses and an old olive](docs/images/coast-entrance-court.jpg) | ![A border of lavender, grasses and perennials beside a lawn](docs/images/coast-border.jpg) |
+| ![Drone view along the coast with the house, dunes and breaking waves](docs/images/coast-drone.jpg) | ![The beach house at dusk with its lights on](docs/images/beach-house-dusk.jpg) |
+| ![Kitchen and dining room of the beach house](docs/images/beach-house-kitchen.jpg) | ![A perennial border in flower in the example garden](docs/images/garden-border.jpg) |
+
+![The example garden at dusk: garden lights along the path, the pond and the house](docs/images/garden-dusk.jpg)
+
+Every picture is one command, for example:
+
+```sh
+visioncraft-cli run --new '{}' --cmd project.load_example --params '{"name":"coast"}' --out coast.visioncraft
+visioncraft-cli render coast.visioncraft --viewpoint "Entrance court" --size 1600x900 --quality photo --out court.png
+```
+
 ## Workspace layout
 
 Dependencies point downwards only.
