@@ -77,7 +77,7 @@ fn grass_outside(center: vec3<f32>, radius: f32) -> bool {
 }
 
 fn grass_seed2(c: vec2<i32>, salt: u32) -> u32 {
-    return grass_pcg(bitcast<u32>(c.x) * 73856093u ^ bitcast<u32>(c.y) * 19349663u ^ salt);
+    return grass_pcg((bitcast<u32>(c.x) * 73856093u) ^ (bitcast<u32>(c.y) * 19349663u) ^ salt);
 }
 
 @compute @workgroup_size(64)

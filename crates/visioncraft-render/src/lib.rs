@@ -7493,6 +7493,121 @@ pub async fn headless_device() -> Result<(wgpu::Device, wgpu::Queue), String> {
 mod tests {
     use super::*;
 
+    /// The binary operators of `src` (comments stripped) that WGSL forbids mixing without
+    /// parentheses, as (line, text) pairs where a bitwise one (`&`, `|`, `^`) shares a level with
+    /// an arithmetic one or another bitwise one. naga accepts the mix; Chrome's compiler (Tint)
+    /// rejects the whole module, which threw away every frame of the grass compute pass.
+    fn mixed_bitwise(src: &str) -> Vec<(usize, String)> {
+        let mut out = Vec::new();
+        for (n, raw) in src.lines().enumerate() {
+            let line = raw.split("//").next().unwrap_or("");
+            let b = line.as_bytes();
+            // Per open bracket: the operators seen since it opened or since the last `,`.
+            let mut levels: Vec<Vec<u8>> = vec![Vec::new()];
+            let mut prev_operand = false;
+            let mut i = 0;
+            while i < b.len() {
+                let c = b[i];
+                if c.is_ascii_digit() || (c == b'.' && b.get(i + 1).is_some_and(u8::is_ascii_digit))
+                {
+                    // A number, exponent sign included (1e-3).
+                    i += 1;
+                    while i < b.len()
+                        && (b[i].is_ascii_alphanumeric()
+                            || b[i] == b'.'
+                            || ((b[i] == b'-' || b[i] == b'+') && matches!(b[i - 1], b'e' | b'E')))
+                    {
+                        i += 1;
+                    }
+                    prev_operand = true;
+                    continue;
+                }
+                match c {
+                    b'(' | b'[' => {
+                        levels.push(Vec::new());
+                        prev_operand = false;
+                    }
+                    b')' | b']' => {
+                        if levels.len() > 1 {
+                            levels.pop();
+                        }
+                        prev_operand = true;
+                    }
+                    b',' | b';' | b'{' | b'}' | b'=' => {
+                        levels.last_mut().unwrap().clear();
+                        prev_operand = false;
+                    }
+                    b'&' | b'|' if b.get(i + 1) == Some(&c) => {
+                        levels.last_mut().unwrap().clear();
+                        prev_operand = false;
+                        i += 1;
+                    }
+                    b'&' | b'|' | b'^' | b'*' | b'/' | b'%' | b'+' | b'-' if prev_operand => {
+                        if b.get(i + 1) == Some(&b'=') {
+                            levels.last_mut().unwrap().clear();
+                            i += 1;
+                        } else {
+                            let ops = levels.last_mut().unwrap();
+                            let bitwise = |o: u8| matches!(o, b'&' | b'|' | b'^');
+                            if ops.iter().any(|&o| o != c && (bitwise(o) || bitwise(c))) {
+                                out.push((n + 1, raw.trim().to_string()));
+                            }
+                            ops.push(c);
+                        }
+                        prev_operand = false;
+                    }
+                    b'<' | b'>' if b.get(i + 1) == Some(&c) && prev_operand => {
+                        // A shift counts as one more kind of operator for the mix rule.
+                        let ops = levels.last_mut().unwrap();
+                        if !ops.is_empty() && !ops.iter().all(|&o| o == c) {
+                            out.push((n + 1, raw.trim().to_string()));
+                        }
+                        ops.push(c);
+                        prev_operand = false;
+                        i += 1;
+                    }
+                    b'<' | b'>' | b'!' => {
+                        // Comparisons and generics end an operand chain without mixing.
+                        levels.last_mut().unwrap().clear();
+                        prev_operand = c == b'>';
+                    }
+                    c if c.is_ascii_alphanumeric() || c == b'_' => prev_operand = true,
+                    c if c.is_ascii_whitespace() => {}
+                    _ => prev_operand = false,
+                }
+                i += 1;
+            }
+        }
+        out.dedup();
+        out
+    }
+
+    #[test]
+    fn no_shader_mixes_bitwise_operators_without_parentheses() {
+        assert_eq!(
+            mixed_bitwise("let h = a * 7u ^ b;").len(),
+            1,
+            "the scan finds the mix"
+        );
+        assert!(mixed_bitwise("let h = (a * 7u) ^ b ^ c; let x = 1e-3 * y - z;").is_empty());
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut found = Vec::new();
+        for entry in std::fs::read_dir(&dir).expect("src") {
+            let path = entry.expect("entry").path();
+            if path.extension().is_some_and(|e| e == "wgsl") {
+                let src = std::fs::read_to_string(&path).expect("reads");
+                for (line, text) in mixed_bitwise(&src) {
+                    found.push(format!("{}:{line}: {text}", path.display()));
+                }
+            }
+        }
+        assert!(
+            found.is_empty(),
+            "WGSL needs parentheses here (Chrome rejects the module):\n{}",
+            found.join("\n")
+        );
+    }
+
     type ShaderEntry = (&'static str, &'static [&'static str]);
 
     /// Every module of `SHADERS`, with fast shading and without, and the scene module also in
