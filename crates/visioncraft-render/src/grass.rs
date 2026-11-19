@@ -234,7 +234,7 @@ fn frustum_planes(m: Mat4) -> [Vec4; 6] {
 }
 
 /// The module that draws the blades: the scene module's parts (for `light`) and the grass's own.
-fn draw_source(fast_shading: bool) -> String {
+pub(crate) fn draw_source(fast_shading: bool) -> String {
     let scene = crate::SHADERS
         .iter()
         .find(|(n, _)| *n == "scene")
@@ -576,7 +576,9 @@ impl GrassGpu {
     ) -> DrawPipelines {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("grass"),
-            source: wgpu::ShaderSource::Wgsl(draw_source(fast_shading).into()),
+            source: wgpu::ShaderSource::Wgsl(
+                crate::for_device(draw_source(fast_shading), device).into(),
+            ),
         });
         let buffers = [Some(wgpu::VertexBufferLayout {
             array_stride: BLADE_SIZE,

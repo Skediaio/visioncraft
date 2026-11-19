@@ -575,14 +575,7 @@ fn cascade_shadow(c: u32, world: vec3<f32>, n: vec3<f32>, nol: f32) -> f32 {
         return -1.0;
     }
     var sum = 0.0;
-    // Chosen at run time (`g.options.x` is 4 on MEDIUM and LOW), not compiled out of their fast
-    // shaders: without this branch Mesa's Intel Vulkan driver (Iris Xe, Mesa 26.2) miscompiled
-    // those forward shaders once `light` had grown the baked sky visibility, and shaded blocks
-    // of pixels with garbage (black and white blobs in hedges and shrubs, coloured specks on
-    // roofs and windows, the same from frame to frame). The same SPIR-V renders clean on
-    // llvmpipe, and with the branch kept, on Iris Xe (reference.rs
-    // `fast_shading_matches_full_shading`).
-    if g.options.x > 4.5 {
+    if !FAST_SHADING && g.options.x > 4.5 {
         for (var y = -1; y <= 1; y++) {
             for (var x = -1; x <= 1; x++) {
                 let o = vec2<f32>(f32(x), f32(y)) * g.shadow.z * 1.5;
@@ -1723,6 +1716,9 @@ fn photo_bounce(p: vec3<f32>, n: vec3<f32>, pixel: vec2<f32>, ao: f32, occ: SkyO
 
 @fragment
 fn fs_main(in: Varying, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    if scratch_floor_taken() {
+        return scratch_floor(in.clip);
+    }
     return vec4<f32>(shade(in, front, true, false).color, 1.0);
 }
 
@@ -1968,6 +1964,9 @@ const EARTH_RADIUS_M: f32 = 6.36e6;
 
 @fragment
 fn fs_ground(in_raw: Varying) -> @location(0) vec4<f32> {
+    if scratch_floor_taken() {
+        return scratch_floor(in_raw.clip);
+    }
     var in = in_raw;
     // The horizon colour in this pixel's own view direction (from the
     // pixel, not the interpolated position: see below).
@@ -2030,12 +2029,18 @@ fn fs_ground(in_raw: Varying) -> @location(0) vec4<f32> {
 // first and the discard last, so derivatives stay in uniform control flow.
 @fragment
 fn fs_reflect(in: Varying, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    if scratch_floor_taken() {
+        return scratch_floor(in.clip);
+    }
     return reflected(in, front, false);
 }
 
 // The endless ground in the reflection.
 @fragment
 fn fs_reflect_ground(in: Varying, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    if scratch_floor_taken() {
+        return scratch_floor(in.clip);
+    }
     return reflected(in, front, true);
 }
 
@@ -2229,6 +2234,9 @@ const SSR_REACH_M: f32 = 40.0;
 // Pass 1: what shows through (multiplied into the target).
 @fragment
 fn fs_glass_transmit(in: Varying) -> @location(0) vec4<f32> {
+    if scratch_floor_taken() {
+        return scratch_floor(in.clip);
+    }
     if g.time.w > 0.5 {
         return vec4<f32>(0.65); // clay: a pale veil
     }
@@ -2239,6 +2247,9 @@ fn fs_glass_transmit(in: Varying) -> @location(0) vec4<f32> {
 // to how much the pane blocks.
 @fragment
 fn fs_glass_reflect(in: Varying, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    if scratch_floor_taken() {
+        return scratch_floor(in.clip);
+    }
     if g.time.w > 0.5 {
         return vec4<f32>(shade(in, front, false, false).color * 0.35, 0.0);
     }
@@ -2357,6 +2368,9 @@ fn water(in: Varying) -> vec4<f32> {
 // Premultiplied alpha out (blend: One, OneMinusSrcAlpha).
 @fragment
 fn fs_transparent(in: Varying, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    if scratch_floor_taken() {
+        return scratch_floor(in.clip);
+    }
     // Branches on uniforms only, so shade() may take derivatives.
     let kind = material.alpha.z;
     if g.time.w > 0.5 {

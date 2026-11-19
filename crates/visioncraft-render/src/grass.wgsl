@@ -201,6 +201,9 @@ fn grass_light(clip: vec4<f32>, world: vec3<f32>, n: vec3<f32>, base: vec3<f32>,
 
 @fragment
 fn fs_grass(in: GrassVarying, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    if scratch_floor_taken() {
+        return scratch_floor(in.clip);
+    }
     var n = normalize(in.normal);
     if !front && in.shade.y < 1.5 {
         n = -n;

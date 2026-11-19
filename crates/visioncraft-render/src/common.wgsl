@@ -16,6 +16,38 @@ const FAST_SHADING: bool = false;
 // shaders are compiled without its lookup, which costs Intel's compiler its registers.
 override VOLUME_PART: u32 = 0u;
 
+// ---- scratch floor ----------------------------------------------------------
+//
+// Mesa's Intel Vulkan driver (anv) before Gfx 12.5 (the integrated GPUs from Skylake to Raptor
+// Lake; Chrome's WebGPU on Linux runs on it too) gives the fragment shaders that spill 1 KB of
+// registers per thread and those that spill 2 KB one scratch buffer (anv_allocator.c
+// `anv_scratch_pool_alloc` rounds sizes below 2 KB up to the 2 KB bucket), but programs each
+// with its own stride (genX_shader.c `get_scratch_space`: 1 KB): a thread of a 1 KB shader
+// and one of a 2 KB shader drawing at the same time overwrite each other's spilled registers.
+// That shaded blocks of pixels with garbage (white, green and magenta specks in impostors and
+// hedges, checker blobs, coloured dots on roofs and glass), different from frame to frame, and
+// any shader edit that moved a shader across 1 KB brought it back or took it away. Every lit
+// fragment shader calls `scratch_floor` first: a branch that never runs (the render size is
+// positive) with an array the compiler keeps in scratch, 2.1 KB at SIMD8, so every lit shader
+// takes 4 KB or more and those sharing a buffer share its stride. 17 is the fewest that go to
+// scratch (Mesa 26.2 keeps arrays up to 256 bytes in registers); each one more spreads the
+// spills of the big shaders further (20 cost Iris Xe 4 to 8 % of a LOW frame, 17 1 to 4 %).
+// Other drivers get an array of one (lib.rs `needs_scratch_floor`).
+// lib.rs `every_lit_fragment_stage_has_the_scratch_floor` checks the calls; reference.rs
+// `shading_is_the_same_every_time` the pictures.
+const SCRATCH_FLOOR_VEC4S: u32 = 17u;
+
+// Never true: lets `scratch_floor`'s array in without running it.
+fn scratch_floor_taken() -> bool {
+    return g.viewport.x < 0.0;
+}
+
+fn scratch_floor(clip: vec4<f32>) -> vec4<f32> {
+    var pad: array<vec4<f32>, SCRATCH_FLOOR_VEC4S>;
+    pad[u32(clip.x) % SCRATCH_FLOOR_VEC4S] = clip;
+    return pad[u32(clip.y) % SCRATCH_FLOOR_VEC4S];
+}
+
 struct Globals {
     view_proj: mat4x4<f32>,
     view: mat4x4<f32>,

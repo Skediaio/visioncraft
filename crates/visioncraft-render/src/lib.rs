@@ -446,10 +446,9 @@ pub struct Quality {
     /// estimate), else the ray's step in pixels (2: half resolution).
     pub screen_reflections: u32,
     /// The shaders compiled for this preset's own settings (common.wgsl `FAST_SHADING`): what
-    /// the slower presets use (the ground's 16-step parallax and its self-shadow) is left out,
-    /// so integrated GPUs keep their shading in registers; the 3x3 shadow filter stays in,
-    /// chosen at run time (scene.wgsl `cascade_shadow`: Mesa's Intel driver miscompiled the
-    /// shaders without it). Changing it compiles the scene's pipelines again.
+    /// the slower presets use (the 3x3 shadow filter, the ground's 16-step parallax and its
+    /// self-shadow) is left out, so integrated GPUs keep their shading in registers. Changing it
+    /// compiles the scene's pipelines again.
     pub fast_shading: bool,
     /// Volumetric clouds (clouds.wgsl, when `Clouds::volumetric` asks for them): the cloud
     /// image's divisor of the render size (2 half, 3 a third, 4 quarter), 0 for the flat cloud layer.
@@ -6305,6 +6304,35 @@ fn depth_state(
 /// The line of common.wgsl that `Quality::fast_shading` sets to true.
 const FAST_SHADING_LINE: &str = "const FAST_SHADING: bool = false;";
 
+/// The line of common.wgsl that sizes `scratch_floor`'s array.
+const SCRATCH_FLOOR_LINE: &str = "const SCRATCH_FLOOR_VEC4S: u32 = 17u;";
+
+/// Whether `info`'s driver may give fragment shaders of 1 KB and 2 KB of scratch one buffer with
+/// two strides (common.wgsl `scratch_floor`): Mesa's Intel Vulkan driver, which does before Gfx
+/// 12.5, and a browser's WebGPU, which does not say what it runs on (Chrome on Linux runs on that
+/// driver). The floor costs Iris Xe 1 to 4 % of a LOW or MEDIUM frame (its spills spread over
+/// more scratch), so other drivers go without it.
+fn needs_scratch_floor(info: &wgpu::AdapterInfo) -> bool {
+    let mesa = |s: &str| s.to_ascii_lowercase().contains("mesa");
+    match info.backend {
+        wgpu::Backend::BrowserWebGpu => true,
+        wgpu::Backend::Vulkan => {
+            info.vendor == 0x8086 && (mesa(&info.driver) || mesa(&info.driver_info))
+        }
+        _ => false,
+    }
+}
+
+/// `source` for `device`: without `scratch_floor`'s scratch (an array of one, kept in registers)
+/// where the driver does not need it.
+fn for_device(source: String, device: &wgpu::Device) -> String {
+    if needs_scratch_floor(&device.adapter_info()) {
+        source
+    } else {
+        source.replace(SCRATCH_FLOOR_LINE, "const SCRATCH_FLOOR_VEC4S: u32 = 1u;")
+    }
+}
+
 /// One shader module's source (`SHADERS` entry), for the fast shading of MEDIUM and LOW or the
 /// full one.
 fn shader_source(parts: &[&str], fast_shading: bool) -> String {
@@ -6342,7 +6370,7 @@ fn shader_modules(
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some(name),
                 source: wgpu::ShaderSource::Wgsl(
-                    module_source(name, parts, fast_shading, coverage).into(),
+                    for_device(module_source(name, parts, fast_shading, coverage), device).into(),
                 ),
             })
         })
@@ -7555,6 +7583,143 @@ mod tests {
             );
             assert!(!masked.contains(vulkan), "{vulkan} writes no sample mask");
         }
+    }
+
+    /// The functions `block` calls, and the ones those call, into `out`.
+    fn calls(
+        module: &naga::Module,
+        block: &naga::Block,
+        out: &mut Vec<naga::Handle<naga::Function>>,
+    ) {
+        for statement in block.iter() {
+            match statement {
+                naga::Statement::Call { function, .. } => {
+                    if !out.contains(function) {
+                        out.push(*function);
+                        calls(module, &module.functions[*function].body, out);
+                    }
+                }
+                naga::Statement::Block(b) => calls(module, b, out),
+                naga::Statement::If { accept, reject, .. } => {
+                    calls(module, accept, out);
+                    calls(module, reject, out);
+                }
+                naga::Statement::Switch { cases, .. } => {
+                    for case in cases {
+                        calls(module, &case.body, out);
+                    }
+                }
+                naga::Statement::Loop {
+                    body, continuing, ..
+                } => {
+                    calls(module, body, out);
+                    calls(module, continuing, out);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Every fragment stage that lights a surface (calls `light` or `sun_shadow`, directly or
+    /// not) also calls `scratch_floor` (common.wgsl: no lit shader may spill exactly 1 KB per
+    /// thread on Mesa's Intel driver), and the floor's array is too big for registers.
+    #[test]
+    fn every_lit_fragment_stage_has_the_scratch_floor() {
+        assert!(
+            COMMON.contains(SCRATCH_FLOOR_LINE),
+            "the floor's array: just over 256 bytes (Mesa's limit for arrays in registers), over 2 KB at SIMD8"
+        );
+        let mut lit = std::collections::BTreeSet::new();
+        let modules = shader_variants()
+            .into_iter()
+            .map(|((name, parts), fast, coverage)| {
+                (*name, module_source(name, parts, fast, coverage))
+            })
+            .chain([false, true].map(|fast| ("grass", grass::draw_source(fast))));
+        for (name, source) in modules {
+            let module = naga::front::wgsl::parse_str(&source).expect("parses");
+            let named = |n: &str| {
+                module
+                    .functions
+                    .iter()
+                    .find(|(_, f)| f.name.as_deref() == Some(n))
+                    .map(|(h, _)| h)
+            };
+            let lights = [named("light"), named("sun_shadow")];
+            let floor = named("scratch_floor");
+            for ep in &module.entry_points {
+                if ep.stage != naga::ShaderStage::Fragment {
+                    continue;
+                }
+                let mut reached = Vec::new();
+                calls(&module, &ep.function.body, &mut reached);
+                if !lights.iter().flatten().any(|h| reached.contains(h)) {
+                    continue;
+                }
+                lit.insert(ep.name.clone());
+                assert!(
+                    floor.is_some_and(|f| reached.contains(&f)),
+                    "{name} {} lights a surface without `scratch_floor`",
+                    ep.name
+                );
+            }
+        }
+        for stage in [
+            "fs_main",
+            "fs_ground",
+            "fs_impostor",
+            "fs_terrain",
+            "fs_transparent",
+            "fs_grass",
+        ] {
+            assert!(lit.contains(stage), "{stage} is checked");
+        }
+    }
+
+    /// The scratch floor is for Mesa's Intel Vulkan driver and for browsers, which hide theirs.
+    #[test]
+    fn the_scratch_floor_is_for_mesa_on_intel_and_browsers() {
+        let info = |backend, vendor, driver: &str, driver_info: &str| wgpu::AdapterInfo {
+            name: String::new(),
+            vendor,
+            device: 0,
+            device_type: wgpu::DeviceType::IntegratedGpu,
+            device_pci_bus_id: String::new(),
+            driver: driver.into(),
+            driver_info: driver_info.into(),
+            backend,
+            subgroup_min_size: 8,
+            subgroup_max_size: 32,
+            transient_saves_memory: None,
+            limit_bucket: None,
+        };
+        let vk = wgpu::Backend::Vulkan;
+        let mesa_intel = info(vk, 0x8086, "Intel open-source Mesa driver", "Mesa 26.2.6");
+        assert!(needs_scratch_floor(&mesa_intel));
+        assert!(needs_scratch_floor(&info(
+            wgpu::Backend::BrowserWebGpu,
+            0,
+            "",
+            ""
+        )));
+        assert!(!needs_scratch_floor(&info(
+            vk,
+            0x8086,
+            "Intel Corporation",
+            "101.6130"
+        )));
+        assert!(!needs_scratch_floor(&info(
+            vk,
+            0x1002,
+            "radv",
+            "Mesa 26.2.6"
+        )));
+        assert!(!needs_scratch_floor(&info(
+            wgpu::Backend::Dx12,
+            0x8086,
+            "",
+            ""
+        )));
     }
 
     /// Every WGSL module parses and validates with naga, without a GPU.

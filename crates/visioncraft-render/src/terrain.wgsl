@@ -308,11 +308,17 @@ fn terrain_varying(in: TerrainVarying) -> Varying {
 
 @fragment
 fn fs_terrain(in: TerrainVarying) -> @location(0) vec4<f32> {
+    if scratch_floor_taken() {
+        return scratch_floor(in.clip);
+    }
     return vec4<f32>(light(terrain_varying(in), terrain_surface(in), false, 0.0, NO_AGING, true).color, 1.0);
 }
 
 @fragment
 fn fs_terrain_reflect(in: TerrainVarying) -> @location(0) vec4<f32> {
+    if scratch_floor_taken() {
+        return scratch_floor(in.clip);
+    }
     let shaded = light(terrain_varying(in), terrain_surface(in), false, 0.0, NO_AGING, false);
     if g.reflection.z > 0.5 && in.world.y < g.reflection.w {
         discard;

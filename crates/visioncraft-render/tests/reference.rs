@@ -1537,37 +1537,48 @@ fn terrain_lod_hand_over_leaves_no_black_patches() {
     }
 }
 
-/// The MEDIUM and LOW shaders (`Quality::fast_shading`) take the full shaders' picture: the
-/// forest seen from above, then from inside after a jump of the camera (the plants near the eye
-/// mid-way through their hand-over from the impostor to their meshes), with each preset's own
-/// shaders and with the full ones. On Intel Iris Xe (Mesa's Vulkan driver) the fast shaders with
-/// the 3x3 shadow filter compiled out shaded blocks of pixels with garbage once the baked sky
-/// visibility had grown `light`: white, green and magenta blobs on the impostors (black and white
-/// checker blobs in the garden's hedge, coloured specks on roofs and windows), frame after frame.
+/// Pixels of two frames that differ by more than 24 levels in a channel.
+fn differing(a: &[u8], b: &[u8]) -> usize {
+    a.chunks(4)
+        .zip(b.chunks(4))
+        .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 24))
+        .count()
+}
+
+/// The forest seen from above, then from inside after a jump of the camera: the plants near the
+/// eye mid-way through their hand-over from the impostor to their meshes.
+fn forest_after_a_jump(quality: Quality) -> Vec<u8> {
+    let aspect = W as f32 / H as f32;
+    let mut r = renderer(W, H);
+    r.set_quality(quality);
+    demo::forest(&mut r, 120, 200, 40.0);
+    setup(
+        &mut r,
+        demo::forest_above_camera(aspect),
+        demo::afternoon_sun(),
+        14.7,
+    );
+    settle(&mut r);
+    let (view, proj, eye) = demo::forest_inside_camera(aspect);
+    r.set_camera(view, proj, eye);
+    capture(&mut r, W, H)
+}
+
+/// The MEDIUM and LOW shaders (`Quality::fast_shading`) take the full shaders' picture of the
+/// forest after a jump (`forest_after_a_jump`), with each preset's own shaders and with the full
+/// ones. On Intel Iris Xe (Mesa's Vulkan driver) one of the two often shaded blocks of pixels
+/// with garbage: white, green and magenta blobs on the impostors (common.wgsl `scratch_floor`).
 #[test]
 fn fast_shading_matches_full_shading() {
-    let aspect = W as f32 / H as f32;
     for (name, preset) in [("low", Quality::LOW), ("medium", Quality::MEDIUM)] {
-        let frame = |fast_shading: bool| {
-            let mut r = renderer(W, H);
-            r.set_quality(Quality {
-                fast_shading,
-                ..preset
-            });
-            demo::forest(&mut r, 120, 200, 40.0);
-            setup(
-                &mut r,
-                demo::forest_above_camera(aspect),
-                demo::afternoon_sun(),
-                14.7,
-            );
-            settle(&mut r);
-            let (view, proj, eye) = demo::forest_inside_camera(aspect);
-            r.set_camera(view, proj, eye);
-            capture(&mut r, W, H)
-        };
-        let fast = frame(true);
-        let full = frame(false);
+        let fast = forest_after_a_jump(Quality {
+            fast_shading: true,
+            ..preset
+        });
+        let full = forest_after_a_jump(Quality {
+            fast_shading: false,
+            ..preset
+        });
         for (kind, px) in [("fast", &fast), ("full", &full)] {
             write_png(
                 &out_dir().join(format!("{kind}_shading_{name}.png")),
@@ -1576,15 +1587,77 @@ fn fast_shading_matches_full_shading() {
                 H,
             );
         }
-        let differing = fast
-            .chunks(4)
-            .zip(full.chunks(4))
-            .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 24))
-            .count();
+        let differing = differing(&fast, &full);
         assert!(
             differing <= 4,
             "{name}: {differing} pixels of the fast shaders' frame differ from the full shaders'"
         );
+    }
+}
+
+/// One frame of a scene of `shading_is_the_same_every_time`.
+fn scene_frame(scene: &str, quality: Quality) -> Vec<u8> {
+    let aspect = W as f32 / H as f32;
+    if scene == "forest" {
+        return forest_after_a_jump(quality);
+    }
+    let mut r = renderer(W, H);
+    r.set_quality(quality);
+    if scene == "garden" {
+        let lights = demo::garden(&mut r);
+        r.set_lights(&lights);
+        clear_day(&mut r);
+        setup(
+            &mut r,
+            demo::garden_plan_camera(aspect),
+            demo::afternoon_sun(),
+            14.7,
+        );
+        settle(&mut r);
+        let (view, proj, eye) = demo::garden_camera(aspect);
+        r.set_camera(view, proj, eye);
+    } else {
+        demo::house(&mut r);
+        setup(
+            &mut r,
+            demo::house_camera(aspect),
+            demo::evening_sun(),
+            14.0,
+        );
+        settle(&mut r);
+    }
+    capture(&mut r, W, H)
+}
+
+/// The same scene and frame give the same picture in a new renderer, on every preset: the forest
+/// after a jump, the garden's hedges, lawn and house the moment after a jump from the plan (the
+/// plants mid-way through their hand-over), and the house's roofs and windows. On Mesa's Intel
+/// Vulkan driver two shaders drawing at once overwrote each other's spilled registers (common.wgsl
+/// `scratch_floor`): garbage specks in foliage, roofs and glass that differed from frame to frame
+/// and from run to run, by hundreds of pixels here.
+#[test]
+fn shading_is_the_same_every_time() {
+    let scenes = ["forest", "garden", "house"];
+    for (preset, quality) in Quality::PRESETS {
+        for scene in scenes {
+            let first = scene_frame(scene, quality);
+            let again = scene_frame(scene, quality);
+            let differing = differing(&first, &again);
+            if differing > 4 {
+                for (run, px) in [("first", &first), ("again", &again)] {
+                    write_png(
+                        &out_dir().join(format!("same_{scene}_{preset}_{run}.png")),
+                        px,
+                        W,
+                        H,
+                    );
+                }
+            }
+            assert!(
+                differing <= 4,
+                "{scene} on {preset}: {differing} pixels differ between two renders of the same frame"
+            );
+        }
     }
 }
 

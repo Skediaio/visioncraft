@@ -308,11 +308,17 @@ fn impostor_shade(in: ImpostorVarying, screen_effects: bool) -> vec3<f32> {
 // Forward: drawn with an Equal depth test, the pre-pass decided coverage.
 @fragment
 fn fs_impostor(in: ImpostorVarying) -> @location(0) vec4<f32> {
+    if scratch_floor_taken() {
+        return scratch_floor(in.clip);
+    }
     return vec4<f32>(impostor_shade(in, true), 1.0);
 }
 
 @fragment
 fn fs_impostor_reflect(in: ImpostorVarying) -> @location(0) vec4<f32> {
+    if scratch_floor_taken() {
+        return scratch_floor(in.clip);
+    }
     let c = impostor_shade(in, false);
     let a = impostor_sample(in).albedo.a;
     if a < impostor.grid.w || (g.reflection.z > 0.5 && in.world.y < g.reflection.w) {

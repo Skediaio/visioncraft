@@ -316,6 +316,9 @@ fn sea_surface(p: vec2<f32>, footprint: f32) -> SeaSurface {
 
 @fragment
 fn fs_sea(in: Varying) -> @location(0) vec4<f32> {
+    if scratch_floor_taken() {
+        return scratch_floor(in.clip);
+    }
     // Derivatives first, in uniform control flow.
     let footprint = max(length(fwidth(in.uv)), 1e-3);
     let s = sea_surface(in.uv, footprint);
@@ -551,6 +554,9 @@ fn sea_wet_near(world: vec3<f32>, pixel: vec2<f32>) -> f32 {
 
 @fragment
 fn fs_sea_wet(in: Varying) -> @location(0) vec4<f32> {
+    if scratch_floor_taken() {
+        return scratch_floor(in.clip);
+    }
     let below = textureLoad(linear_depth, vec2<i32>(in.clip.xy), 0).r;
     if below > SKY_DEPTH * 0.5 || is_ortho() || g.time.w > 0.5 {
         return vec4<f32>(0.0);
