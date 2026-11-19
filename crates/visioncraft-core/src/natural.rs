@@ -1104,8 +1104,12 @@ fn tube(
         for s in 0..sides {
             let ang = s as f32 / sides as f32 * std::f32::consts::TAU;
             let (sn, cs) = ang.sin_cos();
-            // Bark ridges running along the trunk, and slow bulges.
-            let ridge = noise3(seed, [cs * 2.0, sn * 2.0, along_total * 0.8]) * bark;
+            // Bark: ridged plates between furrows running along the trunk (the furrows where
+            // the noise crosses zero), finer cracks over them, and slow bulges.
+            let plates = 0.5 - noise3(seed, [cs * 2.5, sn * 2.5, along_total * 0.5]).abs();
+            let cracks = noise3(seed ^ 0xBA, [cs * 5.0, sn * 5.0, along_total * 1.6]);
+            let bulge = noise3(seed ^ 0x51, [cs, sn, along_total * 0.25]);
+            let ridge = (plates * 1.4 + cracks * 0.35 + bulge * 0.5) * bark;
             let r = radii[i] * (1.0 + ridge);
             let d = [
                 u[0] * cs + v[0] * sn,
@@ -1179,44 +1183,70 @@ pub fn deadwood_mesh(kind: DeadwoodKind, variant: u32, bucket: u32, fine: bool) 
     let aspect = 2f32.powf(bucket as f32 * 0.5);
     let seed = mix(0xDEAD ^ (kind as u64 * 31), i64::from(variant));
     let mut rng = Rng::new(seed);
-    let sides = if fine { 12 } else { 6 };
+    // Fine enough round for the bark's plates to show in the outline and the shading.
+    let sides = if fine { 16 } else { 6 };
     let mut m = NaturalMesh::default();
     let mut ends: Vec<u32> = Vec::new();
-    let rings = |len: f32| ((len * if fine { 3.0 } else { 1.0 }).ceil() as usize).clamp(3, 48);
+    let rings = |len: f32| ((len * if fine { 4.0 } else { 1.0 }).ceil() as usize).clamp(3, 64);
     match kind {
         DeadwoodKind::Log | DeadwoodKind::Branch => {
+            let branch = kind == DeadwoodKind::Branch;
             let n = rings(aspect);
-            let bend = (rng.f32() - 0.5) * 0.08 * aspect;
-            let sag = (rng.f32() - 0.5) * 0.03 * aspect;
-            let taper = if kind == DeadwoodKind::Branch {
-                0.45
-            } else {
-                0.8
-            };
+            // A trunk is seldom straight: a sideways bow over its length with a second, shorter
+            // wave on it, and a little sag into the ground (never a bow up: it would float).
+            let pi = std::f32::consts::PI;
+            let bow = (0.04 + 0.05 * rng.f32()) * aspect * if rng.f32() < 0.5 { -1.0 } else { 1.0 };
+            let wave = (rng.f32() - 0.5) * 0.04 * aspect;
+            let phase = rng.f32() * pi;
+            let sag = -rng.f32() * 0.012 * aspect;
             let centres: Vec<[f32; 3]> = (0..=n)
                 .map(|i| {
                     let t = i as f32 / n as f32;
-                    let curve = (t * std::f32::consts::PI).sin();
-                    [t * aspect - aspect * 0.5, 0.5 + sag * curve, bend * curve]
+                    let curve = (t * pi).sin();
+                    let side = bow * curve + wave * (t * 2.0 * pi + phase).sin() * curve;
+                    [t * aspect - aspect * 0.5, 0.5 + sag * curve, side]
                 })
                 .collect();
+            // Tapering towards the top, the butt flaring into the root collar of a log.
+            let taper = if branch { 0.45 } else { 0.62 };
             let radii: Vec<f32> = (0..=n)
-                .map(|i| 0.5 * (1.0 - (1.0 - taper) * i as f32 / n as f32))
+                .map(|i| {
+                    let t = i as f32 / n as f32;
+                    let collar = if branch {
+                        0.0
+                    } else {
+                        0.22 * (-t * aspect / 0.6).exp()
+                    };
+                    0.5 * (1.0 - (1.0 - taper) * t) * (1.0 + collar)
+                })
                 .collect();
-            let bark = if kind == DeadwoodKind::Branch {
-                0.04
-            } else {
-                0.08
-            };
+            let bark = if branch { 0.05 } else { 0.09 };
             let first = tube(&mut m, &centres, &radii, sides, seed, bark);
             let last = first + n as u32 * sides;
+            // Broken ends: each rim slanted across the trunk (a break is never square), the top
+            // more than the butt; `cap` then splinters it.
+            for (ring, slant) in [(first, 0.25 * rng.f32()), (last, 0.5 + 0.6 * rng.f32())] {
+                let turn = rng.f32() * std::f32::consts::TAU;
+                let (ts, tc) = turn.sin_cos();
+                for s in 0..sides {
+                    let p = &mut m.positions[(ring + s) as usize];
+                    let c = if ring == first {
+                        centres[0]
+                    } else {
+                        centres[n]
+                    };
+                    let across = (p[1] - c[1]) * tc + (p[2] - c[2]) * ts;
+                    let along = if ring == first { -1.0 } else { 1.0 };
+                    p[0] += across * slant * along;
+                }
+            }
             ends.extend(cap(
                 &mut m,
                 first,
                 sides,
                 centres[0],
                 [-1.0, 0.0, 0.0],
-                0.15,
+                if branch { 0.1 } else { 0.3 },
                 seed ^ 1,
             ));
             ends.extend(cap(
@@ -1225,30 +1255,33 @@ pub fn deadwood_mesh(kind: DeadwoodKind, variant: u32, bucket: u32, fine: bool) 
                 sides,
                 centres[n],
                 [1.0, 0.0, 0.0],
-                0.6,
+                0.8,
                 seed ^ 2,
             ));
-            // Branch stubs (a log) or forks (a branch).
-            let stubs = if kind == DeadwoodKind::Branch {
+            // A branch forks; a log keeps the broken stubs of its branches, short and jagged,
+            // up or to the side, never into the ground.
+            let stubs = if branch {
                 2
             } else {
-                1 + (rng.f32() * 2.0) as u32
+                2 + (rng.f32() * 3.0) as u32
             };
             for k in 0..stubs {
-                let t = 0.25 + 0.6 * rng.f32();
-                let i = (t * n as f32) as usize;
-                let c = centres[i.min(n)];
+                let t = 0.2 + 0.7 * rng.f32();
+                let i = ((t * n as f32) as usize).min(n);
+                let c = centres[i];
                 let ang = rng.f32() * std::f32::consts::TAU;
-                // Up or sideways: not into the ground.
                 let dir = norm([
-                    0.5 + rng.f32() * 0.5,
-                    ang.sin().abs() * 0.8 + 0.2,
+                    0.35 + rng.f32() * 0.5,
+                    ang.sin().abs() * 0.9 + 0.1,
                     ang.cos(),
                 ]);
-                let (len, r0) = if kind == DeadwoodKind::Branch {
+                let (len, r0) = if branch {
                     (aspect * (0.25 + 0.2 * rng.f32()), 0.3)
                 } else {
-                    (0.6 + 0.8 * rng.f32(), 0.12 + 0.06 * rng.f32())
+                    (
+                        0.35 + 0.7 * rng.f32(),
+                        (0.1 + 0.08 * rng.f32()) * radii[i] * 2.0,
+                    )
                 };
                 let steps = if fine { 4 } else { 2 };
                 let cs: Vec<[f32; 3]> = (0..=steps)
@@ -1258,7 +1291,7 @@ pub fn deadwood_mesh(kind: DeadwoodKind, variant: u32, bucket: u32, fine: bool) 
                     })
                     .collect();
                 let rs: Vec<f32> = (0..=steps)
-                    .map(|j| r0 * (1.0 - 0.6 * j as f32 / steps as f32))
+                    .map(|j| r0 * (1.0 - 0.45 * j as f32 / steps as f32))
                     .collect();
                 let s0 = tube(&mut m, &cs, &rs, sides.min(6), seed ^ (k as u64 + 9), 0.05);
                 ends.extend(cap(
@@ -1267,7 +1300,7 @@ pub fn deadwood_mesh(kind: DeadwoodKind, variant: u32, bucket: u32, fine: bool) 
                     sides.min(6),
                     cs[steps as usize],
                     dir,
-                    0.05,
+                    if branch { 0.05 } else { 0.25 },
                     seed ^ (k as u64 + 20),
                 ));
             }
@@ -1601,6 +1634,39 @@ mod tests {
         let flat = pts.iter().filter(|p| p[0] < 18.0).count();
         assert!(steep > flat, "{steep} on the slope, {flat} on the flat");
         assert!(pts.iter().all(|p| point_in_polygon(*p, &outline)));
+    }
+
+    #[test]
+    fn a_log_bows_tapers_and_breaks_unevenly() {
+        // Bucket 6: eight diameters long; the trunk is the first tube, 16 sides round.
+        let sides = 16;
+        for v in 0..VARIANTS {
+            let m = deadwood_mesh(DeadwoodKind::Log, v, 6, true);
+            let rings = 33;
+            let ring = |i: usize| &m.positions[i * sides..(i + 1) * sides];
+            let centre = |i: usize| {
+                let r = ring(i);
+                let n = r.len() as f32;
+                [0, 1, 2].map(|k| r.iter().map(|p| p[k]).sum::<f32>() / n)
+            };
+            let radius = |i: usize| {
+                let c = centre(i);
+                ring(i)
+                    .iter()
+                    .map(|p| ((p[1] - c[1]).powi(2) + (p[2] - c[2]).powi(2)).sqrt())
+                    .sum::<f32>()
+                    / sides as f32
+            };
+            let (a, mid, b) = (centre(0), centre(rings / 2), centre(rings - 1));
+            let bow = (mid[2] - (a[2] + b[2]) * 0.5).abs();
+            assert!(bow > 0.25, "variant {v}: bow {bow}");
+            assert!(mid[1] <= 0.5 + 0.05, "variant {v} arches up: {mid:?}");
+            assert!(radius(0) > 1.4 * radius(rings - 1), "variant {v}: no taper");
+            // The top's rim is slanted and jagged, not a square cut.
+            let xs = ring(rings - 1).iter().map(|p| p[0]);
+            let spread = xs.clone().fold(f32::MIN, f32::max) - xs.fold(f32::MAX, f32::min);
+            assert!(spread > 0.2, "variant {v}: square end {spread}");
+        }
     }
 
     #[test]

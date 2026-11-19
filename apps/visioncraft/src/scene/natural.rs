@@ -134,18 +134,34 @@ impl Scene {
         id: &str,
         fallback: [f32; 3],
     ) -> MaterialId {
+        self.natural_material_tinted(r, project, id, fallback, [1.0; 3])
+    }
+
+    /// [`Scene::natural_material`] with its colour multiplied by `tint`.
+    fn natural_material_tinted(
+        &mut self,
+        r: &mut Renderer,
+        project: &Project,
+        id: &str,
+        fallback: [f32; 3],
+        tint: [f32; 3],
+    ) -> MaterialId {
         let month = u32::from(project.plant_month());
         match project.materials.iter().find(|m| m.id == id) {
             Some(m) => {
+                let look = look_of(m, &mut self.library, month, &project.site, 0.0);
+                let c = look.color;
                 let look = Look {
                     stripes: 0,
                     aging: [0.0; 4],
-                    ..look_of(m, &mut self.library, month, &project.site, 0.0)
+                    color: [c[0] * tint[0], c[1] * tint[1], c[2] * tint[2], c[3]],
+                    ..look
                 };
                 self.material(r, &look)
             }
             None => {
-                let look = Look::plain(fallback[0], fallback[1], fallback[2], 0.9);
+                let [r0, g0, b0] = [0, 1, 2].map(|k| fallback[k] * tint[k]);
+                let look = Look::plain(r0, g0, b0, 0.9);
                 self.material(r, &look)
             }
         }
@@ -273,7 +289,10 @@ impl Scene {
         let mut items = Vec::new();
         let mut keys: Vec<_> = generated.keys().cloned().collect();
         keys.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
-        let timber = self.natural_material(r, project, "timber", [0.34, 0.2, 0.09]);
+        // The broken ends: the wood, weathered grey (dead wood lies for years; fresh sawn timber
+        // is orange).
+        let timber =
+            self.natural_material_tinted(r, project, "timber", [0.34, 0.2, 0.09], [0.55, 0.6, 0.7]);
         for k in keys {
             let list = &generated[&k];
             let (key, mat_id) = &k;
