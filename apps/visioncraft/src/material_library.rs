@@ -20,8 +20,10 @@ pub const KINDS: [&str; 14] = [
 /// Which library material each plain palette material shows while the library is there
 /// (lawn: a grass ground, paving: paving stones, plaster, timber and so on).
 /// The variation is the overlay's default; its parallax depth comes from the library kind.
-const DEFAULTS: [(&str, &str, f32); 12] = [
+const DEFAULTS: [(&str, &str, f32); 13] = [
     ("lawn", "grass001", 0.6),
+    // The meadow's floor: the lawn's photo, tinted to the meadow's own duller green.
+    ("meadow", "grass001", 0.6),
     ("paving", "pavingstones005", 0.4),
     ("plaster", "plaster001", 0.25),
     ("timber", "planks021", 0.2),
@@ -35,6 +37,14 @@ const DEFAULTS: [(&str, &str, f32); 12] = [
     ("soil", "ground043", 0.4),
     ("sand", "ground052", 0.3),
 ];
+
+/// Palette materials whose height map comes from another library material. A terrain blends its
+/// layers by their height maps (terrain.wgsl): Grass 001's own is a fine, even speckle of blades
+/// that averages out to one grey within a metre, so rock and scree met the lawn along a clean
+/// line; Grass 005's (ambientCG, CC0) rises and falls in clumps a hand to a foot across, so the
+/// scree and the soil reach into the grass between its tussocks. The lawn's parallax is off, so
+/// the drawn lawn looks the same.
+const HEIGHTS: [(&str, &str); 2] = [("lawn", "grass005"), ("meadow", "grass005")];
 
 /// A library look for an unchanged palette material.
 pub struct Overlay {
@@ -94,12 +104,19 @@ pub fn overlay(lib: &Library, m: &Material) -> Option<Overlay> {
         } => *parallax_depth_m = 0.0,
         _ => {}
     }
+    let mut spec = spec_of_entry(entry);
+    if let Some((_, from)) = HEIGHTS.iter().find(|h| h.0 == m.id)
+        && let Some(h) = lib.materials.iter().find(|e| e.id == *from)
+        && let Some(path) = &h.maps.height
+    {
+        spec.height = Some(TexSrc::Lib(path.clone()));
+    }
     (builtin == unstriped).then(|| Overlay {
-        spec: spec_of_entry(entry),
+        spec,
         scale_m: scale_of(entry),
         variation: *variation,
-        // The lawn's blades stand on it: no relief under them.
-        parallax_m: if m.id == "lawn" {
+        // The blades of a lawn or a meadow stand on it: no relief under them.
+        parallax_m: if m.id == "lawn" || m.id == "meadow" {
             0.0
         } else {
             parallax_of_kind(&entry.kind)
@@ -112,6 +129,8 @@ pub fn overlay(lib: &Library, m: &Material) -> Option<Overlay> {
             // translucency shows): the photo's green deepened by sqrt(mean / mean.g) per channel,
             // so the ground beyond the blades matches them instead of reading olive.
             "lawn" => [0.74, 1.0, 0.45],
+            // The photo's mean (scene.rs `LAWN_PICTURE_MEAN`) brought to the meadow's own colour.
+            "meadow" => [1.27, 1.31, 2.05],
             _ => [1.0; 3],
         },
         // A lawn is a mat of blades and beach sand a few millimetres of ripple: neither shines
@@ -119,7 +138,7 @@ pub fn overlay(lib: &Library, m: &Material) -> Option<Overlay> {
         // relief is a wind-rippled dune's, too deep for a beach at a low sun.
         relief: if m.id == "sand" { 0.35 } else { 1.0 },
         gloss: match m.id.as_str() {
-            "lawn" => -0.4,
+            "lawn" | "meadow" => -0.4,
             "sand" => -0.25,
             _ => 0.0,
         },
@@ -373,6 +392,26 @@ mod tests {
         let o = overlay(&lib, &lawn).expect("a grass look");
         assert_eq!(o.scale_m, 1.4);
         assert!(o.spec.orm.is_some());
+        assert!(o.spec.height.is_none(), "{:?}", o.spec.height);
+        // Grass 005's clumpy height map, for the terrain's height blend.
+        let mut clumps = entry("grass005", None);
+        clumps.maps.height = Some("materials/grass005/height.jpg".into());
+        lib.materials.push(clumps);
+        let o = overlay(&lib, &lawn).expect("a grass look");
+        assert!(
+            matches!(&o.spec.height, Some(TexSrc::Lib(p)) if p.contains("grass005")),
+            "{:?}",
+            o.spec.height
+        );
+        assert_eq!(
+            o.spec.base,
+            Some(TexSrc::Lib("materials/grass001/basecolor.jpg".into()))
+        );
+        let meadow = builtin_palette()
+            .into_iter()
+            .find(|m| m.id == "meadow")
+            .unwrap();
+        assert!(overlay(&lib, &meadow).is_some());
         let mut edited = lawn.clone();
         edited.base_color = [0.0, 0.5, 0.0, 1.0];
         assert!(overlay(&lib, &edited).is_none(), "the user's colour stays");
