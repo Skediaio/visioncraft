@@ -1171,6 +1171,10 @@ fn local_lights(world: vec3<f32>, n: vec3<f32>, v: vec3<f32>, nov: f32, diffuse_
 struct Shaded {
     color: vec3<f32>,
     alpha: f32,
+    // Whether the surface emits light (a lamp's glowing glass). The opaque pass writes it into
+    // the HDR image's alpha (0 an emitter, 1 any other surface), where a photo's bounce rays
+    // read it (`bounce_ray`).
+    emits: bool,
 }
 
 // The full opaque shading model. `screen_effects`: use the screen-space AO
@@ -1182,7 +1186,7 @@ fn shade(in: Varying, front: bool, screen_effects: bool, ground: bool) -> Shaded
     if material.alpha.z == 1.0 && g.time.w < 0.5 {
         let t = glass_terms(in);
         let room = t.transmitted * ROOM_ALBEDO * sh_irradiance(normalize(in.normal)) / PI;
-        return Shaded(apply_fog(t.reflected + room, in.world), 1.0);
+        return Shaded(apply_fog(t.reflected + room, in.world), 1.0, false);
     }
     var s = surface(in, front, ground);
     // Leaves, and the branches among them (both tagged by the app).
@@ -1524,7 +1528,8 @@ fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, aging: Agin
     let ambient_specular = env_brdf_approx(f0, s.roughness, nov) * reflected * spec_ao * wet_boost;
     let local = local_lights(in.world, n, v, nov, diffuse_color, f0, a, foliage);
     let emitted = s.emissive * g.time.y;
-    return Shaded(apply_fog(sun + ambient_diffuse + ambient_specular + local + emitted, in.world), s.base.a);
+    let emits = any(emitted > vec3<f32>(0.0));
+    return Shaded(apply_fog(sun + ambient_diffuse + ambient_specular + local + emitted, in.world), s.base.a, emits);
 }
 
 // ---- snow ------------------------------------------------------------------
@@ -1665,7 +1670,12 @@ const SNOW_ALBEDO: vec3<f32> = vec3<f32>(0.80, 0.83, 0.88);
 
 // One cosine-weighted ray from `p` along a direction about `n`: the radiance it brings (the
 // previous sample's colour where it meets a surface in the depth buffer, else the sky, dimmed
-// by `ao` for the occlusion the coarse march cannot see).
+// by `ao` for the occlusion the coarse march cannot see). An emitter met on screen (alpha
+// under 1, `Shaded::emits`) brings nothing: its light already reaches every surface as a
+// local light (`local_lights`), and its glowing head, a few pixels of radiance thousands of
+// times the wall's that one ray in many thousands meets, left single white pixels round
+// every lamp in a photo. Multisampled edges average the alpha too, so a pixel any part of an
+// emitter covers counts as one: one emitting sample in four already outshines the wall.
 fn bounce_ray(p: vec3<f32>, n: vec3<f32>, r1: f32, r2: f32, ao: f32, occ: SkyOcc) -> vec3<f32> {
     let phi = 2.0 * PI * r1;
     let s = sqrt(r2);
@@ -1689,7 +1699,8 @@ fn bounce_ray(p: vec3<f32>, n: vec3<f32>, r1: f32, r2: f32, ao: f32, occ: SkyOcc
         let uv = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
         let behind = -(g.view * vec4<f32>(q, 1.0)).z - textureLoad(linear_depth, vec2<i32>(uv * ld), 0).r;
         if behind > 0.03 && behind < 0.6 + dist * 0.2 {
-            return textureLoad(previous_hdr, vec2<i32>(uv * full), 0).rgb;
+            let hit = textureLoad(previous_hdr, vec2<i32>(uv * full), 0);
+            return select(vec3<f32>(0.0), hit.rgb, hit.a >= 1.0);
         }
         dist *= 1.45;
     }
@@ -1719,7 +1730,8 @@ fn fs_main(in: Varying, @builtin(front_facing) front: bool) -> @location(0) vec4
     if scratch_floor_taken() {
         return scratch_floor(in.clip);
     }
-    return vec4<f32>(shade(in, front, true, false).color, 1.0);
+    let shaded = shade(in, front, true, false);
+    return vec4<f32>(shaded.color, select(1.0, 0.0, shaded.emits));
 }
 
 // ---- surroundings -----------------------------------------------------------

@@ -1,11 +1,14 @@
-//! Photo mode on the real GPU: averaged samples smooth a hard edge, and a thin lens blurs what
-//! lies off its focal plane while what is on it stays sharp. Run on a machine with a GPU.
+//! Photo mode on the real GPU: averaged samples smooth a hard edge, a thin lens blurs what
+//! lies off its focal plane while what is on it stays sharp, and a lamp's glowing head leaves
+//! no white speckles on the wall behind it. Run on a machine with a GPU.
 
 use std::sync::OnceLock;
 
 use glam::{Mat4, Vec3};
 use visioncraft_render::demo::MeshData;
-use visioncraft_render::{Focus, Lens, Material, Quality, Renderer, Sun, headless_device};
+use visioncraft_render::{
+    Focus, Lens, Light, LightKind, Material, Quality, Renderer, Sun, headless_device,
+};
 
 const W: u32 = 240;
 const H: u32 = 180;
@@ -243,4 +246,127 @@ fn a_thin_lens_blurs_far_and_keeps_the_focal_plane_sharp() {
     );
     assert!(far_sharp < 1.6, "{far_sharp}");
     assert!(far_lens > 6.0, "{far_lens}");
+}
+
+/// Pixels at least 40 (of 255, luma) brighter than all four neighbours, outside `skip` (x0, y0,
+/// x1, y1): the single white pixels a firefly leaves.
+fn isolated_bright(px: &[u8], skip: (u32, u32, u32, u32)) -> usize {
+    let mut n = 0;
+    for y in 1..H - 1 {
+        for x in 1..W - 1 {
+            if (skip.0..skip.2).contains(&x) && (skip.1..skip.3).contains(&y) {
+                continue;
+            }
+            let around = [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)]
+                .map(|(i, j)| luma(px, i, j))
+                .into_iter()
+                .fold(0.0, f32::max);
+            if luma(px, x, y) - around > 40.0 {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
+#[test]
+fn a_lamp_head_leaves_no_speckles_on_the_wall_behind_it() {
+    // Dusk: a pale wall, a garden bollard half a metre in front of it, its head glowing (about
+    // 2000 cd/m2: 350 lm out of a band of 0.05 m2) round a 350 lm point light. A photo's bounce
+    // rays (scene.wgsl `bounce_ray`) used to take the head's colour where they met it on
+    // screen: one ray in thousands, each bringing thousands of times the wall's light, so the
+    // wall above the lamp was strewn with single white pixels.
+    let quality = Quality {
+        bloom: false,
+        ..Quality::ULTRA
+    };
+    let (device, queue) = gpu();
+    let mut r = Renderer::new(device, queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+    r.resize(W, H);
+    r.set_quality(quality);
+    r.set_ground(None);
+    let mut add = |lo: Vec3, hi: Vec3, m: &Material| {
+        let mut mesh = MeshData::default();
+        mesh.add_box(lo, hi);
+        let mesh = r.add_mesh(&mesh.mesh()).expect("box");
+        let m = r.add_material(m);
+        r.add_item(mesh, m, &[Mat4::IDENTITY]);
+    };
+    let matt = |rgb: f32| Material {
+        base_color: [rgb, rgb, rgb, 1.0],
+        roughness: 0.9,
+        ..Default::default()
+    };
+    // Ground, wall, the bollard's post and its glowing head.
+    add(
+        Vec3::new(-10.0, -0.1, -12.0),
+        Vec3::new(10.0, 0.0, 2.0),
+        &matt(0.1),
+    );
+    add(
+        Vec3::new(-4.0, 0.0, -6.2),
+        Vec3::new(4.0, 4.0, -6.0),
+        &matt(0.6),
+    );
+    let lamp = Vec3::new(0.6, 0.51, -5.5);
+    add(
+        lamp + Vec3::new(-0.08, -0.51, -0.08),
+        lamp + Vec3::new(0.08, 0.09, 0.08),
+        &Material {
+            base_color: [0.06, 0.06, 0.065, 1.0],
+            metallic: 0.6,
+            roughness: 0.45,
+            ..Default::default()
+        },
+    );
+    add(
+        lamp + Vec3::new(-0.085, -0.06, -0.085),
+        lamp + Vec3::new(0.085, 0.04, 0.085),
+        &Material {
+            base_color: [1.0, 0.9, 0.75, 1.0],
+            roughness: 0.3,
+            emissive: [1.0, 0.72, 0.42],
+            emissive_strength: 2000.0,
+            ..Default::default()
+        },
+    );
+    let lights = [Light {
+        position: lamp,
+        kind: LightKind::Point,
+        color: Vec3::new(1.0, 0.72, 0.42),
+        intensity: 350.0,
+        range_m: 6.0,
+    }];
+    assert_eq!(r.set_lights(&lights), 0, "no light dropped");
+    let eye = Vec3::new(0.0, 1.2, -1.8);
+    let view = Mat4::look_at_rh(eye, Vec3::new(0.3, 1.0, -6.0), Vec3::Y);
+    let proj = Mat4::perspective_rh(50f32.to_radians(), W as f32 / H as f32, 0.1, 1000.0);
+    r.set_camera(view, proj, eye);
+    r.set_sun(&Sun::from_angles(300.0, -5.0));
+    r.set_exposure(3.0);
+    let mut p = r
+        .photo_begin(W, H, quality, (view, proj, eye), Lens::SHARP)
+        .expect("photo");
+    while p.done < 32 {
+        if !r.photo_sample(&mut p).expect("sample") {
+            r.wait_gpu().expect("poll");
+        }
+    }
+    let px = r.photo_finish(p).expect("finish").wait().expect("pixels");
+    save("lamp-speckles", &px);
+    // The lamp's head on screen and a margin round it: its own bright pixels are no speckles.
+    let c = proj * view * lamp.extend(1.0);
+    let (x, y) = (
+        ((c.x / c.w * 0.5 + 0.5) * W as f32) as u32,
+        ((0.5 - c.y / c.w * 0.5) * H as f32) as u32,
+    );
+    let speckles = isolated_bright(&px, (x - 8, y - 8, x + 8, y + 8));
+    // The point light lights the wall beside the lamp.
+    let wall = luma(&px, x + 15, y - 20);
+    eprintln!("lamp at ({x}, {y}); wall by it {wall:.0}; {speckles} speckles");
+    assert!(wall > 10.0, "the lamp lights the wall: {wall}");
+    assert!(
+        speckles <= 2,
+        "{speckles} isolated bright pixels round the lamp"
+    );
 }
