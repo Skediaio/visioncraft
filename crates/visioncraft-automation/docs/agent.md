@@ -1396,6 +1396,15 @@ works in `film.add_shot` and `film.update_shot` (`center`, `look_at`, `target`, 
 waypoints, pause points, looks), in `film.orbit`, `film.flythrough` and `film.reveal`, in
 `viewpoint.add` and `viewpoint.update` and in the `camera` of `view.render`.
 
+A shot keeps the name behind a point it was given as one, in its `targets` (`{"target": "S6",
+"look_at": "g4#12", "path[2]": "Pond"}`, by the field it fills; a shot reads back with the point
+too). The film looks the names up again every time it is played or rendered, so moving the pond
+moves the shots that look at it; a name that no longer resolves keeps the point it had, and
+`film.preview` answers a `warnings` entry for it. A field given again (`film.update_shot`) lets go
+of the name it had. A walk's `route` is planned once, and `film.reveal`'s path is worked out once
+from the target's size; only the `look_at` of those follow the name, and `film.orbit` follows its
+`target` with its centre (the radius stays). Shots from before `targets` existed have none.
+
 `film.orbit {target, from, sweep_deg, distance, height_m}` circles a target: `from` is a compass
 word (`south`, `north-east`, `ssw`) or a bearing in degrees (0 north, 90 east, clockwise from
 north; -Z is north, +X is east) and `sweep_deg` goes clockwise seen from above (negative: the

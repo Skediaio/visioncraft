@@ -770,7 +770,16 @@ pub(crate) fn film_timeline(
     let p = session.project();
     let owners = owners(p, &models_of(state));
     let ground = |x: f32, z: f32| ground_at(p, &owners, x, z, true).unwrap_or(0.0);
-    visioncraft_core::film::Timeline::new(film, &visioncraft_core::film::Env::new(p, &ground))
+    // The targets a shot names are looked up again over what the host knows.
+    let resolve = |refs: &[&str], years: Option<f32>| {
+        with_scene(session, state, years, |scene| {
+            refs.iter()
+                .map(|r| visioncraft_core::reference::resolve(scene, r))
+                .collect()
+        })
+    };
+    let env = visioncraft_core::film::Env::new(p, &ground).with_resolver(&resolve);
+    visioncraft_core::film::Timeline::new(film, &env)
 }
 
 /// `query.ground_length`: a walk over the ground.

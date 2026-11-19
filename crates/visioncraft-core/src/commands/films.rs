@@ -5,7 +5,7 @@ use super::{fail, next_id};
 use crate::directing::{self, Notes, RevealEnd};
 #[cfg(test)]
 use crate::film::ShotKind;
-use crate::film::{Film, SHOT_KINDS, Shot};
+use crate::film::{Film, SHOT_KINDS, Shot, target_root};
 use crate::project::Project;
 use crate::reference::{Extent, Scene, bearing_deg, place};
 use crate::session::{CommandError, Session, bad, parse};
@@ -308,8 +308,24 @@ fn update_shot(project: &mut Project, params: &Value) -> Result<Value, CommandEr
     let p: P = parse(&given)?;
     let film = find(project, &p.id)?;
     let i = shot_index(film, p.index)?;
+    // What a field is given again names no target of the shot any longer, except the ones this
+    // update gives.
+    let mut targets = film.shots[i].targets.clone();
+    targets.retain(|path, _| !p.shot.contains_key(target_root(path)));
+    if let Some(Value::Object(given)) = p.shot.get("targets") {
+        targets.extend(
+            given
+                .iter()
+                .filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string()))),
+        );
+    }
     let mut value = serde_json::to_value(&film.shots[i]).expect("a shot serialises");
     let fields = value.as_object_mut().expect("a shot is an object");
+    if targets.is_empty() {
+        fields.remove("targets");
+    } else {
+        fields.insert("targets".into(), json!(targets));
+    }
     // A new duration replaces a speed, and the other way round: they are two ways to say one thing.
     if p.shot.get("duration_s").is_some_and(|v| !v.is_null()) && !p.shot.contains_key("speed_mps") {
         fields.remove("speed_mps");
@@ -318,6 +334,9 @@ fn update_shot(project: &mut Project, params: &Value) -> Result<Value, CommandEr
         fields.remove("duration_s");
     }
     for (k, v) in p.shot {
+        if k == "targets" {
+            continue;
+        }
         if k == "kind" && v.as_str() != fields.get("kind").and_then(Value::as_str) {
             return Err(bad(&format!(
                 "a shot keeps its kind (`{}`; the kinds are {}); remove it and add another",
@@ -517,7 +536,16 @@ fn orbit(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
         "height_m": frame.height_m, "from_deg": from_deg, "to_deg": to_deg,
         "duration_s": seconds(p.seconds, p.duration_s, 8.0)?,
     });
-    let shot = with_extras(shot, p.common.extras)?;
+    let mut shot = with_extras(shot, p.common.extras)?;
+    // A named target stays a name: the orbit follows it when it moves.
+    let named = [&p.target, &p.center]
+        .into_iter()
+        .flatten()
+        .find_map(|t| t.get("ref").and_then(Value::as_str))
+        .filter(|r| !r.is_empty());
+    if let Some(r) = named {
+        shot["targets"]["center"] = r.into();
+    }
     build_film(
         project,
         p.common.id,
@@ -877,5 +905,80 @@ mod tests {
         )
         .unwrap();
         assert_eq!(s.project().viewpoints.last().unwrap().target[0], 10.5);
+    }
+
+    #[test]
+    fn a_shot_follows_the_target_it_was_named_after() {
+        use crate::film::{Env, Timeline, terrain_ground};
+        let mut s = crate::Session::new(garden());
+        s.run("film.add", json!({"name": "pond"})).unwrap();
+        let id = s.project().films[0].id.clone();
+        s.run(
+            "film.add_shot",
+            json!({"id": id, "shot": {"kind": "hold", "eye": [2, 2, 30], "target": "S6",
+                "duration_s": 3}}),
+        )
+        .unwrap();
+        s.run(
+            "film.add_shot",
+            json!({"id": id, "shot": {"kind": "glide", "path": [[2, 2, 30], [4, 2, 30]],
+                "look_at": "S6", "duration_s": 3}}),
+        )
+        .unwrap();
+        let shots = &s.project().films[0].shots;
+        assert_eq!(shots[0].targets["target"], "S6");
+        assert_eq!(shots[1].targets["look_at"], "S6");
+        assert!(!shots[0].targets.contains_key("eye"));
+        // Where the shots look at 1 s and 4 s, and what the film warns of.
+        let looks = |s: &crate::Session| {
+            let p = s.project();
+            let ground = |x: f32, z: f32| terrain_ground(p, x, z);
+            let tl = Timeline::new(&p.films[0], &Env::new(p, &ground)).unwrap();
+            (
+                tl.camera_at(1.0).unwrap().target,
+                tl.camera_at(4.0).unwrap().target,
+                tl.warnings.clone(),
+            )
+        };
+        let (hold, glide, warnings) = looks(&s);
+        assert!(warnings.is_empty());
+        // Move the pond 10 m east: both look at the new place.
+        let crate::Shape::Area(area) = s.project().shapes.iter().find(|x| x.id() == "S6").unwrap()
+        else {
+            panic!("the pond is an area")
+        };
+        let moved: Vec<[f32; 2]> = area.points.iter().map(|p| [p[0] + 10.0, p[1]]).collect();
+        s.run("shape.set_outline", json!({"id": "S6", "outline": moved}))
+            .unwrap();
+        let (hold2, glide2, warnings) = looks(&s);
+        assert!(warnings.is_empty());
+        for (a, b) in [(hold, hold2), (glide, glide2)] {
+            assert!(
+                (b[0] - a[0] - 10.0).abs() < 1e-3 && (b[2] - a[2]).abs() < 1e-3,
+                "{a:?} {b:?}"
+            );
+        }
+        // A target that is gone keeps the stored point (where the pond was last seen) and warns.
+        s.run("shape.remove", json!({"id": "S6"})).unwrap();
+        let (hold3, glide3, warnings) = looks(&s);
+        assert!(
+            warnings.len() == 2 && warnings.iter().all(|w| w.contains("S6")),
+            "{warnings:?}"
+        );
+        assert!((hold3[0] - hold[0]).abs() < 1e-3 && (glide3[0] - glide[0]).abs() < 1e-3);
+        // Giving the field a point again lets go of the name; the other keeps it.
+        s.run(
+            "film.update_shot",
+            json!({"id": id, "index": 0, "shot": {"target": [1, 1, 1]}}),
+        )
+        .unwrap();
+        let shots = &s.project().films[0].shots;
+        assert!(shots[0].targets.is_empty() && shots[1].targets.contains_key("look_at"));
+        // Projects saved before targets existed still load.
+        let old: Shot = serde_json::from_value(
+            json!({"kind": "hold", "eye": [0, 1, 0], "target": [1, 1, 1], "duration_s": 2}),
+        )
+        .unwrap();
+        assert!(old.targets.is_empty());
     }
 }

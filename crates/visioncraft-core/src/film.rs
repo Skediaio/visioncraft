@@ -13,10 +13,12 @@
 //! same as `rotation_y_deg`.
 
 use crate::project::{Grade, Project, SunTime, YEARS_MAX};
+use crate::reference::{self, Extent, Scene};
 use crate::season::Season;
 use crate::viewpoint::Viewpoint;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 
 /// Longest shot, in seconds.
 pub const SHOT_MAX_S: f32 = 3600.0;
@@ -167,6 +169,13 @@ pub struct Shot {
     /// default): it starts where its own fields say. For walk, glide, flyover and orbit shots.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub join: Option<Join>,
+    /// The names behind points that were given as references (`"Pond"`, `S6`, `g4#12`), by the
+    /// field they filled: `look_at`, `eye`, `target`, `center`, `at`, `path[2]`, `pause_at[0]`,
+    /// `look[1]`. The point stored in the field is what the reference stood for when the shot was
+    /// made; the film looks the reference up again when it is played (and keeps the stored point,
+    /// with a warning, when the target is gone), so moving the pond moves the shot.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub targets: BTreeMap<String, String>,
 }
 
 /// How a shot follows the one before it.
@@ -315,6 +324,7 @@ pub const COMMON_FIELDS: &[&str] = &[
     "grade",
     "exposure_ev",
     "join",
+    "targets",
 ];
 
 /// The highest haze (a turbidity) a shot or a picture takes: thick fog-like haze.
@@ -322,7 +332,80 @@ pub const HAZE_MAX: f32 = 50.0;
 
 pub const SHOT_KINDS: &[&str] = &["walk", "glide", "rise", "orbit", "flyover", "hold"];
 
+/// The field a `targets` path fills: `path[2]` is `path`.
+pub fn target_root(path: &str) -> &str {
+    path.split_once('[').map_or(path, |(root, _)| root)
+}
+
 impl Shot {
+    /// The shot with each of its `targets` looked up again over `env`, and what could not be:
+    /// those keep the point stored in the shot.
+    fn rebound(&self, env: &Env) -> (Shot, Vec<String>) {
+        let mut warnings = Vec::new();
+        if self.targets.is_empty() {
+            return (self.clone(), warnings);
+        }
+        let years = self
+            .years
+            .map(|y| y.to)
+            .or_else(|| env.project.and_then(|p| p.view.years));
+        let refs: Vec<&str> = self.targets.values().map(String::as_str).collect();
+        let found = env.lookup(&refs, years);
+        let mut shot = self.clone();
+        for ((path, reference), found) in self.targets.iter().zip(found) {
+            match found {
+                Ok(e) => {
+                    if !shot.set_target(path, &e) {
+                        warnings.push(format!(
+                            "`{reference}` cannot fill `{path}` of a {} shot; the stored point is kept",
+                            self.kind.name()
+                        ));
+                    }
+                }
+                Err(_) => warnings.push(format!(
+                    "`{reference}` (the `{path}` of a {} shot) is gone; the stored point is kept",
+                    self.kind.name()
+                )),
+            }
+        }
+        (shot, warnings)
+    }
+
+    /// Puts a looked-up target into the field `path` names; false when the shot has no such field.
+    fn set_target(&mut self, path: &str, e: &Extent) -> bool {
+        let (name, index) = match path.split_once('[') {
+            Some((n, rest)) => (
+                n,
+                rest.strip_suffix(']').and_then(|i| i.parse::<usize>().ok()),
+            ),
+            None => (path, None),
+        };
+        let p3 = e.look_point();
+        let c = e.center();
+        let xz = [c[0], c[2]];
+        match (name, index, &mut self.kind) {
+            ("look_at", None, _) => self.look_at = Some(Look::At(p3)),
+            ("eye", None, ShotKind::Hold { eye, .. }) => *eye = Some(p3),
+            ("target", None, ShotKind::Hold { target, .. }) => *target = Some(p3),
+            ("center", None, ShotKind::Orbit { center, .. }) => *center = p3,
+            ("at", None, ShotKind::Rise { at, .. }) => *at = xz,
+            ("path", Some(i), ShotKind::Glide { path }) if i < path.len() => path[i] = p3,
+            ("path", Some(i), ShotKind::Flyover { path, .. } | ShotKind::Walk { path, .. })
+                if i < path.len() =>
+            {
+                path[i] = xz;
+            }
+            ("pause_at", Some(i), ShotKind::Walk { pause_at, .. }) if i < pause_at.len() => {
+                pause_at[i].point = xz;
+            }
+            ("look", Some(i), ShotKind::Walk { look, .. }) if i < look.len() => {
+                look[i].target = p3;
+            }
+            _ => return false,
+        }
+        true
+    }
+
     /// A shot from JSON, with unknown fields refused (naming the nearest), and checked.
     pub fn from_value(value: &Value, latitude: f64) -> Result<Shot, String> {
         let map = value.as_object().ok_or("a shot is an object")?;
@@ -762,7 +845,15 @@ pub struct Env<'a> {
     pub ground: &'a dyn Fn(f32, f32) -> f32,
     pub viewpoints: &'a [Viewpoint],
     pub latitude: f64,
+    /// The project, which the references of a shot's `targets` are looked up in.
+    pub project: Option<&'a Project>,
+    /// Looks references up where the host knows more than the core (model geometry, plants
+    /// placed with the building rule); without it the core's own [`Scene`] does.
+    pub resolve: Option<&'a ResolveFn<'a>>,
 }
+
+/// Looks up references, at `years` after planting: one answer per reference.
+pub type ResolveFn<'a> = dyn Fn(&[&str], Option<f32>) -> Vec<Result<Extent, String>> + 'a;
 
 impl<'a> Env<'a> {
     pub fn new(project: &'a Project, ground: &'a dyn Fn(f32, f32) -> f32) -> Env<'a> {
@@ -770,6 +861,30 @@ impl<'a> Env<'a> {
             ground,
             viewpoints: &project.viewpoints,
             latitude: project.site.latitude,
+            project: Some(project),
+            resolve: None,
+        }
+    }
+
+    /// The same, with the host's own lookup of references.
+    pub fn with_resolver(mut self, resolve: &'a ResolveFn<'a>) -> Env<'a> {
+        self.resolve = Some(resolve);
+        self
+    }
+
+    fn lookup(&self, refs: &[&str], years: Option<f32>) -> Vec<Result<Extent, String>> {
+        if let Some(f) = self.resolve {
+            return f(refs, years);
+        }
+        match self.project {
+            Some(p) => {
+                let scene = Scene::new(p, years);
+                refs.iter().map(|r| reference::resolve(&scene, r)).collect()
+            }
+            None => refs
+                .iter()
+                .map(|_| Err("no project to look the reference up in".to_string()))
+                .collect(),
         }
     }
 }
@@ -943,6 +1058,8 @@ pub struct Timeline {
     shots: Vec<Built>,
     pub duration_s: f32,
     pub fps: u32,
+    /// Targets that no longer resolve (their shots keep the stored point).
+    pub warnings: Vec<String>,
 }
 
 struct Built {
@@ -1071,8 +1188,11 @@ impl Timeline {
     pub fn new(film: &Film, env: &Env) -> Result<Timeline, String> {
         let mut start = 0.0;
         let mut shots: Vec<Built> = Vec::new();
+        let mut warnings = Vec::new();
         for (i, shot) in film.shots.iter().enumerate() {
-            let b = build(shot, start, env, shots.last()).map_err(|e| format!("shot {i}: {e}"))?;
+            let (shot, found) = shot.rebound(env);
+            warnings.extend(found.into_iter().map(|w| format!("shot {i}: {w}")));
+            let b = build(&shot, start, env, shots.last()).map_err(|e| format!("shot {i}: {e}"))?;
             start += b.duration;
             shots.push(b);
         }
@@ -1080,6 +1200,7 @@ impl Timeline {
             shots,
             duration_s: start,
             fps: film.fps,
+            warnings,
         })
     }
 
@@ -1792,6 +1913,8 @@ mod tests {
             ground,
             viewpoints: vps,
             latitude: 50.8,
+            project: None,
+            resolve: None,
         }
     }
 

@@ -11,6 +11,7 @@ use crate::reference;
 use crate::reference::{Extent, Scene, bearing_deg, bearing_dir, orbit_angle, place, place_xz};
 use crate::route::{self, Obstacles};
 use serde_json::{Map, Value, json};
+use std::collections::BTreeMap;
 
 /// How much of the frame the target fills when the distance is `"frame"`.
 pub const FRAME_FILL: f32 = 0.85;
@@ -238,18 +239,76 @@ fn resolve_walk(
     Ok(())
 }
 
+/// A reference given as a name or an id: a string that is not the word `ahead`.
+fn named(v: &Value) -> Option<&str> {
+    v.as_str().filter(|s| *s != "ahead" && !s.trim().is_empty())
+}
+
+/// The references a shot is given, by the field they fill (`Shot::targets`), before they turn
+/// into points.
+fn shot_targets(shot: &Map<String, Value>, kind: Option<&str>) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    let mut add = |path: String, v: Option<&Value>| {
+        if let Some(r) = v.and_then(named) {
+            out.insert(path, r.to_string());
+        }
+    };
+    add("look_at".into(), shot.get("look_at"));
+    let list = |key: &str| shot.get(key).and_then(Value::as_array);
+    match kind {
+        Some("walk") => {
+            for (i, v) in list("path").into_iter().flatten().enumerate() {
+                add(format!("path[{i}]"), Some(v));
+            }
+            for (i, v) in list("pause_at").into_iter().flatten().enumerate() {
+                add(format!("pause_at[{i}]"), v.get("target").or(v.get("point")));
+            }
+            for (i, v) in list("look").into_iter().flatten().enumerate() {
+                add(format!("look[{i}]"), v.get("target"));
+            }
+        }
+        Some("glide" | "flyover") => {
+            for (i, v) in list("path").into_iter().flatten().enumerate() {
+                add(format!("path[{i}]"), Some(v));
+            }
+        }
+        Some("rise") => add("at".into(), shot.get("at")),
+        Some("orbit") => add("center".into(), shot.get("center")),
+        Some("hold") => {
+            add("eye".into(), shot.get("eye"));
+            add("target".into(), shot.get("target"));
+        }
+        _ => {}
+    }
+    out
+}
+
+/// Adds `targets` to the `targets` an object already has.
+fn merge_targets(map: &mut Map<String, Value>, targets: BTreeMap<String, String>) {
+    if targets.is_empty() {
+        return;
+    }
+    let entry = map
+        .entry("targets")
+        .or_insert_with(|| Value::Object(Map::new()));
+    if let Some(own) = entry.as_object_mut() {
+        own.extend(targets.into_iter().map(|(k, v)| (k, Value::String(v))));
+    }
+}
+
 fn resolve_shot(
     scene: &Scene,
     shot: &mut Map<String, Value>,
     kind: Option<&str>,
     notes: &mut Notes,
 ) -> Result<(), String> {
-    point3_field(scene, shot, "look_at", notes)?;
     let kind = match kind {
         Some(k) => Some(k.to_string()),
         None if shot.contains_key("route") || shot.contains_key("pause_at") => Some("walk".into()),
         None => None,
     };
+    let targets = shot_targets(shot, kind.as_deref());
+    point3_field(scene, shot, "look_at", notes)?;
     match kind.as_deref() {
         Some("walk") => resolve_walk(scene, shot, notes)?,
         Some("glide") => list_field(scene, shot, "path", 3, notes)?,
@@ -262,7 +321,41 @@ fn resolve_shot(
         }
         _ => {}
     }
+    merge_targets(shot, targets);
     Ok(())
+}
+
+/// What a helper's `extras` (fields merged into the shot it makes) name: its `look_at`, and the
+/// `points` of a flythrough as the `path`.
+fn extras_targets(map: &mut Map<String, Value>, points: Option<&str>) {
+    let mut targets = BTreeMap::new();
+    if let Some(r) = map
+        .get("extras")
+        .and_then(|e| e.get("look_at"))
+        .and_then(named)
+    {
+        targets.insert("look_at".to_string(), r.to_string());
+    }
+    if let Some(key) = points {
+        for (i, v) in map
+            .get(key)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .enumerate()
+        {
+            if let Some(r) = named(v) {
+                targets.insert(format!("path[{i}]"), r.to_string());
+            }
+        }
+    }
+    if let Some(extras) = map.get_mut("extras").and_then(Value::as_object_mut) {
+        merge_targets(extras, targets);
+    } else if !targets.is_empty() {
+        let mut extras = Map::new();
+        merge_targets(&mut extras, targets);
+        map.insert("extras".into(), Value::Object(extras));
+    }
 }
 
 /// The command's params with references turned into numbers (a target of `film.orbit` or
@@ -298,6 +391,7 @@ pub fn resolve_command(id: &str, params: &Value, scene: &Scene) -> Result<(Value
             let Some(map) = p.as_object_mut() else {
                 return Ok((p, notes));
             };
+            extras_targets(map, None);
             for key in ["target", "center"] {
                 if let Some(v) = map.get(key).filter(|v| v.is_string()).cloned() {
                     let e = place(scene, &v, key).map_err(fail)?;
@@ -317,6 +411,7 @@ pub fn resolve_command(id: &str, params: &Value, scene: &Scene) -> Result<(Value
             let Some(map) = p.as_object_mut() else {
                 return Ok((p, notes));
             };
+            extras_targets(map, Some("points"));
             list_field(scene, map, "points", 2, &mut notes).map_err(fail)?;
             if let Some(extras) = map.get_mut("extras").and_then(Value::as_object_mut) {
                 point3_field(scene, extras, "look_at", &mut notes).map_err(fail)?;
@@ -568,6 +663,8 @@ mod tests {
             ground: &ground,
             viewpoints: &[],
             latitude: 50.8,
+            project: None,
+            resolve: None,
         };
         let end = Timeline::new(&film, &env).unwrap().camera_at(8.0).unwrap();
         assert!((end.eye[1] - last[1]).abs() < 0.01 && end.target == c);

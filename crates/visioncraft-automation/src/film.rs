@@ -150,6 +150,9 @@ pub(crate) fn preview(host: &mut dyn Host, params: &Value) -> Result<Value, Stri
         "id": film.id, "name": film.name, "fps": film.fps,
         "duration_s": tl.duration_s, "frame_count": tl.frame_count(), "shots": shots,
     });
+    if !tl.warnings.is_empty() {
+        out["warnings"] = json!(tl.warnings);
+    }
     if let Some(t) = t {
         if !t.is_finite() || t < 0.0 {
             return Err(format!("{name}: `t` must be a time in seconds, 0 or more"));
