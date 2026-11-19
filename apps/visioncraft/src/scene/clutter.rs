@@ -695,8 +695,9 @@ pub(super) fn make_meshes(r: &mut Renderer) -> Vec<(MeshId, MaterialId)> {
     out
 }
 
-/// A pebble of radius about 1, flattened and sunk a little into the ground: a once-subdivided
-/// icosahedron (80 triangles; `fine` false: the plain one, 20) pushed in and out by a few waves.
+/// A stone of radius about 1, flattened and sunk a little into the ground: a once-subdivided
+/// icosahedron (80 triangles; `fine` false: the plain one, 20) broken by fracture planes into an
+/// angular chip, flat shaded (each triangle with its own three corners).
 fn stone(seed: u64, fine: bool) -> (Vec<[f32; 3]>, Vec<u32>) {
     let t = (1.0 + 5f32.sqrt()) / 2.0;
     let mut p: Vec<Vec3> = [
@@ -758,27 +759,45 @@ fn stone(seed: u64, fine: bool) -> (Vec<[f32; 3]>, Vec<u32>) {
         s = hash(s);
         unit(s) * 2.0 - 1.0
     };
-    let waves: Vec<(Vec3, f32)> = (0..3)
-        .map(|_| {
-            (
-                Vec3::new(next(), next(), next()).normalize_or_zero() * 2.5,
-                next() * 3.0,
-            )
+    // Fracture planes, as the rocks' (`visioncraft_core::natural::rock_mesh`): each cuts the side
+    // it faces flat, so the stone is a broken chip with faces and edges, not a smooth egg. Then
+    // squashed flat (stones lie on their broadest face) and sunk a little.
+    let cuts: Vec<(Vec3, f32)> = (0..6)
+        .map(|k| {
+            // The first two cut the top and the bottom: a chip lies on a flat face.
+            let n = match k {
+                0 => Vec3::new(0.3 * next(), 1.0, 0.3 * next()),
+                1 => Vec3::new(0.3 * next(), -1.0, 0.3 * next()),
+                _ => Vec3::new(next(), 0.5 * next(), next()),
+            };
+            (n.normalize_or_zero(), 0.62 + 0.2 * next().abs())
         })
         .collect();
-    let squash = Vec3::new(1.0 + 0.2 * next(), 0.5 + 0.1 * next(), 0.8 + 0.15 * next());
-    let pos = p
+    let squash = Vec3::new(
+        1.05 + 0.2 * next(),
+        0.42 + 0.08 * next(),
+        0.75 + 0.15 * next(),
+    );
+    let corner: Vec<Vec3> = p
         .iter()
         .map(|&d| {
-            let bump: f32 = waves
-                .iter()
-                .map(|(w, ph)| (d.dot(*w) + ph).sin())
-                .sum::<f32>();
-            let v = d * (1.0 + 0.07 * bump) * squash;
-            [v.x, v.y - 0.2, v.z]
+            let mut q = d;
+            for (n, depth) in &cuts {
+                let s = q.dot(*n) - depth;
+                if s > 0.0 {
+                    q -= *n * s;
+                }
+            }
+            q * squash - Vec3::Y * 0.12
         })
         .collect();
-    (pos, tris)
+    // Flat shaded: each triangle its own corners, so the faces read as broken facets.
+    let pos: Vec<[f32; 3]> = tris
+        .iter()
+        .map(|&i| corner[i as usize].to_array())
+        .collect();
+    let idx = (0..pos.len() as u32).collect();
+    (pos, idx)
 }
 
 /// A twig of length 1 along x lying on the ground, slightly bent, five-sided.
@@ -881,10 +900,31 @@ mod tests {
     #[test]
     fn stone_and_twig_meshes_are_closed_enough_to_draw() {
         let (p, i) = stone(2, true);
-        assert_eq!((p.len(), i.len()), (42, 240));
+        assert_eq!((p.len(), i.len()), (240, 240));
         assert!(i.iter().all(|&k| (k as usize) < p.len()));
+        // Flatter than wide, with flat faces: several triangles share one normal.
+        let (lo, hi) = p
+            .iter()
+            .fold(([f32::MAX; 3], [f32::MIN; 3]), |(lo, hi), v| {
+                (
+                    std::array::from_fn(|k| lo[k].min(v[k])),
+                    std::array::from_fn(|k| hi[k].max(v[k])),
+                )
+            });
+        assert!(hi[1] - lo[1] < 0.6 * (hi[0] - lo[0]), "{lo:?} {hi:?}");
+        let n = normals(&p, &i);
+        let flat = n
+            .chunks(3)
+            .filter(|t| {
+                n.chunks(3)
+                    .filter(|u| Vec3::from(u[0]).dot(Vec3::from(t[0])) > 0.999)
+                    .count()
+                    >= 3
+            })
+            .count();
+        assert!(flat >= 12, "{flat} triangles on fracture faces");
         let (p, i) = stone(2, false);
-        assert_eq!((p.len(), i.len()), (12, 60));
+        assert_eq!((p.len(), i.len()), (60, 60));
         assert!(i.iter().all(|&k| (k as usize) < p.len()));
         let (p, i) = twig();
         assert!(i.iter().all(|&k| (k as usize) < p.len()));
