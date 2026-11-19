@@ -682,6 +682,9 @@ struct Item {
     cap: u32,
     bounds: Option<Bounds>,
     clusters: Vec<Cluster>,
+    /// The bounding radius of its largest instance (m, `update_bounds`): what the reflection
+    /// leaves out when it would be under `MIN_REFLECTED_PX`.
+    size: f32,
     /// The baked impostor drawn as the last level, and its draw slot.
     impostor: Option<(ImpostorId, u32)>,
     /// Metres before the last level's distance over which instances dither
@@ -939,6 +942,10 @@ struct FramePlans {
 const LOD_UNSET: u8 = u8::MAX;
 /// What `cluster_lod` answers for a cluster drawn by its item's shadow caster.
 const SHADOW_CASTER_LEVEL: u8 = u8::MAX - 1;
+/// The smallest bounding radius in pixels the planar water reflection draws a cluster's
+/// instances with: under it the rippled reflection of a herb, a stone or a chair far off shows
+/// nothing, and leaving them out spared the pass most of its triangles.
+const MIN_REFLECTED_PX: f32 = 1.5;
 /// Frames a hand-over between two levels (two mesh levels, the last mesh
 /// level and the impostor, or a cull fade) dissolves over: the dither shows
 /// only while it runs, never as a steady stipple on a parked camera.
@@ -3176,6 +3183,7 @@ impl Renderer {
             cap: 0,
             bounds: None,
             clusters: Vec::new(),
+            size: 0.0,
             impostor: None,
             shadow_exact: terrain,
             shadow_caster: None,
@@ -3658,8 +3666,8 @@ impl Renderer {
         let layers = self.targets.shadow_layers.len();
         let ssr = self.quality.screen_reflections > 0;
         let mut gather = Vec::new();
-        let mut plan = |cull: Mat4, near_far: bool, kind: Pass| {
-            self.plan_items(cull, near_far, kind, &mut gather)
+        let mut plan = |cull: Mat4, near_far: bool, kind: Pass, small: Option<(Vec3, f32)>| {
+            self.plan_items(cull, near_far, kind, small, &mut gather)
         };
         let plans = (!develop).then(|| {
             let shadows: Vec<Vec<Draw>> = (0..layers)
@@ -3673,6 +3681,7 @@ impl Renderer {
                         cascades.view_proj[c],
                         false,
                         Pass::Shadow { far, coarse: c > 0 },
+                        None,
                     )
                 })
                 .collect();
@@ -3686,14 +3695,21 @@ impl Renderer {
                         far: false,
                         coarse: false,
                     },
+                    None,
                 )
             });
-            let depth = plan(view_proj, true, Pass::Depth);
+            let depth = plan(view_proj, true, Pass::Depth, None);
             let coarsest = self.quality.water_reflection >= 4;
-            let reflection =
-                mirror.map(|m| plan(view_proj * m, true, Pass::Reflection { coarsest }));
-            let forward = plan(view_proj, true, Pass::Forward);
-            let mirrors = ssr.then(|| plan(view_proj, true, Pass::Mirrors));
+            // Things under a pixel or two in the reflection are left out of it (in perspective).
+            let reflected_px =
+                self.proj.y_axis.y.abs() * texture_size(&self.targets.reflection).1 as f32 * 0.5;
+            let perspective = !shadow::is_orthographic(self.proj);
+            let reflection = mirror.map(|m| {
+                let small = perspective.then(|| (m.transform_point3(self.eye), reflected_px));
+                plan(view_proj * m, true, Pass::Reflection { coarsest }, small)
+            });
+            let forward = plan(view_proj, true, Pass::Forward, None);
+            let mirrors = ssr.then(|| plan(view_proj, true, Pass::Mirrors, None));
             FramePlans {
                 shadows,
                 snow,
@@ -4277,7 +4293,15 @@ impl Renderer {
     /// Per item, which of its clusters `cull` keeps (empty: none, or the item is outside):
     /// tested once a pass, and only clusters near enough to draw at all (`cluster_lod`). Testing
     /// them per part, category and fade took a third of a coast frame's CPU time in the browser.
-    fn visible_clusters(&self, cull: Mat4, near_far: bool) -> Vec<Vec<bool>> {
+    ///
+    /// `small`: an eye and pixels per unit of size over distance; clusters whose items'
+    /// instances would be under `MIN_REFLECTED_PX` from there are left out (the reflection).
+    fn visible_clusters(
+        &self,
+        cull: Mat4,
+        near_far: bool,
+        small: Option<(Vec3, f32)>,
+    ) -> Vec<Vec<bool>> {
         self.items
             .iter()
             .map(|item| match item {
@@ -4286,7 +4310,13 @@ impl Renderer {
                     .iter()
                     .map(|c| {
                         (c.lod as usize) < item.lods.len()
-                            && c.bounds.is_some_and(|b| !outside(cull, b, near_far))
+                            && c.bounds.is_some_and(|b| {
+                                !outside(cull, b, near_far)
+                                    && small.is_none_or(|(eye, px)| {
+                                        let d = eye.clamp(b.0, b.1).distance(eye);
+                                        item.size * px >= MIN_REFLECTED_PX * d
+                                    })
+                            })
                     })
                     .collect(),
                 _ => Vec::new(),
@@ -4313,6 +4343,7 @@ impl Renderer {
         cull: Mat4,
         near_far: bool,
         kind: Pass,
+        small: Option<(Vec3, f32)>,
         gather: &mut Vec<u32>,
     ) -> Vec<Draw> {
         let shadow = matches!(kind, Pass::Shadow { .. });
@@ -4332,7 +4363,7 @@ impl Renderer {
             Pass::Mirrors => category == 3,
             _ => category < 2 + glass as usize,
         };
-        let visible = self.visible_clusters(cull, near_far);
+        let visible = self.visible_clusters(cull, near_far, small);
         let mut draws = Vec::new();
         let mut batches = Batches::default();
         let mut levels: Vec<Option<u8>> = Vec::new();
@@ -4782,6 +4813,18 @@ impl Renderer {
                 });
             }
             item.bounds = item.clusters.iter().filter_map(|c| c.bounds).reduce(union);
+            let scale = item
+                .transforms
+                .iter()
+                .map(|m| {
+                    m.x_axis
+                        .truncate()
+                        .length()
+                        .max(m.y_axis.truncate().length())
+                        .max(m.z_axis.truncate().length())
+                })
+                .fold(0.0, f32::max);
+            item.size = mesh_bounds.map_or(0.0, |(lo, hi)| (hi - lo).length() * 0.5 * scale);
             if let Some(b) = item.bounds {
                 scene = Some(scene.map_or(b, |s| union(s, b)));
                 if is_terrain {
