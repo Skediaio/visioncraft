@@ -1295,6 +1295,9 @@ pub struct Renderer {
     /// around the eye (the last shadow layer): where it shows something overhead, no snow.
     snow: f32,
     snow_cover: Option<Mat4>,
+    /// The matrix the snow cover map was last drawn with: drawn again only when it moves (the
+    /// eye a step of eight texels) or the scene changes (`invalidate_shadows`), not every frame.
+    snow_drawn: Option<Mat4>,
     /// Wet surfaces and rain, 0..1 each (`set_wet`).
     wetness: f32,
     rain: f32,
@@ -1693,6 +1696,7 @@ impl Renderer {
             cloud_picture: false,
             snow: 0.0,
             snow_cover: None,
+            snow_drawn: None,
             wetness: 0.0,
             rain: 0.0,
             mist: 0.0,
@@ -3686,8 +3690,12 @@ impl Renderer {
                 })
                 .collect();
             // The view's own levels: a bare tree's coarsest level is a few large twig cards,
-            // which kept the snow off a patch of lawn under a birch.
-            let snow = self.snow_cover.filter(|_| layers > 0).map(|m| {
+            // which kept the snow off a patch of lawn under a birch. Drawn when it moved or the
+            // scene changed.
+            let snow = self
+                .snow_cover
+                .filter(|m| layers > 0 && self.snow_drawn != Some(*m));
+            let snow = snow.map(|m| {
                 plan(
                     m,
                     false,
@@ -3721,6 +3729,9 @@ impl Renderer {
         });
         self.gather
             .run(&self.device, &self.queue, encoder, &self.pool, &gather);
+        if plans.as_ref().is_some_and(|p| p.snow.is_some()) {
+            self.snow_drawn = self.snow_cover;
+        }
 
         let t = &self.targets;
         if let Some(plans) = &plans {
@@ -4993,6 +5004,7 @@ impl Renderer {
 
     fn invalidate_shadows(&mut self) {
         self.far_cache = None;
+        self.snow_drawn = None;
         self.cascade_rendered = [None; shadow::MAX_CASCADES];
     }
 
@@ -5564,8 +5576,10 @@ fn u32_bytes(u: &[u32]) -> Vec<u8> {
 /// `SNOW_COVER_M` round the eye, its centre moved in whole texels so the cover does not crawl.
 fn snow_cover_matrix(eye: Vec3, lo: Vec3, hi: Vec3, resolution: u32) -> Mat4 {
     let half = SNOW_COVER_M / 2.0;
-    let texel = SNOW_COVER_M / resolution.max(1) as f32;
-    let c = (glam::Vec2::new(eye.x, eye.z) / texel).round() * texel;
+    // Centred on the eye in steps of eight whole texels (1.25 m at 1024): the map is drawn
+    // again only when it moves (`snow_drawn`).
+    let step = 8.0 * SNOW_COVER_M / resolution.max(1) as f32;
+    let c = (glam::Vec2::new(eye.x, eye.z) / step).round() * step;
     let top = hi.y + 1.0;
     let view = Mat4::look_to_rh(Vec3::new(c.x, top, c.y), Vec3::NEG_Y, Vec3::NEG_Z);
     Mat4::orthographic_rh(-half, half, -half, half, 0.0, (top - lo.y + 1.0).max(1.0)) * view
