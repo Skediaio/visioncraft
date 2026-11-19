@@ -803,13 +803,71 @@ struct Batch {
 
 #[derive(Default)]
 struct Batches {
-    index: std::collections::HashMap<BatchKey, usize>,
+    index: std::collections::HashMap<BatchKey, usize, std::hash::BuildHasherDefault<Fx>>,
     list: Vec<Batch>,
+}
+
+/// A small, fast hash for the batches' keys (the standard one showed in browser profiles).
+#[derive(Default, Clone, Copy)]
+struct Fx(u64);
+
+impl std::hash::Hasher for Fx {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        bytes.iter().for_each(|&b| self.write_u64(u64::from(b)));
+    }
+    fn write_u8(&mut self, v: u8) {
+        self.write_u64(u64::from(v));
+    }
+    fn write_u32(&mut self, v: u32) {
+        self.write_u64(u64::from(v));
+    }
+    fn write_usize(&mut self, v: usize) {
+        self.write_u64(v as u64);
+    }
+    fn write_u64(&mut self, v: u64) {
+        self.0 = (self.0.rotate_left(5) ^ v).wrapping_mul(0x51_7c_c1_b7_27_22_0a_95);
+    }
+}
+
+/// An item's runs within one pass, per level and whether dissolving clusters are left out
+/// (`Renderer::runs`): made once for all the parts at that level.
+#[derive(Default)]
+struct RunCache(Vec<(u8, bool, Vec<Run>)>);
+
+/// A run of instances with its sort key.
+type Run = (f32, std::ops::Range<u32>);
+
+impl RunCache {
+    fn get(
+        &mut self,
+        item: &Item,
+        levels: &[Option<u8>],
+        order: usize,
+        level: u8,
+        skip_fading: bool,
+    ) -> &[(f32, std::ops::Range<u32>)] {
+        let i = match self
+            .0
+            .iter()
+            .position(|e| e.0 == level && e.1 == skip_fading)
+        {
+            Some(i) => i,
+            None => {
+                let runs = Renderer::runs(item, order, levels, level, skip_fading);
+                self.0.push((level, skip_fading, runs));
+                self.0.len() - 1
+            }
+        };
+        &self.0[i].2
+    }
 }
 
 impl Batches {
     /// Adds `item`'s `runs` (of its own instances, with sort keys) to the batch of `draw`.
-    fn add(&mut self, tag: u8, draw: Draw, item: &Item, runs: Vec<(f32, std::ops::Range<u32>)>) {
+    fn add(&mut self, tag: u8, draw: Draw, item: &Item, runs: &[(f32, std::ops::Range<u32>)]) {
         if runs.is_empty() {
             return;
         }
@@ -833,6 +891,7 @@ impl Batches {
         });
         let b = &mut self.list[i];
         for (k, r) in runs {
+            let k = *k;
             b.first = b.first.min(k);
             b.runs.push((k, item.base + r.start, r.len() as u32));
         }
@@ -4236,14 +4295,19 @@ impl Renderer {
     }
 
     /// Plans every opaque and cutout part (and, into shadow maps and the water reflection, glass)
-    /// whose bounds overlap `cull` (a view-projection): opaque parts first, then cutout parts and
-    /// all impostor quads, then glass. `near_far` also culls on depth.
+    /// whose bounds overlap `cull` (a view-projection), and all impostor quads. `near_far` also
+    /// culls on depth.
     ///
     /// The visible instances of every item that shares a pipeline, a material and a mesh (the
     /// same species in several plantings, the same rock or chair placed many times) become one
     /// draw: their pool indices are appended to `gather`, which the GPU copies into one buffer
     /// before the passes (`batch.rs`), front to back by their clusters. Dissolving clusters and
-    /// terrain chunks draw straight from the pool.
+    /// terrain chunks draw straight from the pool, before the batches; the batches go opaque,
+    /// cutout and impostors, glass, then trees' shadow casters.
+    ///
+    /// Each cluster's level is found once per pass, and the runs of a level once per item: a
+    /// plant has a dozen parts over a few levels, and testing every cluster per part (and per
+    /// category) was most of a coast frame's CPU time in the browser.
     fn plan_items(
         &self,
         cull: Mat4,
@@ -4264,209 +4328,167 @@ impl Renderer {
         // an opaque pane (without it the reflection looked through every window into the dark
         // room behind it: the dark blobs in a pond).
         let glass = shadow || matches!(kind, Pass::Reflection { .. });
-        let categories = match kind {
-            Pass::Mirrors => 3..4,
-            _ => 0..2 + glass as usize,
+        let wanted = |category: usize| match kind {
+            Pass::Mirrors => category == 3,
+            _ => category < 2 + glass as usize,
         };
         let visible = self.visible_clusters(cull, near_far);
         let mut draws = Vec::new();
         let mut batches = Batches::default();
-        for category in categories {
-            for (item, seen) in self.items.iter().zip(&visible) {
-                let Some(item) = item else { continue };
-                if seen.is_empty() {
+        let mut levels: Vec<Option<u8>> = Vec::new();
+        for (item, seen) in self.items.iter().zip(&visible) {
+            let Some(item) = item else { continue };
+            if seen.is_empty() {
+                continue;
+            }
+            // This pass's level per cluster (`None`: not drawn), and whether any dissolves.
+            levels.clear();
+            levels.extend(
+                item.clusters
+                    .iter()
+                    .zip(seen)
+                    .map(|(c, &s)| s.then(|| Self::cluster_lod(item, c, kind)).flatten()),
+            );
+            let dissolving = fades
+                && item
+                    .clusters
+                    .iter()
+                    .zip(&levels)
+                    .any(|(c, l)| l.is_some() && c.fading);
+            let mut runs = RunCache::default();
+            for (part_index, part) in item.parts.iter().enumerate() {
+                let Some(Some(mesh)) = self.meshes.get(part.mesh.0 as usize) else {
+                    continue;
+                };
+                let Some(material) = self
+                    .materials
+                    .get(part.material.0 as usize)
+                    .and_then(Option::as_ref)
+                else {
+                    continue;
+                };
+                let m = &material.cpu;
+                let category = if m.surface == Surface::Glass {
+                    2
+                } else if late && m.mirror() && matches!(kind, Pass::Forward | Pass::Mirrors) {
+                    3
+                } else if m.transparent() {
+                    continue;
+                } else {
+                    m.cutout() as usize
+                };
+                if !wanted(category) {
                     continue;
                 }
-                for (part_index, part) in item.parts.iter().enumerate() {
-                    let Some(Some(mesh)) = self.meshes.get(part.mesh.0 as usize) else {
-                        continue;
+                let weights = mesh.weights.is_some() && shaded;
+                // Opaque and cutout mesh levels dissolve in fading clusters (into each other,
+                // the impostor or nothing), through their own pipelines, one draw and fade slot
+                // per cluster; the settled clusters leave them out.
+                // Terrain chunks never dissolve: their forward pipeline has no dissolve, so they draw
+                // their nearer level in every pass. Asked of the mesh, not of `weights` (none outside the
+                // shaded passes): a depth pre-pass that dithered both levels left the forward pass's level
+                // behind the coarser one, unshaded (black patches on the ground after a jump).
+                let can_fade = fades && category <= 1 && mesh.weights.is_none();
+                let ds = m.double_sided as usize;
+                let pipe = match kind {
+                    Pass::Shadow { .. } => Pipe::Shadow(category),
+                    Pass::Depth => Pipe::Depth(m.variant()),
+                    Pass::Forward if weights => Pipe::Terrain,
+                    Pass::Reflection { .. } if weights => Pipe::ReflectTerrain,
+                    Pass::Forward | Pass::Mirrors => Pipe::Forward(m.variant()),
+                    Pass::Reflection { .. } => Pipe::Reflect(m.variant()),
+                };
+                let g1 = if weights {
+                    Some(Group1::Terrain)
+                } else if shaded || category == 1 {
+                    Some(Group1::Material(part.material.0))
+                } else {
+                    None
+                };
+                let draw = |pipe, g1, g2, instances| Draw {
+                    pipe,
+                    g1,
+                    g2,
+                    mesh: Some(part.mesh.0),
+                    vertices: mesh.index_count,
+                    weights: weights.then_some(part.mesh.0),
+                    src: Src::Pool,
+                    instances,
+                    triangles: mesh.index_count as u64 / 3,
+                    view,
+                };
+                let g2 = shaded.then_some((false, part.slot));
+                let settled = runs.get(item, &levels, order, part.lod, can_fade && dissolving);
+                if weights {
+                    // A terrain chunk is its own mesh: nothing to share a draw with.
+                    draws.extend(
+                        settled
+                            .iter()
+                            .map(|(_, r)| draw(pipe, g1, g2, item.pool_range(r))),
+                    );
+                } else {
+                    batches.add(category as u8, draw(pipe, g1, g2, 0..0), item, settled);
+                }
+                if can_fade && dissolving {
+                    let pipe = match kind {
+                        Pass::Depth => Pipe::DepthFade(ds),
+                        _ => Pipe::Forward(2 + ds),
                     };
-                    let Some(material) = self
-                        .materials
-                        .get(part.material.0 as usize)
-                        .and_then(Option::as_ref)
-                    else {
-                        continue;
-                    };
-                    let m = &material.cpu;
-                    let this = if m.surface == Surface::Glass {
-                        2
-                    } else if late && m.mirror() && matches!(kind, Pass::Forward | Pass::Mirrors) {
-                        3
-                    } else if m.transparent() {
-                        continue;
-                    } else {
-                        m.cutout() as usize
-                    };
-                    if this != category {
-                        continue;
-                    }
-                    let weights = mesh.weights.is_some() && shaded;
-                    // Opaque and cutout mesh levels dissolve in fading
-                    // clusters (into each other, the impostor or nothing),
-                    // through their own pipelines, one draw and fade slot per
-                    // cluster. Terrain chunks never do: their forward pipeline has no dissolve,
-                    // so they draw their nearer level in every pass. Asked of the mesh, not of
-                    // `weights` (none outside the shaded passes): a depth pre-pass that dithered
-                    // both levels left the forward pass's level behind the coarser one wherever
-                    // that lies above it, unshaded (black patches on the ground after a jump).
-                    let can_fade = fades && category <= 1 && mesh.weights.is_none();
-                    for fading in [false, true] {
-                        if fading && !can_fade {
-                            continue;
-                        }
-                        let ds = m.double_sided as usize;
-                        let pipe = match kind {
-                            Pass::Shadow { .. } => Pipe::Shadow(category),
-                            Pass::Depth if fading => Pipe::DepthFade(ds),
-                            Pass::Forward if fading => Pipe::Forward(2 + ds),
-                            Pass::Depth => Pipe::Depth(m.variant()),
-                            Pass::Forward if weights => Pipe::Terrain,
-                            Pass::Reflection { .. } if weights => Pipe::ReflectTerrain,
-                            Pass::Forward | Pass::Mirrors => Pipe::Forward(m.variant()),
-                            Pass::Reflection { .. } => Pipe::Reflect(m.variant()),
-                        };
-                        let g1 = if weights {
-                            Some(Group1::Terrain)
-                        } else if shaded || category == 1 || fading {
-                            Some(Group1::Material(part.material.0))
-                        } else {
-                            None
-                        };
-                        let keep = |c: &Cluster| {
-                            if can_fade && c.fading {
-                                fading && (c.lod == part.lod || c.far == part.lod)
-                            } else {
-                                !fading && Self::cluster_lod(item, c, kind) == Some(part.lod)
-                            }
-                        };
-                        let draw = |g2, instances| Draw {
-                            pipe,
-                            g1,
-                            g2,
-                            mesh: Some(part.mesh.0),
-                            vertices: mesh.index_count,
-                            weights: weights.then_some(part.mesh.0),
-                            src: Src::Pool,
-                            instances,
-                            triangles: mesh.index_count as u64 / 3,
-                            view,
-                        };
-                        if fading {
-                            for (c, _) in item
-                                .clusters
-                                .iter()
-                                .zip(seen)
-                                .filter(|(c, s)| **s && keep(c))
-                            {
-                                let slot = c.fade_slot + part_index as u32;
-                                draws.push(draw(Some((true, slot)), item.pool_range(&c.range)));
-                            }
-                            continue;
-                        }
-                        let g2 = shaded.then_some((false, part.slot));
-                        let runs = Self::runs(item, order, seen, keep);
-                        if weights {
-                            // A terrain chunk is its own mesh: nothing to share a draw with.
-                            draws.extend(
-                                runs.into_iter().map(|(_, r)| draw(g2, item.pool_range(&r))),
-                            );
-                        } else {
-                            batches.add(category as u8, draw(g2, 0..0), item, runs);
-                        }
+                    let g1 = Some(Group1::Material(part.material.0));
+                    for (c, _) in item.clusters.iter().zip(&levels).filter(|(c, l)| {
+                        l.is_some() && c.fading && (c.lod == part.lod || c.far == part.lod)
+                    }) {
+                        let g2 = Some((true, c.fade_slot + part_index as u32));
+                        draws.push(draw(pipe, g1, g2, item.pool_range(&c.range)));
                     }
                 }
             }
-            // All impostors after the cutout meshes: one pipeline switch.
-            if category == 1 {
-                for (item, seen) in self.items.iter().zip(&visible) {
-                    if let Some(item) = item
-                        && !seen.is_empty()
-                    {
-                        self.plan_impostor(item, seen, kind, &mut draws, &mut batches);
-                    }
-                }
+            if !matches!(kind, Pass::Mirrors) {
+                self.plan_impostor(
+                    item,
+                    &levels,
+                    dissolving,
+                    &mut runs,
+                    kind,
+                    &mut draws,
+                    &mut batches,
+                );
             }
-            batches.emit(&mut draws, gather);
+            // Trees' shadow casters (`set_item_shadow_caster`): their clusters past the finest
+            // level, depth only, no material, the density dither of `fs_shadow_dither`.
+            if shadow
+                && let Some(id) = item.shadow_caster
+                && let Some(Some(mesh)) = self.meshes.get(id.0 as usize)
+            {
+                let draw = Draw {
+                    pipe: Pipe::Shadow(3),
+                    g1: None,
+                    g2: None,
+                    mesh: Some(id.0),
+                    vertices: mesh.index_count,
+                    weights: None,
+                    src: Src::Pool,
+                    instances: 0..0,
+                    triangles: mesh.index_count as u64 / 3,
+                    view: false,
+                };
+                let settled = runs.get(item, &levels, 1, SHADOW_CASTER_LEVEL, false);
+                batches.add(4, draw, item, settled);
+            }
         }
-        if shadow {
-            self.plan_shadow_casters(&visible, &mut batches);
-            batches.emit(&mut draws, gather);
-        }
+        batches.emit(&mut draws, gather);
         draws
     }
 
-    /// Runs of consecutive clusters (adjacent in the pool) that pass `keep` and are `visible`
-    /// (`visible_clusters`), each with the sort key of its nearest cluster (front to back seen
-    /// from the camera, or from the sun with `order` 1).
-    fn runs(
-        item: &Item,
-        order: usize,
-        visible: &[bool],
-        keep: impl Fn(&Cluster) -> bool,
-    ) -> Vec<(f32, std::ops::Range<u32>)> {
-        let mut out: Vec<(f32, std::ops::Range<u32>)> = Vec::new();
-        let mut open = false;
-        for (c, &seen) in item.clusters.iter().zip(visible) {
-            if !seen || !keep(c) {
-                open = false;
-                continue;
-            }
-            match out.last_mut() {
-                Some((k, r)) if open => {
-                    r.end = c.range.end;
-                    *k = k.min(c.key[order]);
-                }
-                _ => out.push((c.key[order], c.range.clone())),
-            }
-            open = true;
-        }
-        out
-    }
-
-    /// Trees' shadow casters (`set_item_shadow_caster`): their clusters past the finest level,
-    /// depth only, no material, the density dither of `fs_shadow_dither`.
-    fn plan_shadow_casters(&self, visible: &[Vec<bool>], batches: &mut Batches) {
-        for (item, seen) in self.items.iter().zip(visible) {
-            let Some(item) = item else { continue };
-            let Some((id, Some(mesh))) = item
-                .shadow_caster
-                .and_then(|m| Some((m, self.meshes.get(m.0 as usize)?.as_ref())))
-            else {
-                continue;
-            };
-            let runs = Self::runs(item, 1, seen, |c| {
-                Self::cluster_lod(
-                    item,
-                    c,
-                    Pass::Shadow {
-                        far: false,
-                        coarse: false,
-                    },
-                ) == Some(SHADOW_CASTER_LEVEL)
-            });
-            let draw = Draw {
-                pipe: Pipe::Shadow(3),
-                g1: None,
-                g2: None,
-                mesh: Some(id.0),
-                vertices: mesh.index_count,
-                weights: None,
-                src: Src::Pool,
-                instances: 0..0,
-                triangles: mesh.index_count as u64 / 3,
-                view: false,
-            };
-            batches.add(4, draw, item, runs);
-        }
-    }
-
-    /// An item's impostor quads: clusters at the impostor level, and in the
-    /// depth and forward passes also the fading ones.
+    /// An item's impostor quads: clusters at the impostor level, and in the depth and forward
+    /// passes also the dissolving ones whose far side it is.
+    #[allow(clippy::too_many_arguments)]
     fn plan_impostor(
         &self,
         item: &Item,
-        visible: &[bool],
+        levels: &[Option<u8>],
+        dissolving: bool,
+        runs: &mut RunCache,
         kind: Pass,
         draws: &mut Vec<Draw>,
         batches: &mut Batches,
@@ -4479,10 +4501,6 @@ impl Renderer {
         }
         let level = item.lods.len() as u8 - 1;
         let shadow = matches!(kind, Pass::Shadow { .. });
-        let fades = matches!(kind, Pass::Depth | Pass::Forward);
-        let runs = Self::runs(item, shadow as usize, visible, |c| {
-            Self::cluster_lod(item, c, kind) == Some(level) && !(fades && c.fading)
-        });
         let pipe = match kind {
             Pass::Depth => Pipe::Impostor(0),
             Pass::Forward | Pass::Mirrors => Pipe::Impostor(1),
@@ -4503,28 +4521,55 @@ impl Renderer {
             view: kind == Pass::Forward,
         };
         // Settled impostors share one draw slot's contents (fade 1): batched by atlas.
+        let settled = runs.get(item, levels, shadow as usize, level, dissolving);
         batches.add(
             1,
             draw((!shadow).then_some((false, slot)), 0..0),
             item,
-            runs,
+            settled,
         );
-        // Dissolving clusters draw their impostor with their own fade slot
-        // when it is the far side of their hand-over.
-        if fades {
+        // Dissolving clusters draw their impostor with their own fade slot when it is the far
+        // side of their hand-over.
+        if dissolving {
             for (c, _) in item
                 .clusters
                 .iter()
-                .zip(visible)
-                .filter(|(c, s)| **s && c.fading && c.far == level)
+                .zip(levels)
+                .filter(|(c, l)| l.is_some() && c.fading && c.far == level)
             {
                 let slot = c.fade_slot + item.parts.len() as u32;
-                draws.push(Draw {
-                    vertices: 6,
-                    ..draw(Some((true, slot)), item.pool_range(&c.range))
-                });
+                draws.push(draw(Some((true, slot)), item.pool_range(&c.range)));
             }
         }
+    }
+
+    /// Runs of consecutive clusters (adjacent in the pool) at `level` in this pass (`levels`,
+    /// per cluster), without the dissolving ones when `skip_fading`, each with the sort key of
+    /// its nearest cluster (front to back seen from the camera, or from the sun with `order` 1).
+    fn runs(
+        item: &Item,
+        order: usize,
+        levels: &[Option<u8>],
+        level: u8,
+        skip_fading: bool,
+    ) -> Vec<(f32, std::ops::Range<u32>)> {
+        let mut out: Vec<(f32, std::ops::Range<u32>)> = Vec::new();
+        let mut open = false;
+        for (c, l) in item.clusters.iter().zip(levels) {
+            if *l != Some(level) || (skip_fading && c.fading) {
+                open = false;
+                continue;
+            }
+            match out.last_mut() {
+                Some((k, r)) if open => {
+                    r.end = c.range.end;
+                    *k = k.min(c.key[order]);
+                }
+                _ => out.push((c.key[order], c.range.clone())),
+            }
+            open = true;
+        }
+        out
     }
 
     fn pipe(&self, pipe: Pipe) -> &wgpu::RenderPipeline {
