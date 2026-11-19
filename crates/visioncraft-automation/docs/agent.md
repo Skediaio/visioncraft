@@ -1519,10 +1519,15 @@ no edge floats. `rock.scatter` scatters them over an outline in clusters, sizes 
 with `follow_terrain` (the default) gathers them where the terrain shows rock or scree and on
 steep ground; the answer's `group` removes them together (`rock.remove {"group": "rs1"}`).
 `deadwood.add` places a `log` or `branch` lying along `yaw_deg` (pitched to the ground under its
-ends), a `stump` on its root flare or a `snag`, a dead standing tree with a broken top; sizes
-default by kind, the bark is `bark` and the cut ends `timber`. `deadwood.scatter` does the same
-over an outline or a woodland planting's ground (`planting`). `rock.set` and `deadwood.set`
-change any field, both lists are in `document.inspect` (`rocks`, `deadwood`).
+ends; bowed, tapering to the top, with a root collar, broken slanted ends and the stubs of its
+branches), a `stump` on its root flare or a `snag`, a dead standing tree with a broken top;
+sizes default by kind, the bark is `bark` and the broken ends weathered `timber`.
+`deadwood.scatter` does the same over an outline or a woodland planting's ground (`planting`).
+Both scatters keep clear of what stands there already: rocks and deadwood (their own pieces
+too; rocks of a cluster may lean into each other a little), the areas drawn on the ground
+(paths, terraces, paving, ponds), houses, blocks and walls, and the trunks of trees and palms;
+`rock.add` and `deadwood.add` place where they are told. `rock.set` and `deadwood.set` change
+any field, both lists are in `document.inspect` (`rocks`, `deadwood`).
 
 `terrain.set_cover` scatters small cover over the terrain from the same layers, within 25 m of
 the camera and dissolving towards that edge: stones on scree (fewer on rock and soil), cushions
@@ -1605,6 +1610,19 @@ in winter (and a meadow from midsummer), lean the way the mower went in `stripes
 bow over in the gusts (`gustiness`) as paler waves. No grass grows under the areas drawn on
 top of a lawn (a path, a terrace, a pond), and it thins under tree crowns. At LOW quality a lawn
 is drawn as before, with scattered tufts.
+
+A terrain grows the blades too, wherever its drawn layers are a lawn or a meadow: a base of
+`lawn` under `terrain.set_auto` has grass on the gentle ground and none where rock, scree, moss
+or soil take over, the blades thinning, shortening and fraying into tufts across the blend; paint
+a `meadow` layer (`terrain.add_layer`, `terrain.stroke` `paint`) for long grass, painted to
+about half its weight for grass in tussocks with the ground between. Nothing grows under the
+areas, terraces and models on the terrain, below the sea's level or on slopes past about 45
+degrees. On a terrain wider than 128 m the grass is grown in a 128 m square round the camera,
+made again as the camera moves on. The library's lawn and meadow ground have a height map of
+clumped grass (Grass 005), so scree and soil reach into the grass between its tussocks rather
+than meeting it along a line. A lawn material's `blade_color` ([r, g, b]) gives the blades their
+own colour where they are not the ground's: grey-green dune grass over sand, as on the `coast`
+example's dunes.
 
 ### 47. A thunderstorm at dusk: lightning over the garden, and a film shot of flashes
 
