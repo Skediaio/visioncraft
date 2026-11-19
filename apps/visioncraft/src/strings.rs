@@ -740,6 +740,10 @@ pub const FILM_DELETE: &str = "Delete film";
 pub const FILM_NONE: &str = "No film yet: start one, then add shots.";
 pub const FILM_NO_SHOTS: &str = "No shots yet.";
 pub const FILM_PLAY: &str = "Play";
+pub const FILM_PLAY_SHOT: &str = "Play shot";
+pub const FILM_PLAY_FROM_SHOT: &str = "Play from shot";
+pub const FILM_STRIP_TIP: &str =
+    "The shots on the timeline: click one to select it and jump to its start, drag to scrub.";
 pub const FILM_PAUSE: &str = "Pause";
 pub const FILM_HOLD_HERE: &str = "Add the current view as a shot";
 pub const FILM_ADD_SHOT: &str = "Add shot";
