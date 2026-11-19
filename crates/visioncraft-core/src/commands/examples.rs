@@ -272,6 +272,39 @@ mod tests {
         assert!(sea.coast.len() >= 2 && sea.validate().is_ok());
         assert!(!sea.covers(0.0, -2000.0) && sea.covers(0.0, 2000.0));
         assert!(!sea.covers(-2000.0, 1200.0) && sea.covers(-2000.0, 1500.0));
+        // Dune grass grown on the terrain: a layer of a tall lawn material over the sand, dense
+        // on the ridge behind the house and in patches over the back dunes, a little on the
+        // upper beach, none on the wet sand by the water nor on the house's plot.
+        assert_eq!(t.layers.len(), 2);
+        let dune = p
+            .materials
+            .iter()
+            .find(|m| m.id == t.layers[1].material)
+            .expect("the dune grass material");
+        assert_eq!(dune.name, "Dune grass");
+        assert!(matches!(
+            dune.kind,
+            crate::SurfaceKind::Lawn3d(l) if l.blade_height_m > 0.4 && l.blade_color.is_some()
+        ));
+        let grass = |x: f32, z: f32| f32::from(t.weights_at(x, z).unwrap()[1]) / 255.0;
+        // The share of 100 spots from (x0, z) to (x1, z) where the grass grows well.
+        let grown = |x0: f32, x1: f32, z: f32| {
+            (0..100)
+                .filter(|k| grass(x0 + (x1 - x0) * *k as f32 / 99.0, z) > 0.35)
+                .count()
+        };
+        let crest = grown(-300.0, -80.0, -77.0);
+        assert!(crest > 60, "{crest} of 100 on the crest");
+        let back = grown(-450.0, 450.0, -230.0);
+        assert!((10..80).contains(&back), "{back} of 100 on the back dunes");
+        let beach = grown(-100.0, 100.0, 15.0);
+        assert!(
+            (3..50).contains(&beach),
+            "{beach} of 100 on the upper beach"
+        );
+        for (x0, x1, z) in [(-100.0, 100.0, 22.0), (-30.0, 40.0, -20.0)] {
+            assert_eq!(grown(x0, x1, z), 0, "grass at z {z}");
+        }
         // The beach house itself, with its furniture and lights.
         assert_eq!(p.models.len(), 1);
         assert_eq!(p.models[0].source, "example:beach-house.3dcraft");

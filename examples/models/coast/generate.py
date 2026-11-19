@@ -73,6 +73,65 @@ for pts in ([[-520, 300], [520, 300]], [[525, 80], [525, 300]], [[-525, 270], [-
     c("terrain.stroke", tool="flatten", points=pts, radius_m=110, strength=1.0, falloff=0.9, target_height=LEVEL - 20)
 c("view.set", ground={"height": 6 + LEVEL, "color": [0.2, 0.18, 0.11]}, wind_direction_deg=0, wind_strength=0.5, haze=1.4, surroundings="dunes")
 
+# ---- Dune vegetation: marram-like grass grown on the terrain (GPU grass) ----------------------------
+# A terrain layer of tall, sparse, grey-green grass over sand: tussocks crowding the dune crests,
+# in patches over the back dunes, a few clumps on the upper beach and none on the wet sand. The
+# grass grows where the layer's weight is over about a third, thinning and fraying into tufts
+# towards that; painted to about a half, it stands in tussocks with sand between, as marram does.
+# Painted in dabs of varied size and strength, so no band shows the brush's line.
+# The material's id: the next after the house's own materials (material.add numbers them).
+with open(os.path.join(ROOT, "crates", "visioncraft-core", "src", "examples", "beach-house-furnished.json")) as f:
+    DUNE = "mat%d" % (sum(1 for cmd, _ in json.load(f) if cmd == "material.add") + 1)
+# Its ground is the sand photo greyed and greened a little: from the air the grassed dunes read
+# as a greyer, duller sand, as tussocks over sand do.
+c("material.add", name="Dune grass",
+  kind={"type": "lawn3d", "density_per_m2": 550, "blade_height_m": 0.75, "seed": 7, "blade_color": [0.2, 0.2, 0.15]},
+  base_color=[0.8, 1.0, 0.76, 1.0], roughness=1.0, variation=0.3,
+  maps={"base_color": "materials/ground052/basecolor.jpg", "orm": "materials/ground052/orm.jpg",
+        "height": "materials/ground052/height.jpg"})
+c("terrain.add_layer", material=DUNE)
+
+
+def rand(k):
+    # A fixed sequence (the example must not change between runs), 0..1.
+    return (math.sin(k * 12.9898 + 78.233) * 43758.5453) % 1.0
+
+
+def dab(x, z, r, k, falloff=0.9):
+    c("terrain.stroke", tool="paint", layer=1, points=[[round(x, 1), round(z, 1)]], radius_m=round(r, 1),
+      strength=round(k, 2), falloff=falloff)
+
+
+def along(points, step, seed, jitter, r, k, gaps=0.0, falloff=0.9):
+    """Dabs every `step` metres along a polyline, moved across it by up to `jitter`, of radius
+    r[0]..r[1] and strength k[0]..k[1]; a share `gaps` of them left out."""
+    n = seed
+    for (x0, z0), (x1, z1) in zip(points, points[1:]):
+        length = math.hypot(x1 - x0, z1 - z0)
+        nx, nz = -(z1 - z0) / length, (x1 - x0) / length
+        for i in range(int(length // step)):
+            n += 1
+            if rand(n + 7000) < gaps:
+                continue
+            t = (i + rand(n + 1000)) * step / length
+            off = (rand(n + 2000) * 2 - 1) * jitter
+            dab(x0 + (x1 - x0) * t + nx * off, z0 + (z1 - z0) * t + nz * off,
+                r[0] + (r[1] - r[0]) * rand(n + 3000), k[0] + (k[1] - k[0]) * rand(n + 4000), falloff)
+
+
+# The crests of the dune ridges behind the house and of the dunes over them.
+for s, (pts, w) in enumerate([([[-320, -80], [-180, -77], [-60, -71]], 9), ([[80, -73], [200, -83], [330, -95]], 9),
+                              ([[-200, -150], [0, -155], [220, -160]], 14), ([[-150, -105], [-60, -120]], 8),
+                              ([[-20, -95], [40, -110]], 7), ([[90, -120], [170, -105]], 9), ([[-60, -185], [60, -195]], 10)]):
+    along(pts, 8, 100 * s, w, (9, 18), (0.3, 0.5), gaps=0.1, falloff=0.6)
+# The back dunes: tussocks in patches, some joining, sand between.
+for k in range(110):
+    dab(-470 + 940 * rand(k), -265 + 150 * rand(k + 100), 10 + 14 * rand(k + 200), 0.4 + 0.25 * rand(k + 300), 0.6)
+# A few clumps on the upper beach, a few metres seaward of the bank's top, with sand between;
+# the wet sand below stays bare (and nothing grows under the sea's level).
+along([[-340, 50], [-230, 15], [-110, 15], [0, 15], [110, 13], [230, -3], [360, -31], [500, -57]], 9, 5000, 2.5,
+      (2.5, 6), (0.4, 0.75), gaps=0.4)
+
 # ---- Hard landscape --------------------------------------------------------------------------
 # House: x -0.6..24.6, z -10.5..0, deck to z 6.6; carport x -6.6..-0.6, z -10.5..-4.5; the
 # front door at x 13.3 on the north face, its landing to z -12.3.
