@@ -6309,18 +6309,35 @@ const SCRATCH_FLOOR_LINE: &str = "const SCRATCH_FLOOR_VEC4S: u32 = 17u;";
 
 /// Whether `info`'s driver may give fragment shaders of 1 KB and 2 KB of scratch one buffer with
 /// two strides (common.wgsl `scratch_floor`): Mesa's Intel Vulkan driver, which does before Gfx
-/// 12.5, and a browser's WebGPU, which does not say what it runs on (Chrome on Linux runs on that
+/// 12.5, and a browser's WebGPU unless its description names another vendor (Chrome on Linux runs on that
 /// driver). The floor costs Iris Xe 1 to 4 % of a LOW or MEDIUM frame (its spills spread over
 /// more scratch), so other drivers go without it.
 fn needs_scratch_floor(info: &wgpu::AdapterInfo) -> bool {
     let mesa = |s: &str| s.to_ascii_lowercase().contains("mesa");
     match info.backend {
-        wgpu::Backend::BrowserWebGpu => true,
+        wgpu::Backend::BrowserWebGpu => browser_gpu_may_be_intel(info),
         wgpu::Backend::Vulkan => {
             info.vendor == 0x8086 && (mesa(&info.driver) || mesa(&info.driver_info))
         }
         _ => false,
     }
+}
+
+/// Whether a browser's WebGPU adapter may be an Intel one: wgpu only fills the adapter's
+/// description there (no vendor id, no driver), so a description naming another vendor rules it
+/// out, and an Intel, empty or unknown one keeps the floor.
+fn browser_gpu_may_be_intel(info: &wgpu::AdapterInfo) -> bool {
+    if info.vendor != 0 && info.vendor != 0x8086 {
+        return false;
+    }
+    let text = format!("{} {} {}", info.name, info.driver, info.driver_info).to_ascii_lowercase();
+    if text.contains("intel") {
+        return true;
+    }
+    const OTHERS: [&str; 8] = [
+        "nvidia", "amd", "radeon", "apple", "qualcomm", "adreno", "mali", "arm",
+    ];
+    !OTHERS.iter().any(|vendor| text.contains(vendor))
 }
 
 /// `source` for `device`: without `scratch_floor`'s scratch (an array of one, kept in registers)
@@ -7702,6 +7719,16 @@ mod tests {
             "",
             ""
         )));
+        let named = |name: &str| {
+            let mut browser = info(wgpu::Backend::BrowserWebGpu, 0, "", "");
+            browser.name = name.into();
+            needs_scratch_floor(&browser)
+        };
+        assert!(named("Intel(R) Iris(R) Xe Graphics"));
+        assert!(named("some future gpu"));
+        assert!(!named("NVIDIA GeForce RTX 4090"));
+        assert!(!named("AMD Radeon RX 7900"));
+        assert!(!named("Apple M3"));
         assert!(!needs_scratch_floor(&info(
             vk,
             0x8086,
