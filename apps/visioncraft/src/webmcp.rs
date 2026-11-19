@@ -111,6 +111,14 @@ const DEFS: &[Def] = &[
             wrap: None,
         },
     ),
+    d(
+        "visioncraft_edit_selection",
+        Inspect,
+        Route::Method {
+            name: "ui.edit_selection",
+            wrap: None,
+        },
+    ),
     // Design
     cmd("visioncraft_shape_add_area", Design, "shape.add_area"),
     cmd(
@@ -261,10 +269,10 @@ fn resolve(defs: &[Def], docs: &[CommandDoc]) -> Result<Vec<Tool>, String> {
                         true,
                     ),
                     ("ui.select", _) => (
-                        "Selects one thing in the window as a click would, so the person sees what you mean: a shape (opens Draw with its handles, optionally a vertex or edge), a planting, one plant of a planting (placement) or a lamp (Objects mode), a model or a plan image. `items` null or [] clears. An unknown id is an error; the window selects one thing at a time. It is not part of the project and not an undo step.".to_string(),
+                        "Selects things in the window as a click would, so the person sees what you mean: a shape (opens Draw with its handles, optionally a vertex or edge), a planting, one plant of a planting (placement) or a lamp (Objects mode), a model or a plan image. Give several items to select several things (the first one decides the mode). `items` null or [] clears. An unknown id is an error. It is not part of the project and not an undo step.".to_string(),
                         object(
                             json!({
-                                "items": {"type": ["array", "null"], "maxItems": 1, "description": "What to select, or null to clear.", "items": {
+                                "items": {"type": ["array", "null"], "description": "What to select (one or several), or null to clear.", "items": {
                                     "type": "object",
                                     "properties": {
                                         "kind": {"type": "string", "enum": ["shape", "placement", "planting", "model", "lamp", "underlay"]},
@@ -280,6 +288,18 @@ fn resolve(defs: &[Def], docs: &[CommandDoc]) -> Result<Vec<Tool>, String> {
                                 }},
                             }),
                             &[],
+                        ),
+                        false,
+                    ),
+                    ("ui.edit_selection", _) => (
+                        "Edits everything that is selected (visioncraft_get_selection) at once, as one undo step: `delete` removes it all, `move` shifts it by `offset` metres (+X east, -Z north; shapes, plantings and plan images move on the ground only; a brush or a surface fill cannot move), `material` assigns a material id to every shape and model. What an action does not apply to is left alone and listed under `skipped`; an error undoes the whole edit. Select first with visioncraft_select.".to_string(),
+                        object(
+                            json!({
+                                "action": {"type": "string", "enum": ["delete", "move", "material"], "description": "What to do with the selection."},
+                                "offset": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 3, "description": "For move: [x, z] or [x, y, z] in metres."},
+                                "material": {"type": "string", "description": "For material: the material id (see visioncraft_list)."},
+                            }),
+                            &["action"],
                         ),
                         false,
                     ),
@@ -529,7 +549,7 @@ mod tests {
         let tools = tools(&all_docs()).expect("no dead names");
         assert_eq!(tools.len(), DEFS.len());
         assert!(
-            (25..=40).contains(&tools.len()),
+            (25..=45).contains(&tools.len()),
             "{} tools is not a sensible default set",
             tools.len()
         );

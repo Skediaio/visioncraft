@@ -335,7 +335,12 @@ const UI_METHODS: &[Method] = &[
     Method {
         name: "ui.select",
         params: r#"{"items": [{"kind": "shape"|"placement"|"planting"|"model"|"lamp"|"underlay", "id": string, "sub": {"edge": integer, "vertex": integer, "index": integer}}]|null, "planting": string|null, "model": string|null, "point": [x, y, z]|null}"#,
-        summary: "Selects one thing in the window as a click would: opens its mode (shape and underlay: Draw with the handles; planting, placement and lamp: Objects; model: the plain view). A plant of a planting is `placement` (id: the planting, sub.index: its number). `items: null` or [] clears; an unknown id is an error. The window selects one thing at a time. `planting` and `model` are the older form. `point` sets the picked point alone. The selection is not part of the project and not an undo step.",
+        summary: "Selects things in the window as a click would: opens the mode of the first (shape and underlay: Draw with the handles; planting, placement and lamp: Objects; model: the plain view); the others are selected with it, as Shift+click does. A plant of a planting is `placement` (id: the planting, sub.index: its number). `items: null` or [] clears; an unknown id is an error. `planting` and `model` are the older form (one thing). `point` sets the picked point alone. The selection is not part of the project and not an undo step.",
+    },
+    Method {
+        name: "ui.edit_selection",
+        params: r#"{"action": "delete"|"move"|"material", "offset": [x, z]|[x, y, z], "material": string}"#,
+        summary: "Edits everything selected (`ui.get` -> `selection.items`) at once, as one undo step: `delete` removes it all; `move` shifts it by `offset` metres (+X east, -Z north; a shape, a planting and a plan image only move on the ground, and a brush or a surface fill has no place to move; a plant of a planting moves as `planting.replace_placement` offset; a plant whose whole planting is selected goes with it); `material` assigns a material id to every shape and model. What an action does not apply to is left alone and listed under `skipped`; an error undoes the whole edit. Answers {changed, skipped: [{kind, id, reason}]}.",
     },
     Method {
         name: "ui.screenshot",
@@ -617,6 +622,13 @@ impl Host for Bound<'_, '_> {
                     h.selection.set_point(vec3(p).map(|p| p.to_array()));
                 }
                 Ok(Value::Null)
+            })(),
+            "ui.edit_selection" => (|| {
+                let edit = crate::selection_edit::Edit::parse(params)?;
+                let items = h.selection.items.clone();
+                let done = crate::selection_edit::apply(h.studio, &items, &edit);
+                h.selection.prune(h.studio.project());
+                done
             })(),
             #[cfg(target_arch = "wasm32")]
             "ui.screenshot" => Err(NO_READBACK.into()),
@@ -956,6 +968,47 @@ mod tests {
             let sel = h.call("ui.get", &json!({})).unwrap().unwrap()["selection"].clone();
             assert_eq!(sel["point"], json!([3.5, 0.0, -2.0]));
             assert_eq!(sel["items"][0]["id"], "g1", "the items stay");
+        });
+    }
+
+    #[test]
+    fn several_things_are_selected_and_edited_together() {
+        use super::Host;
+        with_host(garden(), |h| {
+            let lamp = h.host.studio.project().lights[0].id.clone();
+            let r = h.call(
+                "ui.select",
+                &json!({"items": [{"kind": "shape", "id": "S1"}, {"kind": "planting", "id": "g1"},
+                    {"kind": "lamp", "id": lamp}]}),
+            );
+            assert!(r.unwrap().is_ok());
+            let got = h.call("ui.get", &json!({})).unwrap().unwrap();
+            assert_eq!(got["selection"]["items"].as_array().unwrap().len(), 3);
+            let moved = h
+                .call(
+                    "ui.edit_selection",
+                    &json!({"action": "move", "offset": [1, 2]}),
+                )
+                .unwrap()
+                .unwrap();
+            assert_eq!(moved["changed"], 3);
+            let removed = h
+                .call("ui.edit_selection", &json!({"action": "delete"}))
+                .unwrap()
+                .unwrap();
+            assert_eq!(removed["changed"], 3);
+            let p = h.host.studio.project();
+            assert!(p.shapes.is_empty() && p.generators.is_empty() && p.lights.is_empty());
+            // Gone things leave the selection; one undo brings all three back.
+            let got = h.call("ui.get", &json!({})).unwrap().unwrap();
+            assert!(got["selection"]["items"].as_array().unwrap().is_empty());
+            assert!(h.host.studio.session.undo());
+            assert_eq!(h.host.studio.project().shapes.len(), 1);
+            let e = h
+                .call("ui.edit_selection", &json!({"action": "delete"}))
+                .unwrap()
+                .unwrap_err();
+            assert!(e.contains("nothing is selected"), "{e}");
         });
     }
 }

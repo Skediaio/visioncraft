@@ -49,7 +49,7 @@ the ones `visioncraft_list_commands` reports.
 
 | Group | Tools |
 | --- | --- |
-| Inspect | `visioncraft_project_summary` (document.inspect), `visioncraft_list` (shapes, plantings, layers, materials, viewpoints, lights, films, species, models, rocks or deadwood), `visioncraft_quantities`, `visioncraft_sun_hours`, `visioncraft_light_check`, `visioncraft_plants_for_light`, `visioncraft_window_state` (ui.get: mode, camera, the selection), `visioncraft_get_selection` (just `ui.get`'s `selection`), `visioncraft_select` (ui.select) |
+| Inspect | `visioncraft_project_summary` (document.inspect), `visioncraft_list` (shapes, plantings, layers, materials, viewpoints, lights, films, species, models, rocks or deadwood), `visioncraft_quantities`, `visioncraft_sun_hours`, `visioncraft_light_check`, `visioncraft_plants_for_light`, `visioncraft_window_state` (ui.get: mode, camera, the selection), `visioncraft_get_selection` (just `ui.get`'s `selection`), `visioncraft_select` (ui.select), `visioncraft_edit_selection` (ui.edit_selection) |
 | Design | `visioncraft_shape_add_area`, `_shape_add_extrusion`, `_shape_move_vertex`, `_shape_remove`, `_terrace_add`, `_stairs_add`, `_fence_add`, `_bed_add`, `_furniture_add`, `_furniture_add_set`, `_planting_add_border`, `_planting_place` (planting.add_single), `_material_update` (all with the `visioncraft` prefix) |
 | View | `visioncraft_view_set` (sun, season, weather: rain, mist, light shafts, gustiness, white balance, grade), `visioncraft_time_set`, `visioncraft_camera_set` (the window's camera: position, target, field of view), `visioncraft_viewpoint_add` |
 | Film | `visioncraft_film_add`, `_film_add_shot`, `_film_update_shot`, `_film_remove`, `_film_orbit`, `_film_flythrough`, `_film_reveal`, `_film_preview`, `_film_render` |
@@ -94,8 +94,10 @@ The person clicks something and says "make this a birch". `visioncraft_get_selec
 - `kind` is `shape` (area, terrace, stairs, fence, bed, furniture, block or wall: the summary
   gives the spec, size and materials; `sub.vertex` and `sub.edge` when a corner or an edge is
   picked), `placement` (one plant: `id` is its planting, `sub.index` its number in it), `planting`
-  (a whole planting), `model`, `lamp` (a light) or `underlay` (a plan image). The window
-  selects one thing at a time, so `items` has at most one entry.
+  (a whole planting), `model`, `lamp` (a light) or `underlay` (a plan image). Several things
+  can be selected at once (the person holds Shift while clicking to add one or take one out):
+  `items` has every one of them, in the order they were added; "these" means all of `items`,
+  "this" means the one when there is one.
 - `point` is the last ground or surface point the person clicked, in metres. A click on empty
   ground records it without changing `items`, so "put a tree here" has its place.
 - `revision` bumps whenever the items or the point change. There is no blocking wait (a request
@@ -104,8 +106,17 @@ The person clicks something and says "make this a birch". `visioncraft_get_selec
 
 `visioncraft_select {items: [{kind, id, sub?}]}` does the reverse: it selects as a click would
 (Draw with its handles for a shape, Objects for a planting, plant or lamp) so the person sees
-what the agent means. `items: null` or `[]` clears; an unknown id is an error. The old
-`{planting, model}` form still works, and `ui.get` still reports `selected: {planting, model}`.
+what the agent means. `items` may hold several things (the first one's mode opens, the others
+are selected with it); `items: null` or `[]` clears; an unknown id is an error. The old
+`{planting, model}` form still works (one thing), and `ui.get` still reports `selected:
+{planting, model}`.
+
+`visioncraft_edit_selection {action, offset?, material?}` edits everything selected at once, as
+one undo step: `delete` removes it all, `move` shifts it by `offset` (`[x, z]` or `[x, y, z]`
+metres; shapes, plantings and plan images move on the ground only, a brush or a surface fill has
+no place to move), `material` assigns a material id to every shape and model. What an action
+does not apply to is left alone and listed under `skipped` in the answer; an error undoes the
+whole edit. A person's Delete key with several things selected does the same as `delete`.
 
 > **Person:** (clicks a tree in the grove) Make this a birch.
 >

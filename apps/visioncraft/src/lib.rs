@@ -38,6 +38,7 @@ pub mod plants;
 pub mod scans;
 pub mod scene;
 pub mod selection;
+pub mod selection_edit;
 pub mod shell;
 pub mod sky_panel;
 pub mod sky_task;
@@ -1257,7 +1258,9 @@ impl App {
         self.agents.webmcp.sync(&self.studio.session, now);
         // What the person selected since the last frame is what agents read.
         let now_selected = self.current_selection();
-        self.selection.observe(now_selected);
+        let shift = ctx.input(|i| i.modifiers.shift);
+        self.selection.observe(now_selected, shift);
+        self.selection.prune(self.studio.project());
         let mut mode = self.hud.mode;
         let host = agents::WindowHost {
             studio: &mut self.studio,
@@ -1275,8 +1278,44 @@ impl App {
         }
         if let Some(keys) = self.selection.apply.take() {
             self.apply_selection(keys);
+            let shown = self.current_selection();
+            self.selection.applied(shown);
         }
         answered
+    }
+
+    /// With several things selected: how many, and what Delete does.
+    fn selection_note(&self, ctx: &egui::Context) {
+        let n = self.selection.items.len();
+        if n > 1 {
+            ui::floating(
+                ctx,
+                "selection-note",
+                Align2::CENTER_BOTTOM,
+                Vec2::new(0.0, -12.0),
+                320.0,
+                |ui| {
+                    ui.label(strings::selected_many(n));
+                },
+            );
+        }
+    }
+
+    /// An edit of everything selected (one undo step); a failure is a toast.
+    fn edit_selection(&mut self, edit: selection_edit::Edit) {
+        let items = self.selection.items.clone();
+        match selection_edit::apply(&mut self.studio, &items, &edit) {
+            Ok(done) => {
+                if let Some(n) = done["skipped"].as_array().filter(|s| !s.is_empty()) {
+                    self.toasts.warn(format!(
+                        "{} of the selection were left as they are",
+                        n.len()
+                    ));
+                }
+            }
+            Err(e) => self.toasts.error(e),
+        }
+        self.selection.prune(self.studio.project());
     }
 
     /// The selection the modes show now, as the selection model's keys.
@@ -1744,6 +1783,9 @@ impl eframe::App for App {
         let typing = ctx.egui_wants_keyboard_input();
         let key = |k: Key| !typing && ctx.input(|i| i.key_pressed(k));
         let (alt, shift_held) = ctx.input(|i| (i.modifiers.alt, i.modifiers.shift));
+        // With several things selected, Delete takes them all out in one undo step (the modes
+        // delete their own pick only).
+        let delete_all = key(Key::Delete) && self.selection.items.len() > 1;
         let input = Input {
             rect,
             hover: response.hovered().then(|| response.hover_pos()).flatten(),
@@ -1758,8 +1800,12 @@ impl eframe::App for App {
             enter: key(Key::Enter),
             escape: key(Key::Escape),
             backspace: key(Key::Backspace),
-            delete: key(Key::Delete),
+            delete: key(Key::Delete) && !delete_all,
         };
+
+        if delete_all {
+            self.edit_selection(selection_edit::Edit::Delete);
+        }
 
         // Shortcuts.
         let (cmd, shift) = ctx.input(|i| (i.modifiers.command, i.modifiers.shift));
@@ -2316,6 +2362,7 @@ impl eframe::App for App {
             busy = true;
         }
         self.run_requests(&ctx);
+        self.selection_note(&ctx);
         self.agents_pill(&ctx, now);
         busy |= self.poll_still_textures(now);
         busy |= self.poll_export(&ctx);

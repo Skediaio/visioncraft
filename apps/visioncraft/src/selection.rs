@@ -9,6 +9,11 @@
 //! the next `ui.get` shows them) and queues them in `apply`, which the window then puts into the
 //! modes' own states, with the handles and mode a click would give.
 //!
+//! A selection can hold several things. The modes still pick one (the click's), so the extra
+//! ones live here: a click with Shift held that picks something else adds it to the selection, or
+//! takes it out when it was in (see [`SelectionState::observe`]); `ui.select` takes a list; and
+//! [`crate::selection_edit`] edits all of them at once (delete, move, material).
+//!
 //! A [`Key`] is only identity (kind, id, sub-item). Names and one-line summaries are made when an
 //! agent asks ([`describe`]), from the project, so they are always current.
 
@@ -104,6 +109,11 @@ impl Key {
 
     /// The window's mode where a click would have made this selection (`None`: no mode, the plain
     /// 3D view where models are picked).
+    /// Whether both name the same thing (a corner or an edge picked on it does not matter).
+    pub fn same_thing(&self, other: &Key) -> bool {
+        self.kind == other.kind && self.id == other.id && self.index == other.index
+    }
+
     pub fn mode(&self) -> Option<crate::ui::Mode> {
         use crate::ui::Mode;
         match self.kind {
@@ -117,7 +127,11 @@ impl Key {
 /// The selection, its revision and the last point clicked.
 #[derive(Default)]
 pub struct SelectionState {
+    /// Everything selected: what the mode shows (its pick comes last when it was added) and what
+    /// was added to it.
     pub items: Vec<Key>,
+    /// What the modes showed at the last [`SelectionState::observe`].
+    shown: Vec<Key>,
     /// The last ground or surface point clicked, in world metres.
     pub point: Option<[f32; 3]>,
     /// Bumps whenever the items or the point change.
@@ -127,14 +141,59 @@ pub struct SelectionState {
 }
 
 impl SelectionState {
-    /// Takes what the modes show now; true when it differs from before (the revision bumped).
-    pub fn observe(&mut self, now: Vec<Key>) -> bool {
-        if now == self.items {
+    /// Takes what the modes show now; true when the selection changed (the revision bumped).
+    /// When the pick changed to another thing while `additive` (Shift held), that thing is added
+    /// to the selection, or taken out of it when it was in: the modes keep one pick, the rest is
+    /// kept here. Without Shift the pick is the whole selection. A corner or an edge picked on
+    /// the thing that was picked changes only that.
+    pub fn observe(&mut self, now: Vec<Key>, additive: bool) -> bool {
+        if now == self.shown {
             return false;
         }
-        self.items = now;
+        let before = std::mem::replace(&mut self.shown, now.clone());
+        let keep = self.items.clone();
+        match now.as_slice() {
+            [k] if additive && !keep.is_empty() => {
+                let same_pick = before.first().is_some_and(|b| b.same_thing(k));
+                match self.items.iter().position(|i| i.same_thing(k)) {
+                    Some(at) if same_pick => self.items[at] = k.clone(),
+                    Some(at) => {
+                        self.items.remove(at);
+                        // The modes still show it: have them show what is left.
+                        self.apply = Some(self.items.clone());
+                    }
+                    None => self.items.push(k.clone()),
+                }
+            }
+            _ => self.items = now,
+        }
+        if self.items == keep {
+            return false;
+        }
         self.revision += 1;
         true
+    }
+
+    /// Takes out what is no longer in the project; true when something went.
+    pub fn prune(&mut self, project: &Project) -> bool {
+        let before = self.items.len();
+        self.items.retain(|k| match k.kind {
+            Kind::Shape => project.shapes.iter().any(|s| s.id() == k.id),
+            Kind::Planting | Kind::Placement => project.generators.iter().any(|g| g.id() == k.id),
+            Kind::Model => project.models.iter().any(|m| m.id == k.id),
+            Kind::Lamp => project.lights.iter().any(|l| l.id == k.id),
+            Kind::Underlay => project.underlays.iter().any(|u| u.id == k.id),
+        });
+        let gone = self.items.len() != before;
+        if gone {
+            self.revision += 1;
+        }
+        gone
+    }
+
+    /// The window has put the selection into the modes: they now show `now`.
+    pub fn applied(&mut self, now: Vec<Key>) {
+        self.shown = now;
     }
 
     /// A click on the ground or a surface.
@@ -191,7 +250,7 @@ impl SelectionState {
 
 /// The keys of `ui.select`'s parameters, checked against the project; `None` for "clear". Takes
 /// `{items: [{kind, id, sub?: {edge?, vertex?, index?}}]}` (`null` or `[]` clears) and, as
-/// before, `{planting, model}`.
+/// before, `{planting, model}`; several items select several things.
 pub fn parse(project: &Project, params: &Value) -> Result<Vec<Key>, String> {
     let mut keys = Vec::new();
     match params.get("items") {
@@ -212,17 +271,18 @@ pub fn parse(project: &Project, params: &Value) -> Result<Vec<Key>, String> {
             keys.push(Key::new(kind, id));
         }
     }
-    if keys.len() > 1 {
-        return Err(
-            "the window selects one thing at a time: give one item (a plant of a planting is the \
-             `placement` kind)"
-                .into(),
-        );
-    }
     for k in &keys {
         check(project, k)?;
     }
-    Ok(keys)
+    // A thing given twice is selected once.
+    let mut seen: Vec<Key> = Vec::new();
+    for k in keys {
+        match seen.iter().position(|s| s.same_thing(&k)) {
+            Some(at) => seen[at] = k,
+            None => seen.push(k),
+        }
+    }
+    Ok(seen)
 }
 
 fn parse_item(v: &Value) -> Result<Key, String> {
@@ -692,7 +752,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_takes_one_item_in_either_form_and_clears_on_null() {
+    fn parse_takes_items_in_either_form_and_clears_on_null() {
         let s = garden();
         let p = s.project();
         let one = parse(
@@ -740,10 +800,6 @@ mod tests {
                 "cannot be selected",
             ),
             (json!([{"id": "x"}]), "`kind` is missing"),
-            (
-                json!([{"kind": "shape", "id": "S1"}, {"kind": "planting", "id": "g1"}]),
-                "one thing at a time",
-            ),
         ] {
             let e = parse(p, &json!({ "items": items })).unwrap_err();
             assert!(e.contains(want), "{items}: {e}");
@@ -845,10 +901,10 @@ mod tests {
     fn the_revision_bumps_on_a_change_only() {
         let mut st = SelectionState::default();
         assert_eq!(st.revision, 0);
-        assert!(!st.observe(Vec::new()));
-        assert!(st.observe(vec![Key::new(Kind::Model, "m1")]));
+        assert!(!st.observe(Vec::new(), false));
+        assert!(st.observe(vec![Key::new(Kind::Model, "m1")], false));
         assert_eq!(st.revision, 1);
-        assert!(!st.observe(vec![Key::new(Kind::Model, "m1")]));
+        assert!(!st.observe(vec![Key::new(Kind::Model, "m1")], false));
         assert_eq!(st.revision, 1);
         st.set(vec![Key::new(Kind::Model, "m1")]);
         assert_eq!(st.revision, 1, "the same selection is not a change");
@@ -863,6 +919,72 @@ mod tests {
         assert_eq!(j["point"], json!([1.0, 0.0, 2.0]));
         assert_eq!(j["revision"], 3);
         assert_eq!(j["items"], json!([]));
+    }
+
+    #[test]
+    fn several_things_can_be_selected_and_reported() {
+        let s = garden();
+        let p = s.project();
+        let keys = parse(
+            p,
+            &json!({"items": [
+                {"kind": "shape", "id": "S1"}, {"kind": "planting", "id": "g1"},
+                {"kind": "placement", "id": "g2", "sub": {"index": 1}},
+                {"kind": "shape", "id": "S1", "sub": {"vertex": 2}}]}),
+        )
+        .unwrap();
+        // S1 twice is one, with the later sub-item.
+        assert_eq!(keys.len(), 3);
+        assert_eq!(keys[0].vertex, Some(2));
+        let mut st = SelectionState::default();
+        st.set(keys);
+        let j = st.to_json(p, &[]);
+        let items = j["items"].as_array().unwrap();
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[2]["kind"], "placement");
+        assert_eq!(items[2]["sub"]["index"], 1);
+        // The old form still gives one.
+        assert_eq!(parse(p, &json!({"planting": "g1"})).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn shift_picks_add_and_remove_and_a_plain_pick_replaces() {
+        let a = Key::new(Kind::Shape, "S1");
+        let b = Key::new(Kind::Shape, "S2");
+        let c = Key::new(Kind::Planting, "g1");
+        let mut st = SelectionState::default();
+        assert!(st.observe(vec![a.clone()], false));
+        // Shift-click another: both.
+        assert!(st.observe(vec![b.clone()], true));
+        assert_eq!(st.items, vec![a.clone(), b.clone()]);
+        assert!(st.observe(vec![c.clone()], true));
+        assert_eq!(st.items, vec![a.clone(), b.clone(), c.clone()]);
+        // Shift-click one that is in: out, and the modes are told what is left.
+        assert!(st.observe(vec![a.clone()], true));
+        assert_eq!(st.items, vec![b.clone(), c.clone()]);
+        assert_eq!(st.apply.take(), Some(vec![b.clone(), c.clone()]));
+        // A corner picked on the picked shape (Shift for an edge) changes only that.
+        st.applied(vec![b.clone()]);
+        let mut edge = b.clone();
+        edge.edge = Some(1);
+        let rev = st.revision;
+        assert!(st.observe(vec![edge.clone()], true));
+        assert_eq!(st.items, vec![edge, c.clone()]);
+        assert!(st.revision > rev && st.apply.is_none());
+        // Without Shift the pick is everything; nothing picked clears.
+        assert!(st.observe(vec![a.clone()], false));
+        assert_eq!(st.items, vec![a]);
+        assert!(st.observe(Vec::new(), false));
+        assert!(st.items.is_empty());
+        // Gone things leave the selection.
+        let s = garden();
+        st.set(vec![
+            Key::new(Kind::Shape, "S1"),
+            Key::new(Kind::Shape, "S9"),
+        ]);
+        assert!(st.prune(s.project()));
+        assert_eq!(st.items, vec![Key::new(Kind::Shape, "S1")]);
+        assert!(!st.prune(s.project()));
     }
 
     #[test]

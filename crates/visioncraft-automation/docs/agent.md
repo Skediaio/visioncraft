@@ -33,8 +33,14 @@ same over MCP (`visioncraft-cli mcp`), JSON lines (`visioncraft-cli serve`) and 
   planting, model, lamp or underlay; a single tree of a planting is `placement` (`id` the
   planting, `sub.index` the plant's number). `point` is the last ground or surface point clicked,
   so "put a tree here" has a position. When the person says "this", "here" or "the selected
-  one", read the selection first. `ui.select {items: [{kind, id, sub?}]}` selects as a click
-  would (`null` or `[]` clears; the window selects one thing at a time).
+  one", read the selection first; "these" and "all of them" mean every entry of `items` (the
+  person adds one with Shift+click, or takes one out the same way), so act on all of them, not
+  the first. `ui.select {items: [{kind, id, sub?}, ...]}` selects as a click would, several at
+  once (`null` or `[]` clears; the first item's mode opens). `ui.edit_selection {action:
+  "delete" | "move" | "material", offset?: [x, z] | [x, y, z], material?}` edits everything
+  selected as one undo step (one `ui.edit_selection`, not a loop of commands, when the person
+  says "delete these" or "move them 2 m east"); what it does not apply to comes back under
+  `skipped`.
 - **Loading.** `ui.load` is the window's load timeline (docs/performance.md): when the first
   frame reached the screen, when plants, library files and the sky bakes were done, the stages
   by time, and per placed catalogue asset which level of detail it shows and why (`lods`). Read

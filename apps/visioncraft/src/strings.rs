@@ -567,6 +567,10 @@ pub const LAMPS_OVER_CAP: &str = "lamps stay dark: lights from lamps are capped 
 pub const ALLOW_AGENTS: &str = "Allow AI agents";
 pub const ALLOW_AGENTS_TIP: &str = "Lets visioncraft-cli mcp --bridge (an AI agent on this computer) change this project while you watch; Ctrl+Z undoes its steps. Untick to disconnect.";
 pub const AGENT_LAST: &str = "agent:";
+/// The note while several things are selected (Shift+click adds or removes one).
+pub fn selected_many(n: usize) -> String {
+    format!("{n} selected (Shift+click adds or removes; Delete removes them all)")
+}
 pub const WEBMCP: &str = "Experimental: browser AI agent (WebMCP)";
 pub const WEBMCP_TIP: &str = "Lets this browser's own AI agent (Chrome's WebMCP) use VisionCraft's tools on this page, films included. Destructive steps ask you first; Ctrl+Z undoes its steps. Untick to take the tools away. Also switched on by ?webmcp=1 in the address.";
 pub const WEBMCP_UNSUPPORTED: &str = "this browser offers no WebMCP";
