@@ -1537,6 +1537,57 @@ fn terrain_lod_hand_over_leaves_no_black_patches() {
     }
 }
 
+/// The MEDIUM and LOW shaders (`Quality::fast_shading`) take the full shaders' picture: the
+/// forest seen from above, then from inside after a jump of the camera (the plants near the eye
+/// mid-way through their hand-over from the impostor to their meshes), with each preset's own
+/// shaders and with the full ones. On Intel Iris Xe (Mesa's Vulkan driver) the fast shaders with
+/// the 3x3 shadow filter compiled out shaded blocks of pixels with garbage once the baked sky
+/// visibility had grown `light`: white, green and magenta blobs on the impostors (black and white
+/// checker blobs in the garden's hedge, coloured specks on roofs and windows), frame after frame.
+#[test]
+fn fast_shading_matches_full_shading() {
+    let aspect = W as f32 / H as f32;
+    for (name, preset) in [("low", Quality::LOW), ("medium", Quality::MEDIUM)] {
+        let frame = |fast_shading: bool| {
+            let mut r = renderer(W, H);
+            r.set_quality(Quality {
+                fast_shading,
+                ..preset
+            });
+            demo::forest(&mut r, 120, 200, 40.0);
+            setup(
+                &mut r,
+                demo::forest_above_camera(aspect),
+                demo::afternoon_sun(),
+                14.7,
+            );
+            settle(&mut r);
+            let (view, proj, eye) = demo::forest_inside_camera(aspect);
+            r.set_camera(view, proj, eye);
+            capture(&mut r, W, H)
+        };
+        let fast = frame(true);
+        let full = frame(false);
+        for (kind, px) in [("fast", &fast), ("full", &full)] {
+            write_png(
+                &out_dir().join(format!("{kind}_shading_{name}.png")),
+                px,
+                W,
+                H,
+            );
+        }
+        let differing = fast
+            .chunks(4)
+            .zip(full.chunks(4))
+            .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 24))
+            .count();
+        assert!(
+            differing <= 4,
+            "{name}: {differing} pixels of the fast shaders' frame differ from the full shaders'"
+        );
+    }
+}
+
 /// A pond carved into the terrain: water plane, planar reflection of the
 /// trees on the bank, and clay mode.
 #[test]

@@ -575,7 +575,14 @@ fn cascade_shadow(c: u32, world: vec3<f32>, n: vec3<f32>, nol: f32) -> f32 {
         return -1.0;
     }
     var sum = 0.0;
-    if !FAST_SHADING && g.options.x > 4.5 {
+    // Chosen at run time (`g.options.x` is 4 on MEDIUM and LOW), not compiled out of their fast
+    // shaders: without this branch Mesa's Intel Vulkan driver (Iris Xe, Mesa 26.2) miscompiled
+    // those forward shaders once `light` had grown the baked sky visibility, and shaded blocks
+    // of pixels with garbage (black and white blobs in hedges and shrubs, coloured specks on
+    // roofs and windows, the same from frame to frame). The same SPIR-V renders clean on
+    // llvmpipe, and with the branch kept, on Iris Xe (reference.rs
+    // `fast_shading_matches_full_shading`).
+    if g.options.x > 4.5 {
         for (var y = -1; y <= 1; y++) {
             for (var x = -1; x <= 1; x++) {
                 let o = vec2<f32>(f32(x), f32(y)) * g.shadow.z * 1.5;

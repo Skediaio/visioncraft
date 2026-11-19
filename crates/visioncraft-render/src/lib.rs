@@ -444,8 +444,10 @@ pub struct Quality {
     /// estimate), else the ray's step in pixels (2: half resolution).
     pub screen_reflections: u32,
     /// The shaders compiled for this preset's own settings (common.wgsl `FAST_SHADING`): what
-    /// the slower presets use (the 3x3 shadow filter) is left out, so integrated GPUs keep
-    /// their shading in registers. Changing it compiles the scene's pipelines again.
+    /// the slower presets use (the ground's 16-step parallax and its self-shadow) is left out,
+    /// so integrated GPUs keep their shading in registers; the 3x3 shadow filter stays in,
+    /// chosen at run time (scene.wgsl `cascade_shadow`: Mesa's Intel driver miscompiled the
+    /// shaders without it). Changing it compiles the scene's pipelines again.
     pub fast_shading: bool,
     /// Volumetric clouds (clouds.wgsl, when `Clouds::volumetric` asks for them): the cloud
     /// image's divisor of the render size (2 half, 3 a third, 4 quarter), 0 for the flat cloud layer.
