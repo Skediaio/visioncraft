@@ -3576,7 +3576,10 @@ impl Renderer {
         let view_proj = self.proj * self.view;
         // The sea, seen from above, takes the planar reflection over any pond.
         let water = (self.quality.water_reflection > 0)
-            .then(|| self.sea_plane().or_else(|| self.water_plane(view_proj)))
+            .then(|| {
+                self.sea_plane(view_proj)
+                    .or_else(|| self.water_plane(view_proj))
+            })
             .flatten();
         self.write_sea();
         let t = &self.targets;

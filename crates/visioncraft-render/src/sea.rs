@@ -39,6 +39,90 @@ pub struct Sea {
     pub coast: Vec<[f32; 2]>,
 }
 
+/// Whether any of `sea`'s surface may show in the view `view_proj`: rays through a grid over the
+/// view meet its level on the sea side of the coast (with a margin growing with the distance)
+/// and inside the outline, or a corner of the outline lies in the view. Hills and dunes between
+/// are not tested: what the view frames, it counts.
+pub(crate) fn sea_in_view(sea: &Sea, view_proj: glam::Mat4) -> bool {
+    use glam::Vec3;
+    let inverse = view_proj.inverse();
+    let level = sea.level;
+    let corner_seen = sea.outline.iter().any(|&[x, z]| {
+        let c = view_proj * glam::Vec4::new(x, level, z, 1.0);
+        c.w > 0.0 && c.x.abs() <= c.w && c.y.abs() <= c.w
+    });
+    if sea.outline.len() >= 3 && corner_seen {
+        return true;
+    }
+    const COLUMNS: usize = 32;
+    const ROWS: usize = 24;
+    for row in 0..=ROWS {
+        for column in 0..=COLUMNS {
+            let x = -1.0 + 2.0 * column as f32 / COLUMNS as f32;
+            let y = -1.0 + 2.0 * row as f32 / ROWS as f32;
+            let near = inverse.project_point3(Vec3::new(x, y, 0.0));
+            let far = inverse.project_point3(Vec3::new(x, y, 1.0));
+            // The ray from the near plane on (past the far plane too: the sea runs on to the
+            // horizon) meets the level ahead of it.
+            let (a, b) = (near.y - level, far.y - level);
+            if a <= 0.0 || b >= a {
+                continue;
+            }
+            let p = near + (far - near) * (a / (a - b));
+            let q = [p.x, p.z];
+            let margin = 5.0 + 0.1 * p.distance(near);
+            let in_outline = sea.outline.len() < 3 || covers(&sea.outline, q);
+            let sea_side = sea.coast.len() < 2 || coast_distance(&sea.coast, q) > -margin;
+            if in_outline && sea_side {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Even-odd rule over an outline (as sea.wgsl `sea_covers`).
+fn covers(outline: &[[f32; 2]], p: [f32; 2]) -> bool {
+    let mut inside = false;
+    let mut j = outline.len() - 1;
+    for i in 0..outline.len() {
+        let (a, b) = (outline[i], outline[j]);
+        if (a[1] > p[1]) != (b[1] > p[1])
+            && p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0]
+        {
+            inside = !inside;
+        }
+        j = i;
+    }
+    inside
+}
+
+/// Signed distance (m) from `p` to a coastline, positive on the sea side (its right), the first
+/// and last stretches running on without end (as sea.wgsl `coast_distance`).
+fn coast_distance(coast: &[[f32; 2]], p: [f32; 2]) -> f32 {
+    let n = coast.len();
+    let mut best = f32::INFINITY;
+    let mut side = 1.0;
+    for i in 0..n.saturating_sub(1) {
+        let a = coast[i];
+        let d = [coast[i + 1][0] - a[0], coast[i + 1][1] - a[1]];
+        let q = [p[0] - a[0], p[1] - a[1]];
+        let lo = if i == 0 { f32::NEG_INFINITY } else { 0.0 };
+        let hi = if i + 2 == n { f32::INFINITY } else { 1.0 };
+        let t = ((q[0] * d[0] + q[1] * d[1]) / (d[0] * d[0] + d[1] * d[1]).max(1e-9)).clamp(lo, hi);
+        let dist = (q[0] - t * d[0]).hypot(q[1] - t * d[1]);
+        if dist < best {
+            best = dist;
+            side = if d[0] * q[1] - d[1] * q[0] >= 0.0 {
+                1.0
+            } else {
+                -1.0
+            };
+        }
+    }
+    best * side
+}
+
 /// Waves on MEDIUM and above; LOW has the first (longest) half.
 pub const WAVES: usize = 16;
 const OUTLINE: usize = 64;
@@ -234,12 +318,14 @@ impl Renderer {
         self.sea.sea.as_ref()
     }
 
-    /// The height the planar reflection mirrors about while the sea is seen from above it.
-    pub(crate) fn sea_plane(&self) -> Option<f32> {
+    /// The height the planar reflection mirrors about while the sea is seen from above it and
+    /// some of it lies in the view `view_proj` (`sea_in_view`): looking inland, away from the
+    /// water, the pass drew the whole mirrored scene for nothing.
+    pub(crate) fn sea_plane(&self, view_proj: glam::Mat4) -> Option<f32> {
         self.sea
             .sea
             .as_ref()
-            .filter(|s| self.eye.y > s.level)
+            .filter(|s| self.eye.y > s.level && sea_in_view(s, view_proj))
             .map(|s| s.level)
     }
 
@@ -323,6 +409,32 @@ impl Renderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_sea_counts_in_view_only_where_the_view_frames_its_side_of_the_coast() {
+        use glam::{Mat4, Vec3};
+        // A coast along x = 0 running north (-z): the sea to its right, east (+x).
+        let mut s = sea(1.0, 20.0);
+        s.coast = vec![[0.0, 100.0], [0.0, -100.0]];
+        let proj = Mat4::perspective_rh(50f32.to_radians(), 16.0 / 9.0, 0.1, 3000.0);
+        let look = |eye: Vec3, target: Vec3| proj * Mat4::look_at_rh(eye, target, Vec3::Y);
+        let eye = Vec3::new(-50.0, 30.0, 0.0);
+        // Towards the sea, and inland away from it.
+        assert!(sea_in_view(&s, look(eye, Vec3::new(50.0, 0.0, 0.0))));
+        assert!(!sea_in_view(&s, look(eye, Vec3::new(-150.0, 0.0, 0.0))));
+        // Along the coast the sea's side shows at the edge of the view.
+        assert!(sea_in_view(&s, look(eye, Vec3::new(-50.0, 0.0, -100.0))));
+        // Straight up at the sky: the level is behind every ray.
+        assert!(!sea_in_view(&s, look(eye, Vec3::new(-50.0, 100.0, 1.0))));
+        // No coast and no outline: the sea is everywhere below the horizon.
+        s.coast.clear();
+        assert!(sea_in_view(&s, look(eye, Vec3::new(-150.0, 0.0, 0.0))));
+        // A small outline in a corner of the view.
+        s.outline = vec![[-160.0, -10.0], [-150.0, -10.0], [-150.0, -5.0]];
+        assert!(sea_in_view(&s, look(eye, Vec3::new(-150.0, 0.0, 0.0))));
+        s.outline = vec![[400.0, 400.0], [410.0, 400.0], [410.0, 410.0]];
+        assert!(!sea_in_view(&s, look(eye, Vec3::new(-150.0, 0.0, 0.0))));
+    }
 
     fn sea(h: f32, l: f32) -> Sea {
         Sea {
