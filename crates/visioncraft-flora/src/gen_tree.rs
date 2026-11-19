@@ -31,14 +31,24 @@ use crate::{BranchingParams, BudgetClass, Material, PlantMesh, PlantParams, Seas
 /// The species' crown envelope: radius (relative to the half width) at `t` = 0 at the crown
 /// base to 1 at the top, the Weber & Penn shape closed at both ends.
 fn envelope(b: &BranchingParams, t: f32) -> f32 {
+    envelope_with(b, envelope_peak(b), t)
+}
+
+/// The largest shape factor [`envelope`] divides by (a pure function of the species, so the
+/// point sampling, which asks for the envelope tens of thousands of times, takes it once).
+fn envelope_peak(b: &BranchingParams) -> f32 {
+    (0..=16)
+        .map(|k| b.crown_shape.factor(k as f32 / 16.0))
+        .fold(0.0f32, f32::max)
+        .max(1e-3)
+}
+
+/// [`envelope`] with its peak given ([`envelope_peak`]).
+fn envelope_with(b: &BranchingParams, peak: f32, t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
     let s = 2.0 * t - 1.0;
     let s3 = s * s * s;
     let close = (1.0 - s3 * s3).max(0.0).sqrt();
-    let peak = (0..=16)
-        .map(|k| b.crown_shape.factor(k as f32 / 16.0))
-        .fold(0.0f32, f32::max)
-        .max(1e-3);
     b.crown_shape.factor(t) / peak * close
 }
 
@@ -294,27 +304,36 @@ fn scaffold(
 /// Leader strength from which a crown is excurrent (the leader runs through it).
 const EXCURRENT: f32 = 0.75;
 
-/// A uniform grid of buckets for neighbour queries.
+/// A uniform grid of buckets for neighbour queries: ids with their points.
 struct Grid {
     lo: V3,
     cell: f32,
     n: [i32; 3],
-    cells: Vec<Vec<u32>>,
+    cells: Vec<Vec<(u32, V3)>>,
 }
 
 impl Grid {
     fn new(lo: V3, hi: V3, cell: f32) -> Grid {
+        let mut g = Grid::layout(lo, hi, cell);
+        g.cells = vec![Vec::new(); (g.n[0] * g.n[1] * g.n[2]) as usize];
+        g
+    }
+    /// The grid's cells without their buckets (`key` and `index` only): the light's voxels,
+    /// up to 256^3 of them, need no empty list each.
+    fn layout(lo: V3, hi: V3, cell: f32) -> Grid {
         let dim = |a: f32, b: f32| (((b - a) / cell).ceil() as i32 + 1).clamp(1, 256);
         let n = [dim(lo.x, hi.x), dim(lo.y, hi.y), dim(lo.z, hi.z)];
         Grid {
             lo,
             cell,
             n,
-            cells: vec![Vec::new(); (n[0] * n[1] * n[2]) as usize],
+            cells: Vec::new(),
         }
     }
     fn key(&self, p: V3) -> [i32; 3] {
-        let k = |v: f32, lo: f32, n: i32| (((v - lo) / self.cell).floor() as i32).clamp(0, n - 1);
+        // Truncation, not `floor`: they differ only below 0, which the clamp takes to 0 either
+        // way (and `floor` is a library call on x86_64's baseline).
+        let k = |v: f32, lo: f32, n: i32| (((v - lo) / self.cell) as i32).clamp(0, n - 1);
         [
             k(p.x, self.lo.x, self.n[0]),
             k(p.y, self.lo.y, self.n[1]),
@@ -326,16 +345,23 @@ impl Grid {
     }
     fn insert(&mut self, p: V3, id: u32) {
         let i = self.index(self.key(p));
-        self.cells[i].push(id);
+        self.cells[i].push((id, p));
     }
-    /// Every id in the 3x3x3 cells around `p`.
-    fn around(&self, p: V3, mut f: impl FnMut(u32)) {
+    /// Takes `id`, inserted at `p`, out again (the order within its cell changes).
+    fn remove(&mut self, p: V3, id: u32) {
+        let i = self.index(self.key(p));
+        if let Some(j) = self.cells[i].iter().position(|e| e.0 == id) {
+            self.cells[i].swap_remove(j);
+        }
+    }
+    /// Every id with its point in the 3x3x3 cells around `p`.
+    fn around(&self, p: V3, mut f: impl FnMut(u32, V3)) {
         let k = self.key(p);
         for y in (k[1] - 1).max(0)..=(k[1] + 1).min(self.n[1] - 1) {
             for z in (k[2] - 1).max(0)..=(k[2] + 1).min(self.n[2] - 1) {
                 for x in (k[0] - 1).max(0)..=(k[0] + 1).min(self.n[0] - 1) {
-                    for &id in &self.cells[self.index([x, y, z])] {
-                        f(id);
+                    for &(id, q) in &self.cells[self.index([x, y, z])] {
+                        f(id, q);
                     }
                 }
             }
@@ -447,9 +473,37 @@ pub(crate) fn skeleton(
     };
     let lobes = lobes(b, seed, p.age, h, half, y0);
     let masses = sub_lobes(&lobes, b, seed, p.age);
+    let peak = envelope_peak(b);
+    let wmax = 1.0 + 0.5 * f64::from(rough) * 1.61 + 1e-3;
+    // Which masses can hold a point where: the sampling box below, the masses at the most
+    // `wobble` (four sines of at most 1, times 0.4) makes them.
+    let mass_in = crate::near::NearIndex::containing(
+        &masses
+            .iter()
+            .map(|l| (l.c, v3(l.r, l.ry, l.r)))
+            .collect::<Vec<_>>(),
+        v3(-half * 1.15, y0, -half * 1.15),
+        v3(half * 1.15, h, half * 1.15),
+        wmax,
+    );
+    // Whether some mass, at the most a wobble can make it, might hold `q` (real arithmetic with
+    // room for rounding): a point no mass can hold is out before its wobble's sines.
+    let may_hold = |q: V3| -> bool {
+        let t = wmax * wmax * 1.0001 + 1e-12;
+        let held = |l: &Lobe| {
+            let d = |a: f32, b: f32| f64::from(a) - f64::from(b);
+            let (dx, dy, dz) = (d(q.x, l.c.x), d(q.y, l.c.y), d(q.z, l.c.z));
+            let (r, ry) = (f64::from(l.r), f64::from(l.ry));
+            (dx * dx + dz * dz) / (r * r) + dy * dy / (ry * ry) <= t || !(r > 0.0 && ry > 0.0)
+        };
+        match mass_in.at(q) {
+            Some(list) => list.iter().any(|&k| held(&masses[k as usize])),
+            None => true,
+        }
+    };
     let inside = |q: V3| -> bool {
         let t = (q.y - y0) / (h - y0).max(1e-3);
-        if !(0.0..=1.0).contains(&t) {
+        if !(0.0..=1.0).contains(&t) || !may_hold(q) {
             return false;
         }
         // The species' envelope bounds the crown; the lobes, each round its limb's own branch
@@ -457,8 +511,12 @@ pub(crate) fn skeleton(
         // Half as strong since the masses have their own sub-masses: at full strength it wiped
         // out whole sides of a crown (oak and plane from above were two or three blobs).
         let wobble = 1.0 + 0.5 * rough * noise(&bulge, q);
-        let r = half * envelope(b, t) * wobble * 1.15;
-        q.x * q.x + q.z * q.z <= r * r && masses.iter().any(|l| l.contains(q, wobble))
+        let r = half * envelope_with(b, peak, t) * wobble * 1.15;
+        q.x * q.x + q.z * q.z <= r * r
+            && match mass_in.at(q) {
+                Some(list) => list.iter().any(|&k| masses[k as usize].contains(q, wobble)),
+                None => masses.iter().any(|l| l.contains(q, wobble)),
+            }
     };
     let vol = lobes
         .iter()
@@ -479,9 +537,10 @@ pub(crate) fn skeleton(
             y0 + rng.f() * (h - y0),
             rng.sym() * half * 1.15,
         );
-        // Never empty: a gap wider than the radius of influence stops growth across it.
-        let keep = 0.6 + 0.4 * noise(&lumps, q).clamp(-1.0, 1.0);
-        if inside(q) && rng.f() < keep {
+        // Never empty: a gap wider than the radius of influence stops growth across it. (Only
+        // for points inside: most are not, and the noise draws nothing from `rng`.)
+        let keep = |q: V3| 0.6 + 0.4 * noise(&lumps, q).clamp(-1.0, 1.0);
+        if inside(q) && rng.f() < keep(q) {
             pts.push(q);
         }
     }
@@ -545,49 +604,66 @@ pub(crate) fn skeleton(
     let lvl = |order: u8| &b.levels[(order as usize).saturating_sub(1).min(2)];
     let mut infl: Vec<V3> = Vec::new();
     let mut cnt: Vec<u16> = Vec::new();
+    // The points still alive, in order (dead ones never come back), and the nodes some point
+    // pulls at this round (`cnt` above 0), so neither loop runs over all of them every round.
+    let mut live: Vec<u32> = (0..pts.len() as u32).collect();
+    let mut pulled: Vec<u32> = Vec::new();
+    // A node that can grow no more (all its buds used, or a bole node with a branch already)
+    // never can again: the points pulling at it add nothing to any growth.
+    let spent = |sc: &Sc, n: usize| {
+        sc.kids[n] >= max_kids(sc.order[n])
+            || (sc.order[n] == 0 && sc.kids[n] > 0 && sc.p[n].y < y0)
+    };
+    let mut killed: Vec<u32> = Vec::new();
     for _iter in 0..600 {
         for &n in &changed {
             let q = sc.p[n as usize];
-            pgrid.around(q, |pi| {
-                let pi = pi as usize;
-                if !alive[pi] {
-                    return;
-                }
-                let d = (pts[pi] - q).len();
+            // Each point of the grid is alive (the dead leave it after each node's turn): one
+            // node's updates of a point do not depend on the others', so their order does not
+            // matter.
+            pgrid.around(q, |pi, at| {
+                let d = (at - q).len();
                 if d < dk {
-                    alive[pi] = false;
-                } else if d < di && d < near_d[pi] {
-                    near_d[pi] = d;
-                    near[pi] = n;
+                    alive[pi as usize] = false;
+                    killed.push(pi);
+                } else if d < di && d < near_d[pi as usize] {
+                    near_d[pi as usize] = d;
+                    near[pi as usize] = n;
                 }
             });
+            for pi in killed.drain(..) {
+                pgrid.remove(pts[pi as usize], pi);
+            }
         }
-        infl.clear();
+        live.retain(|&pi| alive[pi as usize]);
         infl.resize(sc.p.len(), V3::default());
-        cnt.clear();
         cnt.resize(sc.p.len(), 0);
         let mut any = false;
-        for pi in 0..pts.len() {
-            if alive[pi] && near[pi] != NONE {
-                let n = near[pi] as usize;
-                infl[n] += (pts[pi] - sc.p[n]).norm();
-                cnt[n] += 1;
+        for &pi in &live {
+            let pi = pi as usize;
+            if near[pi] != NONE {
                 any = true;
+                let n = near[pi] as usize;
+                if spent(&sc, n) {
+                    continue;
+                }
+                infl[n] += (pts[pi] - sc.p[n]).norm();
+                if cnt[n] == 0 {
+                    pulled.push(n as u32);
+                }
+                cnt[n] += 1;
             }
         }
         if !any {
             break;
         }
         changed.clear();
-        let count = sc.p.len();
-        for n in 0..count {
-            if cnt[n] == 0 || sc.kids[n] >= max_kids(sc.order[n]) {
-                continue;
-            }
-            // The bole stays clear: no side branch below the crown base.
-            if sc.order[n] == 0 && sc.kids[n] > 0 && sc.p[n].y < y0 {
-                continue;
-            }
+        // In node order, as a loop over all nodes takes them.
+        pulled.sort_unstable();
+        for &n in &pulled {
+            let n = n as usize;
+            // Nodes that cannot grow and the clear bole (no side branch below the crown base)
+            // are not in `pulled`.
             let pull = infl[n];
             if pull.len() < 1e-3 {
                 continue;
@@ -619,8 +695,8 @@ pub(crate) fn skeleton(
             g = g.rotate(g.perp(), wob * rng.sym()).norm();
             // Sympodial growth: a tortuous species' shoot often loses its end bud and a side bud
             // takes over, so its axes kink from side to side (the oak's zigzag).
-            if tip && n % 4 == 0 {
-                let side = if n % 8 == 0 { 1.0 } else { -1.0 };
+            if tip && n.is_multiple_of(4) {
+                let side = if n.is_multiple_of(8) { 1.0 } else { -1.0 };
                 g = g
                     .rotate(g.perp(), side * deg(l.curve_var_deg * rough * 2.5))
                     .norm();
@@ -629,6 +705,10 @@ pub(crate) fn skeleton(
             let id = sc.push(q, g, n as u32, order);
             changed.push(id);
         }
+        for &n in &pulled {
+            (infl[n as usize], cnt[n as usize]) = (V3::default(), 0);
+        }
+        pulled.clear();
         // Points two nodes pull at from opposite sides can keep a pair growing past each other
         // (a known case of the algorithm); a crown never needs this many nodes.
         if changed.is_empty() || sc.p.len() > 30_000 {
@@ -818,7 +898,7 @@ fn finish(
         hi = v3(hi.x.max(s.p.x), hi.y.max(s.p.y), hi.z.max(s.p.z));
     }
     if !shoots.is_empty() {
-        let g = Grid::new(lo, hi, vox);
+        let g = Grid::layout(lo, hi, vox);
         let [nx, ny, nz] = g.n;
         let mut shade = vec![0.0f32; (nx * ny * nz) as usize];
         // A voxel's shadow saturates with the shoots in it; spread over the pyramid's layer so a
@@ -830,6 +910,23 @@ fn finish(
         for (_, _, s) in &shoots {
             let i = g.index(g.key(s.p));
             count[i] = count[i].saturating_add(1);
+        }
+        // The shade is only read where there are shoots, so only those voxels of a pyramid's
+        // layer get its share: the same additions in the same order as when every voxel of the
+        // pyramid got them. `next[i]`: the first voxel of `i`'s row (x) from `i` on with shoots
+        // in it (`nx`: none).
+        let mut next = vec![nx; count.len()];
+        for y in 0..ny {
+            for z in 0..nz {
+                let mut first = nx;
+                for x in (0..nx).rev() {
+                    let i = g.index([x, y, z]);
+                    if count[i] > 0 {
+                        first = x;
+                    }
+                    next[i] = first;
+                }
+            }
         }
         for y in 0..ny {
             for z in 0..nz {
@@ -846,9 +943,13 @@ fn finish(
                             break;
                         }
                         let per = a / ((2 * q + 1) * (2 * q + 1)) as f32;
+                        let x1 = (x + q).min(nx - 1);
                         for zz in (z - q).max(0)..=(z + q).min(nz - 1) {
-                            for xx in (x - q).max(0)..=(x + q).min(nx - 1) {
-                                shade[g.index([xx, yy, zz])] += per;
+                            let mut xx = next[g.index([(x - q).max(0), yy, zz])];
+                            while xx <= x1 {
+                                let i = g.index([xx, yy, zz]);
+                                shade[i] += per;
+                                xx = if xx + 1 < nx { next[i + 1] } else { nx };
                             }
                         }
                     }
@@ -868,11 +969,12 @@ fn finish(
         let (c, inv) = ((lo + hi) * 0.5, 1.0 / ((hi - lo).len() * 0.5).max(0.1));
         for (_, _, s) in &mut shoots {
             let u = (s.p - c) * inv;
-            let bay: f32 = bays.iter().map(|(k, ph)| sin(u.dot(*k) + ph)).sum::<f32>() / 3.0;
+            let bay = || bays.iter().map(|(k, ph)| sin(u.dot(*k) + ph)).sum::<f32>() / 3.0;
             // Only near the outline and below the crown's top: bays in the top made holes in it
-            // from above (the oak a few blobs round a black hole).
+            // from above (the oak a few blobs round a black hole). (The bay's sines last: most
+            // shoots are not there.)
             let outer = (u.x * u.x + u.z * u.z).sqrt();
-            if bay < rough - 0.95 && u.y < 0.2 && outer > 0.3 {
+            if u.y < 0.2 && outer > 0.3 && bay() < rough - 0.95 {
                 s.light = 0.0;
                 continue;
             }
@@ -1004,7 +1106,8 @@ fn finish(
     // by position in the growth order.
     let mut shoots: Vec<Shoot> = shoots.into_iter().map(|(_, _, s)| s).collect();
     let mut order: Vec<usize> = (0..shoots.len()).collect();
-    order.sort_by(|&a, &c| shoots[c].light.total_cmp(&shoots[a].light).then(a.cmp(&c)));
+    // (No two compare equal, so the unstable sort's order is the stable one's.)
+    order.sort_unstable_by(|&a, &c| shoots[c].light.total_cmp(&shoots[a].light).then(a.cmp(&c)));
     shoots = order.into_iter().map(|i| shoots[i]).collect();
     // The card levels hang their sprays on the lit shoots (shed ones carry none).
     let lit = shoots
@@ -1031,14 +1134,39 @@ fn finish(
         );
         lobes.len()
     ];
+    let (mut slo, mut shi) = (
+        v3(f32::MAX, f32::MAX, f32::MAX),
+        v3(f32::MIN, f32::MIN, f32::MIN),
+    );
     for s in shoots.iter().filter(|s| s.light > LIT) {
-        let near = (0..lobes.len()).min_by(|&a, &c| {
-            let d = |l: &Lobe| {
-                let q = s.p - l.c;
-                (q.x * q.x + q.z * q.z) / (l.r * l.r) + q.y * q.y / (l.ry * l.ry)
-            };
-            d(&lobes[a]).total_cmp(&d(&lobes[c]))
-        });
+        slo = v3(slo.x.min(s.p.x), slo.y.min(s.p.y), slo.z.min(s.p.z));
+        shi = v3(shi.x.max(s.p.x), shi.y.max(s.p.y), shi.z.max(s.p.z));
+    }
+    let lobe_near = crate::near::NearIndex::nearest(
+        &lobes
+            .iter()
+            .map(|l| (l.c, v3(l.r, l.ry, l.r)))
+            .collect::<Vec<_>>(),
+        slo,
+        shi,
+    );
+    for s in shoots.iter().filter(|s| s.light > LIT) {
+        // The first lobe of the least distance (as `min_by` takes it), each distance once and
+        // only of the lobes that can be nearest there.
+        let mut near = None;
+        let mut best = f32::MAX;
+        let mut test = |k: usize| {
+            let l = &lobes[k];
+            let q = s.p - l.c;
+            let d = (q.x * q.x + q.z * q.z) / (l.r * l.r) + q.y * q.y / (l.ry * l.ry);
+            if near.is_none() || d.total_cmp(&best).is_lt() {
+                (near, best) = (Some(k), d);
+            }
+        };
+        match lobe_near.at(s.p) {
+            Some(list) => list.iter().for_each(|&k| test(k as usize)),
+            None => (0..lobes.len()).for_each(test),
+        }
         if let Some(k) = near {
             let (lo, hi, n) = &mut acc[k];
             *lo = v3(lo.x.min(s.p.x), lo.y.min(s.p.y), lo.z.min(s.p.z));
@@ -1057,6 +1185,31 @@ fn finish(
             )
         })
         .collect();
+    // Card normals ask for the nearest mass of every card, near the crown.
+    let (mut mlo, mut mhi) = (
+        v3(f32::MAX, f32::MAX, f32::MAX),
+        v3(f32::MIN, f32::MIN, f32::MIN),
+    );
+    for &(c, r) in &sk.masses {
+        mlo = v3(
+            mlo.x.min(c.x - r.x),
+            mlo.y.min(c.y - r.y),
+            mlo.z.min(c.z - r.z),
+        );
+        mhi = v3(
+            mhi.x.max(c.x + r.x),
+            mhi.y.max(c.y + r.y),
+            mhi.z.max(c.z + r.z),
+        );
+    }
+    if !sk.masses.is_empty() {
+        let m = (mhi - mlo) * 0.1;
+        sk.mass_near = Some(crate::near::NearIndex::nearest(
+            &sk.masses,
+            mlo - m,
+            mhi + m,
+        ));
+    }
     sk.shoots = shoots;
     sk
 }
@@ -1221,7 +1374,7 @@ pub(crate) fn leaf_level(
         };
         out.card(
             &card,
-            &crate::gen_branching::mass_outward(&sk.masses, s.p, centre, radii),
+            &crate::gen_branching::mass_outward(sk, s.p, centre, radii),
         );
         cards += 1;
     }

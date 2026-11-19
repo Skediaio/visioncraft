@@ -130,6 +130,16 @@ pub struct Builder {
     uv: Vec<[f32; 2]>,
     wind: Vec<[f32; 2]>,
     idx: [Vec<u32>; 4],
+    /// A tube's working lists, kept between tubes (a tree has tens of thousands of them).
+    scratch: TubeScratch,
+}
+
+#[derive(Default)]
+struct TubeScratch {
+    along: Vec<f32>,
+    frames: Vec<(V3, V3, V3)>,
+    /// Per side: the angle's cosine and sine, and the buttress lobe and its derivative.
+    round: Vec<[f32; 4]>,
 }
 
 fn mat_index(m: Material) -> usize {
@@ -254,7 +264,10 @@ impl Builder {
         // keeps its aspect where the branch tapers or flares (V was one base girth per repeat:
         // a flared trunk's bark stretched up its whole length). V runs on past 1: the bark
         // texture repeats.
-        let mut along = vec![0.0f32; nodes.len()];
+        let mut scratch = std::mem::take(&mut self.scratch);
+        let along = &mut scratch.along;
+        along.clear();
+        along.resize(nodes.len(), 0.0);
         for i in 1..nodes.len() {
             let r = ((nodes[i - 1].r + nodes[i].r) * 0.5).max(1e-3);
             along[i] = along[i - 1] + (nodes[i].p - nodes[i - 1].p).len() / (TAU * r);
@@ -266,13 +279,23 @@ impl Builder {
         };
         // Parallel-transported frame.
         let mut side = dir(0).perp();
-        let mut frames = Vec::with_capacity(nodes.len());
+        let frames = &mut scratch.frames;
+        frames.clear();
         for i in 0..nodes.len() {
             let d = dir(i);
             side = (side - d * side.dot(d)).norm();
             frames.push((d, side, d.cross(side)));
         }
         let last = nodes.len() - 1;
+        // Every ring goes round at the same angles: their sines once per tube.
+        let round = &mut scratch.round;
+        round.clear();
+        round.extend((0..=sides).map(|k| {
+            let a = TAU * k as f32 / sides as f32;
+            let (lobe, dlobe) = buttress.map_or((0.0, 0.0), |bt| bt.lobe(a));
+            [cos(a), sin(a), lobe, dlobe]
+        }));
+        let (along, frames, round) = (&scratch.along, &scratch.frames, &scratch.round);
         // One ring per node, shared by the segments either side: normals and UVs run on
         // unbroken. A ring's normals lean with the taper (towards the thin end), so a flare
         // or a swelling shades as one.
@@ -284,17 +307,16 @@ impl Builder {
             let first = b.pos.len() as u32;
             let r = nodes[i].r;
             for k in 0..=sides {
-                let a = TAU * k as f32 / sides as f32;
-                let n = s * cos(a) + c * sin(a);
+                let [ca, sa, lobe, dlobe] = round[k as usize];
+                let n = s * ca + c * sa;
                 let uv = solid.unwrap_or([k as f32 / sides as f32, 1.0 - along[i]]);
                 let (mut rk, mut nk) = (r, n + d * slope);
                 if let Some(bt) = buttress {
-                    let (lobe, dlobe) = bt.lobe(a);
                     let (g, dg) = bt.rise(nodes[i].p.y);
                     rk = r * (1.0 + lobe * g);
                     // The lobe's sides face round it; its top slopes into the stem.
-                    let round = c * cos(a) - s * sin(a);
-                    nk = nk - round * (dlobe * g) - d * (lobe * dg * r);
+                    let around = c * ca - s * sa;
+                    nk = nk - around * (dlobe * g) - d * (lobe * dg * r);
                 }
                 b.push(nodes[i].p + n * rk, nk.norm(), uv, [nodes[i].w, phase]);
             }
@@ -322,6 +344,7 @@ impl Builder {
                 }
             }
         }
+        self.scratch = scratch;
     }
 
     /// Emit a card. Normals are bent: `normalize(mix * outward(p) + (1 - mix) * card_normal)`,

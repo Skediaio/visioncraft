@@ -26,6 +26,7 @@
 
 pub mod math;
 mod mesh;
+mod near;
 mod params;
 pub mod scan;
 mod shadow;
@@ -136,11 +137,25 @@ impl PlantMesh {
     /// ones dropped), in [`Material::ALL`] order, skipping empty materials.
     pub fn split_parts(&self) -> Vec<(Material, MeshPart)> {
         let mut out = Vec::new();
+        // One map from the mesh's vertices to the part's, cleared after each part.
+        let mut remap = vec![u32::MAX; self.positions.len()];
         for m in Material::ALL {
-            let mut part = MeshPart::default();
-            let mut remap = vec![u32::MAX; self.positions.len()];
-            for p in self.parts.iter().filter(|p| p.material == m) {
-                for &i in &self.indices[p.index_range.start as usize..p.index_range.end as usize] {
+            let ranges = || {
+                self.parts
+                    .iter()
+                    .filter(move |p| p.material == m)
+                    .map(|p| p.index_range.start as usize..p.index_range.end as usize)
+            };
+            let n: usize = ranges().map(|r| r.len()).sum();
+            if n == 0 {
+                continue;
+            }
+            let mut part = MeshPart {
+                indices: Vec::with_capacity(n),
+                ..Default::default()
+            };
+            for r in ranges() {
+                for &i in &self.indices[r] {
                     let i = i as usize;
                     if remap[i] == u32::MAX {
                         remap[i] = part.positions.len() as u32;
@@ -152,9 +167,12 @@ impl PlantMesh {
                     part.indices.push(remap[i]);
                 }
             }
-            if !part.indices.is_empty() {
-                out.push((m, part));
+            for r in ranges() {
+                for &i in &self.indices[r] {
+                    remap[i as usize] = u32::MAX;
+                }
             }
+            out.push((m, part));
         }
         out
     }

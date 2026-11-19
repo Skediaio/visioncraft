@@ -269,6 +269,7 @@ impl W {
     }
     fn floats(&mut self, v: &[f32]) {
         self.u32(v.len() as u32);
+        self.0.reserve(4 * v.len());
         v.iter().for_each(|x| self.f32(*x));
     }
 }
@@ -313,7 +314,13 @@ const MATERIALS: [flora::Material; 4] = [
 pub type Levels = Vec<(usize, Vec<(flora::Material, flora::MeshPart)>, [f32; 3])>;
 
 pub fn encode_levels(height: f32, levels: &Levels) -> Vec<u8> {
-    let mut w = W::default();
+    // The size up front: a tree's levels with the detail ones are 15 MB.
+    let floats: usize = levels
+        .iter()
+        .flat_map(|(_, parts, _)| parts)
+        .map(|(_, p)| 10 * p.positions.len() + p.indices.len() + 6)
+        .sum();
+    let mut w = W(Vec::with_capacity(4 * floats + 64 * levels.len() + 8));
     w.f32(height);
     w.u32(levels.len() as u32);
     for (li, parts, tint) in levels {

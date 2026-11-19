@@ -56,22 +56,39 @@ pub(crate) struct Skeleton {
     /// The crown's foliage masses (`gen_tree`), as ellipsoids (centre, radii); empty for the
     /// other forms.
     pub masses: Vec<(V3, V3)>,
+    /// Which of `masses` can be nearest where (`mass_outward`).
+    pub mass_near: Option<crate::near::NearIndex>,
+    /// The branches thickest first (`wood_plan`), by level and radius and by radius alone:
+    /// every level of detail asks for it twice.
+    wood_order: [std::cell::OnceCell<Vec<WoodEntry>>; 2],
+    /// The thickest stem's base radius (`wood_plan`).
+    trunk_r: std::cell::OnceCell<f32>,
 }
 
 /// The outward direction a leaf card at `p` takes its normals from: the crown's, pulled
 /// towards the foliage mass it belongs to, so each mass shades as a lump of its own (lit on its
 /// sun side, dark under it) instead of the whole crown as one smooth dome.
-pub(crate) fn mass_outward(masses: &[(V3, V3)], p: V3, centre: V3, radii: V3) -> Outward {
-    let near = masses.iter().min_by(|a, b| {
-        let d = |m: &&(V3, V3)| {
-            let q = p - m.0;
-            let r = m.1;
-            (q.x / r.x).powi(2) + (q.y / r.y).powi(2) + (q.z / r.z).powi(2)
-        };
-        d(a).total_cmp(&d(b))
-    });
+pub(crate) fn mass_outward(sk: &Skeleton, p: V3, centre: V3, radii: V3) -> Outward {
+    let masses = &sk.masses;
+    // The first mass of the least distance (as `min_by` takes it), each distance once and only
+    // of the masses that can be nearest there (`NearIndex`): this runs for every foliage card
+    // of every level.
+    let mut near = None;
+    let mut best = f32::MAX;
+    let mut test = |m: &(V3, V3)| {
+        let q = p - m.0;
+        let r = m.1;
+        let d = (q.x / r.x).powi(2) + (q.y / r.y).powi(2) + (q.z / r.z).powi(2);
+        if near.is_none() || d.total_cmp(&best).is_lt() {
+            (near, best) = (Some(*m), d);
+        }
+    };
+    match sk.mass_near.as_ref().and_then(|n| n.at(p)) {
+        Some(list) => list.iter().for_each(|&k| test(&masses[k as usize])),
+        None => masses.iter().for_each(test),
+    }
     match near {
-        Some(&(c, r)) => Outward::Crown {
+        Some((c, r)) => Outward::Crown {
             centre: centre.lerp(c, 0.7),
             radii: radii.lerp(r, 0.7),
         },
@@ -382,24 +399,67 @@ fn decimate(nodes: &[Node], stride: usize) -> Vec<Node> {
 /// a node every growth step: they keep about one per half metre (one and a half far off) and
 /// take their sides from their radius, so a bare crown's budget reaches its finer branches.
 fn shaped(br: &Branch, lvl: usize, lod: usize, all_levels: bool) -> (Vec<Node>, u32) {
-    if !all_levels {
-        return (decimate(&br.nodes, STRIDE[lod]), SIDES[lod][lvl.min(3)]);
-    }
-    let seg = (br.nodes[1].p - br.nodes[0].p).len().max(1e-3);
-    let stride = ((([0.5, 0.9, 1.5][lod] / seg) as usize).max(STRIDE[lod])).max(1);
-    let r = br.nodes[0].r;
-    let sides = if r > 0.25 {
-        [16, 10, 6][lod]
-    } else if r > 0.15 {
-        [12, 8, 6][lod]
-    } else if r > 0.05 {
-        [7, 5, 4][lod]
-    } else if r > 0.015 {
-        [4, 4, 3][lod]
-    } else {
-        3
-    };
+    let (stride, sides) = WoodEntry::of(br, 0, lvl).plan(lod, all_levels);
     (decimate(&br.nodes, stride), sides)
+}
+
+/// What [`wood_plan`] needs of a branch, kept together in the order it goes through them (the
+/// branches themselves lie all over the heap: going through them a level at a time cost more
+/// than the rest of the level's wood).
+struct WoodEntry {
+    i: u32,
+    lvl: u8,
+    nodes: u32,
+    /// Base radius.
+    r: f32,
+    /// Length of the first segment (at least a millimetre); 0 for a branch of one node.
+    seg: f32,
+}
+
+impl WoodEntry {
+    fn of(br: &Branch, i: usize, lvl: usize) -> WoodEntry {
+        let n = &br.nodes;
+        WoodEntry {
+            i: i as u32,
+            lvl: lvl as u8,
+            nodes: n.len() as u32,
+            r: n[0].r,
+            seg: if n.len() > 1 {
+                (n[1].p - n[0].p).len().max(1e-3)
+            } else {
+                0.0
+            },
+        }
+    }
+
+    /// [`shaped`]'s node stride and sides.
+    fn plan(&self, lod: usize, all_levels: bool) -> (usize, u32) {
+        if !all_levels {
+            return (STRIDE[lod], SIDES[lod][(self.lvl as usize).min(3)]);
+        }
+        let stride = ((([0.5, 0.9, 1.5][lod] / self.seg) as usize).max(STRIDE[lod])).max(1);
+        let r = self.r;
+        let sides = if r > 0.25 {
+            [16, 10, 6][lod]
+        } else if r > 0.15 {
+            [12, 8, 6][lod]
+        } else if r > 0.05 {
+            [7, 5, 4][lod]
+        } else if r > 0.015 {
+            [4, 4, 3][lod]
+        } else {
+            3
+        };
+        (stride, sides)
+    }
+
+    /// How many nodes [`shaped`] keeps and its sides, without making the list.
+    fn shaped_len(&self, lod: usize, all_levels: bool) -> (usize, u32) {
+        let (stride, sides) = self.plan(lod, all_levels);
+        let n = self.nodes as usize;
+        let kept = (n - 1) / stride + 1 + usize::from(!(n - 1).is_multiple_of(stride));
+        (kept, sides)
+    }
 }
 
 /// Which branches to mesh at `lod` with how many sides, and what that costs.
@@ -409,54 +469,58 @@ fn wood_plan(
     wood_budget: usize,
     all_levels: bool,
 ) -> (Vec<(usize, u32)>, usize) {
-    let trunk_r = sk
-        .branches
-        .iter()
-        .zip(&sk.levels)
-        .filter(|(_, l)| **l == 0)
-        .map(|(b, _)| b.nodes[0].r)
-        .fold(0.0, f32::max);
-    let mut order: Vec<usize> = (0..sk.branches.len()).collect();
-    // Thickest first (trunk before limbs before twigs); index breaks ties deterministically.
-    // A grown tree's levels are chains of its network (`all_levels`): by radius alone.
-    order.sort_by(|&a, &b| {
-        let (la, lb) = if all_levels {
-            (0, 0)
-        } else {
-            (sk.levels[a], sk.levels[b])
-        };
-        la.cmp(&lb)
-            .then(
-                sk.branches[b].nodes[0]
-                    .r
-                    .total_cmp(&sk.branches[a].nodes[0].r),
-            )
-            .then(a.cmp(&b))
+    let trunk_r = *sk.trunk_r.get_or_init(|| {
+        sk.branches
+            .iter()
+            .zip(&sk.levels)
+            .filter(|(_, l)| **l == 0)
+            .map(|(b, _)| b.nodes[0].r)
+            .fold(0.0, f32::max)
+    });
+    let order = sk.wood_order[usize::from(all_levels)].get_or_init(|| {
+        let mut order: Vec<usize> = (0..sk.branches.len()).collect();
+        // Thickest first (trunk before limbs before twigs); index breaks ties deterministically
+        // (so no two compare equal and the unstable sort's order is the stable one's).
+        // A grown tree's levels are chains of its network (`all_levels`): by radius alone.
+        order.sort_unstable_by(|&a, &b| {
+            let (la, lb) = if all_levels {
+                (0, 0)
+            } else {
+                (sk.levels[a], sk.levels[b])
+            };
+            la.cmp(&lb)
+                .then(
+                    sk.branches[b].nodes[0]
+                        .r
+                        .total_cmp(&sk.branches[a].nodes[0].r),
+                )
+                .then(a.cmp(&b))
+        });
+        order
+            .into_iter()
+            .map(|i| WoodEntry::of(&sk.branches[i], i, sk.levels[i] as usize))
+            .collect()
     });
     let mut used = 0;
     let mut chosen = Vec::new();
-    for i in order {
-        let lvl = sk.levels[i] as usize;
-        let br = &sk.branches[i];
-        if lvl > 0 && br.nodes[0].r < trunk_r * MIN_R_REL[lod] && !all_levels {
+    for e in order {
+        let lvl = e.lvl as usize;
+        if lvl > 0 && e.r < trunk_r * MIN_R_REL[lod] && !all_levels {
             continue;
         }
         if lod == 2 && lvl > 1 && !all_levels {
             continue;
         }
-        let (nodes, mut sides) = shaped(br, lvl, lod, all_levels);
+        let (nodes, mut sides) = e.shaped_len(lod, all_levels);
         // A long stem of many sides can cost more than the level's whole wood budget: it
         // takes fewer sides rather than being left out (a plane's bole went missing at 40 m).
-        while chosen.is_empty()
-            && sides > 6
-            && Builder::tube_cost(nodes.len(), sides) > wood_budget / 3
-        {
+        while chosen.is_empty() && sides > 6 && Builder::tube_cost(nodes, sides) > wood_budget / 3 {
             sides -= 2;
         }
-        let cost = Builder::tube_cost(nodes.len(), sides);
+        let cost = Builder::tube_cost(nodes, sides);
         if used + cost <= wood_budget {
             used += cost;
-            chosen.push((i, sides));
+            chosen.push((e.i as usize, sides));
         }
     }
     (chosen, used)
@@ -682,7 +746,7 @@ pub(crate) fn cards(
             segments: 1,
             outward_mix: 0.75,
         };
-        out.card(&card, &mass_outward(&sk.masses, centre, crown_c, crown_r));
+        out.card(&card, &mass_outward(sk, centre, crown_c, crown_r));
     };
     // Leaf and twig cards go through the points' order and, past its end, round it again
     // (`emit` takes the place in that sequence).
@@ -737,4 +801,37 @@ pub(crate) fn cards(
     }
     debug_assert!(out.tris() <= budget);
     out.finish()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Branch, WoodEntry, shaped};
+    use crate::math::v3;
+    use crate::mesh::Node;
+
+    /// `wood_plan` costs a branch by the length `shaped` gives it without making it.
+    #[test]
+    fn a_wood_entry_counts_what_shaped_keeps() {
+        for n in 2..40 {
+            let br = Branch {
+                nodes: (0..n)
+                    .map(|i| Node {
+                        p: v3(0.0, i as f32 * 0.07, 0.0),
+                        r: 0.3 - 0.005 * i as f32,
+                        w: 0.0,
+                    })
+                    .collect(),
+                phase: 0.0,
+            };
+            for lvl in 0..4 {
+                for lod in 0..3 {
+                    for all in [false, true] {
+                        let (nodes, sides) = shaped(&br, lvl, lod, all);
+                        let e = WoodEntry::of(&br, 0, lvl);
+                        assert_eq!(e.shaped_len(lod, all), (nodes.len(), sides));
+                    }
+                }
+            }
+        }
+    }
 }

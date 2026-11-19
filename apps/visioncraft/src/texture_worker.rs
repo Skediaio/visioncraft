@@ -645,6 +645,106 @@ mod tests {
         assert_eq!(back, here);
     }
 
+    /// Times every mesh job of the estate's and the coast's plants (each species they place,
+    /// with and without the detail levels, every variant) and prints a digest of each answer,
+    /// so a faster generator can be checked to make the same bytes:
+    /// `cargo test --release -p visioncraft --lib mesh_jobs_timed -- --ignored --nocapture`.
+    /// `MESH_ONLY` keeps the jobs whose name has it, `MESH_REPEAT` times each that often (the
+    /// least counts), `MESH_ALL=1` adds every catalogue species in four months.
+    #[test]
+    #[ignore]
+    fn mesh_jobs_timed() {
+        use std::hash::{Hash, Hasher};
+        let mut jobs = Vec::new();
+        for name in ["estate", "coast"] {
+            let p = visioncraft_core::example(name).unwrap();
+            let month = p.plant_month();
+            let text = serde_json::to_string(&p).unwrap();
+            let mut ids: Vec<String> = p.species.iter().map(|s| s.id.clone()).collect();
+            ids.extend(
+                text.split('"')
+                    .filter(|s| s.starts_with("flora:"))
+                    .map(String::from),
+            );
+            ids.push(crate::plants::LAWN_SPECIES.into());
+            ids.sort();
+            ids.dedup();
+            for id in ids {
+                let Some(res) = crate::plants::resolve(&p, &id) else {
+                    continue;
+                };
+                let json = serde_json::to_string(&res.params).unwrap();
+                for detail in [false, true] {
+                    for v in 0..crate::plants::VARIANTS {
+                        jobs.push((
+                            format!("{name} {id} v{v} d{}", detail as u8),
+                            json.clone(),
+                            v,
+                            month,
+                            detail,
+                        ));
+                    }
+                }
+            }
+        }
+        if std::env::var("MESH_ALL").is_ok_and(|v| v == "1") {
+            for sp in visioncraft_flora::species() {
+                let json = serde_json::to_string(&sp.params).unwrap();
+                for month in [1, 4, 7, 10] {
+                    for detail in [false, true] {
+                        for v in 0..crate::plants::VARIANTS {
+                            jobs.push((
+                                format!("all {} m{month} v{v} d{}", sp.id, detail as u8),
+                                json.clone(),
+                                v,
+                                month,
+                                detail,
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        let mut times = Vec::new();
+        let t_all = std::time::Instant::now();
+        let only = std::env::var("MESH_ONLY").unwrap_or_default();
+        let repeat: usize = std::env::var("MESH_REPEAT")
+            .ok()
+            .and_then(|r| r.parse().ok())
+            .unwrap_or(1);
+        for (label, json, v, month, detail) in &jobs {
+            if !label.contains(&only) {
+                continue;
+            }
+            // The least of a few runs: the build server is shared.
+            let mut ms = f64::MAX;
+            let mut bytes = Vec::new();
+            for _ in 0..repeat {
+                let t = std::time::Instant::now();
+                bytes = super::mesh_job(json, *v, *month, *detail).unwrap();
+                ms = ms.min(t.elapsed().as_secs_f64() * 1000.0);
+            }
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            bytes.hash(&mut h);
+            println!(
+                "job {label}: {ms:.1} ms, {} bytes, digest {:016x}",
+                bytes.len(),
+                h.finish()
+            );
+            times.push(ms);
+        }
+        times.sort_by(f64::total_cmp);
+        let q = |f: f64| times[((times.len() - 1) as f64 * f) as usize];
+        println!(
+            "jobs {}, total {:.0} ms, median {:.1}, p90 {:.1}, max {:.1}",
+            times.len(),
+            t_all.elapsed().as_secs_f64() * 1000.0,
+            q(0.5),
+            q(0.9),
+            q(1.0)
+        );
+    }
+
     #[test]
     fn a_mesh_job_answers_what_the_page_would_make() {
         let p = &visioncraft_flora::species()[0].params;

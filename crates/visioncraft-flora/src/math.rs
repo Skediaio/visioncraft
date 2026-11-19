@@ -15,7 +15,7 @@ pub const GOLDEN_ANGLE: f32 = 2.399_963_2;
 /// the generators produce.
 pub fn sin(x: f32) -> f32 {
     let x = x as f64;
-    let k = (x / std::f64::consts::TAU + 0.5).floor();
+    let k = floor(x / std::f64::consts::TAU + 0.5);
     let mut r = x - k * std::f64::consts::TAU; // [-pi, pi]
     let half = std::f64::consts::FRAC_PI_2;
     if r > half {
@@ -32,6 +32,24 @@ pub fn sin(x: f32) -> f32 {
                     * (1.0
                         - r2 / 42.0 * (1.0 - r2 / 72.0 * (1.0 - r2 / 110.0 * (1.0 - r2 / 156.0)))));
     (r * p) as f32
+}
+
+/// `f64::floor`, exactly, without its library call on targets that have no rounding
+/// instruction (x86_64's baseline): `sin` runs a few hundred thousand times per tree.
+pub(crate) fn floor(v: f64) -> f64 {
+    if v.abs() < 4.0e15 {
+        // Truncation is exact in this range; a negative non-integer is one more down.
+        let t = v as i64 as f64;
+        if t > v {
+            t - 1.0
+        } else if t == 0.0 {
+            v * 0.0 // keeps the sign of zero
+        } else {
+            t
+        }
+    } else {
+        v.floor()
+    }
 }
 
 pub fn cos(x: f32) -> f32 {
@@ -245,6 +263,34 @@ pub fn tile_fbm(u: f32, v: f32, px: i32, py: i32, octaves: u32, salt: u32) -> f3
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn floor_is_the_librarys() {
+        let mut r = Rng::new(3, 4);
+        for i in 0..200_000 {
+            let v = match i % 4 {
+                0 => r.sym() as f64 * 10.0,
+                1 => (i as f64 - 100_000.0) * 0.25,
+                2 => r.sym() as f64 * 1e16,
+                _ => f64::from(r.sym()) * 3.0 + 0.5,
+            };
+            assert_eq!(floor(v).to_bits(), v.floor().to_bits(), "{v}");
+        }
+        for v in [
+            0.0,
+            -0.0,
+            0.5,
+            1.0,
+            -1.0,
+            -0.5,
+            4.0e15 - 0.5,
+            -4.0e15 + 0.5,
+            f64::INFINITY,
+        ] {
+            assert_eq!(floor(v).to_bits(), v.floor().to_bits(), "{v}");
+        }
+        assert!(floor(f64::NAN).is_nan());
+    }
 
     #[test]
     fn trig_matches_std_closely() {
