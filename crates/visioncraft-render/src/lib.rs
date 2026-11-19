@@ -52,6 +52,7 @@ use std::num::NonZeroU64;
 use glam::{Mat4, Vec2, Vec3, Vec4};
 
 mod atmosphere;
+mod batch;
 pub mod bc;
 mod clouds;
 mod coverage;
@@ -676,7 +677,9 @@ struct Item {
     lods: Vec<f32>,
     /// Sorted by `CLUSTER_CELL` so each cluster is a contiguous range.
     transforms: Vec<Mat4>,
-    instances: wgpu::Buffer,
+    /// Its instances' range in the pool (`batch::InstancePool`): `cap` from `base`.
+    base: u32,
+    cap: u32,
     bounds: Option<Bounds>,
     clusters: Vec<Cluster>,
     /// The baked impostor drawn as the last level, and its draw slot.
@@ -723,6 +726,155 @@ struct Cluster {
     fading: bool,
     /// First of this frame's fade slots (one per part, then the impostor).
     fade_slot: u32,
+}
+
+impl Item {
+    /// Instances `r` of the item, in the pool.
+    fn pool_range(&self, r: &std::ops::Range<u32>) -> std::ops::Range<u32> {
+        self.base + r.start..self.base + r.end
+    }
+}
+
+/// A pipeline a planned draw uses (`Renderer::pipe`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum Pipe {
+    /// `Pipelines::shadow` (opaque, cutout, glass, shadow caster).
+    Shadow(usize),
+    Depth(usize),
+    DepthFade(usize),
+    /// `SampledPipelines::forward` by `Material::variant`.
+    Forward(usize),
+    Terrain,
+    ReflectTerrain,
+    Reflect(usize),
+    /// `SampledPipelines::impostor`: depth, forward.
+    Impostor(usize),
+    ReflectImpostor,
+    ImpostorShadow,
+}
+
+/// What a planned draw binds as group 1.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Group1 {
+    Material(u32),
+    Terrain,
+    Impostor(u32),
+}
+
+/// Where a planned draw's instances are.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Src {
+    Pool,
+    /// The frame's gathered batches (`batch::Gather`).
+    Gathered,
+}
+
+/// One draw of a pass, planned before the frame records (`Renderer::plan_items`).
+struct Draw {
+    pipe: Pipe,
+    g1: Option<Group1>,
+    /// Group 2: from the fade slots or the draw slots, and the slot.
+    g2: Option<(bool, u32)>,
+    /// The mesh drawn indexed (`vertices` its index count), or `None` for impostor quads.
+    mesh: Option<u32>,
+    vertices: u32,
+    /// The terrain chunk (a mesh id) whose layer weights go in vertex slot 2.
+    weights: Option<u32>,
+    src: Src,
+    instances: std::ops::Range<u32>,
+    triangles: u64,
+    /// Counts as instances in view (`RenderStats::instances`).
+    view: bool,
+}
+
+/// Draws that can share one: by `tag` (the category; impostors and shadow casters have their
+/// own), pipeline, group 1, mesh, and whether group 2 is bound (every part's draw slot holds
+/// just its mesh id, and every settled impostor's the same fade, so any of them serves).
+type BatchKey = (u8, Pipe, Option<Group1>, Option<u32>, u32, bool);
+
+struct Batch {
+    tag: u8,
+    draw: Draw,
+    /// The nearest run's sort key.
+    first: f32,
+    /// Sort key, first pool instance and count of each run.
+    runs: Vec<(f32, u32, u32)>,
+}
+
+#[derive(Default)]
+struct Batches {
+    index: std::collections::HashMap<BatchKey, usize>,
+    list: Vec<Batch>,
+}
+
+impl Batches {
+    /// Adds `item`'s `runs` (of its own instances, with sort keys) to the batch of `draw`.
+    fn add(&mut self, tag: u8, draw: Draw, item: &Item, runs: Vec<(f32, std::ops::Range<u32>)>) {
+        if runs.is_empty() {
+            return;
+        }
+        let key = (
+            tag,
+            draw.pipe,
+            draw.g1,
+            draw.mesh,
+            draw.vertices,
+            draw.g2.is_some(),
+        );
+        let list = &mut self.list;
+        let i = *self.index.entry(key).or_insert_with(|| {
+            list.push(Batch {
+                tag,
+                draw,
+                first: f32::INFINITY,
+                runs: Vec::new(),
+            });
+            list.len() - 1
+        });
+        let b = &mut self.list[i];
+        for (k, r) in runs {
+            b.first = b.first.min(k);
+            b.runs.push((k, item.base + r.start, r.len() as u32));
+        }
+    }
+
+    /// One draw per batch (by tag and pipeline, then front to back): a single run straight
+    /// from the pool, several gathered (their pool indices appended to `gather`, nearest first).
+    fn emit(&mut self, draws: &mut Vec<Draw>, gather: &mut Vec<u32>) {
+        self.index.clear();
+        let mut list = std::mem::take(&mut self.list);
+        list.sort_by(|a, b| {
+            (a.tag, a.draw.pipe)
+                .cmp(&(b.tag, b.draw.pipe))
+                .then(a.first.total_cmp(&b.first))
+        });
+        for mut b in list {
+            if let [(_, start, n)] = b.runs[..] {
+                b.draw.instances = start..start + n;
+                b.draw.src = Src::Pool;
+            } else {
+                b.runs.sort_by(|x, y| x.0.total_cmp(&y.0));
+                let at = gather.len() as u32;
+                for &(_, start, n) in &b.runs {
+                    gather.extend(start..start + n);
+                }
+                b.draw.instances = at..gather.len() as u32;
+                b.draw.src = Src::Gathered;
+            }
+            draws.push(b.draw);
+        }
+    }
+}
+
+/// A frame's planned passes (`Renderer::render_part`).
+struct FramePlans {
+    /// Per shadow layer (empty where the cascade is not refreshed this frame).
+    shadows: Vec<Vec<Draw>>,
+    snow: Option<Vec<Draw>>,
+    depth: Vec<Draw>,
+    reflection: Option<Vec<Draw>>,
+    forward: Vec<Draw>,
+    mirrors: Option<Vec<Draw>>,
 }
 
 const LOD_UNSET: u8 = u8::MAX;
@@ -890,7 +1042,7 @@ struct Targets {
     bytes: u64,
 }
 
-/// Which geometry pass `draw_items` records.
+/// Which geometry pass `plan_items` plans.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Pass {
     /// `far`: the cached, camera-independent last cascade; `coarse`: a
@@ -927,7 +1079,7 @@ enum SkySource {
     },
 }
 
-/// Per-frame counters for `stats` (`draw_items` takes `&self`).
+/// Per-frame counters for `stats` (`record` takes `&self`).
 #[derive(Default)]
 struct Counters {
     draws: Cell<u32>,
@@ -1111,6 +1263,9 @@ pub struct Renderer {
     #[cfg(not(target_arch = "wasm32"))]
     upload_belt: wgpu::util::StagingBelt,
 
+    /// Every item's instances (`batch.rs`), and the frame's batches gathered from them.
+    pool: batch::InstancePool,
+    gather: batch::Gather,
     meshes: Vec<Option<GpuMesh>>,
     materials: Vec<Option<GpuMaterial>>,
     textures: Vec<Option<texture::GpuTexture>>,
@@ -1493,6 +1648,8 @@ impl Renderer {
             lights_cpu: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             upload_belt: wgpu::util::StagingBelt::new(device.clone(), UPLOAD_CHUNK),
+            pool: batch::InstancePool::new(device, 4096),
+            gather: batch::Gather::new(device),
             meshes: Vec::new(),
             materials: Vec::new(),
             textures: Vec::new(),
@@ -2956,7 +3113,8 @@ impl Renderer {
             parts,
             lods,
             transforms: Vec::new(),
-            instances: self.instance_buffer(0),
+            base: 0,
+            cap: 0,
             bounds: None,
             clusters: Vec::new(),
             impostor: None,
@@ -3007,16 +3165,21 @@ impl Renderer {
     }
 
     pub fn set_instances(&mut self, id: ItemId, instances: &[Mat4]) {
-        let grow = match self.items.get(id.0 as usize) {
-            Some(Some(item)) => item.instances.size() < (instances.len() as u64 * 64).max(64),
-            _ => return,
-        };
-        let buffer = grow.then(|| self.instance_buffer(instances.len()));
+        let n = instances.len() as u32;
         let Some(Some(item)) = self.items.get_mut(id.0 as usize) else {
             return;
         };
-        if let Some(buffer) = buffer {
-            item.instances = buffer;
+        // More than its range holds: a new range, or (none left) a larger pool.
+        let mut repack = false;
+        if n > item.cap {
+            self.pool.ranges.release(item.base, item.cap);
+            (item.base, item.cap) = match self.pool.ranges.alloc(n) {
+                Some(base) => (base, n),
+                None => {
+                    repack = true;
+                    (0, 0)
+                }
+            };
         }
         // Group by ground cell. This reorders the instances on the GPU; fine
         // while nothing reads `instance_index` (per-instance data later must
@@ -3048,8 +3211,31 @@ impl Renderer {
             }
         }
         item.transforms = sorted;
-        self.write_instances(id);
+        if repack {
+            self.repack_pool();
+        } else {
+            self.write_instances(id);
+        }
         self.bounds_dirty = true;
+    }
+
+    /// A larger pool for every item's instances, written again.
+    fn repack_pool(&mut self) {
+        let needed: u32 = self
+            .items
+            .iter()
+            .flatten()
+            .map(|i| i.transforms.len() as u32)
+            .sum();
+        self.pool.grow(&self.device, needed);
+        for item in self.items.iter_mut().flatten() {
+            let n = item.transforms.len() as u32;
+            item.base = self.pool.ranges.alloc(n).unwrap_or(0);
+            item.cap = n;
+        }
+        for i in 0..self.items.len() {
+            self.write_instances(ItemId(i as u32));
+        }
     }
 
     /// Uploads an item's instance matrices. The spare w of each matrix's first column carries
@@ -3077,7 +3263,13 @@ impl Renderer {
             }
             b.floats(&m.to_cols_array());
         }
-        self.queue.write_buffer(&item.instances, 0, &b.0);
+        if !b.0.is_empty() {
+            self.queue.write_buffer(
+                &self.pool.buffer,
+                u64::from(item.base) * batch::INSTANCE_BYTES,
+                &b.0,
+            );
+        }
     }
 
     /// Where GPU grass grows (`grass.rs`), or none. Drawn when `Quality::grass` is above 0; the
@@ -3123,20 +3315,12 @@ impl Renderer {
     pub fn remove_item(&mut self, id: ItemId) {
         if let Some(slot) = self.items.get_mut(id.0 as usize) {
             if let Some(item) = slot.take() {
+                self.pool.ranges.release(item.base, item.cap);
                 self.free_slots.extend(item.parts.iter().map(|p| p.slot));
                 self.free_slots.extend(item.impostor.map(|(_, slot)| slot));
             }
             self.bounds_dirty = true;
         }
-    }
-
-    fn instance_buffer(&self, count: usize) -> wgpu::Buffer {
-        self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("instances"),
-            size: (count as u64 * 64).max(64),
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        })
     }
 
     /// Tints one CAD face (by the mesh's per-vertex face ids), or none.
@@ -3410,8 +3594,61 @@ impl Renderer {
                 timestamps,
             },
         );
+        // Every pass's draws, planned before any records: the instances they share draws for
+        // are gathered on the GPU first (`batch.rs`).
+        let layers = self.targets.shadow_layers.len();
+        let ssr = self.quality.screen_reflections > 0;
+        let mut gather = Vec::new();
+        let mut plan = |cull: Mat4, near_far: bool, kind: Pass| {
+            self.plan_items(cull, near_far, kind, &mut gather)
+        };
+        let plans = (!develop).then(|| {
+            let shadows: Vec<Vec<Draw>> = (0..layers)
+                .map(|c| {
+                    // The last layer is the snow cover map, drawn after the cascades.
+                    if c >= refresh.len() || c + 1 == layers || !refresh[c] {
+                        return Vec::new();
+                    }
+                    let far = cached && c == last;
+                    plan(
+                        cascades.view_proj[c],
+                        false,
+                        Pass::Shadow { far, coarse: c > 0 },
+                    )
+                })
+                .collect();
+            // The view's own levels: a bare tree's coarsest level is a few large twig cards,
+            // which kept the snow off a patch of lawn under a birch.
+            let snow = self.snow_cover.filter(|_| layers > 0).map(|m| {
+                plan(
+                    m,
+                    false,
+                    Pass::Shadow {
+                        far: false,
+                        coarse: false,
+                    },
+                )
+            });
+            let depth = plan(view_proj, true, Pass::Depth);
+            let coarsest = self.quality.water_reflection >= 4;
+            let reflection =
+                mirror.map(|m| plan(view_proj * m, true, Pass::Reflection { coarsest }));
+            let forward = plan(view_proj, true, Pass::Forward);
+            let mirrors = ssr.then(|| plan(view_proj, true, Pass::Mirrors));
+            FramePlans {
+                shadows,
+                snow,
+                depth,
+                reflection,
+                forward,
+                mirrors,
+            }
+        });
+        self.gather
+            .run(&self.device, &self.queue, encoder, &self.pool, &gather);
+
         let t = &self.targets;
-        if !develop {
+        if let Some(plans) = &plans {
             for (c, layer) in t.shadow_layers.iter().enumerate() {
                 // The last layer is the snow cover map, drawn after the cascades.
                 if c >= refresh.len() || c + 1 == t.shadow_layers.len() || !refresh[c] {
@@ -3426,15 +3663,9 @@ impl Renderer {
                 );
                 pass.set_bind_group(0, &self.globals_bind, &[]);
                 pass.set_bind_group(2, &self.cascade_bind, &[(c as u64 * SLOT) as u32]);
-                let far = cached && c == last;
-                self.draw_items(
-                    &mut pass,
-                    cascades.view_proj[c],
-                    false,
-                    Pass::Shadow { far, coarse: c > 0 },
-                );
+                self.record(&mut pass, &plans.shadows[c]);
             }
-            if let (Some(m), Some(layer)) = (self.snow_cover, t.shadow_layers.last()) {
+            if let (Some(draws), Some(layer)) = (&plans.snow, t.shadow_layers.last()) {
                 let mut pass = depth_pass(encoder, "snow cover", layer, wgpu::StoreOp::Store, None);
                 pass.set_bind_group(0, &self.globals_bind, &[]);
                 pass.set_bind_group(
@@ -3442,17 +3673,7 @@ impl Renderer {
                     &self.cascade_bind,
                     &[(shadow::MAX_CASCADES as u64 * SLOT) as u32],
                 );
-                self.draw_items(
-                    &mut pass,
-                    m,
-                    false,
-                    // The view's own levels: a bare tree's coarsest level is a few large twig
-                    // cards, which kept the snow off a patch of lawn under a birch.
-                    Pass::Shadow {
-                        far: false,
-                        coarse: false,
-                    },
-                );
+                self.record(&mut pass, draws);
             }
             self.counters.split("shadow");
             {
@@ -3464,7 +3685,7 @@ impl Renderer {
                     self.ts("depth"),
                 );
                 pass.set_bind_group(0, &self.globals_bind, &[]);
-                self.draw_items(&mut pass, view_proj, true, Pass::Depth);
+                self.record(&mut pass, &plans.depth);
                 self.grass.draw_depth(&mut pass);
             }
             self.counters.split("depth");
@@ -3553,7 +3774,7 @@ impl Renderer {
                 self.cloud_volume.off();
             }
             self.counters.split("clouds");
-            if let Some(m) = mirror {
+            if let Some(draws) = &plans.reflection {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("reflection"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -3579,13 +3800,7 @@ impl Renderer {
                 });
                 pass.set_bind_group(0, &self.reflect_globals_bind, &[]);
                 pass.set_bind_group(3, &t.reflect_forward_bind, &[]);
-                let coarsest = self.quality.water_reflection >= 4;
-                self.draw_items(
-                    &mut pass,
-                    view_proj * m,
-                    true,
-                    Pass::Reflection { coarsest },
-                );
+                self.record(&mut pass, draws);
                 // The endless ground has no hole where the terrain is dug out:
                 // seen from water below its height (a pond in the lawn) it would
                 // cover the sky the water mirrors.
@@ -3608,13 +3823,12 @@ impl Renderer {
                 // With screen-space reflections the glass and the mirrors are drawn in a second pass,
                 // after the opaque scene is copied for them to reflect (into `prev_hdr`): the first then
                 // keeps its multisampled colour and depth for the second.
-                let ssr = self.quality.screen_reflections > 0;
                 let targets = (view, resolve, &t.depth);
                 let mut pass =
                     forward_pass(encoder, "forward", targets, (true, ssr), self.ts("forward"));
                 pass.set_bind_group(0, &self.globals_bind, &[]);
                 pass.set_bind_group(3, &t.forward_bind, &[]);
-                self.draw_items(&mut pass, view_proj, true, Pass::Forward);
+                self.record(&mut pass, &plans.forward);
                 self.grass.draw(
                     &mut pass,
                     &self.draw_bind,
@@ -3648,7 +3862,9 @@ impl Renderer {
                     pass = forward_pass(encoder, label, targets, (false, ssr), self.ts(label));
                     pass.set_bind_group(0, &self.globals_bind, &[]);
                     pass.set_bind_group(3, &t.forward_bind, &[]);
-                    self.draw_items(&mut pass, view_proj, true, Pass::Mirrors);
+                    if let Some(draws) = &plans.mirrors {
+                        self.record(&mut pass, draws);
+                    }
                 }
                 self.draw_transparent(&mut pass, view_proj);
                 if self.rain > 0.0 && !shadow::is_orthographic(self.proj) {
@@ -3999,36 +4215,6 @@ impl Renderer {
         })
     }
 
-    /// Runs of consecutive clusters (adjacent in the instance buffer) that
-    /// pass `keep` and are `visible` (`visible_clusters`), one draw each, ordered front to
-    /// back by their nearest cluster (so early depth testing rejects hidden
-    /// foliage layers while a run of cells stays one draw).
-    fn runs(
-        item: &Item,
-        order: usize,
-        visible: &[bool],
-        keep: impl Fn(&Cluster) -> bool,
-    ) -> Vec<std::ops::Range<u32>> {
-        let mut out: Vec<(f32, std::ops::Range<u32>)> = Vec::new();
-        let mut open = false;
-        for (c, &seen) in item.clusters.iter().zip(visible) {
-            if !seen || !keep(c) {
-                open = false;
-                continue;
-            }
-            match out.last_mut() {
-                Some((k, r)) if open => {
-                    r.end = c.range.end;
-                    *k = k.min(c.key[order]);
-                }
-                _ => out.push((c.key[order], c.range.clone())),
-            }
-            open = true;
-        }
-        out.sort_by(|a, b| a.0.total_cmp(&b.0));
-        out.into_iter().map(|(_, r)| r).collect()
-    }
-
     /// Per item, which of its clusters `cull` keeps (empty: none, or the item is outside):
     /// tested once a pass, and only clusters near enough to draw at all (`cluster_lod`). Testing
     /// them per part, category and fade took a third of a coast frame's CPU time in the browser.
@@ -4049,12 +4235,22 @@ impl Renderer {
             .collect()
     }
 
-    /// Draws every opaque and cutout part (and, into shadow maps and the water reflection, glass)
-    /// whose bounds overlap `cull` (a view-projection), opaque parts first,
-    /// clusters front to back, then all impostor quads. `near_far` also culls
-    /// on depth.
-    fn draw_items(&self, pass: &mut wgpu::RenderPass, cull: Mat4, near_far: bool, kind: Pass) {
-        let mut current: Option<usize> = None;
+    /// Plans every opaque and cutout part (and, into shadow maps and the water reflection, glass)
+    /// whose bounds overlap `cull` (a view-projection): opaque parts first, then cutout parts and
+    /// all impostor quads, then glass. `near_far` also culls on depth.
+    ///
+    /// The visible instances of every item that shares a pipeline, a material and a mesh (the
+    /// same species in several plantings, the same rock or chair placed many times) become one
+    /// draw: their pool indices are appended to `gather`, which the GPU copies into one buffer
+    /// before the passes (`batch.rs`), front to back by their clusters. Dissolving clusters and
+    /// terrain chunks draw straight from the pool.
+    fn plan_items(
+        &self,
+        cull: Mat4,
+        near_far: bool,
+        kind: Pass,
+        gather: &mut Vec<u32>,
+    ) -> Vec<Draw> {
         let shadow = matches!(kind, Pass::Shadow { .. });
         let shaded = matches!(
             kind,
@@ -4063,6 +4259,7 @@ impl Renderer {
         let fades = matches!(kind, Pass::Depth | Pass::Forward);
         let order = shadow as usize;
         let late = self.quality.screen_reflections > 0;
+        let view = matches!(kind, Pass::Forward | Pass::Mirrors);
         // 0 opaque, 1 cutout, 2 glass: into shadow maps, and into the water's reflection as
         // an opaque pane (without it the reflection looked through every window into the dark
         // room behind it: the dark blobs in a pond).
@@ -4072,16 +4269,10 @@ impl Renderer {
             _ => 0..2 + glass as usize,
         };
         let visible = self.visible_clusters(cull, near_far);
-        // What is bound, so that nothing is set twice: in the browser every set is a call into
-        // its WebGPU, and the parts of an item share their instances, the levels of a plant
-        // their materials. (mesh, instances' item, group 1: material or `u32::MAX` the
-        // terrain, group 2: fading and slot.)
-        let mut bound_mesh: Option<u32> = None;
-        let mut bound_item: Option<usize> = None;
-        let mut bound_g1: Option<u32> = None;
-        let mut bound_g2: Option<(bool, u32)> = None;
+        let mut draws = Vec::new();
+        let mut batches = Batches::default();
         for category in categories {
-            for (item_index, (item, seen)) in self.items.iter().zip(&visible).enumerate() {
+            for (item, seen) in self.items.iter().zip(&visible) {
                 let Some(item) = item else { continue };
                 if seen.is_empty() {
                     continue;
@@ -4110,7 +4301,7 @@ impl Renderer {
                     if this != category {
                         continue;
                     }
-                    let weights = mesh.weights.as_ref().filter(|_| shaded);
+                    let weights = mesh.weights.is_some() && shaded;
                     // Opaque and cutout mesh levels dissolve in fading
                     // clusters (into each other, the impostor or nothing),
                     // through their own pipelines, one draw and fade slot per
@@ -4125,21 +4316,22 @@ impl Renderer {
                             continue;
                         }
                         let ds = m.double_sided as usize;
-                        let (key, pipeline) = match kind {
-                            Pass::Shadow { .. } => (category, &self.pipelines.shadow[category]),
-                            Pass::Depth if fading => (300 + ds, &self.sampled.depth_fade[ds]),
-                            Pass::Forward if fading => (2 + ds, &self.sampled.forward[2 + ds]),
-                            Pass::Depth => (m.variant(), &self.sampled.depth[m.variant()]),
-                            Pass::Forward if weights.is_some() => (100, &self.sampled.terrain),
-                            Pass::Reflection { .. } if weights.is_some() => {
-                                (100, &self.pipelines.reflect_terrain)
-                            }
-                            Pass::Forward | Pass::Mirrors => {
-                                (m.variant(), &self.sampled.forward[m.variant()])
-                            }
-                            Pass::Reflection { .. } => {
-                                (m.variant(), &self.pipelines.reflect[m.variant()])
-                            }
+                        let pipe = match kind {
+                            Pass::Shadow { .. } => Pipe::Shadow(category),
+                            Pass::Depth if fading => Pipe::DepthFade(ds),
+                            Pass::Forward if fading => Pipe::Forward(2 + ds),
+                            Pass::Depth => Pipe::Depth(m.variant()),
+                            Pass::Forward if weights => Pipe::Terrain,
+                            Pass::Reflection { .. } if weights => Pipe::ReflectTerrain,
+                            Pass::Forward | Pass::Mirrors => Pipe::Forward(m.variant()),
+                            Pass::Reflection { .. } => Pipe::Reflect(m.variant()),
+                        };
+                        let g1 = if weights {
+                            Some(Group1::Terrain)
+                        } else if shaded || category == 1 || fading {
+                            Some(Group1::Material(part.material.0))
+                        } else {
+                            None
                         };
                         let keep = |c: &Cluster| {
                             if can_fade && c.fading {
@@ -4148,69 +4340,39 @@ impl Renderer {
                                 !fading && Self::cluster_lod(item, c, kind) == Some(part.lod)
                             }
                         };
-                        let runs: Vec<(std::ops::Range<u32>, u32)> = if fading {
-                            item.clusters
+                        let draw = |g2, instances| Draw {
+                            pipe,
+                            g1,
+                            g2,
+                            mesh: Some(part.mesh.0),
+                            vertices: mesh.index_count,
+                            weights: weights.then_some(part.mesh.0),
+                            src: Src::Pool,
+                            instances,
+                            triangles: mesh.index_count as u64 / 3,
+                            view,
+                        };
+                        if fading {
+                            for (c, _) in item
+                                .clusters
                                 .iter()
                                 .zip(seen)
                                 .filter(|(c, s)| **s && keep(c))
-                                .map(|(c, _)| (c.range.clone(), c.fade_slot + part_index as u32))
-                                .collect()
-                        } else {
-                            Self::runs(item, order, seen, keep)
-                                .into_iter()
-                                .map(|r| (r, part.slot))
-                                .collect()
-                        };
-                        if runs.is_empty() {
+                            {
+                                let slot = c.fade_slot + part_index as u32;
+                                draws.push(draw(Some((true, slot)), item.pool_range(&c.range)));
+                            }
                             continue;
                         }
-                        if current != Some(key) {
-                            pass.set_pipeline(pipeline);
-                            current = Some(key);
-                        }
-                        if let Some(w) = weights {
-                            if bound_g1 != Some(u32::MAX) {
-                                pass.set_bind_group(1, &self.terrain.bind, &[]);
-                                bound_g1 = Some(u32::MAX);
-                            }
-                            pass.set_vertex_buffer(2, w.slice(..));
-                        } else if (shaded || category == 1 || fading)
-                            && bound_g1 != Some(part.material.0)
-                        {
-                            pass.set_bind_group(1, &material.bind, &[]);
-                            bound_g1 = Some(part.material.0);
-                        }
-                        let slots = if fading {
-                            &self.fade_bind
+                        let g2 = shaded.then_some((false, part.slot));
+                        let runs = Self::runs(item, order, seen, keep);
+                        if weights {
+                            // A terrain chunk is its own mesh: nothing to share a draw with.
+                            draws.extend(
+                                runs.into_iter().map(|(_, r)| draw(g2, item.pool_range(&r))),
+                            );
                         } else {
-                            &self.draw_bind
-                        };
-                        if bound_mesh != Some(part.mesh.0) {
-                            pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-                            pass.set_index_buffer(
-                                mesh.indices.slice(..),
-                                wgpu::IndexFormat::Uint32,
-                            );
-                            bound_mesh = Some(part.mesh.0);
-                        }
-                        if bound_item != Some(item_index) {
-                            pass.set_vertex_buffer(1, item.instances.slice(..));
-                            bound_item = Some(item_index);
-                        }
-                        for (i, (r, slot)) in runs.into_iter().enumerate() {
-                            if (shaded || fading)
-                                && (fading || i == 0)
-                                && bound_g2 != Some((fading, slot))
-                            {
-                                pass.set_bind_group(2, slots, &[(slot as u64 * SLOT) as u32]);
-                                bound_g2 = Some((fading, slot));
-                            }
-                            self.counters.add(
-                                mesh.index_count as u64 / 3,
-                                r.len() as u32,
-                                matches!(kind, Pass::Forward | Pass::Mirrors),
-                            );
-                            pass.draw_indexed(0..mesh.index_count, 0, r);
+                            batches.add(category as u8, draw(g2, 0..0), item, runs);
                         }
                     }
                 }
@@ -4221,27 +4383,55 @@ impl Renderer {
                     if let Some(item) = item
                         && !seen.is_empty()
                     {
-                        self.draw_impostor(pass, item, seen, kind, &mut current);
+                        self.plan_impostor(item, seen, kind, &mut draws, &mut batches);
                     }
                 }
-                // The impostors bound their own groups and instances.
-                (bound_item, bound_g1, bound_g2) = (None, None, None);
             }
+            batches.emit(&mut draws, gather);
         }
         if shadow {
-            self.draw_shadow_casters(pass, &visible);
+            self.plan_shadow_casters(&visible, &mut batches);
+            batches.emit(&mut draws, gather);
         }
+        draws
+    }
+
+    /// Runs of consecutive clusters (adjacent in the pool) that pass `keep` and are `visible`
+    /// (`visible_clusters`), each with the sort key of its nearest cluster (front to back seen
+    /// from the camera, or from the sun with `order` 1).
+    fn runs(
+        item: &Item,
+        order: usize,
+        visible: &[bool],
+        keep: impl Fn(&Cluster) -> bool,
+    ) -> Vec<(f32, std::ops::Range<u32>)> {
+        let mut out: Vec<(f32, std::ops::Range<u32>)> = Vec::new();
+        let mut open = false;
+        for (c, &seen) in item.clusters.iter().zip(visible) {
+            if !seen || !keep(c) {
+                open = false;
+                continue;
+            }
+            match out.last_mut() {
+                Some((k, r)) if open => {
+                    r.end = c.range.end;
+                    *k = k.min(c.key[order]);
+                }
+                _ => out.push((c.key[order], c.range.clone())),
+            }
+            open = true;
+        }
+        out
     }
 
     /// Trees' shadow casters (`set_item_shadow_caster`): their clusters past the finest level,
     /// depth only, no material, the density dither of `fs_shadow_dither`.
-    fn draw_shadow_casters(&self, pass: &mut wgpu::RenderPass, visible: &[Vec<bool>]) {
-        let mut set = false;
+    fn plan_shadow_casters(&self, visible: &[Vec<bool>], batches: &mut Batches) {
         for (item, seen) in self.items.iter().zip(visible) {
             let Some(item) = item else { continue };
-            let Some(Some(mesh)) = item
+            let Some((id, Some(mesh))) = item
                 .shadow_caster
-                .and_then(|m| self.meshes.get(m.0 as usize))
+                .and_then(|m| Some((m, self.meshes.get(m.0 as usize)?.as_ref())))
             else {
                 continue;
             };
@@ -4255,90 +4445,186 @@ impl Renderer {
                     },
                 ) == Some(SHADOW_CASTER_LEVEL)
             });
-            if runs.is_empty() {
-                continue;
-            }
-            if !set {
-                pass.set_pipeline(&self.pipelines.shadow[3]);
-                set = true;
-            }
-            pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-            pass.set_vertex_buffer(1, item.instances.slice(..));
-            pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-            for r in runs {
-                self.counters
-                    .add(mesh.index_count as u64 / 3, r.len() as u32, false);
-                pass.draw_indexed(0..mesh.index_count, 0, r);
-            }
+            let draw = Draw {
+                pipe: Pipe::Shadow(3),
+                g1: None,
+                g2: None,
+                mesh: Some(id.0),
+                vertices: mesh.index_count,
+                weights: None,
+                src: Src::Pool,
+                instances: 0..0,
+                triangles: mesh.index_count as u64 / 3,
+                view: false,
+            };
+            batches.add(4, draw, item, runs);
         }
     }
 
     /// An item's impostor quads: clusters at the impostor level, and in the
     /// depth and forward passes also the fading ones.
-    fn draw_impostor(
+    fn plan_impostor(
         &self,
-        pass: &mut wgpu::RenderPass,
         item: &Item,
         visible: &[bool],
         kind: Pass,
-        current: &mut Option<usize>,
+        draws: &mut Vec<Draw>,
+        batches: &mut Batches,
     ) {
         let Some((id, slot)) = item.impostor else {
             return;
         };
-        let Some(Some(gpu)) = self.impostors.get(id.0 as usize) else {
+        if !matches!(self.impostors.get(id.0 as usize), Some(Some(_))) {
             return;
-        };
+        }
         let level = item.lods.len() as u8 - 1;
-        let order = matches!(kind, Pass::Shadow { .. }) as usize;
+        let shadow = matches!(kind, Pass::Shadow { .. });
         let fades = matches!(kind, Pass::Depth | Pass::Forward);
-        let runs = Self::runs(item, order, visible, |c| {
+        let runs = Self::runs(item, shadow as usize, visible, |c| {
             Self::cluster_lod(item, c, kind) == Some(level) && !(fades && c.fading)
         });
+        let pipe = match kind {
+            Pass::Depth => Pipe::Impostor(0),
+            Pass::Forward | Pass::Mirrors => Pipe::Impostor(1),
+            Pass::Reflection { .. } => Pipe::ReflectImpostor,
+            Pass::Shadow { .. } => Pipe::ImpostorShadow,
+        };
+        let draw = |g2, instances| Draw {
+            pipe,
+            g1: Some(Group1::Impostor(id.0)),
+            g2,
+            mesh: None,
+            // Shadows: two cards per plant (impostor.wgsl, `impostor_shadow_towards`).
+            vertices: if shadow { 12 } else { 6 },
+            weights: None,
+            src: Src::Pool,
+            instances,
+            triangles: 2,
+            view: kind == Pass::Forward,
+        };
+        // Settled impostors share one draw slot's contents (fade 1): batched by atlas.
+        batches.add(
+            1,
+            draw((!shadow).then_some((false, slot)), 0..0),
+            item,
+            runs,
+        );
         // Dissolving clusters draw their impostor with their own fade slot
         // when it is the far side of their hand-over.
-        let fading: Vec<(std::ops::Range<u32>, u32)> = if fades {
-            item.clusters
+        if fades {
+            for (c, _) in item
+                .clusters
                 .iter()
                 .zip(visible)
                 .filter(|(c, s)| **s && c.fading && c.far == level)
-                .map(|(c, _)| (c.range.clone(), c.fade_slot + item.parts.len() as u32))
-                .collect()
-        } else {
-            Vec::new()
-        };
-        if runs.is_empty() && fading.is_empty() {
-            return;
+            {
+                let slot = c.fade_slot + item.parts.len() as u32;
+                draws.push(Draw {
+                    vertices: 6,
+                    ..draw(Some((true, slot)), item.pool_range(&c.range))
+                });
+            }
         }
-        let (key, pipeline) = match kind {
-            Pass::Depth => (400, &self.sampled.impostor[0]),
-            Pass::Forward | Pass::Mirrors => (401, &self.sampled.impostor[1]),
-            Pass::Reflection { .. } => (402, &self.pipelines.reflect_impostor),
-            Pass::Shadow { .. } => (403, &self.pipelines.impostor_shadow),
-        };
-        if *current != Some(key) {
-            pass.set_pipeline(pipeline);
-            *current = Some(key);
+    }
+
+    fn pipe(&self, pipe: Pipe) -> &wgpu::RenderPipeline {
+        match pipe {
+            Pipe::Shadow(c) => &self.pipelines.shadow[c],
+            Pipe::Depth(v) => &self.sampled.depth[v],
+            Pipe::DepthFade(ds) => &self.sampled.depth_fade[ds],
+            Pipe::Forward(v) => &self.sampled.forward[v],
+            Pipe::Terrain => &self.sampled.terrain,
+            Pipe::ReflectTerrain => &self.pipelines.reflect_terrain,
+            Pipe::Reflect(v) => &self.pipelines.reflect[v],
+            Pipe::Impostor(i) => &self.sampled.impostor[i],
+            Pipe::ReflectImpostor => &self.pipelines.reflect_impostor,
+            Pipe::ImpostorShadow => &self.pipelines.impostor_shadow,
         }
-        pass.set_bind_group(1, &gpu.bind, &[]);
-        if !matches!(kind, Pass::Shadow { .. }) {
-            pass.set_bind_group(2, &self.draw_bind, &[(slot as u64 * SLOT) as u32]);
-        }
-        pass.set_vertex_buffer(1, item.instances.slice(..));
-        // Shadows: two cards per plant (impostor.wgsl, `impostor_shadow_towards`).
-        let vertices = if matches!(kind, Pass::Shadow { .. }) {
-            12
-        } else {
-            6
-        };
-        for r in runs {
-            self.counters.add(2, r.len() as u32, kind == Pass::Forward);
-            pass.draw(0..vertices, r);
-        }
-        for (r, slot) in fading {
-            pass.set_bind_group(2, &self.fade_bind, &[(slot as u64 * SLOT) as u32]);
-            self.counters.add(2, r.len() as u32, kind == Pass::Forward);
-            pass.draw(0..6, r);
+    }
+
+    /// Records planned draws (`plan_items`), setting only what changes from one to the next:
+    /// in the browser every set is a call into its WebGPU.
+    fn record(&self, pass: &mut wgpu::RenderPass, draws: &[Draw]) {
+        let mut pipe = None;
+        let mut g1 = None;
+        let mut g2 = None;
+        let mut mesh = None;
+        let mut src = None;
+        let mut weights = None;
+        for d in draws {
+            if pipe != Some(d.pipe) {
+                pass.set_pipeline(self.pipe(d.pipe));
+                pipe = Some(d.pipe);
+            }
+            if let Some(g) = d.g1
+                && g1 != Some(g)
+            {
+                let bind = match g {
+                    Group1::Material(id) => self
+                        .materials
+                        .get(id as usize)
+                        .and_then(Option::as_ref)
+                        .map(|m| &m.bind),
+                    Group1::Terrain => Some(&self.terrain.bind),
+                    Group1::Impostor(id) => self
+                        .impostors
+                        .get(id as usize)
+                        .and_then(Option::as_ref)
+                        .map(|i| &i.bind),
+                };
+                let Some(bind) = bind else { continue };
+                pass.set_bind_group(1, bind, &[]);
+                g1 = Some(g);
+            }
+            if let Some(g) = d.g2
+                && g2 != Some(g)
+            {
+                let (fading, slot) = g;
+                let slots = if fading {
+                    &self.fade_bind
+                } else {
+                    &self.draw_bind
+                };
+                pass.set_bind_group(2, slots, &[(slot as u64 * SLOT) as u32]);
+                g2 = Some(g);
+            }
+            if let Some(id) = d.mesh
+                && mesh != Some(id)
+            {
+                let Some(Some(m)) = self.meshes.get(id as usize) else {
+                    continue;
+                };
+                pass.set_vertex_buffer(0, m.vertices.slice(..));
+                pass.set_index_buffer(m.indices.slice(..), wgpu::IndexFormat::Uint32);
+                mesh = Some(id);
+            }
+            if let Some(id) = d.weights
+                && weights != Some(id)
+            {
+                let Some(Some(w)) = self
+                    .meshes
+                    .get(id as usize)
+                    .map(|m| m.as_ref().and_then(|m| m.weights.as_ref()))
+                else {
+                    continue;
+                };
+                pass.set_vertex_buffer(2, w.slice(..));
+                weights = Some(id);
+            }
+            if src != Some(d.src) {
+                let buffer = match d.src {
+                    Src::Pool => &self.pool.buffer,
+                    Src::Gathered => &self.gather.out,
+                };
+                pass.set_vertex_buffer(1, buffer.slice(..));
+                src = Some(d.src);
+            }
+            self.counters
+                .add(d.triangles, d.instances.len() as u32, d.view);
+            match d.mesh {
+                Some(_) => pass.draw_indexed(0..d.vertices, 0, d.instances.clone()),
+                None => pass.draw(0..d.vertices, d.instances.clone()),
+            }
         }
     }
 
@@ -4398,13 +4684,13 @@ impl Renderer {
             pass.set_bind_group(1, &material.bind, &[]);
             pass.set_bind_group(2, &self.draw_bind, &[(part.slot as u64 * SLOT) as u32]);
             pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-            pass.set_vertex_buffer(1, item.instances.slice(..));
+            pass.set_vertex_buffer(1, self.pool.buffer.slice(..));
             pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
             for p in pipelines {
                 pass.set_pipeline(p);
                 self.counters
                     .add(mesh.index_count as u64 / 3, range.len() as u32, true);
-                pass.draw_indexed(0..mesh.index_count, 0, range.clone());
+                pass.draw_indexed(0..mesh.index_count, 0, item.pool_range(&range));
             }
         }
     }
