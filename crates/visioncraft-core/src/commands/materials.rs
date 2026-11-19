@@ -13,7 +13,7 @@ pub(super) fn register(s: &mut Session) {
         param(
             "kind",
             T::Object,
-            "Surface shading: {type: \"standard_triplanar_pbr\", map_scale_m, relief, gloss, weathering, parallax_depth_m (0..0.1 m of height-map relief on up-facing ground, needs a height map; 0 or absent: off)} | {type: \"architectural_glass\", tint: [r,g,b], roughness} | {type: \"animated_water\", flow_dir_deg, speed, tint: [r,g,b], depth_m} | {type: \"lawn3d\", density_per_m2, blade_height_m, seed, stripes_m (mowing stripes 0.3..5 m wide, 0 none), stripes_deg (their direction, true bearing clockwise from north; site.set north_deg turns the drawing), flowers (0..1 wild flowers among the blades in their season, 0 none)}: blade_height_m up to 1.2 (a mown lawn 0.03..0.06, a meadow 0.3..0.8; the palette's `meadow` is 0.45 m with flowers).",
+            "Surface shading: {type: \"standard_triplanar_pbr\", map_scale_m, relief, gloss, weathering, parallax_depth_m (0..0.1 m of height-map relief on up-facing ground, needs a height map; 0 or absent: off)} | {type: \"architectural_glass\", tint: [r,g,b], roughness} | {type: \"animated_water\", flow_dir_deg, speed, tint: [r,g,b], depth_m} | {type: \"lawn3d\", density_per_m2, blade_height_m, seed, stripes_m (mowing stripes 0.3..5 m wide, 0 none), stripes_deg (their direction, true bearing clockwise from north; site.set north_deg turns the drawing), flowers (0..1 wild flowers among the blades in their season, 0 none), blade_color ([r,g,b] linear 0..1: the blades' own colour, as grey-green dune grass over sand; absent: the ground's)}: blade_height_m up to 1.2 (a mown lawn 0.03..0.06, a meadow 0.3..0.8; the palette's `meadow` is 0.45 m with flowers).",
         )
     };
     let color = || {

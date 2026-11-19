@@ -1709,7 +1709,17 @@ impl Scene {
 
     /// The colour of a lawn's blades: the ground they stand in, in the season.
     fn blade_color(&self, m: &Material, month: u32) -> [f32; 3] {
-        let ground = if material_library::overlay(&self.library, m).is_some() {
+        // Blades of their own colour (dune grass over sand): only the season changes them.
+        if let SurfaceKind::Lawn3d(Lawn3d {
+            blade_color: Some(c),
+            ..
+        }) = &m.kind
+        {
+            let t = lawn_season(month);
+            return [0, 1, 2].map(|k| c[k] * t[k]);
+        }
+        // The meadow's photo is tinted to its own colour: its blades take that.
+        let ground = if m.id == "lawn" && material_library::overlay(&self.library, m).is_some() {
             LAWN_PICTURE_MEAN
         } else {
             [m.base_color[0], m.base_color[1], m.base_color[2]]

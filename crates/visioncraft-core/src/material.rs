@@ -44,6 +44,10 @@ pub struct Lawn3d {
     /// drawn with the GPU grass in their season (spring to late summer).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub flowers: f32,
+    /// The blades' own colour (linear RGB) when it is not the ground's: grey-green dune grass
+    /// over sand. Absent (not written): the blades take the colour of the ground they grow in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blade_color: Option<[f32; 3]>,
 }
 
 /// The tallest grass a lawn or meadow material may ask for (m).
@@ -242,6 +246,7 @@ impl Material {
                     && (l.stripes_m == 0.0 || (0.3..=5.0).contains(&l.stripes_m))
                     && l.stripes_deg.is_finite()
                     && unit(l.flowers)
+                    && l.blade_color.is_none_or(|c| c.iter().all(|v| unit(*v)))
             }
         };
         if ok {
