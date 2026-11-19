@@ -4,6 +4,8 @@
 use glam::{Mat4, Vec3};
 use std::collections::HashMap;
 use std::sync::Arc;
+use visioncraft_core::grass;
+use visioncraft_core::material::Lawn3d;
 use visioncraft_core::wall_photo::{Corner, face_frame, rectified_size, split_by_region};
 use visioncraft_core::{
     Asset, Evaluation, Generator, ImportedModel, LawnWindow, Material, ModelRef, Project, Shape,
@@ -790,6 +792,18 @@ type Holes = Vec<Vec<[f32; 2]>>;
 /// What a grass mask was made from (`Scene::sync_grass`).
 type GrassKey = (Vec<Geom>, Vec<u32>);
 
+/// A lawn's numbers that change its grass mask, as bits for `GrassKey`.
+fn lawn_bits(l: &Lawn3d) -> [u32; 5] {
+    [
+        l.density_per_m2,
+        l.blade_height_m,
+        l.stripes_m,
+        l.stripes_deg,
+        l.flowers,
+    ]
+    .map(f32::to_bits)
+}
+
 /// The share of dead, straw-coloured blades in a month: a lawn's few all summer, more in winter;
 /// a meadow's long grass (over 15 cm) dries out from midsummer, as hay.
 fn grass_dry(month: u32, blade_height_m: f32) -> f32 {
@@ -1047,6 +1061,10 @@ pub struct Scene {
     /// around it (`lawns_follow`), and again when it moves to another cell.
     lawn_eye: [i32; 2],
     lawns_follow: bool,
+    /// The eye's cell for the GPU grass of a large terrain (`grass::window_cell`): its mask is
+    /// made round the eye (`grass_follow`), and again when the eye moves to another cell.
+    grass_eye: [i32; 2],
+    grass_follow: bool,
     /// The tuft budget's multiple of the quality's (`set_lawn_budget`): more on fast GPUs.
     lawn_budget: f32,
     /// Fallen leaves, stones, twigs and lawn edges (`clutter`).
@@ -1899,9 +1917,10 @@ impl Scene {
         todo
     }
 
-    /// The GPU grass's mask over every lawn face (`visioncraft_core::grass`), given to the
-    /// renderer when what it is made of changed: the lawns, what lies on them, the crowns over
-    /// them and the month.
+    /// The GPU grass's mask over every lawn face and the terrain's lawn and meadow layers
+    /// (`visioncraft_core::grass`), given to the renderer when what it is made of changed: the
+    /// lawns, the terrain, what lies on them, the crowns over them and the month; for a terrain
+    /// too big for one mask also the eye's cell (`grass_eye`).
     fn sync_grass(
         &mut self,
         r: &mut Renderer,
@@ -1928,6 +1947,51 @@ impl Scene {
                 (holes, blends_over(&project.shapes, id))
             })
             .collect();
+        // The terrain's lawn and meadow layers (no mowing stripes: those belong to a drawn lawn),
+        // without what is drawn over the terrain: areas, terraces, models on the ground.
+        let terrain = self.terrain.clone();
+        let layers: Vec<Option<(Lawn3d, [f32; 3])>> = terrain
+            .as_ref()
+            .map(|t| {
+                t.layers
+                    .iter()
+                    .map(|l| {
+                        let m = project.materials.iter().find(|m| m.id == l.material)?;
+                        match &m.kind {
+                            SurfaceKind::Lawn3d(lawn) => Some((
+                                Lawn3d {
+                                    stripes_m: 0.0,
+                                    stripes_deg: 0.0,
+                                    flowers: lawn.flowers * flower_season(month),
+                                    ..*lawn
+                                },
+                                self.blade_color(m, month),
+                            )),
+                            _ => None,
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let terrain_grass = layers.iter().any(Option::is_some);
+        let mut terrain_holes: Holes = Vec::new();
+        if terrain_grass {
+            terrain_holes.extend(project.shapes.iter().filter_map(|s| match s {
+                Shape::Area(a) if project.layer_visible(&a.layer) => Some(a.outline().into_owned()),
+                _ => None,
+            }));
+            terrain_holes.extend(self.zones.iter().map(|z| z.hole.clone()));
+            terrain_holes.extend(on_ground.iter().map(|t| t.to_vec()));
+        }
+        let min_height = project.sea.as_ref().map(|s| s.level + 0.05);
+        let windowed = terrain_grass
+            && terrain.as_ref().is_some_and(|t| {
+                let [lo, hi] = t.extent();
+                hi[0] - lo[0] > grass::WINDOW_M || hi[1] - lo[1] > grass::WINDOW_M
+            });
+        self.grass_follow = windowed;
+        let window = windowed.then(|| grass::window_round(self.grass_eye));
+
         let mut bits: Vec<u32> = vec![month];
         bits.extend(crowns.iter().flat_map(|c| c.map(f32::to_bits)));
         let mut geoms = Vec::new();
@@ -1937,61 +2001,100 @@ impl Scene {
             bits.extend(o.xf.to_cols_array().map(f32::to_bits));
             for (f, l, c) in faces {
                 bits.push(*f as u32);
-                bits.extend(
-                    [
-                        l.density_per_m2,
-                        l.blade_height_m,
-                        l.stripes_m,
-                        l.stripes_deg,
-                        l.flowers,
-                    ]
-                    .map(f32::to_bits),
-                );
+                bits.extend(lawn_bits(l));
                 bits.extend(c.map(f32::to_bits));
             }
             bits.extend(holes.iter().flatten().flat_map(|p| p.map(f32::to_bits)));
             bits.extend(blends.iter().map(|b| b.to_bits()));
+        }
+        if terrain_grass && let Some(t) = &terrain {
+            // The terrain is replaced (a new `Arc`) whenever it changes.
+            let at = Arc::as_ptr(t) as usize as u64;
+            bits.extend([at as u32, (at >> 32) as u32]);
+            for l in &layers {
+                match l {
+                    Some((lawn, c)) => {
+                        bits.push(1);
+                        bits.extend(lawn_bits(lawn));
+                        bits.extend(c.map(f32::to_bits));
+                    }
+                    None => bits.push(0),
+                }
+            }
+            bits.extend(
+                terrain_holes
+                    .iter()
+                    .flatten()
+                    .flat_map(|p| p.map(f32::to_bits)),
+            );
+            bits.extend(min_height.map(f32::to_bits));
+            bits.extend(window.iter().flatten().flat_map(|p| p.map(f32::to_bits)));
         }
         let key = (geoms, bits);
         if self.grass_key.as_ref() == Some(&key) {
             return;
         }
         let mut kinds: Vec<visioncraft_render::GrassKind> = Vec::new();
+        let mut kind_of = |kind: visioncraft_render::GrassKind| -> u8 {
+            match kinds.iter().position(|x| *x == kind) {
+                Some(k) => k as u8,
+                None if kinds.len() < visioncraft_render::GRASS_KINDS => {
+                    kinds.push(kind);
+                    (kinds.len() - 1) as u8
+                }
+                // shortcut: past eight lawn looks the rest take the first's colour
+                None => 0,
+            }
+        };
         let mut patches = Vec::new();
         for ((id, faces), (holes, blends)) in todo.iter().zip(&lawns) {
             let o = &self.owners[id];
             for (f, l, color) in faces {
                 let a = l.stripes_deg.to_radians();
-                let kind = visioncraft_render::GrassKind {
+                let k = kind_of(visioncraft_render::GrassKind {
                     color: *color,
                     stripes_m: l.stripes_m,
                     stripes_dir: [a.sin(), -a.cos()],
                     dry: grass_dry(month, l.blade_height_m),
-                };
-                let k = match kinds.iter().position(|x| *x == kind) {
-                    Some(k) => k,
-                    None if kinds.len() < visioncraft_render::GRASS_KINDS => {
-                        kinds.push(kind);
-                        kinds.len() - 1
-                    }
-                    // shortcut: past eight lawn looks the rest take the first's colour
-                    None => 0,
-                };
-                patches.push(visioncraft_core::grass::GrassPatch {
+                });
+                patches.push(grass::GrassPatch {
                     model: &o.geom,
                     face: *f,
                     xf: o.xf.to_cols_array(),
-                    lawn: visioncraft_core::material::Lawn3d {
+                    lawn: Lawn3d {
                         flowers: l.flowers * flower_season(month),
                         ..*l
                     },
-                    kind: k as u8,
+                    kind: k,
                     holes,
                     hole_blends: blends,
                 });
             }
         }
-        let mask = visioncraft_core::grass::grass_mask(&patches, crowns);
+        let terrain_layers: Vec<Option<(Lawn3d, u8)>> = layers
+            .iter()
+            .map(|l| {
+                l.map(|(lawn, color)| {
+                    let k = kind_of(visioncraft_render::GrassKind {
+                        color,
+                        stripes_m: 0.0,
+                        stripes_dir: [0.0, -1.0],
+                        dry: grass_dry(month, lawn.blade_height_m),
+                    });
+                    (lawn, k)
+                })
+            })
+            .collect();
+        let grown = terrain
+            .as_ref()
+            .filter(|_| terrain_grass)
+            .map(|t| grass::TerrainGrass {
+                terrain: t,
+                layers: terrain_layers,
+                holes: &terrain_holes,
+                min_height,
+            });
+        let mask = grass::grass_mask_in(&patches, grown.as_ref(), crowns, window);
         match &mask {
             Some(m) => r.set_grass(Some(&visioncraft_render::GrassField {
                 origin: m.origin,
@@ -2796,7 +2899,10 @@ impl Scene {
         let cover = [eye.x, eye.z].map(|v| (v / natural::COVER_CELL_M).floor() as i32);
         let cover_moved =
             std::mem::replace(&mut self.natural.eye, cover) != cover && self.natural.follow;
-        self.flora.pump(r, eye) | library | moved | cover_moved
+        let grass_cell = grass::window_cell([eye.x, eye.z]);
+        let grass_moved =
+            std::mem::replace(&mut self.grass_eye, grass_cell) != grass_cell && self.grass_follow;
+        self.flora.pump(r, eye) | library | moved | cover_moved | grass_moved
     }
 
     /// Screen pixels per texture repeat of each textured material at its nearest visible
