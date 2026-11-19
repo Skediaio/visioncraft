@@ -4,8 +4,8 @@
 
 use super::{check_layer, fail, merge_update, next_id};
 use crate::natural::{
-    AutoMaterials, Deadwood, DeadwoodKind, GroundCover, Rock, RockShape, ensure_material,
-    rockiness, scatter_points, unit,
+    AutoMaterials, Deadwood, DeadwoodKind, GroundCover, Occupancy, Rock, RockShape,
+    deadwood_footprint, ensure_material, rock_footprint, rockiness, scatter_points, unit,
 };
 use crate::project::Project;
 use crate::session::{CommandError, Session, bad, parse};
@@ -575,16 +575,17 @@ fn scatter_rocks(project: &mut Project, params: &Value) -> Result<Value, Command
     let group = next_id("rs", |g| {
         project.rocks.iter().any(|r| r.group.as_deref() == Some(g))
     });
+    // Clear of what stands there already and of each other (rocks of a cluster may touch).
+    let mut occupied = Occupancy::of_project(project);
     let mut ids = Vec::new();
     for (k, pt) in pts.into_iter().enumerate() {
         let k = k as i64;
         let u = unit(p.seed, k * 4);
         // Most small, a few big: sizes skewed towards the small end.
         let size = p.size_min_m + (p.size_max_m - p.size_min_m) * u * u;
-        let id = next_id("rk", |id| project.rocks.iter().any(|r| r.id == id));
         let pick = |n: usize, j: i64| ((unit(p.seed, k * 4 + j) * n as f32) as usize).min(n - 1);
-        project.rocks.push(Rock {
-            id: id.clone(),
+        let rock = Rock {
+            id: String::new(),
             layer: p.layer.clone(),
             position: pt,
             size_m: size,
@@ -597,6 +598,16 @@ fn scatter_rocks(project: &mut Project, params: &Value) -> Result<Value, Command
             model: (!p.models.is_empty()).then(|| p.models[pick(p.models.len(), 1)].clone()),
             group: Some(group.clone()),
             hidden: false,
+        };
+        let foot = rock_footprint(&rock);
+        if !occupied.is_free(foot, true) {
+            continue;
+        }
+        occupied.add_rock(foot);
+        let id = next_id("rk", |id| project.rocks.iter().any(|r| r.id == id));
+        project.rocks.push(Rock {
+            id: id.clone(),
+            ..rock
         });
         ids.push(id);
     }
@@ -749,6 +760,8 @@ fn scatter_deadwood(project: &mut Project, params: &Value) -> Result<Value, Comm
             .iter()
             .any(|d| d.group.as_deref() == Some(g))
     });
+    // Clear of what stands there already (trunks, rocks, paths) and of each other.
+    let mut occupied = Occupancy::of_project(project);
     let mut ids = Vec::new();
     for (k, pt) in pts.into_iter().enumerate() {
         let k = k as i64;
@@ -757,9 +770,8 @@ fn scatter_deadwood(project: &mut Project, params: &Value) -> Result<Value, Comm
         let (length, diameter) = kind.default_size();
         // From two thirds to one and a half times the usual size, thicker with longer.
         let s = 0.65 + 0.85 * unit(p.seed, k * 5 + 1);
-        let id = next_id("dw", |id| project.deadwood.iter().any(|d| d.id == id));
-        project.deadwood.push(Deadwood {
-            id: id.clone(),
+        let piece = Deadwood {
+            id: String::new(),
             layer: p.layer.clone(),
             kind,
             position: pt,
@@ -771,6 +783,16 @@ fn scatter_deadwood(project: &mut Project, params: &Value) -> Result<Value, Comm
             model: (!p.models.is_empty()).then(|| p.models[pick(p.models.len(), 4)].clone()),
             group: Some(group.clone()),
             hidden: false,
+        };
+        let foot = deadwood_footprint(&piece);
+        if !occupied.is_free(foot, false) {
+            continue;
+        }
+        occupied.add(foot);
+        let id = next_id("dw", |id| project.deadwood.iter().any(|d| d.id == id));
+        project.deadwood.push(Deadwood {
+            id: id.clone(),
+            ..piece
         });
         ids.push(id);
     }
@@ -880,15 +902,26 @@ mod tests {
         let n = sc["count"].as_u64().unwrap() as usize;
         assert!(n > 5, "{sc}");
         assert_eq!(s.project().rocks.len(), n + 1);
-        // Deterministic.
+        // The same scatter again keeps clear of the first: hardly a rock finds room.
         let again = s
             .run("rock.scatter", json!({"outline": [[0, 0], [40, 0], [40, 30], [0, 30]], "density_per_100m2": 4, "seed": 3}))
             .unwrap();
-        assert_eq!(again["count"], sc["count"]);
+        let m = again["count"].as_u64().unwrap() as usize;
+        assert!(m < n / 2, "{m} of {n} again");
         let removed = s.run("rock.remove", json!({"group": sc["group"]})).unwrap();
         assert_eq!(removed["removed"].as_u64().unwrap() as usize, n);
         assert!(s.undo());
-        assert_eq!(s.project().rocks.len(), 2 * n + 1);
+        assert_eq!(s.project().rocks.len(), n + m + 1);
+        // Deterministic: the same in another session.
+        let mut other = hill();
+        other.run("terrain.set_auto", json!({})).unwrap();
+        other
+            .run("rock.add", json!({"position": [5, 5], "size_m": 1.2}))
+            .unwrap();
+        let same = other
+            .run("rock.scatter", json!({"outline": [[0, 0], [40, 0], [40, 30], [0, 30]], "density_per_100m2": 4, "seed": 3}))
+            .unwrap();
+        assert_eq!(same["count"], sc["count"]);
         // Rocks survive the project file.
         let bytes = s.project().to_json_bytes();
         let back = crate::Project::from_json_bytes(&bytes).unwrap();
@@ -941,5 +974,67 @@ mod tests {
         );
         s.run("deadwood.remove", json!({"ids": ["dw1"]})).unwrap();
         assert!(s.project().deadwood.iter().all(|d| d.id != "dw1"));
+    }
+
+    /// The scatters share one occupancy: rocks and deadwood keep clear of each other, of the
+    /// paths and areas drawn on the ground and of the trees' trunks.
+    #[test]
+    fn scatters_keep_clear_of_each_other_paths_and_trunks() {
+        use crate::natural::{Occupancy, deadwood_footprint, rock_footprint};
+        let mut s = hill();
+        s.run(
+            "shape.add_area",
+            json!({"name": "Path", "outline": [[0, 13], [40, 13], [40, 17], [0, 17]], "material": "gravel"}),
+        )
+        .unwrap();
+        s.run(
+            "planting.add_area",
+            json!({"name": "Wood", "asset_palette": [{"asset": "flora:quercus-robur", "weight": 1}], "outline": [[0, 0], [40, 0], [40, 30], [0, 30]], "density_per_m2": 0.03}),
+        )
+        .unwrap();
+        let everywhere = json!([[0, 0], [40, 0], [40, 30], [0, 30]]);
+        s.run(
+            "deadwood.scatter",
+            json!({"outline": everywhere, "density_per_100m2": 6, "seed": 5}),
+        )
+        .unwrap();
+        s.run(
+            "rock.scatter",
+            json!({"outline": everywhere, "density_per_100m2": 12, "seed": 6, "follow_terrain": false}),
+        )
+        .unwrap();
+        let p = s.project();
+        assert!(p.rocks.len() > 10 && p.deadwood.len() > 5);
+        // Nothing on the path.
+        let path = [[0.0, 13.0], [40.0, 13.0], [40.0, 17.0], [0.0, 17.0]];
+        let mut only_path = Occupancy::default();
+        only_path.add_area(path.to_vec());
+        for r in &p.rocks {
+            assert!(only_path.is_free(rock_footprint(r), false), "{r:?}");
+        }
+        for d in &p.deadwood {
+            assert!(only_path.is_free(deadwood_footprint(d), false), "{d:?}");
+        }
+        // No rock on a log or a stump, nor on a trunk.
+        let mut wood = Occupancy::default();
+        for d in &p.deadwood {
+            wood.add(deadwood_footprint(d));
+        }
+        for r in &p.rocks {
+            assert!(wood.is_free(rock_footprint(r), false), "{r:?}");
+        }
+        let trunks = {
+            let mut bare = p.clone();
+            bare.rocks.clear();
+            bare.deadwood.clear();
+            bare.shapes.clear();
+            Occupancy::of_project(&bare)
+        };
+        for r in &p.rocks {
+            assert!(trunks.is_free(rock_footprint(r), false), "{r:?}");
+        }
+        for d in &p.deadwood {
+            assert!(trunks.is_free(deadwood_footprint(d), false), "{d:?}");
+        }
     }
 }

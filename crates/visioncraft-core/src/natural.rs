@@ -1482,6 +1482,191 @@ pub fn unit(seed: u64, k: i64) -> f32 {
     Rng::new(mix(seed, k)).f32()
 }
 
+// ---- occupancy ----
+
+/// What stands on the ground already, for scatters to keep clear of (`rock.scatter`,
+/// `deadwood.scatter`): rocks and deadwood (each new one added as it is placed, so a scatter's
+/// own pieces avoid each other too), the areas drawn on the ground (paths, terraces, paving,
+/// ponds), houses, blocks and walls, and the trunks of trees and palms. Footprints are capsules
+/// in plan: a lying log a segment with its radius, a rock or a trunk a circle.
+#[derive(Clone, Debug, Default)]
+pub struct Occupancy {
+    /// Two ends (x, z; alike for a circle), a radius and whether it is a rock.
+    capsules: Vec<([f32; 2], [f32; 2], f32, bool)>,
+    /// Outlines with their bounds (min x, min z, max x, max z).
+    areas: Vec<([f32; 4], Vec<[f32; 2]>)>,
+}
+
+/// Rocks of a cluster may touch and lean into each other by this share of the smaller one's
+/// radius; nothing else overlaps.
+const NESTLE: f32 = 0.2;
+/// Room left round a trunk (m).
+const TRUNK_CLEARANCE_M: f32 = 0.15;
+
+/// The plan footprint of a rock: a circle round its centre.
+pub fn rock_footprint(r: &Rock) -> ([f32; 2], [f32; 2], f32) {
+    let [w, _, d] = r.dimensions();
+    (r.position, r.position, 0.5 * w.max(d))
+}
+
+/// The plan footprint of a deadwood piece: a lying one along its length (`deadwood_matrix`'s
+/// direction), a standing one a circle as wide as its root flare.
+pub fn deadwood_footprint(d: &Deadwood) -> ([f32; 2], [f32; 2], f32) {
+    if d.kind.lies() {
+        let yaw = d.yaw_deg.to_radians();
+        let half = 0.5 * d.length_m;
+        let dir = [yaw.cos() * half, -yaw.sin() * half];
+        let [x, z] = d.position;
+        // Its bow and branch stubs reach a little beyond the trunk's own radius.
+        (
+            [x - dir[0], z - dir[1]],
+            [x + dir[0], z + dir[1]],
+            0.5 * d.diameter_m + 0.05 * d.length_m,
+        )
+    } else {
+        (d.position, d.position, 0.8 * d.diameter_m)
+    }
+}
+
+fn segment_point(a: [f32; 2], b: [f32; 2], p: [f32; 2]) -> f32 {
+    let ab = [b[0] - a[0], b[1] - a[1]];
+    let ap = [p[0] - a[0], p[1] - a[1]];
+    let t = ((ap[0] * ab[0] + ap[1] * ab[1]) / (ab[0] * ab[0] + ab[1] * ab[1]).max(1e-12))
+        .clamp(0.0, 1.0);
+    ((ap[0] - ab[0] * t).powi(2) + (ap[1] - ab[1] * t).powi(2)).sqrt()
+}
+
+/// The distance between two segments in plan (0 where they cross).
+fn segment_segment(a: [f32; 2], b: [f32; 2], c: [f32; 2], d: [f32; 2]) -> f32 {
+    let side = |p: [f32; 2], q: [f32; 2], r: [f32; 2]| {
+        (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
+    };
+    let (d1, d2) = (side(a, b, c), side(a, b, d));
+    let (d3, d4) = (side(c, d, a), side(c, d, b));
+    if d1 * d2 < 0.0 && d3 * d4 < 0.0 {
+        return 0.0;
+    }
+    segment_point(a, b, c)
+        .min(segment_point(a, b, d))
+        .min(segment_point(c, d, a))
+        .min(segment_point(c, d, b))
+}
+
+impl Occupancy {
+    /// What stands on the ground of `project` (on visible layers; hidden pieces left out).
+    pub fn of_project(project: &crate::Project) -> Self {
+        let mut o = Self::default();
+        for r in project.rocks.iter().filter(|r| !r.hidden) {
+            o.add_rock(rock_footprint(r));
+        }
+        for d in project.deadwood.iter().filter(|d| !d.hidden) {
+            o.add(deadwood_footprint(d));
+        }
+        for s in &project.shapes {
+            if !project.layer_visible(s.layer()) {
+                continue;
+            }
+            match s {
+                crate::Shape::Area(a) => o.add_area(a.outline().into_owned()),
+                crate::Shape::Extrusion(e) => {
+                    let pts = e.outline().into_owned();
+                    if e.closed {
+                        o.add_area(pts);
+                    } else {
+                        let r = (e.thickness / 2.0).max(0.04);
+                        for w in pts.windows(2) {
+                            o.add((w[0], w[1], r));
+                        }
+                    }
+                }
+            }
+        }
+        let terrain = project.terrain.as_ref();
+        let ground = |x: f32, z: f32| terrain.and_then(|t| t.height_at(x, z)).or(Some(0.0));
+        for g in project
+            .generators
+            .iter()
+            .filter(|g| project.layer_visible(g.layer()))
+        {
+            for pl in crate::planting::evaluate(g, &ground).placements {
+                let gr = crate::growth::growth_of(&pl.asset, None);
+                if matches!(
+                    gr.grower,
+                    crate::growth::Grower::Tree
+                        | crate::growth::Grower::Conifer
+                        | crate::growth::Grower::Palm
+                ) {
+                    // The trunk as it is grown in full.
+                    let age = gr.years_to_maturity * 2.0;
+                    let r = gr.trunk_diameter_m(age) * pl.scale * 0.5 + TRUNK_CLEARANCE_M;
+                    let c = [pl.position[0], pl.position[2]];
+                    o.add((c, c, r));
+                }
+            }
+        }
+        o
+    }
+
+    /// A footprint (two ends and a radius).
+    pub fn add(&mut self, (a, b, r): ([f32; 2], [f32; 2], f32)) {
+        self.capsules.push((a, b, r, false));
+    }
+
+    /// A rock's footprint: other rocks may lean into it a little.
+    pub fn add_rock(&mut self, (a, b, r): ([f32; 2], [f32; 2], f32)) {
+        self.capsules.push((a, b, r, true));
+    }
+
+    /// An outline nothing may stand in.
+    pub fn add_area(&mut self, outline: Vec<[f32; 2]>) {
+        if outline.len() < 3 {
+            return;
+        }
+        let b = outline
+            .iter()
+            .fold([f32::MAX, f32::MAX, f32::MIN, f32::MIN], |b, p| {
+                [
+                    b[0].min(p[0]),
+                    b[1].min(p[1]),
+                    b[2].max(p[0]),
+                    b[3].max(p[1]),
+                ]
+            });
+        self.areas.push((b, outline));
+    }
+
+    /// Whether footprint `c` is clear of everything (a `rock` may lean into other rocks a
+    /// little, as in a cluster).
+    pub fn is_free(&self, c: ([f32; 2], [f32; 2], f32), rock: bool) -> bool {
+        let (a, b, r) = c;
+        let clear_of = |(p, q, s, other_rock): &([f32; 2], [f32; 2], f32, bool)| {
+            let give = if rock && *other_rock {
+                NESTLE * r.min(*s)
+            } else {
+                0.0
+            };
+            segment_segment(a, b, *p, *q) >= r + s - give
+        };
+        if !self.capsules.iter().all(clear_of) {
+            return false;
+        }
+        self.areas.iter().all(|(bb, poly)| {
+            let (lo, hi) = (
+                [a[0].min(b[0]) - r, a[1].min(b[1]) - r],
+                [a[0].max(b[0]) + r, a[1].max(b[1]) + r],
+            );
+            if hi[0] < bb[0] || lo[0] > bb[2] || hi[1] < bb[1] || lo[1] > bb[3] {
+                return true;
+            }
+            let mid = [(a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5];
+            if [a, b, mid].iter().any(|p| point_in_polygon(*p, poly)) {
+                return false;
+            }
+            (0..poly.len()).all(|i| segment_segment(a, b, poly[i], poly[(i + 1) % poly.len()]) >= r)
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1602,6 +1787,39 @@ mod tests {
     }
 
     #[test]
+    fn a_log_bows_tapers_and_breaks_unevenly() {
+        // Bucket 6: eight diameters long; the trunk is the first tube, 16 sides round.
+        let sides = 16;
+        for v in 0..VARIANTS {
+            let m = deadwood_mesh(DeadwoodKind::Log, v, 6, true);
+            let rings = 33;
+            let ring = |i: usize| &m.positions[i * sides..(i + 1) * sides];
+            let centre = |i: usize| {
+                let r = ring(i);
+                let n = r.len() as f32;
+                [0, 1, 2].map(|k| r.iter().map(|p| p[k]).sum::<f32>() / n)
+            };
+            let radius = |i: usize| {
+                let c = centre(i);
+                ring(i)
+                    .iter()
+                    .map(|p| ((p[1] - c[1]).powi(2) + (p[2] - c[2]).powi(2)).sqrt())
+                    .sum::<f32>()
+                    / sides as f32
+            };
+            let (a, mid, b) = (centre(0), centre(rings / 2), centre(rings - 1));
+            let bow = (mid[2] - (a[2] + b[2]) * 0.5).abs();
+            assert!(bow > 0.25, "variant {v}: bow {bow}");
+            assert!(mid[1] <= 0.5 + 0.05, "variant {v} arches up: {mid:?}");
+            assert!(radius(0) > 1.4 * radius(rings - 1), "variant {v}: no taper");
+            // The top's rim is slanted and jagged, not a square cut.
+            let xs = ring(rings - 1).iter().map(|p| p[0]);
+            let spread = xs.clone().fold(f32::MIN, f32::max) - xs.fold(f32::MAX, f32::min);
+            assert!(spread > 0.2, "variant {v}: square end {spread}");
+        }
+    }
+
+    #[test]
     fn cover_follows_the_masks_and_is_the_same_each_time() {
         let mut t = slope();
         t.auto = Some(AutoMaterials::default());
@@ -1634,39 +1852,6 @@ mod tests {
         let flat = pts.iter().filter(|p| p[0] < 18.0).count();
         assert!(steep > flat, "{steep} on the slope, {flat} on the flat");
         assert!(pts.iter().all(|p| point_in_polygon(*p, &outline)));
-    }
-
-    #[test]
-    fn a_log_bows_tapers_and_breaks_unevenly() {
-        // Bucket 6: eight diameters long; the trunk is the first tube, 16 sides round.
-        let sides = 16;
-        for v in 0..VARIANTS {
-            let m = deadwood_mesh(DeadwoodKind::Log, v, 6, true);
-            let rings = 33;
-            let ring = |i: usize| &m.positions[i * sides..(i + 1) * sides];
-            let centre = |i: usize| {
-                let r = ring(i);
-                let n = r.len() as f32;
-                [0, 1, 2].map(|k| r.iter().map(|p| p[k]).sum::<f32>() / n)
-            };
-            let radius = |i: usize| {
-                let c = centre(i);
-                ring(i)
-                    .iter()
-                    .map(|p| ((p[1] - c[1]).powi(2) + (p[2] - c[2]).powi(2)).sqrt())
-                    .sum::<f32>()
-                    / sides as f32
-            };
-            let (a, mid, b) = (centre(0), centre(rings / 2), centre(rings - 1));
-            let bow = (mid[2] - (a[2] + b[2]) * 0.5).abs();
-            assert!(bow > 0.25, "variant {v}: bow {bow}");
-            assert!(mid[1] <= 0.5 + 0.05, "variant {v} arches up: {mid:?}");
-            assert!(radius(0) > 1.4 * radius(rings - 1), "variant {v}: no taper");
-            // The top's rim is slanted and jagged, not a square cut.
-            let xs = ring(rings - 1).iter().map(|p| p[0]);
-            let spread = xs.clone().fold(f32::MIN, f32::max) - xs.fold(f32::MAX, f32::min);
-            assert!(spread > 0.2, "variant {v}: square end {spread}");
-        }
     }
 
     #[test]
