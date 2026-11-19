@@ -101,7 +101,9 @@ fn sky_kcd(dir: vec3<f32>, lod: f32) -> vec3<f32> {
         c = preetham(dir) + g.night.rgb;
     }
     let cl = cloud(dir);
-    return mist_over(mix(c, cl.rgb, cl.a), dir);
+    // A lightning flash lights the scene as a bright sky over it would (lib.rs `set_time` redoes
+    // the ambient light while it lasts).
+    return mist_over(mix(c, cl.rgb, cl.a), dir) + flash_sky();
 }
 
 // The sky as seen from the ground through the mist (for the environment and the ambient light, so
@@ -195,20 +197,47 @@ fn cloud(dir: vec3<f32>) -> vec4<f32> {
     let sky = sky_up_sh();
     var rad_over = vec3<f32>(0.0);
     var rad_fair = vec3<f32>(0.0);
+    // Where volumetric clouds are drawn, the environment and the ambient light take this layer
+    // in their stead: lit as the volumetric layer is, so the garden is not lit by a brighter
+    // sky than the one over it (at sunrise under a closed layer, by far).
+    let volumetric = g.cloud_vol.x > 0.5;
+    let sun_up = select(1.0, smoothstep(-0.08, 0.02, g.sun_dir.y), volumetric);
     if o > 0.0 {
-        rad_over = (sun * high * 0.35 + sky * 0.5) / PI * mix(0.8, 1.05, n) * (1.0 + 0.5 * smoothstep(0.1, 0.8, g.wet.y));
+        if volumetric {
+            rad_over = volume_base_light() * mix(0.85, 1.05, n);
+        } else {
+            rad_over = (sun * high * 0.35 + sky * 0.5) / PI * mix(0.8, 1.05, n) * (1.0 + 0.5 * smoothstep(0.1, 0.8, g.wet.y));
+        }
     }
     if o < 1.0 {
         let toward = cloud_fbm(p + normalize(g.sun_dir.xz + vec2<f32>(1e-4, 0.0)) * 0.08);
         let lit = clamp(0.6 + (n - toward) * 3.0, 0.3, 1.0);
         let glow = 1.0 + 1.2 * pow(max(dot(dir, g.sun_dir.xyz), 0.0), 12.0);
-        rad_fair = (sun * high * lit * glow * 0.85 + sky * 0.6) / PI;
+        rad_fair = (sun * high * lit * glow * 0.85 * sun_up + sky * 0.6) / PI;
     }
     var rad = select(rad_fair, rad_over, o > 0.5);
     if o > 0.0 && o < 1.0 {
         rad = mix(rad_fair, rad_over, o);
     }
     return vec4<f32>(rad, a);
+}
+
+// The radiance of a closed layer's base as the volumetric clouds light it (clouds.wgsl `march`,
+// for a sample just inside the base of cloud of density 0.5): the sun's light soaked through
+// the layer (two-stream), the sky's above it shut out by the layer, and the ground's.
+fn volume_base_light() -> vec3<f32> {
+    let sun_up = smoothstep(-0.08, 0.02, g.sun_dir.y);
+    let mu = max(g.sun_dir.y, 0.05);
+    // The whole layer towards the sun (clouds.wgsl `sun_depth`), and straight down for the
+    // light diffused through a closed layer.
+    let od = g.cloud_wind.z * cloud_dense() * 0.5 * g.cloud_vol.z / mu;
+    let slab = od * mix(1.0, mu, g.clouds.y);
+    let soaked = max(1.0 / (1.0 + mix(0.3, 0.12, g.clouds.y) * slab) - exp(-od), 0.0);
+    let sun = cloud_sun_light() * sun_up * soaked * mu / PI;
+    let open = 0.3 + 0.7 * exp(-0.08 * od * max(g.sun_dir.y, 0.25));
+    let sky = sky_up_sh() / PI * 0.25 * open * (1.0 - 0.3 * g.clouds.y);
+    let ground = g.ground.rgb * (sky_up_sh() + g.sun_light.rgb / max(g.night.w, 1e-12) * max(g.sun_dir.y, 0.0)) / PI * 0.45;
+    return sun + sky + ground;
 }
 
 // The ground below the horizon under the analytic skies (kcd/m2): a
@@ -382,5 +411,102 @@ fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
         let transmit = exp(-mist_depth(g.camera.y, dir.y, 1e9));
         color = color * transmit + mist_inscatter(dir) * (1.0 - transmit);
     }
+    // Lightning: the flash lighting the clouds and the rain over the whole sky, and its bolt.
+    if g.bolt.z > 0.0 && dir.y > -0.1 {
+        color += flash_sky() * (0.6 * g.night.w * smoothstep(-0.1, 0.1, dir.y));
+    }
+    if g.bolt.y > 0.0 && !is_ortho() {
+        // Kept within half-float range at any exposure.
+        color += min(lightning_bolt(dir) * g.night.w, vec3<f32>(3e4));
+    }
     return vec4<f32>(color, 1.0);
+}
+
+// ---- a lightning bolt (lightning.rs) ----------------------------------------
+
+fn bolt_random(seed: u32, k: u32) -> f32 {
+    return unit(pcg(seed + k * 7919u));
+}
+
+// The closest approach of the view ray along `dir` to the segment a-b (world): its distance
+// from the ray over the distance along it (an angle, rad), and that distance along it (m).
+fn ray_to_segment(dir: vec3<f32>, a: vec3<f32>, b: vec3<f32>) -> vec2<f32> {
+    let u = b - a;
+    let w0 = g.camera.xyz - a;
+    let bu = dot(dir, u);
+    let c = dot(u, u);
+    let d = dot(dir, w0);
+    let e = dot(u, w0);
+    let t = clamp((e - bu * d) / max(c - bu * bu, 1e-6), 0.0, 1.0);
+    let q = a + u * t;
+    let s = max(dot(dir, q - g.camera.xyz), 1.0);
+    return vec2<f32>(length(g.camera.xyz + dir * s - q) / s, s);
+}
+
+// A lightning bolt seen in `dir` (kcd/m2): a channel from the cloud base under the flash down
+// to the ground, jagged by a random walk that keeps returning to the straight line, with two
+// branches that fade, all from the bolt's seed. Its core is far brighter than anything in the
+// sky and about a pixel wide; a glow round it, and a wide halo where the haze and the rain fog
+// scatter its light (the core dimmed by them as they hide it).
+fn lightning_bolt(dir: vec3<f32>) -> vec3<f32> {
+    let seed = u32(g.bolt.x);
+    let top = vec3<f32>(g.flash.x, g.cloud_vol.y, g.flash.z);
+    let height = max(top.y - g.bolt.w, 100.0);
+    let bottom = vec3<f32>(
+        top.x + (bolt_random(seed, 1u) - 0.5) * 0.6 * height,
+        g.bolt.w,
+        top.z + (bolt_random(seed, 2u) - 0.5) * 0.6 * height,
+    );
+    // The angle one pixel spans.
+    let pixel = 2.0 / (abs(g.proj[1][1]) * g.viewport.y);
+    var core = 0.0;
+    var glow = 0.0;
+    var depth = 1e9;
+    var nearest = 1e9;
+    var a = top;
+    var off = vec3<f32>(0.0);
+    let n = 22u;
+    for (var i = 1u; i <= n; i++) {
+        off = off * 0.55 + (vec3<f32>(bolt_random(seed, 10u + 3u * i), 0.3 * bolt_random(seed, 11u + 3u * i), bolt_random(seed, 12u + 3u * i)) - 0.5) * (0.2 * height);
+        var b = mix(top, bottom, f32(i) / f32(n)) + off;
+        if i == n {
+            b = bottom;
+        }
+        let r = ray_to_segment(dir, a, b);
+        let x = r.x / pixel;
+        core = max(core, exp(-x * x));
+        glow += 1.0 / (1.0 + x * x / 36.0);
+        nearest = min(nearest, x);
+        depth = min(depth, r.y);
+        // Two branches, from a quarter and from halfway down, fading as they go.
+        if i == n / 4u || i == n / 2u {
+            var c = b;
+            var side = normalize(vec3<f32>(bolt_random(seed, 90u + i) - 0.5, 0.0, bolt_random(seed, 91u + i) - 0.5) + vec3<f32>(1e-3));
+            for (var k = 1u; k <= 8u; k++) {
+                let jag = (vec3<f32>(bolt_random(seed, 100u + 7u * i + 3u * k), 0.0, bolt_random(seed, 101u + 7u * i + 3u * k)) - 0.5) * 0.1;
+                let d = c + (side * 0.06 + jag + vec3<f32>(0.0, -0.045, 0.0)) * height;
+                let rb = ray_to_segment(dir, c, d);
+                let xb = rb.x / pixel;
+                let fade = 1.0 - f32(k) / 9.0;
+                core = max(core, exp(-xb * xb * 1.5) * fade);
+                glow += fade * 0.5 / (1.0 + xb * xb / 36.0);
+                c = d;
+            }
+        }
+        a = b;
+    }
+    if nearest > 400.0 {
+        return vec3<f32>(0.0);
+    }
+    var through = fog_transmittance(g.camera.y, dir.y, depth);
+    if g.mist.x > 0.0 {
+        through *= exp(-mist_depth(g.camera.y, dir.y, depth));
+    }
+    let tint = vec3<f32>(0.8, 0.85, 1.0);
+    let s = g.bolt.y;
+    let halo = (1.0 - through) / (1.0 + nearest * nearest / 900.0);
+    // A channel is some 10^4 kcd/m2 (Rakov & Uman 2003): it shows through rain that hides
+    // everything else at that distance (here through at most an optical depth of six).
+    let channel = max(through, 0.0025) * 2e4 * core;
+    return tint * s * (channel + through * 4.0 * min(glow, 4.0) + 1.5 * halo);
 }

@@ -19,7 +19,7 @@ pub fn recipes() -> Vec<Value> {
 #[test]
 fn every_recipe_of_the_guide_runs() {
     let recipes = recipes();
-    assert_eq!(recipes.len(), 46);
+    assert_eq!(recipes.len(), 47);
     for (n, recipe) in recipes.into_iter().enumerate() {
         let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("recipe-{n}"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -332,6 +332,24 @@ fn every_recipe_of_the_guide_runs() {
                     "{report}"
                 );
                 assert_eq!(t["openings"], 2, "{report}");
+            }
+            47 => {
+                // The storm's lightning is the project's; halfway through the shot the flashes
+                // come halfway between its two frequencies.
+                let i = visioncraft_automation::commands::execute(
+                    &mut host,
+                    "document.inspect",
+                    &json!({"faces": false}),
+                )
+                .unwrap();
+                let view = &i["view"];
+                assert_eq!(view["clouds"]["kind"], "storm", "{view}");
+                assert!((view["clouds"]["lightning"].as_f64().unwrap() - 0.8).abs() < 1e-5);
+                let mid = &results[5]["result"]["overrides"];
+                assert!(
+                    (mid["lightning"].as_f64().unwrap() - 0.65).abs() < 1e-3,
+                    "{report}"
+                );
             }
             46 => {
                 // The meadow came from the palette with its flowers changed; the lawn mown in

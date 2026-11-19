@@ -8,14 +8,20 @@
 // - `cs_detail`, 32^3: rgb Worley fractal noise at three rising frequencies, eroding the
 //   edges (Schneider 2015; Schneider, "Nubis: Authoring Real-Time Volumetric Cloudscapes with
 //   the Decima Engine", SIGGRAPH 2017 Advances).
-// - `cs_weather`, 1024^2: common.wgsl `cloud_weather` over one CLOUD_PERIOD, the same function
-//   the cloud shadows evaluate directly.
+// - `cs_weather`, 1024^2: common.wgsl `cloud_weather` over one CLOUD_PERIOD, the same
+//   function the cloud shadows evaluate directly.
+// - `cs_curl`, 128^2: a curl noise over CLOUD_CURL_TILE (clouds.wgsl) that twists the detail
+//   noise into curls as rising air would (Bridson et al., "Curl-Noise for Procedural Fluid
+//   Flow", SIGGRAPH 2007; Schneider 2015 distorts the detail with it).
+// - `cs_mip`: each level of the base and detail noise from the one above (a 2x2x2 box), so a
+//   far cloud reads the noise averaged over its texel instead of aliasing into streaks.
 //
 // Every noise tiles: its lattice wraps at whole cells, so the textures repeat seamlessly.
 
 @group(1) @binding(0) var base_out: texture_storage_3d<rgba8unorm, write>;
 @group(1) @binding(1) var detail_out: texture_storage_3d<rgba8unorm, write>;
 @group(1) @binding(2) var weather_out: texture_storage_2d<rgba8unorm, write>;
+@group(1) @binding(3) var curl_out: texture_storage_2d<rgba8unorm, write>;
 
 fn wrap3(c: vec3<i32>, n: i32) -> vec3<u32> {
     return vec3<u32>(((c % n) + n) % n);
@@ -111,6 +117,20 @@ fn cs_detail(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(detail_out, id, out);
 }
 
+// The curl of a tiling potential of two gradient-noise octaves at `uv` (one period, 0..1), about
+// -1..1 per axis: a flow without sources or sinks.
+fn potential(uv: vec2<f32>) -> f32 {
+    return cloud_perlin(uv * 8.0, 8, 3u) + 0.5 * cloud_perlin(uv * 16.0, 16, 5u);
+}
+
+fn curl(uv: vec2<f32>) -> vec2<f32> {
+    let e = 1.0 / 1024.0;
+    let dx = potential(uv + vec2<f32>(e, 0.0)) - potential(uv - vec2<f32>(e, 0.0));
+    let dy = potential(uv + vec2<f32>(0.0, e)) - potential(uv - vec2<f32>(0.0, e));
+    // Per cell of the coarser octave, the gradient of gradient noise stays within about 1.5.
+    return vec2<f32>(dy, -dx) / (2.0 * e) / (8.0 * 1.5);
+}
+
 @compute @workgroup_size(8, 8, 1)
 fn cs_weather(@builtin(global_invocation_id) id: vec3<u32>) {
     let size = textureDimensions(weather_out);
@@ -119,4 +139,33 @@ fn cs_weather(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(size);
     textureStore(weather_out, id.xy, vec4<f32>(cloud_weather(uv), 0.0, 1.0));
+}
+
+@compute @workgroup_size(8, 8, 1)
+fn cs_curl(@builtin(global_invocation_id) id: vec3<u32>) {
+    let size = textureDimensions(curl_out);
+    if any(id.xy >= size) {
+        return;
+    }
+    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(size);
+    let c = clamp(curl(uv) * 0.5 + 0.5, vec2<f32>(0.0), vec2<f32>(1.0));
+    textureStore(curl_out, id.xy, vec4<f32>(c, 0.0, 1.0));
+}
+
+// One level of a noise from the level above it.
+@group(2) @binding(0) var mip_src: texture_3d<f32>;
+@group(2) @binding(1) var mip_dst: texture_storage_3d<rgba8unorm, write>;
+
+@compute @workgroup_size(4, 4, 4)
+fn cs_mip(@builtin(global_invocation_id) id: vec3<u32>) {
+    let size = textureDimensions(mip_dst);
+    if any(id >= size) {
+        return;
+    }
+    var sum = vec4<f32>(0.0);
+    for (var k = 0u; k < 8u; k++) {
+        let o = vec3<u32>(k & 1u, (k >> 1u) & 1u, (k >> 2u) & 1u);
+        sum += textureLoad(mip_src, vec3<i32>(id * 2u + o), 0);
+    }
+    textureStore(mip_dst, id, sum / 8.0);
 }

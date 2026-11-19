@@ -2131,13 +2131,59 @@ fn volumetric_clouds_fall_back_to_the_flat_layer() {
             ..fair
         },
     );
+    write_png(&out_dir().join("clouds_fair.png"), &lit, W, H);
+    write_png(&out_dir().join("clouds_storm.png"), &storm, W, H);
     let (storm_mean, _) = sky(&storm);
     assert!(
         storm_mean < fair_mean,
         "a storm sky is darker: {storm_mean} vs {fair_mean}"
     );
-    write_png(&out_dir().join("clouds_fair.png"), &lit, W, H);
-    write_png(&out_dir().join("clouds_storm.png"), &storm, W, H);
+}
+
+/// Lightning in a storm (`Clouds::lightning`): at a moment with a flash the picture is lighter
+/// than between flashes, and the same moment of the animation clock gives the same picture, so
+/// a film shows the same flashes every time.
+#[test]
+fn lightning_flashes_at_fixed_moments() {
+    let aspect = W as f32 / H as f32;
+    let view = demo::camera(Vec3::new(0.0, 1.5, 6.0), Vec3::new(0.0, 4.0, -20.0), aspect);
+    let frame = |t: f64| {
+        let mut r = renderer(W, H);
+        r.set_quality(Quality::HIGH);
+        demo::spheres(&mut r);
+        setup(&mut r, view, demo::noon_sun(), 12.0);
+        r.set_sky(&Sky::Physical).unwrap();
+        r.set_clouds(&visioncraft_render::Clouds {
+            cover: 1.0,
+            overcast: 1.0,
+            storm: 1.0,
+            volumetric: true,
+            lightning: 0.5,
+            ..Default::default()
+        });
+        r.set_time(t);
+        r.finish_environment();
+        settle(&mut r);
+        capture(&mut r, W, H)
+    };
+    let mean = |px: &[u8]| {
+        px.chunks(4)
+            .map(|p| (p[0] as f32 + p[1] as f32 + p[2] as f32) / 3.0)
+            .sum::<f32>()
+            / (px.len() / 4) as f32
+    };
+    // At 0.5 the first minute's first flash comes at 15.3 s; one strikes at 151.74 s.
+    let between = frame(1.0);
+    let flash = frame(151.74);
+    write_png(&out_dir().join("lightning_between.png"), &between, W, H);
+    write_png(&out_dir().join("lightning_flash.png"), &flash, W, H);
+    assert!(
+        mean(&flash) > mean(&between) + 8.0,
+        "a flash lights the storm: {} vs {}",
+        mean(&flash),
+        mean(&between)
+    );
+    assert!(frame(151.74) == flash, "the same moment, the same flash");
 }
 
 /// The volumetric clouds' cost a frame once their image is settled, per preset at 1280x720

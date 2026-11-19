@@ -1573,7 +1573,8 @@ given into the current clouds: `{"clouds": {"cover": 0.5}}` changes only the cov
 `view.render` takes `weather` (and `weather_to` with `weather_mix` for a sky between two) and
 `clouds` (a cover, or an object as `view.set` takes it) for one picture (the CLI's `--weather`
 and `--clouds`); a film shot takes
-`weather` `[from, to]`, eased in and out over the shot, and `clouds` (the cover) `[from, to]`.
+`weather` `[from, to]`, eased in and out over the shot, and `clouds` (the cover) `[from, to]`. Storm clouds flash with lightning
+(recipe 47).
 
 ### 46. A flowering meadow beyond a striped lawn, with gusts rolling over both
 
@@ -1604,6 +1605,33 @@ in winter (and a meadow from midsummer), lean the way the mower went in `stripes
 bow over in the gusts (`gustiness`) as paler waves. No grass grows under the areas drawn on
 top of a lawn (a path, a terrace, a pond), and it thins under tree crowns. At LOW quality a lawn
 is drawn as before, with scattered tufts.
+
+### 47. A thunderstorm at dusk: lightning over the garden, and a film shot of flashes
+
+```json recipe
+{"intent": "the example garden under a thunderstorm on a July evening, one picture at the moment of a flash with a bolt far off, then a film shot in which the flashes come more and more often", "steps": [
+  {"id": "project.load_example", "params": {"name": "garden"}},
+  {"id": "time.set", "params": {"month": 7, "day": 15, "hour": 20.5}},
+  {"id": "view.set", "params": {"weather": "storm", "clouds": {"lightning": 0.8}}},
+  {"id": "view.render", "params": {"camera": {"position": [21, 1.7, 31], "target": [60, 13.7, -61], "fov_y_deg": 65}, "width": 1280, "height": 720, "animation_s": 151.74, "path": "storm-flash.png"}},
+  {"id": "film.add", "params": {"name": "Storm", "fps": 25}},
+  {"id": "film.add_shot", "params": {"id": "f1", "shot": {"kind": "hold", "eye": [21, 1.7, 31], "target": [60, 13.7, -61], "fov_y_deg": 65, "duration_s": 10, "lightning": [0.3, 1.0]}}},
+  {"id": "film.preview", "params": {"id": "f1", "t": 5}},
+  {"id": "film.render", "params": {"id": "f1", "dir": "storm", "width": 640, "height": 360, "every": 5}}
+]}
+```
+
+Storm clouds (`weather: "storm"`, or `clouds.kind: "storm"`) flash with lightning: a flash lights
+the clouds from inside for a few frames and the garden as a bright sky over it would, and about
+half of the flashes more than 3 km away show a bolt, a jagged channel with branches from the
+cloud base to the ground, bright enough to show through the rain. `view.set clouds.lightning`
+sets how often, 0 (never) to 1 (every few seconds; 0.5 by default); a sky between two weathers
+flashes as much as it is stormy. The flashes follow the animation clock alone: `view.render
+animation_s` picks the moment (a picture at another moment shows the storm between flashes),
+and a film shows the same flashes every time it is drawn. Raising the frequency keeps every
+flash and adds more. A film shot takes `lightning` `[from, to]`, and `view.render` takes
+`lightning` for one picture. Undo takes a change of `clouds.lightning` back like any other
+view setting.
 
 ## Known traps
 

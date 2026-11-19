@@ -62,6 +62,7 @@ mod grass;
 pub mod hardware;
 mod hdri;
 mod impostor;
+mod lightning;
 pub mod lights;
 pub mod lod;
 mod sea;
@@ -159,7 +160,7 @@ const CLUSTER_CELL: f32 = 8.0;
 /// `set_time` wraps here (seconds) to keep f32 precision in the shaders.
 const TIME_WRAP: f64 = 4096.0;
 /// Byte offset of the SH in the globals (written by the GPU, see env.rs).
-const SH_OFFSET: u64 = 9 * 64 + 60 * 16;
+const SH_OFFSET: u64 = 9 * 64 + 62 * 16;
 /// The roughness up to which a metal is a mirror (`Material::mirror`, scene.wgsl `light`).
 const MIRROR_ROUGHNESS: f32 = 0.1;
 
@@ -1794,6 +1795,7 @@ impl Renderer {
     /// The volumetric clouds drift with the wind of the moment from the last time, or, after a
     /// jump back or of more than 5 s (a picture at its own time), by the time at the current speed.
     pub fn set_time(&mut self, seconds: f64) {
+        let flash = self.flash();
         let dt = seconds - self.clock;
         let wind = Vec2::new(self.wind.direction.x, self.wind.direction.z).normalize_or_zero();
         let speed = f64::from(self.cloud_speed());
@@ -1810,6 +1812,11 @@ impl Renderer {
         self.time = seconds.rem_euclid(TIME_WRAP) as f32;
         self.clock = seconds;
         self.wind_phases.advance(seconds, self.wind.speed_mps);
+        // A lightning flash lights the scene through the ambient light and the environment
+        // (sky.wgsl `sky_kcd`): redone each frame while one comes and goes.
+        if self.flash() != flash {
+            self.update_ambient(false);
+        }
     }
 
     /// A light vignette (the lens' fall-off towards the corners) and film grain, each 0..=1;
@@ -2205,6 +2212,16 @@ impl Renderer {
         self.sea()
             .filter(|s| s.coast.len() >= 2)
             .map_or(ground_height, |s| ground_height.min(s.level))
+    }
+
+    /// The lightning flash lit at this moment of the animation clock (`set_time`), if the clouds
+    /// are stormy and have lightning (`Clouds::lightning`).
+    fn flash(&self) -> Option<lightning::Flash> {
+        let (_, _, storm) = self.cloud_state();
+        if storm <= 0.0 || matches!(self.sky_source, SkySource::Hdri { .. }) {
+            return None;
+        }
+        lightning::flash_at(self.clock, self.clouds.lightning.clamp(0.0, 1.0) * storm)
     }
 
     pub fn set_clouds(&mut self, clouds: &Clouds) {
@@ -3526,6 +3543,7 @@ impl Renderer {
                         jumped: self.cloud_jump,
                         picture: self.cloud_picture,
                         sun: self.sun.direction,
+                        flash: self.flash().is_some(),
                     },
                     ts,
                 );
@@ -4894,6 +4912,30 @@ impl Renderer {
             extinction,
             storm,
         ]);
+        // Lightning in a storm (lightning.rs): the flash in the cloud, its bolt and its light on
+        // the scene; none in a plan or an elevation.
+        let flash = self.flash().filter(|_| !ortho);
+        match flash {
+            Some(f) => {
+                let (sin, cos) = f.azimuth.sin_cos();
+                let at = Vec3::new(
+                    eye.x + cos * f.distance_m,
+                    base + f.height * thickness,
+                    eye.z + sin * f.distance_m,
+                );
+                b.floats(&at.extend(lightning::FLASH_KCD * f.strength).to_array());
+                b.floats(&[
+                    f.bolt.map_or(0.0, |seed| (seed >> 8) as f32),
+                    if f.bolt.is_some() { f.strength } else { 0.0 },
+                    lightning::fill_kcd(&f, self.sun.illuminance * self.sun.direction.y.max(0.0)),
+                    ground_height,
+                ]);
+            }
+            None => {
+                b.floats(&[0.0; 4]);
+                b.floats(&[0.0, 0.0, 0.0, ground_height]);
+            }
+        }
         debug_assert_eq!(b.0.len() as u64, SH_OFFSET);
         self.queue.write_buffer(buffer, 0, &b.0);
     }
@@ -5160,7 +5202,7 @@ fn snow_cover_matrix(eye: Vec3, lo: Vec3, hi: Vec3, resolution: u32) -> Mat4 {
 const SNOW_COVER_M: f32 = 160.0;
 
 fn globals_size() -> u64 {
-    // 9 matrices, 60 vec4s, the 9 SH vec4s last; see common.wgsl.
+    // 9 matrices, 62 vec4s, the 9 SH vec4s last; see common.wgsl.
     SH_OFFSET + 9 * 16
 }
 
@@ -5184,6 +5226,10 @@ pub struct Clouds {
     /// A gap in the broken clouds in front of the sun over the site, so the design stays in
     /// the sun; off, cloud shadows drift over it.
     pub sun_gap: bool,
+    /// How often lightning flashes in storm clouds, 0..1 (times `storm`): flashes light the
+    /// clouds from inside and the scene for a moment, some with a bolt far off, all at fixed
+    /// moments of the animation clock (`Renderer::set_time`).
+    pub lightning: f32,
 }
 
 impl Default for Clouds {
@@ -5196,6 +5242,7 @@ impl Default for Clouds {
             altitude_m: 1500.0,
             speed_mps: None,
             sun_gap: true,
+            lightning: 0.5,
         }
     }
 }

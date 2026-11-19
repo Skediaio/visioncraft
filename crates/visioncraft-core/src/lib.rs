@@ -82,9 +82,9 @@ pub use planting::{
 pub use presets::{PlantingPreset, planting_presets};
 pub use project::{
     CLOUD_ALTITUDE_M, CLOUD_ALTITUDES_M, CloudBlend, CloudKind, CloudShape, Clouds, CustomSpecies,
-    Grade, GroundPlane, Layer, Look, ModelKind, ModelRef, Project, ProjectError, RenderStyle, Site,
-    SkyChoice, SunTime, Surroundings, Transform, ViewState, WEATHER_TRANSITION_MAX_S,
-    WHITE_BALANCE_KELVIN, WhiteBalance, YEARS_MAX,
+    Grade, GroundPlane, LIGHTNING_DEFAULT, Layer, Look, ModelKind, ModelRef, Project, ProjectError,
+    RenderStyle, Site, SkyChoice, SunTime, Surroundings, Transform, ViewState,
+    WEATHER_TRANSITION_MAX_S, WHITE_BALANCE_KELVIN, WhiteBalance, YEARS_MAX,
 };
 pub use raycast::{Hit, ground_height, raycast, raycast_any};
 pub use season::Season;

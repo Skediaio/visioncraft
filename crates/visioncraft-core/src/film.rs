@@ -141,6 +141,10 @@ pub struct Shot {
     /// `cover`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clouds: Option<Span<f32>>,
+    /// How often lightning flashes in a storm sky, 0..1, at the start and the end of the shot
+    /// (as `view.set clouds.lightning`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lightning: Option<Span<f32>>,
     /// How much of the lamps' light is on, 0..1, at the start and the end of the shot: lamps
     /// fade in instead of popping on at sunset. Any value forces the lamps on or off (else they
     /// follow the sun).
@@ -305,6 +309,7 @@ pub const COMMON_FIELDS: &[&str] = &[
     "shafts",
     "weather",
     "clouds",
+    "lightning",
     "lights",
     "white_balance",
     "grade",
@@ -531,6 +536,7 @@ impl Shot {
             ("gustiness", self.gustiness),
             ("shafts", self.shafts),
             ("clouds", self.clouds),
+            ("lightning", self.lightning),
         ] {
             if let Some(s) = span
                 && (!(0.0..=1.0).contains(&s.from) || !(0.0..=1.0).contains(&s.to))
@@ -811,6 +817,9 @@ pub struct Overrides {
     /// The clouds' cover 0..1.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub clouds: Option<f32>,
+    /// How often lightning flashes 0..1.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lightning: Option<f32>,
     /// Lamp light 0..1.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lights: Option<f32>,
@@ -882,6 +891,9 @@ impl Overrides {
         }
         if let Some(c) = self.clouds {
             m.insert("clouds".into(), json!(c));
+        }
+        if let Some(l) = self.lightning {
+            m.insert("lightning".into(), json!(l));
         }
         if let Some(s) = self.lights {
             m.insert("lights".into(), json!(s));
@@ -1278,6 +1290,9 @@ fn overrides_at(shot: &Shot, base: Overrides, u: f32) -> Overrides {
     }
     if let Some(s) = shot.clouds {
         o.clouds = Some(s.at(u));
+    }
+    if let Some(s) = shot.lightning {
+        o.lightning = Some(s.at(u));
     }
     if let Some(s) = shot.lights {
         o.lights = Some(s.at(u));
@@ -1942,6 +1957,25 @@ mod tests {
             52.0,
         );
         assert!(bad.unwrap_err().contains("`shafts` must be from 0 to 1"));
+    }
+
+    #[test]
+    fn lightning_eases_along_a_shot() {
+        let ground: &dyn Fn(f32, f32) -> f32 = &flat;
+        let f = film(vec![shot(
+            json!({"kind": "hold", "eye": [0, 2, 5], "target": [0, 1, 0], "duration_s": 4,
+            "weather": ["storm", "storm"], "lightning": [0.2, 1.0]}),
+        )]);
+        let e = env(ground, &[]);
+        let mid = camera_at(&f, 2.0, &e).unwrap().overrides;
+        assert!((mid.lightning.unwrap() - 0.6).abs() < 1e-5);
+        assert!((mid.render_params()["lightning"].as_f64().unwrap() - 0.6).abs() < 1e-5);
+        let bad = Shot::from_value(
+            &json!({"kind": "hold", "eye": [0, 2, 5], "target": [0, 1, 0], "duration_s": 1,
+            "lightning": -0.1}),
+            52.0,
+        );
+        assert!(bad.unwrap_err().contains("`lightning` must be from 0 to 1"));
     }
 
     #[test]

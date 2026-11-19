@@ -628,6 +628,36 @@ fn clouds_are_a_view_setting_absent_from_files_while_default() {
 }
 
 #[test]
+fn lightning_is_a_cloud_setting_that_undoes_and_round_trips() {
+    let mut s = Session::new(Project::default());
+    assert_eq!(
+        s.project().view.clouds.lightning,
+        visioncraft_core::LIGHTNING_DEFAULT
+    );
+    s.run(
+        "view.set",
+        json!({"weather": "storm", "clouds": {"lightning": 0.9}}),
+    )
+    .unwrap();
+    let v = &s.project().view;
+    assert_eq!(v.clouds.kind, visioncraft_core::CloudKind::Storm);
+    assert_eq!(v.clouds.lightning, 0.9);
+    let text = String::from_utf8(s.project().to_json_bytes()).unwrap();
+    assert!(text.contains("\"lightning\""), "{text}");
+    let p = Project::from_json_bytes(&s.project().to_json_bytes()).unwrap();
+    assert_eq!(p.view.clouds, s.project().view.clouds);
+    assert!(
+        s.run("view.set", json!({"clouds": {"lightning": 1.5}}))
+            .is_err()
+    );
+    assert!(s.undo());
+    assert_eq!(
+        s.project().view.clouds.lightning,
+        visioncraft_core::LIGHTNING_DEFAULT
+    );
+}
+
+#[test]
 fn view_distance_is_a_view_setting_within_its_range_and_absent_from_old_files() {
     let mut s = Session::new(Project::default());
     assert_eq!(s.project().view.view_distance, 1.0);

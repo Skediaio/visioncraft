@@ -1468,6 +1468,7 @@ impl Studio {
             altitude_m: clouds.altitude_m,
             speed_mps: clouds.speed_mps,
             sun_gap: clouds.sun_gap,
+            lightning: clouds.lightning,
         });
         // Light bounced up from what lies under the camera (paving under a canopy, lawn in the
         // garden), with most of its colour taken out: a green lawn tints a wall only a little.

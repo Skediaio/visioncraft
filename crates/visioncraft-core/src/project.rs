@@ -333,6 +333,19 @@ pub struct Clouds {
     /// Another kind mixed in (a weather between two states, `weather::apply`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub blend: Option<CloudBlend>,
+    /// How often lightning flashes in storm clouds, 0 (never) to 1 (every few seconds); only
+    /// a stormy sky (`CloudKind::Storm`, or a blend towards it) has any. The flashes follow
+    /// the animation clock, so a film shows the same ones every time. Not written while
+    /// `LIGHTNING_DEFAULT`.
+    #[serde(skip_serializing_if = "is_default_lightning")]
+    pub lightning: f32,
+}
+
+/// How often lightning flashes in a storm by default (`Clouds::lightning`).
+pub const LIGHTNING_DEFAULT: f32 = 0.5;
+
+fn is_default_lightning(v: &f32) -> bool {
+    *v == LIGHTNING_DEFAULT
 }
 
 /// A second kind of cloud mixed into `Clouds::kind` by `share` (0..1).
@@ -397,6 +410,7 @@ impl Default for Clouds {
             volumetric: true,
             sun_gap: true,
             blend: None,
+            lightning: LIGHTNING_DEFAULT,
         }
     }
 }
@@ -444,6 +458,9 @@ impl Clouds {
         }
         if self.blend.is_some_and(|b| !(0.0..=1.0).contains(&b.share)) {
             return Err("`clouds.blend.share` must be from 0 to 1".into());
+        }
+        if !(0.0..=1.0).contains(&self.lightning) {
+            return Err("`clouds.lightning` must be from 0 to 1".into());
         }
         Ok(())
     }

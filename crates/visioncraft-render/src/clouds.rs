@@ -1,15 +1,18 @@
-//! Volumetric clouds (clouds.wgsl): a raymarch through a layer of cloud at a quarter or half of
-//! the render size, blended over frames, which the sky pass reads (sky.wgsl `background`).
+//! Volumetric clouds (clouds.wgsl): a raymarch through a layer of cloud at a quarter, a third
+//! or half of the render size, upsampled over frames to twice that from a quarter or a third,
+//! which the sky pass reads (sky.wgsl `background`).
 //!
 //! Everything is made the first time the clouds are drawn, never at start-up or per frame:
 //! three noise textures filled once by compute shaders (cloud_noise.wgsl: a 128^3 Perlin-Worley
-//! and Worley base, a 32^3 Worley detail, a 1024^2 weather map), the march pipeline, and two
-//! history images at the cloud resolution that the march writes into in turn, each frame
-//! blending its jittered result into the other's (reprojected by direction). A frame that
-//! cannot use the history (the first, a new size, a cut, a jump of the sun or the weather)
-//! marches four jitters per pixel instead, and a picture (one frame, `Draw::picture`) eight at
-//! fixed offsets, so the frames of a film keep one pattern and do not flicker. Without
-//! volumetric clouds the sky reads a 1x1 image and nothing else is made.
+//! and Worley base and a 32^3 Worley detail, each with its smaller levels, a 1024^2 weather
+//! map and a 128^2 curl noise), the march and resolve pipelines, the march image and two history
+//! images at twice its size (at its size from half the render size). Each frame marches one ray
+//! per march texel, through one texel of each 2x2 block of the history in turn, and the resolve
+//! blends those samples into the other history image (reprojected by direction, clamped to the new samples round each texel). A
+//! frame that cannot use the history (the first, a new size, a cut, a jump of the sun or the
+//! weather) marches every history texel instead, and a picture (one frame, `Draw::picture`)
+//! eight jitters of each at fixed offsets, so the frames of a film keep one pattern and do not
+//! flicker. Without volumetric clouds the sky reads a 1x1 image and nothing else is made.
 
 use glam::{Mat4, Vec3, Vec4};
 
@@ -19,13 +22,28 @@ use crate::{COMMON, Layouts, PipelineDesc, color_pass, pipeline};
 const BASE: u32 = 128;
 const DETAIL: u32 = 32;
 const WEATHER: u32 = 1024;
+const CURL: u32 = 128;
 const HISTORY: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const NOISE: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
-/// Weight of a frame against the history: about ten frames make the image.
-const BLEND: f32 = 0.12;
-/// Jitters per pixel when the history is started over, and for a picture.
-const RESET_SUBSAMPLES: f32 = 4.0;
+/// Weight of a texel's own new sample against the history (a texel has one every fourth
+/// frame), and of the new samples interpolated to it in the frames between; and of the new
+/// sample where the history keeps the march's size (one every frame).
+const BLEND_OWN: f32 = 0.25;
+const BLEND_NEAR: f32 = 0.06;
+const BLEND_SAME: f32 = 0.12;
+/// The march divisors (`Draw::div`) the history doubles; at half the render size it is sharp
+/// enough as it is, and the history at the full size would cost more than the march saves.
+const UPSAMPLE_DIV: u32 = 3;
+/// The history is clamped to the new samples' mean round a texel plus or minus this many of
+/// their standard deviations.
+const CLAMP_SIGMAS: f32 = 1.5;
+/// The order a 2x2 block of the history is sampled in (texels): each frame the opposite corner
+/// of the last, so two frames already cover a diagonal.
+const BLOCK: [(f32, f32); 4] = [(0.0, 0.0), (1.0, 1.0), (1.0, 0.0), (0.0, 1.0)];
+/// Jitters per history texel for a picture.
 const PICTURE_SUBSAMPLES: f32 = 8.0;
+/// The uniform block's size (bytes; clouds.wgsl `CloudFrame`).
+const UNIFORM_SIZE: u64 = 112;
 /// The sun may move this far between frames (cosine, about a degree) before the history is
 /// started over: the clouds' light changes with it.
 const SUN_COS: f32 = 0.99985;
@@ -44,7 +62,7 @@ pub(crate) struct Draw<'a> {
     pub globals: &'a wgpu::BindGroup,
     /// The render size (texels).
     pub size: (u32, u32),
-    /// The cloud image's divisor of it (2 half, 4 quarter).
+    /// The march image's divisor of it (2 half, 4 quarter); the history is twice the march.
     pub div: u32,
     pub steps: u32,
     pub light_steps: u32,
@@ -56,6 +74,9 @@ pub(crate) struct Draw<'a> {
     pub picture: bool,
     /// Towards the sun.
     pub sun: Vec3,
+    /// A lightning flash is lit (lightning.rs): the clouds' light changes from one frame to
+    /// the next, faster than the history follows.
+    pub flash: bool,
 }
 
 pub(crate) struct CloudVolume {
@@ -66,25 +87,29 @@ pub(crate) struct CloudVolume {
     prev: Option<(Mat4, Vec3, Vec3)>,
     /// The history image the sky reads (`None`: the 1x1 one).
     showing: Option<usize>,
+    /// The last frame had a lightning flash.
+    flashed: bool,
 }
 
 struct Gpu {
-    base: wgpu::TextureView,
-    detail: wgpu::TextureView,
-    weather: wgpu::TextureView,
-    repeat: wgpu::Sampler,
     clamp: wgpu::Sampler,
     uniform: wgpu::Buffer,
-    layout: wgpu::BindGroupLayout,
-    pipeline: wgpu::RenderPipeline,
+    /// The uniform, the noise and their sampler (group 1 of both pipelines).
+    march_bind: wgpu::BindGroup,
+    resolve_layout: wgpu::BindGroupLayout,
+    march: wgpu::RenderPipeline,
+    resolve: wgpu::RenderPipeline,
     history: Option<History>,
 }
 
 struct History {
+    /// The march image's size; the history's is `scale` times it.
     size: (u32, u32),
+    scale: u32,
+    march: wgpu::TextureView,
     views: [wgpu::TextureView; 2],
-    /// Writing into image i, reading the other.
-    march: [wgpu::BindGroup; 2],
+    /// Resolving into image i, reading the other.
+    resolve: [wgpu::BindGroup; 2],
     /// The sky reading image i.
     sky: [wgpu::BindGroup; 2],
     current: usize,
@@ -98,6 +123,7 @@ fn sampler(device: &wgpu::Device, label: &str, mode: wgpu::AddressMode) -> wgpu:
         address_mode_w: mode,
         mag_filter: wgpu::FilterMode::Linear,
         min_filter: wgpu::FilterMode::Linear,
+        mipmap_filter: wgpu::MipmapFilterMode::Linear,
         ..Default::default()
     })
 }
@@ -131,6 +157,7 @@ fn texture(
     dimension: wgpu::TextureDimension,
     format: wgpu::TextureFormat,
     usage: wgpu::TextureUsages,
+    mips: u32,
 ) -> wgpu::Texture {
     device.create_texture(&wgpu::TextureDescriptor {
         label: Some(label),
@@ -139,7 +166,7 @@ fn texture(
             height: size.1,
             depth_or_array_layers: size.2,
         },
-        mip_level_count: 1,
+        mip_level_count: mips,
         sample_count: 1,
         dimension,
         format,
@@ -161,6 +188,7 @@ impl CloudVolume {
             wgpu::TextureDimension::D2,
             HISTORY,
             wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            1,
         );
         let texel: Vec<u8> = [0u16, 0, 0, F16_ONE]
             .iter()
@@ -184,6 +212,7 @@ impl CloudVolume {
             frame: 0,
             prev: None,
             showing: None,
+            flashed: false,
         }
     }
 
@@ -206,7 +235,8 @@ impl CloudVolume {
         self.prev = None;
     }
 
-    /// Marches this frame's clouds into the next history image (making what is missing first).
+    /// Marches this frame's clouds and resolves them into the next history image (making what
+    /// is missing first).
     pub fn draw(
         &mut self,
         device: &wgpu::Device,
@@ -220,9 +250,16 @@ impl CloudVolume {
             .get_or_insert_with(|| Gpu::new(device, d.layouts, encoder));
         let div = d.div.max(1);
         let size = (d.size.0.div_ceil(div).max(1), d.size.1.div_ceil(div).max(1));
-        let mut reset = d.jumped || d.picture;
-        if gpu.history.as_ref().is_none_or(|h| h.size != size) {
-            gpu.history = Some(History::new(device, d.layouts, gpu, size));
+        // A flash, and the frame after it, start over: its light comes and goes at once.
+        let mut reset = d.jumped || d.picture || d.flash || self.flashed;
+        self.flashed = d.flash;
+        let scale = if div >= UPSAMPLE_DIV { 2 } else { 1 };
+        if gpu
+            .history
+            .as_ref()
+            .is_none_or(|h| h.size != size || h.scale != scale)
+        {
+            gpu.history = Some(History::new(device, gpu, d.layouts, size, scale));
             reset = true;
         }
         let mut rotation = d.view;
@@ -240,12 +277,15 @@ impl CloudVolume {
                 view_proj
             }
         };
-        let subsamples = match (d.picture, reset) {
-            (true, _) => PICTURE_SUBSAMPLES,
-            (false, true) => RESET_SUBSAMPLES,
-            (false, false) => 1.0,
+        // Starting over, the march writes every texel of the history itself.
+        let (march_size, march_scale, offset) = if reset {
+            ((size.0 * scale, size.1 * scale), 1, (0.0, 0.0))
+        } else if scale == 2 {
+            (size, 2, BLOCK[self.frame as usize % BLOCK.len()])
+        } else {
+            (size, 1, (0.0, 0.0))
         };
-        let mut b = Vec::with_capacity(96);
+        let mut b = Vec::with_capacity(UNIFORM_SIZE as usize);
         for f in prev.to_cols_array() {
             b.extend_from_slice(&f.to_le_bytes());
         }
@@ -256,13 +296,17 @@ impl CloudVolume {
             } else {
                 (self.frame % 4096) as f32
             },
-            if reset { 1.0 } else { BLEND },
-            subsamples,
+            if scale == 2 { BLEND_OWN } else { BLEND_SAME },
+            if d.picture { PICTURE_SUBSAMPLES } else { 1.0 },
             d.steps.max(1) as f32,
             d.light_steps as f32,
-            size.0 as f32,
-            size.1 as f32,
-            0.0,
+            march_size.0 as f32,
+            march_size.1 as f32,
+            march_scale as f32,
+            offset.0,
+            offset.1,
+            BLEND_NEAR,
+            CLAMP_SIGMAS,
         ];
         for f in params {
             b.extend_from_slice(&f.to_le_bytes());
@@ -272,18 +316,47 @@ impl CloudVolume {
             return;
         };
         let next = 1 - history.current;
+        // One timing for both passes: from the march's start to the resolve's end.
+        let (begin, end) = match timestamp {
+            Some(t) if !reset => (
+                Some(wgpu::RenderPassTimestampWrites {
+                    query_set: t.query_set,
+                    beginning_of_pass_write_index: t.beginning_of_pass_write_index,
+                    end_of_pass_write_index: None,
+                }),
+                Some(wgpu::RenderPassTimestampWrites {
+                    query_set: t.query_set,
+                    beginning_of_pass_write_index: None,
+                    end_of_pass_write_index: t.end_of_pass_write_index,
+                }),
+            ),
+            t => (t, None),
+        };
         {
+            let target = if reset {
+                &history.views[next]
+            } else {
+                &history.march
+            };
+            let mut pass = color_pass(encoder, "clouds", target, None, None, begin);
+            pass.set_pipeline(&gpu.march);
+            pass.set_bind_group(0, d.globals, &[]);
+            pass.set_bind_group(1, &gpu.march_bind, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        if !reset {
             let mut pass = color_pass(
                 encoder,
-                "clouds",
+                "clouds resolve",
                 &history.views[next],
                 None,
                 None,
-                timestamp,
+                end,
             );
-            pass.set_pipeline(&gpu.pipeline);
+            pass.set_pipeline(&gpu.resolve);
             pass.set_bind_group(0, d.globals, &[]);
-            pass.set_bind_group(1, &history.march[next], &[]);
+            pass.set_bind_group(1, &gpu.march_bind, &[]);
+            pass.set_bind_group(2, &history.resolve[next], &[]);
             pass.draw(0..3, 0..1);
         }
         history.current = next;
@@ -304,6 +377,7 @@ impl Gpu {
             d3,
             NOISE,
             usage,
+            BASE.ilog2() + 1,
         );
         let detail = texture(
             device,
@@ -312,18 +386,24 @@ impl Gpu {
             d3,
             NOISE,
             usage,
+            DETAIL.ilog2() + 1,
         );
-        let weather = texture(
-            device,
-            "cloud weather",
-            (WEATHER, WEATHER, 1),
-            wgpu::TextureDimension::D2,
-            NOISE,
-            usage,
-        );
-        let views = [&base, &detail, &weather].map(|t| t.create_view(&Default::default()));
-        fill_noise(device, encoder, &views);
-        let [base, detail, weather] = views;
+        let flat = |label, side| {
+            texture(
+                device,
+                label,
+                (side, side, 1),
+                wgpu::TextureDimension::D2,
+                NOISE,
+                usage,
+                1,
+            )
+        };
+        let weather = flat("cloud weather", WEATHER);
+        let curl = flat("cloud curl", CURL);
+        fill_noise(device, encoder, [&base, &detail], [&weather, &curl]);
+        let [base, detail, weather, curl] =
+            [&base, &detail, &weather, &curl].map(|t| t.create_view(&Default::default()));
 
         let fs = wgpu::ShaderStages::FRAGMENT;
         let tex = |binding, dim| wgpu::BindGroupLayoutEntry {
@@ -361,52 +441,104 @@ impl Gpu {
                 tex(3, D::D2),
                 smp(4),
                 tex(5, D::D2),
-                smp(6),
             ],
+        });
+        let resolve_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("clouds resolve"),
+            entries: &[tex(0, D::D2), tex(1, D::D2), smp(2)],
         });
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("clouds"),
             source: wgpu::ShaderSource::Wgsl(march_source().into()),
         });
-        let pipeline = pipeline(
-            device,
-            PipelineDesc {
-                label: "clouds",
-                module: &module,
-                vs: "vs_clouds",
-                fs: Some("fs_clouds"),
-                groups: &[Some(&layouts.globals), Some(&layout)],
-                buffers: &[],
-                target: Some(HISTORY.into()),
-                depth: None,
-                cull: None,
-                samples: 1,
-                constants: &[],
-                front_cw: false,
-            },
+        let make = |label, fs, groups: &[Option<&wgpu::BindGroupLayout>]| {
+            pipeline(
+                device,
+                PipelineDesc {
+                    label,
+                    module: &module,
+                    vs: "vs_clouds",
+                    fs: Some(fs),
+                    groups,
+                    buffers: &[],
+                    target: Some(HISTORY.into()),
+                    depth: None,
+                    cull: None,
+                    samples: 1,
+                    constants: &[],
+                    front_cw: false,
+                },
+            )
+        };
+        let march = make(
+            "clouds",
+            "fs_clouds",
+            &[Some(&layouts.globals), Some(&layout)],
         );
+        let resolve = make(
+            "clouds resolve",
+            "fs_resolve",
+            &[Some(&layouts.globals), Some(&layout), Some(&resolve_layout)],
+        );
+        let repeat = sampler(device, "clouds repeat", wgpu::AddressMode::Repeat);
+        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("clouds frame"),
+            size: UNIFORM_SIZE,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let view = |v| wgpu::BindingResource::TextureView(v);
+        let march_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("clouds"),
+            layout: &layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: view(&base),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: view(&detail),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: view(&weather),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::Sampler(&repeat),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: view(&curl),
+                },
+            ],
+        });
         Gpu {
-            base,
-            detail,
-            weather,
-            repeat: sampler(device, "clouds repeat", wgpu::AddressMode::Repeat),
             clamp: sampler(device, "clouds clamp", wgpu::AddressMode::ClampToEdge),
-            uniform: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("clouds frame"),
-                size: 96,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            }),
-            layout,
-            pipeline,
+            uniform,
+            march_bind,
+            resolve_layout,
+            march,
+            resolve,
             history: None,
         }
     }
 }
 
 impl History {
-    fn new(device: &wgpu::Device, layouts: &Layouts, gpu: &Gpu, size: (u32, u32)) -> History {
-        let views = [0, 1].map(|_| {
+    fn new(
+        device: &wgpu::Device,
+        gpu: &Gpu,
+        layouts: &Layouts,
+        size: (u32, u32),
+        scale: u32,
+    ) -> History {
+        let image = |size: (u32, u32)| {
             texture(
                 device,
                 "clouds",
@@ -414,41 +546,27 @@ impl History {
                 wgpu::TextureDimension::D2,
                 HISTORY,
                 wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
+                1,
             )
             .create_view(&Default::default())
-        });
-        let march = [0, 1].map(|i| {
-            let view = |v| wgpu::BindingResource::TextureView(v);
+        };
+        let march = image(size);
+        let views = [0, 1].map(|_| image((size.0 * scale, size.1 * scale)));
+        let resolve = [0, 1].map(|i| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("clouds"),
-                layout: &gpu.layout,
+                label: Some("clouds resolve"),
+                layout: &gpu.resolve_layout,
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: gpu.uniform.as_entire_binding(),
+                        resource: wgpu::BindingResource::TextureView(&march),
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
-                        resource: view(&gpu.base),
+                        resource: wgpu::BindingResource::TextureView(&views[1 - i]),
                     },
                     wgpu::BindGroupEntry {
                         binding: 2,
-                        resource: view(&gpu.detail),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: view(&gpu.weather),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 4,
-                        resource: wgpu::BindingResource::Sampler(&gpu.repeat),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 5,
-                        resource: view(&views[1 - i]),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 6,
                         resource: wgpu::BindingResource::Sampler(&gpu.clamp),
                     },
                 ],
@@ -457,8 +575,10 @@ impl History {
         let sky = [0, 1].map(|i| sky_bind(device, layouts, &views[i], &gpu.clamp));
         History {
             size,
-            views,
+            scale,
             march,
+            views,
+            resolve,
             sky,
             current: 0,
         }
@@ -475,11 +595,13 @@ pub(crate) fn noise_source() -> String {
     [COMMON, NOISE_WGSL].concat()
 }
 
-/// Fills the base, detail and weather textures (`views`, in that order) once.
+/// Fills the base and detail noise (`noise`, with every level), the weather map and the curl
+/// noise (`flat`) once.
 fn fill_noise(
     device: &wgpu::Device,
     encoder: &mut wgpu::CommandEncoder,
-    views: &[wgpu::TextureView; 3],
+    noise: [&wgpu::Texture; 2],
+    flat: [&wgpu::Texture; 2],
 ) {
     let storage = |binding, dim| wgpu::BindGroupLayoutEntry {
         binding,
@@ -492,27 +614,72 @@ fn fill_noise(
         count: None,
     };
     use wgpu::TextureViewDimension as D;
+    let level = |t: &wgpu::Texture, mip: u32| {
+        t.create_view(&wgpu::TextureViewDescriptor {
+            base_mip_level: mip,
+            mip_level_count: Some(1),
+            ..Default::default()
+        })
+    };
     let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("cloud noise"),
-        entries: &[storage(0, D::D3), storage(1, D::D3), storage(2, D::D2)],
+        entries: &[
+            storage(0, D::D3),
+            storage(1, D::D3),
+            storage(2, D::D2),
+            storage(3, D::D2),
+        ],
     });
+    let tops = [
+        level(noise[0], 0),
+        level(noise[1], 0),
+        level(flat[0], 0),
+        level(flat[1], 0),
+    ];
     let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("cloud noise"),
         layout: &layout,
-        entries: &[0, 1, 2].map(|i| wgpu::BindGroupEntry {
+        entries: &[0, 1, 2, 3].map(|i| wgpu::BindGroupEntry {
             binding: i as u32,
-            resource: wgpu::BindingResource::TextureView(&views[i]),
+            resource: wgpu::BindingResource::TextureView(&tops[i]),
         }),
     });
-    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("cloud noise"),
-        bind_group_layouts: &[None, Some(&layout)],
-        immediate_size: 0,
+    let mip_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("cloud noise level"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: D::D3,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            storage(1, D::D3),
+        ],
     });
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("cloud noise"),
         source: wgpu::ShaderSource::Wgsl(noise_source().into()),
     });
+    let compute = |entry, groups: &[Option<&wgpu::BindGroupLayout>]| {
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some(entry),
+            bind_group_layouts: groups,
+            immediate_size: 0,
+        });
+        device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some(entry),
+            layout: Some(&layout),
+            module: &module,
+            entry_point: Some(entry),
+            compilation_options: Default::default(),
+            cache: None,
+        })
+    };
+    let mip_pipeline = compute("cs_mip", &[None, None, Some(&mip_layout)]);
     let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
         label: Some("cloud noise"),
         timestamp_writes: None,
@@ -522,17 +689,39 @@ fn fill_noise(
         ("cs_base", (BASE / 4, BASE / 4, BASE / 4)),
         ("cs_detail", (DETAIL / 4, DETAIL / 4, DETAIL / 4)),
         ("cs_weather", (WEATHER / 8, WEATHER / 8, 1)),
+        ("cs_curl", (CURL / 8, CURL / 8, 1)),
     ] {
-        let p = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some(entry),
-            layout: Some(&pipeline_layout),
-            module: &module,
-            entry_point: Some(entry),
-            compilation_options: Default::default(),
-            cache: None,
-        });
-        pass.set_pipeline(&p);
+        pass.set_pipeline(&compute(entry, &[None, Some(&layout)]));
         pass.dispatch_workgroups(groups.0, groups.1, groups.2);
+    }
+    drop(pass);
+    // Each level from the one above.
+    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+        label: Some("cloud noise levels"),
+        timestamp_writes: None,
+    });
+    pass.set_pipeline(&mip_pipeline);
+    for t in noise {
+        for mip in 1..t.mip_level_count() {
+            let (src, dst) = (level(t, mip - 1), level(t, mip));
+            let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("cloud noise level"),
+                layout: &mip_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&src),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&dst),
+                    },
+                ],
+            });
+            pass.set_bind_group(2, &bind, &[]);
+            let side = (t.width() >> mip).max(1).div_ceil(4);
+            pass.dispatch_workgroups(side, side, side);
+        }
     }
 }
 
@@ -561,9 +750,19 @@ mod tests {
     #[test]
     fn the_noise_tiles_divide_the_weather_period() {
         // Wrapping the drift at the period must not move the noise (common.wgsl constants).
-        for tile in [2560.0, 320.0] {
+        for tile in [2560.0, 160.0, 1280.0] {
             assert_eq!(CLOUD_PERIOD % tile, 0.0);
         }
         assert!(COMMON.contains("const CLOUD_PERIOD: f32 = 40960.0;"));
+        assert!(COMMON.contains("const CLOUD_BASE_TILE: f32 = 2560.0;"));
+        assert!(COMMON.contains("const CLOUD_DETAIL_TILE: f32 = 160.0;"));
+        assert!(COMMON.contains("const CLOUD_CURL_TILE: f32 = 1280.0;"));
+    }
+
+    #[test]
+    fn the_uniform_block_matches_the_shader() {
+        // A matrix and three vec4s (clouds.wgsl `CloudFrame`).
+        assert_eq!(UNIFORM_SIZE, 64 + 3 * 16);
+        assert!(CLOUDS_WGSL.contains("    up: vec4<f32>,\n}"));
     }
 }

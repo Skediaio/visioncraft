@@ -332,8 +332,14 @@ nothing here is a promise of a date.
      Weather states (`view.set weather`: clear, fair, cloudy, overcast, rain, storm) write the
      clouds, rain, wetness, mist, gusts and wind; the window eases into a change over
      `weather_transition_s`; `view.render weather`/`weather_to`/`weather_mix` and a film shot's
-     `weather` `[from, to]` mix two. Recipe 45. Next: lightning in storms (a flash lighting the
-     clouds and the scene, a bolt), a top-down rain occlusion map, wetness that builds up and dries
+     `weather` `[from, to]` mix two. Recipe 45. Round two: domes instead of blocks (gradient-noise
+     weather cells, the cover narrowing up the column, the base noise spread so the cover carves
+     it), detail erosion by the base density twisted by a curl noise, noise levels by distance (no
+     streaks in far cloud), the in-scattering probability for varied bases, a march at a quarter
+     or third upsampled over frames to twice that (neighbourhood-clamped), and the environment
+     lit as the volumetric layer is. Lightning in storms (`clouds.lightning`, a film shot's
+     `lightning`): flashes at fixed moments of the animation clock light the clouds from inside
+     and the scene, some with a bolt. Recipe 47. Next: a top-down rain occlusion map, wetness that builds up and dries
      with puddles that grow from their centre, drops on every wet surface, clouds in reflections
      (the water's mirror keeps the flat layer) and a flyable view through the cloud layer.
 - **More leaf sets:** the remaining CC0 atlases, then coverage reported again.

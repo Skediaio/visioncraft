@@ -70,6 +70,8 @@ struct Globals {
     cloud_vol: vec4<f32>,       // volumetric clouds (clouds.wgsl): x drawn in this view (0/1), y base altitude (m), z layer thickness (m), w cloud type 0 (stratus) .. 1 (cumulonimbus)
     cloud_shade: vec4<f32>,     // x cloud shadows on the ground 0..1 (0 off), y the gap over the site 0..1, zw the gap's centre (world x, z; m)
     cloud_wind: vec4<f32>,      // xy the clouds' drift (m, wrapped to CLOUD_PERIOD), z extinction per unit density (1/m), w storm 0..1
+    flash: vec4<f32>,           // lightning (lightning.rs): xyz the flash in the cloud (world m), w its light in the cloud (kcd/m2; 0 none)
+    bolt: vec4<f32>,            // x the bolt's seed, y its brightness (0 none), z the flash's light on the scene as a radiance of the sky over it (kcd/m2, `flash_sky`; 0 none), w the bolt's ground height (m)
     sh: array<vec4<f32>, 9>,    // sky irradiance as L2 SH (kcd/m2 * sr), written on the GPU (env.wgsl)
 }
 @group(0) @binding(0) var<uniform> g: Globals;
@@ -643,7 +645,19 @@ fn impostor_sway(ws: WindState, rel: vec3<f32>, origin: vec3<f32>, h: f32, hz: f
 // drift can wrap without a jump.
 const CLOUD_PERIOD: f32 = 40960.0;
 const CLOUD_BASE_TILE: f32 = 2560.0;
-const CLOUD_DETAIL_TILE: f32 = 320.0;
+const CLOUD_DETAIL_TILE: f32 = 160.0;
+// Separate clouds' density to extinction, over the renderer's (`cloud_wind.z`): crisp edges.
+// A closed layer keeps the renderer's, or its base would turn as dark as a storm's.
+const CLOUD_DENSE: f32 = 2.4;
+
+fn cloud_dense() -> f32 {
+    return mix(CLOUD_DENSE, 1.0, g.clouds.y);
+}
+// The curl noise in the weather map's ba repeats this often (clouds.wgsl `density`).
+const CLOUD_CURL_TILE: f32 = 1280.0;
+// The weather noise's scale to its spread about 0.5 (`cloud_weather`): a cover c clouds about a
+// share c of the sky.
+const WEATHER_SPREAD: f32 = 3.0;
 // The gap kept in the clouds in front of the sun over the site (`cloud_shade.y`), metres.
 const CLOUD_GAP_M: f32 = 900.0;
 
@@ -664,12 +678,38 @@ fn cloud_value(p: vec2<f32>, n: i32) -> f32 {
     return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
+// A gradient on a lattice of `n` cells that repeats every `n` cells (each component -1..1:
+// no trigonometry, which the cloud shadows evaluate per pixel).
+fn cloud_gradient(i: vec2<i32>, n: i32, seed: u32) -> vec2<f32> {
+    let w = ((i % n) + n) % n;
+    let h = pcg(u32(w.x) + pcg(u32(w.y) + seed));
+    return vec2<f32>(unit(h), unit(pcg(h))) * 2.0 - 1.0;
+}
+
+// Gradient noise (Perlin, "Improving Noise", SIGGRAPH 2002) on a lattice of `n` cells that
+// repeats every `n` cells, about -0.7..0.7: rounder outlines than value noise, which, cut at a
+// threshold, leaves cells with straight sides along the lattice.
+fn cloud_perlin(p: vec2<f32>, n: i32, seed: u32) -> f32 {
+    let i = vec2<i32>(floor(p));
+    let f = p - floor(p);
+    let u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+    let a = dot(cloud_gradient(i, n, seed), f);
+    let b = dot(cloud_gradient(i + vec2<i32>(1, 0), n, seed), f - vec2<f32>(1.0, 0.0));
+    let c = dot(cloud_gradient(i + vec2<i32>(0, 1), n, seed), f - vec2<f32>(0.0, 1.0));
+    let d = dot(cloud_gradient(i + vec2<i32>(1, 1), n, seed), f - vec2<f32>(1.0, 1.0));
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
 // The weather at `uv` (one period, 0..1): x where clouds form (spread to about 0..1, so a cover
-// c clouds about a share c of the sky), y a slow variation of their type.
+// c clouds about a share c of the sky), y a slow variation of their type. Two octaves of
+// gradient noise and a finer one of value noise, whose domain a slow value noise bends
+// (Quilez, "Domain warping", 2002), so the cells have ragged, rounded outlines and no grid
+// shows; everything repeats with the map.
 fn cloud_weather(uv: vec2<f32>) -> vec2<f32> {
-    let p = uv * 20.0;
-    let n = 0.55 * cloud_value(p, 20) + 0.3 * cloud_value(p * 2.0 + 0.37, 40) + 0.15 * cloud_value(p * 4.0 + 0.71, 80);
-    let spread = clamp((n - 0.5) * 2.2 + 0.5, 0.0, 1.0);
+    let warp = vec2<f32>(cloud_value(uv * 10.0, 10), cloud_value(uv * 10.0 + 0.5, 10)) * 1.2 - 0.6;
+    let q = uv * 20.0 + warp;
+    let n = 0.6 * cloud_perlin(q, 20, 40503u) + 0.28 * cloud_perlin(q * 2.0, 40, 811u) + 0.12 * (cloud_value(q * 4.0, 80) - 0.5);
+    let spread = clamp(n * WEATHER_SPREAD + 0.5, 0.0, 1.0);
     return vec2<f32>(spread, cloud_value(uv * 6.0, 6));
 }
 
@@ -685,6 +725,33 @@ fn cloud_coverage(w: vec2<f32>, xz: vec2<f32>) -> f32 {
         c *= 1.0 - g.cloud_shade.y * exp(-dot(d, d) / (CLOUD_GAP_M * CLOUD_GAP_M));
     }
     return c;
+}
+
+// The sun's light over the clouds (kcd/m2 * sr per unit phase; volumetric clouds, clouds.wgsl,
+// and the flat layer's stand-in for them, sky.wgsl `cloud`): the light on the ground with the
+// clouds', the rain's and the mist's share taken back out, and the haze's and the clear air's
+// below the clouds' base given back, along the sun's air mass (Kasten & Young, "Revised optical
+// air mass tables and approximation formula", Applied Optics 1989): a low sun lights the clouds
+// far more than the garden under them, which is why they glow at sunrise and sunset (capped at
+// e^4).
+fn cloud_sun_light() -> vec3<f32> {
+    let mu = max(g.sun_dir.y, 0.0);
+    let air_mass = 1.0 / (mu + 0.50572 * pow(degrees(asin(mu)) + 6.07995, -1.6364));
+    let base = g.cloud_vol.y;
+    var haze_below = 0.0;
+    if g.fog.x > 0.0 {
+        haze_below = g.fog.x / g.fog.y * (1.0 - exp(-g.fog.y * max(base - g.fog.z, 0.0)));
+    }
+    let rayleigh = vec3<f32>(5.802e-6, 13.558e-6, 33.1e-6);
+    let air_below = rayleigh * 8000.0 * (1.0 - exp(-base / 8000.0));
+    let lift = exp(min((vec3<f32>(haze_below) + air_below) * air_mass, vec3<f32>(4.0)));
+    return g.sun_light.rgb / max(g.night.w, 1e-12) / max(g.wet.z, 0.02) * lift;
+}
+
+// A lightning flash's light on the scene (lightning.rs `fill_kcd`), as a radiance it adds to
+// the sky over it (kcd/m2).
+fn flash_sky() -> vec3<f32> {
+    return vec3<f32>(0.85, 0.88, 1.0) * g.bolt.z;
 }
 
 // The share of the sun the clouds let through to `world`: the coverage where the sun's ray
