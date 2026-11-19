@@ -18,12 +18,9 @@ pub async fn get(kind: &str, key: u64) -> Option<Vec<u8>> {
         .ok()
         .filter(|v| !v.is_null() && !v.is_undefined())
         .map(|v| js_sys::Uint8Array::new(&v).to_vec());
+    let what = if got.is_some() { "hit (read)" } else { "miss" };
     crate::load_stats::add(
-        if got.is_some() {
-            "browser cache hit (read)"
-        } else {
-            "browser cache miss"
-        },
+        &format!("browser cache {what} ({kind})"),
         crate::assets::now_ms() - t,
     );
     got

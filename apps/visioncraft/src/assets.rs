@@ -641,18 +641,19 @@ async fn compress_any(
     }
 }
 
-/// A map or model picture compressed on an earlier visit, out of the browser's cache.
+/// A library map (`kind` "map") or a model picture ("picture") compressed on an earlier visit,
+/// out of the browser's cache.
 #[cfg(target_arch = "wasm32")]
-async fn web_compressed(key: u64) -> Option<Arc<Compressed>> {
-    let b = crate::web_cache::get("map", key).await?;
+async fn web_compressed(kind: &str, key: u64) -> Option<Arc<Compressed>> {
+    let b = crate::web_cache::get(kind, key).await?;
     let (_, mut images) = crate::plant_cache::decode_textures(&b)?;
     (images.len() == 1).then(|| images.remove(0).0)
 }
 
 #[cfg(target_arch = "wasm32")]
-fn store_web_compressed(key: u64, c: &Arc<Compressed>) {
+fn store_web_compressed(kind: &str, key: u64, c: &Arc<Compressed>) {
     let bytes = crate::plant_cache::encode_textures(&([0.0; 3], vec![(c.clone(), false)]));
-    crate::web_cache::put("map", key, &bytes);
+    crate::web_cache::put(kind, key, &bytes);
 }
 
 /// `compress`: block-compress library material maps and model pictures (on a device with BC
@@ -698,7 +699,7 @@ async fn load(
             #[cfg(target_arch = "wasm32")]
             if compress
                 && bc_kind_of(path).is_some()
-                && let Some(c) = web_compressed(cache_key).await
+                && let Some(c) = web_compressed("map", cache_key).await
             {
                 let mut img = Rgba::new(c.width, c.height, Vec::new());
                 img.bc = Some(c);
@@ -728,7 +729,7 @@ async fn load(
                     #[cfg(not(target_arch = "wasm32"))]
                     crate::plant_cache::store_compressed(cache_key, &c);
                     #[cfg(target_arch = "wasm32")]
-                    store_web_compressed(cache_key, &c);
+                    store_web_compressed("map", cache_key, &c);
                     img.bc = Some(c);
                     img.px = Vec::new();
                 }
@@ -779,7 +780,7 @@ async fn load(
                 }
                 #[cfg(target_arch = "wasm32")]
                 if let Some(k) = cache_key
-                    && let Some(c) = web_compressed(k).await
+                    && let Some(c) = web_compressed("picture", k).await
                 {
                     let mut img = Rgba::new(c.width, c.height, Vec::new());
                     img.bc = Some(c);
@@ -806,7 +807,7 @@ async fn load(
                         }
                         #[cfg(target_arch = "wasm32")]
                         if let Some(k) = cache_key {
-                            store_web_compressed(k, &c);
+                            store_web_compressed("picture", k, &c);
                         }
                         img.bc = Some(c);
                         img.px = Vec::new();
