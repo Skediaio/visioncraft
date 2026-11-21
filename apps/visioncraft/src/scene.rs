@@ -2567,6 +2567,8 @@ impl Scene {
                 parts
             };
             let item = r.add_lod_item(parts, matrices);
+            // Library models stop at the quality's model draw distance (`Library::caps_draw`).
+            r.set_item_draw_capped(item, self.library.caps_draw(asset));
             // A hedge's shadow is a band, not one blob per segment.
             let clipped = asset
                 .strip_prefix("flora:")
@@ -2698,7 +2700,9 @@ impl Scene {
             };
             // Built before the catalogue arrived, the group's model was never asked for.
             if self.library.knows(asset) {
-                self.library.note(generator, asset, &grp.matrices);
+                let capped = self.library.caps_draw(asset);
+                self.library
+                    .note(generator, asset, *variant, &grp.matrices, capped);
             }
             let src = self.source(project, asset, *variant, when);
             let imp = self
@@ -2767,7 +2771,9 @@ impl Scene {
             let when = When { month, age };
             if self.library.knows(&asset) {
                 // the library streams the level the nearest instance needs
-                self.library.note(g.id(), &asset, &matrices);
+                let capped = self.library.caps_draw(&asset);
+                self.library
+                    .note(g.id(), &asset, variant, &matrices, capped);
             }
             let src = self.source(project, &asset, variant, when);
             let imp = self

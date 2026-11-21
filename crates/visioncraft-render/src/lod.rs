@@ -28,9 +28,41 @@ pub fn select(d: f32, max: &[f32], current: Option<usize>, hysteresis: f32) -> u
     }
 }
 
+/// Ends every level at `end` at the latest (a draw distance in the same units): past it the
+/// virtual culled level follows, with the same hysteresis. A level wholly beyond `end` becomes
+/// empty; an infinite `end` changes nothing.
+pub fn cap(max: &mut [f32], end: f32) {
+    if end.is_finite() {
+        for m in max {
+            *m = m.min(end.max(0.0));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_draw_distance_culls_past_it_whatever_the_levels() {
+        let mut max = [10.0, 30.0, f32::INFINITY];
+        cap(&mut max, 20.0);
+        assert_eq!(max, [10.0, 20.0, 20.0]);
+        assert_eq!(select(5.0, &max, None, 1.0), 0);
+        assert_eq!(select(15.0, &max, None, 1.0), 1);
+        assert_eq!(
+            select(25.0, &max, None, 1.0),
+            3,
+            "culled past the draw distance"
+        );
+        // The hand-over to nothing holds near the threshold, as any other.
+        assert_eq!(select(20.5, &max, Some(1), 1.0), 1);
+        assert_eq!(select(20.5, &max, Some(3), 1.0), 3);
+        let mut open = [10.0, f32::INFINITY];
+        cap(&mut open, f32::INFINITY);
+        assert_eq!(open, [10.0, f32::INFINITY], "no limit");
+        assert_eq!(select(1e6, &open, None, 1.0), 1);
+    }
 
     #[test]
     fn levels_by_distance() {

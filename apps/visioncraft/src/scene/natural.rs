@@ -320,7 +320,8 @@ impl Scene {
         models.sort();
         for m in models {
             let list = &scans[&m];
-            self.library.note(NOTE, &m, list);
+            // Scanned dead wood is part of the ground cover: no model draw distance.
+            self.library.note(NOTE, &m, 0, list, false);
             if let Some(parts) = self.library.parts(&m) {
                 items.push(r.add_lod_item(&parts, list));
             }

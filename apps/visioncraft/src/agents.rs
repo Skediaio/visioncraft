@@ -311,6 +311,36 @@ fn vec3(v: &Value) -> Option<glam::Vec3> {
     ))
 }
 
+/// The metres a model draw distance set by hand takes (`ui.set modelDrawDistance`).
+pub const MODEL_DRAW_RANGE: std::ops::RangeInclusive<f32> = 20.0..=2000.0;
+
+/// `ui.set modelDrawDistance`: "preset" or null (`None`: the quality's), "unlimited"
+/// (`f32::INFINITY`) or metres within `MODEL_DRAW_RANGE`.
+pub fn parse_model_draw_distance(v: &Value) -> Result<Option<f32>, String> {
+    match v {
+        Value::Null => Ok(None),
+        Value::String(s) if s == "preset" => Ok(None),
+        Value::String(s) if s == "unlimited" => Ok(Some(f32::INFINITY)),
+        _ => v
+            .as_f64()
+            .map(|m| m as f32)
+            .filter(|m| MODEL_DRAW_RANGE.contains(m))
+            .map(Some)
+            .ok_or_else(|| {
+                format!("modelDrawDistance: \"preset\", \"unlimited\" or metres from 20 to 2000, not {v}")
+            }),
+    }
+}
+
+/// The choice as `ui.get` reports it, in the form `ui.set` takes.
+pub fn model_draw_distance_json(d: Option<f32>) -> Value {
+    match d {
+        None => json!("preset"),
+        Some(m) if m.is_infinite() => json!("unlimited"),
+        Some(m) => json!(m),
+    }
+}
+
 const UI_METHODS: &[Method] = &[
     Method {
         name: "ui.get",
@@ -324,8 +354,8 @@ const UI_METHODS: &[Method] = &[
     },
     Method {
         name: "ui.set",
-        params: r#"{"mode": "draw"|"materials"|"objects"|"sun"|"viewpoints"|extension id|null, "camera": {"position": [x, y, z], "target": [x, y, z], "fov_y_deg": number}, "lightsOn": boolean, "overlaysInPictures": boolean, "tabs": boolean, "file_bar": boolean, "view_bar": boolean, "mode_panel_frame": boolean, "textures": "auto"|"1k"|"2k"|"4k", "quality": "auto"|"low"|"medium"|"high"|"ultra", "targetFps": number (24..=240), "walk": boolean}"#,
-        summary: "Switches the mode, places the camera (orbiting `target`), walks (as the Walk button: on foot near the camera's target; the arrow keys or WASD move) or orbits again, turns the lights on or off (the project's view.set lights), whether pictures show the editor's overlays, the texture resolution, the rendering quality and the frame rate Auto aims for (`targetFps`, default 60; the Quality menu). `tabs`, `file_bar`, `view_bar` and `mode_panel_frame` show or hide the built-in mode tabs, the Open/Save/Undo/Redo bar, the view bar (Layers, Lights, Quality, Export, Walk, fps) and the frame and fold button of the mode panel (an embedding app hides what it replaces; `ui.get` reports them under `ui`). Hidden controls stay reachable as commands and shortcuts (Ctrl+Z, `ui.set mode`).",
+        params: r#"{"mode": "draw"|"materials"|"objects"|"sun"|"viewpoints"|extension id|null, "camera": {"position": [x, y, z], "target": [x, y, z], "fov_y_deg": number}, "lightsOn": boolean, "overlaysInPictures": boolean, "tabs": boolean, "file_bar": boolean, "view_bar": boolean, "mode_panel_frame": boolean, "textures": "auto"|"1k"|"2k"|"4k", "quality": "auto"|"low"|"medium"|"high"|"ultra", "targetFps": number (24..=240), "modelDrawDistance": "preset"|"unlimited"|number (20..=2000 m)|null, "walk": boolean}"#,
+        summary: "Switches the mode, places the camera (orbiting `target`), walks (as the Walk button: on foot near the camera's target; the arrow keys or WASD move) or orbits again, turns the lights on or off (the project's view.set lights), whether pictures show the editor's overlays, the texture resolution, the rendering quality, the frame rate Auto aims for (`targetFps`, default 60) and how far library models are drawn and loaded (`modelDrawDistance`: metres from the eye for benches, pots, lamps and other catalogue objects, not plants, terrain or the design's own buildings; past it they dissolve out and are not loaded; \"preset\" or null follows the quality: 80 m LOW, 150 m MEDIUM, 300 m HIGH, no limit ULTRA; \"unlimited\" none; `ui.get` reports the choice under `quality.modelDrawDistance` and the distance in force under `quality.modelDrawDistanceM`, null for no limit). All of these are the Quality menu's. `tabs`, `file_bar`, `view_bar` and `mode_panel_frame` show or hide the built-in mode tabs, the Open/Save/Undo/Redo bar, the view bar (Layers, Lights, Quality, Export, Walk, fps) and the frame and fold button of the mode panel (an embedding app hides what it replaces; `ui.get` reports them under `ui`). Hidden controls stay reachable as commands and shortcuts (Ctrl+Z, `ui.set mode`).",
     },
     Method {
         name: "ui.fly",
@@ -482,6 +512,9 @@ impl Host for Bound<'_, '_> {
                     "targetFps": h.studio.target_fps,
                     "preset": crate::studio::preset_name(&h.studio.current_quality()),
                     "renderScale": h.studio.current_quality().render_scale,
+                    "modelDrawDistance": model_draw_distance_json(h.studio.model_draw_distance),
+                    "modelDrawDistanceM": Some(h.studio.renderer.model_draw_distance())
+                        .filter(|m| m.is_finite()),
                 },
                 "pending": {
                     "plants": h.studio.plants_pending(),
@@ -585,6 +618,13 @@ impl Host for Bound<'_, '_> {
                         .ok_or_else(|| format!("targetFps: a number from 24 to 240, not {f}"))?;
                     h.studio.target_fps = fps;
                     h.studio.frame_ms.clear();
+                }
+                if let Some(d) = params.get("modelDrawDistance") {
+                    h.studio.model_draw_distance = parse_model_draw_distance(d)?;
+                    // In force from this call on (ui.get reads it back), not the next frame.
+                    h.studio
+                        .renderer
+                        .set_model_draw_distance(h.studio.model_draw_distance);
                 }
                 if let Some(t) = params.get("textures") {
                     h.studio.textures = match t.as_str() {
@@ -865,6 +905,96 @@ mod tests {
             let got = h.call("ui.get", &json!({})).unwrap().unwrap();
             assert_eq!(got["ui"]["tabs"], false);
             assert!(h.call("ui.set", &json!({"file_bar": 3})).unwrap().is_err());
+        });
+    }
+
+    #[test]
+    fn the_model_draw_distance_parses_validates_and_round_trips() {
+        use super::{model_draw_distance_json, parse_model_draw_distance};
+        for v in [
+            json!("preset"),
+            json!("unlimited"),
+            json!(20.0),
+            json!(120.0),
+            json!(2000.0),
+        ] {
+            let got = parse_model_draw_distance(&v).unwrap();
+            assert_eq!(model_draw_distance_json(got), v, "{v}");
+        }
+        assert_eq!(parse_model_draw_distance(&Value::Null), Ok(None));
+        for bad in [
+            json!(0),
+            json!(-5),
+            json!(19.9),
+            json!(2001),
+            json!("far"),
+            json!(true),
+        ] {
+            assert!(parse_model_draw_distance(&bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn ui_set_model_draw_distance_reaches_the_renderer_and_ui_get() {
+        use super::Host;
+        with_host(Project::default(), |h| {
+            h.call("ui.set", &json!({"quality": "medium"}))
+                .unwrap()
+                .unwrap();
+            let got = h.call("ui.get", &json!({})).unwrap().unwrap();
+            assert_eq!(got["quality"]["modelDrawDistance"], "preset");
+            h.call("ui.set", &json!({"modelDrawDistance": 90}))
+                .unwrap()
+                .unwrap();
+            assert_eq!(h.host.studio.renderer.model_draw_distance(), 90.0);
+            let got = h.call("ui.get", &json!({})).unwrap().unwrap();
+            assert_eq!(got["quality"]["modelDrawDistance"], 90.0);
+            assert_eq!(got["quality"]["modelDrawDistanceM"], 90.0);
+            h.call("ui.set", &json!({"modelDrawDistance": "unlimited"}))
+                .unwrap()
+                .unwrap();
+            let got = h.call("ui.get", &json!({})).unwrap().unwrap();
+            assert_eq!(got["quality"]["modelDrawDistance"], "unlimited");
+            assert_eq!(got["quality"]["modelDrawDistanceM"], Value::Null);
+            assert!(
+                h.call("ui.set", &json!({"modelDrawDistance": 5}))
+                    .unwrap()
+                    .is_err()
+            );
+            h.call("ui.set", &json!({"modelDrawDistance": "preset"}))
+                .unwrap()
+                .unwrap();
+            assert_eq!(h.host.studio.model_draw_distance, None);
+        });
+    }
+
+    /// Pictures (`settle_for_picture`, then `render_pixels`, `render_photo` or the CLI's
+    /// readback) and a still waiting for what is in frame draw and load every model: the draw
+    /// distance is for the live view, which gets it back at its next frame.
+    #[test]
+    fn pictures_ignore_the_model_draw_distance() {
+        use super::Host;
+        with_host(Project::default(), |h| {
+            h.call("ui.set", &json!({"modelDrawDistance": 90}))
+                .unwrap()
+                .unwrap();
+            let s = &mut *h.host.studio;
+            s.prepare();
+            assert_eq!(s.renderer.model_draw_distance(), 90.0);
+            s.settle_for_picture();
+            assert_eq!(
+                s.renderer.model_draw_distance(),
+                f32::INFINITY,
+                "until the picture is rendered"
+            );
+            s.prepare();
+            assert_eq!(s.renderer.model_draw_distance(), 90.0, "live again");
+            s.still_textures = Some(720);
+            s.prepare();
+            assert_eq!(s.renderer.model_draw_distance(), f32::INFINITY);
+            s.still_textures = None;
+            s.prepare();
+            assert_eq!(s.renderer.model_draw_distance(), 90.0);
         });
     }
 

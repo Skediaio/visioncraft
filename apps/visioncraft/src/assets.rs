@@ -221,14 +221,11 @@ impl Lru {
         self.entries.get(key).map(|e| e.0)
     }
 
-    /// Least recently used entries whose path passes `which`, oldest first, until `to_free`
-    /// bytes are covered, recent use or not.
-    pub fn victims_where(&self, to_free: u64, which: impl Fn(&str) -> bool) -> Vec<Key> {
-        let mut old: Vec<(&Key, &(u64, u64))> = self
-            .entries
-            .iter()
-            .filter(|(k, _)| which(k.path()))
-            .collect();
+    /// Least recently used entries passing `which`, oldest first, until `to_free` bytes are
+    /// covered, recent use or not.
+    pub fn victims_where(&self, to_free: u64, which: impl Fn(&Key) -> bool) -> Vec<Key> {
+        let mut old: Vec<(&Key, &(u64, u64))> =
+            self.entries.iter().filter(|(k, _)| which(k)).collect();
         old.sort_by_key(|(k, (_, t))| (*t, k.path().to_string()));
         let (mut freed, mut out) = (0, Vec::new());
         for (k, (bytes, _)) in old {
@@ -242,12 +239,18 @@ impl Lru {
     }
 
     /// Least recently used entries, oldest first, until `to_free` bytes are covered. Entries used
-    /// at `protect_from` or later are never chosen, so what is on screen stays.
-    pub fn victims(&self, to_free: u64, protect_from: u64) -> Vec<Key> {
+    /// at `protect_from` or later are never chosen, so what is on screen stays, nor those
+    /// `which` refuses.
+    pub fn victims(
+        &self,
+        to_free: u64,
+        protect_from: u64,
+        which: impl Fn(&Key) -> bool,
+    ) -> Vec<Key> {
         let mut old: Vec<(&Key, &(u64, u64))> = self
             .entries
             .iter()
-            .filter(|(_, (_, t))| *t < protect_from)
+            .filter(|(k, (_, t))| *t < protect_from && which(k))
             .collect();
         old.sort_by_key(|(k, (_, t))| (*t, k.path().to_string()));
         let (mut freed, mut out) = (0, Vec::new());
@@ -891,6 +894,9 @@ pub struct AssetStore {
     /// Bytes of a compressed picture written per frame (`STREAM_BYTES_PER_FRAME`; a picture
     /// being taken, with no frame to keep smooth, writes whole maps).
     pub stream_bytes: usize,
+    /// What is on screen with nothing resident to stand in for it (`pin`): never evicted, not
+    /// even a higher tier over the cap.
+    pinned: HashSet<Key>,
 }
 
 /// Bytes of a compressed picture written per frame (a 4k BC1 map with mips is about 11 MB, 44
@@ -943,6 +949,7 @@ impl AssetStore {
             cancelled: Default::default(),
             texture_bytes: 0,
             stream_bytes: STREAM_BYTES_PER_FRAME,
+            pinned: HashSet::new(),
         }
     }
 
@@ -1034,6 +1041,56 @@ impl AssetStore {
 
     pub fn untrack(&mut self, key: &Key) {
         self.lru.remove(key);
+    }
+
+    /// Replaces the set of things that must stay whatever the memory (shown, with no resident
+    /// stand-in: a 2k model whose base level is not loaded).
+    pub fn pin(&mut self, keys: HashSet<Key>) {
+        self.pinned = keys;
+    }
+
+    /// What to evict to free `over` bytes: higher tiers first, even in view (the base files
+    /// under them stay, so the picture only gets coarser, never blank), then the least recently
+    /// used that are not on screen (used within `PROTECT_TICKS`). Pinned keys never go.
+    fn choose_victims(&self, over: u64) -> Vec<Key> {
+        let free = |k: &Key| !self.pinned.contains(k);
+        let mut victims = self
+            .lru
+            .victims_where(over, |k| is_tier_file(k.path()) && free(k));
+        let freed: u64 = victims.iter().filter_map(|k| self.lru.bytes(k)).sum();
+        if freed < over {
+            let more: Vec<Key> = self
+                .lru
+                .victims(over - freed, self.tick.saturating_sub(PROTECT_TICKS), free)
+                .into_iter()
+                .filter(|k| !victims.contains(k))
+                .collect();
+            victims.extend(more);
+        }
+        victims
+    }
+
+    /// The tick a tracked or resident key was last used at.
+    #[cfg(test)]
+    pub(crate) fn last_used(&self, key: &Key) -> Option<u64> {
+        self.lru.entries.get(key).map(|e| e.1)
+    }
+
+    /// Moves the clock on as `pump` does, without a renderer.
+    #[cfg(test)]
+    pub(crate) fn advance(&mut self, ticks: u64) {
+        self.tick += ticks;
+    }
+
+    /// The priority a key waits in the queue with.
+    #[cfg(test)]
+    pub(crate) fn queued_priority(&self, key: &Key) -> Option<f32> {
+        self.queue.items.iter().find(|e| &e.0 == key).map(|e| e.1)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_pinned(&self, key: &Key) -> bool {
+        self.pinned.contains(key)
     }
 
     /// Things the owner must release (GLB models evicted for memory).
@@ -1171,20 +1228,7 @@ impl AssetStore {
         let over = texture_bytes.saturating_sub(self.cap_bytes);
         self.over_cap = over > 0;
         if over > 0 {
-            // Higher tiers go first, even in view: the base files under them stay, so the
-            // picture only gets coarser, never blank.
-            let mut victims = self.lru.victims_where(over, is_tier_file);
-            let freed: u64 = victims.iter().filter_map(|k| self.lru.bytes(k)).sum();
-            if freed < over {
-                let more: Vec<Key> = self
-                    .lru
-                    .victims(over - freed, self.tick.saturating_sub(PROTECT_TICKS))
-                    .into_iter()
-                    .filter(|k| !victims.contains(k))
-                    .collect();
-                victims.extend(more);
-            }
-            for key in victims {
+            for key in self.choose_victims(over) {
                 self.lru.remove(&key);
                 self.stats.evictions += 1;
                 if let Some(id) = self.textures.remove(&key) {
@@ -1375,15 +1419,37 @@ mod tests {
         l.touch(&k("a"), 3);
         assert_eq!(l.total, 300);
         // free 150 bytes, protecting everything used at tick 50 or later
-        assert_eq!(l.victims(150, 50), vec![k("b"), k("a")]);
+        assert_eq!(l.victims(150, 50, |_| true), vec![k("b"), k("a")]);
         // 100 is enough with one
-        assert_eq!(l.victims(100, 50), vec![k("b")]);
+        assert_eq!(l.victims(100, 50, |_| true), vec![k("b")]);
+        // nor what `which` refuses
+        assert_eq!(l.victims(150, 50, |k| k.path() != "b"), vec![k("a")]);
         // nothing is evictable when everything is recent
-        assert!(l.victims(100, 0).is_empty());
+        assert!(l.victims(100, 0, |_| true).is_empty());
         l.remove(&k("b"));
         assert_eq!(l.total, 200);
         l.insert(k("a"), 10, 4); // re-inserting replaces the size
         assert_eq!(l.total, 110);
+    }
+
+    /// Over the cap a higher tier goes first even on screen, unless it is pinned (shown with
+    /// nothing resident under it): then only what is neither pinned nor recently used goes.
+    #[test]
+    fn a_pinned_tier_is_never_evicted_over_the_cap() {
+        let mut s = AssetStore::new();
+        let (tier, base, old) = (k("m/lod0_2k.glb"), k("m/lod1.glb"), k("old.glb"));
+        s.track(old.clone(), 100);
+        s.advance(500);
+        s.track(tier.clone(), 100);
+        s.track(base.clone(), 100);
+        assert_eq!(s.choose_victims(100), vec![tier.clone()]);
+        s.pin([tier.clone()].into());
+        assert_eq!(s.choose_victims(100), vec![old.clone()]);
+        assert!(
+            s.choose_victims(300).iter().all(|v| *v == old),
+            "what is on screen stays: {:?}",
+            s.choose_victims(300)
+        );
     }
 
     #[test]

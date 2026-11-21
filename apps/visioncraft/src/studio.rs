@@ -141,6 +141,12 @@ pub struct Studio {
     /// The Textures choice of the Quality menu: `None` follows the quality, else "1k", "2k" or
     /// "4k".
     pub textures: Option<&'static str>,
+    /// The Model distance choice of the Quality menu (`ui.set modelDrawDistance`): `None`
+    /// follows the quality's `model_draw_distance_m`, else metres (`f32::INFINITY` no limit).
+    pub model_draw_distance: Option<f32>,
+    /// A picture is being settled (`settle_for_picture`): the model draw distance is a live-view
+    /// setting, so library models load and draw at any distance.
+    pub picturing: bool,
     /// The height of a still waiting for the highest texture tier of what is in frame.
     pub still_textures: Option<u32>,
     /// The Quality menu's Re-measure: calibrate again on the next frame.
@@ -442,6 +448,8 @@ impl Studio {
             hardware_line: None,
             gpu_lawn_budget: 1.0,
             textures: None,
+            model_draw_distance: None,
+            picturing: false,
             still_textures: None,
             remeasure: false,
             measuring: false,
@@ -803,6 +811,9 @@ impl Studio {
         let mut lamp_problems = Vec::new();
         let stream = self.scene.library.store.stream_bytes;
         self.scene.library.store.stream_bytes = 64 << 20;
+        // Everything is loaded and drawn, whatever the model draw distance; the renderer keeps
+        // it so until the next live frame's `prepare` (the picture is rendered before that).
+        self.picturing = true;
         loop {
             self.prepare();
             // The lights of lamps, once the catalogue that says which assets are lamps is in (a
@@ -830,6 +841,7 @@ impl Studio {
         // A picture is taken with the eye adapted to it.
         self.adapted_ev = None;
         self.prepare();
+        self.picturing = false;
         let mut problems = picture_problems(
             self.plants_pending(),
             self.scene.library.idle(),
@@ -1798,6 +1810,8 @@ impl Studio {
             });
         self.renderer.set_view_distance(v.view_distance);
         self.renderer.set_impostor_reach(reach.small_impostors);
+        self.renderer
+            .set_model_draw_distance(self.model_draw_in_force());
         if self.shadow_reach != reach.shadow_m {
             self.shadow_reach = reach.shadow_m;
             self.renderer.set_shadow_distance(reach.shadow_m);
@@ -2054,7 +2068,21 @@ impl Studio {
         crate::load_stats::add("~frame prepare (main thread)", crate::assets::now_ms() - t);
     }
 
+    /// The model draw distance the live view uses: the choice (`model_draw_distance`), except
+    /// while a picture is made or a still waits for what is in frame (`still_textures`):
+    /// pictures draw everything, as plan views do.
+    pub fn model_draw_in_force(&self) -> Option<f32> {
+        if self.picturing || self.still_textures.is_some() {
+            Some(f32::INFINITY)
+        } else {
+            self.model_draw_distance
+        }
+    }
+
     fn prepare_now(&mut self) {
+        // Before the scene's pump: the library asks for models within this distance.
+        self.renderer
+            .set_model_draw_distance(self.model_draw_in_force());
         self.scene.library.lamps_on = self.lights_on();
         let eye = self.camera.eye();
         let h = self.still_textures.unwrap_or(self.size[1]).max(1) as f32;

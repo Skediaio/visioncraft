@@ -212,6 +212,8 @@ impl Renderer {
         let live_pipelines = sampled.0.map(|p| std::mem::replace(&mut self.pipelines, p));
         let live_sampled = sampled.1.map(|s| std::mem::replace(&mut self.sampled, s));
         let live = (self.size, self.quality, self.view, self.proj, self.eye);
+        // A still or a photo draws every model: the draw distance is for the live view.
+        let live_draw = self.model_draw_override.replace(f32::INFINITY);
         let live_cache = self.far_cache.take();
         let live_cascades = std::mem::take(&mut self.cascade_rendered);
         let live_stale = std::mem::take(&mut self.cascade_stale);
@@ -255,6 +257,7 @@ impl Renderer {
         let used_pipelines = live_pipelines.map(|p| std::mem::replace(&mut self.pipelines, p));
         let used_sampled = live_sampled.map(|s| std::mem::replace(&mut self.sampled, s));
         (self.size, self.quality, self.view, self.proj, self.eye) = live;
+        self.model_draw_override = live_draw;
         self.far_cache = live_cache;
         self.cascade_rendered = live_cascades;
         self.cascade_stale = live_stale;

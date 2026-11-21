@@ -59,8 +59,18 @@ Recipe, a time-of-day drag:
 - **`quality change: every pipeline made`**: the shading changed (fast shading or not) to one
   the renderer had not made before; changing back is free (`Renderer::set_quality` keeps both).
 - **`lods[].why`** other than `the level needed`: still loading, failed, nothing resident yet
-  (the grey placeholder), or over the texture memory cap (then only the coarsest and the nearest
-  levels are asked for).
+  (the grey placeholder), over the texture memory cap (then only the coarsest and the nearest
+  levels are asked for), or past the model draw distance (`needed` is then the level count:
+  not drawn and not asked for). `needed` is the level the renderer draws at that distance: the
+  catalogue's distances times the instance's scale, the quality's LOD percentage and the view
+  distance.
+- **What stays resident.** Every tenth frame the library marks as used the level each instance
+  in view may be drawing (its cluster can be up to `CLUSTER_SLACK_M` nearer than the instance),
+  or the resident level standing in for it while it loads, and the coarsest level of every
+  instance within the draw distance. Eviction over the cap never takes what was used in the
+  last 90 frames; a higher tier goes first even on screen, except a 2k model shown with its base
+  level not resident (pinned). Levels wanted only behind the camera load after those in view
+  and are the first to go.
 
 ## What the loading path does
 

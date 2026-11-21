@@ -734,6 +734,37 @@ impl Hud {
                                     }
                                 }
                             });
+                            // How far library objects draw: the preset's, a distance, or no limit
+                            // (`ui.set modelDrawDistance`).
+                            ui.horizontal(|ui| {
+                                ui.label(t::MODEL_DISTANCE)
+                                    .on_hover_text(t::MODEL_DISTANCE_TIP);
+                                let choice = cx.s.model_draw_distance;
+                                if ui.selectable_label(choice.is_none(), t::PRESET).clicked() {
+                                    cx.s.model_draw_distance = None;
+                                }
+                                let open = choice.is_some_and(f32::is_infinite);
+                                if ui.selectable_label(open, t::UNLIMITED).clicked() {
+                                    cx.s.model_draw_distance = Some(f32::INFINITY);
+                                }
+                            });
+                            let range = crate::agents::MODEL_DRAW_RANGE;
+                            let mut m =
+                                cx.s.model_draw_distance
+                                    .unwrap_or(cx.s.current_quality().model_draw_distance_m)
+                                    .min(*range.end());
+                            if ui
+                                .add(
+                                    egui::Slider::new(&mut m, range)
+                                        .logarithmic(true)
+                                        .integer()
+                                        .suffix(" m"),
+                                )
+                                .on_hover_text(t::MODEL_DISTANCE_TIP)
+                                .changed()
+                            {
+                                cx.s.model_draw_distance = Some(m);
+                            }
                             let range = visioncraft_render::TARGET_FPS_RANGE;
                             let mut fps = cx.s.target_fps;
                             let r = ui

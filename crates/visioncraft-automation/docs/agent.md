@@ -304,11 +304,19 @@ default at cover 0.35) or `overcast` (soft shadows, little direct sun); they dri
 and show in reflections and in the ambient light. The rendering quality and
 the texture resolution belong to the window, not the project: set them over the control channel
 with `ui.set {"quality": "auto" | "low" | "medium" | "high" | "ultra", "textures": "auto" | "1k"
-| "2k" | "4k", "targetFps": 24..240}` (`targetFps`, 60 by default, is the frame rate Auto aims for:
-it steps down when frames miss it and up with room to spare, judging the GPU's own time when the
-device has timestamp queries and vsync-aware frame intervals otherwise, see
-`docs/performance.md`; `ui.get` reports it under
-`quality.targetFps`); `view.render` takes its own `quality`. For a final picture use `view.render
+| "2k" | "4k", "targetFps": 24..240, "modelDrawDistance": "preset" | "unlimited" | 20..2000}`
+(`targetFps`, 60 by default, is the frame rate Auto aims for: it steps down when frames miss it
+and up with room to spare, judging the GPU's own time when the device has timestamp queries and
+vsync-aware frame intervals otherwise, see `docs/performance.md`; `ui.get` reports it under
+`quality.targetFps`. `modelDrawDistance` is
+how far library objects such as benches, pots and lamps are drawn and loaded, in metres from the
+eye; plants, terrain, imported objects and the design's own buildings have no such limit. Past it
+they dissolve out and are not loaded. It is a live-view setting only: pictures (`view.render`,
+photos, film frames, screenshots and exports) load and draw every model, as plan views do.
+`"preset"` (or null) follows the quality: 80 m at LOW, 150 m
+at MEDIUM, 300 m at HIGH, no limit at ULTRA; `ui.get` reports the choice under
+`quality.modelDrawDistance` and the distance in force under `quality.modelDrawDistanceM`, null for
+no limit); `view.render` takes its own `quality`. For a final picture use `view.render
 {"quality": "photo"}`: many frames averaged at ULTRA give soft shadows with real penumbrae,
 smooth edges and leaves without shimmer (seconds to minutes); recipe 41 has the lens.
 

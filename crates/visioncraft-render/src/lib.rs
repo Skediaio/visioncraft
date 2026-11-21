@@ -512,6 +512,12 @@ pub struct Quality {
     /// gives a `GrassField`): 0 off (the app draws its own lawn tufts), 1 to 3 ever further and
     /// denser.
     pub grass: u32,
+    /// How far the items marked with `set_item_draw_capped` (catalogue models such as benches,
+    /// pots and lamps; not plants, terrain or the design's own buildings) are drawn: metres
+    /// from the eye, `f32::INFINITY` for no limit. Not scaled by `lod_distance_percent` or the
+    /// view distance (a distance in metres, as games give one); the hand-over to nothing
+    /// dissolves as a cull fade does. `set_model_draw_distance` overrides it.
+    pub model_draw_distance_m: f32,
 }
 
 // `render_scale` is clamped to 0.5..=1 everywhere it is used, never NaN, so
@@ -543,6 +549,7 @@ impl Quality {
         fast_shading: true,
         clouds: 0,
         grass: 0,
+        model_draw_distance_m: 80.0,
     };
     pub const MEDIUM: Quality = Quality {
         shadow_resolution: 1024,
@@ -564,6 +571,7 @@ impl Quality {
         fast_shading: true,
         clouds: 4,
         grass: 1,
+        model_draw_distance_m: 150.0,
     };
     pub const HIGH: Quality = Quality {
         shadow_resolution: 2048,
@@ -583,6 +591,7 @@ impl Quality {
         fast_shading: false,
         clouds: 3,
         grass: 2,
+        model_draw_distance_m: 300.0,
     };
     /// For GPUs with headroom (a desktop card at 100+ fps on HIGH): 4096
     /// shadow maps, full-resolution AO with more taps and a full-resolution
@@ -608,6 +617,7 @@ impl Quality {
         fast_shading: false,
         clouds: 2,
         grass: 3,
+        model_draw_distance_m: f32::INFINITY,
     };
     pub const PRESETS: [(&'static str, Quality); 4] = [
         ("low", Quality::LOW),
@@ -746,6 +756,8 @@ struct Item {
     cull_fade: f32,
     /// The impostor's end follows `set_impostor_reach` (small plants).
     follows_reach: bool,
+    /// Culled past the model draw distance (`set_item_draw_capped`).
+    draw_capped: bool,
     /// Casts shadows with the level it is drawn with (`set_item_shadow_exact`).
     shadow_exact: bool,
     /// Casts shadows past its finest level with this mesh (a tree's few untextured blobs,
@@ -1409,6 +1421,8 @@ pub struct Renderer {
     view_distance: f32,
     /// Multiplies how far impostors draw (their last distance only).
     impostor_reach: f32,
+    /// Overrides the quality's `model_draw_distance_m` (`set_model_draw_distance`).
+    model_draw_override: Option<f32>,
     wind: Wind,
     /// The wind's phases, integrated by `set_time` (wind.rs).
     wind_phases: wind::Phases,
@@ -1795,6 +1809,7 @@ impl Renderer {
             shadow_distance: 80.0,
             view_distance: 1.0,
             impostor_reach: 1.0,
+            model_draw_override: None,
             wind: Wind::default(),
             wind_phases: wind::Phases::default(),
             time: 0.0,
@@ -2055,6 +2070,30 @@ impl Renderer {
     /// eye level the ground and everything on it hide them long before.
     pub fn set_impostor_reach(&mut self, scale: f32) {
         self.impostor_reach = scale.clamp(0.01, 10.0);
+    }
+
+    /// How far capped models draw (`Quality::model_draw_distance_m`), metres: `Some` overrides
+    /// the quality's (`f32::INFINITY` no limit), `None` follows it again.
+    pub fn set_model_draw_distance(&mut self, metres: Option<f32>) {
+        self.model_draw_override = metres.filter(|m| !m.is_nan()).map(|m| m.max(1.0));
+    }
+
+    /// The draw distance in force for capped models, metres (`f32::INFINITY`: no limit).
+    pub fn model_draw_distance(&self) -> f32 {
+        self.model_draw_override
+            .unwrap_or(self.quality.model_draw_distance_m)
+    }
+
+    /// Whether `item` stops drawing past the model draw distance (`model_draw_distance`).
+    pub fn set_item_draw_capped(&mut self, item: ItemId, capped: bool) {
+        if let Some(Some(it)) = self.items.get_mut(item.0 as usize) {
+            it.draw_capped = capped;
+        }
+    }
+
+    /// The camera's projection times its view (`set_camera`): world to clip space.
+    pub fn view_proj(&self) -> Mat4 {
+        self.proj * self.view
     }
 
     /// Makes the end of `item`'s impostor follow `set_impostor_reach`.
@@ -3292,6 +3331,7 @@ impl Renderer {
             shadow_caster: None,
             cull_fade: 0.0,
             follows_reach: false,
+            draw_capped: false,
             conifer: false,
             grass: false,
         }));
@@ -4967,7 +5007,9 @@ impl Renderer {
         }
     }
 
-    fn lod_scale(&self) -> f32 {
+    /// What every level-of-detail distance is multiplied by: the quality's percentage times
+    /// the view distance (a cluster at `d` metres takes the level for `d / lod_scale()`).
+    pub fn lod_scale(&self) -> f32 {
         self.quality.lod_distance_percent.max(1) as f32 / 100.0 * self.view_distance
     }
 
@@ -4990,6 +5032,8 @@ impl Renderer {
             (2.0 / self.proj.y_axis.y.abs().max(1e-9), forward)
         });
         let reach = self.impostor_reach;
+        // The model draw distance in the scaled units the levels are compared in.
+        let draw_end = self.model_draw_distance() / scale;
         let mut fade_bytes: Vec<u8> = Vec::new();
         let mut fade_used = 0usize;
         for item in self.items.iter_mut().flatten() {
@@ -5001,6 +5045,9 @@ impl Renderer {
             {
                 let mesh_end = item.lods[item.lods.len() - 2];
                 *last = (*last * reach).max(mesh_end + 1.0);
+            }
+            if item.draw_capped {
+                lod::cap(&mut lods, draw_end);
             }
             for c in &mut item.clusters {
                 let Some((lo, hi)) = c.bounds else {
@@ -5023,9 +5070,10 @@ impl Renderer {
                 // shows no pop. Beyond the impostor, or a last level without
                 // a cull fade, it is culled at once.
                 let levels = item.lods.len() as u8;
+                // A model past its draw distance dissolves out as a cull fade does.
                 let cull_fades = item.impostor.is_none()
-                    && item.cull_fade > 0.0
-                    && item.lods[levels as usize - 1].is_finite();
+                    && (item.cull_fade > 0.0 || item.draw_capped)
+                    && lods[levels as usize - 1].is_finite();
                 let dissolves = |l: u8| l < levels || (l == levels && cull_fades);
                 if ortho.is_none()
                     && c.target != LOD_UNSET
@@ -7827,6 +7875,64 @@ mod tests {
                 ));
             }
         }
+    }
+
+    /// The model draw distance is for the live view: a capped model past it is not drawn
+    /// there, but a still (and a photo, through the same offscreen path) draws it.
+    #[test]
+    fn stills_ignore_the_model_draw_distance() {
+        let Ok((device, queue)) = pollster::block_on(headless_device()) else {
+            eprintln!("no GPU adapter: skipped");
+            return;
+        };
+        let mut r = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        r.resize(64, 36);
+        r.set_quality(Quality::LOW);
+        let mut cube = demo::MeshData::default();
+        cube.add_box(Vec3::splat(-1.0), Vec3::splat(1.0));
+        let mesh = r.add_mesh(&cube.mesh()).expect("mesh");
+        let material = r.add_material(&Material::default());
+        // 400 m ahead: past LOW's 80 m live, and past HIGH's 300 m that a still renders with.
+        let item = r.add_lod_item(
+            &[(mesh, material, f32::INFINITY)],
+            &[Mat4::from_translation(Vec3::new(0.0, 0.0, -400.0))],
+        );
+        r.set_item_draw_capped(item, true);
+        let view = Mat4::look_at_rh(Vec3::ZERO, Vec3::NEG_Z, Vec3::Y);
+        let proj = Mat4::perspective_infinite_rh(1.0, 64.0 / 36.0, 0.1);
+        r.set_camera(view, proj, Vec3::ZERO);
+        // Past the hand-over's dissolve (`FADE_FRAMES`).
+        let live = |r: &mut Renderer| {
+            for _ in 0..=FADE_FRAMES as usize + 2 {
+                let mut e = device.create_command_encoder(&Default::default());
+                r.render(&mut e);
+                queue.submit([e.finish()]);
+            }
+            r.stats().instances
+        };
+        let capped = live(&mut r);
+        r.set_model_draw_distance(Some(f32::INFINITY));
+        let open = live(&mut r);
+        assert!(open > capped, "culled live past 80 m: {capped} vs {open}");
+        r.set_model_draw_distance(None);
+        assert_eq!(live(&mut r), capped);
+        r.render_still(64, 36, view, proj, Vec3::ZERO)
+            .expect("still")
+            .wait()
+            .expect("pixels");
+        assert_eq!(r.stats().instances, open, "the still draws it");
+        assert_eq!(r.model_draw_distance(), 80.0, "the live setting is back");
+        assert_eq!(live(&mut r), capped);
+    }
+
+    #[test]
+    fn each_preset_draws_models_further_than_the_one_below() {
+        let d: Vec<f32> = Quality::PRESETS
+            .iter()
+            .map(|(_, q)| q.model_draw_distance_m)
+            .collect();
+        assert_eq!(d, [80.0, 150.0, 300.0, f32::INFINITY]);
+        assert!(d.windows(2).all(|w| w[0] < w[1]));
     }
 
     /// The binary operators of `src` (comments stripped) that WGSL forbids mixing without
