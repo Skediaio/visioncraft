@@ -55,12 +55,108 @@ pub fn inputs_key(p: &Project, models: u64) -> u64 {
     h.finish()
 }
 
+/// The layout of a stored grid; bump it when `SkyVisibility` or this encoding changes.
+const CACHE_FORMAT: u8 = 1;
+
+/// The cache key of the bake of the scene with key `scene` (`SkyScene::key`).
+pub fn cache_key(scene: u64) -> u64 {
+    crate::plant_cache::key(&[b"sky visibility", &scene.to_le_bytes()])
+}
+
+/// A grid as bytes: the format, a checksum and length of the body, then the body (the header
+/// numbers, then the arrays, little-endian floats, so the round trip is bit-exact).
+pub fn encode(v: &SkyVisibility) -> Vec<u8> {
+    let mut body = Vec::new();
+    let f = |b: &mut Vec<u8>, xs: &[f32]| xs.iter().for_each(|x| b.extend(x.to_le_bytes()));
+    f(&mut body, &v.origin);
+    f(&mut body, &[v.cell]);
+    v.dims.iter().for_each(|d| body.extend(d.to_le_bytes()));
+    f(&mut body, &[v.lift, v.height]);
+    f(&mut body, &v.ground);
+    v.sh.iter().for_each(|p| f(&mut body, p));
+    f(&mut body, &v.valid);
+    f(&mut body, &v.albedo);
+    let mut out = vec![CACHE_FORMAT];
+    out.extend((body.len() as u64).to_le_bytes());
+    out.extend(crate::plant_cache::digest(&body));
+    out.extend(body);
+    out
+}
+
+/// The grid in `bytes`; `None` for another format, a wrong length or checksum, or sizes that
+/// do not fit the grid's dimensions.
+pub fn decode(bytes: &[u8]) -> Option<SkyVisibility> {
+    let (&format, rest) = bytes.split_first()?;
+    (format == CACHE_FORMAT).then_some(())?;
+    let len = u64::from_le_bytes(rest.get(..8)?.try_into().ok()?);
+    let sum = rest.get(8..16)?;
+    let body = rest.get(16..)?;
+    (body.len() as u64 == len && crate::plant_cache::digest(body)[..] == *sum).then_some(())?;
+    let mut at = 0usize;
+    let mut take = |n: usize| {
+        let s = body.get(at..at.checked_add(n.checked_mul(4)?)?)?;
+        at += n * 4;
+        Some(s)
+    };
+    let floats = |s: &[u8]| -> Vec<f32> {
+        s.as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| f32::from_le_bytes(*c))
+            .collect()
+    };
+    let head = take(8)?;
+    let word = |i: usize| {
+        [
+            head[4 * i],
+            head[4 * i + 1],
+            head[4 * i + 2],
+            head[4 * i + 3],
+        ]
+    };
+    let (fl, un) = (
+        |i: usize| f32::from_le_bytes(word(i)),
+        |i: usize| u32::from_le_bytes(word(i)),
+    );
+    let dims = [un(3), un(4), un(5)];
+    let columns = (dims[0] as usize).checked_mul(dims[2] as usize)?;
+    let probes = columns.checked_mul(dims[1] as usize)?;
+    let ground = floats(take(columns)?);
+    let sh: Vec<[f32; 9]> = floats(take(probes.checked_mul(9)?)?)
+        .as_chunks::<9>()
+        .0
+        .to_vec();
+    let valid = floats(take(probes)?);
+    let albedo = floats(take(probes)?);
+    (at == body.len()).then_some(())?;
+    Some(SkyVisibility {
+        origin: [fl(0), fl(1)],
+        cell: fl(2),
+        dims,
+        lift: fl(6),
+        height: fl(7),
+        ground,
+        sh,
+        valid,
+        albedo,
+    })
+}
+
 enum Work {
     /// A thread natively, the import worker on the web (with the scene, should it fail).
     Off(Slot, Option<SkyScene>),
     #[cfg(target_arch = "wasm32")]
     Sliced(Option<SkyVisJob>),
+    /// The browser's cache is being asked; the bake follows when it has no entry.
+    #[cfg(target_arch = "wasm32")]
+    Lookup(LookupSlot, Option<SkyScene>),
+    /// No cache entry: the bake waits for `SkyVisState::hold` to end.
+    Parked(Option<SkyScene>),
 }
+
+/// The browser cache's answer: `Some(None)` is a miss.
+#[cfg(target_arch = "wasm32")]
+type LookupSlot = Arc<Mutex<Option<Option<SkyVisibility>>>>;
 
 struct Task {
     cancel: Arc<AtomicBool>,
@@ -277,6 +373,11 @@ pub struct SkyVisState {
     /// How long the last bake took (ms), for the measurements.
     pub last_ms: Option<f64>,
     started_ms: f64,
+    /// Set by the window while plants are still being made: a bake that missed the cache waits
+    /// (a cache hit needs no cores, so it is never held).
+    pub hold: bool,
+    /// The cache key to store the running bake's grid under.
+    store: Option<u64>,
 }
 
 impl SkyVisState {
@@ -297,10 +398,69 @@ impl SkyVisState {
         changed
     }
 
-    /// Starts baking `scene`, dropping (cancelling) the bake under way.
+    /// Gets the grid of `scene`: from the cache when it has it (the disk natively, the browser's
+    /// cache on the web; no workers), else baked (`hold` delays that), dropping (cancelling) the
+    /// work under way. A baked grid is stored when it is done.
     pub fn start(&mut self, scene: SkyScene, now_ms: f64) {
-        let cancel = Arc::new(AtomicBool::new(false));
         self.started_ms = now_ms;
+        self.store = None;
+        let key = cache_key(scene.key());
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let got = crate::plant_cache::disk()
+                .and_then(|d| d.read("skyvis", key))
+                .and_then(|b| decode(&b));
+            let what = if got.is_some() { "hit" } else { "miss" };
+            crate::load_stats::add(&format!("disk cache {what} (skyvis)"), 0.0);
+            if let Some(v) = got {
+                let slot: Slot = Arc::new(Mutex::new(Some(Ok(Some(v)))));
+                self.task = Some(Task {
+                    cancel: Arc::default(),
+                    work: Work::Off(slot, None),
+                });
+                return;
+            }
+            self.after_miss(scene, key);
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let slot: LookupSlot = Arc::default();
+            let out = slot.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let got = crate::web_cache::get("skyvis", key)
+                    .await
+                    .and_then(|b| decode(&b));
+                if let Ok(mut s) = out.lock() {
+                    *s = Some(got);
+                }
+            });
+            self.store = Some(key);
+            self.task = Some(Task {
+                cancel: Arc::default(),
+                work: Work::Lookup(slot, Some(scene)),
+                _run: None,
+            });
+        }
+    }
+
+    /// No cache entry: bakes now, or parks the scene while plants are made.
+    fn after_miss(&mut self, scene: SkyScene, key: u64) {
+        self.store = Some(key);
+        if self.hold {
+            self.task = Some(Task {
+                cancel: Arc::default(),
+                work: Work::Parked(Some(scene)),
+                #[cfg(target_arch = "wasm32")]
+                _run: None,
+            });
+        } else {
+            self.bake(scene);
+        }
+    }
+
+    /// Starts baking `scene`.
+    fn bake(&mut self, scene: SkyScene) {
+        let cancel = Arc::new(AtomicBool::new(false));
         let slot: Slot = Arc::default();
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -340,6 +500,31 @@ impl SkyVisState {
     pub fn poll(&mut self, now_ms: f64) -> Option<Option<SkyVisibility>> {
         let task = self.task.as_mut()?;
         let grid = match &mut task.work {
+            Work::Parked(scene) => {
+                if self.hold {
+                    return None;
+                }
+                let scene = scene.take()?;
+                // `store` still holds the key `after_miss` kept.
+                self.bake(scene);
+                return None;
+            }
+            #[cfg(target_arch = "wasm32")]
+            Work::Lookup(slot, scene) => {
+                let got = slot.lock().ok()?.take()?;
+                match got {
+                    Some(v) => {
+                        self.store = None;
+                        Some(Some(v))
+                    }
+                    None => {
+                        let scene = scene.take()?;
+                        let key = self.store.take()?;
+                        self.after_miss(scene, key);
+                        return None;
+                    }
+                }
+            }
             Work::Off(slot, scene) => {
                 let got = slot.lock().ok()?.take()?;
                 match got {
@@ -377,6 +562,15 @@ impl SkyVisState {
         };
         let grid = grid?;
         self.task = None;
+        if let (Some(v), Some(key)) = (&grid, self.store.take()) {
+            let bytes = encode(v);
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(d) = crate::plant_cache::disk() {
+                d.write("skyvis", key, &bytes);
+            }
+            #[cfg(target_arch = "wasm32")]
+            crate::web_cache::put("skyvis", key, &bytes);
+        }
         self.last_ms = Some(now_ms - self.started_ms);
         crate::load_stats::add(
             "sky visibility bake (off the frame, wall)",
@@ -388,7 +582,59 @@ impl SkyVisState {
     /// Forgets the grid and the bake (another project).
     pub fn clear(&mut self) {
         self.task = None;
+        self.store = None;
         self.inputs = None;
         self.scene = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn grid() -> SkyVisibility {
+        let (cols, probes) = (6usize, 12usize);
+        let f = |i: usize, k: f32| (i as f32 * 0.37 + k).sin();
+        SkyVisibility {
+            origin: [-3.5, 1.25],
+            cell: 0.75,
+            dims: [3, 2, 2],
+            lift: 0.4,
+            height: 9.0,
+            ground: (0..cols).map(|i| f(i, 1.0)).collect(),
+            sh: (0..probes)
+                .map(|i| std::array::from_fn(|j| f(i * 9 + j, 2.0)))
+                .collect(),
+            valid: (0..probes).map(|i| (i % 2) as f32).collect(),
+            albedo: (0..probes).map(|i| f(i, 3.0).abs()).collect(),
+        }
+    }
+
+    #[test]
+    fn round_trip_is_bit_exact() {
+        let g = grid();
+        assert_eq!(decode(&encode(&g)), Some(g));
+    }
+
+    #[test]
+    fn truncated_or_corrupt_entries_are_misses() {
+        let bytes = encode(&grid());
+        for n in [0, 1, 8, 16, 17, bytes.len() / 2, bytes.len() - 1] {
+            assert_eq!(decode(&bytes[..n]), None, "truncated to {n}");
+        }
+        let mut longer = bytes.clone();
+        longer.push(0);
+        assert_eq!(decode(&longer), None);
+        for at in [0, 3, 9, 20, bytes.len() / 2, bytes.len() - 1] {
+            let mut b = bytes.clone();
+            b[at] ^= 0x55;
+            assert_eq!(decode(&b), None, "byte {at} damaged");
+        }
+    }
+
+    #[test]
+    fn the_key_follows_the_scene_key() {
+        assert_ne!(cache_key(1), cache_key(2));
+        assert_eq!(cache_key(7), cache_key(7));
     }
 }
