@@ -117,6 +117,8 @@ pub struct Studio {
     pub quality: usize,
     /// Follow `suggest_quality` instead of the preset in `quality`.
     pub quality_auto: bool,
+    /// The frame rate Auto aims for (`visioncraft_render::TARGET_FPS_RANGE`).
+    pub target_fps: f32,
     pub auto_quality: Quality,
     pub frame_ms: Vec<f32>,
     /// Auto does not step up before this `clock` (seconds): it just stepped down.
@@ -423,6 +425,7 @@ impl Studio {
             assets: demo_assets(),
             quality,
             quality_auto: true,
+            target_fps: visioncraft_render::DEFAULT_TARGET_FPS,
             auto_quality: Quality::MEDIUM,
             frame_ms: Vec::new(),
             auto_hold_until: 0.0,
@@ -1887,10 +1890,10 @@ impl Studio {
     }
 
     /// Feeds one frame time (ms); Auto may change the quality. Down as soon as 30 frames show
-    /// the budget missed (the 75th percentile over 30 fps, so hitches count too), up only after
+    /// the budget missed (the 75th percentile over the target fps, so hitches count too), up only after
     /// 90 frames well inside it, never while plants or textures load (those frames say nothing
     /// about the scene; past a grace period they can still step it down) and not for 10 s after a step down (else it climbs back into the tier it
-    /// just left and settles below 30 fps).
+    /// just left and settles below the target).
     pub fn record_frame(&mut self, ms: f32) {
         if !self.quality_auto {
             self.frame_ms.clear();
@@ -1913,7 +1916,8 @@ impl Studio {
         // Down while loading (past the grace), up only once it is done: a rise mid-load (fast
         // frames before the trees arrive) took an integrated GPU to HIGH and 11 fps.
         let can_rise = self.clock >= self.auto_hold_until && !loading;
-        match auto_step(&self.frame_ms, self.auto_quality, can_rise) {
+        let budget = visioncraft_render::target_ms(self.target_fps);
+        match auto_step(&self.frame_ms, self.auto_quality, can_rise, budget) {
             AutoStep::Wait => {}
             AutoStep::Keep => {
                 let n = self.frame_ms.len();
@@ -2646,10 +2650,10 @@ enum AutoStep {
 }
 
 /// Auto's decision from frame times (ms, oldest first): one rung down the renderer's ladder as
-/// soon as 30 frames have their 75th percentile over the 30 fps budget, one up (the renderer's
+/// soon as 30 frames have their 75th percentile over the budget (`target_ms` of the target fps), one up (the renderer's
 /// `suggest_quality`, with its ULTRA headroom) after 90 frames with it under 65 % of it, when
 /// `can_rise`.
-fn auto_step(frames: &[f32], current: Quality, can_rise: bool) -> AutoStep {
+fn auto_step(frames: &[f32], current: Quality, can_rise: bool, budget: f32) -> AutoStep {
     let n = frames.len();
     if n < 30 {
         return AutoStep::Wait;
@@ -2657,12 +2661,11 @@ fn auto_step(frames: &[f32], current: Quality, can_rise: bool) -> AutoStep {
     let mut recent = frames[n - 30..].to_vec();
     recent.sort_by(f32::total_cmp);
     let p75 = recent[22];
-    let budget = visioncraft_render::TARGET_MS;
     let next = if p75 > budget {
         // A history that misses the budget asks the ladder for the next rung down.
-        visioncraft_render::suggest_quality(&[budget * 1.5; 30], current)
+        visioncraft_render::suggest_quality(&[budget * 1.5; 30], current, budget)
     } else if n >= 90 && can_rise && p75 < budget * 0.65 {
-        visioncraft_render::suggest_quality(frames, current)
+        visioncraft_render::suggest_quality(frames, current, budget)
     } else if n >= 90 {
         return AutoStep::Keep;
     } else {
@@ -3002,8 +3005,11 @@ mod reach_tests {
 
     #[test]
     fn auto_steps_down_at_once_and_up_only_when_well_inside_the_budget() {
-        use super::{AutoStep, auto_step};
+        use super::AutoStep;
         use visioncraft_render::Quality;
+        // The 30 fps budget this test was written for.
+        let auto_step =
+            |f: &[f32], q: Quality, rise: bool| super::auto_step(f, q, rise, 1000.0 / 30.0);
         let high = Quality::HIGH;
         // 28 fps with hitches: under the old 110 % median rule this stayed; now it steps down.
         let mut frames = vec![34.0; 20];
@@ -3048,6 +3054,22 @@ mod reach_tests {
             auto_step(&[40.0; 30], low(0.65), true),
             AutoStep::To(_, true)
         ));
+    }
+
+    #[test]
+    fn auto_follows_the_target_fps() {
+        use super::{AutoStep, auto_step};
+        use visioncraft_render::{Quality, target_ms};
+        // 25 ms frames (40 fps): too slow for 60 fps, fine for 30 fps.
+        let frames = [25.0; 90];
+        assert!(matches!(
+            auto_step(&frames, Quality::MEDIUM, true, target_ms(60.0)),
+            AutoStep::To(_, true)
+        ));
+        assert_eq!(
+            auto_step(&frames, Quality::MEDIUM, true, target_ms(30.0)),
+            AutoStep::Keep
+        );
     }
 }
 

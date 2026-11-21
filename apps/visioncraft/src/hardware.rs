@@ -11,8 +11,9 @@ use serde::{Deserialize, Serialize};
 use visioncraft_render::{HardwareProbe, Quality, Score, starting_quality};
 
 /// eframe storage key: a JSON map from `key` to `Measured`.
-/// (`2`: integrated GPUs start at MEDIUM at most; older choices are measured again.)
-pub const STORAGE_KEY: &str = "visioncraft.hardware2";
+/// (`3`: starts aim at the 60 fps default, integrated GPUs at 30 fps at most; older choices are
+/// measured again. `2`: integrated GPUs start at MEDIUM at most.)
+pub const STORAGE_KEY: &str = "visioncraft.hardware3";
 
 /// What one device measured and the tier it chose.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -117,7 +118,12 @@ pub fn choose(
     {
         probe.kind = k;
     }
-    let q = starting_quality(&probe, score, size);
+    let q = starting_quality(
+        &probe,
+        score,
+        size,
+        visioncraft_render::target_ms(visioncraft_render::DEFAULT_TARGET_FPS),
+    );
     let preset = Quality::PRESETS
         .iter()
         .find(|(_, p)| {
