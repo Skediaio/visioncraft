@@ -60,7 +60,8 @@ struct CloudFrame {
     // upsamples it).
     more: vec4<f32>,
     // xy this frame's march samples' offset in their 2x2 block of the history (texels), z the
-    // weight of the new samples interpolated to the other texels, w the history's clamp
+    // weight of the new samples interpolated to the other texels (1: starting over, the
+    // samples at the blocks' centres, xy 0.5, interpolated to every texel), w the history's clamp
     // (standard deviations of the new samples round it).
     up: vec4<f32>,
 }
@@ -357,7 +358,8 @@ fn fs_clouds(in: Out) -> @location(0) vec4<f32> {
     let scale = cf.more.w;
     let size = cf.more.yz * scale;
     // The history texel this march texel samples this frame (its centre).
-    let uv = (floor(in.clip.xy) * scale + cf.up.xy + 0.5) / size;
+    let texel = floor(in.clip.xy) * scale + cf.up.xy;
+    let uv = (texel + 0.5) / size;
     let dir = view_dir(uv);
     // The angle a history texel spans (rad).
     let pixel = 2.0 / (abs(g.proj[1][1]) * size.y);
@@ -365,9 +367,16 @@ fn fs_clouds(in: Out) -> @location(0) vec4<f32> {
     var light = vec3<f32>(0.0);
     var transmit = 0.0;
     var distance = 0.0;
-    let noise = ign(in.clip.xy + vec2<f32>(5.588, 5.588) * fract(cf.params.x / 64.0) * 64.0);
+    // The jitter follows each history texel's own samples: the n-th, one a frame, or one every
+    // fourth frame where the history doubles the march (frame 4n + its place in the block). So
+    // a texel's samples step along the golden ratio from one to the next, as at half the size;
+    // counted by the frame, every fourth step of it would barely move (the noise's turn and
+    // the golden ratio over four frames add up to about a whole turn), and a texel would keep
+    // the same jitter, and its banding, for dozens of frames.
+    let n = floor(cf.params.x / (scale * scale));
+    let noise = ign(texel + vec2<f32>(5.588, 5.588) * fract(n / 64.0) * 64.0);
     for (var s = 0; s < subs; s++) {
-        let jitter = fract(noise + cf.params.x * 0.618034 + f32(s) / f32(subs));
+        let jitter = fract(noise + n * 0.618034 + f32(s) / f32(subs));
         let m = march(dir, jitter, pixel);
         light += m.light;
         transmit += m.transmit;
@@ -400,8 +409,14 @@ fn fs_resolve(in: Out) -> @location(0) vec4<f32> {
     let low_size = vec2<i32>(cf.more.yz);
     let scale = i32(cf.more.w);
     let size = cf.more.yz * cf.more.w;
-    let o = vec2<i32>(cf.up.xy);
     let low = min(p / scale, low_size - 1);
+    // Starting over (`cf.up.z` 1), the history is filled from the new samples alone, marched at
+    // the centres of the 2x2 blocks (`cf.up.xy` 0.5).
+    if cf.up.z >= 1.0 {
+        let at = ((vec2<f32>(p) - cf.up.xy) / cf.more.w + 0.5) / cf.more.yz;
+        return textureSampleLevel(current, clamp_sampler, at, 0.0);
+    }
+    let o = vec2<i32>(cf.up.xy);
     // The new samples round this texel (its own and the four next to it): their mean and
     // spread, for the clamp.
     var m1 = vec4<f32>(0.0);

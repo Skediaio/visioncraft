@@ -10,7 +10,8 @@
 //! per march texel, through one texel of each 2x2 block of the history in turn, and the resolve
 //! blends those samples into the other history image (reprojected by direction, clamped to the new samples round each texel). A
 //! frame that cannot use the history (the first, a new size, a cut, a jump of the sun or the
-//! weather) marches every history texel instead, and a picture (one frame, `Draw::picture`)
+//! weather) fills the history from the march alone, four jitters a march texel (where the
+//! history keeps the march's size: marches every history texel), and a picture (one frame, `Draw::picture`)
 //! eight jitters of each at fixed offsets, so the frames of a film keep one pattern and do not
 //! flicker. Without volumetric clouds the sky reads a 1x1 image and nothing else is made.
 
@@ -42,6 +43,8 @@ const CLAMP_SIGMAS: f32 = 1.5;
 const BLOCK: [(f32, f32); 4] = [(0.0, 0.0), (1.0, 1.0), (1.0, 0.0), (0.0, 1.0)];
 /// Jitters per history texel for a picture.
 const PICTURE_SUBSAMPLES: f32 = 8.0;
+/// Jitters per march texel when a history at twice the march's size starts over (`draw`).
+const FILL_SUBSAMPLES: f32 = 4.0;
 /// The uniform block's size (bytes; clouds.wgsl `CloudFrame`).
 const UNIFORM_SIZE: u64 = 112;
 /// The sun may move this far between frames (cosine, about a degree) before the history is
@@ -310,9 +313,18 @@ impl CloudVolume {
                 view_proj
             }
         };
-        // Starting over, the march writes every texel of the history itself.
-        let (march_size, march_scale, offset) = if reset {
+        // Starting over, a picture marches every texel of the history itself, with eight jitters
+        // each, and so does a history at the march's size, with one. A history at twice the
+        // march's size is filled from the march image instead, with four jitters a texel at the
+        // centre of each 2x2 block: as many rays as one through every history texel, but no
+        // single-jitter banding for the frames after to wear off (a dither of the history's
+        // texels for a second or so after every restart).
+        let fill = reset && !d.picture && scale == 2;
+        let direct = reset && !fill;
+        let (march_size, march_scale, offset) = if direct {
             ((size.0 * scale, size.1 * scale), 1, (0.0, 0.0))
+        } else if fill {
+            (size, 2, (0.5, 0.5))
         } else if scale == 2 {
             (size, 2, BLOCK[self.frame as usize % BLOCK.len()])
         } else {
@@ -330,7 +342,13 @@ impl CloudVolume {
                 (self.frame % 4096) as f32
             },
             blend,
-            if d.picture { PICTURE_SUBSAMPLES } else { 1.0 },
+            if d.picture {
+                PICTURE_SUBSAMPLES
+            } else if fill {
+                FILL_SUBSAMPLES
+            } else {
+                1.0
+            },
             d.steps.max(1) as f32,
             d.light_steps as f32,
             march_size.0 as f32,
@@ -338,8 +356,15 @@ impl CloudVolume {
             march_scale as f32,
             offset.0,
             offset.1,
-            // The interpolated texels follow a relight at the same rate.
-            if blend > normal { blend } else { BLEND_NEAR },
+            // 1: no history, the new samples interpolated to every texel (clouds.wgsl); otherwise
+            // the interpolated texels follow a relight at the same rate.
+            if fill {
+                1.0
+            } else if blend > normal {
+                blend
+            } else {
+                BLEND_NEAR
+            },
             CLAMP_SIGMAS,
         ];
         for f in params {
@@ -352,7 +377,7 @@ impl CloudVolume {
         let next = 1 - history.current;
         // One timing for both passes: from the march's start to the resolve's end.
         let (begin, end) = match timestamp {
-            Some(t) if !reset => (
+            Some(t) if !direct => (
                 Some(wgpu::RenderPassTimestampWrites {
                     query_set: t.query_set,
                     beginning_of_pass_write_index: t.beginning_of_pass_write_index,
@@ -367,7 +392,7 @@ impl CloudVolume {
             t => (t, None),
         };
         {
-            let target = if reset {
+            let target = if direct {
                 &history.views[next]
             } else {
                 &history.march
@@ -378,7 +403,7 @@ impl CloudVolume {
             pass.set_bind_group(1, &gpu.march_bind, &[]);
             pass.draw(0..3, 0..1);
         }
-        if !reset {
+        if !direct {
             let mut pass = color_pass(
                 encoder,
                 "clouds resolve",
