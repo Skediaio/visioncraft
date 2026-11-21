@@ -105,19 +105,10 @@ pub fn decode(bytes: &[u8]) -> Option<SkyVisibility> {
             .map(|c| f32::from_le_bytes(*c))
             .collect()
     };
-    let head = take(8)?;
-    let word = |i: usize| {
-        [
-            head[4 * i],
-            head[4 * i + 1],
-            head[4 * i + 2],
-            head[4 * i + 3],
-        ]
-    };
-    let (fl, un) = (
-        |i: usize| f32::from_le_bytes(word(i)),
-        |i: usize| u32::from_le_bytes(word(i)),
-    );
+    // The header: origin x, z, cell, dims (three u32), lift, height.
+    let words = take(8)?.as_chunks::<4>().0;
+    let fl = |i: usize| f32::from_le_bytes(words[i]);
+    let un = |i: usize| u32::from_le_bytes(words[i]);
     let dims = [un(3), un(4), un(5)];
     let columns = (dims[0] as usize).checked_mul(dims[2] as usize)?;
     let probes = columns.checked_mul(dims[1] as usize)?;
