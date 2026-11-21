@@ -1,0 +1,20 @@
+# The source the cached bytes (plant meshes and textures, compressed maps and pictures) depend
+# on, relative to apps/visioncraft. `build.rs` hashes every file (a folder: all files in it,
+# recursively) into `GENERATOR_FINGERPRINT`, which `plant_cache::key` mixes into every key.
+# Better one file too many (a cold cache after an unrelated edit) than one too few (a stale hit).
+
+# The generators (meshes, textures, scans) and everything they use.
+../../crates/visioncraft-flora/src
+# Block compression and the colour space it takes.
+../../crates/visioncraft-render/src/bc.rs
+../../crates/visioncraft-render/src/texture.rs
+# Encode and decode of the entries, and the keys.
+src/plant_cache.rs
+# The jobs that turn generator output into the cached bytes (mesh_job, plant_job, compression).
+src/texture_worker.rs
+# generate_variant_now (the mesh recipe) and the plant texture jobs.
+src/plants.rs
+# Map and picture decode, mip chain and compression, the picture and map key parts.
+src/assets.rs
+# The scans the textures are made from.
+src/scans.rs

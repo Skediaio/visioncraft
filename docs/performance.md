@@ -56,7 +56,11 @@ the costliest stages of each example into its `report.json` (`timeline`).
   import workers as texture workers (2 to 8) bake the sky visibility. The page's thread only
   uploads, within a 4 ms budget a frame.
 - **Caches.** Natively `plant_cache` on disk; in the browser the Cache API (`web_cache.rs`) with
-  the same keys plus the build's wasm hash, so a rebuilt generator never reads an old result.
+  the same keys. Keys carry a generator fingerprint (`GENERATOR_FINGERPRINT`: `build.rs` hashes the
+  source files listed in `apps/visioncraft/fingerprint-inputs.txt`, the flora crate, `bc.rs` and
+  the app's encode, job and compression code), not the build: a changed generator never reads an
+  old result, a rebuild or deploy that leaves them alone (a UI change) keeps the cache warm. A
+  new input file goes in that list.
 - **Pipelines** are made once for the quality the window starts with (the stored hardware
   choice), and per shading after that.
 - **Ground clutter** is built once all plants are there, not on the first frame and again after.
