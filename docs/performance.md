@@ -36,7 +36,7 @@ the costliest stages of each example into its `report.json` (`timeline`).
 - **Stages named `(... worker, wall)`** are the time a job took from sending it to the worker to
   its answer, waiting included; several run at once, so they add up to more than the wall time.
 - **`browser cache hit` / `miss`** (web, per kind: `mesh` and `tex` the plants, `map` the library
-  maps, `picture` the models' pictures) and **`disk cache hit` / `miss`** (native): generated
+  maps, `picture` the models' pictures, `skyvis` the baked sky visibility) and **`disk cache hit` / `miss`** (native): generated
   plants and compressed maps from an earlier visit. A second visit should be nearly all hits;
   the misses left are what the first visit never asked for. A reload reopens the project at the
   camera it was left at, so after walking among the furniture the second visit asks for its
@@ -64,8 +64,10 @@ the costliest stages of each example into its `report.json` (`timeline`).
 - **Pipelines** are made once for the quality the window starts with (the stored hardware
   choice), and per shading after that.
 - **Ground clutter** is built once all plants are there, not on the first frame and again after.
-- **The sky visibility bake** waits until no plant or model is on its way (it would share the
-  cores with them, and the models change what it bakes), then runs on the work pool's share of
+- **The sky visibility bake** first looks its result up in the cache (kind `skyvis`, keyed by
+  `SkyScene::key`, with a format byte, length and checksum; a damaged entry is a miss), which
+  needs only the models (they change the scene) and no cores. On a miss it waits until no plant
+  is on its way (it would share the cores with them), then runs on the work pool's share of
   the cores natively and, in the browser, over several import workers that each take the next
   chunk of probes when they answer (`sky_vis.rs`, `SkyBake::probe_floats`): the grid is put
   together in probe order, bit for bit the single bake's. It skips the ground samples of blocks

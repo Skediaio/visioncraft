@@ -2090,6 +2090,9 @@ impl Studio {
     /// grid up to the GPU, and bakes again when what blocks the sky changed (`sky_vis`).
     fn sync_sky_visibility(&mut self) {
         let now = crate::assets::now_ms();
+        // A bake that missed the cache waits for the plants (`SkyVisState::hold`); a cache hit
+        // does not.
+        self.sky_vis.hold = self.plants_pending() > 0;
         if let Some(grid) = self.sky_vis.poll(now) {
             match &grid {
                 Some(v) => {
@@ -2111,10 +2114,11 @@ impl Studio {
         if !self.session.project().view.sky_occlusion.unwrap_or(true) {
             return;
         }
-        // The plants and models first: a bake shares the cores with what makes them (on the
-        // web all the workers' for half a minute on the coast, which held its plants back by
-        // as long), and the models it waits for change what it bakes.
-        if self.plants_pending() > 0 || self.models_pending() > 0 {
+        // The models first: the scene to look up (or bake) is made from them. The plants only
+        // hold back a bake that missed the cache (`SkyVisState::hold`): it shares the cores
+        // with what makes them (on the web all the workers' for half a minute on the coast,
+        // which held its plants back by as long), but a grid from the cache costs none.
+        if self.models_pending() > 0 {
             self.sky_vis_waiting = true;
             return;
         }
