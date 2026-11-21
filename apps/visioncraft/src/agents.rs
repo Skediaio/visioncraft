@@ -324,8 +324,8 @@ const UI_METHODS: &[Method] = &[
     },
     Method {
         name: "ui.set",
-        params: r#"{"mode": "draw"|"materials"|"objects"|"sun"|"viewpoints"|extension id|null, "camera": {"position": [x, y, z], "target": [x, y, z], "fov_y_deg": number}, "lightsOn": boolean, "overlaysInPictures": boolean, "tabs": boolean, "file_bar": boolean, "view_bar": boolean, "mode_panel_frame": boolean, "textures": "auto"|"1k"|"2k"|"4k", "quality": "auto"|"low"|"medium"|"high"|"ultra", "walk": boolean}"#,
-        summary: "Switches the mode, places the camera (orbiting `target`), walks (as the Walk button: on foot near the camera's target; the arrow keys or WASD move) or orbits again, turns the lights on or off (the project's view.set lights), whether pictures show the editor's overlays, the texture resolution and the rendering quality (the Quality menu). `tabs`, `file_bar`, `view_bar` and `mode_panel_frame` show or hide the built-in mode tabs, the Open/Save/Undo/Redo bar, the view bar (Layers, Lights, Quality, Export, Walk, fps) and the frame and fold button of the mode panel (an embedding app hides what it replaces; `ui.get` reports them under `ui`). Hidden controls stay reachable as commands and shortcuts (Ctrl+Z, `ui.set mode`).",
+        params: r#"{"mode": "draw"|"materials"|"objects"|"sun"|"viewpoints"|extension id|null, "camera": {"position": [x, y, z], "target": [x, y, z], "fov_y_deg": number}, "lightsOn": boolean, "overlaysInPictures": boolean, "tabs": boolean, "file_bar": boolean, "view_bar": boolean, "mode_panel_frame": boolean, "textures": "auto"|"1k"|"2k"|"4k", "quality": "auto"|"low"|"medium"|"high"|"ultra", "targetFps": number (24..=240), "walk": boolean}"#,
+        summary: "Switches the mode, places the camera (orbiting `target`), walks (as the Walk button: on foot near the camera's target; the arrow keys or WASD move) or orbits again, turns the lights on or off (the project's view.set lights), whether pictures show the editor's overlays, the texture resolution, the rendering quality and the frame rate Auto aims for (`targetFps`, default 60; the Quality menu). `tabs`, `file_bar`, `view_bar` and `mode_panel_frame` show or hide the built-in mode tabs, the Open/Save/Undo/Redo bar, the view bar (Layers, Lights, Quality, Export, Walk, fps) and the frame and fold button of the mode panel (an embedding app hides what it replaces; `ui.get` reports them under `ui`). Hidden controls stay reachable as commands and shortcuts (Ctrl+Z, `ui.set mode`).",
     },
     Method {
         name: "ui.fly",
@@ -475,6 +475,7 @@ impl Host for Bound<'_, '_> {
                 "size": h.studio.size,
                 "quality": {
                     "auto": h.studio.quality_auto,
+                    "targetFps": h.studio.target_fps,
                     "preset": crate::studio::preset_name(&h.studio.current_quality()),
                     "renderScale": h.studio.current_quality().render_scale,
                 },
@@ -568,6 +569,15 @@ impl Host for Bound<'_, '_> {
                             })?;
                         h.studio.quality_auto = false;
                     }
+                }
+                if let Some(f) = params.get("targetFps") {
+                    let fps = f
+                        .as_f64()
+                        .map(|v| v as f32)
+                        .filter(|v| visioncraft_render::TARGET_FPS_RANGE.contains(v))
+                        .ok_or_else(|| format!("targetFps: a number from 24 to 240, not {f}"))?;
+                    h.studio.target_fps = fps;
+                    h.studio.frame_ms.clear();
                 }
                 if let Some(t) = params.get("textures") {
                     h.studio.textures = match t.as_str() {
@@ -848,6 +858,29 @@ mod tests {
             let got = h.call("ui.get", &json!({})).unwrap().unwrap();
             assert_eq!(got["ui"]["tabs"], false);
             assert!(h.call("ui.set", &json!({"file_bar": 3})).unwrap().is_err());
+        });
+    }
+
+    #[test]
+    fn ui_set_target_fps_validates_and_shows_in_ui_get() {
+        use super::Host;
+        with_host(Project::default(), |h| {
+            let got = h.call("ui.get", &json!({})).unwrap().unwrap();
+            assert_eq!(got["quality"]["targetFps"], 60.0);
+            h.call("ui.set", &json!({"targetFps": 90}))
+                .unwrap()
+                .unwrap();
+            assert_eq!(h.host.studio.target_fps, 90.0);
+            let got = h.call("ui.get", &json!({})).unwrap().unwrap();
+            assert_eq!(got["quality"]["targetFps"], 90.0);
+            for bad in [json!(23), json!(241), json!("60"), json!(null)] {
+                assert!(
+                    h.call("ui.set", &json!({"targetFps": bad}))
+                        .unwrap()
+                        .is_err()
+                );
+            }
+            assert_eq!(h.host.studio.target_fps, 90.0);
         });
     }
 

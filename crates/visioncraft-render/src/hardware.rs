@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 
 use crate::Quality;
-use crate::stats::{TARGET_MS, ladder};
+use crate::stats::ladder;
 
 /// What kind of adapter wgpu says this is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -187,8 +187,11 @@ pub fn relative_cost(q: &Quality) -> f32 {
 /// headroom for heavier views, the UI and `suggest_quality`'s first step.
 const BUDGET: f32 = 0.7;
 
+/// The tightest frame rate an integrated GPU is calibrated against.
+const INTEGRATED_MAX_FPS: f32 = 30.0;
+
 /// The best preset and render scale whose predicted frame time at `size`
-/// (output pixels) fits `BUDGET` of the 30 fps budget, from the ladder
+/// (output pixels) fits `BUDGET` of `target_ms`, from the ladder
 /// `suggest_quality` walks (so it fine-tunes from there). The predicted
 /// time is the score's cost per megapixel times the preset's
 /// `PRESET_COST` times the megapixels it renders, plus the score's fixed
@@ -201,7 +204,19 @@ const BUDGET: f32 = 0.7;
 /// 11 fps there (Auto still rises once measured frames allow). Without a
 /// score the prior alone picks: MEDIUM for integrated or unknown GPUs, HIGH
 /// for discrete ones.
-pub fn starting_quality(probe: &HardwareProbe, score: Option<Score>, size: (u32, u32)) -> Quality {
+///
+/// `target_ms` is the frame time the person aims for (`target_ms(fps)`). An
+/// integrated GPU is calibrated against no tighter a budget than 30 fps
+/// (`INTEGRATED_MAX_FPS`): its short burst is already pessimistic, and at a
+/// 60 fps budget it would start at a coarse LOW scale where it ran fine at
+/// 30; `suggest_quality` then still steps down to the real target from
+/// measured frames.
+pub fn starting_quality(
+    probe: &HardwareProbe,
+    score: Option<Score>,
+    size: (u32, u32),
+    target_ms: f32,
+) -> Quality {
     if probe.kind == GpuKind::Cpu {
         return ladder()[0];
     }
@@ -211,6 +226,11 @@ pub fn starting_quality(probe: &HardwareProbe, score: Option<Score>, size: (u32,
         } else {
             Quality::MEDIUM
         };
+    };
+    let target_ms = if probe.kind == GpuKind::Integrated {
+        target_ms.max(1000.0 / INTEGRATED_MAX_FPS)
+    } else {
+        target_ms
     };
     let prior = match probe.kind {
         GpuKind::Integrated => 1.15,
@@ -234,7 +254,7 @@ pub fn starting_quality(probe: &HardwareProbe, score: Option<Score>, size: (u32,
         .into_iter()
         .rev()
         .filter(|q| probe.kind != GpuKind::Integrated || medium_or_lower(q))
-        .find(|q| predict(q) <= BUDGET * TARGET_MS)
+        .find(|q| predict(q) <= BUDGET * target_ms)
         .unwrap_or_else(|| ladder()[0])
 }
 
@@ -566,6 +586,43 @@ impl Future for Signal {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The 30 fps budget these tests were written for.
+    const T30: f32 = 1000.0 / 30.0;
+
+    fn starting_quality(probe: &HardwareProbe, score: Option<Score>, size: (u32, u32)) -> Quality {
+        super::starting_quality(probe, score, size, T30)
+    }
+
+    #[test]
+    fn a_tighter_target_lowers_a_discrete_start_but_not_an_integrated_one() {
+        let w = (2560, 1300);
+        let rank = |q: Quality| ladder().iter().position(|l| *l == q).unwrap();
+        let s = score(2.0);
+        let (d30, d60) = (
+            rank(super::starting_quality(
+                &probe(GpuKind::Discrete),
+                s,
+                w,
+                T30,
+            )),
+            rank(super::starting_quality(
+                &probe(GpuKind::Discrete),
+                s,
+                w,
+                1000.0 / 60.0,
+            )),
+        );
+        assert!(d60 < d30, "{d60} vs {d30}");
+        // Integrated GPUs keep their 30 fps calibration whatever the target.
+        let i = |fps: f32| {
+            super::starting_quality(&probe(GpuKind::Integrated), score(5.0), w, 1000.0 / fps)
+        };
+        assert_eq!(i(60.0), i(30.0));
+        assert_eq!(i(240.0), i(30.0));
+        // A looser target (24 fps) may start higher.
+        assert!(rank(i(24.0)) >= rank(i(30.0)));
+    }
 
     fn probe(kind: GpuKind) -> HardwareProbe {
         HardwareProbe {

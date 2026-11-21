@@ -88,7 +88,9 @@ pub use impostor::{ImpostorId, atlas_layout, impostor_views};
 pub use lights::{Light, LightKind};
 pub use sea::Sea;
 pub use sky::Sun;
-pub use stats::{RenderStats, TARGET_MS, ULTRA_HEADROOM, suggest_quality};
+pub use stats::{
+    DEFAULT_TARGET_FPS, RenderStats, TARGET_FPS_RANGE, ULTRA_HEADROOM, suggest_quality, target_ms,
+};
 pub use still::Still;
 pub use still::{FOCUS_RANGE, Focus, Lens, Photo, lens_point, lens_view, pixel_jitter};
 pub use terrain::{TerrainChunk, TerrainLayer};

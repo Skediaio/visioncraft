@@ -21,7 +21,12 @@ fn main() {
             t.elapsed().as_secs_f64() * 1000.0
         );
         for size in [(1280, 720), (1920, 1080), (2560, 1300), (3840, 2160)] {
-            let q = starting_quality(&probe, Some(score), size);
+            let q = starting_quality(
+                &probe,
+                Some(score),
+                size,
+                visioncraft_render::target_ms(visioncraft_render::DEFAULT_TARGET_FPS),
+            );
             let name = visioncraft_render::Quality::PRESETS
                 .iter()
                 .find(|(_, p)| {

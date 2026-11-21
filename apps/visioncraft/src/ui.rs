@@ -734,6 +734,19 @@ impl Hud {
                                     }
                                 }
                             });
+                            let range = visioncraft_render::TARGET_FPS_RANGE;
+                            let mut fps = cx.s.target_fps;
+                            let r = ui
+                                .add(
+                                    egui::Slider::new(&mut fps, range)
+                                        .integer()
+                                        .text(t::TARGET_FPS),
+                                )
+                                .on_hover_text(t::TARGET_FPS_TIP);
+                            if r.changed() {
+                                cx.s.target_fps = fps;
+                                cx.s.frame_ms.clear();
+                            }
                             ui.separator();
                             // What the hardware probe found: where Auto started.
                             if cx.s.measuring {
