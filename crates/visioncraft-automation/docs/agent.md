@@ -305,7 +305,9 @@ and show in reflections and in the ambient light. The rendering quality and
 the texture resolution belong to the window, not the project: set them over the control channel
 with `ui.set {"quality": "auto" | "low" | "medium" | "high" | "ultra", "textures": "auto" | "1k"
 | "2k" | "4k", "targetFps": 24..240}` (`targetFps`, 60 by default, is the frame rate Auto aims for:
-it steps down when frames miss it and up with room to spare; `ui.get` reports it under
+it steps down when frames miss it and up with room to spare, judging the GPU's own time when the
+device has timestamp queries and vsync-aware frame intervals otherwise, see
+`docs/performance.md`; `ui.get` reports it under
 `quality.targetFps`); `view.render` takes its own `quality`. For a final picture use `view.render
 {"quality": "photo"}`: many frames averaged at ULTRA give soft shadows with real penumbrae,
 smooth edges and leaves without shimmer (seconds to minutes); recipe 41 has the lens.

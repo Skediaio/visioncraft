@@ -11,9 +11,10 @@ use serde::{Deserialize, Serialize};
 use visioncraft_render::{HardwareProbe, Quality, Score, starting_quality};
 
 /// eframe storage key: a JSON map from `key` to `Measured`.
-/// (`3`: starts aim at the 60 fps default, integrated GPUs at 30 fps at most; older choices are
-/// measured again. `2`: integrated GPUs start at MEDIUM at most.)
-pub const STORAGE_KEY: &str = "visioncraft.hardware3";
+/// (`4`: every start is calibrated at 30 fps at most again, Auto moves on from measured frames;
+/// older choices are measured again. `3`: starts aimed at the 60 fps default, integrated GPUs at
+/// 30 fps at most. `2`: integrated GPUs start at MEDIUM at most.)
+pub const STORAGE_KEY: &str = "visioncraft.hardware4";
 
 /// What one device measured and the tier it chose.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

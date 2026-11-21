@@ -94,7 +94,8 @@ pub use lights::{Light, LightKind};
 pub use sea::Sea;
 pub use sky::Sun;
 pub use stats::{
-    DEFAULT_TARGET_FPS, RenderStats, TARGET_FPS_RANGE, ULTRA_HEADROOM, suggest_quality, target_ms,
+    DEFAULT_TARGET_FPS, FrameCost, RenderStats, TARGET_FPS_RANGE, ULTRA_HEADROOM, frame_cost,
+    interval_budget, refresh_interval, suggest_quality, target_ms,
 };
 pub use still::Still;
 pub use still::{FOCUS_RANGE, Focus, Lens, Photo, lens_point, lens_view, pixel_jitter};

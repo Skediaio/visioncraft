@@ -120,6 +120,32 @@ Recipe, a time-of-day drag:
   clusters are in view. It draws the coarser levels, and leaves out what would be under 1.5
   pixels of radius in its image (`MIN_REFLECTED_PX`): far herbs, stones and chairs.
 
+## What automatic quality measures
+
+Auto (`Studio::record_frame`, `auto_step`) aims at a target frame rate (60 fps by default,
+`ui.set {"targetFps"}`) and judges each frame by its cost (`visioncraft_render::frame_cost`):
+
+- **With timestamp queries** (requested whenever the adapter offers them; Chromium offers them,
+  quantised to 0.1 ms; `window.__vcFrame.gpu_ms` is not `null` then),
+  the cost is the frame's own work: the GPU time of its passes (`RenderStats::gpu_ms`, one to
+  three frames late, so Auto skips the first four after a change) or the CPU time of the
+  previous whole update, whichever is longer. Vsync does not cap it, so a fast GPU on a 60 Hz
+  display still shows its room to spare: 6 ms of GPU work on HIGH at 60 fps rises to ULTRA.
+- **Without them** the cost is the wall-clock interval between frames, which vsync rounds up to
+  the display's refresh interval. When the intervals show one (`refresh_interval`: their 25th
+  percentile near a common rate from 60 to 240 Hz), anything up to 1.5 refresh intervals counts
+  as on time (`interval_budget`), so frames at the refresh interval never step down; a missed
+  refresh (two intervals) still does. An interval is only an upper bound of the cost, so a rise
+  needs the intervals themselves well inside the budget: on a display at or below the target
+  rate that never happens, and Auto keeps the calibration's start.
+
+Thresholds (fractions of the target frame time, 16.7 ms at 60 fps): down when the 75th
+percentile of 30 frames is over 1.0; up after 90 frames under 0.65 when the next rung, scaled by
+the preset cost table (`relative_cost`), is predicted under 0.85; HIGH to ULTRA (1.68 times
+HIGH's cost) only when ULTRA is predicted under 0.65, so HIGH's median under 6.5 ms at 60 fps.
+The calibration's start (`starting_quality`) uses no tighter a budget than 30 fps: a start too
+high is corrected within half a second, one too low may never rise.
+
 ## Measured (November 2026)
 
 Orca-server (Intel Iris Xe, 8 threads), the four examples, `wait assets timed 1280 720` natively

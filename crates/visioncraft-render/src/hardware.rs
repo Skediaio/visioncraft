@@ -187,8 +187,8 @@ pub fn relative_cost(q: &Quality) -> f32 {
 /// headroom for heavier views, the UI and `suggest_quality`'s first step.
 const BUDGET: f32 = 0.7;
 
-/// The tightest frame rate an integrated GPU is calibrated against.
-const INTEGRATED_MAX_FPS: f32 = 30.0;
+/// The tightest frame rate a start is calibrated against.
+const START_MAX_FPS: f32 = 30.0;
 
 /// The best preset and render scale whose predicted frame time at `size`
 /// (output pixels) fits `BUDGET` of `target_ms`, from the ladder
@@ -205,12 +205,20 @@ const INTEGRATED_MAX_FPS: f32 = 30.0;
 /// score the prior alone picks: MEDIUM for integrated or unknown GPUs, HIGH
 /// for discrete ones.
 ///
-/// `target_ms` is the frame time the person aims for (`target_ms(fps)`). An
-/// integrated GPU is calibrated against no tighter a budget than 30 fps
-/// (`INTEGRATED_MAX_FPS`): its short burst is already pessimistic, and at a
-/// 60 fps budget it would start at a coarse LOW scale where it ran fine at
-/// 30; `suggest_quality` then still steps down to the real target from
-/// measured frames.
+/// `target_ms` is the frame time the person aims for (`target_ms(fps)`). The
+/// start is calibrated against no tighter a budget than 30 fps
+/// (`START_MAX_FPS`), whatever the GPU, and Auto moves to the real target
+/// from measured frames. The two directions cost Auto differently: a step
+/// down follows 30 frames over the budget (half a second), a rise needs 90
+/// frames well inside it plus a prediction that the next rung fits, and
+/// none while plants or textures load. So a start one or two rungs too high
+/// is put right at once, one too low may never be: at a 60 fps budget a
+/// discrete GPU started one to two rungs below its 30 fps start, and with
+/// Auto then judging vsync-capped intervals a top GPU stayed there. The
+/// probe is not vsync-bound (offscreen, timestamp queries or a clock
+/// around submit-and-wait), but it is a short burst of a synthetic
+/// workload: on an integrated GPU it is already pessimistic, and on any GPU
+/// it is only a prediction, which measured frames overrule.
 pub fn starting_quality(
     probe: &HardwareProbe,
     score: Option<Score>,
@@ -227,11 +235,7 @@ pub fn starting_quality(
             Quality::MEDIUM
         };
     };
-    let target_ms = if probe.kind == GpuKind::Integrated {
-        target_ms.max(1000.0 / INTEGRATED_MAX_FPS)
-    } else {
-        target_ms
-    };
+    let target_ms = target_ms.max(1000.0 / START_MAX_FPS);
     let prior = match probe.kind {
         GpuKind::Integrated => 1.15,
         GpuKind::Discrete => 0.9,
@@ -595,33 +599,21 @@ mod tests {
     }
 
     #[test]
-    fn a_tighter_target_lowers_a_discrete_start_but_not_an_integrated_one() {
+    fn a_tighter_target_than_30_fps_does_not_lower_the_start() {
         let w = (2560, 1300);
         let rank = |q: Quality| ladder().iter().position(|l| *l == q).unwrap();
-        let s = score(2.0);
-        let (d30, d60) = (
-            rank(super::starting_quality(
-                &probe(GpuKind::Discrete),
-                s,
-                w,
-                T30,
-            )),
-            rank(super::starting_quality(
-                &probe(GpuKind::Discrete),
-                s,
-                w,
-                1000.0 / 60.0,
-            )),
-        );
-        assert!(d60 < d30, "{d60} vs {d30}");
-        // Integrated GPUs keep their 30 fps calibration whatever the target.
-        let i = |fps: f32| {
-            super::starting_quality(&probe(GpuKind::Integrated), score(5.0), w, 1000.0 / fps)
-        };
-        assert_eq!(i(60.0), i(30.0));
-        assert_eq!(i(240.0), i(30.0));
-        // A looser target (24 fps) may start higher.
-        assert!(rank(i(24.0)) >= rank(i(30.0)));
+        for (kind, s) in [
+            (GpuKind::Discrete, score(2.0)),
+            (GpuKind::Unknown, score(2.0)),
+            (GpuKind::Integrated, score(5.0)),
+        ] {
+            let at = |fps: f32| super::starting_quality(&probe(kind), s, w, 1000.0 / fps);
+            // The start keeps its 30 fps calibration at any tighter target ...
+            assert_eq!(at(60.0), at(30.0), "{kind:?}");
+            assert_eq!(at(240.0), at(30.0), "{kind:?}");
+            // ... and a looser one (24 fps) may start higher.
+            assert!(rank(at(24.0)) >= rank(at(30.0)), "{kind:?}");
+        }
     }
 
     fn probe(kind: GpuKind) -> HardwareProbe {

@@ -347,7 +347,8 @@ mod native {
                         *p += d;
                     }
                     let ms = t5 - t0;
-                    s.record_frame(ms as f32); // Auto adapts as in the window
+                    // Auto adapts as in the window; submit-and-wait is the frame's own work.
+                    s.record_frame(visioncraft_render::FrameCost::Work(ms as f32));
                     each.push(ms);
                 }
                 let each = &each[3..]; // the first frames build pipelines

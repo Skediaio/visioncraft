@@ -206,6 +206,9 @@ pub struct App {
     frame_cpu: [f64; 4],
     /// The worst prepare, render and ui time of the same 60 frames.
     frame_cpu_max: [f64; 3],
+    /// CPU milliseconds of the last whole `ui` (Auto's frame cost takes the longer of it and the
+    /// GPU time, `FrameCost::Work`).
+    last_ui_ms: f64,
     last_title: String,
     settle: u8,
     /// A project restored at start is still settling (its undo history is cleared until then).
@@ -314,6 +317,7 @@ impl App {
             fps: 0.0,
             frame_cpu: [0.0; 4],
             frame_cpu_max: [0.0; 3],
+            last_ui_ms: 0.0,
             last_title: String::new(),
             settle: 0,
             settling_restore: was_restored,
@@ -2058,7 +2062,14 @@ impl eframe::App for App {
         let consecutive = raw_dt > 0.0 && (raw_dt < 0.1 || (self.repainting && raw_dt < 2.0));
         if consecutive {
             load_stats::frame(raw_dt * 1000.0);
-            self.studio.record_frame(raw_dt as f32 * 1000.0);
+            // Auto judges the GPU's and CPU's own work when the device has timestamp queries
+            // (both a frame or more late), else the interval, which vsync caps.
+            let cost = visioncraft_render::frame_cost(
+                raw_dt as f32 * 1000.0,
+                self.studio.renderer.stats().gpu_ms,
+                self.last_ui_ms as f32,
+            );
+            self.studio.record_frame(cost);
         } else {
             self.studio.frame_ms.clear();
         }
@@ -2430,7 +2441,8 @@ impl eframe::App for App {
         if self.repainting {
             ctx.request_repaint();
         }
-        self.publish_frame_cpu(prepare_ms, render_ms, cpu_ms() - cpu_start);
+        self.last_ui_ms = cpu_ms() - cpu_start;
+        self.publish_frame_cpu(prepare_ms, render_ms, self.last_ui_ms);
     }
 }
 
