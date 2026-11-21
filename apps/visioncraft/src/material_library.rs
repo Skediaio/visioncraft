@@ -73,11 +73,12 @@ fn spec_of_entry(m: &LibMaterial) -> TexSpec {
 }
 
 /// Parallax depth (metres of relief) a library material of `kind` starts with: guesses, tuned
-/// on low-sun renders (gravel016 at 3 cm hardly changed; 8 cm read as stones but is more than
-/// the pebbles are); 0 for walls, roofs and the rest (the march runs on up-facing ground only).
+/// on renders; 0 for walls, roofs and the rest (the march runs on up-facing ground only).
+/// Gravel's pebbles are 2 to 6 cm across and lie half sunk, so they stand about 2 cm proud: at
+/// 5 cm each pebble drew as a tall tower smeared along the view.
 pub fn parallax_of_kind(kind: &str) -> f32 {
     match kind {
-        "gravel" => 0.05,
+        "gravel" => visioncraft_core::material::GRAVEL_PARALLAX_M,
         "ground" | "stone" => 0.03,
         "paving" | "tile" => 0.015,
         _ => 0.0,

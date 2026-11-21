@@ -957,6 +957,9 @@ impl Project {
         let mut project: Project =
             serde_json::from_value(value).map_err(|e| ProjectError::Json(e.to_string()))?;
         project.view.migrate_wind();
+        for m in &mut project.materials {
+            m.migrate_gravel_depth();
+        }
         Ok(project)
     }
 }
@@ -1006,6 +1009,42 @@ mod tests {
         assert_eq!(
             saved["models"][0]["extensions"],
             json!({"vendor.thing": {"deep": {"n": 1}}})
+        );
+    }
+
+    #[test]
+    fn gravel_at_the_old_default_depth_takes_the_new_one_on_load() {
+        use crate::material::{GRAVEL_PARALLAX_M, OLD_GRAVEL_PARALLAX_M, SurfaceKind};
+        let pbr = |depth: f32| {
+            json!({"type": "standard_triplanar_pbr", "map_scale_m": 1.0, "relief": 1.0,
+                   "gloss": 0.0, "weathering": 0.0, "parallax_depth_m": depth})
+        };
+        let material = |id: &str, folder: &str, depth: f32| {
+            json!({"id": id, "name": id, "kind": pbr(depth),
+                   "base_color": [1.0, 1.0, 1.0, 1.0], "metallic": 1.0, "roughness": 1.0,
+                   "maps": {"base_color": format!("materials/{folder}/basecolor.jpg"),
+                            "height": format!("materials/{folder}/height.jpg")}})
+        };
+        let doc = json!({"format_version": 1, "materials": [
+            material("m1", "gravel016", OLD_GRAVEL_PARALLAX_M),
+            material("m2", "gravel017", 0.03),
+            material("m3", "rocks023", OLD_GRAVEL_PARALLAX_M),
+        ]});
+        let p = Project::from_json_bytes(&serde_json::to_vec(&doc).unwrap()).unwrap();
+        let depths: Vec<f32> = p
+            .materials
+            .iter()
+            .map(|m| match m.kind {
+                SurfaceKind::StandardTriplanarPbr {
+                    parallax_depth_m, ..
+                } => parallax_depth_m,
+                _ => panic!("{m:?}"),
+            })
+            .collect();
+        assert_eq!(
+            depths,
+            [GRAVEL_PARALLAX_M, 0.03, OLD_GRAVEL_PARALLAX_M],
+            "the old gravel default migrated; a chosen depth and non-gravel kept"
         );
     }
 

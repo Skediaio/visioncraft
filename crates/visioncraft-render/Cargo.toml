@@ -16,4 +16,6 @@ wgpu = "30.0.1"
 # Validates the WGSL without a GPU; same naga that wgpu already uses.
 naga = { version = "30.0.1", features = ["wgsl-in", "spv-out"] }
 pollster = "1.0.1"
+# Decodes the library's JPEG maps for the optional real-texture parallax renders.
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
 png = "0.17"

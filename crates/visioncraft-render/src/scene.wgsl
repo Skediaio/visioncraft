@@ -765,9 +765,16 @@ fn triplanar_normal(l: Lookup, n: vec3<f32>, relief: f32) -> vec3<f32> {
 // I3D 2005 poster) with the last step interpolated between the two layers that straddle the
 // height field (the parallax occlusion mapping of Tatarchuk, "Dynamic Parallax Occlusion
 // Mapping with Approximate Soft Shadows", I3D 2006 / GDC 2006): layers along the tangent-space
-// view ray, more of them at grazing angles, the mip level computed once before the loop
-// (Tatarchuk's adaptive LOD) and the effect faded to plain normal mapping by mip level and at
-// grazing view. The height map's white is the top, and the ray is pushed down from it.
+// view ray, the mip level computed once before the loop (Tatarchuk's adaptive LOD) and the
+// effect faded to plain normal mapping by mip level and at grazing view. The number of layers
+// follows the ray's run across the height map in texels of that mip, so no layer skips more
+// than PARALLAX_TEXELS of it (Tatarchuk's sampling rate, set by the run rather than by the view
+// angle alone): a fixed count, too few for the run, sliced the pebbles into stacked copies.
+// Where the run would need more layers than the preset affords, the run is shortened instead
+// (offset limiting in texels: flatter relief rather than slices). The crossing between the last
+// two layers is then refined by the secant method (false position, as in the relief mapping
+// of Policarpo, Oliveira & Comba, below, with its binary search replaced by interpolation).
+// The height map's white is the top, and the ray is pushed down from it.
 // Shading only: no depth is written (the depth pre-pass and SSAO keep the flat surface) and
 // the shadow map is looked up at the flat point. Then a second short march from the hit
 // towards the sun (Tatarchuk's soft self-shadowing, a separate ray as in Policarpo, Oliveira
@@ -781,9 +788,14 @@ struct Parallax {
 // Guesses, tuned on renders: the march is full strength up to mip LOD 1 of the height map and
 // gone by LOD 3, and fades out below 6 degrees of view elevation; the ray's run per unit of
 // depth is capped (Welsh's offset limiting, loosened to 3: a ratio of 1 flattened the relief
-// at a standing eye's view of the ground).
+// at a standing eye's view of the ground). A layer moves at most 1.5 texels of the mip read
+// (the secant steps after it find the crossing within that); 4 layers at least (the depth's own
+// resolution looking straight down), at most 32, or 12 on the fast preset; 3 secant steps.
 const PARALLAX_LOD: vec2<f32> = vec2<f32>(1.0, 3.0);
 const PARALLAX_RUN: f32 = 3.0;
+const PARALLAX_TEXELS: f32 = 1.5;
+const PARALLAX_LAYERS: vec3<f32> = vec3<f32>(4.0, 32.0, 12.0);
+const PARALLAX_REFINE: i32 = 3;
 
 fn parallax(l: Lookup, v: vec3<f32>, n: vec3<f32>, depth_uv: f32) -> Parallax {
     var out = Parallax(l.uv[1], 0.0);
@@ -803,38 +815,55 @@ fn parallax(l: Lookup, v: vec3<f32>, n: vec3<f32>, depth_uv: f32) -> Parallax {
         return out;
     }
     let run = vt.xy / vt.z;
-    let full = -run * min(1.0, PARALLAX_RUN / max(length(run), 1e-4)) * depth_uv * fade;
-    let lo = 4.0;
-    let hi = select(16.0, 8.0, FAST_SHADING);
-    let count = i32(mix(hi, lo, vt.z));
+    let limit = min(1.0, PARALLAX_RUN / max(length(run), 1e-4));
+    // The run across the height map at full depth, in texels of the mip the march reads.
+    let texels = length(run * size) * limit * depth_uv * fade * exp2(-lod);
+    let most = select(PARALLAX_LAYERS.y, PARALLAX_LAYERS.z, FAST_SHADING);
+    // The relief's depth in uv as drawn: shallower where the run outgrows the layers.
+    let relief = depth_uv * fade * min(1.0, most * PARALLAX_TEXELS / max(texels, 1e-4));
+    let full = -run * limit * relief;
+    let count = i32(clamp(ceil(texels / PARALLAX_TEXELS), PARALLAX_LAYERS.x, most));
     let dl = 1.0 / f32(count);
-    var uv = l.uv[1];
+    // uv at depth d (0 top .. 1 bottom) is l.uv[1] + full * d; the march keeps the depths and
+    // the gaps (height field's depth minus the ray's) of the last layer above the field and the
+    // first one below it.
     var depth = 0.0;
-    var field = 1.0 - textureSampleLevel(ao_tex, ao_smp, uv, lod).r;
-    var prev_uv = uv;
-    var prev_gap = field;
+    var gap = 1.0 - textureSampleLevel(ao_tex, ao_smp, l.uv[1], lod).r;
+    var prev_depth = 0.0;
+    var prev_gap = gap;
     for (var i = 0; i < count; i++) {
-        if depth >= field {
+        if gap <= 0.0 {
             break;
         }
-        prev_uv = uv;
-        prev_gap = field - depth;
-        uv += full * dl;
+        prev_depth = depth;
+        prev_gap = gap;
         depth += dl;
-        field = 1.0 - textureSampleLevel(ao_tex, ao_smp, uv, lod).r;
+        gap = 1.0 - textureSampleLevel(ao_tex, ao_smp, l.uv[1] + full * depth, lod).r - depth;
     }
-    // Where the segment between the last two layers crosses the height field.
-    let gap = field - depth;
+    // Secant refinement of the crossing between the two (none on the fast preset: one
+    // interpolation, Tatarchuk's).
+    let refine = select(PARALLAX_REFINE, 0, FAST_SHADING);
+    for (var i = 0; i < refine; i++) {
+        let d = mix(prev_depth, depth, prev_gap / max(prev_gap - gap, 1e-5));
+        let gd = 1.0 - textureSampleLevel(ao_tex, ao_smp, l.uv[1] + full * d, lod).r - d;
+        if gd > 0.0 {
+            prev_depth = d;
+            prev_gap = gd;
+        } else {
+            depth = d;
+            gap = gd;
+        }
+    }
     let k = clamp(prev_gap / max(prev_gap - gap, 1e-5), 0.0, 1.0);
-    out.uv = mix(prev_uv, uv, k);
-    let hit = clamp(mix(depth - dl, depth, k), 0.0, 1.0);
+    let hit = clamp(mix(prev_depth, depth, k), 0.0, 1.0);
+    out.uv = l.uv[1] + full * hit;
     let sun = g.sun_dir.xyz;
     if FAST_SHADING || dot(n, sun) <= 0.0 || sun.y <= 0.0 || hit < 0.02 {
         return out;
     }
     let st = vec3<f32>(dot(sun, t), -dot(sun, b), dot(sun, axis));
     let srun = st.xy / max(st.z, 1e-3);
-    let up = srun * min(1.0, PARALLAX_RUN / max(length(srun), 1e-4)) * depth_uv * fade * hit;
+    let up = srun * min(1.0, PARALLAX_RUN / max(length(srun), 1e-4)) * relief * hit;
     var block = 0.0;
     for (var i = 1; i <= 6; i++) {
         let f = f32(i) / 6.0;

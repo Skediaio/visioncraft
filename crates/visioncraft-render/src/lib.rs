@@ -501,7 +501,7 @@ pub struct Quality {
     /// estimate), else the ray's step in pixels (2: half resolution).
     pub screen_reflections: u32,
     /// The shaders compiled for this preset's own settings (common.wgsl `FAST_SHADING`): what
-    /// the slower presets use (the 3x3 shadow filter, the ground's 16-step parallax and its
+    /// the slower presets use (the 3x3 shadow filter, the ground's parallax refinement and its
     /// self-shadow) is left out, so integrated GPUs keep their shading in registers. Changing it
     /// compiles the scene's pipelines again.
     pub fast_shading: bool,
@@ -8316,6 +8316,58 @@ mod tests {
             texture_bits([true, true, true, false, false, false], true),
             7
         );
+    }
+
+    /// scene.wgsl's parallax layer budget, with the shader's own constants: over views from
+    /// grazing to straight down, 1k to 4k height maps, 0.5 to 10 cm of relief on a 1 m tile and
+    /// mip levels 0 to 3, no layer moves more than PARALLAX_TEXELS of the map at the mip read
+    /// (4 to 16 layers by view angle alone moved up to 10 texels of a 1k map at 5 cm, 40 of a 4k one, and sliced
+    /// gravel into stacked copies), and the count stays within the preset's budget.
+    #[test]
+    fn parallax_layers_stay_within_a_texel_step() {
+        let src = include_str!("scene.wgsl");
+        let number = |name: &str| -> Vec<f32> {
+            let line = src
+                .lines()
+                .find(|l| l.starts_with(&format!("const {name}:")))
+                .unwrap_or_else(|| panic!("{name} in scene.wgsl"));
+            let value = line.split('=').nth(1).expect("value");
+            value
+                .split(|c: char| !(c.is_ascii_digit() || c == '.'))
+                .filter(|s| !s.is_empty() && s.contains('.'))
+                .map(|s| s.parse().expect("number"))
+                .collect()
+        };
+        let step = number("PARALLAX_TEXELS")[0];
+        let run_cap = number("PARALLAX_RUN")[0];
+        let layers = number("PARALLAX_LAYERS");
+        let (least, most_full, most_fast) = (layers[0], layers[1], layers[2]);
+        assert!(step <= 2.0 && least >= 2.0, "{step} {layers:?}");
+        assert!(most_full <= 48.0 && most_fast <= 16.0, "{layers:?}");
+        assert!(src.contains("ceil(texels / PARALLAX_TEXELS)"));
+        for most in [most_full, most_fast] {
+            for size in [1024.0f32, 2048.0, 4096.0] {
+                for depth_m in [0.005f32, 0.02, 0.05, 0.1] {
+                    for lod in [0.0f32, 1.0, 2.0, 3.0] {
+                        for elevation in [6.0f32, 10.0, 20.0, 30.0, 45.0, 60.0, 90.0] {
+                            let (sin, cos) = elevation.to_radians().sin_cos();
+                            let run = cos / sin;
+                            let limit = (run_cap / run.max(1e-4)).min(1.0);
+                            // As the shader: texels, the depth as drawn, the layer count.
+                            let texels = run * size * limit * depth_m * (-lod).exp2();
+                            let shrink = (most * step / texels.max(1e-4)).min(1.0);
+                            let count = (texels / step).ceil().clamp(least, most);
+                            let per_layer = texels * shrink / count;
+                            assert!(
+                                per_layer <= step * 1.001 && count <= most,
+                                "{per_layer} texels a layer, {count} layers \
+                                 ({size} map, {depth_m} m, LOD {lod}, {elevation} degrees)"
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]

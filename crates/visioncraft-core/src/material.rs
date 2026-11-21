@@ -195,7 +195,44 @@ pub struct Material {
     pub extensions: Extensions,
 }
 
+/// Parallax depth (m) a library gravel starts with: its pebbles are 2 to 6 cm across and lie
+/// half sunk, so they stand about 2 cm proud.
+pub const GRAVEL_PARALLAX_M: f32 = 0.02;
+/// The depth library gravel used to start with: more than the pebbles are.
+pub const OLD_GRAVEL_PARALLAX_M: f32 = 0.05;
+
 impl Material {
+    /// Gravel: the palette's `gravel`, or a material whose maps come from a library gravel's
+    /// folder (`materials/gravel016/...`; every library material of kind gravel has an id that
+    /// starts with "gravel", and no other does).
+    pub fn is_gravel(&self) -> bool {
+        let m = &self.maps;
+        self.id == "gravel"
+            || [&m.base_color, &m.normal, &m.orm, &m.height]
+                .into_iter()
+                .flatten()
+                .any(|path| {
+                    let mut dirs = path.rsplit(['/', '\\']).skip(1);
+                    dirs.next().is_some_and(|d| d.starts_with("gravel"))
+                })
+    }
+
+    /// On every load: a gravel at exactly the old library depth is taken to be one nobody
+    /// changed and gets the new depth; any other depth is the person's and stays. Someone who
+    /// chose exactly 5 cm on purpose loses it, an accepted, negligible case (no format version
+    /// bump, which older builds would refuse).
+    pub fn migrate_gravel_depth(&mut self) {
+        let gravel = self.is_gravel();
+        if let SurfaceKind::StandardTriplanarPbr {
+            parallax_depth_m, ..
+        } = &mut self.kind
+            && gravel
+            && *parallax_depth_m == OLD_GRAVEL_PARALLAX_M
+        {
+            *parallax_depth_m = GRAVEL_PARALLAX_M;
+        }
+    }
+
     /// Rejects numbers a shader cannot use.
     pub fn validate(&self) -> Result<(), String> {
         let unit = |v: f32| (0.0..=1.0).contains(&v);
