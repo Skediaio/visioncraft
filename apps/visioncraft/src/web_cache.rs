@@ -4,8 +4,9 @@
 //! again (seconds of worker time per species and map on the web).
 //!
 //! An entry's name is the `plant_cache::key` of what made it (the same parts as on the desktop),
-//! a kind, and this build: the main module's file name, which carries trunk's hash of its
-//! contents, so a rebuilt generator never reads an old result. Natively there is nothing here
+//! a kind, and `plant_cache::GENERATOR_FINGERPRINT` (a hash of the generators' source, not of
+//! the whole build), so a changed generator never reads an old result while a deploy that leaves
+//! them alone keeps the entries. The first store of a fingerprint drops the entries of others. Natively there is nothing here
 //! (`plant_cache` keeps them on disk). A browser that refuses the Cache API (not a secure
 //! context, storage blocked) simply makes everything every time.
 
@@ -29,12 +30,22 @@ pub async fn get(kind: &str, key: u64) -> Option<Vec<u8>> {
 /// Stores `bytes` under `kind` and `key` (in the background).
 #[cfg(target_arch = "wasm32")]
 pub fn put(kind: &str, key: u64, bytes: &[u8]) {
-    let _ = js::vc_cache_put(&name(kind, key), &js_sys::Uint8Array::from(bytes));
+    let _ = js::vc_cache_put(
+        &name(kind, key),
+        &js_sys::Uint8Array::from(bytes),
+        &suffix(),
+    );
+}
+
+/// The tail of every entry name; the sweep keeps the entries that end in it.
+#[cfg(target_arch = "wasm32")]
+fn suffix() -> String {
+    format!("-{:016x}", crate::plant_cache::GENERATOR_FINGERPRINT)
 }
 
 #[cfg(target_arch = "wasm32")]
 fn name(kind: &str, key: u64) -> String {
-    format!("{kind}-{key:016x}-{}", js::vc_cache_build())
+    format!("{kind}-{key:016x}{}", suffix())
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -43,15 +54,6 @@ mod js {
 
     #[wasm_bindgen(inline_js = r#"
 const NAME = 'visioncraft-work-v1';
-let build = null;
-// The main module's file name carries trunk's hash of its contents.
-export function vc_cache_build() {
-  if (build === null) {
-    const l = document.querySelector('link[rel=preload][type="application/wasm"]');
-    build = l ? l.getAttribute('href').replace(/^.*\//, '').replace(/_bg\.wasm$/, '') : 'dev';
-  }
-  return build;
-}
 const url = name => new URL('./__vc_cache/' + name, location.href).href;
 export async function vc_cache_get(name) {
   try {
@@ -63,24 +65,26 @@ export async function vc_cache_get(name) {
     return null;
   }
 }
-// Entries of older builds are dropped once, the first time this build stores something.
+// Entries of other generator fingerprints are dropped once, the first time one stores something.
 let swept = false;
-export async function vc_cache_put(name, bytes) {
+export async function vc_cache_put(name, bytes, suffix) {
   try {
     if (typeof caches === 'undefined') return;
     const c = await caches.open(NAME);
     if (!swept) {
       swept = true;
-      const mine = '-' + vc_cache_build();
-      for (const k of await c.keys()) if (!k.url.endsWith(mine)) await c.delete(k);
+      for (const k of await c.keys()) if (!k.url.endsWith(suffix)) await c.delete(k);
     }
     await c.put(url(name), new Response(bytes));
   } catch (e) {}
 }
 "#)]
     extern "C" {
-        pub fn vc_cache_build() -> String;
         pub fn vc_cache_get(name: &str) -> js_sys::Promise;
-        pub fn vc_cache_put(name: &str, bytes: &js_sys::Uint8Array) -> js_sys::Promise;
+        pub fn vc_cache_put(
+            name: &str,
+            bytes: &js_sys::Uint8Array,
+            suffix: &str,
+        ) -> js_sys::Promise;
     }
 }

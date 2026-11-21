@@ -3,8 +3,10 @@
 //! in the platform's cache folder (`cache_folder`): a picture rendered again, or the window
 //! started again, loads them instead of generating every species anew. A file's name is a hash
 //! of everything that made it (the parameters, variant, month or texture scale and the scans'
-//! bytes; a map's whole file) and of the executable and `FORMAT`, so a rebuilt generator never
-//! reads an old result. Every file carries a checksum of its contents: a damaged one is
+//! bytes; a map's whole file) and of `FORMAT` and `GENERATOR_FINGERPRINT` (a hash of the source
+//! of the generators, the encoding and the compression, listed in `fingerprint-inputs.txt`), so
+//! a changed generator never reads an old result while a rebuild that leaves them alone (a UI
+//! change) keeps the cache. Every file carries a checksum of its contents: a damaged one is
 //! removed and made again. Least recently used files go once the folder is above its limit.
 //! `visioncraft-cli cache clear` (or deleting the folder) empties it.
 
@@ -67,22 +69,15 @@ pub fn disk() -> Option<&'static Disk> {
     .as_ref()
 }
 
-/// The executable's identity: its size and modification time.
-fn build_id() -> u64 {
-    static ID: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
-    *ID.get_or_init(|| {
-        let m = std::env::current_exe().and_then(std::fs::metadata);
-        let (len, t) = m.map_or((0, 0), |m| {
-            let t = m
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map_or(0, |d| d.as_nanos() as u64);
-            (m.len(), t)
-        });
-        len ^ t.rotate_left(17)
-    })
-}
+/// Hash of the source of everything that determines the cached bytes (the files in
+/// `fingerprint-inputs.txt`, computed by `build.rs`): a rebuild that leaves them alone keeps
+/// its cache, a changed generator never reads an old result.
+pub const GENERATOR_FINGERPRINT: u64 =
+    include!(concat!(env!("OUT_DIR"), "/generator_fingerprint.rs"));
+
+/// The files `GENERATOR_FINGERPRINT` covers (also read by `build.rs`).
+#[cfg(test)]
+const FINGERPRINT_INPUTS: &str = include_str!("../fingerprint-inputs.txt");
 
 const FNV0: u64 = 0xcbf2_9ce4_8422_2325;
 
@@ -92,10 +87,10 @@ fn fnv(h: u64, bytes: &[u8]) -> u64 {
         .fold(h, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3))
 }
 
-/// FNV-1a over `parts` (each closed by a separator), the format and the build.
+/// FNV-1a over `parts` (each closed by a separator), the format and the generator fingerprint.
 pub fn key(parts: &[&[u8]]) -> u64 {
     let mut h = fnv(FNV0, &FORMAT.to_le_bytes());
-    h = fnv(h, &build_id().to_le_bytes());
+    h = fnv(h, &GENERATOR_FINGERPRINT.to_le_bytes());
     for p in parts {
         h = fnv(fnv(h, p), &[0xff]);
     }
@@ -524,6 +519,30 @@ mod tests {
             assert_ne!(k, base);
         }
         assert_ne!(digest(b"picture a"), digest(b"picture b"));
+    }
+
+    #[test]
+    fn every_fingerprint_input_exists() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let inputs: Vec<_> = FINGERPRINT_INPUTS
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .collect();
+        assert!(inputs.len() >= 5, "{inputs:?}");
+        for i in inputs {
+            assert!(root.join(i).exists(), "fingerprint input {i} is gone");
+        }
+    }
+
+    #[test]
+    fn the_key_mixes_in_the_generator_fingerprint() {
+        assert_ne!(GENERATOR_FINGERPRINT, 0);
+        let expected = fnv(
+            fnv(FNV0, &FORMAT.to_le_bytes()),
+            &GENERATOR_FINGERPRINT.to_le_bytes(),
+        );
+        assert_eq!(key(&[]), expected);
     }
 
     #[test]
