@@ -13,6 +13,7 @@ pub struct Shell {
 
 impl Shell {
     pub fn new() -> Self {
+        install_panic_hook();
         Self::default()
     }
 
@@ -171,4 +172,19 @@ fn with_timestamps(mut setup: egui_wgpu::WgpuSetupCreateNew) -> egui_wgpu::WgpuS
         d
     });
     setup
+}
+
+/// Logs a panic's message and location to the browser console (a wasm panic otherwise shows only
+/// as "unreachable", with no clue where it came from). Natively the default hook already prints
+/// them, so this does nothing there. Safe to call more than once.
+pub fn install_panic_hook() {
+    #[cfg(target_arch = "wasm32")]
+    {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            std::panic::set_hook(Box::new(|info| {
+                web_sys::console::error_1(&format!("VisionCraft panicked: {info}").into());
+            }));
+        });
+    }
 }

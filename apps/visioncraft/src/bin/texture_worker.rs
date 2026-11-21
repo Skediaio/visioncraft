@@ -5,6 +5,7 @@
 
 #[cfg(target_arch = "wasm32")]
 fn main() {
+    visioncraft::shell::install_panic_hook();
     use visioncraft::texture_worker::{READY, answer};
     use wasm_bindgen::{JsCast, prelude::Closure};
     let scope: web_sys::DedicatedWorkerGlobalScope = js_sys::global().unchecked_into();
