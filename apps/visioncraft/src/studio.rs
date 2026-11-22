@@ -75,8 +75,37 @@ pub enum Draft {
     Terrain(Arc<visioncraft_core::Terrain>),
 }
 
+/// The last `planting.growth_conflicts` answer, by the revision and the years it was asked for:
+/// the command clones the project and compares all plants, too much to run every frame.
+#[derive(Default)]
+pub struct GrowthConflicts {
+    key: Option<(u64, u32)>,
+    value: Option<serde_json::Value>,
+    /// How many times the command ran (for the test).
+    runs: usize,
+}
+
+impl GrowthConflicts {
+    pub fn get(&mut self, session: &mut Session, years: f32) -> Option<&serde_json::Value> {
+        let key = (session.revision(), years.to_bits());
+        if self.key != Some(key) {
+            self.runs += 1;
+            self.value = session
+                .run(
+                    "planting.growth_conflicts",
+                    serde_json::json!({"years": years}),
+                )
+                .ok();
+            self.key = Some(key);
+        }
+        self.value.as_ref()
+    }
+}
+
 pub struct Studio {
     pub session: Session,
+    /// Cached growth conflicts; `set_session` and a swapped-in session clear it.
+    pub growth_conflicts: GrowthConflicts,
     pub scene: Scene,
     pub camera: Camera,
     pub renderer: Renderer,
@@ -374,6 +403,7 @@ impl Studio {
         renderer.set_quality(Quality::PRESETS[quality].1);
         Self {
             session: Session::new(project),
+            growth_conflicts: GrowthConflicts::default(),
             scene: Scene::default(),
             camera: Camera::default(),
             renderer,
@@ -563,6 +593,7 @@ impl Studio {
     /// another project state); its lamps get their lights at the next reconcile.
     pub fn set_session(&mut self, session: Session) {
         self.session = session;
+        self.growth_conflicts = GrowthConflicts::default();
         self.drop_sun_map();
         self.lamps_reconciled = (u64::MAX, false);
         // A new session counts its revisions from zero again: the scene must look at it anew.
@@ -2531,6 +2562,23 @@ fn lit_rooms(p: &Project) -> impl Iterator<Item = visioncraft_render::Light> + '
 #[cfg(test)]
 mod tests {
     use super::auto_ev;
+
+    #[test]
+    fn growth_conflicts_run_again_only_for_a_new_revision_or_years() {
+        use visioncraft_core::{Project, Session};
+        let mut s = Session::new(Project::default());
+        let mut c = super::GrowthConflicts::default();
+        assert!(c.get(&mut s, 30.0).is_some());
+        assert!(c.get(&mut s, 30.0).is_some());
+        assert_eq!(c.runs, 1);
+        c.get(&mut s, 10.0);
+        assert_eq!(c.runs, 2);
+        s.run("view.set", serde_json::json!({"years": 5.0}))
+            .unwrap();
+        c.get(&mut s, 10.0);
+        c.get(&mut s, 10.0);
+        assert_eq!(c.runs, 3);
+    }
 
     #[test]
     fn the_meter_opens_up_for_a_dim_room_and_not_out_of_doors() {

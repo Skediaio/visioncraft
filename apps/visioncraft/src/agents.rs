@@ -386,6 +386,9 @@ impl Host for Bound<'_, '_> {
         // the request) goes through a draft-free copy and back.
         let saved = (h.studio.project() != project)
             .then(|| std::mem::replace(&mut h.studio.session, Session::new(project.clone())));
+        if saved.is_some() {
+            h.studio.growth_conflicts = Default::default();
+        }
         for (id, m) in models {
             if !h.studio.loaded.contains_key(id) {
                 h.studio.install_model(id, m.model.clone());
@@ -430,6 +433,7 @@ impl Host for Bound<'_, '_> {
         if let Some(own) = saved {
             // The window's own session, with its history, comes back; the scene follows it.
             h.studio.session = own;
+            h.studio.growth_conflicts = Default::default();
             h.studio.force_sync();
         }
         Ok(Rendered {

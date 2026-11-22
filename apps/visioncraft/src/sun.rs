@@ -513,10 +513,7 @@ fn years_fields(ui: &mut egui::Ui, cx: &mut Cx) {
         }
     });
     if let Some(years) = committed
-        && let Ok(c) = cx.s.session.run(
-            "planting.growth_conflicts",
-            json!({"years": years.max(0.0)}),
-        )
+        && let Some(c) = cx.s.growth_conflicts.get(&mut cx.s.session, years.max(0.0))
         && let Some(list) = c["conflicts"].as_array()
         && !list.is_empty()
     {
