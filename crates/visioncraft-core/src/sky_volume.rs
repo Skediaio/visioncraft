@@ -147,6 +147,39 @@ pub struct SkyVolume {
     hits: Vec<u32>,
     /// Per sample: not inside a wall or floor (`validity`; not stored in the bytes).
     valid: Vec<bool>,
+    /// Per ray of `hits`: the face it meets, resolved once (`transport`; not stored in the bytes).
+    transport: Transport,
+}
+
+/// What a ray of `SkyVolume::hits` meets, from the geometry alone (never the sun): the sample in
+/// front of the face (`OPEN` for an open ray or a face with no sample before it) and what that
+/// sample sees of the sky facing the face. Precomputed transport (Enlighten, "A Real-Time
+/// Radiosity Architecture for Video Games", SIGGRAPH 2010): only the lighting is evaluated at
+/// runtime. 8 bytes per ray.
+#[derive(Clone, Copy, Debug)]
+struct Link {
+    h: u32,
+    seen: f32,
+}
+
+/// The table of `Link`s, one per ray, built on first use. A cache: equal for all volumes.
+#[derive(Debug, Default)]
+struct Transport(std::sync::OnceLock<Vec<Link>>);
+
+impl Clone for Transport {
+    fn clone(&self) -> Self {
+        let t = Self::default();
+        if let Some(links) = self.0.get() {
+            let _ = t.0.set(links.clone());
+        }
+        t
+    }
+}
+
+impl PartialEq for Transport {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
 }
 
 impl SkyVolume {
@@ -219,6 +252,7 @@ impl SkyVolume {
             voxels,
             links,
             hits,
+            transport: Transport::default(),
         })
     }
 }
@@ -404,9 +438,15 @@ impl SkyVolume {
             return vec![0.0; self.samples.len()];
         }
         let l = to_sun.map(|c| c / len);
+        let lit = self.sunlit(l);
+        self.gather(|code, _| sun_direct(&lit, l, code))
+    }
+
+    /// Per voxel, which of its six faces (`face_code`'s low bits) the sun reaches, for the unit
+    /// direction `l` to the sun.
+    fn sunlit(&self, l: [f32; 3]) -> Vec<u8> {
         let d = l.map(|c| -c);
         let vx = &self.voxels;
-        // Per voxel, which of its six faces (`face_code`'s low bits) the sun reaches.
         let mut lit = vec![0u8; vx.solid.len()];
         for k in (0..3).filter(|&k| l[k].abs() > 1e-4) {
             let (u, w) = ((k + 1) % 3, (k + 2) % 3);
@@ -428,14 +468,7 @@ impl SkyVolume {
                 }
             }
         }
-        self.gather(|code, _| {
-            let k = ((code & 7) >> 1) as usize;
-            if lit[(code >> 3) as usize] & (1 << (code & 7)) != 0 {
-                l[k].abs()
-            } else {
-                0.0
-            }
-        })
+        lit
     }
 
     /// The light passed round the rooms, per sample (module docs): `direct(face, seen)` is the
@@ -444,6 +477,31 @@ impl SkyVolume {
     /// face gets from the room, reflected (`ROOM_REFLECTANCE`). Samples inside walls get none.
     fn gather(&self, direct: impl Fn(u32, f32) -> f32) -> Vec<f32> {
         let n = self.samples.len();
+        let links = self.transport.0.get_or_init(|| {
+            self.hits
+                .iter()
+                .map(|&code| match self.face(code) {
+                    Some((h, normal)) => Link {
+                        h: h as u32,
+                        seen: self.seen(h, normal),
+                    },
+                    None => Link { h: OPEN, seen: 0.0 },
+                })
+                .collect()
+        });
+        // What each ray's face gets from outside does not change with the bounce.
+        let lit: Vec<f32> = self
+            .hits
+            .iter()
+            .zip(links)
+            .map(|(&code, l)| {
+                if l.h == OPEN {
+                    0.0
+                } else {
+                    direct(code, l.seen)
+                }
+            })
+            .collect();
         let mut g = vec![0.0f32; n];
         for _ in 0..BOUNCES {
             g = (0..n)
@@ -452,12 +510,12 @@ impl SkyVolume {
                         return 0.0;
                     }
                     let (mut sum, mut met) = (0.0f32, 0.0f32);
-                    for &code in &self.hits[i * RAYS..(i + 1) * RAYS] {
-                        let Some((h, normal)) = self.face(code) else {
+                    let r = i * RAYS..(i + 1) * RAYS;
+                    for (l, &d) in links[r.clone()].iter().zip(&lit[r]) {
+                        if l.h == OPEN {
                             continue;
-                        };
-                        let seen = self.seen(h, normal);
-                        sum += direct(code, seen) + g[h] * (1.0 - seen);
+                        }
+                        sum += d + g[l.h as usize] * (1.0 - l.seen);
                         met += 1.0;
                     }
                     if met > 0.0 {
@@ -490,6 +548,16 @@ impl SkyVolume {
         let at = self.nearest(p)?;
         let i = (at[0] + self.dims[0] * (at[1] + self.dims[1] * at[2])) as usize;
         self.valid[i].then_some((i, normal))
+    }
+}
+
+/// The sun's light on the face `code` (`face_code`) given the faces it reaches (`sunlit`).
+fn sun_direct(lit: &[u8], l: [f32; 3], code: u32) -> f32 {
+    let k = ((code & 7) >> 1) as usize;
+    if lit[(code >> 3) as usize] & (1 << (code & 7)) != 0 {
+        l[k].abs()
+    } else {
+        0.0
     }
 }
 
@@ -836,6 +904,7 @@ pub fn sky_volume_with_canopy(triangles: &[[[f32; 3]; 3]], crowns: &[Crown]) -> 
         links,
         hits,
         valid,
+        transport: Transport::default(),
     };
     // The sky's light passed round the rooms: what the faces a sample's rays meet get of the sky.
     let room = v.gather(|_, seen| seen);
@@ -1085,5 +1154,166 @@ mod tests {
     #[test]
     fn nothing_to_occlude_is_no_volume() {
         assert!(sky_volume(&[]).is_none());
+    }
+
+    /// The gather as it was before the transport table: the oracle.
+    impl SkyVolume {
+        fn gather_reference(&self, direct: impl Fn(u32, f32) -> f32) -> Vec<f32> {
+            let n = self.samples.len();
+            let mut g = vec![0.0f32; n];
+            for _ in 0..BOUNCES {
+                g = (0..n)
+                    .map(|i| {
+                        if !self.valid[i] {
+                            return 0.0;
+                        }
+                        let (mut sum, mut met) = (0.0f32, 0.0f32);
+                        for &code in &self.hits[i * RAYS..(i + 1) * RAYS] {
+                            let Some((h, normal)) = self.face(code) else {
+                                continue;
+                            };
+                            let seen = self.seen(h, normal);
+                            sum += direct(code, seen) + g[h] * (1.0 - seen);
+                            met += 1.0;
+                        }
+                        if met > 0.0 {
+                            ROOM_REFLECTANCE * sum / met
+                        } else {
+                            0.0
+                        }
+                    })
+                    .collect();
+            }
+            g
+        }
+
+        fn sun_bounce_reference(&self, to_sun: [f32; 3]) -> Vec<f32> {
+            let len = to_sun.iter().map(|c| c * c).sum::<f32>().sqrt();
+            if len < 1e-6 || to_sun[1] <= 0.0 {
+                return vec![0.0; self.samples.len()];
+            }
+            let l = to_sun.map(|c| c / len);
+            let lit = self.sunlit(l);
+            self.gather_reference(|code, _| sun_direct(&lit, l, code))
+        }
+    }
+
+    fn bits(v: &[f32]) -> Vec<u32> {
+        v.iter().map(|x| x.to_bits()).collect()
+    }
+
+    /// The fixtures: rooms of both kinds, a room beside a crown, a crown alone.
+    fn fixtures() -> Vec<SkyVolume> {
+        let crown = Crown {
+            center: [9.0, 6.0, 3.0],
+            radii: [3.0, 2.5, 3.0],
+            ground_y: 0.0,
+        };
+        vec![
+            sky_volume(&room(2.0)).unwrap(),
+            sky_volume(&room(0.0)).unwrap(),
+            sky_volume_with_canopy(&room(2.0), &[crown]).unwrap(),
+            sky_volume_with_canopy(&[], &[crown]).unwrap(),
+        ]
+    }
+
+    /// 24+ sun directions: below the horizon, down, up, on the axes, and a sweep.
+    fn suns() -> Vec<[f32; 3]> {
+        let mut s = vec![
+            [0.0, 1.0, 0.0],
+            [0.0, -1.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [-1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, -1.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 1.0, -1.0],
+            [-1.0, 0.5, 1.0],
+            [0.3, -0.4, 0.2],
+            [1.0, 1e-3, 0.0],
+        ];
+        for i in 0..16 {
+            let a = i as f32 * std::f32::consts::TAU / 16.0;
+            let e = 0.1 + 1.3 * ((i * 5) % 16) as f32 / 16.0;
+            s.push([e.cos() * a.cos(), e.sin(), e.cos() * a.sin()]);
+        }
+        s
+    }
+
+    #[test]
+    fn sun_bounce_matches_the_reference_bit_for_bit() {
+        for (f, v) in fixtures().iter().enumerate() {
+            for sun in suns() {
+                assert_eq!(
+                    bits(&v.sun_bounce(sun)),
+                    bits(&v.sun_bounce_reference(sun)),
+                    "fixture {f}, sun {sun:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_sky_gather_matches_the_reference_bit_for_bit() {
+        for (f, v) in fixtures().iter().enumerate() {
+            let gathered = v.gather_reference(|_, seen| seen);
+            let room: Vec<f32> = (0..gathered.len())
+                .map(|i| if v.valid[i] { gathered[i] } else { -1.0 })
+                .collect();
+            assert_eq!(bits(&v.room), bits(&room), "fixture {f}");
+            assert_eq!(
+                bits(&v.gather(|_, seen| seen)),
+                bits(&gathered),
+                "fixture {f}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_transport_table_is_not_in_the_bytes() {
+        for v in fixtures() {
+            let bytes = v.to_bytes();
+            let n = v.samples.len();
+            // origin, cell, dims, voxel origin and dims, samples, room, hits, links, solid.
+            let expected = 4 * 13 + 16 * n + 4 * n + 4 * n * RAYS + n + v.voxels.solid.len();
+            assert_eq!(bytes.len(), expected);
+            // Used (table built) or not, the same bytes, and the same volume after the trip.
+            let _ = v.sun_bounce([0.3, 0.8, 0.2]);
+            assert_eq!(v.to_bytes(), bytes);
+            let back = SkyVolume::from_bytes(&bytes).unwrap();
+            assert_eq!(back, v);
+            assert_eq!(back.to_bytes(), bytes);
+            assert_eq!(
+                bits(&back.sun_bounce([0.3, 0.8, 0.2])),
+                bits(&v.sun_bounce_reference([0.3, 0.8, 0.2]))
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "timing: run with --release -- --ignored --nocapture"]
+    fn timing_of_the_sun_bounce() {
+        let v = &fixtures()[2];
+        let sun = [0.5, 0.7, 0.3];
+        let time = |f: &dyn Fn() -> Vec<f32>| {
+            let t = std::time::Instant::now();
+            let r = (0..10).map(|_| f()).last().unwrap();
+            (t.elapsed().as_secs_f64() * 100.0, r)
+        };
+        let (cold, _) = time(&|| {
+            SkyVolume::from_bytes(&v.to_bytes())
+                .unwrap()
+                .sun_bounce(sun)
+        });
+        let (new, a) = time(&|| v.sun_bounce(sun));
+        let (old, b) = time(&|| v.sun_bounce_reference(sun));
+        assert_eq!(bits(&a), bits(&b));
+        println!(
+            "{} samples, {} rays: new {new:.2} ms, reference {old:.2} ms, x{:.1} (first call incl. table {cold:.2} ms)",
+            v.samples.len(),
+            v.samples.len() * RAYS,
+            old / new
+        );
     }
 }
