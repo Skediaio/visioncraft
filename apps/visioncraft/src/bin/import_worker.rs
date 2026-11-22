@@ -1,7 +1,10 @@
 //! The web import worker (`import_task`, loaded by `index.html`): receives `[kind, bytes]`, posts
 //! back the meshed model as bytes, or an error message; or the sky visibility volume for
 //! `["sky", triangles, to_sun, crowns]` (`sky_task`) with its sun bounce, or the baked sky
-//! visibility probes for `["skyvis", scene floats, start, end]` (`sky_vis`). Natively it does nothing.
+//! visibility probes for `["skyvis", scene floats, start, end]` (`sky_vis`). The worker keeps the
+//! sky volume it made and relights it: `["skylight", to_sun]` -> `["skylight", sun bounce]`,
+//! `["lamplight", lamps]` -> `["lamplight", rgb bounce, flattened]` (`sky_relight`). Natively it
+//! does nothing.
 
 #[cfg(target_arch = "wasm32")]
 fn main() {
@@ -38,6 +41,38 @@ fn main() {
                 let _ = reply_to.post_message(&js_sys::Float32Array::from(&out[..]));
                 return;
             }
+            // The kept sky volume (`sky_task`), relit for the sun or the lamps (`sky_relight`);
+            // an empty bounce when this worker has no volume.
+            thread_local! {
+                static VOLUME: std::cell::RefCell<Option<visioncraft_core::SkyVolume>> =
+                    const { std::cell::RefCell::new(None) };
+            }
+            let kind = msg.get(0).as_string();
+            if kind.as_deref() == Some(visioncraft::sky_relight::SKY_LIGHT) {
+                let d = js_sys::Float32Array::new(&msg.get(1)).to_vec();
+                let to_sun = [0, 1, 2].map(|i| d.get(i).copied().unwrap_or(0.0));
+                let out = VOLUME.with(|v| v.borrow().as_ref().map(|v| v.sun_bounce(to_sun)));
+                let reply = js_sys::Array::of2(
+                    &visioncraft::sky_relight::SKY_LIGHT.into(),
+                    &js_sys::Float32Array::from(&out.unwrap_or_default()[..]),
+                );
+                let _ = reply_to.post_message(&reply);
+                return;
+            }
+            if kind.as_deref() == Some(visioncraft::sky_relight::LAMP_LIGHT) {
+                let lamps = visioncraft::sky_relight::decode_lamps(
+                    &js_sys::Float32Array::new(&msg.get(1)).to_vec(),
+                );
+                let out = VOLUME.with(|v| v.borrow().as_ref().map(|v| v.lamp_bounce(&lamps)));
+                let reply = js_sys::Array::of2(
+                    &visioncraft::sky_relight::LAMP_LIGHT.into(),
+                    &js_sys::Float32Array::from(
+                        &visioncraft::sky_relight::flatten_rgb(&out.unwrap_or_default())[..],
+                    ),
+                );
+                let _ = reply_to.post_message(&reply);
+                return;
+            }
             let bytes = msg.get(1).unchecked_into::<js_sys::Uint8Array>().to_vec();
             // The sky visibility volume and its sun bounce (`sky_task`): empty bytes when nothing
             // blocks the sky.
@@ -48,9 +83,11 @@ fn main() {
                 let crowns = visioncraft::sky_task::decode_crowns(
                     &js_sys::Float32Array::new(&msg.get(3)).to_vec(),
                 );
-                let (v, bounce) = visioncraft::sky_task::make(&t, &crowns, to_sun)
-                    .map(|(v, b)| (v.to_bytes(), b))
-                    .unwrap_or_default();
+                let made = visioncraft::sky_task::make(&t, &crowns, to_sun);
+                let (v, bounce) = made
+                    .as_ref()
+                    .map_or_else(Default::default, |(v, b)| (v.to_bytes(), b.clone()));
+                VOLUME.with(|k| *k.borrow_mut() = made.map(|(v, _)| v));
                 let reply = js_sys::Array::of2(
                     &js_sys::Uint8Array::from(&v[..]),
                     &js_sys::Float32Array::from(&bounce[..]),

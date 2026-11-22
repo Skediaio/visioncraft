@@ -4,7 +4,11 @@
 //! (`SkyVolume::to_bytes`). The sun's bounce through its rooms for the sun at the start
 //! (`SkyVolume::sun_bounce`, seconds too) is made with it. When the worker cannot start, both are
 //! made here, blocking.
+//!
+//! Once made, the volume is relit by a `sky_relight::Relighter` (`SkyTask::relighter`): on the web
+//! the very worker that made it, which keeps the volume and stays alive.
 
+use crate::sky_relight::Relighter;
 use std::sync::{Arc, Mutex};
 use visioncraft_core::{Crown, SkyVolume};
 
@@ -18,18 +22,46 @@ pub struct SkyTask {
     pub key: u64,
     pub to_sun: [f32; 3],
     slot: Slot,
+    /// The worker, to become the volume's relighter (dropped with the task: terminated).
+    #[cfg(target_arch = "wasm32")]
+    web: std::cell::RefCell<Option<Relighter>>,
+    /// The thread's relighter, made on the making thread (the volume is cloned there, not on the
+    /// UI thread).
+    #[cfg(not(target_arch = "wasm32"))]
+    relighter: Arc<Mutex<Option<Relighter>>>,
 }
 
 impl SkyTask {
     pub fn start(triangles: Triangles, crowns: Vec<Crown>, key: u64, to_sun: [f32; 3]) -> Self {
         let slot: Slot = Arc::default();
-        run(triangles, crowns, to_sun, slot.clone());
-        Self { key, to_sun, slot }
+        #[cfg(target_arch = "wasm32")]
+        let web = std::cell::RefCell::new(run(triangles, crowns, to_sun, slot.clone()));
+        #[cfg(not(target_arch = "wasm32"))]
+        let relighter: Arc<Mutex<Option<Relighter>>> = Arc::default();
+        #[cfg(not(target_arch = "wasm32"))]
+        run(triangles, crowns, to_sun, slot.clone(), relighter.clone());
+        Self {
+            key,
+            to_sun,
+            slot,
+            #[cfg(target_arch = "wasm32")]
+            web,
+            #[cfg(not(target_arch = "wasm32"))]
+            relighter,
+        }
     }
 
     /// The volume once made, then `None` again.
     pub fn take(&self) -> Option<Made> {
         self.slot.lock().ok()?.take()
+    }
+
+    /// The relighter of the volume just taken (`None`: relight here, blocking).
+    pub fn relighter(&self) -> Option<Relighter> {
+        #[cfg(target_arch = "wasm32")]
+        return self.web.borrow_mut().take();
+        #[cfg(not(target_arch = "wasm32"))]
+        self.relighter.lock().ok()?.take()
     }
 }
 
@@ -47,23 +79,45 @@ fn put(slot: &Slot, v: Made) {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn run(triangles: Triangles, crowns: Vec<Crown>, to_sun: [f32; 3], slot: Slot) {
-    std::thread::spawn(move || put(&slot, make(&triangles, &crowns, to_sun)));
+fn run(
+    triangles: Triangles,
+    crowns: Vec<Crown>,
+    to_sun: [f32; 3],
+    slot: Slot,
+    relighter: Arc<Mutex<Option<Relighter>>>,
+) {
+    std::thread::spawn(move || {
+        let made = make(&triangles, &crowns, to_sun);
+        // Before the volume is handed over, so it is there when the volume is.
+        if let (Some((v, _)), Ok(mut r)) = (&made, relighter.lock()) {
+            *r = Relighter::spawn(v.clone());
+        }
+        put(&slot, made);
+    });
 }
 
 #[cfg(target_arch = "wasm32")]
-fn run(triangles: Triangles, crowns: Vec<Crown>, to_sun: [f32; 3], slot: Slot) {
+fn run(
+    triangles: Triangles,
+    crowns: Vec<Crown>,
+    to_sun: [f32; 3],
+    slot: Slot,
+) -> Option<Relighter> {
+    use std::{cell::Cell, rc::Rc};
     use wasm_bindgen::JsCast;
     use wasm_bindgen::prelude::Closure;
     let Ok(worker) = web_sys::Worker::new("./import_worker_loader.js") else {
-        return put(&slot, make(&triangles, &crowns, to_sun));
+        put(&slot, make(&triangles, &crowns, to_sun));
+        return None;
     };
     let msg = js_sys::Array::new();
     msg.push(&SKY.into());
     msg.push(&js_sys::Uint8Array::from(&encode_triangles(&triangles)[..]));
     msg.push(&js_sys::Float32Array::from(&to_sun[..]));
     msg.push(&js_sys::Float32Array::from(&encode_crowns(&crowns)[..]));
-    let (w, done) = (worker.clone(), slot.clone());
+    let relighter = Relighter::on_worker(worker.clone());
+    let (link, replied) = (relighter.link(), Rc::new(Cell::new(false)));
+    let (w, done, l, got) = (worker.clone(), slot.clone(), link.clone(), replied.clone());
     let on_message =
         Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |e: web_sys::MessageEvent| {
             let data = e.data();
@@ -71,22 +125,33 @@ fn run(triangles: Triangles, crowns: Vec<Crown>, to_sun: [f32; 3], slot: Slot) {
                 let _ = w.post_message(&msg);
                 return;
             }
-            // [volume, sun bounce]; empty volume bytes: nothing blocks the sky.
             let parts = data.dyn_into::<js_sys::Array>().ok();
+            // A relight's reply is tagged with its kind (`sky_relight`), the volume's is not.
+            if let Some(a) = parts.as_ref().filter(|a| a.get(0).as_string().is_some()) {
+                return crate::sky_relight::on_reply(&l, a);
+            }
+            // [volume, sun bounce]; empty volume bytes: nothing blocks the sky.
             let v = parts.and_then(|a| {
                 let b = a.get(0).dyn_into::<js_sys::Uint8Array>().ok()?.to_vec();
                 let bounce = a.get(1).dyn_into::<js_sys::Float32Array>().ok()?.to_vec();
                 let v = SkyVolume::from_bytes(&b).ok()?;
                 Some((v, bounce))
             });
+            got.set(true);
+            if v.is_none() {
+                // No volume to relight: the worker is done (the relighter's drop would do it).
+                w.terminate();
+                crate::sky_relight::mark_dead(&l);
+            }
             put(&done, v);
-            w.terminate();
         });
     worker.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
-    let (w, failed) = (worker.clone(), slot.clone());
+    let (w, failed, l) = (worker.clone(), slot.clone(), link);
     let on_error = Closure::<dyn FnMut(wasm_bindgen::JsValue)>::new(move |_| {
         w.terminate();
-        if failed.lock().is_ok_and(|s| s.is_none()) {
+        crate::sky_relight::mark_dead(&l);
+        if !replied.get() {
+            replied.set(true);
             put(&failed, make(&triangles, &crowns, to_sun));
         }
     });
@@ -94,6 +159,7 @@ fn run(triangles: Triangles, crowns: Vec<Crown>, to_sun: [f32; 3], slot: Slot) {
     // shortcut: two small closures leak per volume, fine for a change of the buildings
     on_message.forget();
     on_error.forget();
+    Some(relighter)
 }
 
 /// The worker job's kind (beside the model kinds of `import_task`).
@@ -169,6 +235,7 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
         };
+        assert!(task.relighter().is_some());
         let (v, bounce) = v.expect("a volume");
         assert!(!v.samples.is_empty());
         assert_eq!(bounce, v.sun_bounce([0.3, 0.8, 0.2]));

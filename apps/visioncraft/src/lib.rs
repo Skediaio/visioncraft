@@ -41,6 +41,7 @@ pub mod selection;
 pub mod selection_edit;
 pub mod shell;
 pub mod sky_panel;
+pub mod sky_relight;
 pub mod sky_task;
 pub mod sky_vis;
 pub mod smoke;
@@ -2013,6 +2014,8 @@ impl eframe::App for App {
         let t = cpu_ms();
         self.studio.prepare();
         let prepare_ms = cpu_ms() - t;
+        // `prepare` is where a relight is asked for (and a volume swapped in): look again.
+        busy |= self.studio.sky_volume_pending();
         if !self.studio.measuring {
             self.studio.track_load();
         }

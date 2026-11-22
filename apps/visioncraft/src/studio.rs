@@ -198,6 +198,14 @@ pub struct Studio {
     sky_volume_key: u64,
     sky_volume: Option<visioncraft_core::SkyVolume>,
     sky_task: Option<crate::sky_task::SkyTask>,
+    /// Relights the volume off this thread (`sky_relight`); `None`: made here, blocking.
+    relighter: Option<crate::sky_relight::Relighter>,
+    /// A new volume made, waiting for its light before it replaces the one on screen.
+    incoming: Option<Incoming>,
+    /// Counts the changes of the lamps; a lamp bounce is kept only if made for the current one.
+    lamp_key: u64,
+    /// The sun direction the bounce was last asked for (it comes back as `sun_bounce_dir`).
+    sun_asked_dir: Vec3,
     /// Examples' models being imported in the import worker (the web: on the page they froze
     /// it for seconds), by model id; `wake` repaints when one is done (the window sets it).
     #[cfg(target_arch = "wasm32")]
@@ -459,6 +467,10 @@ impl Studio {
             sky_volume_key: 0,
             sky_volume: None,
             sky_task: None,
+            relighter: None,
+            incoming: None,
+            lamp_key: 0,
+            sun_asked_dir: Vec3::ZERO,
             #[cfg(target_arch = "wasm32")]
             example_imports: Vec::new(),
             #[cfg(target_arch = "wasm32")]
@@ -1114,7 +1126,7 @@ impl Studio {
         }
         self.sky_volume_key = key;
         // The old volume stays until the new one is made (`poll_sky_volume`).
-        let to_sun = self.sun_bounce_dir.to_array();
+        let to_sun = self.sun_asked_dir.to_array();
         self.sky_task = Some(crate::sky_task::SkyTask::start(
             triangles, crowns, key, to_sun,
         ));
@@ -1127,24 +1139,140 @@ impl Studio {
         };
         if let Some(made) = task.take() {
             // The sun bounce came with it, for the sun when it started: kept if it still stands.
-            let same_sun = task.to_sun == self.sun_bounce_dir.to_array();
+            let to_sun = task.to_sun;
+            let same_sun = to_sun == self.sun_asked_dir.to_array();
+            let relighter = made.as_ref().and_then(|_| task.relighter());
             self.sky_task = None;
-            self.lamp_bounce.clear();
-            self.sun_bounce.clear();
-            self.room_texels.clear();
-            self.sky_volume = made.map(|(v, bounce)| {
-                if same_sun {
-                    self.sun_bounce = bounce;
+            self.incoming = None;
+            match (made, relighter) {
+                // The old volume and its light stay on screen until the new one has its own.
+                (Some((volume, bounce)), Some(relighter)) => {
+                    relighter.request_lamps(self.lamp_key, self.current_lamps());
+                    let sun = same_sun.then(|| (Vec3::from(to_sun), bounce));
+                    if sun.is_none() {
+                        relighter.request_sun(self.sun_asked_dir.to_array());
+                    }
+                    self.incoming = Some(Incoming {
+                        volume,
+                        relighter,
+                        sun,
+                        lamps: None,
+                    });
                 }
-                v
-            });
+                (made, _) => {
+                    self.relighter = None;
+                    self.lamp_bounce.clear();
+                    self.sun_bounce.clear();
+                    self.room_texels.clear();
+                    self.sky_volume = made.map(|(v, bounce)| {
+                        if same_sun {
+                            self.sun_bounce = bounce;
+                            self.sun_bounce_dir = Vec3::from(to_sun);
+                        }
+                        v
+                    });
+                    self.upload_sky_volume();
+                }
+            }
+        }
+    }
+
+    /// Takes the light the incoming volume's relighter has finished, and swaps the volume in
+    /// once it has all of it. A relighter that failed: the volume goes in with the light made
+    /// here.
+    fn poll_incoming(&mut self) {
+        let Some(inc) = self.incoming.as_mut() else {
+            return;
+        };
+        if inc.relighter.failed() {
+            if let Some(inc) = self.incoming.take() {
+                self.relighter = None;
+                self.sky_volume = Some(inc.volume);
+                self.lamp_bounce.clear();
+                self.sun_bounce.clear();
+                self.room_texels.clear();
+                self.upload_sky_volume();
+            }
+            return;
+        }
+        let n = inc.volume.samples.len();
+        while let Some(d) = inc.relighter.take() {
+            match d {
+                crate::sky_relight::Done::Sun { to_sun, bounce } if bounce.len() == n => {
+                    inc.sun = Some((Vec3::from(to_sun), bounce));
+                }
+                crate::sky_relight::Done::Lamps { lights_key, bounce }
+                    if lights_key == self.lamp_key && bounce.len() == n =>
+                {
+                    inc.lamps = Some(bounce);
+                }
+                _ => {}
+            }
+        }
+        let sun_dir = inc.sun.as_ref().map(|s| s.0);
+        if !incoming_ready(sun_dir, self.sun_asked_dir, inc.lamps.is_some()) {
+            return;
+        }
+        if let Some(Incoming {
+            volume,
+            relighter,
+            sun: Some((dir, sun)),
+            lamps: Some(lamps),
+        }) = self.incoming.take()
+        {
+            self.sky_volume = Some(volume);
+            self.relighter = Some(relighter);
+            self.sun_bounce = sun;
+            self.sun_bounce_dir = dir;
+            self.lamp_bounce = lamps;
+            self.room_texels.clear();
             self.upload_sky_volume();
         }
     }
 
-    /// A sky volume is being made.
+    /// A sky volume is being made, or its light is being relit (a request runs or waits, or its
+    /// result is not taken yet), so a still or a smoke run waits for the exact light.
     pub fn sky_volume_pending(&self) -> bool {
         self.sky_task.is_some()
+            || self.incoming.is_some()
+            || self.relighter.as_ref().is_some_and(|r| r.busy())
+    }
+
+    /// Takes what the relighter has finished: the sun's bounce, and the lamps' if still made for
+    /// the lamps now on. A relighter that failed is dropped: the bounces are made here again.
+    fn poll_relight(&mut self) {
+        let Some(r) = self.relighter.as_ref() else {
+            return;
+        };
+        if r.failed() {
+            self.relighter = None;
+            self.lamp_bounce.clear();
+            self.sun_bounce.clear();
+            self.send_room_light();
+            return;
+        }
+        let done: Vec<_> = std::iter::from_fn(|| r.take()).collect();
+        let n = self.sky_volume.as_ref().map_or(0, |v| v.samples.len());
+        let mut changed = false;
+        for d in done {
+            match d {
+                crate::sky_relight::Done::Sun { to_sun, bounce } if bounce.len() == n => {
+                    self.sun_bounce = bounce;
+                    self.sun_bounce_dir = Vec3::from(to_sun);
+                    changed = true;
+                }
+                crate::sky_relight::Done::Lamps { lights_key, bounce }
+                    if lights_key == self.lamp_key && bounce.len() == n =>
+                {
+                    self.lamp_bounce = bounce;
+                    changed = true;
+                }
+                _ => {}
+            }
+        }
+        if changed {
+            self.send_room_light();
+        }
     }
 
     /// Examples' models still being imported (the web; natively they load in `sync`).
@@ -1221,19 +1349,9 @@ impl Studio {
         }
     }
 
-    /// Makes the sun's and the lamps' bounce through the rooms where emptied.
-    fn make_bounces(&mut self) {
-        let Some(v) = &self.sky_volume else { return };
-        if self.sun_bounce.len() != v.samples.len() {
-            self.sun_bounce = crate::load_stats::time("sun bounce (main thread)", || {
-                v.sun_bounce(self.sun_bounce_dir.to_array())
-            });
-        }
-        if self.lamp_bounce.len() == v.samples.len() {
-            return;
-        }
-        let lamps: Vec<visioncraft_core::Lamp> = self
-            .last_lights
+    /// The lamps now on, as the volume takes them.
+    fn current_lamps(&self) -> Vec<visioncraft_core::Lamp> {
+        self.last_lights
             .iter()
             .map(|l| visioncraft_core::Lamp {
                 position: l.position.to_array(),
@@ -1246,9 +1364,37 @@ impl Studio {
                     visioncraft_render::LightKind::Point => None,
                 },
             })
-            .collect();
-        self.lamp_bounce =
-            crate::load_stats::time("lamp bounce (main thread)", || v.lamp_bounce(&lamps));
+            .collect()
+    }
+
+    /// Where the sun's and the lamps' bounce through the rooms is emptied: asked of the relighter
+    /// (none yet: no bounce until it comes, the lamps' direct light is drawn anyway), or made
+    /// here, blocking, without one.
+    fn make_bounces(&mut self) {
+        let Some(v) = &self.sky_volume else { return };
+        let n = v.samples.len();
+        if self.sun_bounce.len() != n {
+            if let Some(r) = &self.relighter {
+                self.sun_bounce = vec![0.0; n];
+                r.request_sun(self.sun_asked_dir.to_array());
+            } else {
+                self.sun_bounce_dir = self.sun_asked_dir;
+                self.sun_bounce = crate::load_stats::time("sun bounce (main thread)", || {
+                    v.sun_bounce(self.sun_bounce_dir.to_array())
+                });
+            }
+        }
+        if self.lamp_bounce.len() == n {
+            return;
+        }
+        let lamps = self.current_lamps();
+        if let Some(r) = &self.relighter {
+            self.lamp_bounce = vec![[0.0; 3]; n];
+            r.request_lamps(self.lamp_key, lamps);
+        } else {
+            self.lamp_bounce =
+                crate::load_stats::time("lamp bounce (main thread)", || v.lamp_bounce(&lamps));
+        }
     }
 
     /// The light passed round the volume's rooms per sample (`Renderer::set_sky_volume`): the
@@ -1682,20 +1828,40 @@ impl Studio {
         if lights != self.last_lights {
             self.dropped_lights = self.renderer.set_lights(&lights);
             self.last_lights = lights;
-            self.lamp_bounce.clear();
+            self.lamp_key += 1;
+            // The old lamp bounce stays on screen until the new one comes.
+            match &self.relighter {
+                Some(r) => r.request_lamps(self.lamp_key, self.current_lamps()),
+                None => self.lamp_bounce.clear(),
+            }
+            let lamps = self.current_lamps();
+            if let Some(i) = &mut self.incoming {
+                i.lamps = None;
+                i.relighter.request_lamps(self.lamp_key, lamps);
+            }
             self.send_room_light();
         }
         // The sun's light let into the rooms: made again when the sun has moved a degree, sent
         // again when its illuminance changed by a twentieth.
         let to_sun = self.sun().0.direction.normalize_or_zero();
         let lux = self.renderer.sun_lux();
-        let turned = to_sun.dot(self.sun_bounce_dir) < SUN_BOUNCE_COS;
+        let turned = to_sun.dot(self.sun_asked_dir) < SUN_BOUNCE_COS;
         if turned
             || (lux - self.sun_lux).abs().max_element() > 0.05 * self.sun_lux.max_element() + 1.0
         {
             if turned {
-                self.sun_bounce_dir = to_sun;
-                self.sun_bounce.clear();
+                self.sun_asked_dir = to_sun;
+                match &self.relighter {
+                    // The old bounce stays on screen until the new one comes.
+                    Some(r) => r.request_sun(to_sun.to_array()),
+                    None => {
+                        self.sun_bounce_dir = to_sun;
+                        self.sun_bounce.clear();
+                    }
+                }
+                if let Some(i) = &self.incoming {
+                    i.relighter.request_sun(to_sun.to_array());
+                }
             }
             self.sun_lux = lux;
             self.send_room_light();
@@ -1885,6 +2051,8 @@ impl Studio {
         }
         self.sync();
         self.poll_sky_volume();
+        self.poll_incoming();
+        self.poll_relight();
         #[cfg(target_arch = "wasm32")]
         self.poll_example_imports();
         self.scene
@@ -2754,6 +2922,27 @@ pub fn view_reach(camera: &crate::camera::Camera, ground_y: f32, view_distance: 
 }
 
 #[cfg(test)]
+mod incoming_tests {
+    use super::*;
+
+    #[test]
+    fn a_new_volume_swaps_in_only_with_both_bounces_for_the_sun_now() {
+        let noon = Vec3::new(0.0, 1.0, 0.0);
+        let near = Vec3::new(0.005, 1.0, 0.0).normalize();
+        let far = Vec3::new(0.5, 1.0, 0.0).normalize();
+        assert!(incoming_ready(Some(noon), noon, true));
+        assert!(incoming_ready(Some(near), noon, true));
+        assert!(!incoming_ready(Some(far), noon, true), "the sun has turned");
+        assert!(!incoming_ready(None, noon, true), "no sun bounce yet");
+        assert!(
+            !incoming_ready(Some(noon), noon, false),
+            "no lamp bounce yet"
+        );
+        assert!(incoming_ready(Some(Vec3::ZERO), Vec3::ZERO, true));
+    }
+}
+
+#[cfg(test)]
 mod reach_tests {
     use super::view_reach;
     use crate::camera::{Camera, View};
@@ -2899,6 +3088,21 @@ const ADAPT_S: f32 = 0.33;
 /// as scene.wgsl's `room_bounce`) against the light the automatic exposure is made for.
 /// The cosine of the angle the sun moves before its light in the rooms is made again (1 deg).
 const SUN_BOUNCE_COS: f32 = 0.999_85;
+
+/// A new sky volume made, waiting for its light (`Studio::poll_incoming`).
+struct Incoming {
+    volume: visioncraft_core::SkyVolume,
+    relighter: crate::sky_relight::Relighter,
+    /// The sun's bounce and the direction it is for (it came with the volume, or was relit).
+    sun: Option<(Vec3, Vec<f32>)>,
+    lamps: Option<Vec<[f32; 3]>>,
+}
+
+/// Whether a made volume has the light to replace the one on screen: the lamps' bounce, and
+/// the sun's for a direction that has not turned a degree from the one asked for.
+fn incoming_ready(sun: Option<Vec3>, asked: Vec3, lamps: bool) -> bool {
+    lamps && sun.is_some_and(|d| d == asked || d.dot(asked) >= SUN_BOUNCE_COS)
+}
 
 const METER_COLUMNS: usize = 6;
 const METER_ROWS: usize = 4;
