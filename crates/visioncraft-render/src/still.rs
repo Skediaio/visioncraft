@@ -214,6 +214,7 @@ impl Renderer {
         let live = (self.size, self.quality, self.view, self.proj, self.eye);
         let live_cache = self.far_cache.take();
         let live_cascades = std::mem::take(&mut self.cascade_rendered);
+        let live_stale = std::mem::take(&mut self.cascade_stale);
         if let Some(t) = &self.timer {
             t.paused.set(true);
         }
@@ -256,6 +257,7 @@ impl Renderer {
         (self.size, self.quality, self.view, self.proj, self.eye) = live;
         self.far_cache = live_cache;
         self.cascade_rendered = live_cascades;
+        self.cascade_stale = live_stale;
         if let Some(t) = &self.timer {
             t.paused.set(false);
         }

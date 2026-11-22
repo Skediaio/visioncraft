@@ -107,6 +107,14 @@ Recipe, a time-of-day drag:
   cached while the camera stays within its margin, each culled by its own cascade. The snow
   cover map (on a coast also the sea's bed) follows the eye in steps of eight texels and is
   drawn again only when it moves or the scene changes.
+  **While the sun moves** (a dragged time of day) `set_sun` no longer drops the caches: every
+  cascade keeps its map and matrix and is marked stale, so it shows the shadow of a sun a few
+  frames old, consistently. The near cascade still draws every frame, the cached far one every
+  fourth frame (at once when the camera leaves its margin), the middle ones on their alternate
+  frames; the snow cover map does not depend on the sun and is not redrawn. The frame after the
+  sun stops, every stale cascade draws, so the resting picture is the same as before.
+  `finish_environment` (a picture of the live view) forces that refresh too; the offscreen
+  stills start without any cache. The rule is `cascade_refresh` in `visioncraft-render`.
 - **The water reflection** is drawn only when the view frames water: the sea counts when a grid
   of rays through the view lands on its side of the coast (`sea::sea_in_view`), a pond when its
   clusters are in view. It draws the coarser levels, and leaves out what would be under 1.5

@@ -10,7 +10,12 @@
 //!    (`Rgba16Float` 64^2 x 6 faces x 6 mips, prefiltered per roughness)
 //! 1. shadow cascades, depth only, `Depth32Float` 2D array (one layer each);
 //!    cutout materials alpha-test, glass stipples, wind animates (not in the
-//!    cached far cascade); with 3+ cascades the middle ones alternate frames
+//!    cached far cascade); with 3+ cascades the middle ones alternate frames.
+//!    A moving sun (`set_sun`) keeps every cascade's map and matrix and marks them stale: the
+//!    near one still draws every frame, the far cached one every 4th, the middle ones on their
+//!    alternate frames, and the frame after the sun stops all stale ones draw, so a settled
+//!    picture is exact (`cascade_refresh`, `refresh_shadows`). Only a scene change, a resize or
+//!    a quality or distance change drops the caches (`invalidate_shadows`)
 //! 2. depth pre-pass, `Depth32Float` (4x MSAA when enabled); cutout
 //!    materials write their coverage through the sample mask
 //! 3. depth resolve: sample 0 -> linear view depth, `R32Float`
@@ -125,6 +130,53 @@ const SHAFTS_REACH_M: f32 = 30.0;
 /// and the halo's share. A share of a few per cent is what a clean camera lens and the eye
 /// show (Spencer et al. 1995 put the eye's scattered light at about 10 % within 10 degrees).
 const SUN_GLARE: [f32; 4] = [0.03, 0.025, 0.14, 0.35];
+
+/// How often the camera-centred far cascade is redrawn while the sun moves (frames).
+const FAR_SUN_PERIOD: u64 = 4;
+
+/// Whether cascade `c` of `count` is drawn this frame. The near cascade every frame; the middle
+/// ones on alternate frames; the cached far one (`cached_far`) only when it is not `reuse`d (the
+/// camera left its margin) or was never drawn. A cascade a sun change left `stale` is still
+/// sampled with the matrix it was drawn with (a picture of an earlier sun): while the sun keeps
+/// moving (`sun_moving`) the far one is redrawn every `FAR_SUN_PERIOD` frames and the middle ones
+/// keep their alternate frames; the frame after the sun stops, every stale one is redrawn.
+#[allow(clippy::too_many_arguments)]
+fn cascade_refresh(
+    c: usize,
+    count: usize,
+    cached_far: bool,
+    reuse: bool,
+    rendered: bool,
+    frame: u64,
+    sun_moving: bool,
+    stale: bool,
+    sun_lit: bool,
+) -> bool {
+    if !sun_lit {
+        return false;
+    }
+    if cached_far {
+        return !reuse
+            || !rendered
+            || (stale && (!sun_moving || frame.is_multiple_of(FAR_SUN_PERIOD)));
+    }
+    c == 0
+        || count < 3
+        || !rendered
+        || (stale && !sun_moving)
+        || (frame + c as u64).is_multiple_of(2)
+}
+
+/// The light matrix of the cached far cascade this frame, and whether the cache takes it: a far
+/// cascade that draws (`draws`: left the margin, never drawn, or stale) uses the `fresh` matrix,
+/// made for the current sun and eye, and replaces the cache; one that does not keeps the `cached`.
+fn far_matrix(draws: bool, fresh: Mat4, cached: Option<Mat4>) -> (Mat4, bool) {
+    if draws {
+        (fresh, true)
+    } else {
+        (cached.unwrap_or(fresh), false)
+    }
+}
 
 /// What `Renderer::render_part` draws of a frame.
 #[derive(Clone, Copy)]
@@ -1368,6 +1420,11 @@ pub struct Renderer {
     /// The light matrix each cascade's map was last rendered with (middle
     /// cascades are refreshed every other frame); `None` until rendered.
     cascade_rendered: [Option<Mat4>; shadow::MAX_CASCADES],
+    /// Cascades whose map shows an earlier sun than `sun` (`set_sun` moved it, a picture asks for
+    /// a fresh one): still sampled with their own matrix until `cascade_refresh` redraws them.
+    cascade_stale: [bool; shadow::MAX_CASCADES],
+    /// `set_sun` moved the sun since the last frame: the sun is moving (a dragged time of day).
+    sun_moving: bool,
     frame: u64,
     /// Depth-tested and on-top segments; kept so either list can be
     /// replaced alone.
@@ -1743,6 +1800,8 @@ impl Renderer {
             highlight: None,
             far_cache: None,
             cascade_rendered: [None; shadow::MAX_CASCADES],
+            cascade_stale: [false; shadow::MAX_CASCADES],
+            sun_moving: false,
             frame: 0,
             overlay_cpu: (Vec::new(), Vec::new()),
             overlay: None,
@@ -1951,7 +2010,11 @@ impl Renderer {
             return; // keeps the cached cascade, the ambient and the environment
         }
         self.sun = sun;
-        self.invalidate_shadows();
+        // Not `invalidate_shadows`: the cascades keep their maps and matrices (each is sampled
+        // with its own, a picture of an earlier sun) and `cascade_refresh` redraws them over the
+        // next frames; the snow cover looks straight down and does not depend on the sun.
+        self.cascade_stale = [true; shadow::MAX_CASCADES];
+        self.sun_moving = true;
         self.sky = sky::Sky::new(self.sun.direction);
         self.update_ambient(false);
     }
@@ -3518,8 +3581,16 @@ impl Renderer {
     ///
     /// The volumetric clouds of that frame start over too, with more jitters (clouds.rs).
     pub fn finish_environment(&mut self) {
+        self.refresh_shadows();
         self.env.finish();
         self.cloud_picture = true;
+    }
+
+    /// The next `render` redraws every shadow cascade for the sun of the moment, instead of
+    /// spreading the redraws of a moving sun over frames (`cascade_refresh`): for a picture.
+    pub fn refresh_shadows(&mut self) {
+        self.cascade_stale = [true; shadow::MAX_CASCADES];
+        self.sun_moving = false;
     }
 
     /// Records every pass of a frame; returns the output view. Submit the
@@ -3562,40 +3633,48 @@ impl Renderer {
             Some(c) => c.proj == self.proj && c.eye.distance(self.eye) < cascades.margin,
             None => false,
         };
-        if reuse {
-            cascades.view_proj[last] = self.far_cache.as_ref().map_or(Mat4::IDENTITY, |c| c.matrix);
-        } else if cached && sun_lit {
-            self.far_cache = Some(FarCache {
-                eye: self.eye,
-                proj: self.proj,
-                matrix: cascades.view_proj[last],
-            });
-        }
         // The near cascade every frame; with three or more, the middle ones
         // on alternate frames (sampled with the matrix they were rendered
         // with; points they no longer cover fall through to the next one).
+        let sun_moving = std::mem::take(&mut self.sun_moving);
         let mut refresh = [false; shadow::MAX_CASCADES];
         for (c, r) in refresh.iter_mut().enumerate().take(cascades.count) {
             let far = cached && c == last;
-            *r = sun_lit
-                && if far {
-                    !reuse
-                } else {
-                    c == 0
-                        || cascades.count < 3
-                        || self.cascade_rendered[c].is_none()
-                        || (self.frame + c as u64).is_multiple_of(2)
-                };
-            if !*r
-                && !far
-                && let Some(m) = self.cascade_rendered[c]
-            {
+            *r = cascade_refresh(
+                c,
+                cascades.count,
+                far,
+                reuse,
+                self.cascade_rendered[c].is_some(),
+                self.frame,
+                sun_moving,
+                self.cascade_stale[c],
+                sun_lit,
+            );
+            if far {
+                // A far cascade that draws uses the fresh matrix (the current sun, centred on
+                // the current eye) and becomes the cache; one that does not keeps the cached.
+                let (m, replace) = far_matrix(
+                    *r,
+                    cascades.view_proj[c],
+                    self.far_cache.as_ref().map(|f| f.matrix),
+                );
+                cascades.view_proj[c] = m;
+                if replace {
+                    self.far_cache = Some(FarCache {
+                        eye: self.eye,
+                        proj: self.proj,
+                        matrix: m,
+                    });
+                }
+            } else if !*r && let Some(m) = self.cascade_rendered[c] {
                 cascades.view_proj[c] = m;
             }
         }
         for (c, r) in refresh.iter().enumerate() {
             if *r {
                 self.cascade_rendered[c] = Some(cascades.view_proj[c]);
+                self.cascade_stale[c] = false;
             }
         }
         // The snow cover map: straight down over a square round the eye, in whole texels. The
@@ -5042,6 +5121,7 @@ impl Renderer {
         self.far_cache = None;
         self.snow_drawn = None;
         self.cascade_rendered = [None; shadow::MAX_CASCADES];
+        self.cascade_stale = [false; shadow::MAX_CASCADES];
     }
 
     /// One globals block (common.wgsl `Globals`) without the SH, which the
@@ -7592,6 +7672,158 @@ mod tests {
         assert!(!r.set_sky_volume_light(&room[..11]), "another size");
         r.set_sky_volume(None);
         assert!(!r.set_sky_volume_light(&room[..1]), "volume removed");
+    }
+
+    /// Cascade `c` of `count` (the last one cached when `cached`), the camera inside the far
+    /// cascade's margin, everything drawn once and stale when `stale`.
+    fn refresh(
+        c: usize,
+        count: usize,
+        cached: bool,
+        frame: u64,
+        moving: bool,
+        stale: bool,
+    ) -> bool {
+        cascade_refresh(
+            c,
+            count,
+            cached && c == count - 1,
+            true,
+            true,
+            frame,
+            moving,
+            stale,
+            true,
+        )
+    }
+
+    #[test]
+    fn a_moving_sun_redraws_the_near_cascade_every_frame() {
+        for f in 1..=16 {
+            assert!(refresh(0, 4, true, f, true, true));
+        }
+    }
+
+    #[test]
+    fn a_moving_sun_redraws_the_far_cascade_once_in_four_frames() {
+        let n = (1..=16)
+            .filter(|&f| refresh(3, 4, true, f, true, true))
+            .count();
+        assert_eq!(n, 4);
+        // With two cascades the second is the far cached one: the same rule.
+        let n = (1..=16)
+            .filter(|&f| refresh(1, 2, true, f, true, true))
+            .count();
+        assert_eq!(n, 4);
+    }
+
+    #[test]
+    fn a_moving_sun_alternates_the_middle_cascades_instead_of_forcing_them_together() {
+        for c in [1, 2] {
+            let n = (1..=16)
+                .filter(|&f| refresh(c, 4, true, f, true, true))
+                .count();
+            assert_eq!(n, 8);
+        }
+        assert!(
+            (1..=16)
+                .all(|f| refresh(1, 4, true, f, true, true) != refresh(2, 4, true, f, true, true))
+        );
+    }
+
+    #[test]
+    fn a_sun_that_stopped_redraws_every_stale_cascade_at_once() {
+        for f in 1..=4 {
+            for c in 0..4 {
+                assert!(refresh(c, 4, true, f, false, true), "cascade {c} frame {f}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_settled_sun_keeps_the_cached_far_cascade_and_the_alternating_middle_ones() {
+        assert!((1..=16).all(|f| !refresh(3, 4, true, f, false, false)));
+        assert!(refresh(0, 4, true, 3, false, false));
+        let n = (1..=16)
+            .filter(|&f| refresh(1, 4, true, f, false, false))
+            .count();
+        assert_eq!(n, 8);
+        // Without a cached far cascade the last one draws every frame.
+        assert!((1..=16).all(|f| refresh(1, 2, false, f, false, false)));
+    }
+
+    #[test]
+    fn a_scene_change_redraws_everything() {
+        for c in 0..4 {
+            // Nothing drawn yet, no cached far cascade to reuse.
+            assert!(cascade_refresh(
+                c,
+                4,
+                c == 3,
+                false,
+                false,
+                5,
+                true,
+                false,
+                true
+            ));
+            assert!(cascade_refresh(
+                c,
+                4,
+                c == 3,
+                false,
+                false,
+                6,
+                false,
+                false,
+                true
+            ));
+        }
+        // The camera left the far cascade's margin.
+        assert!(cascade_refresh(
+            3, 4, true, false, true, 5, true, false, true
+        ));
+    }
+
+    #[test]
+    fn a_stale_far_refresh_inside_the_margin_takes_the_fresh_matrix_into_the_cache() {
+        let (old, fresh) = (
+            Mat4::from_scale(Vec3::splat(2.0)),
+            Mat4::from_scale(Vec3::splat(3.0)),
+        );
+        // Within the margin (reuse), stale, sun stopped: it draws, so the fresh matrix.
+        let draws = cascade_refresh(3, 4, true, true, true, 5, false, true, true);
+        assert!(draws);
+        assert_eq!(far_matrix(draws, fresh, Some(old)), (fresh, true));
+        // A frame that does not draw keeps the cached matrix and the cache.
+        let draws = cascade_refresh(3, 4, true, true, true, 5, true, true, true);
+        assert!(!draws);
+        assert_eq!(far_matrix(draws, fresh, Some(old)), (old, false));
+        // Nothing cached yet: the fresh one is the only choice.
+        assert_eq!(far_matrix(false, fresh, None), (fresh, false));
+    }
+
+    #[test]
+    fn no_sun_draws_no_shadows() {
+        for c in 0..4 {
+            for (moving, stale, rendered) in [
+                (true, true, true),
+                (false, true, false),
+                (false, false, false),
+            ] {
+                assert!(!cascade_refresh(
+                    c,
+                    4,
+                    c == 3,
+                    false,
+                    rendered,
+                    4,
+                    moving,
+                    stale,
+                    false
+                ));
+            }
+        }
     }
 
     /// The binary operators of `src` (comments stripped) that WGSL forbids mixing without
