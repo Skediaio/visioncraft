@@ -2248,6 +2248,40 @@ impl Renderer {
         self.rebind_globals();
     }
 
+    /// Changes only the light passed round the rooms of the volume `set_sky_volume` gave (`room`,
+    /// one per sample, as there), in place: no new textures, no new bind groups. False (nothing
+    /// changed) when the volume there has another number of samples, or there is none.
+    pub fn set_sky_volume_light(&mut self, room: &[[f32; 4]]) -> bool {
+        let size = self.room_volume.0.size();
+        let dims = [size.width / 2, size.height, size.depth_or_array_layers];
+        if self.sky_volume_box[7] == 0.0
+            || room.len() != dims.iter().map(|&d| d as usize).product::<usize>()
+        {
+            return false;
+        }
+        // The room half of each row (`room_volume_texture`): texels 0 to dims[0].
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.room_volume.0,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &pack_room_light(room),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(8 * dims[0]),
+                rows_per_image: Some(dims[1]),
+            },
+            wgpu::Extent3d {
+                width: dims[0],
+                height: dims[1],
+                depth_or_array_layers: dims[2],
+            },
+        );
+        true
+    }
+
     /// The cloud layer over the analytic skies (an HDRI brings its own). It shows in the sky,
     /// in reflections and in the ambient light, and takes its share of the sun.
     /// Snow over the up-facing surfaces, 0 (none) to 1, except where something lies over them.
@@ -5905,14 +5939,7 @@ fn room_volume_texture(
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
-    let row = dims[0] as usize;
-    let bytes: Vec<u8> = room
-        .chunks(row)
-        .zip(sky.chunks(row))
-        .flat_map(|(r, s)| r.iter().chain(s))
-        .flat_map(|s| s.map(|v| hdri::f16_bits(v.clamp(-1.0, 60000.0))))
-        .flat_map(u16::to_le_bytes)
-        .collect();
+    let bytes = pack_room_volume(dims[0] as usize, room, sky);
     queue.write_texture(
         wgpu::TexelCopyTextureInfo {
             texture: &texture,
@@ -5930,6 +5957,30 @@ fn room_volume_texture(
     );
     let view = texture.create_view(&Default::default());
     (texture, view)
+}
+
+/// The room tile of a sky volume's texels (`room_volume_texture`): per sample rgba as f16, little
+/// endian, clamped as there.
+fn pack_room_light(room: &[[f32; 4]]) -> Vec<u8> {
+    room.iter()
+        .flat_map(texel_bits)
+        .flat_map(u16::to_le_bytes)
+        .collect()
+}
+
+/// One rgba texel as f16 bits, clamped to what the texture's format and the shader take.
+fn texel_bits(s: &[f32; 4]) -> [u16; 4] {
+    s.map(|v| hdri::f16_bits(v.clamp(-1.0, 60000.0)))
+}
+
+/// A whole sky volume's texels, `row` samples wide: per row the room tile, then the sky tile.
+fn pack_room_volume(row: usize, room: &[[f32; 4]], sky: &[[f32; 4]]) -> Vec<u8> {
+    room.chunks(row)
+        .zip(sky.chunks(row))
+        .flat_map(|(r, s)| r.iter().chain(s))
+        .flat_map(texel_bits)
+        .flat_map(u16::to_le_bytes)
+        .collect()
 }
 
 fn sky_bind_group(
@@ -7492,6 +7543,56 @@ pub async fn headless_device() -> Result<(wgpu::Device, wgpu::Queue), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The in-place room light sends the bytes the full upload puts in the room tile: per row of
+    /// the 2*dims[0]-wide texture, the room tile first and the sky tile after.
+    #[test]
+    fn in_place_room_light_equals_the_room_tile_of_the_full_packing() {
+        let dims = [3usize, 2, 2];
+        let n: usize = dims.iter().product();
+        // Values over the clamp's ends and between, so the clamp and the f16 rounding both count.
+        let room: Vec<[f32; 4]> = (0..n)
+            .map(|i| {
+                let f = i as f32;
+                [f * 0.37 - 1.5, f * 5000.1, 0.1 + f / 7.0, 70000.0 - f]
+            })
+            .collect();
+        let sky: Vec<[f32; 4]> = (0..n).map(|i| [i as f32 / 3.0, 0.5, -0.5, 1.0]).collect();
+        let full = pack_room_volume(dims[0], &room, &sky);
+        let in_place = pack_room_light(&room);
+        assert_eq!(in_place.len(), n * 8);
+        let (tile, row) = (dims[0] * 8, dims[0] * 16);
+        for r in 0..dims[1] * dims[2] {
+            assert_eq!(
+                &full[r * row..r * row + tile],
+                &in_place[r * tile..(r + 1) * tile],
+                "row {r}"
+            );
+        }
+    }
+
+    /// `set_sky_volume_light` needs the volume it changes the light of.
+    #[test]
+    fn set_sky_volume_light_needs_a_volume_of_the_same_size() {
+        let (device, queue) = pollster::block_on(headless_device()).expect("device");
+        let mut r = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let room = vec![[1.0, 2.0, 3.0, 4.0]; 12];
+        assert!(!r.set_sky_volume_light(&room), "no volume yet");
+        let sky = vec![[1.0, 0.0, 0.0, 0.0]; 12];
+        let solid = vec![0u8; 12];
+        r.set_sky_volume(Some((
+            [0.0; 3],
+            1.0,
+            [3, 2, 2],
+            &sky,
+            &room,
+            (&solid, [3, 2, 2]),
+        )));
+        assert!(r.set_sky_volume_light(&room));
+        assert!(!r.set_sky_volume_light(&room[..11]), "another size");
+        r.set_sky_volume(None);
+        assert!(!r.set_sky_volume_light(&room[..1]), "volume removed");
+    }
 
     /// The binary operators of `src` (comments stripped) that WGSL forbids mixing without
     /// parentheses, as (line, text) pairs where a bitwise one (`&`, `|`, `^`) shares a level with

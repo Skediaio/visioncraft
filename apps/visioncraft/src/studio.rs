@@ -209,6 +209,8 @@ pub struct Studio {
     /// The sun's light passed round the rooms per unit of its illuminance (empty: to be made
     /// again), the direction it was made for, and the sun's illuminance (lux) it was sent with.
     sun_bounce: Vec<f32>,
+    /// The volume's `SkyVolume::room_texels` (empty: to be made again).
+    room_texels: Vec<f32>,
     sun_bounce_dir: Vec3,
     sun_lux: Vec3,
     /// The room shift (EV, `meter_shift`) the eye has adapted to and when (`clock`); `None`:
@@ -463,6 +465,7 @@ impl Studio {
             wake: Default::default(),
             lamp_bounce: Vec::new(),
             sun_bounce: Vec::new(),
+            room_texels: Vec::new(),
             sun_bounce_dir: Vec3::ZERO,
             sun_lux: Vec3::ZERO,
             adapted_ev: None,
@@ -1128,6 +1131,7 @@ impl Studio {
             self.sky_task = None;
             self.lamp_bounce.clear();
             self.sun_bounce.clear();
+            self.room_texels.clear();
             self.sky_volume = made.map(|(v, bounce)| {
                 if same_sun {
                     self.sun_bounce = bounce;
@@ -1185,25 +1189,48 @@ impl Studio {
     /// passed round its rooms (`SkyVolume::lamp_bounce`, `SkyVolume::sun_bounce`), each made
     /// again when emptied.
     fn upload_sky_volume(&mut self) {
-        crate::load_stats::time("sky volume light (main thread)", || {
-            self.upload_sky_volume_now()
-        });
-    }
-
-    fn upload_sky_volume_now(&mut self) {
-        let Some(v) = &self.sky_volume else {
+        if self.sky_volume.is_none() {
             self.lamp_bounce.clear();
             self.sun_bounce.clear();
             self.renderer.set_sky_volume(None);
             return;
+        }
+        self.make_bounces();
+        self.send_sky_volume();
+    }
+
+    /// Sends the light round the rooms again for the volume the renderer has (the lamps or the
+    /// sun's light changed): in place, not the whole volume, which made new textures each time.
+    /// The whole volume when the renderer has none of this size.
+    fn send_room_light(&mut self) {
+        crate::load_stats::time("sky volume light (main thread)", || {
+            self.send_room_light_now()
+        });
+    }
+
+    fn send_room_light_now(&mut self) {
+        if self.sky_volume.is_none() {
+            return self.upload_sky_volume();
+        }
+        self.make_bounces();
+        let Some(room) = self.room_light() else {
+            return;
         };
+        if !self.renderer.set_sky_volume_light(&room) {
+            self.send_sky_volume();
+        }
+    }
+
+    /// Makes the sun's and the lamps' bounce through the rooms where emptied.
+    fn make_bounces(&mut self) {
+        let Some(v) = &self.sky_volume else { return };
         if self.sun_bounce.len() != v.samples.len() {
             self.sun_bounce = crate::load_stats::time("sun bounce (main thread)", || {
                 v.sun_bounce(self.sun_bounce_dir.to_array())
             });
         }
         if self.lamp_bounce.len() == v.samples.len() {
-            return self.send_sky_volume();
+            return;
         }
         let lamps: Vec<visioncraft_core::Lamp> = self
             .last_lights
@@ -1222,7 +1249,29 @@ impl Studio {
             .collect();
         self.lamp_bounce =
             crate::load_stats::time("lamp bounce (main thread)", || v.lamp_bounce(&lamps));
-        self.send_sky_volume();
+    }
+
+    /// The light passed round the volume's rooms per sample (`Renderer::set_sky_volume`): the
+    /// lamps' and the sun's at its illuminance now, and the sky's share; `None` without a volume.
+    /// Needs both bounces (`make_bounces`).
+    fn room_light(&mut self) -> Option<Vec<[f32; 4]>> {
+        let v = self.sky_volume.as_ref()?;
+        if self.room_texels.len() != v.samples.len() {
+            self.room_texels = v.room_texels();
+        }
+        let sun = self.sun_lux.to_array();
+        let room = (0..v.samples.len())
+            .map(|i| {
+                let (l, s) = (self.lamp_bounce[i], self.sun_bounce[i]);
+                [
+                    l[0] + s * sun[0],
+                    l[1] + s * sun[1],
+                    l[2] + s * sun[2],
+                    self.room_texels[i],
+                ]
+            })
+            .collect();
+        Some(room)
     }
 
     /// The volume to the renderer, the room light being the lamps' and the sun's (lux) and the
@@ -1234,21 +1283,11 @@ impl Studio {
     }
 
     fn send_sky_volume_now(&mut self) {
+        let Some(room) = self.room_light() else {
+            return;
+        };
         let Some(v) = &self.sky_volume else { return };
-        let sun = self.sun_lux.to_array();
         let (occupancy, voxels) = v.occupancy();
-        let texels = v.room_texels();
-        let room: Vec<[f32; 4]> = (0..v.samples.len())
-            .map(|i| {
-                let (l, s) = (self.lamp_bounce[i], self.sun_bounce[i]);
-                [
-                    l[0] + s * sun[0],
-                    l[1] + s * sun[1],
-                    l[2] + s * sun[2],
-                    texels[i],
-                ]
-            })
-            .collect();
         self.renderer.set_sky_volume(Some((
             v.origin,
             v.cell,
@@ -1644,7 +1683,7 @@ impl Studio {
             self.dropped_lights = self.renderer.set_lights(&lights);
             self.last_lights = lights;
             self.lamp_bounce.clear();
-            self.upload_sky_volume();
+            self.send_room_light();
         }
         // The sun's light let into the rooms: made again when the sun has moved a degree, sent
         // again when its illuminance changed by a twentieth.
@@ -1659,7 +1698,7 @@ impl Studio {
                 self.sun_bounce.clear();
             }
             self.sun_lux = lux;
-            self.upload_sky_volume();
+            self.send_room_light();
         }
         let people: Vec<glam::Mat4> = if self.show_people {
             self.people
