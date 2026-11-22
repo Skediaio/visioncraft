@@ -45,8 +45,23 @@ const PICTURE_SUBSAMPLES: f32 = 8.0;
 /// The uniform block's size (bytes; clouds.wgsl `CloudFrame`).
 const UNIFORM_SIZE: u64 = 112;
 /// The sun may move this far between frames (cosine, about a degree) before the history is
-/// started over: the clouds' light changes with it.
+/// told its light changed: the clouds' light moves with it.
 const SUN_COS: f32 = 0.99985;
+/// A sun that turned further than this in one frame (cosine, about 5 degrees: a jump of the
+/// time of day, not a drag) starts the history over. Below it the history stays: the sun does
+/// not change where a cloud texel reprojects (that is the view's), only how it is lit, and a
+/// temporal cloud renderer follows a lighting change by weighting the new frame more, not by
+/// dropping the history (Schneider, "The Real-Time Volumetric Cloudscapes of Horizon Zero
+/// Dawn", SIGGRAPH 2015; Hillaire, "Physically Based Sky, Atmosphere and Cloud Rendering in
+/// Frostbite", 2016).
+const SUN_JUMP_COS: f32 = 0.996;
+/// The weight of the new frame while the sun moves more than `SUN_COS` per frame (and less than
+/// a jump). The old light's share left after n frames is `(1 - w)^n`: at 0.45 it is 0.55^4 =
+/// 0.0915 after four frames, below 10 %. It applies to every texel, the own sample of a block
+/// and the interpolated ones alike (clouds.wgsl `fs_resolve` mixes them with `params[1]` and
+/// `params[10]`), so with the checkerboard march (scale 2), where a texel is marched one frame
+/// in four, all of them still converge at this rate.
+const BLEND_RELIGHT: f32 = 0.45;
 /// The view may turn this far between frames (cosine) before the history is started over.
 const TURN_COS: f32 = 0.97;
 
@@ -55,6 +70,21 @@ pub(crate) const CLOUD_PERIOD: f64 = 40960.0;
 
 const CLOUDS_WGSL: &str = include_str!("clouds.wgsl");
 const NOISE_WGSL: &str = include_str!("cloud_noise.wgsl");
+
+/// Whether the history starts over, and the weight of the new frame (own samples) in it:
+/// `sun_dot` and `view_dot` are the cosines of the sun's and the view axis' turn since the last
+/// frame, `forced` a reason to start over that is not a turn (a weather jump, a picture, a
+/// flash, a new size), `normal` the weight when nothing changed. A view turn or a sun jump
+/// starts over; a sun that moved more than `SUN_COS` keeps the history and raises the weight.
+fn history_blend(sun_dot: f32, view_dot: f32, forced: bool, normal: f32) -> (bool, f32) {
+    if forced || view_dot < TURN_COS || sun_dot < SUN_JUMP_COS {
+        (true, normal)
+    } else if sun_dot < SUN_COS {
+        (false, BLEND_RELIGHT.max(normal))
+    } else {
+        (false, normal)
+    }
+}
 
 /// What one frame's march needs.
 pub(crate) struct Draw<'a> {
@@ -266,11 +296,14 @@ impl CloudVolume {
         rotation.w_axis = Vec4::W;
         let view_proj = d.proj * rotation;
         let axis = -Vec3::new(d.view.x_axis.z, d.view.y_axis.z, d.view.z_axis.z);
+        let normal = if scale == 2 { BLEND_OWN } else { BLEND_SAME };
+        let mut blend = normal;
         let prev = match self.prev {
-            Some((m, a, s))
-                if self.showing.is_some() && a.dot(axis) >= TURN_COS && s.dot(d.sun) >= SUN_COS =>
-            {
-                m
+            Some((m, a, s)) if self.showing.is_some() => {
+                let (r, b) = history_blend(s.dot(d.sun), a.dot(axis), reset, normal);
+                blend = b;
+                reset |= r;
+                if r { view_proj } else { m }
             }
             _ => {
                 reset = true;
@@ -296,7 +329,7 @@ impl CloudVolume {
             } else {
                 (self.frame % 4096) as f32
             },
-            if scale == 2 { BLEND_OWN } else { BLEND_SAME },
+            blend,
             if d.picture { PICTURE_SUBSAMPLES } else { 1.0 },
             d.steps.max(1) as f32,
             d.light_steps as f32,
@@ -305,7 +338,8 @@ impl CloudVolume {
             march_scale as f32,
             offset.0,
             offset.1,
-            BLEND_NEAR,
+            // The interpolated texels follow a relight at the same rate.
+            if blend > normal { blend } else { BLEND_NEAR },
             CLAMP_SIGMAS,
         ];
         for f in params {
@@ -745,6 +779,52 @@ mod tests {
     fn cloud_shaders_validate() {
         validate(&march_source());
         validate(&noise_source());
+    }
+
+    fn turned(degrees: f32) -> f32 {
+        degrees.to_radians().cos()
+    }
+
+    #[test]
+    fn a_tiny_sun_move_keeps_the_normal_blend() {
+        let (reset, blend) = history_blend(turned(0.2), 1.0, false, BLEND_SAME);
+        assert!(!reset);
+        assert_eq!(blend, BLEND_SAME);
+    }
+
+    #[test]
+    fn a_two_degree_sun_move_relights_without_a_reset() {
+        for normal in [BLEND_SAME, BLEND_OWN] {
+            let (reset, blend) = history_blend(turned(2.0), 1.0, false, normal);
+            assert!(!reset);
+            assert_eq!(blend, BLEND_RELIGHT);
+        }
+        // Four frames of it leave less than a tenth of the old light.
+        assert!((1.0 - BLEND_RELIGHT).powi(4) < 0.1);
+    }
+
+    #[test]
+    fn a_ten_degree_sun_jump_resets() {
+        assert!(history_blend(turned(10.0), 1.0, false, BLEND_SAME).0);
+    }
+
+    #[test]
+    fn a_picture_a_view_turn_and_other_reasons_reset() {
+        assert!(history_blend(1.0, 1.0, true, BLEND_SAME).0);
+        assert!(history_blend(1.0, turned(20.0), false, BLEND_SAME).0);
+    }
+
+    #[test]
+    fn a_drag_of_one_and_a_half_degrees_a_frame_never_resets() {
+        let mut sun = 0.0f32;
+        for _ in 0..100 {
+            let next = sun + 1.5;
+            let (reset, blend) =
+                history_blend((next - sun).to_radians().cos(), 1.0, false, BLEND_OWN);
+            assert!(!reset);
+            assert_eq!(blend, BLEND_RELIGHT);
+            sun = next;
+        }
     }
 
     #[test]
