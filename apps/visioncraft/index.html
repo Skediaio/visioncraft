@@ -9,6 +9,8 @@
   <link data-trunk rel="copy-file" href="initializer.js" />
   <!-- WebMCP (experimental): lets the browser's own AI agent use the app's tools; off until the person ticks the box or opens ?webmcp=1. -->
   <link data-trunk rel="copy-file" href="webmcp.js" />
+  <!-- Debug capture: a button with ?debug=1 (or vcCapture() in the console) records the view and the app state. -->
+  <link data-trunk rel="copy-file" href="debug-capture.js" />
   <!-- Origin trial for WebMCP (Chrome): register this site's origin at https://developer.chrome.com/origintrials/ and
        paste the token it gives you into the tag below, then take it out of the comment. No token is committed on
        purpose; without one, only a Chrome with the WebMCP flag turned on offers WebMCP (docs/webmcp.md).
@@ -108,5 +110,6 @@
     };
   </script>
   <script src="webmcp.js"></script>
+  <script src="debug-capture.js"></script>
 </body>
 </html>
