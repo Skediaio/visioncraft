@@ -1185,6 +1185,12 @@ impl Studio {
     /// passed round its rooms (`SkyVolume::lamp_bounce`, `SkyVolume::sun_bounce`), each made
     /// again when emptied.
     fn upload_sky_volume(&mut self) {
+        crate::load_stats::time("sky volume light (main thread)", || {
+            self.upload_sky_volume_now()
+        });
+    }
+
+    fn upload_sky_volume_now(&mut self) {
         let Some(v) = &self.sky_volume else {
             self.lamp_bounce.clear();
             self.sun_bounce.clear();
@@ -1192,7 +1198,9 @@ impl Studio {
             return;
         };
         if self.sun_bounce.len() != v.samples.len() {
-            self.sun_bounce = v.sun_bounce(self.sun_bounce_dir.to_array());
+            self.sun_bounce = crate::load_stats::time("sun bounce (main thread)", || {
+                v.sun_bounce(self.sun_bounce_dir.to_array())
+            });
         }
         if self.lamp_bounce.len() == v.samples.len() {
             return self.send_sky_volume();
@@ -1212,13 +1220,20 @@ impl Studio {
                 },
             })
             .collect();
-        self.lamp_bounce = v.lamp_bounce(&lamps);
+        self.lamp_bounce =
+            crate::load_stats::time("lamp bounce (main thread)", || v.lamp_bounce(&lamps));
         self.send_sky_volume();
     }
 
     /// The volume to the renderer, the room light being the lamps' and the sun's (lux) and the
     /// sky's share (`upload_sky_volume`).
     fn send_sky_volume(&mut self) {
+        crate::load_stats::time("sky volume send (main thread)", || {
+            self.send_sky_volume_now()
+        });
+    }
+
+    fn send_sky_volume_now(&mut self) {
         let Some(v) = &self.sky_volume else { return };
         let sun = self.sun_lux.to_array();
         let (occupancy, voxels) = v.occupancy();
@@ -1835,8 +1850,10 @@ impl Studio {
         self.poll_example_imports();
         self.scene
             .sync_terrain_layers(&mut self.renderer, self.session.project());
-        self.sync_sun_map();
-        self.sync_sky_visibility();
+        crate::load_stats::time("sun map sync (main thread)", || self.sync_sun_map());
+        crate::load_stats::time("sky visibility sync (main thread)", || {
+            self.sync_sky_visibility()
+        });
         self.sync_underlays();
         let (view, proj, eye) = self.camera.matrices(self.aspect());
         self.renderer.set_camera(view, proj, eye);
@@ -1844,7 +1861,7 @@ impl Studio {
         let moon = self.moonlight();
         self.renderer.set_sun(&moon.map_or(sun, |m| m.0));
         self.renderer.set_sky_scale(moon.map_or(1.0, |m| m.1));
-        self.apply_view(elevation);
+        crate::load_stats::time("apply view (main thread)", || self.apply_view(elevation));
         crate::sky_panel::apply(self);
         if elevation < 0.0
             && !self.lights_on()

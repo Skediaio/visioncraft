@@ -10,7 +10,7 @@
 //! table (`report`), and in the browser every milestone is also a console line (`[load] ...`).
 //! docs/performance.md explains how to read it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::Mutex;
 
 /// Timed events kept per load (the longest win when there are more).
@@ -19,7 +19,80 @@ const MAX_EVENTS: usize = 400;
 /// Events shorter than this are only summed into their stage, not kept on the timeline.
 const EVENT_MIN_MS: f64 = 2.0;
 
+/// A frame longer than this (1.5 frames at 60 Hz) is a hitch and is logged with its stages.
+pub const HITCH_MS: f64 = 25.0;
+
+/// Hitches kept (the latest win).
+const MAX_HITCHES: usize = 64;
+
+/// Stages shorter than this are left out of a hitch record.
+const HITCH_STAGE_MIN_MS: f64 = 0.5;
+
+/// Stages noted per frame at most (a bound on the buffer, never reached in practice).
+const MAX_FRAME_STAGES: usize = 128;
+
+/// One slow frame: when, how long, and the main-thread stages of that frame.
+#[derive(Clone, Debug, PartialEq)]
+struct Hitch {
+    at_s: f64,
+    ms: f64,
+    stages: Vec<(String, f64)>,
+}
+
+/// The stages of the frame being drawn and the log of the slow frames before it.
+struct Hitches {
+    /// Stages (`time`, main thread) since the last frame ended; cleared, not freed, per frame.
+    current: Vec<(String, f64)>,
+    log: VecDeque<Hitch>,
+    /// Frames over `HITCH_MS` since the log was cleared (the log keeps only the last 64).
+    over: u32,
+}
+
+impl Hitches {
+    const fn new() -> Self {
+        Self {
+            current: Vec::new(),
+            log: VecDeque::new(),
+            over: 0,
+        }
+    }
+
+    fn stage(&mut self, label: &str, ms: f64) {
+        if ms >= HITCH_STAGE_MIN_MS && self.current.len() < MAX_FRAME_STAGES {
+            self.current.push((label.to_string(), ms));
+        }
+    }
+
+    /// A frame of `ms` ended at `at_s`: logs it when slow. Clears the frame's stages.
+    fn end_frame(&mut self, at_s: f64, ms: f64) {
+        if ms > HITCH_MS {
+            self.over += 1;
+            if self.log.len() >= MAX_HITCHES {
+                self.log.pop_front();
+            }
+            self.log.push_back(Hitch {
+                at_s,
+                ms,
+                stages: self.current.clone(),
+            });
+        }
+        self.current.clear();
+    }
+
+    fn clear(&mut self) {
+        self.current.clear();
+        self.log.clear();
+        self.over = 0;
+    }
+}
+
+thread_local! {
+    /// Set on the thread that draws frames (`frame`): only its `time` calls are frame stages.
+    static FRAME_THREAD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 struct Stats {
+    hitches: Hitches,
     /// stage -> (count, total ms, longest ms)
     stages: BTreeMap<String, (u32, f64, f64)>,
     /// (milestone, ms since the reset), first time each was reached
@@ -37,6 +110,7 @@ struct Stats {
 }
 
 static STATS: Mutex<Stats> = Mutex::new(Stats {
+    hitches: Hitches::new(),
     stages: BTreeMap::new(),
     marks: Vec::new(),
     events: Vec::new(),
@@ -90,8 +164,21 @@ pub fn add(stage: &str, ms: f64) {
 pub fn time<T>(stage: &str, f: impl FnOnce() -> T) -> T {
     let t = now_ms();
     let v = f();
-    add(stage, now_ms() - t);
+    let ms = now_ms() - t;
+    add(stage, ms);
+    if ms >= HITCH_STAGE_MIN_MS && FRAME_THREAD.with(|m| m.get()) {
+        with(|s| s.hitches.stage(stage, ms));
+    }
     v
+}
+
+/// Clears the hitch log, its count and the frame counters, so a measurement starts clean
+/// (`ui.load` with `reset`).
+pub fn reset_hitches() {
+    with(|s| {
+        s.hitches.clear();
+        s.frames = (0, 0, 0.0);
+    });
 }
 
 /// Starts a new load (`what`: the project or example): stages, milestones, events, frames and
@@ -148,7 +235,10 @@ pub fn startup(name: &str) {
 
 /// A drawn frame of `ms` (the time since the last one).
 pub fn frame(ms: f64) {
+    FRAME_THREAD.with(|m| m.set(true));
+    let at_s = now_ms() / 1000.0;
     with(|s| {
+        s.hitches.end_frame(at_s, ms);
         s.frames.0 += 1;
         if ms > 50.0 {
             s.frames.1 += 1;
@@ -253,7 +343,16 @@ pub fn json() -> serde_json::Value {
                 "what": s.what,
                 "since_ms": ms(now - s.start_ms),
                 "milestones": s.marks.iter().map(|(m, at)| serde_json::json!({"name": m, "at_ms": ms(*at)})).collect::<Vec<_>>(),
-                "frames": {"count": s.frames.0, "over_50ms": s.frames.1, "longest_ms": ms(s.frames.2)},
+                "frames": {"count": s.frames.0, "over_25ms": s.hitches.over, "over_50ms": s.frames.1, "longest_ms": ms(s.frames.2)},
+                "hitches": s.hitches.log.iter().map(|h| serde_json::json!({
+                    "at_s": (h.at_s * 100.0).round() / 100.0,
+                    "ms": ms(h.ms),
+                    "stages": h.stages.iter().fold(serde_json::Map::new(), |mut m, (k, v)| {
+                        let sum = m.get(k).and_then(|x| x.as_f64()).unwrap_or(0.0) + ms(*v);
+                        m.insert(k.clone(), serde_json::json!(ms(sum)));
+                        m
+                    }),
+                })).collect::<Vec<_>>(),
                 "stages": rows.iter().map(|(k, (n, total, max))| serde_json::json!({
                     "name": k.trim_start_matches('~'),
                     "breakdown": k.starts_with('~'),
@@ -269,6 +368,62 @@ pub fn json() -> serde_json::Value {
 
 #[cfg(test)]
 mod tests {
+    use super::{HITCH_MS, Hitches};
+
+    #[test]
+    fn a_fast_frame_records_nothing() {
+        let mut h = Hitches::new();
+        h.stage("a", 3.0);
+        h.end_frame(1.0, HITCH_MS);
+        assert!(h.log.is_empty());
+        assert_eq!(h.over, 0);
+        assert!(h.current.is_empty());
+    }
+
+    #[test]
+    fn a_slow_frame_records_its_stages_of_half_a_ms_or_more() {
+        let mut h = Hitches::new();
+        h.stage("sun bounce", 12.5);
+        h.stage("tiny", 0.2);
+        h.stage("apply view", 14.0);
+        h.end_frame(2.5, 30.0);
+        assert_eq!(h.over, 1);
+        let r = &h.log[0];
+        assert_eq!((r.at_s, r.ms), (2.5, 30.0));
+        assert_eq!(
+            r.stages,
+            vec![
+                ("sun bounce".to_string(), 12.5),
+                ("apply view".to_string(), 14.0)
+            ]
+        );
+        // The next frame starts empty.
+        h.end_frame(3.0, 40.0);
+        assert!(h.log[1].stages.is_empty());
+    }
+
+    #[test]
+    fn the_log_keeps_the_last_64() {
+        let mut h = Hitches::new();
+        for i in 0..100 {
+            h.end_frame(i as f64, 30.0);
+        }
+        assert_eq!(h.log.len(), 64);
+        assert_eq!(h.log[0].at_s, 36.0);
+        assert_eq!(h.log[63].at_s, 99.0);
+        assert_eq!(h.over, 100);
+    }
+
+    #[test]
+    fn clear_empties_the_log_and_the_count() {
+        let mut h = Hitches::new();
+        h.stage("a", 5.0);
+        h.end_frame(1.0, 30.0);
+        h.clear();
+        assert!(h.log.is_empty() && h.current.is_empty());
+        assert_eq!(h.over, 0);
+    }
+
     #[test]
     fn stages_add_up_and_marks_keep_the_first_time() {
         super::add("test stage x", 10.0);

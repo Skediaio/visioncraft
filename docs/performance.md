@@ -20,11 +20,25 @@ the costliest stages of each example into its `report.json` (`timeline`).
 | `load.what` | What was opened last (`example coast`, `open garden.visioncraft`, `agent: ...`). Opening a project, an example or `file.new` starts a new load. |
 | `load.milestones` | ms since that open: `first frame`, `first frame on screen`, `first plant generated`, `models imported`, `plants done`, `library idle`, `everything loaded`. |
 | `load.stages` | Per stage: count, total ms and the longest single step. `breakdown: true` rows detail others and are not part of the total. |
-| `load.frames` | Frames drawn since the open, how many took over 50 ms, and the longest. |
+| `load.frames` | Frames drawn since the open, how many took over 25 ms (`over_25ms`, since the last hitch reset) and over 50 ms, and the longest. |
+| `load.hitches` | The last 64 frames that took over 25 ms (1.5 frames at 60 Hz): `at_s` (seconds since the program started), `ms`, and `stages`, the main-thread stages timed that frame (`load_stats::time`) that took 0.5 ms or more, as name to ms. A hitch names its cause. Not cleared by opening a project. |
 | `load.timeline` | Up to 400 steps of 2 ms or more (the longest win): name, start and duration in ms since the open. |
 | `pending` | What is still on its way (plants, models, library, sky volume, sky visibility). |
 | `textures` | The texture tier, the store's cap, the content texture memory it is compared with, whether it is over the cap, and what the library holds. |
 | `lods` | Per placed catalogue asset, nearest first: the nearest instance's distance, the level of detail that distance needs, the levels resident, the level shown, and in words why it is not the one needed. |
+
+## Measuring hitches
+
+`ui.load` with `{"reset": true}` returns the reply and then clears `hitches`, `over_25ms` and the
+frame counters, so the next read covers only what you did. In the browser, `window.__vcFrame`
+also carries the worst frame of each 60 for `prepare_max_ms`, `render_max_ms` and `ui_max_ms`,
+next to the averages.
+
+Recipe, a time-of-day drag:
+
+1. `await vcRpc("ui.load", {reset: true})` to start clean.
+2. Drag the time-of-day slider for 5 s.
+3. `(await vcRpc("ui.load")).load.hitches`: each slow frame with the stages that caused it.
 
 ## How to read it
 

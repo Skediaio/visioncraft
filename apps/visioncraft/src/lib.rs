@@ -203,6 +203,8 @@ pub struct App {
     /// CPU milliseconds of the frame's stages (prepare, render, the whole `ui`) and frames,
     /// summed for the browser measurements (`window.__vcFrame`, `publish_frame_cpu`).
     frame_cpu: [f64; 4],
+    /// The worst prepare, render and ui time of the same 60 frames.
+    frame_cpu_max: [f64; 3],
     last_title: String,
     settle: u8,
     /// A project restored at start is still settling (its undo history is cleared until then).
@@ -310,6 +312,7 @@ impl App {
             last_time: 0.0,
             fps: 0.0,
             frame_cpu: [0.0; 4],
+            frame_cpu_max: [0.0; 3],
             last_title: String::new(),
             settle: 0,
             settling_restore: was_restored,
@@ -2014,7 +2017,9 @@ impl eframe::App for App {
             self.studio.track_load();
         }
         let mut encoder = self.device.create_command_encoder(&Default::default());
-        let view = self.studio.renderer.render(&mut encoder);
+        let view = load_stats::time("render encode (main thread)", || {
+            self.studio.renderer.render(&mut encoder)
+        });
         self.queue.submit([encoder.finish()]);
         load_stats::first_frame_submitted(&self.queue);
         let render_ms = cpu_ms() - t - prepare_ms;
@@ -2439,6 +2444,13 @@ impl App {
         for (sum, v) in f.iter_mut().zip([prepare_ms, render_ms, ui_ms, 1.0]) {
             *sum += v;
         }
+        for (max, v) in self
+            .frame_cpu_max
+            .iter_mut()
+            .zip([prepare_ms, render_ms, ui_ms])
+        {
+            *max = max.max(v);
+        }
         if f[3] < 60.0 {
             return;
         }
@@ -2460,10 +2472,13 @@ impl App {
             .map(|(k, ms)| format!("\"{k}\":{ms:.2}"))
             .collect();
         let json = format!(
-            "{{\"prepare_ms\":{:.2},\"render_ms\":{:.2},\"ui_ms\":{:.2},\"draws\":{},\"pass_draws\":{{{}}},\"instances\":{},\"triangles\":{},\"pass_triangles\":{{{}}},\"gpu_ms\":{},\"gpu_passes\":{{{}}}}}",
+            "{{\"prepare_ms\":{:.2},\"render_ms\":{:.2},\"ui_ms\":{:.2},\"prepare_max_ms\":{:.2},\"render_max_ms\":{:.2},\"ui_max_ms\":{:.2},\"draws\":{},\"pass_draws\":{{{}}},\"instances\":{},\"triangles\":{},\"pass_triangles\":{{{}}},\"gpu_ms\":{},\"gpu_passes\":{{{}}}}}",
             f[0] / n,
             f[1] / n,
             f[2] / n,
+            self.frame_cpu_max[0],
+            self.frame_cpu_max[1],
+            self.frame_cpu_max[2],
             st.draw_calls,
             passes.join(","),
             st.instances,
@@ -2473,6 +2488,7 @@ impl App {
             gpu.join(",")
         );
         *f = [0.0; 4];
+        self.frame_cpu_max = [0.0; 3];
         #[cfg(target_arch = "wasm32")]
         let _ = js_sys::Reflect::set(&js_sys::global(), &"__vcFrame".into(), &json.into());
         #[cfg(not(target_arch = "wasm32"))]

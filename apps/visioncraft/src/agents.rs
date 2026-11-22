@@ -319,8 +319,8 @@ const UI_METHODS: &[Method] = &[
     },
     Method {
         name: "ui.load",
-        params: "{}",
-        summary: "The load timeline (docs/performance.md): `startup` (the program's start: renderer and pipelines, calibration, first frame on screen, ms since the program started), `load` (since the last project or example was opened: `milestones` such as first frame, first frame on screen, plants done, library idle, everything loaded; `stages` by total time with count and longest step, `breakdown` rows detail others; `frames` drawn, over 50 ms and the longest; `timeline`: the longer steps with start and duration, ms since the load began), `pending` (what is still on its way), `textures` (the store's cap and held bytes) and `lods`: per placed catalogue asset, nearest first, the level of detail its nearest instance needs, the levels resident, the level shown and why.",
+        params: r#"{"reset": boolean}"#,
+        summary: "The load timeline (docs/performance.md): `startup` (the program's start: renderer and pipelines, calibration, first frame on screen, ms since the program started), `load` (since the last project or example was opened: `milestones` such as first frame, first frame on screen, plants done, library idle, everything loaded; `stages` by total time with count and longest step, `breakdown` rows detail others; `frames` drawn, over 25 ms, over 50 ms and the longest; `hitches`: the last 64 frames over 25 ms, each {at_s (seconds since the program started), ms, stages: {main-thread stage: ms, for stages of 0.5 ms or more that frame}}; `reset: true` returns this reply and then clears the hitches and the frame counters so a measurement starts clean; `timeline`: the longer steps with start and duration, ms since the load began), `pending` (what is still on its way), `textures` (the store's cap and held bytes) and `lods`: per placed catalogue asset, nearest first, the level of detail its nearest instance needs, the levels resident, the level shown and why.",
     },
     Method {
         name: "ui.set",
@@ -510,6 +510,9 @@ impl Host for Bound<'_, '_> {
                     "library_mb": lib.store.held_bytes(|_| true) >> 20,
                 });
                 out["lods"] = lib.lod_report();
+                if params.get("reset").and_then(Value::as_bool) == Some(true) {
+                    crate::load_stats::reset_hitches();
+                }
                 Ok(out)
             }
             "ui.set" => (|| {
