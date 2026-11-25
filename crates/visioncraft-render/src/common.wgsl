@@ -60,7 +60,7 @@ struct Globals {
     splits: vec4<f32>,          // far view depth of each cascade
     texel: vec4<f32>,           // world size of one shadow texel per cascade
     shadow: vec4<f32>,          // x cascade count, y map size, z 1 / size, w shadow distance
-    shadow_filter: vec4<f32>,  // x penumbra radius of the sun's shadow filter in the world (m), the same in every cascade (lib.rs `ShadowFilter`); yzw spare
+    shadow_filter: vec4<f32>,  // x penumbra radius of the sun's shadow filter in the world (m), spread by the 16-tap disk in every cascade (lib.rs `ShadowFilter`; the 4- and 9-tap grids ignore it); yzw spare
     viewport: vec4<f32>,        // render width, height, 1 / width, 1 / height (scaled)
     effects: vec4<f32>,         // x AO samples, y contact shadows on, z AO radius (m), w AO intensity
     perez: array<vec4<f32>, 5>, // Preetham's Perez coefficients A..E for (Y, x, y)

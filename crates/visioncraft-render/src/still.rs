@@ -195,7 +195,7 @@ impl Renderer {
     /// Renders `part` of one frame into `targets` (and with the pipelines `sampled` where the live ones
     /// do not do, `offscreen_pipelines`) from `view`/`proj`/`eye`, copies the output
     /// into `buffer`, and puts the live state back. Returns the targets for another frame and
-    /// the encoder to submit.
+    /// the encoder to submit. `quality` is sanitized as in `set_quality` (`Quality::sanitized`).
     #[allow(clippy::too_many_arguments)]
     fn render_offscreen(
         &mut self,
@@ -207,6 +207,7 @@ impl Renderer {
         copy: Option<(&wgpu::Buffer, u32)>,
         part: FramePart,
     ) -> (Targets, Offscreen, wgpu::CommandEncoder) {
+        let quality = quality.sanitized();
         // Swap the live state out, render, swap it back.
         let live_targets = std::mem::replace(&mut self.targets, targets);
         let live_pipelines = sampled.0.map(|p| std::mem::replace(&mut self.pipelines, p));
@@ -543,7 +544,7 @@ impl Renderer {
         lens: Lens,
     ) -> Result<Photo, String> {
         quality.lod_distance_percent *= 2;
-        let quality = self.coverage.quality(quality);
+        let quality = self.coverage.quality(quality.sanitized());
         if width == 0 || height == 0 || width > MAX_STILL.0 || height > MAX_STILL.1 {
             return Err(format!(
                 "photo size {width}x{height} outside 1x1..={}x{}",

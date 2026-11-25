@@ -462,20 +462,24 @@ pub struct LineVertex {
     pub width: f32,
 }
 
-/// The penumbra radius of the presets' sun shadow filter, in metres in the world
-/// (`ShadowFilter`): the same in every cascade, so it does not change at a cascade split.
-pub const DEFAULT_SHADOW_RADIUS_M: f32 = 0.05;
+/// The penumbra radius of the presets' sun shadow filter, in metres in the world: the 16-tap
+/// disk's (scene.wgsl `cascade_shadow` spreads it over 1.5 to 6 texels of a cascade), the same
+/// in every cascade, so it does not change at a cascade split. The 4- and 9-tap grids keep their
+/// fixed texel size.
+pub const DEFAULT_SHADOW_RADIUS_M: f32 = 0.03;
 
 /// How the sun's cascaded shadow maps are filtered (`Quality::shadow_filter`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ShadowFilter {
     /// One hardware comparison tap (2x2 bilinear): the sharpest edge.
     Hard,
-    /// Percentage-closer filtering: `taps` 4 (2x2 grid), 9 (3x3 grid) or 16 (Vogel disk),
-    /// spread over a disk of `radius_m` metres in the world, the same in every cascade (a
-    /// cascade whose texel is larger than the radius spreads over one texel). Under
-    /// `Quality::fast_shading` only the 1- and 4-tap paths are compiled (register pressure on
-    /// integrated GPUs): 9 and 16 fall back to 4 there.
+    /// Percentage-closer filtering. `taps` 4 (2x2 grid at +-0.75 texel) and 9 (3x3 grid at
+    /// -1.5, 0, +1.5 texels) are fixed, texel-sized kernels: gap-free, as each hardware
+    /// comparison tap covers 2 texels, and they ignore `radius_m`. `taps` 16 is a Vogel disk,
+    /// turned per pixel, spread over `radius_m` metres in the world, the same in every cascade
+    /// (clamped to 1.5..6 texels of a cascade: beyond 6 the penumbra stops growing there).
+    /// Under `Quality::fast_shading` only the 1- and 4-tap paths are compiled (register
+    /// pressure on integrated GPUs): 9 and 16 fall back to 4 there.
     Pcf { taps: u32, radius_m: f32 },
 }
 
@@ -546,8 +550,8 @@ pub struct Quality {
     /// Planar reflection of water: resolution divisor of the render size (2
     /// half, 4 quarter); 0 = off (water reflects the environment cube).
     pub water_reflection: u32,
-    /// The sun's shadow filter: the comparison taps and, for PCF, the penumbra's radius in the
-    /// world, the same in every cascade.
+    /// The sun's shadow filter: the comparison taps, and for the 16-tap disk the penumbra's
+    /// radius in the world, the same in every cascade.
     pub shadow_filter: ShadowFilter,
     /// Ambient occlusion and contact shadows at the full render size
     /// (otherwise half size, upsampled depth-aware).
@@ -574,7 +578,7 @@ pub struct Quality {
 
 // `render_scale` is clamped to 0.5..=1 everywhere it is used, never NaN, so
 // equality is total (presets are compared with `==`); `shadow_filter` is sanitized
-// (`ShadowFilter::sanitized`) wherever a quality enters the renderer.
+// (`Quality::sanitized`) wherever a quality enters the renderer.
 impl Eq for Quality {}
 
 impl Default for Quality {
@@ -699,6 +703,24 @@ impl Quality {
             4
         } else {
             taps
+        }
+    }
+
+    /// This quality as the renderer holds it (`set_quality`, still.rs `render_offscreen` and
+    /// `photo_begin`): every field the renderer indexes, divides by or compares with `==` in
+    /// range, the shadow filter sanitized (`ShadowFilter::sanitized`). A preset is its own
+    /// sanitized self, so setting one again changes nothing.
+    fn sanitized(self) -> Quality {
+        Quality {
+            cascades: self.cascades.clamp(1, shadow::MAX_CASCADES as u32),
+            impostor_resolution: self.impostor_resolution.clamp(64, 1024),
+            render_scale: if self.render_scale.is_nan() {
+                1.0
+            } else {
+                self.render_scale.clamp(0.5, 1.0)
+            },
+            shadow_filter: self.shadow_filter.sanitized(),
+            ..self
         }
     }
 
@@ -1921,18 +1943,7 @@ impl Renderer {
 
     /// On a Vulkan device that cannot shade per sample, MSAA stays off (`coverage.rs`).
     pub fn set_quality(&mut self, quality: Quality) {
-        let quality = self.coverage.quality(quality);
-        let quality = Quality {
-            cascades: quality.cascades.clamp(1, shadow::MAX_CASCADES as u32),
-            impostor_resolution: quality.impostor_resolution.clamp(64, 1024),
-            render_scale: if quality.render_scale.is_nan() {
-                1.0
-            } else {
-                quality.render_scale.clamp(0.5, 1.0)
-            },
-            shadow_filter: quality.shadow_filter.sanitized(),
-            ..quality
-        };
+        let quality = self.coverage.quality(quality.sanitized());
         if quality == self.quality {
             return;
         }
@@ -8575,8 +8586,8 @@ mod tests {
     }
 
     /// Every preset filters the sun's shadows with PCF at today's tap counts (LOW and MEDIUM
-    /// 4, HIGH 9, ULTRA 16) over the same penumbra, and under `fast_shading` the shaders run 4
-    /// taps at most.
+    /// 4, HIGH 9, ULTRA 16); the radius is the 16-tap disk's alone, and under `fast_shading` the
+    /// shaders run 4 taps at most.
     #[test]
     fn every_preset_filters_shadows_with_pcf() {
         for (name, q) in Quality::PRESETS {
@@ -8606,6 +8617,85 @@ mod tests {
             .shadow_taps(),
             1
         );
+    }
+
+    /// The 4- and 9-tap filters are the fixed texel-sized grids of before (scene.wgsl
+    /// `cascade_shadow`: the offsets `g.shadow.z * 1.5`), so LOW, MEDIUM and HIGH shade as they
+    /// did: they never read the penumbra's radius, which only the 16-tap disk spreads over.
+    #[test]
+    fn the_grid_filters_ignore_the_radius_and_stay_texel_sized() {
+        let src = include_str!("scene.wgsl");
+        let body = &src[src.find("fn cascade_shadow(").unwrap()..];
+        let body = &body[..body.find("\n}\n").unwrap()];
+        let (disk, grids) = body.split_once("taps > 8.5").expect("the 9-tap branch");
+        assert!(
+            disk.contains("g.shadow_filter.x"),
+            "the 16-tap disk spreads over the radius:\n{disk}"
+        );
+        // From the 9-tap branch on: the 9- and 4-tap paths.
+        assert!(
+            !grids.contains("g.shadow_filter") && !grids.contains("spread"),
+            "the grids take no radius:\n{grids}"
+        );
+        for offsets in [
+            "let o = vec2<f32>(f32(x), f32(y)) * g.shadow.z * 1.5;",
+            "let o = (vec2<f32>(f32(i & 1), f32(i >> 1u)) - 0.5) * g.shadow.z * 1.5;",
+        ] {
+            assert!(grids.contains(offsets), "a texel-sized grid: {offsets}");
+        }
+    }
+
+    /// `Quality::sanitized` is how any quality enters the renderer (`set_quality`, still.rs
+    /// `render_offscreen` and `photo_begin`): the fields it indexes or divides by in range, the
+    /// shadow filter sanitized, and a preset its own sanitized self.
+    #[test]
+    fn a_quality_is_sanitized_whenever_it_enters_the_renderer() {
+        let out_of_range = Quality {
+            cascades: 0,
+            impostor_resolution: 1,
+            render_scale: f32::NAN,
+            shadow_filter: ShadowFilter::Pcf {
+                taps: 7,
+                radius_m: f32::NAN,
+            },
+            ..Quality::HIGH
+        };
+        let clean = out_of_range.sanitized();
+        assert_eq!(
+            (
+                clean.cascades,
+                clean.impostor_resolution,
+                clean.render_scale
+            ),
+            (1, 64, 1.0)
+        );
+        assert_eq!(
+            clean.shadow_filter,
+            ShadowFilter::Pcf {
+                taps: 9,
+                radius_m: DEFAULT_SHADOW_RADIUS_M
+            }
+        );
+        assert_eq!(
+            Quality {
+                cascades: 4,
+                impostor_resolution: 1024,
+                render_scale: 1.0,
+                ..Quality::LOW
+            },
+            Quality {
+                cascades: 99,
+                impostor_resolution: 9999,
+                render_scale: 3.0,
+                ..Quality::LOW
+            }
+            .sanitized()
+        );
+        // Idempotent, and a preset is its own sanitized self: set again, it changes nothing.
+        assert_eq!(clean.sanitized(), clean);
+        for (name, q) in Quality::PRESETS {
+            assert_eq!(q.sanitized(), q, "{name}");
+        }
     }
 
     #[test]

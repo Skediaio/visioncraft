@@ -412,7 +412,7 @@ fn fs_sea(in: Varying) -> @location(0) vec4<f32> {
     var sun_on = 0.0;
     var glint = local_lights(in.world, n, v, nov, vec3<f32>(0.0), vec3<f32>(0.02), alpha, false);
     if l.y > 0.0 {
-        sun_on = sun_shadow(in.world, up, max(l.y, 0.05), depth);
+        sun_on = sun_shadow(in.clip.xy, in.world, up, max(l.y, 0.05), depth);
         glint += specular(n, v, l, max(nol, 1e-4), nov, vec3<f32>(0.02), alpha) * nol * g.sun_light.rgb * sun_on;
     }
     let transmit = water_transmittance(path, sea.surface.w);

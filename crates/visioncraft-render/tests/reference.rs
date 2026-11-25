@@ -994,35 +994,82 @@ fn impostor_shadow_stays_behind_the_tree() {
     assert!(behind < 0.6 * open, "behind {behind} vs {open}");
 }
 
+/// The linear scene luminance of the pixels of row `y` between two columns.
+fn row_luminance(px: &[u8], w: u32, y: u32, x0: u32, x1: u32) -> Vec<f32> {
+    (x0..x1)
+        .map(|x| {
+            let i = ((y * w + x) * 4) as usize;
+            scene_luminance([px[i] as f32, px[i + 1] as f32, px[i + 2] as f32])
+        })
+        .collect()
+}
+
+/// One row across the pole's shadow (`row`: its scene luminance, the shadow near its middle):
+/// the shadow level (the row's darkest pixel), the lit level (the median of the open ground
+/// 60..120 px to both sides of it) and, on each of the two edges round that darkest pixel, how
+/// many of the pixels within 60 px of it lie strictly between a tenth and nine tenths of the
+/// way from the shadow to the lit ground: the penumbra's band.
+fn across(row: &[f32]) -> (f32, f32, [usize; 2]) {
+    let core = row
+        .iter()
+        .enumerate()
+        .min_by(|a, b| a.1.total_cmp(b.1))
+        .map_or(0, |(i, _)| i);
+    assert!(
+        core >= 120 && core + 121 < row.len(),
+        "the shadow near the row's middle: {core} of {}",
+        row.len()
+    );
+    let mut open: Vec<f32> = row[core - 120..core - 60]
+        .iter()
+        .chain(&row[core + 61..core + 121])
+        .copied()
+        .collect();
+    open.sort_by(f32::total_cmp);
+    let lit = 0.5 * (open[open.len() / 2 - 1] + open[open.len() / 2]);
+    let dark = row[core];
+    let in_band = |l: f32| {
+        let t = (l - dark) / (lit - dark);
+        t > 0.1 && t < 0.9
+    };
+    let band = [
+        row[core - 60..core].iter().filter(|l| in_band(**l)).count(),
+        row[core + 1..core + 61]
+            .iter()
+            .filter(|l| in_band(**l))
+            .count(),
+    ];
+    (dark, lit, band)
+}
+
 /// The sun's shadow filter (`Quality::shadow_filter`): a thin pole's shadow on flat ground has
-/// the penumbra asked for, from the filter alone. One image row across the shadow: the pixels
-/// that lie strictly between a tenth and nine tenths of the way from the shadow to the open
-/// ground are few with one comparison tap (`Hard`), more with the 3x3 PCF grid and not fewer
-/// with the 16-tap Vogel disk, which leaves at least three of them on each of the shadow's two
-/// edges.
+/// the penumbra asked for, from the filter alone, and the lit ground stays even. Across the
+/// shadow, on five rows through its middle (the 16-tap disk is turned per pixel, so one row's
+/// count is a pixel or two off): the shadow level is the row's darkest pixel, the lit level
+/// the median of the open ground 60..120 px to both sides of it, and the band is the pixels
+/// within 60 px of the darkest pixel that lie strictly between a tenth and nine tenths of the
+/// way from the shadow to the lit ground. Few with one comparison tap (`Hard`), more with the
+/// 3x3 grid, more again with the 16-tap disk the wider its radius (the only kernel that takes
+/// one), which leaves at least three band pixels on each of the shadow's two edges. And on a
+/// lit patch of the ground away from the pole, every row's mean luminance differs from the
+/// mean of its two neighbouring rows by at most 2 % (a filter that shades a lit slope shows
+/// stripes), for `Hard` too.
 #[test]
 fn pole_shadow_penumbra() {
     let (w, h) = (1920, 1080);
+    let pcf16 = |radius_m| ShadowFilter::Pcf { taps: 16, radius_m };
+    // (name, filter): HIGH's 9-tap grid (a radius changes nothing there), and the 16-tap disk
+    // at the presets' radius and at a wider one.
     let filters = [
         ("hard", ShadowFilter::Hard),
-        (
-            "pcf9",
-            ShadowFilter::Pcf {
-                taps: 9,
-                radius_m: 0.05,
-            },
-        ),
-        (
-            "pcf16",
-            ShadowFilter::Pcf {
-                taps: 16,
-                radius_m: 0.05,
-            },
-        ),
+        ("pcf9", Quality::HIGH.shadow_filter),
+        ("pcf16", pcf16(0.03)),
+        ("pcf16_r0.1", pcf16(0.1)),
     ];
-    // Per filter: the row's pixels in the band, and those on its narrower edge.
-    let mut bands = Vec::new();
-    for (name, filter) in filters {
+    let eye = Vec3::new(0.0, 1.7, -10.0);
+    // Per filter: its name, the band per row (both edges, and the narrower one), and the row
+    // of the lit patch whose mean is furthest off its neighbours, with how far (per cent).
+    let measured = filters.map(|(name, filter)| {
         let mut r = renderer(w, h);
         r.set_quality(Quality {
             shadow_filter: filter,
@@ -1049,14 +1096,9 @@ fn pole_shadow_penumbra() {
         r.add_item(pole, grey, &[Mat4::IDENTITY]);
         // The sun low in the south (+Z, 30 degrees up): the pole's shadow runs 6.9 m towards
         // -Z. The camera is 10 m from the pole at eye height, past the shadow's end, looking
-        // back along the shadow (the sun out of frame, above it): the shadow runs up the
-        // picture through its centre, so one row crosses both its edges.
-        let aspect = w as f32 / h as f32;
-        let cam = demo::camera(
-            Vec3::new(0.0, 1.7, -10.0),
-            Vec3::new(0.0, 0.0, -4.0),
-            aspect,
-        );
+        // back along the shadow (the sun out of frame, above it): the shadow runs down the
+        // middle of the picture, so a row crosses both its edges.
+        let cam = demo::camera(eye, Vec3::new(0.0, 0.0, -4.0), w as f32 / h as f32);
         setup(&mut r, cam, Sun::from_angles(180.0, 30.0), 13.5);
         settle(&mut r);
         let px = capture(&mut r, w, h);
@@ -1069,51 +1111,70 @@ fn pole_shadow_penumbra() {
         let mid = r
             .project(Vec3::new(0.0, 0.0, -4.0))
             .expect("the shadow's middle in view");
-        let y = (mid.y.clamp(0.0, h as f32 - 1.0)) as u32;
-        // The linear scene luminance of the row (the ground is near-neutral grey).
-        let row: Vec<f32> = (0..w)
-            .map(|x| {
-                let i = ((y * w + x) * 4) as usize;
-                scene_luminance([px[i] as f32, px[i + 1] as f32, px[i + 2] as f32])
+        let (cx, cy) = (mid.x as u32, mid.y as u32);
+        let mut band = [0.0; 2];
+        let mut levels = (0.0, 0.0);
+        for y in cy - 2..=cy + 2 {
+            let row = row_luminance(&px, w, y, cx - 200, cx + 200);
+            let (dark, lit, on_edge) = across(&row);
+            band[0] += (on_edge[0] + on_edge[1]) as f32;
+            band[1] += on_edge[0].min(on_edge[1]) as f32;
+            levels = (dark, lit);
+        }
+        let band = band.map(|b| b / 5.0);
+        // The lit patch: columns 200..400, from 50 px below the horizon (where a point at eye
+        // height far away ahead of the camera appears) to the bottom of the picture.
+        let horizon = r
+            .project(eye + Vec3::new(0.0, 0.0, 1.0e5))
+            .expect("the horizon in view")
+            .y as u32;
+        let first = horizon + 50;
+        let means: Vec<f32> = (first..h)
+            .map(|y| {
+                let row = row_luminance(&px, w, y, 200, 400);
+                row.iter().sum::<f32>() / row.len() as f32
             })
             .collect();
-        let dark = row.iter().copied().fold(f32::MAX, f32::min);
-        let lit = row.iter().copied().fold(f32::MIN, f32::max);
-        let in_band = |l: f32| {
-            let t = (l - dark) / (lit - dark);
-            t > 0.1 && t < 0.9
-        };
-        // The row's darkest pixel is in the shadow's core: it parts the two edges.
-        let core = row
-            .iter()
-            .enumerate()
-            .min_by(|a, b| a.1.total_cmp(b.1))
-            .map_or(0, |(i, _)| i);
-        let near = row[..core].iter().filter(|l| in_band(**l)).count();
-        let far = row[core..].iter().filter(|l| in_band(**l)).count();
+        let (jump, row) = (1..means.len() - 1)
+            .map(|i| {
+                let neighbours = 0.5 * (means[i - 1] + means[i + 1]);
+                (
+                    100.0 * (means[i] - neighbours).abs() / neighbours,
+                    first + i as u32,
+                )
+            })
+            .max_by(|a, b| a.0.total_cmp(&b.0))
+            .expect("rows in the patch");
         eprintln!(
-            "{name}: {} pixels in the band, {near} and {far} on its edges; shadow {dark}, lit {lit}",
-            near + far
+            "{name}: band {:.1} px per row ({:.1} on its narrower edge); shadow {:.1}, lit {:.1}; \
+             lit patch: row {row} is {jump:.2} % off its neighbours",
+            band[0], band[1], levels.0, levels.1
         );
-        bands.push((name, near + far, near.min(far)));
+        (name, band, jump, row)
+    });
+    for (name, _, jump, row) in measured {
+        assert!(
+            jump <= 2.0,
+            "{name}: the lit patch's row {row} is {jump:.2} % off its neighbours"
+        );
     }
-    let band = |name: &str| bands.iter().find(|b| b.0 == name).unwrap();
+    let [hard, pcf9, pcf16, wide] = measured;
     assert!(
-        band("hard").1 < band("pcf9").1,
-        "hard {} < pcf9 {}",
-        band("hard").1,
-        band("pcf9").1
+        hard.1[0] < pcf9.1[0],
+        "hard {} < pcf9 {} band pixels per row",
+        hard.1[0],
+        pcf9.1[0]
     );
     assert!(
-        band("pcf9").1 <= band("pcf16").1,
-        "pcf9 {} <= pcf16 {}",
-        band("pcf9").1,
-        band("pcf16").1
+        wide.1[0] > pcf16.1[0],
+        "pcf16 at 0.1 m {} > pcf16 at 0.03 m {} band pixels per row",
+        wide.1[0],
+        pcf16.1[0]
     );
     assert!(
-        band("pcf16").2 >= 3,
-        "pcf16: {} pixels of the band on its narrower edge",
-        band("pcf16").2
+        pcf16.1[1] >= 3.0,
+        "pcf16: {} band pixels per row on its narrower edge",
+        pcf16.1[1]
     );
 }
 
