@@ -126,6 +126,7 @@ Usage: visioncraft-cli render FILE --out PNG [--size WxH] [--viewpoint V]
                               [--white-balance WB] [--grade G]
                               [--sky-occlusion on|off]
                               [--quality low|medium|high|ultra|photo] [--samples N]
+                              [--shadow-filter hard|pcf4|pcf9|pcf16] [--shadow-radius M]
                               [--aperture F] [--focus M|auto|target] [--focus-point X,Y]
                               [--shutter S] [--vignette N] [--grain N] [--animation-s S]
 
@@ -160,6 +161,10 @@ Options:
                   inside). Default: the project's, else on
   --quality Q     low, medium, high (default), ultra or photo (many frames averaged
                   at ULTRA: soft shadows, smooth edges; slower)
+  --shadow-filter F  The sun's shadow filter for this picture over the preset's: hard (the
+                  sharpest edge) or pcf4, pcf9, pcf16 (taps over --shadow-radius). Default the
+                  preset's; pcf9 and pcf16 run as pcf4 at quality low and medium
+  --shadow-radius M  The penumbra's radius in metres for this picture, 0 to 1. Default 0.05
 PHOTO_FLAGS
   --animation-s S The animation clock in seconds (wind, water). Default 0";
 
@@ -804,6 +809,20 @@ fn cmd_render(raw: &[String]) -> Res {
     }
     if let Some(q) = a.value("--quality")? {
         params["quality"] = q.into();
+    }
+    if let Some(f) = a.value("--shadow-filter")? {
+        // The command checks the name.
+        params["shadow_filter"] = f.into();
+    }
+    if let Some(s) = a.value("--shadow-radius")? {
+        params["shadow_radius_m"] = s
+            .parse::<f64>()
+            .map_err(|_| {
+                CliError::Usage(format!(
+                    "`--shadow-radius` must be a number 0..1, got `{s}`"
+                ))
+            })?
+            .into();
     }
     if let Some(s) = a.value("--season")? {
         params["season"] = s.into();

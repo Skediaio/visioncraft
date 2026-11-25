@@ -111,6 +111,7 @@ impl Pictures for GpuPictures {
             // A photo is taken at ULTRA; an unknown name renders on HIGH (ULTRA is for fast
             // desktop GPUs).
             .unwrap_or(if request.photo.is_some() { 3 } else { 2 });
+        s.set_shadow_filter(request.shadow_taps, request.shadow_radius_m);
         s.resize(request.width, request.height);
         s.clock = request.animation_s;
         // What only this picture changes: the lamps' level, the exposure compensation and the
