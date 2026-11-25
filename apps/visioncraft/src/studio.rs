@@ -11,7 +11,7 @@ use visioncraft_core::{
     Asset, Generator, ImportedModel, Material, ModelKind, Project, Session, Shape, Site, SunTime,
     catalog::Category, import_3dcraft, import_obj, sun::sun_position,
 };
-use visioncraft_render::{LineVertex, Quality, Renderer, Sun};
+use visioncraft_render::{LineVertex, Quality, Renderer, ShadowFilter, Sun};
 
 use crate::camera::{Camera, View, ray_through};
 use crate::scene::{Loaded, Pick, Scene, box_outline, light_markers, model_matrix};
@@ -118,6 +118,11 @@ pub struct Studio {
     /// Follow `suggest_quality` instead of the preset in `quality`.
     pub quality_auto: bool,
     pub auto_quality: Quality,
+    /// The sun's shadow filter over the preset's for the pictures taken from now on
+    /// (`view.render`'s `shadow_filter` and `shadow_radius_m`, see `set_shadow_filter`):
+    /// `None`, the preset's. The CLI sets it for each picture; the window's host sets it for
+    /// one picture and clears it after, so the window keeps its preset.
+    pub shadow_filter: Option<ShadowFilter>,
     pub frame_ms: Vec<f32>,
     /// Auto does not step up before this `clock` (seconds): it just stepped down.
     pub auto_hold_until: f64,
@@ -424,6 +429,7 @@ impl Studio {
             quality,
             quality_auto: true,
             auto_quality: Quality::MEDIUM,
+            shadow_filter: None,
             frame_ms: Vec::new(),
             auto_hold_until: 0.0,
             auto_loading_since: None,
@@ -1879,11 +1885,41 @@ impl Studio {
 
     /// Whether anything on screen moves by itself (wind with plants in view).
     pub fn current_quality(&self) -> Quality {
-        if self.quality_auto {
+        let preset = if self.quality_auto {
             self.auto_quality
         } else {
             Quality::PRESETS[self.quality].1
+        };
+        match self.shadow_filter {
+            Some(filter) => Quality {
+                shadow_filter: filter,
+                ..preset
+            },
+            None => preset,
         }
+    }
+
+    /// `view.render`'s shadow filter over the preset's (`None`: the preset's again) for the
+    /// pictures taken from now on: `taps` comparison taps (1: the hard edge; 4, 9 or 16:
+    /// percentage-closer filtering; `None`: the preset's taps) and `radius_m`, the penumbra's
+    /// radius in the world (`None`: the preset's radius; `Hard` has none).
+    pub fn set_shadow_filter(&mut self, taps: Option<u32>, radius_m: Option<f32>) {
+        let preset = if self.quality_auto {
+            self.auto_quality
+        } else {
+            Quality::PRESETS[self.quality].1
+        };
+        self.shadow_filter = match (taps, radius_m) {
+            (None, None) => None,
+            (Some(1), _) => Some(ShadowFilter::Hard),
+            (taps, radius_m) => Some(
+                ShadowFilter::Pcf {
+                    taps: taps.unwrap_or_else(|| preset.shadow_filter.taps()),
+                    radius_m: radius_m.unwrap_or_else(|| preset.shadow_filter.radius_m()),
+                }
+                .sanitized(),
+            ),
+        };
     }
 
     /// Feeds one frame time (ms); Auto may change the quality. Down as soon as 30 frames show
@@ -2688,13 +2724,14 @@ fn auto_step(frames: &[f32], current: Quality, can_rise: bool) -> AutoStep {
     AutoStep::To(next, p75 > budget)
 }
 
-/// The preset a quality is (at any render scale), for messages.
+/// The preset a quality is (at any render scale and sun shadow filter), for messages.
 pub fn preset_name(q: &Quality) -> &'static str {
     Quality::PRESETS
         .iter()
         .find(|(_, p)| {
             *p == Quality {
                 render_scale: p.render_scale,
+                shadow_filter: p.shadow_filter,
                 ..*q
             }
         })

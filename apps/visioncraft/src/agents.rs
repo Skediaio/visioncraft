@@ -396,6 +396,7 @@ impl Host for Bound<'_, '_> {
         }
         let camera = h.studio.camera.clone();
         let (quality, auto) = (h.studio.quality, h.studio.quality_auto);
+        let shadow_filter = h.studio.shadow_filter;
         if let Some((p, t, fov)) = request.camera {
             h.studio.camera = crate::camera::Camera::default();
             h.studio.camera.fov_y = fov.to_radians();
@@ -410,6 +411,8 @@ impl Host for Bound<'_, '_> {
             .iter()
             .position(|(n, _)| n.eq_ignore_ascii_case(&request.quality))
             .unwrap_or(if request.photo.is_some() { 3 } else { 2 });
+        h.studio
+            .set_shadow_filter(request.shadow_taps, request.shadow_radius_m);
         let before = h.studio.problems.len();
         let png = match &request.photo {
             Some(p) => {
@@ -430,6 +433,7 @@ impl Host for Bound<'_, '_> {
         );
         h.studio.camera = camera;
         (h.studio.quality, h.studio.quality_auto) = (quality, auto);
+        h.studio.shadow_filter = shadow_filter;
         if let Some(own) = saved {
             // The window's own session, with its history, comes back; the scene follows it.
             h.studio.session = own;
