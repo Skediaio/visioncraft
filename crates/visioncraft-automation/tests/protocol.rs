@@ -571,12 +571,25 @@ fn shadow_filter_parameters_are_checked_before_rendering() {
         "view.render: `shadow_radius_m` must be from 0 to 1"
     );
     assert!(error(&mut h, json!({"shadow_radius_m": -0.1})).contains("`shadow_radius_m`"));
-    // Valid: on to the renderer, which this host has not; alone or together, at any quality.
+    // A radius is only the 16-tap disk's to spread over: with hard, pcf4 or pcf9 it is refused.
+    for filter in ["hard", "pcf4", "pcf9"] {
+        assert_eq!(
+            error(
+                &mut h,
+                json!({"shadow_filter": filter, "shadow_radius_m": 0.2})
+            ),
+            "view.render: `shadow_radius_m` needs shadow_filter pcf16 (or none)",
+            "{filter}"
+        );
+    }
+    // Valid: on to the renderer, which this host has not; alone or together, at any quality
+    // (a radius alone goes with the preset's filter).
     for params in [
         json!({"shadow_filter": "hard"}),
         json!({"shadow_filter": "pcf16", "shadow_radius_m": 0.2}),
         json!({"quality": "photo", "shadow_radius_m": 0.0}),
-        json!({"quality": "low", "shadow_filter": "pcf9", "shadow_radius_m": 1}),
+        json!({"quality": "low", "shadow_filter": "pcf9"}),
+        json!({"quality": "low", "shadow_filter": "pcf16", "shadow_radius_m": 1}),
     ] {
         let text = params.to_string();
         assert!(error(&mut h, params).contains("no renderer"), "{text}");

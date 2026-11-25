@@ -86,7 +86,8 @@ pub struct RenderRequest {
     /// filtering); `None`: the preset's.
     pub shadow_taps: Option<u32>,
     /// `view.render`'s `shadow_radius_m`: the penumbra's radius in the world (m, 0..1) over the
-    /// preset's; `None`: the presets'.
+    /// preset's; `None`: the presets'. Only a 16-tap filter spreads over it (the command refuses
+    /// it together with hard, pcf4 or pcf9).
     pub shadow_radius_m: Option<f32>,
     /// The project's image files (plan underlays, wall photos) by their `file` (see
     /// [`HostState::images`]).

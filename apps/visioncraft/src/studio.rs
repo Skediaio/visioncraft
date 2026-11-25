@@ -1902,7 +1902,8 @@ impl Studio {
     /// `view.render`'s shadow filter over the preset's (`None`: the preset's again) for the
     /// pictures taken from now on: `taps` comparison taps (1: the hard edge; 4, 9 or 16:
     /// percentage-closer filtering; `None`: the preset's taps) and `radius_m`, the penumbra's
-    /// radius in the world (`None`: the preset's radius; `Hard` has none).
+    /// radius in the world (`None`: the preset's radius; only the 16-tap disk spreads over it,
+    /// `Hard` has none).
     pub fn set_shadow_filter(&mut self, taps: Option<u32>, radius_m: Option<f32>) {
         let preset = if self.quality_auto {
             self.auto_quality
