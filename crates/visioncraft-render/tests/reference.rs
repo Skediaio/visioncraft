@@ -13,7 +13,8 @@ use std::sync::OnceLock;
 use glam::{Mat4, Vec3};
 use visioncraft_render::demo::{self, Camera, MeshData, PlantShape};
 use visioncraft_render::{
-    Atmosphere, HdriImage, LineVertex, Material, Quality, Renderer, Sky, Sun, headless_device,
+    Atmosphere, HdriImage, LineVertex, Material, Quality, Renderer, ShadowFilter, Sky, Sun,
+    headless_device,
 };
 
 const W: u32 = 480;
@@ -991,6 +992,129 @@ fn impostor_shadow_stays_behind_the_tree() {
         "sunny side {sunny_side} vs {open}"
     );
     assert!(behind < 0.6 * open, "behind {behind} vs {open}");
+}
+
+/// The sun's shadow filter (`Quality::shadow_filter`): a thin pole's shadow on flat ground has
+/// the penumbra asked for, from the filter alone. One image row across the shadow: the pixels
+/// that lie strictly between a tenth and nine tenths of the way from the shadow to the open
+/// ground are few with one comparison tap (`Hard`), more with the 3x3 PCF grid and not fewer
+/// with the 16-tap Vogel disk, which leaves at least three of them on each of the shadow's two
+/// edges.
+#[test]
+fn pole_shadow_penumbra() {
+    let (w, h) = (1920, 1080);
+    let filters = [
+        ("hard", ShadowFilter::Hard),
+        (
+            "pcf9",
+            ShadowFilter::Pcf {
+                taps: 9,
+                radius_m: 0.05,
+            },
+        ),
+        (
+            "pcf16",
+            ShadowFilter::Pcf {
+                taps: 16,
+                radius_m: 0.05,
+            },
+        ),
+    ];
+    // Per filter: the row's pixels in the band, and those on its narrower edge.
+    let mut bands = Vec::new();
+    for (name, filter) in filters {
+        let mut r = renderer(w, h);
+        r.set_quality(Quality {
+            shadow_filter: filter,
+            ..Quality::HIGH
+        });
+        // Flat grey ground and a 0.1 m x 0.1 m x 4 m pole on it.
+        let mut ground = MeshData::default();
+        ground.add_box(Vec3::new(-40.0, -0.1, -40.0), Vec3::new(40.0, 0.0, 40.0));
+        let ground = r.add_mesh(&ground.mesh()).expect("ground");
+        let grey = r.add_material(&Material {
+            base_color: [0.2, 0.2, 0.2, 1.0],
+            roughness: 0.95,
+            ..Default::default()
+        });
+        r.add_item(ground, grey, &[Mat4::IDENTITY]);
+        r.set_ground(Some(visioncraft_render::Ground {
+            color: [0.2, 0.2, 0.2],
+            variation: 0.0,
+            ..Default::default()
+        }));
+        let mut pole = MeshData::default();
+        pole.add_box(Vec3::new(-0.05, 0.0, -0.05), Vec3::new(0.05, 4.0, 0.05));
+        let pole = r.add_mesh(&pole.mesh()).expect("pole");
+        r.add_item(pole, grey, &[Mat4::IDENTITY]);
+        // The sun low in the south (+Z, 30 degrees up): the pole's shadow runs 6.9 m towards
+        // -Z. The camera is 10 m from the pole at eye height, past the shadow's end, looking
+        // back along the shadow (the sun out of frame, above it): the shadow runs up the
+        // picture through its centre, so one row crosses both its edges.
+        let aspect = w as f32 / h as f32;
+        let cam = demo::camera(
+            Vec3::new(0.0, 1.7, -10.0),
+            Vec3::new(0.0, 0.0, -4.0),
+            aspect,
+        );
+        setup(&mut r, cam, Sun::from_angles(180.0, 30.0), 13.5);
+        settle(&mut r);
+        let px = capture(&mut r, w, h);
+        write_png(
+            &out_dir().join(format!("pole_shadow_{name}.png")),
+            &px,
+            w,
+            h,
+        );
+        let mid = r
+            .project(Vec3::new(0.0, 0.0, -4.0))
+            .expect("the shadow's middle in view");
+        let y = (mid.y.clamp(0.0, h as f32 - 1.0)) as u32;
+        // The linear scene luminance of the row (the ground is near-neutral grey).
+        let row: Vec<f32> = (0..w)
+            .map(|x| {
+                let i = ((y * w + x) * 4) as usize;
+                scene_luminance([px[i] as f32, px[i + 1] as f32, px[i + 2] as f32])
+            })
+            .collect();
+        let dark = row.iter().copied().fold(f32::MAX, f32::min);
+        let lit = row.iter().copied().fold(f32::MIN, f32::max);
+        let in_band = |l: f32| {
+            let t = (l - dark) / (lit - dark);
+            t > 0.1 && t < 0.9
+        };
+        // The row's darkest pixel is in the shadow's core: it parts the two edges.
+        let core = row
+            .iter()
+            .enumerate()
+            .min_by(|a, b| a.1.total_cmp(b.1))
+            .map_or(0, |(i, _)| i);
+        let near = row[..core].iter().filter(|l| in_band(**l)).count();
+        let far = row[core..].iter().filter(|l| in_band(**l)).count();
+        eprintln!(
+            "{name}: {} pixels in the band, {near} and {far} on its edges; shadow {dark}, lit {lit}",
+            near + far
+        );
+        bands.push((name, near + far, near.min(far)));
+    }
+    let band = |name: &str| bands.iter().find(|b| b.0 == name).unwrap();
+    assert!(
+        band("hard").1 < band("pcf9").1,
+        "hard {} < pcf9 {}",
+        band("hard").1,
+        band("pcf9").1
+    );
+    assert!(
+        band("pcf9").1 <= band("pcf16").1,
+        "pcf9 {} <= pcf16 {}",
+        band("pcf9").1,
+        band("pcf16").1
+    );
+    assert!(
+        band("pcf16").2 >= 3,
+        "pcf16: {} pixels of the band on its narrower edge",
+        band("pcf16").2
+    );
 }
 
 /// A white wall on a green lawn after sunset (physical sky): lit by the

@@ -212,8 +212,9 @@ const SUN_TOP_KLX: f32 = 128.0;
 const CLUSTER_CELL: f32 = 8.0;
 /// `set_time` wraps here (seconds) to keep f32 precision in the shaders.
 const TIME_WRAP: f64 = 4096.0;
-/// Byte offset of the SH in the globals (written by the GPU, see env.rs).
-const SH_OFFSET: u64 = 9 * 64 + 62 * 16;
+/// Byte offset of the SH in the globals (written by the GPU, see env.rs): 9 matrices and the
+/// vec4s before it.
+const SH_OFFSET: u64 = 9 * 64 + 63 * 16;
 /// The roughness up to which a metal is a mirror (`Material::mirror`, scene.wgsl `light`).
 const MIRROR_ROUGHNESS: f32 = 0.1;
 
@@ -461,6 +462,65 @@ pub struct LineVertex {
     pub width: f32,
 }
 
+/// The penumbra radius of the presets' sun shadow filter, in metres in the world
+/// (`ShadowFilter`): the same in every cascade, so it does not change at a cascade split.
+pub const DEFAULT_SHADOW_RADIUS_M: f32 = 0.05;
+
+/// How the sun's cascaded shadow maps are filtered (`Quality::shadow_filter`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ShadowFilter {
+    /// One hardware comparison tap (2x2 bilinear): the sharpest edge.
+    Hard,
+    /// Percentage-closer filtering: `taps` 4 (2x2 grid), 9 (3x3 grid) or 16 (Vogel disk),
+    /// spread over a disk of `radius_m` metres in the world, the same in every cascade (a
+    /// cascade whose texel is larger than the radius spreads over one texel). Under
+    /// `Quality::fast_shading` only the 1- and 4-tap paths are compiled (register pressure on
+    /// integrated GPUs): 9 and 16 fall back to 4 there.
+    Pcf { taps: u32, radius_m: f32 },
+}
+
+impl ShadowFilter {
+    /// Comparison taps per pixel: 1, 4, 9 or 16.
+    pub fn taps(self) -> u32 {
+        match self {
+            ShadowFilter::Hard => 1,
+            ShadowFilter::Pcf { taps, .. } => taps,
+        }
+    }
+
+    /// The penumbra's radius in the world (m); 0 for `Hard`.
+    pub fn radius_m(self) -> f32 {
+        match self {
+            ShadowFilter::Hard => 0.0,
+            ShadowFilter::Pcf { radius_m, .. } => radius_m,
+        }
+    }
+
+    /// This filter with `taps` the nearest of 4, 9 or 16 and `radius_m` clamped to 0..=1 (NaN:
+    /// the presets' radius), so two filters that shade the same compare equal (`Quality: Eq`).
+    pub fn sanitized(self) -> Self {
+        match self {
+            ShadowFilter::Hard => ShadowFilter::Hard,
+            ShadowFilter::Pcf { taps, radius_m } => ShadowFilter::Pcf {
+                // No ties: 4, 9 and 16 are an odd number apart.
+                taps: [4u32, 9, 16]
+                    .into_iter()
+                    .min_by_key(|&t| t.max(taps) - t.min(taps))
+                    .unwrap_or(4),
+                radius_m: {
+                    let r = if radius_m.is_nan() {
+                        DEFAULT_SHADOW_RADIUS_M
+                    } else {
+                        radius_m.clamp(0.0, 1.0)
+                    };
+                    // One zero, not -0.0: they compare equal, but print apart.
+                    if r == 0.0 { 0.0 } else { r }
+                },
+            },
+        }
+    }
+}
+
 /// Effect switches so the app can fall back on slow GPUs.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Quality {
@@ -486,8 +546,9 @@ pub struct Quality {
     /// Planar reflection of water: resolution divisor of the render size (2
     /// half, 4 quarter); 0 = off (water reflects the environment cube).
     pub water_reflection: u32,
-    /// 3x3 PCF taps for sun shadows (otherwise 2x2: softer edges cost ~2x).
-    pub soft_shadows: bool,
+    /// The sun's shadow filter: the comparison taps and, for PCF, the penumbra's radius in the
+    /// world, the same in every cascade.
+    pub shadow_filter: ShadowFilter,
     /// Ambient occlusion and contact shadows at the full render size
     /// (otherwise half size, upsampled depth-aware).
     pub ao_full_resolution: bool,
@@ -498,9 +559,9 @@ pub struct Quality {
     /// estimate), else the ray's step in pixels (2: half resolution).
     pub screen_reflections: u32,
     /// The shaders compiled for this preset's own settings (common.wgsl `FAST_SHADING`): what
-    /// the slower presets use (the 3x3 shadow filter, the ground's 16-step parallax and its
-    /// self-shadow) is left out, so integrated GPUs keep their shading in registers. Changing it
-    /// compiles the scene's pipelines again.
+    /// the slower presets use (the 9- and 16-tap shadow filters, the ground's 16-step parallax
+    /// and its self-shadow) is left out, so integrated GPUs keep their shading in registers.
+    /// Changing it compiles the scene's pipelines again.
     pub fast_shading: bool,
     /// Volumetric clouds (clouds.wgsl, when `Clouds::volumetric` asks for them): the cloud
     /// image's divisor of the render size (2 half, 3 a third, 4 quarter), 0 for the flat cloud layer.
@@ -512,7 +573,8 @@ pub struct Quality {
 }
 
 // `render_scale` is clamped to 0.5..=1 everywhere it is used, never NaN, so
-// equality is total (presets are compared with `==`).
+// equality is total (presets are compared with `==`); `shadow_filter` is sanitized
+// (`ShadowFilter::sanitized`) wherever a quality enters the renderer.
 impl Eq for Quality {}
 
 impl Default for Quality {
@@ -533,7 +595,10 @@ impl Quality {
         fxaa: true,
         bloom: false,
         water_reflection: 0,
-        soft_shadows: false,
+        shadow_filter: ShadowFilter::Pcf {
+            taps: 4,
+            radius_m: DEFAULT_SHADOW_RADIUS_M,
+        },
         ao_full_resolution: false,
         impostor_resolution: 256,
         screen_reflections: 0,
@@ -554,7 +619,10 @@ impl Quality {
         fxaa: true,
         bloom: true,
         water_reflection: 4,
-        soft_shadows: false,
+        shadow_filter: ShadowFilter::Pcf {
+            taps: 4,
+            radius_m: DEFAULT_SHADOW_RADIUS_M,
+        },
         ao_full_resolution: false,
         impostor_resolution: 256,
         screen_reflections: 2,
@@ -573,7 +641,10 @@ impl Quality {
         fxaa: false,
         bloom: true,
         water_reflection: 2,
-        soft_shadows: true,
+        shadow_filter: ShadowFilter::Pcf {
+            taps: 9,
+            radius_m: DEFAULT_SHADOW_RADIUS_M,
+        },
         ao_full_resolution: false,
         impostor_resolution: 256,
         screen_reflections: 1,
@@ -598,7 +669,10 @@ impl Quality {
         fxaa: false,
         bloom: true,
         water_reflection: 1,
-        soft_shadows: true,
+        shadow_filter: ShadowFilter::Pcf {
+            taps: 16,
+            radius_m: DEFAULT_SHADOW_RADIUS_M,
+        },
         ao_full_resolution: true,
         impostor_resolution: 512,
         screen_reflections: 1,
@@ -615,6 +689,17 @@ impl Quality {
 
     fn samples(&self) -> u32 {
         if self.msaa { MSAA_SAMPLES } else { 1 }
+    }
+
+    /// The sun shadow's comparison taps the shaders run: under `fast_shading` only the 1- and
+    /// 4-tap paths are compiled, so 9 and 16 fall back to 4.
+    fn shadow_taps(&self) -> u32 {
+        let taps = self.shadow_filter.taps();
+        if self.fast_shading && taps > 4 {
+            4
+        } else {
+            taps
+        }
     }
 
     /// The volumetric clouds' march steps through the layer and towards the sun.
@@ -1845,11 +1930,18 @@ impl Renderer {
             } else {
                 quality.render_scale.clamp(0.5, 1.0)
             },
+            shadow_filter: quality.shadow_filter.sanitized(),
             ..quality
         };
         if quality == self.quality {
             return;
         }
+        // The shadow filter only reaches the globals: no pipeline, target or shadow map of
+        // the renderer depends on it, so a picture's own filter costs nothing to swap in.
+        let filter_only = Quality {
+            shadow_filter: quality.shadow_filter,
+            ..self.quality
+        } == quality;
         let (fast, samples) = (self.quality.fast_shading, self.quality.samples());
         if quality.fast_shading != fast {
             // Other shaders: every pipeline of the scene and the sky, made once per shading and
@@ -1893,7 +1985,9 @@ impl Renderer {
             self.other_sampled.push((fast, samples, old));
         }
         self.quality = quality;
-        self.rebuild_targets();
+        if !filter_only {
+            self.rebuild_targets();
+        }
     }
 
     /// What wgpu reports about this renderer's adapter and device
@@ -5156,6 +5250,7 @@ impl Renderer {
         b.floats(&cascades.texel);
         let res = q.shadow_resolution as f32;
         b.floats(&[cascades.count as f32, res, 1.0 / res, self.shadow_distance]);
+        b.floats(&[q.shadow_filter.radius_m(), 0.0, 0.0, 0.0]);
         let (w, h) = (w as f32, h as f32);
         b.floats(&[w, h, 1.0 / w, 1.0 / h]);
         b.floats(&[
@@ -5232,11 +5327,7 @@ impl Renderer {
         );
         let bloom = if q.bloom { self.bloom_strength } else { 0.0 };
         b.floats(&[
-            if q.soft_shadows && !q.fast_shading {
-                9.0
-            } else {
-                4.0
-            },
+            q.shadow_taps() as f32,
             bloom,
             if q.ao_full_resolution { 1.0 } else { 2.0 },
             ground_height,
@@ -5706,7 +5797,7 @@ fn snow_cover_matrix(eye: Vec3, lo: Vec3, hi: Vec3, resolution: u32) -> Mat4 {
 const SNOW_COVER_M: f32 = 160.0;
 
 fn globals_size() -> u64 {
-    // 9 matrices, 62 vec4s, the 9 SH vec4s last; see common.wgsl.
+    // 9 matrices, 63 vec4s, the 9 SH vec4s last; see common.wgsl.
     SH_OFFSET + 9 * 16
 }
 
@@ -8454,6 +8545,67 @@ mod tests {
         );
         assert_eq!(bloom_sizes((3, 1)), [(1, 1); 4]);
         assert_eq!(bloom_sizes((1921, 1081))[0], (960, 540));
+    }
+
+    /// `ShadowFilter::sanitized` keeps `Quality: Eq` total: taps become the nearest of 4, 9 and
+    /// 16, a NaN radius the presets', and the radius stays within 0..=1.
+    #[test]
+    fn shadow_filter_sanitizes_taps_and_radius() {
+        let pcf = |taps, radius_m| ShadowFilter::Pcf { taps, radius_m };
+        assert_eq!(pcf(7, 0.05).sanitized(), pcf(9, 0.05));
+        assert_eq!(pcf(1, 0.05).sanitized(), pcf(4, 0.05));
+        assert_eq!(pcf(12, 0.05).sanitized(), pcf(9, 0.05));
+        assert_eq!(pcf(13, 0.05).sanitized(), pcf(16, 0.05));
+        assert_eq!(
+            pcf(9, f32::NAN).sanitized(),
+            pcf(9, DEFAULT_SHADOW_RADIUS_M)
+        );
+        assert_eq!(pcf(9, 5.0).sanitized(), pcf(9, 1.0));
+        assert_eq!(pcf(9, -1.0).sanitized(), pcf(9, 0.0));
+        assert_eq!(pcf(9, -0.0).sanitized(), pcf(9, 0.0));
+        assert_eq!(pcf(9, f32::INFINITY).sanitized(), pcf(9, 1.0));
+        assert_eq!(ShadowFilter::Hard.sanitized(), ShadowFilter::Hard);
+        // Idempotent, so a preset equals its own sanitized self (the renderer compares).
+        for f in [pcf(9, 0.05), pcf(16, 0.2), ShadowFilter::Hard] {
+            assert_eq!(f.sanitized().sanitized(), f.sanitized());
+        }
+        // A NaN radius would break `==` (and so `Eq`): sanitized, a filter equals itself.
+        let f = pcf(9, f32::NAN).sanitized();
+        assert_eq!(f, f);
+    }
+
+    /// Every preset filters the sun's shadows with PCF at today's tap counts (LOW and MEDIUM
+    /// 4, HIGH 9, ULTRA 16) over the same penumbra, and under `fast_shading` the shaders run 4
+    /// taps at most.
+    #[test]
+    fn every_preset_filters_shadows_with_pcf() {
+        for (name, q) in Quality::PRESETS {
+            assert!(
+                matches!(q.shadow_filter, ShadowFilter::Pcf { .. }),
+                "{name}"
+            );
+            assert_eq!(
+                q.shadow_filter.radius_m(),
+                DEFAULT_SHADOW_RADIUS_M,
+                "{name}"
+            );
+            assert_eq!(q.shadow_filter, q.shadow_filter.sanitized(), "{name}");
+        }
+        assert_eq!(Quality::LOW.shadow_filter.taps(), 4);
+        assert_eq!(Quality::MEDIUM.shadow_filter.taps(), 4);
+        assert_eq!(Quality::HIGH.shadow_filter.taps(), 9);
+        assert_eq!(Quality::ULTRA.shadow_filter.taps(), 16);
+        assert_eq!(Quality::MEDIUM.shadow_taps(), 4);
+        assert_eq!(Quality::HIGH.shadow_taps(), 9);
+        assert_eq!(Quality::ULTRA.shadow_taps(), 16);
+        assert_eq!(
+            Quality {
+                shadow_filter: ShadowFilter::Hard,
+                ..Quality::MEDIUM
+            }
+            .shadow_taps(),
+            1
+        );
     }
 
     #[test]

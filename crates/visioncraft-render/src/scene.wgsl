@@ -561,10 +561,18 @@ fn environment(r: vec3<f32>, roughness: f32) -> vec3<f32> {
     return textureSampleLevel(env_map, env_sampler, r, roughness * g.time.z).rgb * g.night.w;
 }
 
-// One cascade with hardware 2x2 PCF taps: 3x3 of them (smooth 4x4-texel
-// footprint) on HIGH, 2x2 at +-0.75 texel (3x3-texel footprint, less than
-// half the cost) below. -1 when the point is outside this cascade's map
-// (cascades refreshed every other frame lag the camera by a frame).
+// One cascade of the sun's shadow map, filtered as the quality asks (lib.rs `ShadowFilter`,
+// `g.options.x` the taps): one hardware comparison tap (a 2x2 bilinear footprint: the hard
+// edge), a 2x2 grid of them at +-0.5 spread, a 3x3 grid at -1, 0, +1 spread, or 16 on a fixed
+// Vogel disk (r = sqrt((i + 0.5) / 16), the golden angle 2.399963 apart; no per-pixel rotation,
+// so stills are deterministic). `spread` is the penumbra's radius in this cascade's texels:
+// `g.shadow_filter.x` metres in the world, the same in every cascade, so the penumbra no longer
+// changes at a cascade split; a cascade whose texel is larger than the radius spreads over one
+// texel (it cannot resolve less). Under FAST_SHADING (lib.rs compiles MEDIUM and LOW's shaders
+// with it: register pressure on integrated GPUs) only the 1- and 4-tap paths exist, and lib.rs
+// writes 4 there for 9 and 16.
+// -1 when the point is outside this cascade's map (cascades refreshed every other frame lag
+// the camera by a frame).
 // Normal offset: Holbert, "Saying Goodbye to Shadow Acne", GDC 2011 poster;
 // the slope-scaled raster bias is in the shadow pipeline.
 fn cascade_shadow(c: u32, world: vec3<f32>, n: vec3<f32>, nol: f32) -> f32 {
@@ -574,18 +582,32 @@ fn cascade_shadow(c: u32, world: vec3<f32>, n: vec3<f32>, nol: f32) -> f32 {
     if any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0)) || p.z > 1.0 {
         return -1.0;
     }
+    let taps = g.options.x;
+    if taps < 1.5 {
+        return textureSampleCompareLevel(shadow_map, shadow_sampler, uv, i32(c), p.z);
+    }
+    let spread = max(g.shadow_filter.x / g.texel[c], 1.0) * g.shadow.z;
     var sum = 0.0;
-    if !FAST_SHADING && g.options.x > 4.5 {
+    if !FAST_SHADING && taps > 12.5 {
+        for (var i = 0u; i < 16u; i++) {
+            let r = sqrt((f32(i) + 0.5) / 16.0) * spread;
+            let a = f32(i) * 2.399963;
+            let o = vec2<f32>(cos(a), sin(a)) * r;
+            sum += textureSampleCompareLevel(shadow_map, shadow_sampler, uv + o, i32(c), p.z);
+        }
+        return sum / 16.0;
+    }
+    if !FAST_SHADING && taps > 8.5 {
         for (var y = -1; y <= 1; y++) {
             for (var x = -1; x <= 1; x++) {
-                let o = vec2<f32>(f32(x), f32(y)) * g.shadow.z * 1.5;
+                let o = vec2<f32>(f32(x), f32(y)) * spread;
                 sum += textureSampleCompareLevel(shadow_map, shadow_sampler, uv + o, i32(c), p.z);
             }
         }
         return sum / 9.0;
     }
     for (var i = 0; i < 4; i++) {
-        let o = (vec2<f32>(f32(i & 1), f32(i >> 1u)) - 0.5) * g.shadow.z * 1.5;
+        let o = (vec2<f32>(f32(i & 1), f32(i >> 1u)) - 0.5) * spread;
         sum += textureSampleCompareLevel(shadow_map, shadow_sampler, uv + o, i32(c), p.z);
     }
     return sum * 0.25;
