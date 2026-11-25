@@ -549,6 +549,40 @@ fn photo_parameters_are_checked_before_rendering() {
     assert!(error(&mut h, json!({"season": "monsoon"})).contains("`season`"));
 }
 
+/// `view.render`'s `shadow_filter` and `shadow_radius_m` override the preset's sun shadow filter
+/// for that picture: a wrong name or a radius outside 0..1 is refused before rendering, a good
+/// one goes on to the renderer.
+#[test]
+fn shadow_filter_parameters_are_checked_before_rendering() {
+    let mut h = Headless::new(Access::default());
+    let error = |h: &mut Headless, params: Value| {
+        execute(h, 1, "view.render", params)["error"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(
+        error(&mut h, json!({"shadow_filter": "pcf7"})),
+        "view.render: `shadow_filter` must be hard, pcf4, pcf9 or pcf16, got `pcf7`"
+    );
+    assert!(error(&mut h, json!({"shadow_filter": "soft"})).contains("`shadow_filter`"));
+    assert_eq!(
+        error(&mut h, json!({"shadow_radius_m": 2})),
+        "view.render: `shadow_radius_m` must be from 0 to 1"
+    );
+    assert!(error(&mut h, json!({"shadow_radius_m": -0.1})).contains("`shadow_radius_m`"));
+    // Valid: on to the renderer, which this host has not; alone or together, at any quality.
+    for params in [
+        json!({"shadow_filter": "hard"}),
+        json!({"shadow_filter": "pcf16", "shadow_radius_m": 0.2}),
+        json!({"quality": "photo", "shadow_radius_m": 0.0}),
+        json!({"quality": "low", "shadow_filter": "pcf9", "shadow_radius_m": 1}),
+    ] {
+        let text = params.to_string();
+        assert!(error(&mut h, params).contains("no renderer"), "{text}");
+    }
+}
+
 /// A saved example keeps its model as the program's own (`example:<file>`), so `render FILE`
 /// and `file.open` load it as `run` does; files saved before, with the example's name made a
 /// path in their folder, still open.

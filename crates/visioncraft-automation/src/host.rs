@@ -81,6 +81,13 @@ pub struct RenderRequest {
     /// A second grade mixed in: the grade and how much of it, 0..1 (the project's grade is the
     /// first).
     pub grade_mix: Option<(visioncraft_core::Grade, f32)>,
+    /// `view.render`'s `shadow_filter`, over the preset's sun shadow filter for this picture:
+    /// the comparison taps (1: one hardware tap, the hard edge; 4, 9 or 16: percentage-closer
+    /// filtering); `None`: the preset's.
+    pub shadow_taps: Option<u32>,
+    /// `view.render`'s `shadow_radius_m`: the penumbra's radius in the world (m, 0..1) over the
+    /// preset's; `None`: the presets'.
+    pub shadow_radius_m: Option<f32>,
     /// The project's image files (plan underlays, wall photos) by their `file` (see
     /// [`HostState::images`]).
     pub images: Vec<(String, Arc<[u8]>)>,

@@ -981,6 +981,24 @@ pub fn host_docs() -> Vec<CommandDoc> {
                     "The renderer's quality preset; photo averages `samples` frames at ULTRA (soft shadows, smooth edges and occlusion, optional depth of field), taking every lens setting it is not given from view.set_photo",
                 ),
                 p(
+                    "shadow_filter",
+                    "string",
+                    None,
+                    false,
+                    Some("the preset's"),
+                    &["hard", "pcf4", "pcf9", "pcf16"],
+                    "The sun's shadow filter for this picture, over the preset's: hard is one comparison tap (the sharpest edge); pcf4, pcf9 and pcf16 spread 4 (2x2), 9 (3x3) or 16 (disk) taps over `shadow_radius_m` metres in the world, the same penumbra in every cascade. At quality low and medium only the 1- and 4-tap filters are compiled: pcf9 and pcf16 run as pcf4 there",
+                ),
+                p(
+                    "shadow_radius_m",
+                    "number",
+                    Some("m"),
+                    false,
+                    Some("0.05"),
+                    &[],
+                    "The penumbra's radius in the world for this picture, 0 to 1, over the preset's; a cascade whose texel is larger spreads over one texel. Goes with `shadow_filter` pcf4, pcf9 and pcf16, and with the preset's filter when `shadow_filter` is not given",
+                ),
+                p(
                     "samples",
                     "integer",
                     None,
@@ -2250,6 +2268,8 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
             "lights",
             "exposure_offset_ev",
             "quality",
+            "shadow_filter",
+            "shadow_radius_m",
             "years",
             "samples",
             "aperture",
@@ -2274,6 +2294,26 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
             "{id}: `quality` must be low, medium, high, ultra or photo, got `{}`",
             shorten(quality)
         ));
+    }
+    // The sun's shadow filter over the preset's, for this picture only.
+    let shadow_taps = match a.str("shadow_filter")? {
+        None => None,
+        Some(name) => Some(match name {
+            "hard" => 1,
+            "pcf4" => 4,
+            "pcf9" => 9,
+            "pcf16" => 16,
+            _ => {
+                return Err(format!(
+                    "{id}: `shadow_filter` must be hard, pcf4, pcf9 or pcf16, got `{}`",
+                    shorten(name)
+                ));
+            }
+        }),
+    };
+    let shadow_radius_m = a.number("shadow_radius_m")?;
+    if shadow_radius_m.is_some_and(|r| !(0.0..=1.0).contains(&r)) {
+        return Err(format!("{id}: `shadow_radius_m` must be from 0 to 1"));
     }
     let mut project = host.session().project().clone();
     let photo = photo_request(id, &a, quality, &project.view.photo)?;
@@ -2524,6 +2564,8 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
         lamp_level,
         exposure_offset_ev,
         grade_mix,
+        shadow_taps,
+        shadow_radius_m: shadow_radius_m.map(|r| r as f32),
         images: {
             let state = host.state();
             project

@@ -307,6 +307,10 @@ with `ui.set {"quality": "auto" | "low" | "medium" | "high" | "ultra", "textures
 | "2k" | "4k"}`; `view.render` takes its own `quality`. For a final picture use `view.render
 {"quality": "photo"}`: many frames averaged at ULTRA give soft shadows with real penumbrae,
 smooth edges and leaves without shimmer (seconds to minutes); recipe 41 has the lens.
+`view.render` also takes `shadow_filter` (`hard`, `pcf4`, `pcf9` or `pcf16`) and
+`shadow_radius_m` (0 to 1) to filter the sun's shadows of that one picture over the preset's: the
+taps spread over that radius in the world, the same penumbra in every cascade (pcf9 and pcf16 run
+as pcf4 at quality low and medium).
 
 Lamps and lit rooms follow the sun: on after sunset at the time shown, off before. `view.set
 {"lights": true}` or `false` fixes them for the project (the window's Lights button does the same),
