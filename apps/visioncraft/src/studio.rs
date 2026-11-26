@@ -124,6 +124,9 @@ pub struct Studio {
     pub frame_ms: Vec<f32>,
     /// `frame_ms` holds the frames' own work (`FrameCost::Work`), not wall-clock intervals.
     pub frame_work: bool,
+    /// The wall-clock intervals (ms, oldest first, at most 90) of the same frames: a frame that
+    /// is cheap in `frame_ms` but slow here is bound by the CPU or the compositor.
+    pub frame_wall: Vec<f32>,
     /// Work samples still to skip after a change: the GPU times lag a few frames.
     pub auto_skip: u32,
     /// Auto does not step up before this `clock` (seconds): it just stepped down.
@@ -440,6 +443,7 @@ impl Studio {
             auto_quality: Quality::MEDIUM,
             frame_ms: Vec::new(),
             frame_work: false,
+            frame_wall: Vec::new(),
             auto_skip: 0,
             auto_hold_until: 0.0,
             auto_loading_since: None,
@@ -1928,14 +1932,14 @@ impl Studio {
         let ms = cost.ms();
         if cost.is_work() != self.frame_work {
             self.frame_work = cost.is_work();
-            self.frame_ms.clear();
+            self.clear_frame_history();
         }
         if cost.is_work() && self.auto_skip > 0 {
             self.auto_skip -= 1;
             return;
         }
         if !self.quality_auto {
-            self.frame_ms.clear();
+            self.clear_frame_history();
             return;
         }
         // Frames while plants or textures load say little about the scene, but only for a few
@@ -1945,7 +1949,7 @@ impl Studio {
         if loading {
             let since = *self.auto_loading_since.get_or_insert(self.clock);
             if self.clock - since < AUTO_LOAD_GRACE_S {
-                self.frame_ms.clear();
+                self.clear_frame_history();
                 return;
             }
         } else {
@@ -1958,6 +1962,7 @@ impl Studio {
         let budget = visioncraft_render::target_ms(self.target_fps);
         match auto_step(
             &self.frame_ms,
+            &self.frame_wall,
             self.auto_quality,
             can_rise,
             budget,
@@ -1967,6 +1972,8 @@ impl Studio {
             AutoStep::Keep => {
                 let n = self.frame_ms.len();
                 self.frame_ms.drain(..n - 30);
+                let w = self.frame_wall.len();
+                self.frame_wall.drain(..w.saturating_sub(30));
             }
             AutoStep::To(next, down) => {
                 if down {
@@ -1987,10 +1994,25 @@ impl Studio {
                     next.render_scale * 100.0
                 ));
                 self.auto_quality = next;
-                self.frame_ms.clear();
+                self.clear_frame_history();
                 self.auto_skip = AUTO_GPU_LAG_FRAMES;
             }
         }
+    }
+
+    /// Notes the wall-clock interval of the frame `record_frame` is about to judge (before it).
+    /// With GPU timing Auto judges the work, but a frame that is cheap and slow on the clock
+    /// still misses the target: `auto_step` steps down on these and never up.
+    pub fn record_frame_wall(&mut self, interval_ms: f32) {
+        self.frame_wall.push(interval_ms);
+        let n = self.frame_wall.len();
+        self.frame_wall.drain(..n.saturating_sub(90));
+    }
+
+    /// Forgets Auto's frame history (a change of quality or target, a pause, a load).
+    pub fn clear_frame_history(&mut self) {
+        self.frame_ms.clear();
+        self.frame_wall.clear();
     }
 
     /// Notes the load's milestones reached by now (`load_stats`), after a frame.
@@ -2719,13 +2741,14 @@ enum AutoStep {
 const AUTO_GPU_LAG_FRAMES: u32 = 4;
 
 /// Auto's decision from frame costs (ms, oldest first; the frames' own work when `work`, else
-/// wall-clock intervals): one rung down the renderer's ladder as soon as 30 frames have their
+/// wall-clock intervals; `wall` the wall-clock intervals either way, which with `work` can force a step down): one rung down the renderer's ladder as soon as 30 frames have their
 /// 75th percentile over the budget (`target_ms` of the target fps; for intervals no less than 1.5
 /// refresh intervals, `interval_budget`, so vsync alone never steps down), one up (the
 /// renderer's `suggest_quality`, with its ULTRA headroom) after 90 frames with it under 65 % of
 /// `budget`, when `can_rise`.
 fn auto_step(
     frames: &[f32],
+    wall: &[f32],
     current: Quality,
     can_rise: bool,
     budget: f32,
@@ -2738,11 +2761,24 @@ fn auto_step(
     let mut recent = frames[n - 30..].to_vec();
     recent.sort_by(f32::total_cmp);
     let p75 = recent[22];
-    let miss = if work {
+    let mut miss = if work {
         budget
     } else {
         visioncraft_render::interval_budget(frames, budget)
     };
+    // GPU timing only sees the GPU's and the update's work: a frame bound by the CPU outside
+    // them or by the compositor still runs at the wall-clock rate. Intervals that miss their
+    // budget (vsync-aware, as without timestamps) step down as the intervals would, never up.
+    let mut p75 = p75;
+    if work && wall.len() >= 30 {
+        let mut w = wall[wall.len() - 30..].to_vec();
+        w.sort_by(f32::total_cmp);
+        let wall_budget = visioncraft_render::interval_budget(wall, budget);
+        if w[22] > wall_budget {
+            p75 = w[22];
+            miss = wall_budget;
+        }
+    }
     let next = if p75 > miss {
         // A history that misses the budget asks the ladder for the next rung down.
         visioncraft_render::suggest_quality(&[budget * 1.5; 30], current, budget)
@@ -3090,8 +3126,9 @@ mod reach_tests {
         use super::AutoStep;
         use visioncraft_render::Quality;
         // The 30 fps budget this test was written for.
-        let auto_step =
-            |f: &[f32], q: Quality, rise: bool| super::auto_step(f, q, rise, 1000.0 / 30.0, true);
+        let auto_step = |f: &[f32], q: Quality, rise: bool| {
+            super::auto_step(f, &[], q, rise, 1000.0 / 30.0, true)
+        };
         let high = Quality::HIGH;
         // 28 fps with hitches: under the old 110 % median rule this stayed; now it steps down.
         let mut frames = vec![34.0; 20];
@@ -3144,7 +3181,7 @@ mod reach_tests {
         use visioncraft_render::{Quality, target_ms};
         // 6 ms of GPU work on HIGH at a 60 fps target: ULTRA (about 1.7 times HIGH's cost) fits.
         assert_eq!(
-            auto_step(&[6.0; 90], Quality::HIGH, true, target_ms(60.0), true),
+            auto_step(&[6.0; 90], &[], Quality::HIGH, true, target_ms(60.0), true),
             AutoStep::To(Quality::ULTRA, false)
         );
     }
@@ -3158,7 +3195,7 @@ mod reach_tests {
             .map(|i| [16.2, 17.1, 16.6, 17.4, 16.4][i % 5])
             .collect();
         for q in [Quality::LOW, Quality::MEDIUM, Quality::HIGH, Quality::ULTRA] {
-            let step = auto_step(&frames, q, true, target_ms(60.0), false);
+            let step = auto_step(&frames, &[], q, true, target_ms(60.0), false);
             assert!(!matches!(step, AutoStep::To(_, true)), "{q:?}: {step:?}");
             // Nor do they rise: at the refresh interval they say nothing about room to spare.
             assert!(!matches!(step, AutoStep::To(..)), "{q:?}: {step:?}");
@@ -3166,7 +3203,7 @@ mod reach_tests {
         // The same numbers as GPU work would miss the 60 fps budget (ULTRA to HIGH, no render
         // scale dead band): the fallback is what holds.
         assert!(matches!(
-            auto_step(&frames, Quality::ULTRA, true, target_ms(60.0), true),
+            auto_step(&frames, &[], Quality::ULTRA, true, target_ms(60.0), true),
             AutoStep::To(_, true)
         ));
         // A GPU that misses every other refresh (16.7 / 33.3 ms, 40 fps) still steps down.
@@ -3174,8 +3211,39 @@ mod reach_tests {
             .map(|i| if i % 2 == 0 { 16.7 } else { 33.3 })
             .collect();
         assert!(matches!(
-            auto_step(&halves, Quality::HIGH, true, target_ms(60.0), false),
+            auto_step(&halves, &[], Quality::HIGH, true, target_ms(60.0), false),
             AutoStep::To(_, true)
+        ));
+    }
+
+    /// A CPU- or compositor-bound frame: 6 ms of work but 30 ms on the clock. Judged by the
+    /// work alone Auto would rise at 33 fps.
+    #[test]
+    fn auto_does_not_rise_while_the_wall_clock_misses_the_target() {
+        use super::{AutoStep, auto_step};
+        use visioncraft_render::{Quality, target_ms};
+        let work = [6.0f32; 90];
+        let t = target_ms(60.0);
+        // Without the wall intervals: plenty of room, it rises.
+        assert!(matches!(
+            auto_step(&work, &[], Quality::HIGH, true, t, true),
+            AutoStep::To(Quality::ULTRA, false)
+        ));
+        // With 30 ms intervals it steps down, as it would on the intervals alone.
+        let wall = [30.0f32; 90];
+        assert!(matches!(
+            auto_step(&work, &wall, Quality::HIGH, true, t, true),
+            AutoStep::To(_, true)
+        ));
+        assert_eq!(
+            auto_step(&work, &wall, Quality::HIGH, true, t, true),
+            auto_step(&wall, &[], Quality::HIGH, true, t, false),
+        );
+        // Intervals pinned to a 60 Hz display are no miss: the work's room still lets it rise.
+        let vsync = [16.7f32; 90];
+        assert!(matches!(
+            auto_step(&[6.0; 90], &vsync, Quality::HIGH, true, t, true),
+            AutoStep::To(Quality::ULTRA, false)
         ));
     }
 
@@ -3186,11 +3254,11 @@ mod reach_tests {
         // 25 ms frames (40 fps): too slow for 60 fps, fine for 30 fps.
         let frames = [25.0; 90];
         assert!(matches!(
-            auto_step(&frames, Quality::MEDIUM, true, target_ms(60.0), true),
+            auto_step(&frames, &[], Quality::MEDIUM, true, target_ms(60.0), true),
             AutoStep::To(_, true)
         ));
         assert_eq!(
-            auto_step(&frames, Quality::MEDIUM, true, target_ms(30.0), true),
+            auto_step(&frames, &[], Quality::MEDIUM, true, target_ms(30.0), true),
             AutoStep::Keep
         );
     }

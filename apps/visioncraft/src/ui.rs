@@ -776,7 +776,7 @@ impl Hud {
                                 .on_hover_text(t::TARGET_FPS_TIP);
                             if r.changed() {
                                 cx.s.target_fps = fps;
-                                cx.s.frame_ms.clear();
+                                cx.s.clear_frame_history();
                             }
                             ui.separator();
                             // What the hardware probe found: where Auto started.

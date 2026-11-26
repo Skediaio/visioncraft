@@ -1997,7 +1997,7 @@ impl eframe::App for App {
         ) {
             load_stats::startup("hardware calibrated");
             self.studio.auto_quality = m.quality();
-            self.studio.frame_ms.clear();
+            self.studio.clear_frame_history();
             hardware::note(&format!("starting quality: {}", m.line()));
             self.studio.hardware_line = Some(m.line());
             self.studio.gpu_lawn_budget = hardware::lawn_budget(m.ms_per_megapixel);
@@ -2069,9 +2069,10 @@ impl eframe::App for App {
                 self.studio.renderer.stats().gpu_ms,
                 self.last_ui_ms as f32,
             );
+            self.studio.record_frame_wall(raw_dt as f32 * 1000.0);
             self.studio.record_frame(cost);
         } else {
-            self.studio.frame_ms.clear();
+            self.studio.clear_frame_history();
         }
         if consecutive {
             self.fps = if self.fps == 0.0 {

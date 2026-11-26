@@ -617,7 +617,7 @@ impl Host for Bound<'_, '_> {
                         .filter(|v| visioncraft_render::TARGET_FPS_RANGE.contains(v))
                         .ok_or_else(|| format!("targetFps: a number from 24 to 240, not {f}"))?;
                     h.studio.target_fps = fps;
-                    h.studio.frame_ms.clear();
+                    h.studio.clear_frame_history();
                 }
                 if let Some(d) = params.get("modelDrawDistance") {
                     h.studio.model_draw_distance = parse_model_draw_distance(d)?;
