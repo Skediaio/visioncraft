@@ -302,6 +302,28 @@ pub(crate) fn mode_of(s: &str, extensions: &[(&'static str, &'static str)]) -> O
         .find(|m| mode_id(*m) == s)
 }
 
+/// The last frame's water surfaces and how each was reflected (`RenderStats::water`), as
+/// `ui.get` and `view.render` report them: per surface `{item, part, material, level_m, tier}`
+/// (the numbers `ItemId::index` and `MaterialId::index` give; the sea is `{"surface": "sea"}`).
+pub fn water_json(water: &[visioncraft_render::WaterSurface]) -> Value {
+    water
+        .iter()
+        .map(|w| {
+            let mut o = match w.item {
+                Some(i) => json!({
+                    "item": i.item,
+                    "part": i.part,
+                    "material": i.material,
+                }),
+                None => json!({"surface": "sea"}),
+            };
+            o["level_m"] = json!(w.level_m);
+            o["tier"] = json!(w.tier.name());
+            o
+        })
+        .collect()
+}
+
 fn vec3(v: &Value) -> Option<glam::Vec3> {
     let a = v.as_array()?;
     Some(glam::Vec3::new(
@@ -461,7 +483,9 @@ impl Host for Bound<'_, '_> {
     fn call(&mut self, method: &str, params: &Value) -> Option<Result<Value, String>> {
         let h = &mut *self.host;
         Some(match method {
-            "ui.get" => Ok(json!({
+            "ui.get" => {
+                let water = water_json(&h.studio.renderer.stats().water);
+                let value = json!({
                 "mode": h.mode_name(),
                 "ui": h.host_ui.to_json(),
                 "camera": {
@@ -481,6 +505,8 @@ impl Host for Bound<'_, '_> {
                     "auto": h.studio.quality_auto,
                     "preset": crate::studio::preset_name(&h.studio.current_quality()),
                     "renderScale": h.studio.current_quality().render_scale,
+                    // The planar water passes a frame may draw (`Quality::water_planes`), 0 when the planar reflection is off.
+                    "waterPlanes": h.studio.current_quality().plane_budget(),
                 },
                 "pending": {
                     "plants": h.studio.plants_pending(),
@@ -490,7 +516,11 @@ impl Host for Bound<'_, '_> {
                     "skyVisibility": h.studio.sky_visibility_pending(),
                     "sunMap": h.studio.sun_map_pending(),
                 },
-            })),
+                // The last frame's water surfaces and how each was reflected.
+                "water": water,
+                });
+                Ok(value)
+            }
             "ui.load" => {
                 let s = &h.studio;
                 let lib = &s.scene.library;

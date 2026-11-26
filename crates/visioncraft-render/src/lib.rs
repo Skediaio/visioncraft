@@ -81,6 +81,7 @@ mod texture;
 mod timing;
 pub mod tonemap;
 mod underlay;
+mod water;
 pub mod wind;
 
 pub use atmosphere::{
@@ -93,13 +94,14 @@ pub use impostor::{ImpostorId, atlas_layout, impostor_views};
 pub use lights::{Light, LightKind};
 pub use sea::Sea;
 pub use sky::Sun;
-pub use stats::{RenderStats, TARGET_MS, ULTRA_HEADROOM, suggest_quality};
+pub use stats::{RenderStats, TARGET_MS, ULTRA_HEADROOM, WaterItem, WaterSurface, suggest_quality};
 pub use still::Still;
 pub use still::{FOCUS_RANGE, Focus, Lens, Photo, lens_point, lens_view, pixel_jitter};
 pub use terrain::{TerrainChunk, TerrainLayer};
 pub use texture::{ColorSpace, TextureDesc, TextureId, mip_count};
 pub use tonemap::{ColorGrade, WhiteBalance};
 pub use underlay::UnderlayQuad;
+pub use water::WaterTier;
 pub use wind::Wind;
 
 const HDR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -450,6 +452,20 @@ pub struct MaterialId(u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ItemId(u32);
 
+impl MaterialId {
+    /// Its number, as `RenderStats::water` reports it.
+    pub const fn index(self) -> u32 {
+        self.0
+    }
+}
+
+impl ItemId {
+    /// Its number, as `RenderStats::water` reports it.
+    pub const fn index(self) -> u32 {
+        self.0
+    }
+}
+
 /// One end of an overlay segment. Consecutive pairs form segments; a pair
 /// with equal positions draws a round point.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -486,6 +502,11 @@ pub struct Quality {
     /// Planar reflection of water: resolution divisor of the render size (2
     /// half, 4 quarter); 0 = off (water reflects the environment cube).
     pub water_reflection: u32,
+    /// Planar reflections of water per frame (0..=4): the visible water planes ranked by
+    /// what they cover on screen and how near they are each get a mirrored pass while the
+    /// budget lasts; the others reflect the opaque scene of the frame when `screen_reflections`
+    /// is on, else the environment cube (`water.rs`). 0: no planar pass.
+    pub water_planes: u32,
     /// 3x3 PCF taps for sun shadows (otherwise 2x2: softer edges cost ~2x).
     pub soft_shadows: bool,
     /// Ambient occlusion and contact shadows at the full render size
@@ -533,6 +554,7 @@ impl Quality {
         fxaa: true,
         bloom: false,
         water_reflection: 0,
+        water_planes: 0,
         soft_shadows: false,
         ao_full_resolution: false,
         impostor_resolution: 256,
@@ -554,6 +576,7 @@ impl Quality {
         fxaa: true,
         bloom: true,
         water_reflection: 4,
+        water_planes: 1,
         soft_shadows: false,
         ao_full_resolution: false,
         impostor_resolution: 256,
@@ -573,6 +596,7 @@ impl Quality {
         fxaa: false,
         bloom: true,
         water_reflection: 2,
+        water_planes: 2,
         soft_shadows: true,
         ao_full_resolution: false,
         impostor_resolution: 256,
@@ -598,6 +622,7 @@ impl Quality {
         fxaa: false,
         bloom: true,
         water_reflection: 1,
+        water_planes: 3,
         soft_shadows: true,
         ao_full_resolution: true,
         impostor_resolution: 512,
@@ -615,6 +640,16 @@ impl Quality {
 
     fn samples(&self) -> u32 {
         if self.msaa { MSAA_SAMPLES } else { 1 }
+    }
+
+    /// The planar passes a frame may draw: `water_planes` (at most the globals' planes) while
+    /// the planar reflection is on, else none.
+    pub fn plane_budget(&self) -> u32 {
+        if self.water_reflection == 0 {
+            0
+        } else {
+            self.water_planes.min(water::MAX_PLANES)
+        }
     }
 
     /// The volumetric clouds' march steps through the layer and towards the sun.
@@ -1196,6 +1231,14 @@ enum SkySource {
     },
 }
 
+/// A water surface of the frame as it was gathered: what draws it, and what the ranking
+/// (`water.rs`) sees of it.
+struct Seen {
+    /// The item (its `ItemId`), its part, and the part's material; `None` for the sea.
+    item: Option<(u32, u32, MaterialId)>,
+    surface: water::Surface,
+}
+
 /// Per-frame counters for `stats` (`record` takes `&self`).
 #[derive(Default)]
 struct Counters {
@@ -1436,6 +1479,11 @@ pub struct Renderer {
     timer: Option<timing::Timer>,
     counters: Counters,
     last_stats: RenderStats,
+    /// The water surfaces of the frame, their planes and tiers (`water.rs`); the buffers are
+    /// reused every frame.
+    water: water::Ranking,
+    water_seen: Vec<Seen>,
+    water_surfaces: Vec<water::Surface>,
 }
 
 impl Renderer {
@@ -1811,6 +1859,9 @@ impl Renderer {
             timer: timing::Timer::new(device, queue),
             counters: Counters::default(),
             last_stats: RenderStats::default(),
+            water: water::Ranking::default(),
+            water_seen: Vec::new(),
+            water_surfaces: Vec::new(),
         };
         renderer.ground_slot = renderer.alloc_slot(MeshId(u32::MAX - 1));
         renderer.update_ambient(true);
@@ -1839,6 +1890,7 @@ impl Renderer {
         let quality = self.coverage.quality(quality);
         let quality = Quality {
             cascades: quality.cascades.clamp(1, shadow::MAX_CASCADES as u32),
+            water_planes: quality.water_planes.min(water::MAX_PLANES),
             impostor_resolution: quality.impostor_resolution.clamp(64, 1024),
             render_scale: if quality.render_scale.is_nan() {
                 1.0
@@ -3686,13 +3738,11 @@ impl Renderer {
         .flatten()
         .map(|(lo, hi)| snow_cover_matrix(self.eye, lo, hi, self.quality.shadow_resolution));
         let view_proj = self.proj * self.view;
-        // The sea, seen from above, takes the planar reflection over any pond.
-        let water = (self.quality.water_reflection > 0)
-            .then(|| {
-                self.sea_plane(view_proj)
-                    .or_else(|| self.water_plane(view_proj))
-            })
-            .flatten();
+        // The water planes of the frame, ranked; the best one gets the planar reflection.
+        self.rank_water(view_proj);
+        let water = (0..self.water.planes.len())
+            .find(|&i| self.water.layer_of(i) == Some(0))
+            .map(|i| self.water.planes[i].height);
         self.write_sea();
         let t = &self.targets;
         self.write_globals(
@@ -4308,6 +4358,26 @@ impl Renderer {
             let total: f32 = gpu_passes.iter().map(|p| p.1).sum();
             eprintln!("gpu ms: {} (sum {total:.2})", parts.join(", "));
         }
+        // The water surfaces of the frame and how each was reflected: by plane (height), and in
+        // the order they were gathered within one. The list is the last frame's, filled again.
+        let mut water = std::mem::take(&mut self.last_stats.water);
+        water.clear();
+        for (p, _) in self.water.planes.iter().enumerate() {
+            for (s, seen) in self.water_seen.iter().enumerate() {
+                if self.water.plane_of(s) != p {
+                    continue;
+                }
+                water.push(WaterSurface {
+                    item: seen.item.map(|(item, part, material)| WaterItem {
+                        item,
+                        part,
+                        material: material.0,
+                    }),
+                    level_m: seen.surface.height,
+                    tier: self.water.tier_of(s),
+                });
+            }
+        }
         self.last_stats = RenderStats {
             draw_calls: self.counters.draws.get(),
             pass_draws: self.counters.passes.take(),
@@ -4321,6 +4391,7 @@ impl Renderer {
             gpu_ms: (!gpu_passes.is_empty()).then(|| gpu_passes.iter().map(|p| p.1).sum()),
             gpu_passes,
             render_size: self.targets.size,
+            water,
         };
     }
 
@@ -4348,21 +4419,57 @@ impl Renderer {
         }
     }
 
-    /// The height of the largest visible water surface (by the area of its
-    /// visible clusters' bounds), for the planar reflection.
-    fn water_plane(&self, cull: Mat4) -> Option<f32> {
-        let mut best: Option<(f32, f32)> = None;
-        for item in self.items.iter().flatten() {
+    /// Gathers the visible water surfaces of the frame and ranks their planes (`water.rs`):
+    /// the sea when the eye is above it, and the parts with a water material whose clusters are
+    /// in view, each where its visible clusters' bounds show on the render target. Nothing is
+    /// allocated once the buffers have grown.
+    fn rank_water(&mut self, cull: Mat4) {
+        // The planar reflection off: nothing to rank, as before this ranked at all.
+        let off = self.quality.water_reflection == 0;
+        self.water_seen.clear();
+        self.water_surfaces.clear();
+        if off {
+            self.water.rank(&[], 0, false);
+            return;
+        }
+        let size = self.targets.size;
+        // The ripples' most tilt: the wind's, more under rain's rings.
+        let tilt = if self.rain > 0.0 {
+            water::RAIN_TILT
+        } else {
+            water::WIND_TILT
+        };
+        // The sea when the eye is above it and some of it is in view.
+        let sea = self.sea_surface(cull, size, tilt);
+        let Self {
+            water,
+            water_seen,
+            water_surfaces,
+            items,
+            materials,
+            eye,
+            quality,
+            ..
+        } = self;
+        if let Some(surface) = sea {
+            water_seen.push(Seen {
+                item: None,
+                surface,
+            });
+        }
+        for (i, item) in items.iter().enumerate() {
+            let Some(item) = item else {
+                continue;
+            };
             if item.bounds.is_none_or(|b| outside(cull, b, true)) {
                 continue;
             }
-            for part in &item.parts {
-                let water = self
-                    .materials
+            for (p, part) in item.parts.iter().enumerate() {
+                let water_material = materials
                     .get(part.material.0 as usize)
                     .and_then(Option::as_ref)
                     .is_some_and(|m| m.cpu.surface == Surface::Water);
-                if !water {
+                if !water_material {
                     continue;
                 }
                 let visible = item
@@ -4372,15 +4479,33 @@ impl Renderer {
                     .filter_map(|c| c.bounds)
                     .filter(|b| !outside(cull, *b, true))
                     .reduce(union);
-                if let Some((lo, hi)) = visible {
-                    let area = (hi.x - lo.x) * (hi.z - lo.z);
-                    if best.is_none_or(|(a, _)| area > a) {
-                        best = Some((area, hi.y));
-                    }
-                }
+                let Some((lo, hi)) = visible else {
+                    continue;
+                };
+                let distance = eye.clamp(lo, hi).distance(*eye);
+                let rect = water::screen_rect(cull, (lo, hi), size);
+                let coverage = rect.area() as f32 / (u64::from(size.0) * u64::from(size.1)) as f32;
+                let rect = rect.padded(
+                    water::ripple_pad(distance, water::POND_DISTORTION, tilt, size),
+                    size,
+                );
+                water_seen.push(Seen {
+                    item: Some((i as u32, p as u32, part.material)),
+                    surface: water::Surface {
+                        height: hi.y,
+                        rect,
+                        coverage,
+                        distance,
+                    },
+                });
             }
         }
-        best.map(|(_, h)| h)
+        water_surfaces.extend(water_seen.iter().map(|s| s.surface));
+        water.rank(
+            water_surfaces,
+            quality.plane_budget(),
+            quality.screen_reflections > 0,
+        );
     }
 
     /// The level of detail a cluster draws at in a pass (`None`: culled).
@@ -8417,6 +8542,35 @@ mod tests {
         // Guards against a runaway frame, not speed: a software rasteriser on a shared
         // machine has taken 2.1 s here.
         assert!(worst.get() < 6.0, "a frame took {:.2} s", worst.get());
+    }
+
+    /// The presets budget 0, 1, 2 and 3 planar passes; the globals hold four planes at most.
+    #[test]
+    fn the_presets_budget_their_planar_water_passes() {
+        let budgets: Vec<u32> = Quality::PRESETS
+            .iter()
+            .map(|(_, q)| q.plane_budget())
+            .collect();
+        assert_eq!(budgets, [0, 1, 2, 3]);
+        assert_eq!(Quality::LOW.water_reflection, 0);
+        // The planar reflection off: no budget, whatever the setting.
+        assert_eq!(
+            (Quality {
+                water_reflection: 0,
+                water_planes: 4,
+                ..Quality::ULTRA
+            })
+            .plane_budget(),
+            0
+        );
+        assert_eq!(
+            (Quality {
+                water_planes: 9,
+                ..Quality::ULTRA
+            })
+            .plane_budget(),
+            water::MAX_PLANES
+        );
     }
 
     #[test]

@@ -192,6 +192,8 @@ impl Pictures for GpuPictures {
                     "instances": stats.instances,
                     "gpu_ms": stats.gpu_ms,
                     "gpu_passes": stats.gpu_passes,
+                    // The frame's water surfaces and how each was reflected (`ui.get`).
+                    "water": visioncraft::agents::water_json(&stats.water),
                 },
             }),
         })
