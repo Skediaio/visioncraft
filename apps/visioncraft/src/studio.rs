@@ -2228,7 +2228,8 @@ impl Studio {
             self.draft_serial += 1;
         }
         self.sync();
-        self.playback.prune_flashes(self.clock);
+        // Live, only what has ended on the live clock: a flash on a film's time stays for it.
+        self.playback.prune_live(self.clock);
         self.scene.animate(&mut self.renderer, &self.playback);
         self.draw_flashes();
         self.poll_sky_volume();

@@ -394,10 +394,17 @@ impl Host for Bound<'_, '_> {
         let saved = (h.studio.project() != project)
             .then(|| std::mem::replace(&mut h.studio.session, Session::new(project.clone())));
         // A picture is taken at the clock it asks for (a film's time), so it is the same every
-        // time: the window's own clock and frame rate come back afterwards.
-        let live = (h.studio.clock, h.studio.playback.fps);
+        // time, and from the request's copy of what plays (as the command line takes it): the
+        // window's own playback is neither moved on nor pruned by it, and comes back afterwards
+        // with the window's clock.
+        let mut playback = request.playback.clone();
+        playback.clock = request.animation_s;
+        playback.fps = request.fps;
+        let live = (
+            h.studio.clock,
+            std::mem::replace(&mut h.studio.playback, playback),
+        );
         h.studio.clock = request.animation_s;
-        h.studio.playback.fps = request.fps;
         if saved.is_some() {
             h.studio.growth_conflicts = Default::default();
         }
@@ -443,7 +450,7 @@ impl Host for Bound<'_, '_> {
         h.studio.camera = camera;
         (h.studio.quality, h.studio.quality_auto) = (quality, auto);
         h.studio.clock = live.0;
-        h.studio.playback.fps = live.1;
+        h.studio.playback = live.1;
         if let Some(own) = saved {
             // The window's own session, with its history, comes back; the scene follows it.
             h.studio.session = own;
@@ -1114,6 +1121,88 @@ mod tests {
         // And nothing of it is an edit.
         // (The object and its planting are the only two edits.)
         assert_eq!(h.host.studio.session.revision(), 2);
+    }
+
+    /// A flash scheduled on a film's time through the window's host: a live frame later on
+    /// does not forget it, and two renders of the film show it on the same frames.
+    #[test]
+    fn a_film_time_flash_outlives_the_live_clock_and_shows_in_every_film() {
+        let mut s = Session::new(Project::default());
+        // Night, lamps off: the ground is dark, so a flash shows.
+        s.run("time.set", json!({"hour": 23.0})).unwrap();
+        s.run("film.add", json!({"name": "F", "fps": 10})).unwrap();
+        s.run(
+            "film.add_shot",
+            json!({"id": "f1", "shot": {"kind": "hold", "eye": [0, 1.5, 6], "target": [0, 0.5, 0], "duration_s": 1.0}}),
+        )
+        .unwrap();
+        let project = s.project().clone();
+        let out = std::env::temp_dir().join(format!(
+            "visioncraft-window-film-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&out);
+        let mut ran = false;
+        with_host(project, |h| {
+            ran = true;
+            h.host.now = 50.0;
+            let r = visioncraft_automation::commands::execute(
+                h,
+                "effect.flash",
+                &json!({"position": [0, 0.8, 0], "color": [1, 0.8, 0.5], "intensity": 4000,
+                        "range_m": 5, "frames": 2, "start_s": 0.5}),
+            )
+            .unwrap();
+            assert_eq!(r["start_s"], json!(0.5));
+            // A live frame, ten seconds on: the flash belongs to the film, not to now.
+            h.host.studio.clock = 60.0;
+            h.host.studio.prepare();
+            assert_eq!(h.host.studio.playback.flashes().len(), 1, "kept");
+            let light = |dir: &std::path::Path, n: usize| -> f32 {
+                let bytes = std::fs::read(dir.join(format!("frame_{n:05}.png"))).unwrap();
+                let img = image::load_from_memory(&bytes).unwrap().to_rgba8();
+                let (w, hh) = img.dimensions();
+                let (mut sum, mut count) = (0.0, 0);
+                for y in hh / 4..hh * 3 / 4 {
+                    for x in w / 4..w * 3 / 4 {
+                        let p = img.get_pixel(x, y);
+                        sum += 0.2126 * f32::from(p[0])
+                            + 0.7152 * f32::from(p[1])
+                            + 0.0722 * f32::from(p[2]);
+                        count += 1;
+                    }
+                }
+                sum / (count * 255) as f32
+            };
+            let mut films = Vec::new();
+            for name in ["a", "b"] {
+                let dir = out.join(name);
+                let r = visioncraft_automation::commands::execute(
+                    h,
+                    "film.render",
+                    &json!({"id": "f1", "dir": dir, "width": 160, "height": 90}),
+                )
+                .unwrap_or_else(|e| panic!("film.render: {e}"));
+                assert_eq!(r["frames"], json!(10), "{r}");
+                films.push((0..10).map(|n| light(&dir, n)).collect::<Vec<f32>>());
+                assert_eq!(
+                    h.host.studio.playback.flashes().len(),
+                    1,
+                    "a film leaves the window's flashes alone"
+                );
+            }
+            for film in &films {
+                let dark = [0, 4, 7, 9].map(|n| film[n]).into_iter().fold(0.0, f32::max);
+                assert!(
+                    film[5] > dark + 0.01 && film[6] > dark + 0.01,
+                    "frames 5 and 6 (0.5 s and 0.6 s) show the flash: {films:?}"
+                );
+            }
+        });
+        let _ = std::fs::remove_dir_all(&out);
+        if !ran {
+            eprintln!("no GPU adapter: skipped");
+        }
     }
 
     #[test]

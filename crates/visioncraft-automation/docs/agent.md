@@ -368,8 +368,12 @@ b], "intensity": 2000, "range_m": 4, "size_m"?: 0.15, "frames"?: 2, "seconds"?, 
 short-lived flash there: a point light (lumens, as a lamp's) and a glowing quad facing the
 camera, for `frames` frames of the rate in force (a film's fps, so the same frames show it every
 time; 60 a second in a still) or for `seconds`, from `start_s` (the clock now); at most 16 flash
-at once, the oldest is dropped. Playing and flashing are session state: not saved with the
-project, not an undo step.
+at once, the oldest is dropped. A flash without `start_s` starts at the clock now and is
+forgotten once over; one with `start_s` is kept, so every render of a film shows it. In a
+window the clock is the window's own frame time (seconds since it opened), not a film's: a clip
+or a flash meant for `film.render` takes its `start_s` on the film's time explicitly (`"start_s":
+1.5` is 1.5 s into the film), or it plays at the window's clock and the film does not see it.
+Playing and flashing are session state: not saved with the project, not an undo step.
 
 ### 15. The example garden
 

@@ -163,6 +163,9 @@ pub struct Playback {
     pub fps: f64,
     plays: Vec<Play>,
     flashes: Vec<Flash>,
+    /// The flashes that started at the clock when they were added ([`Self::flash_live`]): the
+    /// ones [`Self::prune_live`] forgets once over. The others are on a film's time.
+    live: Vec<u64>,
     serial: u64,
     next_flash: u64,
 }
@@ -174,6 +177,7 @@ impl Default for Playback {
             fps: 60.0,
             plays: Vec::new(),
             flashes: Vec::new(),
+            live: Vec::new(),
             serial: 0,
             next_flash: 1,
         }
@@ -290,12 +294,23 @@ impl Playback {
         self.plays.iter().any(|p| p.target.planting == planting)
     }
 
-    /// Adds a flash; over [`MAX_FLASHES`] at once the oldest goes. Returns its id.
+    /// Adds a flash at a time of its own (a film's): it stays until removed, so every render of
+    /// the film shows it. Over [`MAX_FLASHES`] at once the oldest goes. Returns its id.
     pub fn flash(&mut self, flash: Flash) -> u64 {
         let id = self.next_flash;
         self.next_flash += 1;
         self.flashes.insert(0, Flash { id, ..flash });
         self.flashes.truncate(MAX_FLASHES);
+        let flashes = &self.flashes;
+        self.live.retain(|l| flashes.iter().any(|f| f.id == *l));
+        id
+    }
+
+    /// Adds a flash that starts at the clock now (live): [`Self::prune_live`] forgets it once
+    /// it is over. Returns its id.
+    pub fn flash_live(&mut self, flash: Flash) -> u64 {
+        let id = self.flash(flash);
+        self.live.push(id);
         id
     }
 
@@ -303,6 +318,7 @@ impl Playback {
     pub fn remove_flash(&mut self, id: u64) -> bool {
         let before = self.flashes.len();
         self.flashes.retain(|f| f.id != id);
+        self.live.retain(|l| *l != id);
         before != self.flashes.len()
     }
 
@@ -328,6 +344,21 @@ impl Playback {
         let fps = self.fps;
         let before = self.flashes.len();
         self.flashes.retain(|f| !f.ended(t, fps));
+        let flashes = &self.flashes;
+        self.live.retain(|l| flashes.iter().any(|f| f.id == *l));
+        before - self.flashes.len()
+    }
+
+    /// Forgets the live flashes ([`Self::flash_live`]) that are over at the live clock `t`; a
+    /// flash on a film's time stays for the film. Returns how many went.
+    pub fn prune_live(&mut self, t: f64) -> usize {
+        let fps = self.fps;
+        let before = self.flashes.len();
+        let live = &self.live;
+        self.flashes
+            .retain(|f| !(live.contains(&f.id) && f.ended(t, fps)));
+        let flashes = &self.flashes;
+        self.live.retain(|l| flashes.iter().any(|f| f.id == *l));
         before - self.flashes.len()
     }
 }

@@ -349,7 +349,10 @@ pub(crate) fn flash(host: &mut dyn Host, id: &str, params: &Value) -> Result<Val
         (None, None) => Life::Frames(FLASH_FRAMES as u32),
     };
     let playback = playback(host)?;
-    let start_s = match a.number("start_s")? {
+    // Without a time of its own it starts at the clock now, and is forgotten once over; with
+    // one it is on a film's time, and stays for every render of the film.
+    let given = a.number("start_s")?;
+    let start_s = match given {
         None => playback.clock as f32,
         Some(v) if v.is_finite() => v as f32,
         Some(v) => {
@@ -359,7 +362,7 @@ pub(crate) fn flash(host: &mut dyn Host, id: &str, params: &Value) -> Result<Val
         }
     };
     let full = playback.flashes().len() >= MAX_FLASHES;
-    let flash_id = playback.flash(Flash {
+    let flash = Flash {
         id: 0,
         start_s,
         position,
@@ -368,7 +371,12 @@ pub(crate) fn flash(host: &mut dyn Host, id: &str, params: &Value) -> Result<Val
         range_m: range_m as f32,
         size_m: size_m as f32,
         life,
-    });
+    };
+    let flash_id = if given.is_some() {
+        playback.flash(flash)
+    } else {
+        playback.flash_live(flash)
+    };
     let mut out = json!({
         "id": flash_id,
         "start_s": start_s,
