@@ -414,6 +414,61 @@ pub fn auto_ev(elevation_deg: f32, moon_lux: f32, lamps: bool) -> f32 {
     (metered + darker + lamp).max(-2.5)
 }
 
+/// `view.render`'s shadow filter over the preset's for one picture: `filter` and `radius_m` as
+/// the command gives them (`None`: not given) and `preset` the preset's filter. `None`: the
+/// preset's own again. A filter given is mapped to the renderer's (`PictureShadowFilter` is
+/// this workspace's automation crate's, which does not see `ShadowFilter`): every tap choice is
+/// one variant, so there is no count a host could get wrong. The 16-tap disk takes the picture's
+/// radius, else the preset's; PCSS takes the picture's radius as its largest penumbra, else its
+/// own default, `DEFAULT_PCSS_MAX_RADIUS_M`; `Hard` and the grids have no radius (one given
+/// with them is kept in the filter, where their shaders ignore it: the command refuses the two
+/// together before this). A radius alone goes with the preset's filter: the 16-tap disk's
+/// radius, PCSS's largest. Whatever comes out is sanitized, as a preset is.
+fn picture_shadow_filter(
+    filter: Option<PictureShadowFilter>,
+    radius_m: Option<f32>,
+    preset: ShadowFilter,
+) -> Option<ShadowFilter> {
+    match (filter, radius_m) {
+        (None, None) => None,
+        (None, Some(radius_m)) => Some(
+            match preset {
+                ShadowFilter::Hard => ShadowFilter::Hard,
+                ShadowFilter::Pcf { taps, .. } => ShadowFilter::Pcf { taps, radius_m },
+                ShadowFilter::Pcss { .. } => ShadowFilter::Pcss {
+                    max_radius_m: radius_m,
+                },
+            }
+            .sanitized(),
+        ),
+        (Some(filter), radius_m) => {
+            // The disk's radius: the picture's, else the preset's.
+            let disk = radius_m.unwrap_or_else(|| preset.radius_m());
+            Some(
+                match filter {
+                    PictureShadowFilter::Hard => ShadowFilter::Hard,
+                    PictureShadowFilter::Pcf4 => ShadowFilter::Pcf {
+                        taps: 4,
+                        radius_m: disk,
+                    },
+                    PictureShadowFilter::Pcf9 => ShadowFilter::Pcf {
+                        taps: 9,
+                        radius_m: disk,
+                    },
+                    PictureShadowFilter::Pcf16 => ShadowFilter::Pcf {
+                        taps: 16,
+                        radius_m: disk,
+                    },
+                    PictureShadowFilter::Pcss => ShadowFilter::Pcss {
+                        max_radius_m: radius_m.unwrap_or(DEFAULT_PCSS_MAX_RADIUS_M),
+                    },
+                }
+                .sanitized(),
+            )
+        }
+    }
+}
+
 impl Studio {
     pub fn new(mut renderer: Renderer, project: Project) -> Self {
         let quality = 1;
@@ -1918,32 +1973,7 @@ impl Studio {
         } else {
             Quality::PRESETS[self.quality].1
         };
-        self.shadow_filter = match (filter, radius_m) {
-            (None, None) => None,
-            (None, Some(radius_m)) => Some(
-                match preset.shadow_filter {
-                    ShadowFilter::Hard => ShadowFilter::Hard,
-                    ShadowFilter::Pcf { taps, .. } => ShadowFilter::Pcf { taps, radius_m },
-                    ShadowFilter::Pcss { .. } => ShadowFilter::Pcss {
-                        max_radius_m: radius_m,
-                    },
-                }
-                .sanitized(),
-            ),
-            (Some(filter), radius_m) => Some(
-                match filter {
-                    PictureShadowFilter::Hard => ShadowFilter::Hard,
-                    PictureShadowFilter::Pcf { taps } => ShadowFilter::Pcf {
-                        taps,
-                        radius_m: radius_m.unwrap_or_else(|| preset.shadow_filter.radius_m()),
-                    },
-                    PictureShadowFilter::Pcss => ShadowFilter::Pcss {
-                        max_radius_m: radius_m.unwrap_or(DEFAULT_PCSS_MAX_RADIUS_M),
-                    },
-                }
-                .sanitized(),
-            ),
-        };
+        self.shadow_filter = picture_shadow_filter(filter, radius_m, preset.shadow_filter);
     }
 
     /// Feeds one frame time (ms); Auto may change the quality. Down as soon as 30 frames show
@@ -2931,6 +2961,84 @@ mod tests {
         assert!(
             moonless < moonlit && moonless > moonlit - (0.358f32 / 0.058).log2(),
             "{moonless}"
+        );
+    }
+
+    /// `view.render`'s shadow filter over the preset's maps to the renderer's, `set_shadow_filter`:
+    /// each of the closed tap choices and PCSS is one variant of the renderer's (there is no tap
+    /// count to round), the disk and PCSS take the picture's radius, else the preset's and
+    /// PCSS's own default, a radius alone goes with the preset's filter, and all of it comes out
+    /// sanitized, as a preset is.
+    #[test]
+    fn a_pictures_shadow_filter_maps_to_the_renderers() {
+        use super::{PictureShadowFilter::*, picture_shadow_filter};
+        use visioncraft_render::{
+            DEFAULT_PCSS_MAX_RADIUS_M, DEFAULT_SHADOW_RADIUS_M, Quality, ShadowFilter,
+        };
+        let pcf = |taps, radius_m| ShadowFilter::Pcf { taps, radius_m };
+        let pcss = |max_radius_m| ShadowFilter::Pcss { max_radius_m };
+        let high = Quality::HIGH.shadow_filter;
+        // Nothing given: the preset's.
+        assert_eq!(picture_shadow_filter(None, None, high), None);
+        // Every choice, without a radius: at the preset's radius (HIGH: 0.03), PCSS at its own.
+        let bare = [
+            (Hard, ShadowFilter::Hard),
+            (Pcf4, pcf(4, DEFAULT_SHADOW_RADIUS_M)),
+            (Pcf9, pcf(9, DEFAULT_SHADOW_RADIUS_M)),
+            (Pcf16, pcf(16, DEFAULT_SHADOW_RADIUS_M)),
+            (Pcss, pcss(DEFAULT_PCSS_MAX_RADIUS_M)),
+        ];
+        for (given, mapped) in bare {
+            assert_eq!(picture_shadow_filter(Some(given), None, high), Some(mapped));
+        }
+        // With a radius: the disk's and PCSS's (as its largest).
+        assert_eq!(
+            picture_shadow_filter(Some(Pcf16), Some(0.2), high),
+            Some(pcf(16, 0.2))
+        );
+        assert_eq!(
+            picture_shadow_filter(Some(Pcss), Some(0.2), high),
+            Some(pcss(0.2))
+        );
+        assert_eq!(
+            picture_shadow_filter(Some(Pcss), Some(0.0), high),
+            Some(pcss(0.0))
+        );
+        // The 16-tap disk of a preset with another radius keeps that one.
+        assert_eq!(
+            picture_shadow_filter(Some(Pcf16), None, pcf(16, 0.07)),
+            Some(pcf(16, 0.07))
+        );
+        // A radius alone goes with the preset's filter: the disk's radius, PCSS's largest, and
+        // nothing to take it for `Hard`.
+        assert_eq!(
+            picture_shadow_filter(None, Some(0.2), high),
+            Some(pcf(9, 0.2))
+        );
+        assert_eq!(
+            picture_shadow_filter(None, Some(0.2), pcf(16, 0.03)),
+            Some(pcf(16, 0.2))
+        );
+        assert_eq!(
+            picture_shadow_filter(None, Some(0.2), pcss(0.1)),
+            Some(pcss(0.2))
+        );
+        assert_eq!(
+            picture_shadow_filter(None, Some(0.2), ShadowFilter::Hard),
+            Some(ShadowFilter::Hard)
+        );
+        // Sanitized, as a preset is: a radius out of range clamped, a NaN one the default.
+        assert_eq!(
+            picture_shadow_filter(None, Some(5.0), high),
+            Some(pcf(9, 1.0))
+        );
+        assert_eq!(
+            picture_shadow_filter(Some(Pcf16), Some(-1.0), high),
+            Some(pcf(16, 0.0))
+        );
+        assert_eq!(
+            picture_shadow_filter(Some(Pcss), Some(f32::NAN), high),
+            Some(pcss(DEFAULT_PCSS_MAX_RADIUS_M))
         );
     }
 }

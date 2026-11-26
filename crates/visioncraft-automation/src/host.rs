@@ -59,13 +59,19 @@ pub trait Pictures {
 
 /// `view.render`'s `shadow_filter`: the sun's shadow filter of one picture, over the preset's.
 /// This crate does not depend on visioncraft-render, whose `ShadowFilter` the app maps it to.
+/// One variant per tap count, so a host that builds a `RenderRequest` itself has no count to
+/// get wrong (before, `Pcf { taps }` took any, and the app rounded it to the nearest the
+/// renderer has).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PictureShadowFilter {
     /// One comparison tap: the hard edge.
     Hard,
-    /// Percentage-closer filtering: 4 taps (a 2x2 grid), 9 (a 3x3 grid) or 16 (a disk over
-    /// [`RenderRequest::shadow_radius_m`]).
-    Pcf { taps: u32 },
+    /// Percentage-closer filtering, 4 taps: a 2x2 grid a few shadow texels wide.
+    Pcf4,
+    /// Percentage-closer filtering, 9 taps: a 3x3 grid a few shadow texels wide.
+    Pcf9,
+    /// Percentage-closer filtering, 16 taps: a disk over [`RenderRequest::shadow_radius_m`].
+    Pcf16,
     /// Percentage-closer soft shadows: 16 taps, a penumbra that grows with the receiver's
     /// distance to its occluder, at most [`RenderRequest::shadow_radius_m`].
     Pcss,

@@ -987,7 +987,7 @@ pub fn host_docs() -> Vec<CommandDoc> {
                     false,
                     Some("the preset's"),
                     &["hard", "pcf4", "pcf9", "pcf16", "pcss"],
-                    "The sun's shadow filter for this picture, over the preset's: hard is one comparison tap (the sharpest edge); pcf4 and pcf9 are fixed 2x2 and 3x3 grids a few shadow texels wide; pcf16 spreads 16 taps (a disk, never narrower than 1.5 shadow texels) over `shadow_radius_m` metres in the world, the same penumbra in every cascade; pcss (percentage-closer soft shadows) spreads the same 16 taps over a penumbra that grows with the distance to the occluder, as a real sun's: sharp where a caster meets its shadow, at most `shadow_radius_m` metres (0.15 unless given). At quality low and medium only the 1- and 4-tap filters are compiled: pcf9, pcf16 and pcss run as pcf4 there",
+                    "The sun's shadow filter for this picture, over the preset's: hard is one comparison tap (the sharpest edge); pcf4 and pcf9 are fixed 2x2 and 3x3 grids a few shadow texels wide; pcf16 spreads 16 taps (a disk, never narrower than 1.5 shadow texels) over `shadow_radius_m` metres in the world, the same penumbra in every cascade; pcss (percentage-closer soft shadows) spreads the same 16 taps over a penumbra that grows with the distance to the occluder: sharp where a caster meets its shadow (never narrower than 0.75 shadow texels), at most `shadow_radius_m` metres (0.15 unless given), about twice as wide as a real sun's (the sun's disc as drawn is twice the real one's angular radius). At quality low and medium only the 1- and 4-tap filters are compiled: pcf9, pcf16 and pcss run as pcf4 there",
                 ),
                 p(
                     "shadow_radius_m",
@@ -2300,9 +2300,9 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
         None => None,
         Some(name) => Some(match name {
             "hard" => PictureShadowFilter::Hard,
-            "pcf4" => PictureShadowFilter::Pcf { taps: 4 },
-            "pcf9" => PictureShadowFilter::Pcf { taps: 9 },
-            "pcf16" => PictureShadowFilter::Pcf { taps: 16 },
+            "pcf4" => PictureShadowFilter::Pcf4,
+            "pcf9" => PictureShadowFilter::Pcf9,
+            "pcf16" => PictureShadowFilter::Pcf16,
             "pcss" => PictureShadowFilter::Pcss,
             _ => {
                 return Err(format!(
@@ -2321,7 +2321,7 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
     // `Quality` in visioncraft-render, which this crate does not see).
     if shadow_radius_m.is_some()
         && !match shadow_filter {
-            Some(PictureShadowFilter::Pcf { taps: 16 }) | Some(PictureShadowFilter::Pcss) => true,
+            Some(PictureShadowFilter::Pcf16 | PictureShadowFilter::Pcss) => true,
             Some(_) => false,
             None => matches!(quality, "ultra" | "photo"),
         }

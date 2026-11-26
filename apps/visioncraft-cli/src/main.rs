@@ -165,8 +165,9 @@ Options:
                   sharpest edge), pcf4 or pcf9 (fixed grids a few shadow texels wide), pcf16
                   (a disk over --shadow-radius, never narrower than 1.5 shadow texels) or pcss
                   (the same 16 taps over a penumbra that grows with the distance to the
-                  occluder: sharp at the contact, at most --shadow-radius). Default the
-                  preset's; pcf9, pcf16 and pcss run as pcf4 at quality low and medium
+                  occluder: sharp at the contact, at most --shadow-radius, about twice as wide
+                  as a real sun's: the sun's disc as drawn is twice its angular radius). Default
+                  the preset's; pcf9, pcf16 and pcss run as pcf4 at quality low and medium
   --shadow-radius M  The penumbra's radius in metres for this picture, 0 to 1: only pcf16 and
                   pcss spread over it, so it needs --shadow-filter pcf16 or pcss, or --quality
                   ultra or photo. Default 0.03, for pcss 0.15
