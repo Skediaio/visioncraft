@@ -4,8 +4,10 @@
 //! somebody else's job (`assets`, `library`).
 //!
 //! A model with animations (glTF 2.0, "Animations") keeps the nodes they move as rigid parts
-//! ([`Glb::parts`]) and its clips ([`Glb::clips`]). [`Glb::rest_prims`] draws such a model whole
-//! at its rest pose.
+//! ([`Glb::parts`]) and its clips ([`Glb::clips`]). A channel that is malformed, or that moves
+//! nothing here, is left out with a warning ([`Glb::animation_warnings`]): the model still
+//! loads, as a file without that animation would. Only broken geometry refuses a file.
+//! [`Glb::rest_prims`] draws such a model whole at its rest pose.
 
 use glam::{Mat3, Mat4, Vec3};
 use gltf::accessor::{DataType, Dimensions};
@@ -81,7 +83,9 @@ pub struct AnimatedPart {
     pub prims: Vec<Prim>,
     /// The node's transform in the file.
     pub rest: Trs,
-    /// The part it hangs under (`None`: the model's root).
+    /// The part it hangs under (`None`: the model's root). Parts are in the order of their
+    /// nodes in the file, so a parent may have a higher index than its child: nothing may
+    /// assume parents come first.
     pub parent: Option<usize>,
 }
 
@@ -96,13 +100,33 @@ pub struct Glb {
     /// with the nodes between it and the root (a fixed node there is part of its chain). Empty
     /// without animations.
     pub parts: Vec<AnimatedPart>,
-    /// The animations, their channels targeting `parts`. Empty without animations.
+    /// The animations, their channels targeting `parts`. Empty without animations, and
+    /// without an animation nothing of which can play (see `animation_warnings`).
     pub clips: Vec<Clip>,
+    /// What was left out of the animations and why: a malformed channel, an animation that
+    /// moves nothing here. Empty for most files.
+    pub animation_warnings: Vec<String>,
 }
 
 impl Glb {
-    /// The whole model at its rest pose: `prims` with every part where the file has it. What is
-    /// drawn until a clip plays; playback (part B) moves the parts on their own instead.
+    /// The bones the clips move, for playback and queries: each part's rest transform and
+    /// parent part, with the clips. `None` for a model that stands still.
+    pub fn rig(&self) -> Option<keyframes::Rig> {
+        if self.parts.is_empty() {
+            return None;
+        }
+        Some(keyframes::Rig {
+            rest: self.parts.iter().map(|p| p.rest).collect(),
+            parents: self.parts.iter().map(|p| p.parent).collect(),
+            clips: self.clips.clone(),
+        })
+    }
+}
+
+impl Glb {
+    /// The whole model at its rest pose: `prims` with every part where the file has it. For
+    /// what a model measures and its thumbnail; the scene draws `prims` and the parts apart,
+    /// so that a clip can move them.
     /// Nothing moves in most models: then these are `prims` themselves, not a copy.
     pub fn rest_prims(&self) -> std::borrow::Cow<'_, [Prim]> {
         if self.parts.is_empty() {
@@ -233,37 +257,11 @@ fn tree_of(
     Ok((parent, reached))
 }
 
-/// Whether a channel can move this node here: its transform is a translation, a rotation and a
-/// scale (a node given as a matrix has nothing to animate, says glTF), and the scene reaches it
-/// once, so that it moves in one place and not in several at once.
-fn animatable(node: gltf::Node, reached: &[u8]) -> bool {
-    let index = node.index();
-    !matches!(node.transform(), Transform::Matrix { .. }) && reached[index] == 1
-}
-
-/// The nodes the animations keep apart, by index: every node a channel can move, with the nodes
+/// The nodes the animations keep apart, by index: every node a channel moves, with the nodes
 /// between it and the root, so that a fixed node there (a chest under a lid) is not lost. A
 /// node no channel moves whose own transform is the identity adds nothing to that chain and
-/// stays in the static model. A moving node under a node the scene reaches twice stays as it is
-/// too: it would move in one copy only.
-fn kept_nodes(doc: &gltf::Document, tree: &[Option<usize>], reached: &[u8]) -> Vec<usize> {
-    // The node and every node above it are each reached once.
-    let once =
-        |first: usize| std::iter::successors(Some(first), |i| tree[*i]).all(|i| reached[i] == 1);
-    let mut moved = HashSet::new();
-    for animation in doc.animations() {
-        for channel in animation.channels() {
-            let target = channel.target();
-            let node = target.node();
-            let index = node.index();
-            if target.property() != Property::MorphTargetWeights
-                && animatable(node, reached)
-                && once(index)
-            {
-                moved.insert(index);
-            }
-        }
-    }
+/// stays in the static model.
+fn kept_nodes(doc: &gltf::Document, tree: &[Option<usize>], moved: &HashSet<usize>) -> Vec<usize> {
     let mut kept = moved.clone();
     let mut under: Vec<usize> = kept.iter().copied().collect();
     while let Some(n) = under.pop() {
@@ -417,57 +415,108 @@ where
     Ok((interpolation, times, values))
 }
 
-/// The clips of the file, their channels targeting parts. A channel that moves nothing here (a
-/// node outside the scene, a morph target) is left out; its animation stays listed.
+/// The clips of the file, their channels naming glTF nodes, and what was left out. A channel
+/// that is malformed, or that moves nothing here (a morph target, a node that does not exist,
+/// a node given as a matrix, a node outside the scene or one the scene does not reach once),
+/// is left out with a warning, and so is an animation nothing is left of: the model still
+/// loads. The nodes the kept channels name are what [`kept_nodes`] keeps apart.
 fn read_clips<'a, 's, F>(
     doc: &'a gltf::Document,
-    part_of: &HashMap<usize, usize>,
+    tree: &[Option<usize>],
     reached: &[u8],
     data: F,
-) -> Result<Vec<Clip>, String>
+) -> (Vec<Clip>, Vec<String>)
 where
     F: Clone + Fn(gltf::Buffer<'a>) -> Option<&'s [u8]>,
 {
-    let mut clips = Vec::new();
+    // The node and every node above it are each reached once.
+    let once =
+        |first: usize| std::iter::successors(Some(first), |i| tree[*i]).all(|i| reached[i] == 1);
+    let raw = doc.as_json();
+    let nodes = raw.nodes.len();
+    let (mut clips, mut warnings) = (Vec::new(), Vec::new());
     for animation in doc.animations() {
+        let name = animation.name().unwrap_or_default().to_string();
+        let json = &raw.animations[animation.index()];
         let mut clip = Clip {
-            name: animation.name().unwrap_or_default().to_string(),
+            name: name.clone(),
             duration: 0.0,
             channels: Vec::new(),
         };
-        for channel in animation.channels() {
+        for (i, channel) in animation.channels().enumerate() {
             let target = channel.target();
             let path = match target.property() {
                 Property::Translation => Path::Translation,
                 Property::Rotation => Path::Rotation,
                 Property::Scale => Path::Scale,
-                Property::MorphTargetWeights => continue,
+                Property::MorphTargetWeights => {
+                    warnings.push(format!(
+                        "the animation `{name}`: channel {i} moves morph targets, which are not drawn here; the channel is left out"
+                    ));
+                    continue;
+                }
             };
-            let node = target.node();
-            let index = node.index();
-            if !animatable(node, reached) {
+            let index = json.channels[i].target.node.value();
+            let what = format!("the animation `{name}`: channel {i} ({path:?} of node {index})");
+            // The crate does not check a channel's node, and panics on a bad one later.
+            if index >= nodes {
+                warnings.push(format!(
+                    "{what}: the node does not exist; the channel is left out"
+                ));
                 continue;
             }
-            let Some(&part) = part_of.get(&index) else {
+            let node = doc.nodes().nth(index).expect("the index is in range");
+            if matches!(node.transform(), Transform::Matrix { .. }) {
+                warnings.push(format!(
+                    "{what}: the node is given as a matrix, which has nothing to animate; the channel is left out"
+                ));
                 continue;
-            };
-            let (interpolation, times, values) =
-                sampler_keys(channel.sampler(), path, data.clone())
-                    .map_err(|e| format!("the animation `{}`: {e}", clip.name))?;
-            clip.channels.push(Channel {
-                node: part,
-                path,
-                interpolation,
-                times,
-                values,
-            });
+            }
+            if reached[index] != 1 {
+                warnings.push(format!(
+                    "{what}: the scene reaches the node {} times, so it would not move in one place; the channel is left out",
+                    reached[index]
+                ));
+                continue;
+            }
+            if !once(index) {
+                warnings.push(format!(
+                    "{what}: a node above it is reached more than once by the scene; the channel is left out"
+                ));
+                continue;
+            }
+            match sampler_keys(channel.sampler(), path, data.clone()) {
+                Ok((interpolation, times, values)) => {
+                    let ch = Channel {
+                        node: index,
+                        path,
+                        interpolation,
+                        times,
+                        values,
+                    };
+                    if let Err(e) = ch.check(&what) {
+                        warnings.push(format!("{e}; the channel is left out"));
+                    } else {
+                        clip.channels.push(ch);
+                    }
+                }
+                Err(e) => warnings.push(format!("{what}: {e}; the channel is left out")),
+            }
+        }
+        if clip.channels.is_empty() {
+            warnings.push(format!(
+                "the animation `{name}` is left out: nothing of it can move here"
+            ));
+            continue;
         }
         clip.duration = clip.end();
-        clip.validate()
-            .map_err(|e| format!("the animation `{}`: {e}", clip.name))?;
+        if let Err(e) = clip.validate() {
+            warnings.push(format!("the animation `{name}`: {e}; it is left out"));
+            continue;
+        }
         clips.push(clip);
     }
-    Ok(clips)
+    (clips, warnings)
 }
 
 /// Where the walk is: the node, its matrix in model space, and when it lies under a part, that
@@ -527,20 +576,13 @@ pub fn parse(bytes: &[u8]) -> Result<Glb, String> {
         .default_scene()
         .or_else(|| doc.scenes().next())
         .ok_or("the file has no scene")?;
-    // The crate checks a channel's sampler at load, not its node, and panics on that one later.
-    let raw = doc.as_json();
-    if let Some(a) = raw.animations.iter().find(|a| {
-        a.channels
-            .iter()
-            .any(|c| c.target.node.value() >= raw.nodes.len())
-    }) {
-        return Err(format!(
-            "an animation `{}` targets a node that does not exist",
-            a.name.as_deref().unwrap_or_default()
-        ));
-    }
     let (tree, reached) = tree_of(doc, scene.clone())?;
-    let kept = kept_nodes(doc, &tree, &reached);
+    let (mut clips, animation_warnings) = read_clips(doc, &tree, &reached, data);
+    let moved: HashSet<usize> = clips
+        .iter()
+        .flat_map(|c| c.channels.iter().map(|ch| ch.node))
+        .collect();
+    let kept = kept_nodes(doc, &tree, &moved);
     let part_of: HashMap<usize, usize> = kept.iter().enumerate().map(|(i, n)| (*n, i)).collect();
     let mut parts: Vec<AnimatedPart> = kept
         .iter()
@@ -628,7 +670,12 @@ pub fn parse(bytes: &[u8]) -> Result<Glb, String> {
         return Err("the file has no triangles".into());
     }
     out.parts = parts;
-    out.clips = read_clips(doc, &part_of, &reached, data)?;
+    // The channels now name parts instead of nodes.
+    for ch in clips.iter_mut().flat_map(|c| c.channels.iter_mut()) {
+        ch.node = part_of[&ch.node];
+    }
+    out.clips = clips;
+    out.animation_warnings = animation_warnings;
     Ok(out)
 }
 
@@ -1241,6 +1288,204 @@ pub(crate) mod tests {
         assert!((at[0] - 2.25).abs() < 1e-4 && at[1].abs() < 1e-5, "{at:?}");
     }
 
+    /// A triangle with its normals, as comparable bits of rounded floats.
+    type Triangle = (usize, [[u32; 3]; 3], [[u32; 3]; 3]);
+
+    /// The triangles of `prims` whatever order they were merged in: per material, each triangle
+    /// turned to start at its least vertex (so its winding stays), with its normals, rounded to
+    /// a tenth of a millimetre, sorted.
+    fn oriented(prims: &[Prim]) -> Vec<Triangle> {
+        // A tenth of a millimetre, as bits (and no negative zero: the two loaders round it
+        // either way).
+        let round = |c: f32| {
+            let r = (c * 10_000.0).round() / 10_000.0;
+            (if r == 0.0 { 0.0 } else { r }).to_bits()
+        };
+        let mut out = Vec::new();
+        for p in prims {
+            for t in p.indices.as_chunks::<3>().0 {
+                let v: [[f32; 3]; 3] = std::array::from_fn(|k| p.positions[t[k] as usize]);
+                let n: [[f32; 3]; 3] = std::array::from_fn(|k| p.normals[t[k] as usize]);
+                let (rv, rn) = (v.map(|q| q.map(round)), n.map(|q| q.map(round)));
+                let first = (0..3).min_by_key(|k| rv[*k]).expect("three corners");
+                let turn = |a: [[u32; 3]; 3]| std::array::from_fn(|k| a[(first + k) % 3]);
+                out.push((p.material, turn(rv), turn(rn)));
+            }
+        }
+        out.sort();
+        out
+    }
+
+    /// A model that moves: its triangles at rest are the flat loader's, the same way round.
+    fn rest_is_flat(bytes: &[u8]) {
+        let g = parse(bytes).unwrap();
+        assert!(
+            !g.parts.is_empty() && !g.clips.is_empty(),
+            "something moves"
+        );
+        let flat = flat_parse(bytes).unwrap();
+        assert_eq!(g.materials, flat.materials);
+        let rest = g.rest_prims();
+        assert_eq!(oriented(&rest), oriented(&flat.prims));
+        assert_eq!(
+            g.rig()
+                .map(|r| (r.rest.len(), r.parents.len(), r.clips.len())),
+            Some((g.parts.len(), g.parts.len(), g.clips.len()))
+        );
+    }
+
+    #[test]
+    fn a_mirrored_part_and_a_mirrored_node_under_it_draw_as_the_flat_loader() {
+        // The body stands; the lid is mirrored (its node scales x by -1) and swings; under the
+        // lid a fixed node mirrored again carries a third triangle.
+        let mut b = Builder::new("steel");
+        let (body, lid, tag) = (b.triangle(A), b.triangle(B), b.triangle(C));
+        let n0 = b.node(json!({"mesh": body}));
+        let n1 = b.node(json!({
+            "mesh": lid, "scale": [-1.0, 1.0, 1.0], "translation": [1.0, 0.0, 0.0],
+        }));
+        let n2 = b.node(json!({
+            "mesh": tag, "scale": [-1.0, 1.0, 1.0], "translation": [0.0, 1.0, 0.0],
+        }));
+        b.nodes[n0]["children"] = json!([n1]);
+        b.nodes[n1]["children"] = json!([n2]);
+        b.animation(
+            "swing",
+            n1,
+            "rotation",
+            "LINEAR",
+            &[0.0, 1.0],
+            &[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, Q, Q],
+        );
+        let bytes = b.finish();
+        let g = parse(&bytes).unwrap();
+        assert_eq!(g.prims, vec![as_is(A)]);
+        assert_eq!(g.parts.len(), 1);
+        assert!(
+            g.animation_warnings.is_empty(),
+            "{:?}",
+            g.animation_warnings
+        );
+        // The part's rest carries the mirror, so its own triangle is not mirrored; the tag under
+        // it lies as its node has it relative to the lid (mirrored again, 1 m up).
+        assert_eq!(g.parts[0].prims.len(), 1, "one material");
+        assert_eq!(
+            g.parts[0].prims[0].positions,
+            [
+                B[0],
+                B[1],
+                B[2],
+                [0.0, 1.0, 1.0],
+                [0.0, 2.0, 1.0],
+                [-1.0, 1.0, 1.0]
+            ]
+        );
+        assert_eq!(
+            g.parts[0].rest,
+            Trs {
+                translation: [1.0, 0.0, 0.0],
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                scale: [-1.0, 1.0, 1.0],
+            }
+        );
+        rest_is_flat(&bytes);
+    }
+
+    #[test]
+    fn a_chain_keeps_its_moved_ends_and_skips_an_identity_node_between() {
+        // P (a chest, moved) has I under it (the identity, with a triangle of its own), and I
+        // has M under it (a lid, moved). The file lists M first: P is the part after its child.
+        let mut b = Builder::new("steel");
+        let (a, c, bb) = (b.triangle(A), b.triangle(C), b.triangle(B));
+        let m = b.node(json!({"mesh": bb, "translation": [1.0, 0.0, 0.0]}));
+        let i = b.node(json!({"mesh": c}));
+        let p = b.node(json!({
+            "mesh": a, "translation": [0.0, 1.0, 0.0], "rotation": [0.0, Q, 0.0, Q],
+        }));
+        b.nodes[p]["children"] = json!([i]);
+        b.nodes[i]["children"] = json!([m]);
+        b.animation(
+            "lift",
+            p,
+            "translation",
+            "LINEAR",
+            &[0.0, 1.0],
+            &[0.0, 1.0, 0.0, 0.0, 3.0, 0.0],
+        );
+        b.animation(
+            "open",
+            m,
+            "rotation",
+            "LINEAR",
+            &[0.0, 1.0],
+            &[0.0, 0.0, 0.0, 1.0, 0.0, Q, 0.0, Q],
+        );
+        let bytes = b.finish();
+        let g = parse(&bytes).unwrap();
+        assert!(
+            g.prims.is_empty(),
+            "the chest and what is under it move with it"
+        );
+        assert_eq!(
+            g.parts.len(),
+            2,
+            "M and P; I is the identity and adds nothing"
+        );
+        assert_eq!(
+            (g.parts[0].rest.translation, g.parts[1].rest.translation),
+            ([1.0, 0.0, 0.0], [0.0, 1.0, 0.0])
+        );
+        assert_eq!(
+            g.parts[0].parent,
+            Some(1),
+            "M hangs under P, the part after it"
+        );
+        assert_eq!(g.parts[1].parent, None);
+        // I's triangle belongs to P, where it lies relative to P (one material: one prim).
+        assert_eq!(g.parts[1].prims.len(), 1);
+        assert_eq!(
+            g.parts[1].prims[0].positions,
+            [A[0], A[1], A[2], C[0], C[1], C[2]]
+        );
+        assert_eq!(g.parts[1].prims[0].indices, vec![0, 1, 2, 3, 4, 5]);
+        assert_eq!(g.parts[0].prims, vec![as_is(B)]);
+        assert_eq!(
+            (g.clips[0].name.as_str(), g.clips[0].channels[0].node),
+            ("lift", 1)
+        );
+        assert_eq!(
+            (g.clips[1].name.as_str(), g.clips[1].channels[0].node),
+            ("open", 0)
+        );
+        rest_is_flat(&bytes);
+        // The rig poses with a parent after its child: half open, only the lid's matrix differs
+        // from its rest.
+        let rig = g.rig().unwrap();
+        let rest = keyframes::model_space(&rig.parents, &rig.rest);
+        let pose = |clip: usize, t: f32| {
+            keyframes::model_space(
+                &rig.parents,
+                &keyframes::sample(&rig.clips[clip], t, false, &rig.rest),
+            )
+        };
+        let half = pose(1, 0.5);
+        assert_eq!(half[1], rest[1]);
+        assert_ne!(half[0], rest[0]);
+        // A quarter of the way into the lift (1 to 3 m in a second), the chest is 0.5 m higher,
+        // the lid with it.
+        let pose = pose(0, 0.25);
+        assert!(
+            (pose[1][13] - rest[1][13] - 0.5).abs() < 1e-5,
+            "{}",
+            pose[1][13]
+        );
+        assert!(
+            (pose[0][13] - rest[0][13] - 0.5).abs() < 1e-5,
+            "{}",
+            pose[0][13]
+        );
+    }
+
     /// What `parse` says of a file it refuses; it must not panic on any of them.
     fn refused(bytes: &[u8]) -> String {
         std::panic::catch_unwind(|| parse(bytes))
@@ -1248,35 +1493,31 @@ pub(crate) mod tests {
             .expect_err("the file is refused")
     }
 
+    /// The one-triangle model with a translation channel over two keys, `edit` on its JSON:
+    /// accessor 1 holds the key times over buffer view 1, accessor 2 the values over view 2.
+    fn bad_animation(edit: impl FnOnce(&mut Value)) -> Vec<u8> {
+        let mut b = Builder::new("steel");
+        let m = b.triangle(A);
+        let n0 = b.node(json!({"mesh": m}));
+        b.animation(
+            "x",
+            n0,
+            "translation",
+            "LINEAR",
+            &[0.0, 1.0],
+            &[1.0, 0.0, 0.0, 2.0, 0.0, 0.0],
+        );
+        b.finish_json(edit)
+    }
+
     #[test]
-    fn malformed_animations_are_refused_not_a_panic() {
-        /// The one-triangle model with a translation channel over two keys, `edit` on its JSON.
-        fn edited(edit: impl FnOnce(&mut Value)) -> Vec<u8> {
-            let mut b = Builder::new("steel");
-            let m = b.triangle(A);
-            let n0 = b.node(json!({"mesh": m}));
-            b.animation(
-                "x",
-                n0,
-                "translation",
-                "LINEAR",
-                &[0.0, 1.0],
-                &[1.0, 0.0, 0.0, 2.0, 0.0, 0.0],
-            );
-            b.finish_json(edit)
-        }
-        // Accessor 1 holds the key times over buffer view 1; accessor 2 the values over view 2.
+    fn a_bad_animation_is_dropped_not_the_model() {
         type Edit = Box<dyn FnOnce(&mut Value)>;
         let cases: Vec<(&str, Edit, &str)> = vec![
             (
                 "a node that does not exist",
                 Box::new(|j| j["animations"][0]["channels"][0]["target"]["node"] = json!(7)),
                 "does not exist",
-            ),
-            (
-                "a sampler that does not exist",
-                Box::new(|j| j["animations"][0]["channels"][0]["sampler"] = json!(3)),
-                "GLB",
             ),
             (
                 "one value for two keys",
@@ -1326,10 +1567,39 @@ pub(crate) mod tests {
                 }),
                 "embedded",
             ),
+            (
+                "a quantised integer translation (KHR_mesh_quantization)",
+                Box::new(|j| {
+                    j["accessors"][2]["componentType"] = json!(5123);
+                    j["accessors"][2]["normalized"] = json!(false);
+                    j["extensionsUsed"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(json!("KHR_mesh_quantization"));
+                }),
+                "not floats",
+            ),
         ];
         for (what, edit, word) in cases {
-            let e = refused(&edited(edit));
-            assert!(e.contains(word), "{what}: {e}");
+            let bytes = bad_animation(edit);
+            let flat = flat_parse(&bytes).unwrap();
+            let g = parse(&bytes).unwrap_or_else(|e| panic!("{what}: the model is refused: {e}"));
+            assert_eq!(g.prims, flat.prims, "{what}: drawn as before");
+            assert!(g.parts.is_empty() && g.clips.is_empty(), "{what}");
+            // The channel says why it went, then the animation it was all of.
+            assert_eq!(
+                g.animation_warnings.len(),
+                2,
+                "{what}: {:?}",
+                g.animation_warnings
+            );
+            assert!(
+                g.animation_warnings[0].contains(word),
+                "{what}: {:?}",
+                g.animation_warnings
+            );
+            assert!(g.animation_warnings[1].contains("left out"), "{what}");
+            assert_eq!(g.rest_prims().as_ref(), g.prims.as_slice(), "{what}");
         }
         let one = |times: &[f32], values: &[f32], interpolation: &str| -> Vec<u8> {
             let mut b = Builder::new("steel");
@@ -1355,16 +1625,41 @@ pub(crate) mod tests {
             (&[1.0, 1.0][..], &[1.0; 6][..], "LINEAR", "ascending"),
             (&[0.0][..], &[0.0; 9][..], "CUBICSPLINE", "two keys"),
         ] {
-            let e = refused(&one(times, values, interpolation));
-            assert!(e.contains(word), "{e}");
+            let bytes = one(times, values, interpolation);
+            let g = parse(&bytes)
+                .unwrap_or_else(|e| panic!("{interpolation} {times:?}: the model is refused: {e}"));
+            assert!(
+                g.clips.is_empty() && g.parts.is_empty(),
+                "{interpolation} {times:?}"
+            );
+            let w = &g.animation_warnings;
+            assert_eq!(w.len(), 2, "the channel, then the animation: {w:?}");
+            assert!(w[0].contains(word), "{w:?}");
+            assert!(w[1].contains("left out"), "{w:?}");
+            assert_eq!(g.prims, flat_parse(&bytes).unwrap().prims);
         }
-        // A rotation that is all zero.
+        // A rotation that is all zero, and a value beyond what a float animation may hold.
         let mut b = Builder::new("steel");
         let m = b.triangle(A);
         let n0 = b.node(json!({"mesh": m}));
         b.animation("spin", n0, "rotation", "LINEAR", &[0.0, 1.0], &[0.0; 8]);
-        assert!(refused(&b.finish()).contains("zero"));
-        // A hierarchy that loops back on itself: the walk would never end.
+        let g = parse(&b.finish()).unwrap();
+        assert!(g.clips.is_empty() && g.animation_warnings[0].contains("zero"));
+        let g = parse(&one(
+            &[0.0, 1.0],
+            &[1e30, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "LINEAR",
+        ))
+        .unwrap();
+        assert!(
+            g.animation_warnings[0].contains("1e6"),
+            "{:?}",
+            g.animation_warnings
+        );
+        // Still refused, as broken geometry is: a file that is not a GLB (a sampler that does
+        // not exist fails the crate's own check), and a hierarchy that loops back on itself.
+        let bytes = bad_animation(|j| j["animations"][0]["channels"][0]["sampler"] = json!(3));
+        assert!(refused(&bytes).contains("GLB"));
         let mut b = Builder::new("steel");
         let m = b.triangle(A);
         let n0 = b.node(json!({"mesh": m}));
@@ -1377,9 +1672,38 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn channels_that_move_nothing_here_are_skipped() {
+    fn a_clip_keeps_its_good_channels_and_loses_the_bad_ones() {
+        // A hinge whose swing has a good rotation, a translation with one key time missing and
+        // a scale that is all beyond the limits.
+        let mut b = hinge();
+        let t = b.floats("SCALAR", &[0.0, 1.0]);
+        let short = b.floats("VEC3", &[0.0, 0.0, 0.0]);
+        let big = b.floats("VEC3", &[2.0, 2.0, 2.0, 1e7, 1.0, 1.0]);
+        b.animations[0]["samplers"].as_array_mut().unwrap().extend([
+            json!({"input": t, "interpolation": "LINEAR", "output": short}),
+            json!({"input": t, "interpolation": "LINEAR", "output": big}),
+        ]);
+        b.animations[0]["channels"].as_array_mut().unwrap().extend([
+            json!({"sampler": 1, "target": {"node": b.nodes.len() - 1, "path": "translation"}}),
+            json!({"sampler": 2, "target": {"node": b.nodes.len() - 1, "path": "scale"}}),
+        ]);
+        let g = parse(&b.finish()).unwrap();
+        assert_eq!(g.parts.len(), 1);
+        assert_eq!(g.clips.len(), 1, "the clip stays");
+        assert_eq!(g.clips[0].channels.len(), 1, "with its rotation");
+        assert_eq!(g.clips[0].channels[0].path, Path::Rotation);
+        assert_eq!(g.animation_warnings.len(), 2, "{:?}", g.animation_warnings);
+        assert!(
+            g.animation_warnings[0].contains("keys") && g.animation_warnings[1].contains("1e6"),
+            "{:?}",
+            g.animation_warnings
+        );
+    }
+
+    #[test]
+    fn channels_that_move_nothing_here_are_left_out() {
         // A node given as a matrix, a morph target, a node outside the scene and a node the
-        // scene reaches twice: the model loads as it always did, and the clip stays listed.
+        // scene reaches twice: the model loads as it always did.
         let mut b = Builder::new("steel");
         let (m, m2) = (b.triangle(A), b.triangle(B));
         let plain = b.node(json!({"mesh": m}));
@@ -1408,14 +1732,28 @@ pub(crate) mod tests {
         }));
         let bytes = b.finish_json(|j| j["scenes"][0]["nodes"] = json!([plain, matrix]));
         let g = parse(&bytes).unwrap();
-        assert!(g.parts.is_empty());
-        assert_eq!(
-            g.clips,
-            vec![Clip {
-                name: "mixed".into(),
-                duration: 0.0,
-                channels: vec![]
-            }]
+        assert!(g.parts.is_empty() && g.clips.is_empty());
+        // Each channel says why it went, then the animation.
+        assert_eq!(g.animation_warnings.len(), 5, "{:?}", g.animation_warnings);
+        for (i, word) in [
+            "given as a matrix",
+            "morph targets",
+            "reaches the node 0 times",
+            "reaches the node 2 times",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert!(
+                g.animation_warnings[i].contains(word),
+                "{:?}",
+                g.animation_warnings
+            );
+        }
+        assert!(
+            g.animation_warnings[4].contains("left out"),
+            "{:?}",
+            g.animation_warnings
         );
         let flat = flat_parse(&bytes).unwrap();
         assert_eq!(g.prims, flat.prims);
