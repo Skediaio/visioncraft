@@ -4,7 +4,7 @@
 //! ([`Playback::clock`]): the window's frame time live, a film's time for its frames, so a film
 //! is the same every time it is rendered.
 
-use crate::keyframes::{Clip, Played, Rig, Sampler};
+use crate::keyframes::{Clip, Played};
 use std::collections::BTreeMap;
 
 /// Most flashes at once; over it the oldest goes.
@@ -284,7 +284,7 @@ impl Playback {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::keyframes::{Interpolation, Path, Trs, model_space};
+    use crate::keyframes::{Interpolation, Path, Rig, Sampler, Trs, model_space};
 
     fn clip(name: &str, times: &[f32], values: &[f32]) -> Clip {
         Clip {
