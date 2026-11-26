@@ -1398,6 +1398,13 @@ pub struct Renderer {
     textures: Vec<Option<texture::GpuTexture>>,
     items: Vec<Option<Item>>,
     bounds_dirty: bool,
+    /// Items an instance of which `set_instance` moved since the last frame: their bounds, the
+    /// scene's and the shadows are made again once, when the frame is drawn.
+    moved: Vec<u32>,
+    /// How often the shadow caches were thrown away (for tests that posing does not do it per
+    /// instance).
+    #[cfg(test)]
+    shadow_invalidations: usize,
     scene_bounds: Option<Bounds>,
 
     view: Mat4,
@@ -1788,6 +1795,9 @@ impl Renderer {
             textures: Vec::new(),
             items: Vec::new(),
             bounds_dirty: false,
+            moved: Vec::new(),
+            #[cfg(test)]
+            shadow_invalidations: 0,
             scene_bounds: None,
             view: Mat4::look_at_rh(Vec3::new(0.0, 1.7, 10.0), Vec3::ZERO, Vec3::Y),
             proj: Mat4::perspective_rh(1.0, 1.0, 0.1, 1000.0),
@@ -3402,8 +3412,9 @@ impl Renderer {
 
     /// Replaces instance `index` of an item (numbered as [`Self::instance_order`] counts them)
     /// where it is: the same range in the pool, the same cluster. Its bounds, the scene's and
-    /// the shadows are made again this frame. For the few instances that move every frame (the
-    /// parts of a model whose clip plays): nothing is sorted or allocated.
+    /// the shadows are made again once when the frame is drawn, however many instances moved.
+    /// For the few instances that move every frame (the parts of a model whose clip plays):
+    /// nothing is sorted or allocated.
     pub fn set_instance(&mut self, id: ItemId, index: usize, model_to_world: Mat4) {
         let Some(mut item) = self.items.get_mut(id.0 as usize).and_then(Option::take) else {
             return;
@@ -3428,17 +3439,37 @@ impl Renderer {
             u64::from(item.base + index as u32) * batch::INSTANCE_BYTES,
             &bytes,
         );
-        let mesh_bounds = self.item_mesh_bounds(&item);
-        for i in 0..item.clusters.len() {
-            let b = cluster_bounds(&item, &item.clusters[i], mesh_bounds);
-            item.clusters[i].bounds = b;
-        }
-        item.bounds = item.clusters.iter().filter_map(|c| c.bounds).reduce(union);
-        item.size = item_size(&item, mesh_bounds);
         self.items[id.0 as usize] = Some(item);
+        if self.moved.last() != Some(&id.0) {
+            self.moved.push(id.0);
+        }
+    }
+
+    /// The bounds of the items `set_instance` moved, and the scene's, made again (once a frame).
+    fn update_moved(&mut self) {
+        if self.moved.is_empty() {
+            return;
+        }
+        let mut moved = std::mem::take(&mut self.moved);
+        moved.sort_unstable();
+        moved.dedup();
+        for &i in &moved {
+            let Some(mut item) = self.items.get_mut(i as usize).and_then(Option::take) else {
+                continue;
+            };
+            let mesh_bounds = self.item_mesh_bounds(&item);
+            for c in 0..item.clusters.len() {
+                let b = cluster_bounds(&item, &item.clusters[c], mesh_bounds);
+                item.clusters[c].bounds = b;
+            }
+            item.bounds = item.clusters.iter().filter_map(|c| c.bounds).reduce(union);
+            item.size = item_size(&item, mesh_bounds);
+            self.items[i as usize] = Some(item);
+        }
+        // Reused next frame: nothing is allocated while parts move.
+        moved.clear();
+        self.moved = moved;
         self.scene_bounds_of_all();
-        // The scene changed where this instance is: the cached cascades no longer cover it.
-        self.invalidate_shadows();
     }
 
     /// A larger pool for every item's instances, written again.
@@ -3672,9 +3703,12 @@ impl Renderer {
         }
         self.counters = Counters::default();
         self.frame += 1;
-        if self.bounds_dirty {
-            self.invalidate_shadows(); // the scene changed
+        // The scene changed (or instances moved where they are): the cached cascades no
+        // longer cover it.
+        if self.bounds_dirty || !self.moved.is_empty() {
+            self.invalidate_shadows();
         }
+        self.update_moved();
         self.update_bounds();
         self.update_lods();
         let mut cascades = shadow::compute(
@@ -5185,6 +5219,10 @@ impl Renderer {
     }
 
     fn invalidate_shadows(&mut self) {
+        #[cfg(test)]
+        {
+            self.shadow_invalidations += 1;
+        }
         self.far_cache = None;
         self.snow_drawn = None;
         self.cascade_rendered = [None; shadow::MAX_CASCADES];
@@ -7746,8 +7784,8 @@ mod tests {
     }
 
     /// `instance_order` says where each given instance lands (sorted by ground cell), and
-    /// `set_instance` moves one in place: its bounds and the scene's follow, the other
-    /// instances stay where they are, and nothing is left dirty.
+    /// `set_instance` moves one in place: its bounds and the scene's follow once the frame is
+    /// drawn, the other instances stay where they are, and nothing else is made dirty.
     #[test]
     fn an_instance_moves_in_place() {
         let (device, queue) = pollster::block_on(headless_device()).expect("device");
@@ -7789,7 +7827,9 @@ mod tests {
         assert_eq!(of(&r, item).transforms[order[0] as usize], m);
         assert_eq!(of(&r, item).transforms[order[1] as usize], given[1]);
         assert_eq!(of(&r, item).transforms[order[2] as usize], given[2]);
-        assert!(!r.bounds_dirty, "its bounds are made again at once");
+        assert!(!r.bounds_dirty, "nothing else is made again");
+        // Its bounds and the scene's are made again when the frame is drawn.
+        r.update_moved();
         let b = of(&r, item).bounds.unwrap();
         assert_eq!((b.0.x, b.1.x, b.1.y), (0.0, 101.0, 51.0));
         assert_eq!(r.scene_bounds.unwrap().1.x, 101.0);
@@ -7803,8 +7843,49 @@ mod tests {
         assert_eq!(of(&r, item).transforms.len(), 3);
         r.set_instance(ItemId(item.0 + 1), 0, m);
         r.set_instance(item, order[0] as usize, given[0]);
+        r.update_moved();
         let b = of(&r, item).bounds.unwrap();
         assert_eq!((b.1.x, b.1.y), (17.0, 1.0), "and back");
+    }
+
+    /// Posing moves a few instances every frame: however many move, the shadow caches are
+    /// thrown away once, when the frame is drawn, not once per instance.
+    #[test]
+    fn moved_instances_invalidate_the_shadows_once_a_frame() {
+        let (device, queue) = pollster::block_on(headless_device()).expect("device");
+        let mut r = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        r.resize(64, 36);
+        let p = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        let mesh = r
+            .add_mesh(&Mesh {
+                positions: &p,
+                normals: &[[0.0, 0.0, 1.0]; 3],
+                indices: &[0, 1, 2],
+                ..Default::default()
+            })
+            .unwrap();
+        let mat = r.add_material(&Material::default());
+        let at = |x: f32| Mat4::from_translation(Vec3::new(x, 0.0, 0.0));
+        let item = r.add_item(mesh, mat, &[at(0.0), at(8.0)]);
+        let frame = |r: &mut Renderer| {
+            let mut e = device.create_command_encoder(&Default::default());
+            r.render(&mut e);
+            queue.submit([e.finish()]);
+            device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .expect("poll");
+        };
+        frame(&mut r);
+        let before = r.shadow_invalidations;
+        r.set_instance(item, 0, at(1.0));
+        r.set_instance(item, 1, at(9.0));
+        frame(&mut r);
+        assert_eq!(r.shadow_invalidations - before, 1, "once for the frame");
+        assert_eq!(r.scene_bounds.unwrap().1.x, 10.0, "the scene's bounds follow");
+        // A frame in which nothing moved keeps them.
+        let before = r.shadow_invalidations;
+        frame(&mut r);
+        assert_eq!(r.shadow_invalidations, before);
     }
 
     /// `set_sky_volume_light` needs the volume it changes the light of.

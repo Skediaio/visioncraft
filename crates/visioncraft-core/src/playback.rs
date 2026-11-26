@@ -289,6 +289,17 @@ impl Playback {
             })
     }
 
+    /// Whether a play that reaches `spot` still moves at clock time `t` (one not started yet
+    /// counts: it will): if none does, its pose is the one it holds.
+    pub fn moves(&self, spot: &Spot<'_>, t: f64) -> bool {
+        self.plays.iter().any(|p| {
+            p.target.planting == spot.planting
+                && p.target.plant.is_none_or(|n| Some(n) == spot.plant)
+                && p.clips.contains_key(spot.asset)
+                && p.moving(t)
+        })
+    }
+
     /// Whether anything plays on `planting`.
     pub fn playing_on(&self, planting: &str) -> bool {
         self.plays.iter().any(|p| p.target.planting == planting)

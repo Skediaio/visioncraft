@@ -110,6 +110,8 @@ struct FlashDraw {
     id: u64,
     item: ItemId,
     material: MaterialId,
+    /// Where its quad was last written: written again only when the camera turned.
+    at: Mat4,
 }
 
 /// The luminance (cd/m2) of a flash's quad: its flux over the quad's area, Lambertian, as a
@@ -2089,8 +2091,12 @@ impl Studio {
         for &i in &self.flash_now {
             let f = &flashes[i];
             let at = flash_quad(view, f.position, f.size_m);
-            match self.flashes.iter().find(|d| d.id == f.id) {
-                Some(d) => self.renderer.set_instance(d.item, 0, at),
+            match self.flashes.iter_mut().find(|d| d.id == f.id) {
+                Some(d) if d.at == at => {}
+                Some(d) => {
+                    self.renderer.set_instance(d.item, 0, at);
+                    d.at = at;
+                }
                 None => {
                     let material = self.renderer.add_material(&visioncraft_render::Material {
                         base_color: [0.0, 0.0, 0.0, 1.0],
@@ -2108,6 +2114,7 @@ impl Studio {
                         id: f.id,
                         item,
                         material,
+                        at,
                     });
                 }
             }

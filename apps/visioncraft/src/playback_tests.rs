@@ -148,6 +148,36 @@ fn a_planting_on_a_hidden_layer_has_no_items() {
     );
 }
 
+/// A clip that ended holds its pose: the lid is written once at it, not frame after frame,
+/// and once stopped it is written back at rest once.
+#[test]
+fn a_held_pose_is_written_once() {
+    let Some((_device, _queue, mut s)) = hinge_studio() else {
+        eprintln!("no GPU adapter: skipped");
+        return;
+    };
+    let at = |s: &mut Studio, t: f64| {
+        s.clock = t;
+        s.prepare();
+        s.scene.rig_writes()
+    };
+    let still = at(&mut s, 0.5);
+    assert_eq!(at(&mut s, 0.6), still, "nothing plays: nothing is written");
+    let clips = BTreeMap::from([("user:uo1".to_string(), 0)]);
+    s.playback
+        .play(ClipTarget::all("g1"), clips, "swing", 1.0, false, 1.0);
+    let moving = at(&mut s, 1.5);
+    assert!(moving > still, "it swings");
+    assert!(at(&mut s, 1.6) > moving, "and again the next frame");
+    let held = at(&mut s, 2.5);
+    assert_eq!(at(&mut s, 3.0), held, "an ended clip is not written again");
+    assert_eq!(at(&mut s, 9.0), held);
+    s.playback.stop(&ClipTarget::all("g1"), None);
+    let rest = at(&mut s, 9.1);
+    assert!(rest > held, "back at rest");
+    assert_eq!(at(&mut s, 9.2), rest);
+}
+
 #[test]
 fn the_lid_swings_on_its_clip_and_the_body_stands_still() {
     let Some((device, queue, mut s)) = hinge_studio() else {

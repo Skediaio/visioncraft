@@ -940,13 +940,20 @@ struct GroupRig {
     rest: Vec<Matrix>,
     /// To the ground (an imported object stands on its lowest point), before the pose.
     lift: Mat4,
-    /// Instance `i` of the group is instance `order[i]` of each item (items sort by ground cell).
-    order: Vec<u32>,
+    /// Per item, instance `i` of the group is instance `order[k][i]` of item `k` (items sort
+    /// their instances by ground cell, the part's own place at rest).
+    order: Vec<Vec<u32>>,
     /// Which instances were last written posed rather than at rest.
     posed: Vec<bool>,
+    /// Per instance, the plays it was last written under while none of them moved (its held
+    /// pose): written again only once that changes or one moves.
+    held: Vec<Option<Vec<Played>>>,
     /// Scratch: the clips that reach the instance being posed.
     played: Vec<Played>,
     sampler: Sampler,
+    /// Instances written, for tests that a held pose is not written frame after frame.
+    #[cfg(test)]
+    writes: usize,
 }
 
 impl GroupRig {
@@ -982,29 +989,46 @@ impl GroupRig {
             if entries.is_empty() {
                 continue;
             }
-            let item = r.add_lod_item(&entries, matrices);
-            items.push((item, k_part));
+            items.push((entries, k_part));
         }
-        let this = Self {
+        let rest: Vec<Matrix> = source.rig.bones.iter().map(|b| b.rest_space).collect();
+        let lift = Mat4::from_translation(Vec3::Y * source.rig.lift);
+        // Each item made at once with every instance at rest.
+        let mut order = Vec::with_capacity(items.len());
+        let items = items
+            .into_iter()
+            .map(|(entries, part)| {
+                let at = at_rest(matrices, lift, &rest, part);
+                order.push(Renderer::instance_order(&at));
+                (r.add_lod_item(&entries, &at), part)
+            })
+            .collect();
+        Some(Self {
             model: source.rig.id,
             items,
-            rest: source.rig.bones.iter().map(|b| b.rest_space).collect(),
+            rest,
             rig,
-            lift: Mat4::from_translation(Vec3::Y * source.rig.lift),
-            order: Renderer::instance_order(matrices),
+            lift,
+            order,
             posed: vec![false; matrices.len()],
+            held: vec![None; matrices.len()],
             played: Vec::new(),
             sampler: Sampler::default(),
-        };
-        this.write(r, matrices, None, &this.rest);
-        Some(this)
+            #[cfg(test)]
+            writes: 0,
+        })
     }
 
-    /// Other (or moved) instances, as many: every one at rest under them.
+    /// Other (or moved) instances, as many: every one at rest under them, each item written
+    /// whole.
     fn follow(&mut self, r: &mut Renderer, matrices: &[Mat4]) {
-        self.order = Renderer::instance_order(matrices);
+        for (k, (item, part)) in self.items.iter().enumerate() {
+            let at = at_rest(matrices, self.lift, &self.rest, *part);
+            self.order[k] = Renderer::instance_order(&at);
+            r.set_instances(*item, &at);
+        }
         self.posed.fill(false);
-        self.write(r, matrices, None, &self.rest);
+        self.held.fill(None);
     }
 
     /// Whether any instance is drawn posed.
@@ -1012,24 +1036,11 @@ impl GroupRig {
         self.posed.iter().any(|p| *p)
     }
 
-    /// Writes instance `only` (every one with `None`) of each part's item under `pose`: the
-    /// group's matrix, then the lift, then the part's matrix in model space.
-    fn write(&self, r: &mut Renderer, matrices: &[Mat4], only: Option<usize>, pose: &[Matrix]) {
-        for (index, m) in matrices.iter().enumerate() {
-            if only.is_some_and(|o| o != index) {
-                continue;
-            }
-            let before = *m * self.lift;
-            for (item, part) in &self.items {
-                let m = before * matrix_of(pose, *part);
-                r.set_instance(*item, self.order[index] as usize, m);
-            }
-        }
-    }
-
     /// Poses every instance of the group for the frame at clock time `t`: those a clip reaches
     /// under their clips (in the order they started), the ones whose clips all ended back at
-    /// rest. Nothing is written for an instance that did not change.
+    /// rest. Nothing is written for an instance that did not change: one at rest that stays
+    /// so, or one that holds the pose it was written at (no clip on it moves, and they are the
+    /// same clips).
     #[allow(clippy::too_many_arguments)]
     fn animate(
         &mut self,
@@ -1042,28 +1053,64 @@ impl GroupRig {
         t: f64,
     ) {
         for (index, number) in numbers.iter().enumerate() {
-            self.played.clear();
-            self.played.extend(playback.played(&visioncraft_core::Spot {
+            let spot = visioncraft_core::Spot {
                 planting,
                 plant: Some(*number as u32),
                 asset,
-            }));
-            if self.played.is_empty() {
-                if self.posed[index] {
-                    self.write(r, matrices, Some(index), &self.rest);
-                    self.posed[index] = false;
+            };
+            self.played.clear();
+            self.played.extend(playback.played(&spot));
+            let written = if self.played.is_empty() {
+                if !self.posed[index] {
+                    continue;
                 }
-                continue;
+                self.posed[index] = false;
+                self.held[index] = None;
+                write_instance(r, &self.items, &self.order, self.lift, matrices[index], index, &self.rest)
+            } else {
+                let moving = playback.moves(&spot, t);
+                if !moving && self.held[index].as_deref() == Some(&self.played[..]) {
+                    continue;
+                }
+                let pose = self.sampler.pose(&self.rig, &self.played, t);
+                let n = write_instance(r, &self.items, &self.order, self.lift, matrices[index], index, pose);
+                self.posed[index] = true;
+                self.held[index] = (!moving).then(|| self.played.clone());
+                n
+            };
+            #[cfg(test)]
+            {
+                self.writes += written;
             }
-            let pose = self.sampler.pose(&self.rig, &self.played, t);
-            let before = matrices[index] * self.lift;
-            for (item, part) in &self.items {
-                let m = before * matrix_of(pose, *part);
-                r.set_instance(*item, self.order[index] as usize, m);
-            }
-            self.posed[index] = true;
+            #[cfg(not(test))]
+            let _ = written;
         }
     }
+}
+
+/// Every instance of `matrices` with part `part` at rest: the group's matrix, then the lift,
+/// then the part's rest matrix in model space.
+fn at_rest(matrices: &[Mat4], lift: Mat4, rest: &[Matrix], part: usize) -> Vec<Mat4> {
+    let m = lift * matrix_of(rest, part);
+    matrices.iter().map(|g| *g * m).collect()
+}
+
+/// Writes instance `index` (its group matrix `m`) of each part's item under `pose`: the group's
+/// matrix, then the lift, then the part's matrix in model space. Returns how many it wrote.
+fn write_instance(
+    r: &mut Renderer,
+    items: &[(ItemId, usize)],
+    order: &[Vec<u32>],
+    lift: Mat4,
+    m: Mat4,
+    index: usize,
+    pose: &[Matrix],
+) -> usize {
+    let before = m * lift;
+    for (k, (item, part)) in items.iter().enumerate() {
+        r.set_instance(*item, order[k][index] as usize, before * matrix_of(pose, *part));
+    }
+    items.len()
 }
 
 /// Part `part`'s matrix in model space from a pose (the identity for a part it lacks).
@@ -3181,6 +3228,17 @@ impl Scene {
                 &|a| self.plant_dims(a),
             ),
         }
+    }
+
+    /// How many instances of moving parts `animate` has written so far.
+    #[cfg(test)]
+    pub fn rig_writes(&self) -> usize {
+        self.gens
+            .values()
+            .flat_map(|g| g.groups.values())
+            .filter_map(|grp| grp.rig.as_ref())
+            .map(|rig| rig.writes)
+            .sum()
     }
 
     /// How many moving parts of animated models are drawn as items of their own.
