@@ -61,13 +61,16 @@ pub(crate) struct Cells {
     pub y1: u32,
 }
 
-/// The cells the rays met, in pixels of a render target of `size` (top-left origin).
+/// The cells the rays met, in pixels of a render target of `size` (top-left origin): a full
+/// cell past the outermost rays that met the water on every side, as far as the next ray, which
+/// missed it (half a cell left a black band of up to a cell's half along the horizon and the
+/// coast), cut to the target.
 impl SeaSight {
     pub(crate) fn rect(self, size: (u32, u32)) -> crate::water::Rect {
         let cell = |c: u32, n: u32, size: u32| {
             (
-                ((c as f32 - 0.5).max(0.0) * size as f32 / n as f32).floor() as u32,
-                ((c as f32 + 0.5) * size as f32 / n as f32)
+                ((c as f32 - 1.0).max(0.0) * size as f32 / n as f32).floor() as u32,
+                ((c as f32 + 1.0) * size as f32 / n as f32)
                     .ceil()
                     .min(size as f32) as u32,
             )
@@ -595,5 +598,41 @@ mod tests {
     fn the_uniform_has_the_shaders_layout() {
         // SeaParams: five vec4, 16 waves of two vec4, 32 vec4 of outline points.
         assert_eq!(UNIFORM_SIZE, 80 + 16 * 32 + 32 * 16);
+    }
+
+    #[test]
+    fn the_sight_rect_reaches_a_full_cell_past_its_outer_rays() {
+        use crate::water::Rect;
+        let sight = |x0, y0, x1, y1| SeaSight {
+            hits: 1,
+            cells: Cells { x0, y0, x1, y1 },
+            distance: 1.0,
+            depth: 1.0,
+        };
+        // 320 x 240 over 32 x 24 cells: a cell is 10 x 10 pixels. The water reaches up to the
+        // next ray that missed it, a cell further on every side.
+        assert_eq!(
+            sight(4, 3, 10, 8).rect((320, 240)),
+            Rect {
+                x: 30,
+                y: 20,
+                w: 80,
+                h: 70
+            }
+        );
+        // Cut to the target at its edges.
+        assert_eq!(
+            sight(0, 0, COLUMNS, ROWS).rect((320, 240)),
+            Rect::whole((320, 240))
+        );
+        assert_eq!(
+            sight(0, 0, 0, 0).rect((320, 240)),
+            Rect {
+                x: 0,
+                y: 0,
+                w: 10,
+                h: 10
+            }
+        );
     }
 }
