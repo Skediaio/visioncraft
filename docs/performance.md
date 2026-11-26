@@ -103,6 +103,13 @@ Recipe, a time-of-day drag:
   indices go into one list that a compute dispatch copies into a frame buffer before the first
   pass, nearest first, in blocks of 64 instances a batch. Dissolving clusters, terrain chunks
   and transparents draw straight from the pool.
+- **Culling without allocation, in 128 m blocks.** Each pass's cluster visibility is written
+  into one flat list of flags the renderer keeps (an item's at its range, remade only when items
+  change). An item's instances are sorted by 128 m block of the ground grid, then by their 8 m
+  cell, so each block is a range of clusters with its own bounds: a block outside the view takes
+  its clusters with it. `update_lods` skips a block altogether beyond the item's last level
+  (hysteresis included) when all its clusters are already culled by distance and nothing
+  dissolves: no level there can change.
 - **One vertex buffer and one index buffer** for the static meshes (`batch.rs` `MeshRanges`): a
   mesh holds a range of each, a draw names its index range and its base vertex, and a pass binds
   the two buffers once (again only when a mesh of another arena follows). A mesh replaced by as

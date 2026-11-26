@@ -212,6 +212,8 @@ const SUN_TOP_KLX: f32 = 128.0;
 /// shadow cascades and the camera can skip the ones they do not see, and
 /// levels of detail switch per cell.
 const CLUSTER_CELL: f32 = 8.0;
+/// Cluster cells a side of a block (`Block`): 128 m, the coarse level the culling tests first.
+const BLOCK_CELLS: i32 = 16;
 /// `set_time` wraps here (seconds) to keep f32 precision in the shaders.
 const TIME_WRAP: f64 = 4096.0;
 /// Byte offset of the SH in the globals (written by the GPU, see env.rs).
@@ -729,13 +731,17 @@ struct Item {
     parts: Vec<Part>,
     /// Max camera distance per level of detail, ascending.
     lods: Vec<f32>,
-    /// Sorted by `CLUSTER_CELL` so each cluster is a contiguous range.
+    /// Sorted by 128 m block, then by `CLUSTER_CELL`, so each cluster and each block is a
+    /// contiguous range.
     transforms: Vec<Mat4>,
     /// Its instances' range in the pool (`batch::InstancePool`): `cap` from `base`.
     base: u32,
     cap: u32,
     bounds: Option<Bounds>,
     clusters: Vec<Cluster>,
+    /// Its clusters in 128 m blocks of the ground grid, each a contiguous range: tested
+    /// before its clusters (`visible_clusters`, `update_lods`).
+    blocks: Vec<Block>,
     /// The bounding radius of its largest instance (m, `update_bounds`): what the reflection
     /// leaves out when it would be under `MIN_REFLECTED_PX`.
     size: f32,
@@ -783,6 +789,26 @@ struct Cluster {
     fading: bool,
     /// First of this frame's fade slots (one per part, then the impostor).
     fade_slot: u32,
+}
+
+/// The item's clusters of one 128 m block of the ground grid: a contiguous range of
+/// `Item::clusters` (`set_instances` sorts them so), with their bounds.
+struct Block {
+    range: std::ops::Range<u32>,
+    bounds: Option<Bounds>,
+}
+
+/// The ranges of consecutive elements of `items` that are `same` as the one before: a partition
+/// of `0..items.len()`, in order.
+fn same_ranges<T>(items: &[T], same: impl Fn(&T, &T) -> bool) -> Vec<std::ops::Range<u32>> {
+    let mut out: Vec<std::ops::Range<u32>> = Vec::new();
+    for i in 0..items.len() {
+        match out.last_mut() {
+            Some(r) if same(&items[i - 1], &items[i]) => r.end = i as u32 + 1,
+            _ => out.push(i as u32..i as u32 + 1),
+        }
+    }
+    out
 }
 
 impl Item {
@@ -1380,6 +1406,36 @@ enum SkySource {
     },
 }
 
+/// Which clusters the passes' culling keeps (`Renderer::visible_clusters`): one flag per
+/// cluster of every item, item `i`'s at `offsets[i]..offsets[i + 1]` (`None` slots get none).
+/// Kept between passes and frames; the offsets are remade after items or their clusters change
+/// (`dirty`).
+#[derive(Default)]
+struct Visibility {
+    seen: Vec<bool>,
+    offsets: Vec<u32>,
+    dirty: bool,
+}
+
+impl Visibility {
+    /// `offsets` over `items` and `seen` over all their clusters, after a change.
+    fn follow(&mut self, items: &[Option<Item>]) {
+        if !self.dirty {
+            return;
+        }
+        self.dirty = false;
+        self.offsets.clear();
+        self.offsets.push(0);
+        let mut n = 0u32;
+        for item in items {
+            n += item.as_ref().map_or(0, |i| i.clusters.len() as u32);
+            self.offsets.push(n);
+        }
+        self.seen.clear();
+        self.seen.resize(n as usize, false);
+    }
+}
+
 /// Per-frame counters for `stats` (`record` takes `&self`).
 #[derive(Default)]
 struct Counters {
@@ -1628,6 +1684,11 @@ pub struct Renderer {
     items: Vec<Option<Item>>,
     bounds_dirty: bool,
     scene_bounds: Option<Bounds>,
+    /// The passes' cluster visibility (`Visibility`), rewritten per pass.
+    visibility: Visibility,
+    /// `update_lods` skips blocks past the last level whose clusters are all culled (a test
+    /// switches it off).
+    lod_skip: bool,
 
     view: Mat4,
     proj: Mat4,
@@ -2026,6 +2087,11 @@ impl Renderer {
             materials: Vec::new(),
             textures: Vec::new(),
             items: Vec::new(),
+            visibility: Visibility {
+                dirty: true,
+                ..Visibility::default()
+            },
+            lod_skip: true,
             bounds_dirty: false,
             scene_bounds: None,
             view: Mat4::look_at_rh(Vec3::new(0.0, 1.7, 10.0), Vec3::ZERO, Vec3::Y),
@@ -3734,6 +3800,7 @@ impl Renderer {
                 .is_some_and(|m| m.weights)
         });
         let id = ItemId(self.items.len() as u32);
+        self.visibility.dirty = true;
         self.items.push(Some(Item {
             parts,
             lods,
@@ -3742,6 +3809,7 @@ impl Renderer {
             cap: 0,
             bounds: None,
             clusters: Vec::new(),
+            blocks: Vec::new(),
             size: 0.0,
             impostor: None,
             shadow_exact: terrain,
@@ -3834,41 +3902,58 @@ impl Renderer {
                 }
             };
         }
-        // Group by ground cell. This reorders the instances on the GPU; fine
-        // while nothing reads `instance_index` (per-instance data later must
-        // be permuted the same way).
-        let cell = |m: &Mat4| {
-            (
+        // Group by ground cell, the cells by 128 m block: sorted by (block, cell), each cluster
+        // and each block is a contiguous range. This reorders the instances on the GPU; fine
+        // while nothing reads `instance_index` (per-instance data later must be permuted the
+        // same way).
+        let place = |m: &Mat4| {
+            let (cx, cz) = (
                 (m.w_axis.x / CLUSTER_CELL).floor() as i32,
                 (m.w_axis.z / CLUSTER_CELL).floor() as i32,
+            );
+            (
+                cx.div_euclid(BLOCK_CELLS),
+                cz.div_euclid(BLOCK_CELLS),
+                cx,
+                cz,
             )
         };
-        let mut sorted = instances.to_vec();
-        sorted.sort_by_key(cell);
-        item.clusters.clear();
-        for (i, m) in sorted.iter().enumerate() {
-            match item.clusters.last_mut() {
-                Some(c) if cell(&sorted[c.range.start as usize]) == cell(m) => c.range.end += 1,
-                _ => item.clusters.push(Cluster {
-                    range: i as u32..i as u32 + 1,
-                    bounds: None,
-                    lod: LOD_UNSET,
-                    far: LOD_UNSET,
-                    target: LOD_UNSET,
-                    key: [0.0; 2],
-                    fade: 0,
-                    to_far: false,
-                    fading: false,
-                    fade_slot: 0,
-                }),
-            }
-        }
-        item.transforms = sorted;
+        let mut sorted: Vec<_> = instances.iter().map(|m| (place(m), *m)).collect();
+        sorted.sort_by_key(|(p, _)| *p);
+        let places: Vec<_> = sorted.iter().map(|(p, _)| *p).collect();
+        item.clusters = same_ranges(&places, |a, b| a.2 == b.2 && a.3 == b.3)
+            .into_iter()
+            .map(|range| Cluster {
+                range,
+                bounds: None,
+                lod: LOD_UNSET,
+                far: LOD_UNSET,
+                target: LOD_UNSET,
+                key: [0.0; 2],
+                fade: 0,
+                to_far: false,
+                fading: false,
+                fade_slot: 0,
+            })
+            .collect();
+        let block_of = |c: &Cluster| {
+            let p = places[c.range.start as usize];
+            (p.0, p.1)
+        };
+        item.blocks = same_ranges(&item.clusters, |a, b| block_of(a) == block_of(b))
+            .into_iter()
+            .map(|range| Block {
+                range,
+                bounds: None,
+            })
+            .collect();
+        item.transforms = sorted.into_iter().map(|(_, m)| m).collect();
         if repack {
             self.repack_pool();
         } else {
             self.write_instances(id);
         }
+        self.visibility.dirty = true;
         self.bounds_dirty = true;
     }
 
@@ -3971,6 +4056,7 @@ impl Renderer {
                 self.pool.ranges.release(item.base, item.cap);
                 self.free_slots.extend(item.parts.iter().map(|p| p.slot));
                 self.free_slots.extend(item.impostor.map(|(_, slot)| slot));
+                self.visibility.dirty = true;
             }
             self.bounds_dirty = true;
         }
@@ -4283,8 +4369,10 @@ impl Renderer {
         let layers = self.targets.shadow_layers.len();
         let ssr = self.quality.screen_reflections > 0;
         let mut gather = batch::GatherList::default();
+        self.visibility.follow(&self.items);
+        let mut visibility = std::mem::take(&mut self.visibility);
         let mut plan = |cull: Mat4, near_far: bool, kind: Pass, small: Option<(Vec3, f32)>| {
-            self.plan_items(cull, near_far, kind, small, &mut gather)
+            self.plan_items(cull, near_far, kind, small, &mut gather, &mut visibility)
         };
         let mut plans = (!develop).then(|| {
             let shadows: Vec<Vec<Draw>> = (0..layers)
@@ -4349,6 +4437,7 @@ impl Renderer {
         {
             gather_ms = stage.elapsed().as_secs_f64() * 1000.0;
         }
+        self.visibility = visibility;
         if let Some(p) = plans.as_mut() {
             self.write_indirect(p);
         }
@@ -4956,9 +5045,11 @@ impl Renderer {
         })
     }
 
-    /// Per item, which of its clusters `cull` keeps (empty: none, or the item is outside):
-    /// tested once a pass, and only clusters near enough to draw at all (`cluster_lod`). Testing
-    /// them per part, category and fade took a third of a coast frame's CPU time in the browser.
+    /// Per item, which of its clusters `cull` keeps, written into `seen` (`Visibility`): tested
+    /// once a pass, a 128 m block at a time (`Item::blocks`), and only clusters near enough to
+    /// draw at all (`cluster_lod`). Nothing is allocated: the flags are the renderer's. Testing
+    /// them per part, category and fade took a third of a coast frame's CPU time in the browser,
+    /// and a list a pass 15 % of a town's.
     ///
     /// `small`: an eye and pixels per unit of size over distance; clusters whose items'
     /// instances would be under `MIN_REFLECTED_PX` from there are left out (the reflection).
@@ -4967,27 +5058,38 @@ impl Renderer {
         cull: Mat4,
         near_far: bool,
         small: Option<(Vec3, f32)>,
-    ) -> Vec<Vec<bool>> {
-        self.items
-            .iter()
-            .map(|item| match item {
-                Some(item) if item.bounds.is_some_and(|b| !outside(cull, b, near_far)) => item
-                    .clusters
-                    .iter()
-                    .map(|c| {
-                        (c.lod as usize) < item.lods.len()
-                            && c.bounds.is_some_and(|b| {
-                                !outside(cull, b, near_far)
-                                    && small.is_none_or(|(eye, px)| {
-                                        let d = eye.clamp(b.0, b.1).distance(eye);
-                                        item.size * px >= MIN_REFLECTED_PX * d
-                                    })
-                            })
-                    })
-                    .collect(),
-                _ => Vec::new(),
-            })
-            .collect()
+        offsets: &[u32],
+        seen: &mut [bool],
+    ) {
+        for (i, item) in self.items.iter().enumerate() {
+            let seen = &mut seen[offsets[i] as usize..offsets[i + 1] as usize];
+            let Some(item) = item else {
+                seen.fill(false);
+                continue;
+            };
+            if item.bounds.is_none_or(|b| outside(cull, b, near_far)) {
+                seen.fill(false);
+                continue;
+            }
+            // A block outside the view takes its clusters with it.
+            for block in &item.blocks {
+                let flags = &mut seen[block.range.clone()];
+                if block.bounds.is_none_or(|b| outside(cull, b, near_far)) {
+                    flags.fill(false);
+                    continue;
+                }
+                for (c, keep) in item.clusters[block.range.clone()].iter().zip(flags) {
+                    *keep = (c.lod as usize) < item.lods.len()
+                        && c.bounds.is_some_and(|b| {
+                            !outside(cull, b, near_far)
+                                && small.is_none_or(|(eye, px)| {
+                                    let d = eye.clamp(b.0, b.1).distance(eye);
+                                    item.size * px >= MIN_REFLECTED_PX * d
+                                })
+                        });
+                }
+            }
+        }
     }
 
     /// Plans every opaque and cutout part (and, into shadow maps and the water reflection, glass)
@@ -5011,6 +5113,7 @@ impl Renderer {
         kind: Pass,
         small: Option<(Vec3, f32)>,
         gather: &mut batch::GatherList,
+        visibility: &mut Visibility,
     ) -> Vec<Draw> {
         let shadow = matches!(kind, Pass::Shadow { .. });
         let shaded = matches!(
@@ -5031,7 +5134,9 @@ impl Renderer {
         };
         #[cfg(not(target_arch = "wasm32"))]
         let plan_start = std::time::Instant::now();
-        let visible = self.visible_clusters(cull, near_far, small);
+        let Visibility { seen, offsets, .. } = visibility;
+        let (seen, offsets): (&mut [bool], &[u32]) = (seen.as_mut_slice(), offsets.as_slice());
+        self.visible_clusters(cull, near_far, small, offsets, seen);
         #[cfg(not(target_arch = "wasm32"))]
         self.counters
             .visible_ms
@@ -5039,9 +5144,10 @@ impl Renderer {
         let mut draws = Vec::new();
         let mut batches = Batches::default();
         let mut levels: Vec<Option<u8>> = Vec::new();
-        for (item, seen) in self.items.iter().zip(&visible) {
+        for (i, item) in self.items.iter().enumerate() {
             let Some(item) = item else { continue };
-            if seen.is_empty() {
+            let seen = &seen[offsets[i] as usize..offsets[i + 1] as usize];
+            if !seen.iter().any(|&s| s) {
                 continue;
             }
             // This pass's level per cluster (`None`: not drawn), and whether any dissolves.
@@ -5572,6 +5678,12 @@ impl Renderer {
                         .reduce(union)
                 });
             }
+            for block in &mut item.blocks {
+                block.bounds = item.clusters[block.range.clone()]
+                    .iter()
+                    .filter_map(|c| c.bounds)
+                    .reduce(union);
+            }
             item.bounds = item.clusters.iter().filter_map(|c| c.bounds).reduce(union);
             let scale = item
                 .transforms
@@ -5621,6 +5733,7 @@ impl Renderer {
             (2.0 / self.proj.y_axis.y.abs().max(1e-9), forward)
         });
         let reach = self.impostor_reach;
+        let skip = self.lod_skip;
         let mut fade_bytes: Vec<u8> = Vec::new();
         let mut fade_used = 0usize;
         for item in self.items.iter_mut().flatten() {
@@ -5633,84 +5746,106 @@ impl Renderer {
                 let mesh_end = item.lods[item.lods.len() - 2];
                 *last = (*last * reach).max(mesh_end + 1.0);
             }
-            for c in &mut item.clusters {
-                let Some((lo, hi)) = c.bounds else {
-                    continue;
-                };
-                // Scaling the distance instead of the thresholds: same choice.
-                let (d, order) = match ortho {
-                    Some((height, forward)) => (height, ((lo + hi) * 0.5 - eye).dot(forward)),
-                    None => {
-                        let d = eye.clamp(lo, hi).distance(eye);
-                        (d, d)
-                    }
-                };
-                let d = d / scale;
-                let current = (c.target != LOD_UNSET).then_some(c.target as usize);
-                let target = lod::select(d, &lods, current, lod::HYSTERESIS_M) as u8;
-                // Every hand-over between two levels dissolves (mesh to
-                // mesh, the last mesh level into the impostor, the last level
-                // into nothing with a cull fade), so walking up to a tree
-                // shows no pop. Beyond the impostor, or a last level without
-                // a cull fade, it is culled at once.
+            for block in 0..item.blocks.len() {
+                // Past the last level (its hysteresis included: the nearest cluster of the block
+                // could not come back), every cluster culled by distance and nothing dissolving:
+                // no level here changes, so the block is not visited.
                 let levels = item.lods.len() as u8;
-                let cull_fades = item.impostor.is_none()
-                    && item.cull_fade > 0.0
-                    && item.lods[levels as usize - 1].is_finite();
-                let dissolves = |l: u8| l < levels || (l == levels && cull_fades);
-                if ortho.is_none()
-                    && c.target != LOD_UNSET
-                    && target != c.target
-                    && dissolves(c.target)
-                    && dissolves(target)
+                if skip
+                    && ortho.is_none()
+                    && item.blocks[block].bounds.is_some_and(|(lo, hi)| {
+                        eye.clamp(lo, hi).distance(eye) / scale
+                            > lods.last().copied().unwrap_or(f32::INFINITY) - lod::HYSTERESIS_M
+                    })
                 {
-                    // Crossing a hand-over: dissolve, or turn a running
-                    // dissolve between the same two levels around where it is.
-                    let (a, b) = (c.target.min(target), c.target.max(target));
-                    c.fade = if c.fade > 0 && c.lod == a && c.far == b {
-                        FADE_FRAMES - c.fade
-                    } else {
-                        FADE_FRAMES
-                    };
-                    c.to_far = target > c.target;
-                    c.lod = a;
-                    c.far = b;
-                } else if ortho.is_some() || !dissolves(target) {
-                    c.fade = 0;
-                }
-                c.target = target;
-                c.fading = false;
-                if c.fade > 0 && fade_used + item.parts.len() < FADE_SLOTS {
-                    let done = (FADE_FRAMES - c.fade) as f32 + 1.0;
-                    let progress = done / (FADE_FRAMES as f32 + 1.0);
-                    let fade = if c.to_far { progress } else { 1.0 - progress };
-                    c.fade_slot = fade_used as u32;
-                    for p in &item.parts {
-                        // The far mesh level keeps the samples the near one gives
-                        // up: a negative fade (impostor.wgsl `fade_keeps`).
-                        let f = if p.lod == c.far { -fade } else { fade };
-                        fade_bytes.extend_from_slice(&fade_slot(p.mesh, row(p.material), f));
-                        fade_bytes.resize(fade_bytes.len() + SLOT as usize - 16, 0);
+                    let clusters = &item.clusters[item.blocks[block].range.clone()];
+                    if clusters
+                        .iter()
+                        .all(|c| c.target == levels && c.lod == levels && c.fade == 0 && !c.fading)
+                    {
+                        continue;
                     }
-                    fade_bytes.extend_from_slice(&fade_slot(
-                        MeshId(u32::MAX - 2),
-                        FROM_INSTANCE,
-                        fade,
-                    ));
-                    fade_bytes.resize(fade_bytes.len() + SLOT as usize - 16, 0);
-                    fade_used += item.parts.len() + 1;
-                    c.fading = true;
-                    c.fade -= 1;
-                } else {
-                    c.fade = 0;
-                    c.lod = target;
                 }
-                if ortho.is_some() {
-                    // A plan or elevation shows everything: the coarsest
-                    // level instead of culling by distance.
-                    c.lod = c.lod.min(levels - 1);
+                let range = item.blocks[block].range.clone();
+                for c in &mut item.clusters[range] {
+                    let Some((lo, hi)) = c.bounds else {
+                        continue;
+                    };
+                    // Scaling the distance instead of the thresholds: same choice.
+                    let (d, order) = match ortho {
+                        Some((height, forward)) => (height, ((lo + hi) * 0.5 - eye).dot(forward)),
+                        None => {
+                            let d = eye.clamp(lo, hi).distance(eye);
+                            (d, d)
+                        }
+                    };
+                    let d = d / scale;
+                    let current = (c.target != LOD_UNSET).then_some(c.target as usize);
+                    let target = lod::select(d, &lods, current, lod::HYSTERESIS_M) as u8;
+                    // Every hand-over between two levels dissolves (mesh to
+                    // mesh, the last mesh level into the impostor, the last level
+                    // into nothing with a cull fade), so walking up to a tree
+                    // shows no pop. Beyond the impostor, or a last level without
+                    // a cull fade, it is culled at once.
+                    let levels = item.lods.len() as u8;
+                    let cull_fades = item.impostor.is_none()
+                        && item.cull_fade > 0.0
+                        && item.lods[levels as usize - 1].is_finite();
+                    let dissolves = |l: u8| l < levels || (l == levels && cull_fades);
+                    if ortho.is_none()
+                        && c.target != LOD_UNSET
+                        && target != c.target
+                        && dissolves(c.target)
+                        && dissolves(target)
+                    {
+                        // Crossing a hand-over: dissolve, or turn a running
+                        // dissolve between the same two levels around where it is.
+                        let (a, b) = (c.target.min(target), c.target.max(target));
+                        c.fade = if c.fade > 0 && c.lod == a && c.far == b {
+                            FADE_FRAMES - c.fade
+                        } else {
+                            FADE_FRAMES
+                        };
+                        c.to_far = target > c.target;
+                        c.lod = a;
+                        c.far = b;
+                    } else if ortho.is_some() || !dissolves(target) {
+                        c.fade = 0;
+                    }
+                    c.target = target;
+                    c.fading = false;
+                    if c.fade > 0 && fade_used + item.parts.len() < FADE_SLOTS {
+                        let done = (FADE_FRAMES - c.fade) as f32 + 1.0;
+                        let progress = done / (FADE_FRAMES as f32 + 1.0);
+                        let fade = if c.to_far { progress } else { 1.0 - progress };
+                        c.fade_slot = fade_used as u32;
+                        for p in &item.parts {
+                            // The far mesh level keeps the samples the near one gives
+                            // up: a negative fade (impostor.wgsl `fade_keeps`).
+                            let f = if p.lod == c.far { -fade } else { fade };
+                            fade_bytes.extend_from_slice(&fade_slot(p.mesh, row(p.material), f));
+                            fade_bytes.resize(fade_bytes.len() + SLOT as usize - 16, 0);
+                        }
+                        fade_bytes.extend_from_slice(&fade_slot(
+                            MeshId(u32::MAX - 2),
+                            FROM_INSTANCE,
+                            fade,
+                        ));
+                        fade_bytes.resize(fade_bytes.len() + SLOT as usize - 16, 0);
+                        fade_used += item.parts.len() + 1;
+                        c.fading = true;
+                        c.fade -= 1;
+                    } else {
+                        c.fade = 0;
+                        c.lod = target;
+                    }
+                    if ortho.is_some() {
+                        // A plan or elevation shows everything: the coarsest
+                        // level instead of culling by distance.
+                        c.lod = c.lod.min(levels - 1);
+                    }
+                    c.key = [order, -((lo + hi) * 0.5).dot(sun)];
                 }
-                c.key = [order, -((lo + hi) * 0.5).dot(sun)];
             }
         }
         if !fade_bytes.is_empty() {
@@ -9503,6 +9638,239 @@ mod tests {
             );
             assert_eq!(calls, direct_calls);
         }
+    }
+
+    /// An item's clusters partition its instances (by 8 m cell) and its blocks its clusters (by
+    /// 128 m block of the ground grid), in sort order, wherever the instances stand.
+    #[test]
+    fn blocks_partition_the_clusters_and_the_clusters_the_instances() {
+        let (device, queue) = pollster::block_on(headless_device()).expect("device");
+        let mut r = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let mut m = demo::MeshData::default();
+        m.add_box(Vec3::new(-0.5, 0.0, -0.5), Vec3::new(0.5, 1.0, 0.5));
+        let mesh = r.add_mesh(&m.mesh()).expect("mesh");
+        let material = r.add_material(&Material::default());
+        let mut rng = demo::Rng::new(3);
+        let at: Vec<Mat4> = (0..5000)
+            .map(|_| {
+                Mat4::from_translation(Vec3::new(
+                    rng.unit() * 600.0 - 300.0,
+                    0.0,
+                    rng.unit() * 600.0 - 300.0,
+                ))
+            })
+            .collect();
+        let item = r.add_lod_item(&[(mesh, material, f32::INFINITY)], &at);
+        let item = r.items[item.0 as usize].as_ref().expect("item");
+        let cell = |m: &Mat4| {
+            (
+                (m.w_axis.x / CLUSTER_CELL).floor() as i32,
+                (m.w_axis.z / CLUSTER_CELL).floor() as i32,
+            )
+        };
+        let cells = same_ranges(&item.transforms, |a, b| cell(a) == cell(b));
+        assert_eq!(
+            cells,
+            item.clusters
+                .iter()
+                .map(|c| c.range.clone())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(item.clusters.first().map(|c| c.range.end), Some(5000));
+        let block = |c: &Cluster| {
+            let m = &item.transforms[c.range.start as usize];
+            (
+                (m.w_axis.x / 128.0).floor() as i32,
+                (m.w_axis.z / 128.0).floor() as i32,
+            )
+        };
+        let (mut covered, mut seen_blocks) = (0u32, std::collections::HashSet::new());
+        for (i, b) in item.blocks.iter().enumerate() {
+            assert_eq!(b.range.start, covered, "block {i}");
+            covered = b.range.end;
+            let first = block(&item.clusters[b.range.start as usize]);
+            assert!(
+                item.clusters[b.range.clone()]
+                    .iter()
+                    .all(|c| block(c) == first),
+                "block {i}"
+            );
+            assert!(seen_blocks.insert(first), "block {first:?} twice");
+        }
+        assert_eq!(covered as usize, item.clusters.len());
+        assert!(item.blocks.len() > 20, "{} blocks", item.blocks.len());
+        // Sorted by block, then cell: the blocks come in order too.
+        let keys: Vec<_> = item
+            .blocks
+            .iter()
+            .map(|b| block(&item.clusters[b.range.start as usize]))
+            .collect();
+        let mut sorted = keys.clone();
+        sorted.sort();
+        assert_eq!(keys, sorted);
+    }
+
+    /// What the blocks' culling keeps is what testing every cluster of every item keeps, over
+    /// camera positions and with and without the near and far planes and the reflection's size
+    /// test.
+    #[test]
+    fn blocks_cull_what_their_clusters_cull() {
+        let (device, queue) = pollster::block_on(headless_device()).expect("device");
+        let mut r = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        r.resize(64, 36);
+        let mut rng = demo::Rng::new(9);
+        let mut meshes = Vec::new();
+        for k in 0..40 {
+            let s = 0.5 + rng.unit();
+            let mut m = demo::MeshData::default();
+            m.add_box(Vec3::new(-s, 0.0, -s), Vec3::new(s, 2.0 * s, s));
+            let mesh = r.add_mesh(&m.mesh()).expect("mesh");
+            meshes.push(mesh);
+            let material = r.add_material(&Material::default());
+            let n = 1 + (rng.unit() * 300.0) as usize;
+            let at: Vec<Mat4> = (0..n)
+                .map(|_| {
+                    Mat4::from_translation(Vec3::new(
+                        rng.unit() * 800.0 - 400.0,
+                        0.0,
+                        rng.unit() * 800.0 - 400.0,
+                    ))
+                })
+                .collect();
+            let item = if k % 3 == 0 {
+                r.add_lod_item(&[(mesh, material, 120.0)], &at)
+            } else {
+                r.add_item(mesh, material, &at)
+            };
+            if k % 5 == 0 {
+                r.remove_item(item);
+            }
+        }
+        let _ = &meshes;
+        let mut checked = 0usize;
+        for f in 0..12 {
+            let eye = Vec3::new(
+                (f as f32 * 37.0).sin() * 300.0,
+                20.0 + 10.0 * f as f32,
+                (f as f32 * 53.0).cos() * 300.0,
+            );
+            let (view, proj, eye) = demo::camera(eye, Vec3::ZERO, 64.0 / 36.0);
+            r.set_camera(view, proj, eye);
+            r.update_bounds();
+            r.update_lods();
+            let cull = proj * view;
+            for (near_far, small) in [(true, None), (false, None), (true, Some((eye, 300.0)))] {
+                r.visibility.follow(&r.items);
+                let offsets = r.visibility.offsets.clone();
+                let Visibility { seen, .. } = &mut r.visibility;
+                r.visible_clusters(cull, near_far, small, &offsets, seen);
+                for (i, item) in r.items.iter().enumerate() {
+                    let Some(item) = item else { continue };
+                    let got = &r.visibility.seen[offsets[i] as usize..offsets[i + 1] as usize];
+                    let item_out = item.bounds.is_none_or(|b| outside(cull, b, near_far));
+                    let want: Vec<bool> = item
+                        .clusters
+                        .iter()
+                        .map(|c| {
+                            !item_out
+                                && (c.lod as usize) < item.lods.len()
+                                && c.bounds.is_some_and(|b| {
+                                    !outside(cull, b, near_far)
+                                        && small.is_none_or(|(eye, px)| {
+                                            let d = eye.clamp(b.0, b.1).distance(eye);
+                                            item.size * px >= MIN_REFLECTED_PX * d
+                                        })
+                                })
+                        })
+                        .collect();
+                    assert_eq!(
+                        got,
+                        want.as_slice(),
+                        "item {i}, frame {f}, {near_far:?} {small:?}"
+                    );
+                    checked += got.len();
+                }
+            }
+        }
+        assert!(checked > 10_000, "{checked}");
+    }
+
+    /// Over a camera path of 300 frames, skipping the blocks past the last level leaves every
+    /// cluster's level, target and dissolve as visiting them all does, while hand-overs do
+    /// dissolve on the way.
+    #[test]
+    fn skipped_blocks_leave_the_levels_unchanged() {
+        let (device, queue) = pollster::block_on(headless_device()).expect("device");
+        let scene = |skip: bool| {
+            let mut r = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+            r.resize(64, 36);
+            r.lod_skip = skip;
+            let mut rng = demo::Rng::new(21);
+            for k in 0..12 {
+                let mut m = demo::MeshData::default();
+                m.add_box(Vec3::new(-0.5, 0.0, -0.5), Vec3::new(0.5, 1.5, 0.5));
+                let mesh = r.add_mesh(&m.mesh()).expect("mesh");
+                let material = r.add_material(&Material::default());
+                let at: Vec<Mat4> = (0..400)
+                    .map(|_| {
+                        Mat4::from_translation(Vec3::new(
+                            rng.unit() * 600.0 - 300.0,
+                            0.0,
+                            rng.unit() * 600.0 - 300.0,
+                        ))
+                    })
+                    .collect();
+                let item = r.add_lod_item(
+                    &[
+                        (mesh, material, 25.0),
+                        (mesh, material, 70.0),
+                        (mesh, material, 160.0),
+                    ],
+                    &at,
+                );
+                if k % 4 == 0 {
+                    r.set_item_cull_fade(item, 8.0);
+                }
+            }
+            r
+        };
+        let (mut full, mut skip) = (scene(false), scene(true));
+        let mut dissolving = 0usize;
+        let mut skipped = 0usize;
+        for f in 0..300 {
+            let t = f as f32 / 10.0;
+            let eye = Vec3::new(
+                t * 3.0 - 40.0,
+                1.7 + (t * 0.2).sin() * 2.0,
+                (t * 0.7).cos() * 120.0,
+            );
+            let target = eye + Vec3::new((t * 0.3).sin(), -0.1, 1.0);
+            for r in [&mut full, &mut skip] {
+                let (view, proj, eye) = demo::camera(eye, target, 16.0 / 9.0);
+                r.set_camera(view, proj, eye);
+                r.update_bounds();
+                r.update_lods();
+            }
+            for (a, b) in full.items.iter().zip(&skip.items) {
+                let (Some(a), Some(b)) = (a, b) else {
+                    continue;
+                };
+                for (ca, cb) in a.clusters.iter().zip(&b.clusters) {
+                    assert_eq!(
+                        (ca.lod, ca.target, ca.fade, ca.fading, ca.far, ca.to_far),
+                        (cb.lod, cb.target, cb.fade, cb.fading, cb.far, cb.to_far),
+                        "frame {f}"
+                    );
+                    dissolving += ca.fading as usize;
+                    skipped += (ca.target == a.lods.len() as u8) as usize;
+                }
+            }
+        }
+        assert!(
+            dissolving > 100,
+            "hand-overs dissolved on the way: {dissolving}"
+        );
+        assert!(skipped > 1000, "clusters past the last level: {skipped}");
     }
 
     /// The plane test culls exactly what testing the eight corners culled.
