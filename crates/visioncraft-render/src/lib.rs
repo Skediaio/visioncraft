@@ -7892,6 +7892,44 @@ mod tests {
         assert_eq!(r.shadow_invalidations, before);
     }
 
+    /// A still taken right after instances moved: the window's own shadow caches (swapped out
+    /// for the still) are thrown away too, not only the still's.
+    #[test]
+    fn a_still_after_moved_instances_invalidates_the_window_s_shadows() {
+        let (device, queue) = pollster::block_on(headless_device()).expect("device");
+        let mut r = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        r.resize(64, 36);
+        let p = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        let mesh = r
+            .add_mesh(&Mesh {
+                positions: &p,
+                normals: &[[0.0, 0.0, 1.0]; 3],
+                indices: &[0, 1, 2],
+                ..Default::default()
+            })
+            .unwrap();
+        let mat = r.add_material(&Material::default());
+        let at = |x: f32| Mat4::from_translation(Vec3::new(x, 0.0, 0.0));
+        let item = r.add_item(mesh, mat, &[at(0.0), at(8.0)]);
+        let mut e = device.create_command_encoder(&Default::default());
+        r.render(&mut e);
+        queue.submit([e.finish()]);
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("poll");
+        assert!(
+            r.cascade_rendered.iter().any(Option::is_some),
+            "a frame caches its cascades"
+        );
+        r.set_instance(item, 0, at(1.0));
+        let (view, proj, eye) = (r.view, r.proj, r.eye);
+        r.render_still(32, 18, view, proj, eye).expect("a still");
+        assert!(
+            r.cascade_rendered.iter().all(Option::is_none) && r.far_cache.is_none(),
+            "the window's cascades no longer cover the scene"
+        );
+    }
+
     /// `set_sky_volume_light` needs the volume it changes the light of.
     #[test]
     fn set_sky_volume_light_needs_a_volume_of_the_same_size() {

@@ -207,6 +207,13 @@ impl Renderer {
         copy: Option<(&wgpu::Buffer, u32)>,
         part: FramePart,
     ) -> (Targets, Offscreen, wgpu::CommandEncoder) {
+        // What changed since the window's last frame (moved instances, new bounds) the window's
+        // shadow caches no longer cover: they go now, since the still's frame below makes the
+        // bounds anew and takes the list of moved items, and the window's next frame would not
+        // see that anything changed.
+        if self.bounds_dirty || !self.moved.is_empty() {
+            self.invalidate_shadows();
+        }
         // Swap the live state out, render, swap it back.
         let live_targets = std::mem::replace(&mut self.targets, targets);
         let live_pipelines = sampled.0.map(|p| std::mem::replace(&mut self.pipelines, p));
