@@ -2741,11 +2741,14 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
         ),
         None => None,
     };
-    // The session's clock is the picture's: a clip started without a time starts here.
-    host.state().playback.clock = animation_s;
-    let (playback, fps) = {
-        let playback = &host.state().playback;
-        (playback.clone(), playback.fps)
+    // The session's clock is the picture's: a clip started without a time starts here. The
+    // playback and the rate are the host's own (a window's is its studio's, not its state's).
+    let (playback, fps) = match host.playback() {
+        Some(p) => {
+            p.clock = animation_s;
+            (p.clone(), p.fps)
+        }
+        None => (Default::default(), 60.0),
     };
     let request = RenderRequest {
         width,
