@@ -115,10 +115,49 @@ Recipe, a time-of-day drag:
   sun stops, every stale cascade draws, so the resting picture is the same as before.
   `finish_environment` (a picture of the live view) forces that refresh too; the offscreen
   stills start without any cache. The rule is `cascade_refresh` in `visioncraft-render`.
-- **The water reflection** is drawn only when the view frames water: the sea counts when a grid
-  of rays through the view lands on its side of the coast (`sea::sea_in_view`), a pond when its
-  clusters are in view. It draws the coarser levels, and leaves out what would be under 1.5
-  pixels of radius in its image (`MIN_REFLECTED_PX`): far herbs, stones and chairs.
+- **The water reflections** are drawn only for water the view frames: the sea counts when a
+  grid of rays through the view lands on its side of the coast (`sea::sea_sight`), a pond when
+  its clusters are in view. They draw the coarser levels, and leave out what would be under
+  1.5 pixels of radius in their image (`MIN_REFLECTED_PX`): far herbs, stones and chairs. How
+  many planes get a pass is below.
+
+### Water: several planes, budgeted reflections (November 2026)
+
+Every visible water surface reflects its surroundings at a bounded cost (`water.rs`; asked for
+by scenes with a river, ponds and canals at different heights, two to five in view):
+
+- **Planes.** The visible water surfaces (the parts with a water material, the sea) are grouped
+  into planes by height (within 4 cm: two areas at one level share one) and scored by the
+  share of the render target they cover times 1 + the nearness of the nearest of them. The CPU
+  side is one pass over the water parts (tens at most) into buffers that are reused: a steady
+  frame allocates nothing for it.
+- **Planar passes.** The best `Quality::water_planes` planes each draw the scene mirrored about
+  their height, coarser levels and nothing tiny: one pass per plane, into its own layer of one
+  array texture. Each pass is scissored to where its plane shows on screen (padded for the
+  ripples' lookup offset), so a pond over a fifth of the screen costs a fifth of the fill of
+  the old full-frame pass; its draw calls are the scene's, as before. The GPU time of all of
+  them together is the `reflection` entry of `stats.gpu_passes` (passes of one label are
+  summed), their draws that of `pass_draws`.
+- **The rest.** A surface whose plane got no pass marches the opaque scene of the frame along
+  its reflected ray when screen-space reflections are on (the glass march at half its reach
+  and half its steps), else takes the environment cube, darkened towards the horizon, as every
+  pond but one did before.
+- **No flicker.** A plane keeps its pass until a challenger scores 1.3 times its own for 10
+  consecutive frames.
+- **Stats.** `RenderStats::water` lists each visible surface with its height and its tier
+  (`planar`, `screen_space` or `environment`); over the control channel it is `water` in
+  `ui.get` and in a render's `stats` (`view.render`, `visioncraft-cli render`).
+
+| Preset | Planar reflection | Planes with a pass per frame | Screen-space reflections (glass, mirrors and the other water) |
+| --- | --- | --- | --- |
+| low | off: the environment cube | 0 | off |
+| medium | quarter size | 1 | on, a 2-pixel step |
+| high | half size | 2 | on, a 1-pixel step |
+| ultra | full size | 3 | on, a 1-pixel step |
+
+With one pond in view and one plane a frame, the picture is the one before, its pass scissored
+to the pond. The frame times with 1, 3 and 5 ponds on a hardware GPU, before and after, are
+not measured yet: the build server's software adapter has none worth noting.
 
 ## Measured (November 2026)
 

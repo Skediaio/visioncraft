@@ -20,9 +20,16 @@
 //!    materials write their coverage through the sample mask
 //! 3. depth resolve: sample 0 -> linear view depth, `R32Float`
 //! 4. AO + contact shadows at half (ULTRA: full) render size, `Rg8Unorm`, depth-aware blur (H, V)
-//! 5. planar reflection of the largest visible water plane (when enabled):
-//!    the scene mirrored, coarser LODs, no screen-space effects,
-//!    `Rgba16Float` + `Depth32Float` at render size / divisor
+//! 5. planar reflections of water (when enabled): the visible water surfaces
+//!    are ranked every frame (`water.rs`: planes by height, scored by what
+//!    they cover of the screen and how near they are); the best
+//!    `Quality::water_planes` of them each draw the scene mirrored about
+//!    their height into one layer of an `Rgba16Float` array at render size /
+//!    divisor (coarser LODs, no screen-space effects, scissored to where the
+//!    plane shows), over one `Depth32Float` cleared per pass. Every other
+//!    water surface reflects the opaque scene of the frame along its
+//!    reflected ray when `screen_reflections` is on, else the environment
+//!    cube (step 6)
 //! 6. forward PBR, `Rgba16Float` (MSAA, resolved into a 1x target): opaque
 //!    and cutout geometry (cutout with an Equal depth test), the infinite
 //!    ground, the sky, then glass, water and alpha-blended materials sorted
