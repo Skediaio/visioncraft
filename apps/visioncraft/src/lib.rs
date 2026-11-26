@@ -26,7 +26,7 @@ pub mod light_ui;
 pub mod load_stats;
 pub mod material_library;
 pub mod materials;
-pub mod model_clips;
+pub mod model_animation;
 pub mod modelui;
 pub mod objects;
 pub mod placeholder;
@@ -63,6 +63,9 @@ pub mod water_panel;
 pub mod web_cache;
 pub mod webmcp;
 pub mod work_pool;
+
+#[cfg(test)]
+mod playback_tests;
 
 pub use eframe::egui;
 pub use extension::{Extension, ExtensionCx, Overlay};
@@ -2069,6 +2072,8 @@ impl eframe::App for App {
             } else {
                 self.fps * 0.9 + 0.1 / raw_dt
             };
+            // What a flash's `frames` last: this window's own rate.
+            self.studio.playback.fps = self.fps.max(1.0);
         }
 
         // HUD.

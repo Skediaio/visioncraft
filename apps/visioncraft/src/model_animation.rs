@@ -1,4 +1,4 @@
-//! The animation clips of a model, for `query.clips`. Which file a model is (an imported
+//! A model's animation, for `query.clips` and playback. Which file a model is (an imported
 //! object's own file, a catalogue asset's first level of detail) is known here; the bytes are
 //! the host's, and reading them is the loader's (`gltf_load`).
 
@@ -6,9 +6,9 @@
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
-use visioncraft_automation::{Clips, HostState};
+use visioncraft_automation::{Animations, HostState};
 use visioncraft_core::catalog::Asset;
-use visioncraft_core::{Clip, Project};
+use visioncraft_core::{Animation, Project};
 
 /// The file a model is.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -19,11 +19,11 @@ pub enum ModelFile {
     Library(String),
 }
 
-/// What the host has of a model file: its bytes, or the clips of a model it loaded already.
+/// What the host has of a model file: its bytes, or the animation of a model it loaded already.
 #[derive(Clone)]
 pub enum Held {
     Bytes(Arc<[u8]>),
-    Clips(Vec<Clip>),
+    Loaded(Animation),
 }
 
 /// A model's file as the host has it, or why it cannot hand it over.
@@ -51,14 +51,15 @@ pub fn model_file(project: &Project, assets: &[&Asset], model: &str) -> Result<M
     }
 }
 
-/// The clips of `model`: `object` holds an imported object's file, `library` a library file.
-pub fn clips_of(
+/// The animation of `model`: `object` holds an imported object's file, `library` a library
+/// file.
+pub fn animation_of(
     project: &Project,
     assets: &[&Asset],
     object: Reader,
     library: Reader,
     model: &str,
-) -> Result<Vec<Clip>, String> {
+) -> Result<Animation, String> {
     let (file, held) = match model_file(project, assets, model)? {
         ModelFile::Object(file) => {
             let held = object(&file);
@@ -70,36 +71,36 @@ pub fn clips_of(
         }
     };
     match held? {
-        Held::Clips(clips) => Ok(clips),
+        Held::Loaded(animation) => Ok(animation),
         Held::Bytes(bytes) => crate::gltf_load::parse(&bytes)
-            .map(|glb| glb.clips)
+            .map(|glb| glb.animation())
             .map_err(|e| format!("`{model}` ({file}): {e}")),
     }
 }
 
-/// The command line's clips: an imported object's file from where the host may read it (the
+/// The command line's animations: an imported object's file from where the host may read it (the
 /// project's folder), a library file from the library folder, and the garden-light fixtures,
 /// made here as the window makes them.
 #[cfg(not(target_arch = "wasm32"))]
-pub struct FolderClips {
+pub struct FolderAnimations {
     library: PathBuf,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl FolderClips {
+impl FolderAnimations {
     pub fn new(library: PathBuf) -> Self {
         Self { library }
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl Clips for FolderClips {
-    fn clips(
+impl Animations for FolderAnimations {
+    fn animation(
         &mut self,
         model: &str,
         project: &Project,
         state: &HostState,
-    ) -> Result<Vec<Clip>, String> {
+    ) -> Result<Animation, String> {
         let assets: Vec<&Asset> = state.catalog.assets.iter().collect();
         let read = |path: PathBuf| -> Result<Held, String> {
             std::fs::read(&path)
@@ -126,7 +127,7 @@ impl Clips for FolderClips {
                 })
                 .and_then(read)
         };
-        clips_of(project, &assets, &object, &library, model)
+        animation_of(project, &assets, &object, &library, model)
     }
 }
 
@@ -204,7 +205,7 @@ mod tests {
             asset("ghost", "models/ghost/lod0.glb", true),
             asset("not_a_model", "", false),
         ];
-        host.clips = Some(Box::new(FolderClips::new(dir)));
+        host.animations = Some(Box::new(FolderAnimations::new(dir)));
         for (name, file, size_m) in [
             ("Hinge", "objects/hinge.glb", [1.0; 3]),
             ("Rock", "objects/rock.glb", [2.0, 1.0, 0.1]),
@@ -220,7 +221,7 @@ mod tests {
     }
 
     fn swing() -> Value {
-        json!({"clips": [{"name": "swing", "duration_s": 1.0, "channels": 1}]})
+        json!({"clips": [{"name": "swing", "duration_s": 1.0, "channels": 1}], "warnings": []})
     }
 
     #[test]
@@ -234,7 +235,10 @@ mod tests {
             let r = ask(&mut host, model).unwrap_or_else(|e| panic!("{model}: {e}"));
             assert_eq!(r, swing(), "{model}");
         }
-        assert_eq!(ask(&mut host, "user:uo2").unwrap(), json!({"clips": []}));
+        assert_eq!(
+            ask(&mut host, "user:uo2").unwrap(),
+            json!({"clips": [], "warnings": []})
+        );
         for (model, word) in [
             ("user:uo9", "no imported object `uo9`"),
             ("nope", "no model `nope`"),
@@ -287,7 +291,7 @@ mod tests {
         let text = replies[1]["result"]["content"][0]["text"].as_str().unwrap();
         assert_eq!(
             serde_json::from_str::<Value>(text).unwrap(),
-            json!({"clips": []})
+            json!({"clips": [], "warnings": []})
         );
     }
 
@@ -311,7 +315,7 @@ mod tests {
         assert_eq!(params, ["model"]);
         assert_eq!(
             d.result.as_deref(),
-            Some("{clips: [{name, duration_s, channels}]}")
+            Some("{clips: [{name, duration_s, channels}], warnings: [string]}")
         );
         assert!(!d.undoable);
         let list = commands::command_list(

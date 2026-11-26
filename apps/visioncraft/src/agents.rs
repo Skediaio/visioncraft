@@ -354,6 +354,13 @@ impl Host for Bound<'_, '_> {
         (&mut self.host.studio.session, self.state)
     }
 
+    /// What plays is the window's: the scene poses the parts from the studio's own state, and
+    /// the clock is the window's.
+    fn playback(&mut self) -> Option<&mut visioncraft_core::Playback> {
+        self.host.studio.playback.clock = self.host.now;
+        Some(&mut self.host.studio.playback)
+    }
+
     fn extra_assets(&self) -> Vec<String> {
         let s = &self.host.studio;
         let library = s.scene.library.catalog.iter().flat_map(|c| c.assets.iter());
@@ -386,6 +393,11 @@ impl Host for Bound<'_, '_> {
         // the request) goes through a draft-free copy and back.
         let saved = (h.studio.project() != project)
             .then(|| std::mem::replace(&mut h.studio.session, Session::new(project.clone())));
+        // A picture is taken at the clock it asks for (a film's time), so it is the same every
+        // time: the window's own clock and frame rate come back afterwards.
+        let live = (h.studio.clock, h.studio.playback.fps);
+        h.studio.clock = request.animation_s;
+        h.studio.playback.fps = request.fps;
         if saved.is_some() {
             h.studio.growth_conflicts = Default::default();
         }
@@ -430,6 +442,8 @@ impl Host for Bound<'_, '_> {
         );
         h.studio.camera = camera;
         (h.studio.quality, h.studio.quality_auto) = (quality, auto);
+        h.studio.clock = live.0;
+        h.studio.playback.fps = live.1;
         if let Some(own) = saved {
             // The window's own session, with its history, comes back; the scene follows it.
             h.studio.session = own;
@@ -454,10 +468,11 @@ impl Host for Bound<'_, '_> {
         })
     }
 
-    /// `query.clips`: an imported object's file is in the window's files, a library model's
-    /// clips were kept when it was loaded (all a browser has), or its file is on disk.
-    fn clips(&mut self, model: &str) -> Option<Result<Vec<visioncraft_core::Clip>, String>> {
-        use crate::model_clips::Held;
+    /// `query.clips` and playback: an imported object's file is in the window's files, a
+    /// library model's animation was kept when it was loaded (all a browser has), or its file
+    /// is on disk.
+    fn animation(&mut self, model: &str) -> Option<Result<visioncraft_core::Animation, String>> {
+        use crate::model_animation::Held;
         let s = &self.host.studio;
         let assets: Vec<&visioncraft_core::catalog::Asset> = s
             .scene
@@ -468,16 +483,16 @@ impl Host for Bound<'_, '_> {
             .chain(&s.assets)
             .collect();
         let store = &s.scene.library.store;
-        let loaded = &s.scene.library.clips;
+        let library = &s.scene.library;
         let object = |file: &str| {
             store
                 .provided(file)
                 .map(Held::Bytes)
                 .ok_or_else(|| format!("`{file}` is not among the window's files"))
         };
-        let library = |file: &str| {
-            if let Some(clips) = loaded.get(file) {
-                return Ok(Held::Clips(clips.clone()));
+        let files = |file: &str| {
+            if let Some(animation) = library.animation(file) {
+                return Ok(Held::Loaded(animation.clone()));
             }
             #[cfg(not(target_arch = "wasm32"))]
             if let Some(bytes) = store.library_file(file) {
@@ -487,11 +502,11 @@ impl Host for Bound<'_, '_> {
                 "`{file}` is not loaded here: place the model, or ask `visioncraft-cli`, which reads the library folder"
             ))
         };
-        Some(crate::model_clips::clips_of(
+        Some(crate::model_animation::animation_of(
             s.project(),
             &assets,
             &object,
-            &library,
+            &files,
             model,
         ))
     }
@@ -929,21 +944,23 @@ mod tests {
                 .import_object("Hinge", crate::gltf_load::tests::hinge().finish())
                 .unwrap();
             assert_eq!(id, "user:uo1");
-            let clips = h
-                .clips("user:uo1")
+            let animation = h
+                .animation("user:uo1")
                 .expect("the window answers")
                 .expect("the hinge's file is among its files");
-            assert_eq!(clips.len(), 1);
+            assert_eq!(animation.clips.len(), 1);
             assert_eq!(
                 (
-                    clips[0].name.as_str(),
-                    clips[0].duration,
-                    clips[0].channels.len()
+                    animation.clips[0].name.as_str(),
+                    animation.clips[0].duration,
+                    animation.clips[0].channels.len()
                 ),
                 ("swing", 1.0, 1)
             );
-            assert_eq!(h.clips("user:uo1").unwrap().unwrap(), clips);
-            let e = h.clips("nope").unwrap().unwrap_err();
+            assert_eq!(animation.rig.as_ref().map(|r| r.rest.len()), Some(1));
+            assert!(animation.warnings.is_empty());
+            assert_eq!(h.animation("user:uo1").unwrap().unwrap(), animation);
+            let e = h.animation("nope").unwrap().unwrap_err();
             assert!(e.contains("no model `nope`"), "{e}");
         });
     }
@@ -1004,7 +1021,99 @@ mod tests {
             &json!({"model": "vc-bollard"}),
         )
         .unwrap_or_else(|e| panic!("query.clips: {e}"));
-        assert_eq!(r, json!({"clips": []}));
+        assert_eq!(r, json!({"clips": [], "warnings": []}));
+    }
+
+    /// Through the window's host, as an agent or the page's scripts reach it: a placed hinge
+    /// plays its clip from `start_s`, the pose query reads the sampler's matrix back, and the
+    /// window's clock (not a file) is what a start without a time takes.
+    #[test]
+    fn the_window_host_plays_a_clip_and_reads_the_pose_back() {
+        let Ok((device, queue)) = pollster::block_on(visioncraft_render::headless_device()) else {
+            eprintln!("no GPU adapter: skipped");
+            return;
+        };
+        let bytes = crate::gltf_load::tests::hinge().finish();
+        let renderer =
+            visioncraft_render::Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let mut studio = super::Studio::new(renderer, Project::default());
+        let id = studio.import_object("Hinge", bytes.clone()).unwrap();
+        assert_eq!(id, "user:uo1");
+        studio
+            .session
+            .run(
+                "planting.add_single",
+                json!({"name": "Hinge", "asset": "user:uo1", "position": [0, 0, 0]}),
+            )
+            .unwrap();
+        let (mut mode, mut selection) = (None, crate::selection::SelectionState::default());
+        let mut host_ui = crate::host_ui::HostUi::default();
+        let mut host = super::WindowHost {
+            studio: &mut studio,
+            device: &device,
+            queue: &queue,
+            mode: &mut mode,
+            selection: &mut selection,
+            extension_modes: &[],
+            host_ui: &mut host_ui,
+            now: 41.5,
+        };
+        let mut state = super::HostState::new(visioncraft_automation::Access::any());
+        let mut h = super::Bound {
+            host: &mut host,
+            state: &mut state,
+        };
+        let play = |h: &mut super::Bound, params: Value| {
+            visioncraft_automation::commands::execute(h, "model.play_clip", &params)
+        };
+        // Without a start the window's clock is taken.
+        let r = play(&mut h, json!({"object": "g1", "clip": "swing"})).unwrap();
+        assert_eq!(r["start_s"], json!(41.5));
+        assert_eq!(r["playing"], json!(1));
+        assert!(h.host.studio.playback.animating(), "it moves from now on");
+        let r = play(
+            &mut h,
+            json!({"object": "g1", "clip": "swing", "start_s": 40.0}),
+        )
+        .unwrap();
+        assert_eq!(r["restarted"], json!(true));
+        // A second long, started 1.5 s ago: over, and holding its pose (nothing moves).
+        assert!(!h.host.studio.playback.animating());
+        assert!(!h.host.studio.playback.is_empty());
+        // The pose at 40.5 s is half the swing, as the sampler has it over the file's rig.
+        let r = visioncraft_automation::commands::execute(
+            &mut h,
+            "query.part_pose",
+            &json!({"object": "g1", "t": 40.5}),
+        )
+        .unwrap();
+        let rig = crate::gltf_load::parse(&bytes).unwrap().rig().unwrap();
+        let local = visioncraft_core::keyframes::sample(&rig.clips[0], 0.5, false, &rig.rest);
+        let want = visioncraft_core::keyframes::model_space(&rig.parents, &local)[0];
+        let got: Vec<f32> = serde_json::from_value(r["plants"][0]["parts"][0].clone()).unwrap();
+        for (a, b) in got.iter().zip(want) {
+            assert!((a - b).abs() < 1e-6, "{got:?} vs {want:?}");
+        }
+        // The studio poses the scene from its own playback.
+        let r = visioncraft_automation::commands::execute(
+            &mut h,
+            "model.stop_clip",
+            &json!({"object": "g1"}),
+        )
+        .unwrap();
+        assert_eq!(r["stopped"], json!(1));
+        assert!(h.host.studio.playback.is_empty());
+        let r = visioncraft_automation::commands::execute(
+            &mut h,
+            "effect.flash",
+            &json!({"position": [0, 1, 0], "color": [1, 1, 1], "intensity": 100, "range_m": 2}),
+        )
+        .unwrap();
+        assert_eq!(r["id"], json!(1));
+        assert_eq!(h.host.studio.playback.flashes().len(), 1);
+        // And nothing of it is an edit.
+        // (The object and its planting are the only two edits.)
+        assert_eq!(h.host.studio.session.revision(), 2);
     }
 
     #[test]

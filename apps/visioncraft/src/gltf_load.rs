@@ -80,6 +80,8 @@ pub struct Prim {
 /// their own. Until a clip plays, [`Glb::rest_prims`] draws it where the file has it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AnimatedPart {
+    /// The part's node in the file: how a level of detail's file knows the same part.
+    pub node: usize,
     /// Its triangles in the node's own space: the node's own transform is not applied.
     pub prims: Vec<Prim>,
     /// The node's transform in the file.
@@ -603,6 +605,7 @@ pub fn parse(bytes: &[u8]) -> Result<Glb, String> {
                     n.transform().decomposed()
                 });
             AnimatedPart {
+                node: n,
                 prims: Vec::new(),
                 rest: Trs {
                     translation,
@@ -1097,6 +1100,7 @@ pub(crate) mod tests {
         assert_eq!(
             g.parts,
             vec![AnimatedPart {
+                node: 1,
                 prims: vec![as_is(B)],
                 rest: Trs {
                     translation: [1.0, 0.0, 0.0],
