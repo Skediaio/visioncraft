@@ -210,6 +210,13 @@ const SUN_TOP_KLX: f32 = 128.0;
 /// shadow cascades and the camera can skip the ones they do not see, and
 /// levels of detail switch per cell.
 const CLUSTER_CELL: f32 = 8.0;
+/// The ground cell an instance's origin lies in: instances are sorted by it.
+fn cluster_cell(m: &Mat4) -> (i32, i32) {
+    (
+        (m.w_axis.x / CLUSTER_CELL).floor() as i32,
+        (m.w_axis.z / CLUSTER_CELL).floor() as i32,
+    )
+}
 /// `set_time` wraps here (seconds) to keep f32 precision in the shaders.
 const TIME_WRAP: f64 = 4096.0;
 /// Byte offset of the SH in the globals (written by the GPU, see env.rs).
@@ -3350,13 +3357,8 @@ impl Renderer {
         }
         // Group by ground cell. This reorders the instances on the GPU; fine
         // while nothing reads `instance_index` (per-instance data later must
-        // be permuted the same way).
-        let cell = |m: &Mat4| {
-            (
-                (m.w_axis.x / CLUSTER_CELL).floor() as i32,
-                (m.w_axis.z / CLUSTER_CELL).floor() as i32,
-            )
-        };
+        // be permuted the same way, which `instance_order` gives).
+        let cell = cluster_cell;
         let mut sorted = instances.to_vec();
         sorted.sort_by_key(cell);
         item.clusters.clear();
@@ -3386,6 +3388,59 @@ impl Renderer {
         self.bounds_dirty = true;
     }
 
+    /// Where `set_instances` puts each of `matrices`: instance `i` of the list becomes
+    /// instance `order[i]` of the item (its instances are sorted by ground cell, stably).
+    pub fn instance_order(matrices: &[Mat4]) -> Vec<u32> {
+        let mut order: Vec<u32> = (0..matrices.len() as u32).collect();
+        order.sort_by_key(|&i| cluster_cell(&matrices[i as usize]));
+        let mut at = vec![0u32; order.len()];
+        for (pos, &i) in order.iter().enumerate() {
+            at[i as usize] = pos as u32;
+        }
+        at
+    }
+
+    /// Replaces instance `index` of an item (numbered as [`Self::instance_order`] counts them)
+    /// where it is: the same range in the pool, the same cluster. Its bounds, the scene's and
+    /// the shadows are made again this frame. For the few instances that move every frame (the
+    /// parts of a model whose clip plays): nothing is sorted or allocated.
+    pub fn set_instance(&mut self, id: ItemId, index: usize, model_to_world: Mat4) {
+        let Some(mut item) = self.items.get_mut(id.0 as usize).and_then(Option::take) else {
+            return;
+        };
+        if index >= item.transforms.len() {
+            self.items[id.0 as usize] = Some(item);
+            return;
+        }
+        item.transforms[index] = model_to_world;
+        let mut m = model_to_world;
+        if let Some(h) = self.wind_height(&item) {
+            let hz = wind::plant_hz(h * m.x_axis.truncate().length(), item.conifer);
+            m.x_axis.w = if item.grass { -hz } else { hz };
+        }
+        // The matrix as the pool takes it, on the stack: no buffer is allocated per frame.
+        let mut bytes = [0u8; batch::INSTANCE_BYTES as usize];
+        for (i, f) in m.to_cols_array().iter().enumerate() {
+            bytes[i * 4..i * 4 + 4].copy_from_slice(&f.to_le_bytes());
+        }
+        self.queue.write_buffer(
+            &self.pool.buffer,
+            u64::from(item.base + index as u32) * batch::INSTANCE_BYTES,
+            &bytes,
+        );
+        let mesh_bounds = self.item_mesh_bounds(&item);
+        for i in 0..item.clusters.len() {
+            let b = cluster_bounds(&item, &item.clusters[i], mesh_bounds);
+            item.clusters[i].bounds = b;
+        }
+        item.bounds = item.clusters.iter().filter_map(|c| c.bounds).reduce(union);
+        item.size = item_size(&item, mesh_bounds);
+        self.items[id.0 as usize] = Some(item);
+        self.scene_bounds_of_all();
+        // The scene changed where this instance is: the cached cascades no longer cover it.
+        self.invalidate_shadows();
+    }
+
     /// A larger pool for every item's instances, written again.
     fn repack_pool(&mut self) {
         let needed: u32 = self
@@ -3405,6 +3460,19 @@ impl Renderer {
         }
     }
 
+    /// How tall the tallest wind-blown mesh an item draws is in its own space (`None` for an
+    /// item nothing of which sways): from it and the scale drawn, each instance's sway
+    /// frequency (`write_instances`).
+    fn wind_height(&self, item: &Item) -> Option<f32> {
+        item.parts
+            .iter()
+            .filter_map(|p| self.meshes.get(p.mesh.0 as usize).and_then(Option::as_ref))
+            .filter(|m| m.wind)
+            .filter_map(|m| m.bounds)
+            .map(|(_, hi)| hi.y)
+            .reduce(f32::max)
+    }
+
     /// Uploads an item's instance matrices. The spare w of each matrix's first column carries
     /// the plant's own sway frequency (Hz; `wind::plant_hz` of its height in the world), which
     /// the vertex shaders read in every pass: no extra attribute, no per-draw uniform (the depth
@@ -3413,14 +3481,7 @@ impl Renderer {
         let Some(Some(item)) = self.items.get(id.0 as usize) else {
             return;
         };
-        let height = item
-            .parts
-            .iter()
-            .filter_map(|p| self.meshes.get(p.mesh.0 as usize)?.as_ref())
-            .filter(|m| m.wind)
-            .filter_map(|m| m.bounds)
-            .map(|(_, hi)| hi.y)
-            .reduce(f32::max);
+        let height = self.wind_height(item);
         let mut b = Bytes::default();
         for m in &item.transforms {
             let mut m = *m;
@@ -4902,60 +4963,66 @@ impl Renderer {
             return;
         }
         self.bounds_dirty = false;
+        for i in 0..self.items.len() {
+            let Some(mut item) = self.items[i].take() else {
+                continue;
+            };
+            let mesh_bounds = self.item_mesh_bounds(&item);
+            for i in 0..item.clusters.len() {
+                let b = cluster_bounds(&item, &item.clusters[i], mesh_bounds);
+                item.clusters[i].bounds = b;
+            }
+            item.bounds = item.clusters.iter().filter_map(|c| c.bounds).reduce(union);
+            item.size = item_size(&item, mesh_bounds);
+            self.items[i] = Some(item);
+        }
+        self.scene_bounds_of_all();
+    }
+
+    /// The bounds of an item's meshes with room for the wind's sway at any speed (the lean and
+    /// the detail both saturate).
+    fn item_mesh_bounds(&self, item: &Item) -> Option<Bounds> {
+        let mut mesh_bounds: Option<Bounds> = None;
+        let mut sways = false;
+        for p in &item.parts {
+            if let Some(Some(m)) = self.meshes.get(p.mesh.0 as usize) {
+                sways |= m.wind;
+                if let Some(b) = m.bounds {
+                    mesh_bounds = Some(mesh_bounds.map_or(b, |s| union(s, b)));
+                }
+            }
+        }
+        match (mesh_bounds, sways) {
+            (Some((lo, hi)), true) => {
+                let pad = Vec3::splat(wind::bounds_pad(
+                    (hi - lo).max_element(),
+                    self.wind.speed_mps,
+                    self.wind.gusts,
+                    item.grass,
+                ));
+                Some((lo - pad, hi + pad))
+            }
+            (b, _) => b,
+        }
+    }
+
+    /// The scene's bounds over every item's, and the terrain's edge over the terrain items'.
+    fn scene_bounds_of_all(&mut self) {
         let mut scene: Option<Bounds> = None;
         let mut terrain: Option<Bounds> = None;
-        for item in self.items.iter_mut().flatten() {
+        for item in self.items.iter().flatten() {
+            let Some(b) = item.bounds else {
+                continue;
+            };
+            scene = Some(scene.map_or(b, |s| union(s, b)));
             let is_terrain = item.parts.iter().any(|p| {
                 self.meshes
                     .get(p.mesh.0 as usize)
                     .and_then(Option::as_ref)
                     .is_some_and(|m| m.weights.is_some())
             });
-            let meshes: Vec<&GpuMesh> = item
-                .parts
-                .iter()
-                .filter_map(|p| self.meshes.get(p.mesh.0 as usize)?.as_ref())
-                .collect();
-            let mesh_bounds = meshes.iter().filter_map(|m| m.bounds).reduce(union);
-            // Room for the wind's sway at any speed (the lean and the detail both saturate).
-            let mesh_bounds = match (mesh_bounds, meshes.iter().any(|m| m.wind)) {
-                (Some((lo, hi)), true) => {
-                    let pad = Vec3::splat(wind::bounds_pad(
-                        (hi - lo).max_element(),
-                        self.wind.speed_mps,
-                        self.wind.gusts,
-                        item.grass,
-                    ));
-                    Some((lo - pad, hi + pad))
-                }
-                (b, _) => b,
-            };
-            for c in &mut item.clusters {
-                c.bounds = mesh_bounds.and_then(|b| {
-                    item.transforms[c.range.start as usize..c.range.end as usize]
-                        .iter()
-                        .map(|m| transform_bounds(*m, b))
-                        .reduce(union)
-                });
-            }
-            item.bounds = item.clusters.iter().filter_map(|c| c.bounds).reduce(union);
-            let scale = item
-                .transforms
-                .iter()
-                .map(|m| {
-                    m.x_axis
-                        .truncate()
-                        .length()
-                        .max(m.y_axis.truncate().length())
-                        .max(m.z_axis.truncate().length())
-                })
-                .fold(0.0, f32::max);
-            item.size = mesh_bounds.map_or(0.0, |(lo, hi)| (hi - lo).length() * 0.5 * scale);
-            if let Some(b) = item.bounds {
-                scene = Some(scene.map_or(b, |s| union(s, b)));
-                if is_terrain {
-                    terrain = Some(terrain.map_or(b, |s| union(s, b)));
-                }
+            if is_terrain {
+                terrain = Some(terrain.map_or(b, |s| union(s, b)));
             }
         }
         self.scene_bounds = scene;
@@ -5571,6 +5638,33 @@ fn corners((lo, hi): Bounds) -> [Vec3; 8] {
             if i & 4 == 0 { lo.z } else { hi.z },
         )
     })
+}
+
+/// The bounds of a cluster's instances: the item's mesh bounds under each of them.
+fn cluster_bounds(item: &Item, c: &Cluster, mesh_bounds: Option<Bounds>) -> Option<Bounds> {
+    mesh_bounds.and_then(|b| {
+        item.transforms[c.range.start as usize..c.range.end as usize]
+            .iter()
+            .map(|m| transform_bounds(*m, b))
+            .reduce(union)
+    })
+}
+
+/// The bounding radius (m) of an item's largest instance: what the reflection leaves out when
+/// it would be under `MIN_REFLECTED_PX`.
+fn item_size(item: &Item, mesh_bounds: Option<Bounds>) -> f32 {
+    let scale = item
+        .transforms
+        .iter()
+        .map(|m| {
+            m.x_axis
+                .truncate()
+                .length()
+                .max(m.y_axis.truncate().length())
+                .max(m.z_axis.truncate().length())
+        })
+        .fold(0.0, f32::max);
+    mesh_bounds.map_or(0.0, |(lo, hi)| (hi - lo).length() * 0.5 * scale)
 }
 
 fn transform_bounds(m: Mat4, b: Bounds) -> Bounds {
@@ -7649,6 +7743,68 @@ mod tests {
                 "row {r}"
             );
         }
+    }
+
+    /// `instance_order` says where each given instance lands (sorted by ground cell), and
+    /// `set_instance` moves one in place: its bounds and the scene's follow, the other
+    /// instances stay where they are, and nothing is left dirty.
+    #[test]
+    fn an_instance_moves_in_place() {
+        let (device, queue) = pollster::block_on(headless_device()).expect("device");
+        let mut r = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let at = |x: f32, y: f32| Mat4::from_translation(Vec3::new(x, y, 0.0));
+        let p = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        let mesh = r
+            .add_mesh(&Mesh {
+                positions: &p,
+                normals: &[[0.0, 0.0, 1.0]; 3],
+                indices: &[0, 1, 2],
+                ..Default::default()
+            })
+            .unwrap();
+        let mat = r.add_material(&Material::default());
+        // Three cells apart, given from east to west: sorted west to east.
+        let given = [at(16.0, 0.0), at(0.0, 0.0), at(8.0, 0.0)];
+        let item = r.add_item(mesh, mat, &given);
+        let order = Renderer::instance_order(&given);
+        assert_eq!(order, vec![2, 0, 1], "the first given lands last");
+        fn of(r: &Renderer, id: ItemId) -> &Item {
+            r.items[id.0 as usize].as_ref().unwrap()
+        }
+        assert_eq!(
+            of(&r, item)
+                .transforms
+                .iter()
+                .map(|m| m.w_axis.x)
+                .collect::<Vec<_>>(),
+            vec![0.0, 8.0, 16.0]
+        );
+        r.update_bounds();
+        assert!(!r.bounds_dirty);
+        let b = of(&r, item).bounds.unwrap();
+        assert_eq!((b.0.x, b.1.x, b.1.y), (0.0, 17.0, 1.0));
+        // The first given instance, the one furthest east, jumps up and away.
+        let m = at(100.0, 50.0);
+        r.set_instance(item, order[0] as usize, m);
+        assert_eq!(of(&r, item).transforms[order[0] as usize], m);
+        assert_eq!(of(&r, item).transforms[order[1] as usize], given[1]);
+        assert_eq!(of(&r, item).transforms[order[2] as usize], given[2]);
+        assert!(!r.bounds_dirty, "its bounds are made again at once");
+        let b = of(&r, item).bounds.unwrap();
+        assert_eq!((b.0.x, b.1.x, b.1.y), (0.0, 101.0, 51.0));
+        assert_eq!(r.scene_bounds.unwrap().1.x, 101.0);
+        assert_eq!(
+            of(&r, item).clusters.len(),
+            3,
+            "still one instance per cell"
+        );
+        // Out of range, or a removed item: nothing happens.
+        r.set_instance(item, 9, m);
+        assert_eq!(of(&r, item).transforms.len(), 3);
+        r.set_instance(ItemId(item.0 + 1), 0, m);
+        r.set_instance(item, order[0] as usize, given[0]);
+        let b = of(&r, item).bounds.unwrap();
+        assert_eq!((b.1.x, b.1.y), (17.0, 1.0), "and back");
     }
 
     /// `set_sky_volume_light` needs the volume it changes the light of.
