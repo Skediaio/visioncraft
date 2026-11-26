@@ -118,6 +118,13 @@ fn flash_luminance(intensity: f32, size_m: f32) -> f32 {
     (intensity / (std::f32::consts::PI * size_m * size_m)).clamp(1.0, 1e6)
 }
 
+/// Where a flash's quad is drawn: at its position, turned to face the camera `view` looks
+/// from, a square of side `size_m`.
+fn flash_quad(view: Mat4, position: [f32; 3], size_m: f32) -> Mat4 {
+    let turn = Mat4::from_mat3(Mat3::from_mat4(view.inverse()));
+    Mat4::from_translation(Vec3::from(position)) * turn * Mat4::from_scale(Vec3::splat(size_m))
+}
+
 pub struct Studio {
     pub session: Session,
     /// Cached growth conflicts; `set_session` and a swapped-in session clear it.
@@ -2079,12 +2086,9 @@ impl Studio {
         };
         // Facing the camera: its rotation, at the flash's position, a square of its side.
         let (_, view, _) = self.camera.matrices(self.aspect());
-        let turn = Mat4::from_mat3(Mat3::from_mat4(view.inverse()));
         for &i in &self.flash_now {
             let f = &flashes[i];
-            let at = turn
-                * Mat4::from_translation(Vec3::from(f.position))
-                * Mat4::from_scale(Vec3::splat(f.size_m));
+            let at = flash_quad(view, f.position, f.size_m);
             match self.flashes.iter().find(|d| d.id == f.id) {
                 Some(d) => self.renderer.set_instance(d.item, 0, at),
                 None => {
@@ -2963,6 +2967,28 @@ fn lit_rooms(p: &Project) -> impl Iterator<Item = visioncraft_render::Light> + '
 #[cfg(test)]
 mod tests {
     use super::auto_ev;
+
+    #[test]
+    fn a_flash_quad_stands_at_its_flash_whichever_way_the_camera_looks() {
+        use glam::{Mat4, Vec3};
+        let position = [3.0, 1.2, -2.0];
+        let view = Mat4::look_at_rh(
+            Vec3::new(-4.0, 1.6, 5.0),
+            Vec3::new(2.0, 0.5, -1.0),
+            Vec3::Y,
+        );
+        let at = super::flash_quad(view, position, 0.25);
+        let origin = at.transform_point3(Vec3::ZERO);
+        assert!(
+            origin.abs_diff_eq(Vec3::from(position), 1e-5),
+            "{origin} is not {position:?}"
+        );
+        // It faces the camera: its +Z points back along the view's forward axis.
+        let normal = at.transform_vector3(Vec3::Z).normalize();
+        let back = view.inverse().transform_vector3(Vec3::Z).normalize();
+        assert!(normal.abs_diff_eq(back, 1e-5), "{normal} {back}");
+        assert!((at.transform_vector3(Vec3::X).length() - 0.25).abs() < 1e-5);
+    }
 
     #[test]
     fn growth_conflicts_run_again_only_for_a_new_revision_or_years() {
