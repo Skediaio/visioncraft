@@ -4,7 +4,16 @@
 //! ([`Playback::clock`]): the window's frame time live, a film's time for its frames, so a film
 //! is the same every time it is rendered.
 
-use crate::keyframes::{Clip, Played};
+use crate::keyframes::{Clip, Played, Rig};
+
+/// A model file's animation as `query.clips` and playback read it: its clips, what was left
+/// out of them and why, and the bones they move (`None` for a model that stands still).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Animation {
+    pub clips: Vec<Clip>,
+    pub warnings: Vec<String>,
+    pub rig: Option<Rig>,
+}
 use std::collections::BTreeMap;
 
 /// Most flashes at once; over it the oldest goes.

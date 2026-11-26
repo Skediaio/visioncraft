@@ -15,6 +15,7 @@ use gltf::animation::Property;
 use gltf::scene::Transform;
 use std::collections::{HashMap, HashSet};
 use visioncraft_core::keyframes::{self, Channel, Clip, Interpolation, Path, Trs};
+use visioncraft_core::playback;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Alpha {
@@ -120,6 +121,15 @@ impl Glb {
             parents: self.parts.iter().map(|p| p.parent).collect(),
             clips: self.clips.clone(),
         })
+    }
+
+    /// The clips, what was left out of them, and the bones they move ([`Self::rig`]).
+    pub fn animation(&self) -> playback::Animation {
+        playback::Animation {
+            clips: self.clips.clone(),
+            warnings: self.animation_warnings.clone(),
+            rig: self.rig(),
+        }
     }
 }
 

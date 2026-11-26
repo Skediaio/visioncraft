@@ -3,6 +3,7 @@
 //! drawn like an area). Terrain and the endless ground that rise above it cut it; the renderer
 //! draws the waves from `wave_height_m` and `peak_wavelength_m`.
 
+use crate::planting::{Evaluation, Placement};
 use serde::{Deserialize, Serialize};
 
 /// What the water is: it sets how long the waves are for their height, whether it freezes and
@@ -208,9 +209,20 @@ pub fn floats(asset: &crate::Asset) -> bool {
 /// Applies the sea to plant and object placements: what floats sits on the mean water level,
 /// what would stand more than 5 cm under the water is left out. `floating` says whether an
 /// asset id floats.
-pub fn keep_dry(sea: Option<&Sea>, e: &mut crate::Evaluation, floating: &dyn Fn(&str) -> bool) {
+pub fn keep_dry(sea: Option<&Sea>, e: &mut Evaluation, floating: &dyn Fn(&str) -> bool) {
+    let mut numbered: Vec<(usize, Placement)> = e.placements.drain(..).enumerate().collect();
+    keep_dry_numbered(sea, &mut numbered, floating);
+    e.placements = numbered.into_iter().map(|(_, p)| p).collect();
+}
+
+/// [`keep_dry`] on placements with their numbers (`evaluate_in_scene_numbered`).
+pub fn keep_dry_numbered(
+    sea: Option<&Sea>,
+    placements: &mut Vec<(usize, Placement)>,
+    floating: &dyn Fn(&str) -> bool,
+) {
     let Some(sea) = sea else { return };
-    e.placements.retain_mut(|p| {
+    placements.retain_mut(|(_, p)| {
         let [x, y, z] = p.position;
         match sea.depth_over(x, z, y) {
             Some(_) if floating(&p.asset) => {

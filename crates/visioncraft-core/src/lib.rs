@@ -75,14 +75,17 @@ pub use model::{Body, Face, ImportError, ImportedModel, ModelCodecError};
 pub use object::UserObject;
 pub use photo::PhotoSettings;
 pub use plant_ground::{
-    evaluate_in_scene, over_ids, placed_shape, placed_shape_mesh, plant_size, water_areas,
+    evaluate_in_scene, evaluate_in_scene_numbered, over_ids, placed_shape, placed_shape_mesh,
+    plant_size, water_areas,
 };
 pub use planting::{
     Evaluation, Generator, LawnWindow, Placement, PlantLayer, Tuft, blocked_by_buildings, evaluate,
-    evaluate_avoiding, evaluate_surface_fill, lawn_area, lawn_scatter, lawn_scatter_blended,
-    lawn_scatter_within,
+    evaluate_avoiding, evaluate_avoiding_numbered, evaluate_surface_fill, lawn_area, lawn_scatter,
+    lawn_scatter_blended, lawn_scatter_within,
 };
-pub use playback::{ClipTarget, Flash, Life, MAX_FLASHES, Play, Playback, Spot, clip_index};
+pub use playback::{
+    Animation, ClipTarget, Flash, Life, MAX_FLASHES, Play, Playback, Spot, clip_index,
+};
 pub use presets::{PlantingPreset, planting_presets};
 pub use project::{
     CLOUD_ALTITUDE_M, CLOUD_ALTITUDES_M, CloudBlend, CloudKind, CloudShape, Clouds, CustomSpecies,
@@ -110,5 +113,5 @@ pub use tiers::Tiers;
 pub use underlay::{Placement as UnderlayPlacement, Underlay};
 pub use viewpoint::{Viewpoint, interpolate};
 pub use wall_photo::WallPhoto;
-pub use water::{Sea, WaterKind, keep_dry};
+pub use water::{Sea, WaterKind, keep_dry, keep_dry_numbered};
 pub use weather::{WEATHERS, Weather};
