@@ -652,6 +652,8 @@ impl Studio {
     /// another project state); its lamps get their lights at the next reconcile.
     pub fn set_session(&mut self, session: Session) {
         self.session = session;
+        // What played, played on the session that went.
+        self.playback.stop_all();
         self.growth_conflicts = GrowthConflicts::default();
         self.drop_sun_map();
         self.lamps_reconciled = (u64::MAX, false);
@@ -672,6 +674,7 @@ impl Studio {
     /// Replaces the whole project (open, restore): clears history and the scene.
     pub fn replace_project(&mut self, project: Project) {
         self.session.replace_project(project);
+        self.playback.stop_all();
         self.drop_sun_map();
         self.scene.clear(&mut self.renderer);
         self.scene.flora.sweep();

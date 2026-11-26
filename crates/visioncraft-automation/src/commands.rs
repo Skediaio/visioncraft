@@ -2073,6 +2073,10 @@ fn file_new(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
     state.models.clear();
     state.missing.clear();
     state.saved = Some(Project::default());
+    // What played, played on the project that went.
+    if let Some(p) = host.playback() {
+        p.stop_all();
+    }
     Ok(json!({"models": 0}))
 }
 
@@ -2094,12 +2098,18 @@ fn file_open(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
     state.missing.clear();
     state.saved = Some(project.clone());
     state.sync_models(&project);
+    let path = state.file.as_ref().map(|f| f.display().to_string());
+    let missing = missing_json(state, &project);
+    // What played, played on the project that went.
+    if let Some(p) = host.playback() {
+        p.stop_all();
+    }
     Ok(json!({
-        "path": state.file.as_ref().map(|f| f.display().to_string()),
+        "path": path,
         "models": project.models.len(), "shapes": project.shapes.len(),
         "generators": project.generators.len(), "lights": project.lights.len(),
         "viewpoints": project.viewpoints.len(), "films": project.films.len(),
-        "missingModels": missing_json(state, &project),
+        "missingModels": missing,
     }))
 }
 

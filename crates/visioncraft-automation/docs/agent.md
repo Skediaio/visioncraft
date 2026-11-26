@@ -375,7 +375,8 @@ forgotten once over; one with `start_s` is kept, so every render of a film shows
 window the clock is the window's own frame time (seconds since it opened), not a film's: a clip
 or a flash meant for `film.render` takes its `start_s` on the film's time explicitly (`"start_s":
 1.5` is 1.5 s into the film), or it plays at the window's clock and the film does not see it.
-Playing and flashing are session state: not saved with the project, not an undo step.
+Playing and flashing are session state: not saved with the project, not an undo step, and
+gone with it: `file.new` and `file.open` start with nothing playing and no flash.
 
 ### 15. The example garden
 

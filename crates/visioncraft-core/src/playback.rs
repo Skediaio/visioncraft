@@ -293,9 +293,12 @@ impl Playback {
             })
     }
 
-    /// Ends every play.
+    /// Ends every play and forgets every flash: another project (`file.new`, `file.open`)
+    /// starts with nothing playing.
     pub fn stop_all(&mut self) {
         self.plays.clear();
+        self.flashes.clear();
+        self.live.clear();
     }
 
     /// The plays, in the order they started.

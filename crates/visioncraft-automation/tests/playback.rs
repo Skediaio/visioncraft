@@ -731,6 +731,42 @@ fn the_flash_cap_counts_flashes_at_once() {
     assert!(!ids.contains(&live["id"].as_u64().unwrap()), "the live one is over");
 }
 
+/// What plays belongs to the project it played on: an opened or a new project starts with
+/// nothing playing and no flash.
+#[test]
+fn an_opened_or_new_project_plays_nothing() {
+    let mut h = host();
+    let file = dir("reopen").join("hinge.visioncraft");
+    run(&mut h, "file.save", json!({"path": file})).unwrap();
+    let busy = |h: &mut Headless| {
+        run(
+            h,
+            "model.play_clip",
+            json!({"object": "g1", "clip": "swing", "start_s": 0, "loop": true}),
+        )
+        .unwrap();
+        run(
+            h,
+            "effect.flash",
+            json!({"position": [0, 1, 0], "color": [1, 1, 1], "intensity": 100, "range_m": 2, "start_s": 0}),
+        )
+        .unwrap();
+        assert!(!h.state.playback.is_empty());
+    };
+    busy(&mut h);
+    run(&mut h, "file.open", json!({"path": file})).unwrap();
+    let r = run(&mut h, "query.part_pose", json!({"object": "g1", "t": 0.5})).unwrap();
+    assert_eq!(
+        (r["plants"][0]["posed"].clone(), r["plants"][0]["clips"].clone()),
+        (json!(false), json!([])),
+        "{r}"
+    );
+    assert!(h.state.playback.is_empty(), "opened: nothing plays or flashes");
+    busy(&mut h);
+    run(&mut h, "file.new", json!({})).unwrap();
+    assert!(h.state.playback.is_empty(), "new: nothing plays or flashes");
+}
+
 /// Pictures that draw nothing and remember what they were asked for.
 struct Recorder(std::rc::Rc<std::cell::RefCell<Vec<RenderRequest>>>);
 
