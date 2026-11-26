@@ -75,6 +75,13 @@ impl Interpolation {
     }
 }
 
+/// The largest key time in seconds, and the largest magnitude of a value or a tangent, a clip
+/// may have: a million. Within these limits every sample is finite: a cubic segment multiplies a
+/// tangent by its key interval, and a million times a million is far inside a float's range (a
+/// 1e30 tangent over a 1e9 s interval overflowed to infinity).
+pub const MAX_TIME: f32 = 1e6;
+pub const MAX_VALUE: f32 = 1e6;
+
 /// The keys of one property of one node.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Channel {
@@ -174,39 +181,13 @@ impl Clip {
         }
         for (i, ch) in self.channels.iter().enumerate() {
             let what = format!("channel {i} ({:?} of node {})", ch.path, ch.node);
-            if ch.times.is_empty() {
-                return Err(format!("{what} has no key"));
-            }
-            if let Some(bad) = ch.times.iter().find(|t| !t.is_finite()) {
-                return Err(format!("a key time of {what} is not finite: {bad}"));
-            }
-            if let Some(w) = ch.times.windows(2).find(|w| w[0] >= w[1]) {
-                return Err(format!(
-                    "the key times of {what} are not in ascending order: {} then {}",
-                    w[0], w[1]
-                ));
-            }
+            ch.check(&what)?;
             let last = ch.times[ch.times.len() - 1];
             if last > self.duration {
                 return Err(format!(
                     "the duration {} s ends before the last key of {what} at {last} s",
                     self.duration
                 ));
-            }
-            let needed = ch.times.len() * ch.interpolation.stride(ch.path);
-            if ch.values.len() != needed {
-                return Err(format!(
-                    "{what} has {} values where its {} keys need {}",
-                    ch.values.len(),
-                    ch.times.len(),
-                    needed
-                ));
-            }
-            if let Some(bad) = ch.values.iter().find(|v| !v.is_finite()) {
-                return Err(format!("a value of {what} is not finite: {bad}"));
-            }
-            if ch.path == Path::Rotation && ch.values.iter().all(|v| *v == 0.0) {
-                return Err(format!("the rotations of {what} are all zero"));
             }
         }
         Ok(())
@@ -218,6 +199,57 @@ impl Clip {
             .iter()
             .filter_map(|c| c.times.last())
             .fold(0.0, |end, t| end.max(*t))
+    }
+}
+
+impl Channel {
+    /// What is wrong with the channel, if anything; `what` names it in the message. [`sample`]
+    /// gives finite values for a channel this accepts, whatever the time.
+    pub fn check(&self, what: &str) -> Result<(), String> {
+        if self.times.is_empty() {
+            return Err(format!("{what} has no key"));
+        }
+        if let Some(bad) = self.times.iter().find(|t| !t.is_finite()) {
+            return Err(format!("a key time of {what} is not finite: {bad}"));
+        }
+        if self.times[0] < 0.0 {
+            return Err(format!(
+                "a key time of {what} is negative: {}",
+                self.times[0]
+            ));
+        }
+        if let Some(bad) = self.times.iter().find(|t| **t > MAX_TIME) {
+            return Err(format!(
+                "a key time of {what} is {bad} s: key times go up to {MAX_TIME:e} s"
+            ));
+        }
+        if let Some(w) = self.times.windows(2).find(|w| w[0] >= w[1]) {
+            return Err(format!(
+                "the key times of {what} are not in ascending order: {} then {}",
+                w[0], w[1]
+            ));
+        }
+        let needed = self.times.len() * self.interpolation.stride(self.path);
+        if self.values.len() != needed {
+            return Err(format!(
+                "{what} has {} values where its {} keys need {}",
+                self.values.len(),
+                self.times.len(),
+                needed
+            ));
+        }
+        if let Some(bad) = self.values.iter().find(|v| !v.is_finite()) {
+            return Err(format!("a value of {what} is not finite: {bad}"));
+        }
+        if let Some(bad) = self.values.iter().find(|v| v.abs() > MAX_VALUE) {
+            return Err(format!(
+                "a value or tangent of {what} is {bad}: they go up to {MAX_VALUE:e} in magnitude"
+            ));
+        }
+        if self.path == Path::Rotation && self.values.iter().all(|v| *v == 0.0) {
+            return Err(format!("the rotations of {what} are all zero"));
+        }
+        Ok(())
     }
 }
 
@@ -374,6 +406,16 @@ pub fn model_space(parents: &[Option<usize>], local: &[Trs]) -> Vec<Matrix> {
         }
     }
     out
+}
+
+/// A model's nodes as far as animation goes: each one's rest transform and parent, and the
+/// clips that move them (the `parts` and `clips` of a glTF file). The node a clip's channel
+/// names is an index into `rest`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Rig {
+    pub rest: Vec<Trs>,
+    pub parents: Vec<Option<usize>>,
+    pub clips: Vec<Clip>,
 }
 
 #[cfg(test)]
@@ -796,6 +838,207 @@ mod tests {
         for (bad, word) in cases {
             let e = bad.validate().expect_err("a malformed clip is refused");
             assert!(e.contains(word), "{word:?} not in {e:?}");
+        }
+    }
+
+    #[test]
+    fn a_cubic_spline_rotation_matches_the_hand_computed_value() {
+        // Keys at 0 s and 1 s: no turn, then a quarter about Z. The first key leaves along +Z
+        // (its out-tangent), the second is entered from -Z (its in-tangent), per second.
+        // At a quarter of the interval (u = 0.25, t_d = 1): h00 = 0.84375, h10 = 0.140625,
+        // h01 = 0.15625, h11 = -0.046875, so before the normalising:
+        //   z = 0.140625 * 0.2 + 0.15625 * sin 45deg - 0.046875 * (-0.1) = 0.1432979
+        //   w = 0.84375 * 1 + 0.15625 * cos 45deg = 0.9542354
+        //   z / |q| = 0.1485053, w / |q| = 0.9889116 (17.08 degrees).
+        let c = clip(
+            R,
+            Interpolation::CubicSpline,
+            &[0.0, 1.0],
+            &[
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.2, 0.0, //
+                0.0, 0.0, -0.1, 0.0, 0.0, 0.0, Q, Q, 0.0, 0.0, 0.0, 0.0,
+            ],
+        );
+        c.validate().unwrap();
+        for (t, q) in [
+            (0.25, [0.0, 0.0, 0.1485053, 0.9889116]),
+            (0.5, [0.0, 0.0, 0.4165151, 0.9091288]),
+            (0.75, [0.0, 0.0, 0.6357361, 0.7719065]),
+        ] {
+            let got = sample(&c, t, false, &[Trs::IDENTITY])[0].rotation;
+            assert!(near4(got, q), "t = {t}: {got:?}");
+        }
+        // The keys themselves, and beyond them the end keys.
+        for (t, q) in [(0.0, [0.0, 0.0, 0.0, 1.0]), (1.0, [0.0, 0.0, Q, Q])] {
+            let got = sample(&c, t, false, &[Trs::IDENTITY])[0].rotation;
+            assert!(near4(got, q), "t = {t}: {got:?}");
+        }
+        // With no tangents the spline takes the chord: half way both keys weigh the same, which
+        // is the bisector, 45 degrees.
+        let straight = clip(
+            R,
+            Interpolation::CubicSpline,
+            &[0.0, 1.0],
+            &[
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, //
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, Q, Q, 0.0, 0.0, 0.0, 0.0,
+            ],
+        );
+        let got = sample(&straight, 0.5, false, &[Trs::IDENTITY])[0].rotation;
+        assert!(near4(got, [0.0, 0.0, 0.3826834, 0.9238795]), "{got:?}");
+    }
+
+    #[test]
+    fn a_looped_clip_longer_than_its_last_key_holds_then_wraps() {
+        // Keys at 0 and 2 s, in a loop of 3 s.
+        let mut c = clip(
+            T,
+            Interpolation::Linear,
+            &[0.0, 2.0],
+            &[0.0, 0.0, 0.0, 4.0, 2.0, -2.0],
+        );
+        c.duration = 3.0;
+        c.validate().unwrap();
+        let rest = [Trs::IDENTITY];
+        let at = |t: f32, looped: bool| sample(&c, t, looped, &rest)[0].translation;
+        // After the last key, up to the end of the loop, the last key holds.
+        for t in [2.0, 2.5, 2.999] {
+            let p = at(t, true);
+            assert!(near(p, [4.0, 2.0, -2.0]), "t = {t}: {p:?}");
+        }
+        // At the end of the loop it is the start.
+        let p = at(3.0, true);
+        assert!(near(p, [0.0, 0.0, 0.0]), "t = 3: {p:?}");
+        assert!(near(at(2.5, false), [4.0, 2.0, -2.0]), "not looped");
+        // The wrap: 3.25 s is a quarter of a second into the clip, the next loop the same.
+        for t in [0.25, 3.25, 6.25] {
+            let p = at(t, true);
+            assert!(near(p, [0.5, 0.25, -0.25]), "t = {t}: {p:?}");
+        }
+        assert!(near(at(5.0, true), [4.0, 2.0, -2.0]), "4 s is 1 s in");
+        // From before the start: a quarter of a second before the end of the loop.
+        let p = at(-0.75, true);
+        assert!(near(p, [4.0, 2.0, -2.0]), "{:?}", p);
+    }
+
+    #[test]
+    fn validate_rejects_a_negative_key_time_and_what_would_overflow() {
+        fn of(path: Path, interpolation: Interpolation, times: &[f32], values: &[f32]) -> Clip {
+            let mut c = Clip {
+                name: "bad".into(),
+                duration: 0.0,
+                channels: vec![channel(path, interpolation, times, values)],
+            };
+            c.duration = c.end();
+            c
+        }
+        let cubic = |a: f32, b: f32| {
+            of(
+                T,
+                Interpolation::CubicSpline,
+                &[0.0, 1.0],
+                &[
+                    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, a, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0,
+                    0.0, b,
+                ],
+            )
+        };
+        let cases: Vec<(Clip, &str)> = vec![
+            (
+                of(T, Interpolation::Linear, &[-1.0, 1.0], &[0.0; 6]),
+                "negative",
+            ),
+            (
+                of(
+                    T,
+                    Interpolation::Linear,
+                    &[0.0, 1.0],
+                    &[2e6, 0.0, 0.0, 0.0, 0.0, 0.0],
+                ),
+                "1e6",
+            ),
+            (cubic(1e30, 0.0), "1e6"),
+            (cubic(0.0, -3e6), "1e6"),
+            (of(T, Interpolation::Linear, &[0.0, 2e6], &[0.0; 6]), "1e6"),
+        ];
+        for (i, (bad, word)) in cases.into_iter().enumerate() {
+            let e = bad.validate().expect_err("refused");
+            assert!(e.contains(word), "case {i}: {e}");
+        }
+        // At the limits everything passes: a key time of a million seconds, a scale of a
+        // million, tangents of a million.
+        of(S, Interpolation::Step, &[0.0], &[1e6; 3])
+            .validate()
+            .unwrap();
+        of(T, Interpolation::Linear, &[999_999.0, MAX_TIME], &[0.0; 6])
+            .validate()
+            .unwrap();
+        cubic(MAX_VALUE, -MAX_VALUE).validate().unwrap();
+        // The tangent the reviewer showed, over its long interval: refused.
+        let mut shown = clip(
+            T,
+            Interpolation::CubicSpline,
+            &[0.0, 1e9],
+            &[
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1e30, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                0.0, 0.0,
+            ],
+        );
+        shown.channels[0].times[1] = MAX_TIME;
+        shown.duration = shown.end();
+        assert!(shown.validate().unwrap_err().contains("1e6"));
+    }
+
+    #[test]
+    fn the_limits_keep_every_sample_finite() {
+        // Everything at its largest: keys a million seconds apart, values and tangents a
+        // million, a rest transform a million wide. Nothing overflows.
+        let c = clip(
+            T,
+            Interpolation::CubicSpline,
+            &[0.0, MAX_TIME],
+            &[
+                -MAX_VALUE, 0.0, 0.0, MAX_VALUE, -MAX_VALUE, 0.0, MAX_VALUE, 0.0, 0.0, //
+                MAX_VALUE, 0.0, 0.0, -MAX_VALUE, MAX_VALUE, 0.0, -MAX_VALUE, 0.0, 0.0,
+            ],
+        );
+        c.validate().unwrap();
+        let r = clip(
+            R,
+            Interpolation::CubicSpline,
+            &[0.0, MAX_TIME],
+            &[
+                -MAX_VALUE, MAX_VALUE, -MAX_VALUE, MAX_VALUE, 0.0, 0.0, Q, Q, MAX_VALUE,
+                -MAX_VALUE, MAX_VALUE, -MAX_VALUE, //
+                MAX_VALUE, -MAX_VALUE, MAX_VALUE, -MAX_VALUE, 0.0, Q, 0.0, Q, -MAX_VALUE,
+                MAX_VALUE, -MAX_VALUE, MAX_VALUE,
+            ],
+        );
+        r.validate().unwrap();
+        let rest = [
+            Trs {
+                translation: [MAX_VALUE; 3],
+                rotation: [MAX_VALUE; 4],
+                scale: [MAX_VALUE; 3],
+            },
+            Trs::IDENTITY,
+        ];
+        let mut both = c.clone();
+        both.channels[0].node = 1;
+        both.channels.extend(r.channels.iter().cloned());
+        for i in 0..=100 {
+            let t = MAX_TIME * i as f32 / 100.0;
+            let got = sample(&both, t, i % 2 == 0, &rest);
+            assert_eq!(got.len(), 2);
+            for trs in &got {
+                assert!(trs.is_finite(), "t = {t}: {trs:?}");
+            }
+            let m = model_space(&[None, Some(0)], &got);
+            assert!(
+                m.iter().flat_map(|m| m.iter()).all(|x| x.is_finite()),
+                "{}",
+                m[1][0]
+            );
         }
     }
 
