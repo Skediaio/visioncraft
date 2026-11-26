@@ -1455,6 +1455,12 @@ pub struct Renderer {
     last_stats: RenderStats,
 }
 
+/// The model draw distance in the scaled units the levels are compared in. An orthographic
+/// view (a plan view) has no eye distance to cap and draws every model.
+fn scaled_draw_end(draw_m: f32, scale: f32, ortho: bool) -> f32 {
+    if ortho { f32::INFINITY } else { draw_m / scale }
+}
+
 impl Renderer {
     /// `format` is the output texture's format: `Rgba8UnormSrgb`, or
     /// `Rgba8Unorm` for sRGB-encoded bytes in a plain texture (what egui
@@ -5033,7 +5039,7 @@ impl Renderer {
         });
         let reach = self.impostor_reach;
         // The model draw distance in the scaled units the levels are compared in.
-        let draw_end = self.model_draw_distance() / scale;
+        let draw_end = scaled_draw_end(self.model_draw_distance(), scale, ortho.is_some());
         let mut fade_bytes: Vec<u8> = Vec::new();
         let mut fade_used = 0usize;
         for item in self.items.iter_mut().flatten() {
@@ -7923,6 +7929,14 @@ mod tests {
         assert_eq!(r.stats().instances, open, "the still draws it");
         assert_eq!(r.model_draw_distance(), 80.0, "the live setting is back");
         assert_eq!(live(&mut r), capped);
+    }
+
+    #[test]
+    fn an_orthographic_view_ignores_the_model_draw_distance() {
+        assert_eq!(scaled_draw_end(80.0, 2.0, false), 40.0);
+        assert_eq!(scaled_draw_end(80.0, 2.0, true), f32::INFINITY);
+        let ortho = Mat4::orthographic_rh(-15.0, 15.0, -15.0, 15.0, 0.1, 600.0);
+        assert!(shadow::is_orthographic(ortho));
     }
 
     #[test]

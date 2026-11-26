@@ -2070,9 +2070,14 @@ impl Studio {
 
     /// The model draw distance the live view uses: the choice (`model_draw_distance`), except
     /// while a picture is made or a still waits for what is in frame (`still_textures`):
-    /// pictures draw everything, as plan views do.
+    /// pictures draw everything, as plan views do (the plan's camera sits `top_half_height /
+    /// tan(fov / 2)` metres up, so the distance from it says nothing about what is near the
+    /// centre of the picture).
     pub fn model_draw_in_force(&self) -> Option<f32> {
-        if self.picturing || self.still_textures.is_some() {
+        if self.picturing
+            || self.still_textures.is_some()
+            || self.camera.view == crate::camera::View::Top
+        {
             Some(f32::INFINITY)
         } else {
             self.model_draw_distance

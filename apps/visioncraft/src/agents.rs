@@ -968,6 +968,25 @@ mod tests {
         });
     }
 
+    /// A plan view draws every model: its camera sits hundreds of metres up, so the eye
+    /// distance says nothing about what is near the centre.
+    #[test]
+    fn plan_view_ignores_the_model_draw_distance() {
+        use super::Host;
+        with_host(Project::default(), |h| {
+            h.call("ui.set", &json!({"modelDrawDistance": 90}))
+                .unwrap()
+                .unwrap();
+            let s = &mut *h.host.studio;
+            s.camera.view = crate::camera::View::Top;
+            s.prepare();
+            assert_eq!(s.renderer.model_draw_distance(), f32::INFINITY);
+            s.camera.view = crate::camera::View::Orbit;
+            s.prepare();
+            assert_eq!(s.renderer.model_draw_distance(), 90.0);
+        });
+    }
+
     /// Pictures (`settle_for_picture`, then `render_pixels`, `render_photo` or the CLI's
     /// readback) and a still waiting for what is in frame draw and load every model: the draw
     /// distance is for the live view, which gets it back at its next frame.
