@@ -420,3 +420,71 @@ fn two_ponds_at_two_levels_each_mirror_their_shore_with_two_planar_passes() {
         "two passes: the upper pond mirrors its pillar: {red:?}"
     );
 }
+
+/// One planar pass and screen-space reflections on: the pond without a pass reflects its
+/// pillar from the opaque scene of the frame where the pillar is on screen, and the
+/// environment cube where the pillar is out of the picture (the camera tilted down past it).
+#[test]
+fn without_a_planar_pass_the_pond_reflects_what_is_on_screen() {
+    let mut r = renderer(W, H);
+    ground(&mut r, 0.0);
+    let water = water_material(&mut r);
+    let _low = shore_pond(&mut r, water, -3.0, 3.0, -4.0, 0.0, -0.2);
+    let high = terrace_pond(&mut r, water, 0.0, 5.0, -9.0, -5.2, 2.8);
+    // Water a little in front of the upper pillar, on the upper pond: its reflection is the
+    // pillar's shaft.
+    let shore = Vec3::new(2.95, 1.5, -7.0);
+    r.set_quality(Quality {
+        water_planes: 1,
+        screen_reflections: 1,
+        ..Quality::HIGH
+    });
+    let aspect = W as f32 / H as f32;
+    let (eye, past) = (Vec3::new(2.0, 3.6, 9.0), Vec3::new(2.0, -4.5, -4.0));
+    for (name, target) in [("ssr", Vec3::new(2.0, 0.9, -4.0)), ("ssr_offscreen", past)] {
+        setup(
+            &mut r,
+            demo::camera(eye, target, aspect),
+            demo::afternoon_sun(),
+            15.0,
+        );
+        let px = capture(&mut r, W, H);
+        frame(name, &px);
+        let tiers: Vec<_> = r
+            .stats()
+            .water
+            .iter()
+            .map(|w| (w.level_m, w.tier))
+            .collect();
+        assert_eq!(
+            tiers,
+            [(0.02, WaterTier::Planar), (1.5, WaterTier::ScreenSpace)],
+            "{name}"
+        );
+        // The whole pillar is above the picture's top edge in the second frame.
+        let top = r.project(Vec3::new(3.0, 1.5, -9.4)).expect("projected").y;
+        assert_eq!(
+            top < 0.0,
+            name == "ssr_offscreen",
+            "{name}: pillar base at y {top}"
+        );
+        let water = at(&r, &px, shore);
+        assert!(
+            r.project(shore)
+                .is_some_and(|p| p.y >= 0.0 && p.y < H as f32),
+            "{name}: the shore water is in the picture"
+        );
+        if name == "ssr" {
+            assert!(
+                redness(at(&r, &px, high)) > 15.0,
+                "{name}: the mirror image of the pillar"
+            );
+            assert!(
+                redness(water) > 15.0,
+                "{name}: the water by the shore {water:?}"
+            );
+        } else {
+            assert!(redness(water) < 15.0, "{name}: {water:?}");
+        }
+    }
+}

@@ -2174,13 +2174,19 @@ fn glass_terms(in: Varying) -> GlassTerms {
 // the ray's reach; 0 where the ray leaves the screen or meets nothing (the sky): the caller's
 // estimate stands there.
 fn screen_reflection(world: vec3<f32>, r: vec3<f32>) -> vec4<f32> {
+    return screen_reflection_within(world, r, SSR_REACH_M, g.ssr.z);
+}
+
+// `screen_reflection` with its own reach (m) and most steps: water without a planar pass
+// (`water`) marches half as far, half as many steps.
+fn screen_reflection_within(world: vec3<f32>, r: vec3<f32>, reach_m: f32, most_steps: f32) -> vec4<f32> {
     if g.ssr.x < 0.5 {
         return vec4<f32>(0.0);
     }
     let size = vec2<f32>(textureDimensions(linear_depth));
     let v0 = (g.view * vec4<f32>(world, 1.0)).xyz;
     let vr = (g.view * vec4<f32>(r, 0.0)).xyz;
-    var reach = SSR_REACH_M;
+    var reach = reach_m;
     if vr.z > 1e-4 {
         reach = min(reach, (-0.1 - v0.z) / vr.z);
     }
@@ -2194,7 +2200,7 @@ fn screen_reflection(world: vec3<f32>, r: vec3<f32>) -> vec4<f32> {
     let k1 = 1.0 / h1.w;
     let p0 = (h0.xy * k0 * vec2<f32>(0.5, -0.5) + 0.5) * size;
     let p1 = (h1.xy * k1 * vec2<f32>(0.5, -0.5) + 0.5) * size;
-    let steps = min(max(abs(p1.x - p0.x), abs(p1.y - p0.y)) / g.ssr.y, g.ssr.z);
+    let steps = min(max(abs(p1.x - p0.x), abs(p1.y - p0.y)) / g.ssr.y, most_steps);
     if steps < 1.0 {
         return vec4<f32>(0.0);
     }
@@ -2325,7 +2331,9 @@ fn water_transmittance(path: f32, turbidity: f32) -> f32 {
 // the deep colour; base_color.a is the turbidity), with a soft fade where
 // the water meets the shore. The reflection is the planar reflection layer
 // of this water's plane when it has one (`water_plane_at`), distorted by the
-// ripples' slope, otherwise the environment cube.
+// ripples' slope, otherwise (with screen-space reflections on) the opaque
+// scene of the frame along the reflected ray where it shows, and the
+// environment cube where it does not.
 fn water(in: Varying) -> vec4<f32> {
     let eye_vec = to_eye(in.world);
     let dist = length(eye_vec);
@@ -2367,7 +2375,13 @@ fn water(in: Varying) -> vec4<f32> {
         // A garden pond reflects hedges, walls and trees near the horizon,
         // not sky: the cube's reflection is darkened towards the horizon (a
         // crude local-horizon term), which also lets the ripples show.
-        reflected = environment(r, 0.04) * mix(0.3, 1.0, smoothstep(0.02, 0.4, r.y));
+        let cube = environment(r, 0.04) * mix(0.3, 1.0, smoothstep(0.02, 0.4, r.y));
+        // Without a planar pass (water.rs), and with screen-space reflections
+        // on, the opaque scene of this frame along the rippled reflected ray
+        // (the glass's march, half as far and half as many steps), fading to
+        // the cube towards the screen's edges and where it meets nothing.
+        let ssr = screen_reflection_within(in.world, r, SSR_REACH_M * 0.5, g.ssr.z * 0.5);
+        reflected = mix(cube, ssr.rgb, ssr.a);
     }
     let l = g.sun_dir.xyz;
     let nol = max(dot(n, l), 0.0);
