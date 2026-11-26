@@ -277,6 +277,9 @@ pub struct Library {
     pub ground_offsets: HashMap<String, f32>,
     indexes_asked: bool,
     models: HashMap<String, Model>,
+    /// The animation of every model file loaded so far, kept when the model is evicted: what
+    /// `query.clips` and playback read in a browser, which has no file to read again.
+    animations: HashMap<String, Animation>,
     /// The id of the next loaded model (`Model::id`).
     next_model_id: u64,
     awaiting: HashSet<String>,
@@ -348,6 +351,7 @@ impl Library {
             ground_offsets: HashMap::new(),
             indexes_asked: false,
             models: HashMap::new(),
+            animations: HashMap::new(),
             next_model_id: 0,
             awaiting: HashSet::new(),
             uploading: Vec::new(),
@@ -453,9 +457,10 @@ impl Library {
         Some(AssetRig { rig, levels })
     }
 
-    /// The animation of a loaded model file (its clips, what was left out, and its bones).
+    /// The animation of a model file loaded once (its clips, what was left out, and its
+    /// bones), whether or not it is still resident.
     pub fn animation(&self, file: &str) -> Option<&Animation> {
-        self.models.get(file).map(|m| &m.anim)
+        self.animations.get(file)
     }
     /// Which level of detail each placed catalogue asset shows and why, for agents (`ui.load`):
     /// the nearest instance's distance, the level that distance needs, the levels resident,
@@ -974,6 +979,7 @@ impl Library {
             self.lamps_applied = None;
         }
         self.store.track(Key::Glb(path.clone()), bytes);
+        self.animations.insert(path.clone(), model.anim.clone());
         self.models.insert(path, model);
         self.rev += 1;
     }
@@ -1328,6 +1334,35 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    /// A model's clips outlive the model: once it was loaded, `query.clips` and playback still
+    /// know them after memory pressure evicted it (a browser has no file to read them again).
+    #[test]
+    fn a_model_s_clips_are_known_after_it_is_evicted() {
+        let Ok((device, queue)) = pollster::block_on(visioncraft_render::headless_device()) else {
+            eprintln!("no GPU adapter: skipped");
+            return;
+        };
+        let mut r = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+        let mut l = Library::new();
+        l.merge_user_assets();
+        l.note("g", "vc-bollard", &[Mat4::IDENTITY]);
+        for _ in 0..500 {
+            l.pump(&mut r, Vec3::ZERO);
+            if l.resident_models() == 1 && l.idle() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(l.resident_models(), 1, "the bollard is loaded");
+        let file = crate::fixtures::glb_path("vc-bollard");
+        let loaded = l.animation(&file).cloned().expect("its animation");
+        assert!(loaded.clips.is_empty(), "the bollard stands still");
+        l.store.evict(crate::assets::Key::Glb(file.clone()));
+        l.pump(&mut r, Vec3::ZERO);
+        assert_eq!(l.resident_models(), 0, "evicted");
+        assert_eq!(l.animation(&file), Some(&loaded), "its clips are still known");
     }
 
     /// Below HIGH a catalogue plant wanted by a generator gets an impostor, baked from its model

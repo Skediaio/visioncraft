@@ -1044,6 +1044,14 @@ impl AssetStore {
         self.lru.remove(key);
     }
 
+    /// Evicts `key` as memory pressure would (for tests of what outlives an eviction).
+    #[cfg(test)]
+    pub fn evict(&mut self, key: Key) {
+        self.lru.remove(&key);
+        self.stats.evictions += 1;
+        self.evicted.push(key);
+    }
+
     /// Things the owner must release (GLB models evicted for memory).
     pub fn take_evicted(&mut self) -> Vec<Key> {
         std::mem::take(&mut self.evicted)
