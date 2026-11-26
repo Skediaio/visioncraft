@@ -14,10 +14,12 @@ nothing here is a promise of a date.
   three-year-old border is closed (95 % of the ground under a crown) and a new one open (14 % at
   planting). An area scatter with a `border`; undoable, deterministic by seed; the garden
   example's border is made with it. Flowers already read from eye level and follow the season
-  (checked at 5 to 17 m). Recipe 29. Next: the same layout along a path or a curved bed's
-  centre line, a bloom calendar view (what flowers each month in the border), a swatch of
-  neighbouring colours, bulbs for spring between the perennials, the coast example's borders
-  moved onto it.
+  (checked at 5 to 17 m). Recipe 29. A bloom calendar (`query.bloom_calendar {planting?,
+  layer?}`) says which species flower in each month of the year, with their plants, colours and
+  names, shifted six months south of the equator, and which months stay without flowers. Next:
+  the same layout along a path or a curved bed's centre line, a bloom calendar view in the
+  window (what flowers each month in the border), a swatch of neighbouring colours, bulbs for
+  spring between the perennials, the coast example's borders moved onto it.
 - **Weathering:** `material.update {weathering: {amount, dirt, moss, wear, streaks}}` and
   `view.set {weathering}` (one slider for the whole design, kept explicit: the view's `years` does
   not drive it) age standard materials with procedural dirt (near the ground, in crevices, under
