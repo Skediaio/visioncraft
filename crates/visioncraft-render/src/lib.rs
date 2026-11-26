@@ -4540,8 +4540,10 @@ impl Renderer {
                 let distance = eye.clamp(lo, hi).distance(*eye);
                 let rect = water::screen_rect(cull, (lo, hi), size);
                 let coverage = rect.area() as f32 / (u64::from(size.0) * u64::from(size.1)) as f32;
+                // The shift over the view-space depth, as the shader divides it.
+                let depth = water::view_depth(cull, (lo, hi));
                 let rect = rect.padded(
-                    water::ripple_pad(distance, water::POND_DISTORTION, tilt, size),
+                    water::ripple_pad(depth, water::POND_DISTORTION, tilt, size),
                     size,
                 );
                 let surface = water::Surface {

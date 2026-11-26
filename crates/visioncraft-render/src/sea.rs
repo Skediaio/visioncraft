@@ -48,6 +48,9 @@ pub(crate) struct SeaSight {
     pub cells: Cells,
     /// From the eye to the nearest point a ray met (m).
     pub distance: f32,
+    /// The least view-space depth of those points (m): what sea.wgsl divides the ripples'
+    /// shift by.
+    pub depth: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -112,6 +115,7 @@ pub(crate) fn sea_sight(sea: &Sea, eye: glam::Vec3, view_proj: glam::Mat4) -> Op
                 (ndc_x as u32).min(COLUMNS),
                 Vec3::new(x, level, z),
                 eye,
+                c.w,
             );
             corner_seen = true;
         }
@@ -137,15 +141,24 @@ pub(crate) fn sea_sight(sea: &Sea, eye: glam::Vec3, view_proj: glam::Mat4) -> Op
             let in_outline = sea.outline.len() < 3 || covers(&sea.outline, q);
             let sea_side = sea.coast.len() < 2 || coast_distance(&sea.coast, q) > -margin;
             if in_outline && sea_side {
-                see(&mut sight, row, column, p, eye);
+                let depth = (view_proj * p.extend(1.0)).w;
+                see(&mut sight, row, column, p, eye, depth);
             }
         }
     }
     sight
 }
 
-/// Notes that the ray through grid cell `(row, column)` met the water at `at`.
-fn see(sight: &mut Option<SeaSight>, row: u32, column: u32, at: glam::Vec3, eye: glam::Vec3) {
+/// Notes that the ray through grid cell `(row, column)` met the water at `at`, `depth` deep in
+/// the view.
+fn see(
+    sight: &mut Option<SeaSight>,
+    row: u32,
+    column: u32,
+    at: glam::Vec3,
+    eye: glam::Vec3,
+    depth: f32,
+) {
     let c = sight.get_or_insert(SeaSight {
         hits: 0,
         cells: Cells {
@@ -155,6 +168,7 @@ fn see(sight: &mut Option<SeaSight>, row: u32, column: u32, at: glam::Vec3, eye:
             y1: row,
         },
         distance: f32::INFINITY,
+        depth: f32::INFINITY,
     });
     c.hits += 1;
     c.cells = Cells {
@@ -164,6 +178,7 @@ fn see(sight: &mut Option<SeaSight>, row: u32, column: u32, at: glam::Vec3, eye:
         y1: c.cells.y1.max(row),
     };
     c.distance = c.distance.min(at.distance(eye));
+    c.depth = c.depth.min(depth);
 }
 
 /// Even-odd rule over an outline (as sea.wgsl `sea_covers`).
@@ -416,8 +431,7 @@ impl Renderer {
         let s = self.sea.sea.as_ref().filter(|s| self.eye.y > s.level)?;
         let sight = sea_sight(s, self.eye, view_proj)?;
         let coverage = f64::from(sight.hits) / f64::from((ROWS + 1) * (COLUMNS + 1));
-        let pad =
-            crate::water::ripple_pad(sight.distance, crate::water::SEA_DISTORTION, tilt, size);
+        let pad = crate::water::ripple_pad(sight.depth, crate::water::SEA_DISTORTION, tilt, size);
         Some(crate::water::Surface {
             height: s.level,
             rect: sight.rect(size).padded(pad, size),

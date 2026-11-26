@@ -561,16 +561,23 @@ fn point_rect(p: glam::Vec4, size: (u32, u32)) -> Option<Rect> {
     })
 }
 
+/// The view-space depth of the box's nearest point, as the shaders divide the ripples' shift
+/// by it (`max(depth, 1)`): its nearest corner's (the depth is linear over the box), a metre at
+/// the least, and so a metre when the box reaches the eye's plane. The clip-space w of
+/// `view_proj`, the view-space depth under a perspective projection (an orthographic one
+/// gives 1, the most padding).
+pub(crate) fn view_depth(view_proj: Mat4, b: (Vec3, Vec3)) -> f32 {
+    (0..8)
+        .map(|i| (view_proj * corner(b, i).extend(1.0)).w)
+        .fold(f32::INFINITY, |d, w| if w > 1.0 { d.min(w) } else { 1.0 })
+}
+
 /// How far the ripples can shift a surface's lookup, in pixels, on a target of `size`: the
-/// distortion times the normal's most tilt, over the depth (a metre at the least, as the
-/// shaders take it), rounded to a pixel, and two pixels more for the filter's reach.
-pub(crate) fn ripple_pad(
-    distance: f32,
-    distortion: f32,
-    tilt: f32,
-    size: (u32, u32),
-) -> (u32, u32) {
-    let share = tilt * distortion / distance.max(1.0);
+/// distortion times the normal's most tilt, over the view-space depth (`view_depth`; a metre
+/// at the least, as the shaders take it), rounded to a pixel, and two pixels more for the
+/// filter's reach.
+pub(crate) fn ripple_pad(depth: f32, distortion: f32, tilt: f32, size: (u32, u32)) -> (u32, u32) {
+    let share = tilt * distortion / depth.max(1.0);
     let px = (share * size.0 as f32 + 0.5).floor() as u32 + 2;
     let py = (share * size.1 as f32 + 0.5).floor() as u32 + 2;
     (px, py)
@@ -1178,5 +1185,28 @@ mod tests {
         assert!(rect.y > 180 && rect.y < 195, "{rect:?}");
         let coverage = rect.area() as f32 / (SIZE.0 * SIZE.1) as f32;
         assert!(coverage > 0.25 && coverage < 0.35, "{coverage}");
+    }
+
+    #[test]
+    fn the_ripple_pad_takes_the_view_depth_of_the_nearest_corner() {
+        let proj = Mat4::perspective_rh(50f32.to_radians(), 16.0 / 9.0, 0.1, 1000.0);
+        let view_proj = proj * Mat4::look_at_rh(Vec3::ZERO, Vec3::NEG_Z, Vec3::Y);
+        // A pond off to the side: 5.5 m deep in the view, 6.8 m from the eye. The shaders
+        // divide the shift by the depth, so the pad does too.
+        let pond = (Vec3::new(4.0, -0.5, -6.0), Vec3::new(4.5, 0.0, -5.5));
+        let depth = view_depth(view_proj, pond);
+        assert!((depth - 5.5).abs() < 1e-3, "{depth}");
+        let distance = Vec3::ZERO.clamp(pond.0, pond.1).length();
+        assert!(distance > 6.7, "{distance}");
+        let (deep, far) = (
+            ripple_pad(depth, POND_DISTORTION, WIND_TILT, SIZE),
+            ripple_pad(distance, POND_DISTORTION, WIND_TILT, SIZE),
+        );
+        assert!(deep.0 > far.0 && deep.1 > far.1, "{deep:?} {far:?}");
+        // A metre at the least, and a box reaching behind the eye's plane reaches its depth 0.
+        let near = (Vec3::new(-0.1, -0.5, -0.6), Vec3::new(0.1, 0.0, -0.4));
+        assert_eq!(view_depth(view_proj, near), 1.0);
+        let around = (Vec3::new(-2.0, -0.5, -9.0), Vec3::new(2.0, 0.0, 3.0));
+        assert_eq!(view_depth(view_proj, around), 1.0);
     }
 }
