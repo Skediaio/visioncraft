@@ -2921,8 +2921,10 @@ impl Scene {
         let mut old_groups = old.map(|o| o.groups).unwrap_or_default();
         let mut groups: HashMap<(String, u32), Group> = HashMap::new();
         self.library.forget_generator(g.id());
+        // Grouped from what is drawn: nothing on a hidden layer.
+        let drawn: &[(usize, Placement)] = if sig.2 { &numbered } else { &[] };
         for (asset, variant, matrices, numbers) in
-            plant_scene::group_numbered(&numbered, plants::VARIANTS)
+            plant_scene::group_numbered(drawn, plants::VARIANTS)
         {
             // Grown for the years shown: a growth stage to generate at, and the scale to it.
             let stage = self.growth_stage(project, assets, g, &asset);

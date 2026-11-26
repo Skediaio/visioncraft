@@ -121,6 +121,33 @@ fn lid_corners(s: &Studio, quarter: f32) -> Vec<(f32, f32)> {
         .collect()
 }
 
+/// A planting on a hidden layer is still counted, and draws nothing: neither its static items
+/// nor its moving parts.
+#[test]
+fn a_planting_on_a_hidden_layer_has_no_items() {
+    let Some((_device, _queue, mut s)) = hinge_studio() else {
+        eprintln!("no GPU adapter: skipped");
+        return;
+    };
+    let shown = s.renderer.item_count();
+    let layer = s.session.project().layer_of("g1").unwrap().to_string();
+    s.session
+        .run(
+            "layer.set_visible",
+            serde_json::json!({"id": layer, "visible": false}),
+        )
+        .unwrap();
+    s.settle_for_picture();
+    assert_eq!(s.scene.gen_stats("g1").map(|g| g.count), Some(1), "still counted");
+    assert_eq!(s.scene.animated_parts(), 0, "the lid is not drawn");
+    // Back to what the scene draws without it: the body and the lid were at least two.
+    assert!(
+        s.renderer.item_count() + 2 <= shown,
+        "{} items of {shown} are left",
+        s.renderer.item_count()
+    );
+}
+
 #[test]
 fn the_lid_swings_on_its_clip_and_the_body_stands_still() {
     let Some((device, queue, mut s)) = hinge_studio() else {
