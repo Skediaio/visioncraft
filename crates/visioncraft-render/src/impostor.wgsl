@@ -63,7 +63,7 @@ fn impostor_views(d: vec3<f32>) -> vec4<f32> {
 // mesh level, the impostor or nothing) has run: per draw, from the draw slot
 // (lib.rs `fade_slot`); negated on a farther mesh level's draws.
 fn lod_fade() -> f32 {
-    return bitcast<f32>(draw.mesh.z);
+    return bitcast<f32>(draw.data.z);
 }
 
 // The quad around an instance facing `towards` (world, unit, from the
@@ -301,7 +301,7 @@ fn impostor_shade(in: ImpostorVarying, screen_effects: bool) -> vec3<f32> {
     s.metallic = 0.0;
     s.ao = sky;
     s.emissive = vec3<f32>(0.0);
-    let v = Varying(in.clip, in.world, n_world, 0xfffffffdu, vec2<f32>(0.0));
+    let v = Varying(in.clip, in.world, n_world, 0xfffffffdu, vec2<f32>(0.0), 0u, 0u);
     return light(v, s, t.foliage, 0.0, NO_AGING, screen_effects).color;
 }
 
@@ -335,13 +335,14 @@ struct FadeOut {
     @builtin(position) @invariant clip: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) @interpolate(flat) fade: f32,
+    @location(2) @interpolate(flat) material_id: u32,
 }
 
 @vertex
 fn vs_depth_fade(v: DepthIn) -> FadeOut {
     let m = model(v.m0, v.m1, v.m2, v.m3);
     let world = animated_world(v.position, v.wind, m, true);
-    return FadeOut(g.view_proj * vec4<f32>(world, 1.0), v.uv, lod_fade());
+    return FadeOut(g.view_proj * vec4<f32>(world, 1.0), v.uv, lod_fade(), instance_material(v.m1));
 }
 
 // A mesh level's share of a hand-over: the near side keeps the pixels at or above `fade`
@@ -353,6 +354,7 @@ fn fade_keeps(clip: vec2<f32>, fade: f32) -> bool {
 
 @fragment
 fn fs_depth_fade(in: FadeOut) {
+    load_material(in.material_id);
     let a = cutout_alpha(in.uv);
     if (material.alpha.x > 0.0 && a < material.alpha.x) || !fade_keeps(in.clip.xy, in.fade) {
         discard;
@@ -361,10 +363,17 @@ fn fs_depth_fade(in: FadeOut) {
 
 // The samples of the pixel at `in.clip.xy` (its centre) a fading mesh level keeps.
 fn depth_fade_mask(in: FadeOut) -> u32 {
+    load_material(in.material_id);
     let split = fade_split(in.clip.xy, abs(in.fade));
     var m = select(split.x, split.y, in.fade < 0.0);
+    // Derivatives before the material's branch (not uniform: the material may be the instance's).
+    let a = cutout_alpha(in.uv);
+    let width = max(fwidth(a), 1e-4);
     if material.alpha.x > 0.0 {
-        m &= alpha_mask(in.clip.xy, cutout_alpha(in.uv), material.alpha.x);
+        m &= sample_run(
+            alpha_samples_over(a, width, material.alpha.x),
+            u32(ign_sampled(in.clip.xy + vec2<f32>(17.0, 29.0)) * f32(SAMPLES)),
+        );
     }
     return m;
 }
@@ -381,11 +390,16 @@ fn fs_depth_fade_ms(in: FadeOut) -> @builtin(sample_mask) u32 {
 
 // ---- baking -------------------------------------------------------------
 
+// The bake pipeline of a part with a base map samples it (lib.rs picks the pipeline): the
+// material comes from the instance, so the branch may not be on it (implicit-level sampling).
+override BAKE_BASE: u32 = 0u;
+
 struct BakeOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) normal: vec3<f32>,
     @location(2) @interpolate(flat) face: u32,
+    @location(3) @interpolate(flat) material_id: u32,
 }
 
 @vertex
@@ -395,6 +409,7 @@ fn vs_bake(v: VertexIn) -> BakeOut {
     out.uv = v.uv;
     out.normal = v.normal;
     out.face = v.face;
+    out.material_id = instance_material(v.m1);
     return out;
 }
 
@@ -405,8 +420,9 @@ struct BakeTargets {
 
 @fragment
 fn fs_bake(in: BakeOut, @builtin(front_facing) front: bool) -> BakeTargets {
+    load_instance_material(in.material_id);
     var base = material.base_color;
-    if (material.flags.x & HAS_BASE) != 0u {
+    if BAKE_BASE == 1u {
         base *= textureSample(base_tex, base_smp, in.uv);
     }
     if material.alpha.x > 0.0 && base.a < material.alpha.x {

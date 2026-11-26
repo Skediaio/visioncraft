@@ -56,7 +56,14 @@ struct Material {
     relief: vec4<f32>,     // x parallax depth of the height map (m; 0 off), yz true north's direction on the ground (x, z; unit), w puddles may form (0/1)
     aging: vec4<f32>,      // how strongly dirt, moss, wear and rain streaks show (0..1 each; all 0 off)
 }
-@group(1) @binding(0) var<uniform> material: Material;
+// Every material's parameters in one table (lib.rs `Renderer::materials`), by row: 0 the
+// endless ground's own, then one per material id. Group 1 binding 0 of every texture set is
+// bound to it.
+@group(1) @binding(0) var<storage, read> materials: array<Material>;
+// The material of the surface being shaded: each fragment stage that reads it loads it first
+// (`load_material`). Its values are not uniform (a batch spans several materials), so nothing
+// branches on it around derivatives or implicit-level sampling.
+var<private> material: Material;
 // Absent maps are bound to a 1x1 white texture (a neutral factor).
 @group(1) @binding(1) var base_tex: texture_2d<f32>;
 @group(1) @binding(2) var normal_tex: texture_2d<f32>;
@@ -73,9 +80,13 @@ struct Material {
 @group(1) @binding(12) var ao_smp: sampler;
 
 struct Draw {
-    mesh: vec4<u32>, // x mesh id (for the face highlight)
+    // x mesh id (for the face highlight), y the material's row in the table, z a dissolve's
+    // progress (impostor.wgsl `lod_fade`), w unused. x and y are FROM_INSTANCE when the draw's
+    // instances carry them (a batch, lib.rs `Gather`); any other draw reads them here.
+    data: vec4<u32>,
 }
 @group(2) @binding(0) var<uniform> draw: Draw;
+const FROM_INSTANCE: u32 = 0xFFFFFFFFu;
 
 @group(3) @binding(0) var shadow_map: texture_depth_2d_array;
 @group(3) @binding(1) var shadow_sampler: sampler_comparison;
@@ -109,8 +120,38 @@ fn animated_world(position: vec3<f32>, wind: vec2<f32>, m: mat4x4<f32>, animate:
     return origin + wind_sway(wind_state(), p - origin, origin, wind.x, wind.y, m[0].w);
 }
 
+// The instance's matrix. Its last row is constant (0, 0, 0, 1): `m0.w` carries the plant's sway
+// frequency (`animated_world`), and a gathered instance's `m1.w` and `m2.w` the bits of its
+// material's row and its mesh id (lib.rs `Gather`); a pool instance has zeros there.
 fn model(m0: vec4<f32>, m1: vec4<f32>, m2: vec4<f32>, m3: vec4<f32>) -> mat4x4<f32> {
-    return mat4x4<f32>(m0, m1, m2, m3);
+    return mat4x4<f32>(m0, vec4<f32>(m1.xyz, 0.0), vec4<f32>(m2.xyz, 0.0), vec4<f32>(m3.xyz, 1.0));
+}
+
+fn instance_material(m1: vec4<f32>) -> u32 {
+    return bitcast<u32>(m1.w);
+}
+
+fn instance_mesh(m2: vec4<f32>) -> u32 {
+    return bitcast<u32>(m2.w);
+}
+
+// The material of the draw's surface, for the pipelines without a draw slot (the cutout depth
+// pre-pass, the cutout shadow pass, the impostor bake): every instance carries its own.
+fn load_instance_material(id: u32) {
+    material = materials[id];
+}
+
+// The material of the draw's surface, for the pipelines with a draw slot (group 2): a batch
+// over several materials takes it from each instance, any other draw from its slot.
+fn load_material(id: u32) {
+    let row = draw.data.y;
+    material = materials[select(id, row, row != FROM_INSTANCE)];
+}
+
+// The mesh id of the draw's surface (the face highlight): the instance's when it carries one.
+fn mesh_of(id: u32) -> u32 {
+    let per_draw = draw.data.x;
+    return select(id, per_draw, per_draw != FROM_INSTANCE);
 }
 
 // Normals with the cofactor matrix, correct for any invertible model matrix
@@ -148,6 +189,7 @@ struct DepthOut {
     @builtin(position) @invariant clip: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) world: vec3<f32>,
+    @location(2) @interpolate(flat) material_id: u32,
 }
 
 @vertex
@@ -157,6 +199,7 @@ fn vs_depth(v: DepthIn) -> DepthOut {
     out.clip = g.view_proj * vec4<f32>(world, 1.0);
     out.uv = v.uv;
     out.world = world;
+    out.material_id = instance_material(v.m1);
     return out;
 }
 
@@ -181,6 +224,7 @@ fn edge_fade(world: vec3<f32>, dir: vec3<f32>) -> f32 {
 // sample mask turns early depth testing off on some GPUs.
 @fragment
 fn fs_depth_cutout_1x(in: DepthOut) {
+    load_instance_material(in.material_id);
     // Derivatives first, in uniform control flow (no early return before them).
     let a = cutout_alpha(in.uv) * edge_fade(in.world, normalize(to_eye(in.world)));
     let soft = edge_coverage(in.uv, in.world);
@@ -193,6 +237,7 @@ fn fs_depth_cutout_1x(in: DepthOut) {
 
 // The samples of the pixel at `in.clip.xy` (its centre) that a cutout covers; 0 for none.
 fn depth_cutout_mask(in: DepthOut) -> u32 {
+    load_instance_material(in.material_id);
     let a = cutout_alpha(in.uv) * edge_fade(in.world, normalize(to_eye(in.world)));
     let soft = edge_coverage(in.uv, in.world);
     // A soft edge covers `soft` of the samples; any other cutout as alpha to coverage.
@@ -251,7 +296,13 @@ fn sample_run(n: u32, start: u32) -> u32 {
 // Alpha to coverage: how many samples a cutout alpha `a` covers, the alpha
 // sharpened to a one-pixel ramp across the cutoff (Golus 2017).
 fn alpha_samples(a: f32, cutoff: f32) -> u32 {
-    let sharp = (a - cutoff) / max(fwidth(a), 1e-4) + 0.5;
+    return alpha_samples_over(a, max(fwidth(a), 1e-4), cutoff);
+}
+
+// `alpha_samples` with the alpha's derivative width taken by the caller (in uniform control
+// flow: where it is branched on, the material may be the instance's).
+fn alpha_samples_over(a: f32, width: f32, cutoff: f32) -> u32 {
+    let sharp = (a - cutoff) / width + 0.5;
     return u32(clamp(round(sharp * f32(SAMPLES)), 0.0, f32(SAMPLES)));
 }
 
@@ -271,6 +322,7 @@ fn vs_shadow(v: DepthIn) -> DepthOut {
     out.clip = cascade.view_proj * vec4<f32>(world, 1.0);
     out.uv = v.uv;
     out.world = world;
+    out.material_id = instance_material(v.m1);
     return out;
 }
 
@@ -278,6 +330,7 @@ fn vs_shadow(v: DepthIn) -> DepthOut {
 // fade.
 @fragment
 fn fs_shadow_cutout(in: DepthOut) {
+    load_instance_material(in.material_id);
     if cutout_alpha(in.uv) < material.alpha.x {
         discard;
     }
@@ -317,6 +370,9 @@ struct Varying {
     @location(1) normal: vec3<f32>,
     @location(2) @interpolate(flat) face: u32,
     @location(3) uv: vec2<f32>,
+    // What the instance carries (`model`): its material's row and its mesh id.
+    @location(4) @interpolate(flat) material_id: u32,
+    @location(5) @interpolate(flat) mesh_id: u32,
 }
 
 @vertex
@@ -329,6 +385,8 @@ fn vs_main(v: VertexIn) -> Varying {
     out.normal = world_normal(m, v.normal);
     out.face = v.face;
     out.uv = v.uv;
+    out.material_id = instance_material(v.m1);
+    out.mesh_id = instance_mesh(v.m2);
     return out;
 }
 
@@ -704,11 +762,11 @@ fn triplanar(world: vec3<f32>, dwx: vec3<f32>, dwy: vec3<f32>, n: vec3<f32>, inv
     return l;
 }
 
-fn uv_lookup(uv: vec2<f32>) -> Lookup {
+fn uv_lookup(uv: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>) -> Lookup {
     var l: Lookup;
     l.uv[0] = uv;
-    l.dx[0] = dpdx(uv);
-    l.dy[0] = dpdy(uv);
+    l.dx[0] = dx;
+    l.dy[0] = dy;
     l.weight = vec3<f32>(1.0, 0.0, 0.0);
     return l;
 }
@@ -718,11 +776,8 @@ fn uv_lookup(uv: vec2<f32>) -> Lookup {
 // tangents: Schüler, "Normal Mapping without Precomputed Tangents", ShaderX5
 // (2006) and his 2013 follow-up. WGSL's dpdy runs down the framebuffer, so
 // both screen derivatives along y are negated to keep the frame's handedness.
-fn uv_normal(tn: vec3<f32>, n: vec3<f32>, world: vec3<f32>, uv: vec2<f32>) -> vec3<f32> {
-    let dp1 = dpdx(world);
-    let dp2 = -dpdy(world);
-    let duv1 = dpdx(uv);
-    let duv2 = -dpdy(uv);
+// With the derivatives taken by the caller, in uniform control flow.
+fn uv_normal(tn: vec3<f32>, n: vec3<f32>, dp1: vec3<f32>, dp2: vec3<f32>, duv1: vec2<f32>, duv2: vec2<f32>) -> vec3<f32> {
     let dp2perp = cross(dp2, n);
     let dp1perp = cross(n, dp1);
     let t = dp2perp * duv1.x + dp1perp * duv2.x;
@@ -902,14 +957,18 @@ fn surface(in: Varying, front: bool, ground: bool) -> Surface {
         n = -n;
     }
     s.geometric = n;
+    // Derivatives first, in uniform control flow: the material is not uniform (it may be the
+    // instance's), and nothing may branch on it around these.
     let dwx = dpdx(in.world);
     let dwy = dpdy(in.world);
+    let duvx = dpdx(in.uv);
+    let duvy = dpdy(in.uv);
     let triplanar_on = material.alpha.y > 0.0;
     var l: Lookup;
     if triplanar_on {
         l = triplanar(in.world, dwx, dwy, n, material.alpha.y);
     } else {
-        l = uv_lookup(in.uv);
+        l = uv_lookup(in.uv, duvx, duvy);
     }
     // Absent maps are skipped (uniform branches), not sampled as white.
     let bits = material.flags.x;
@@ -950,7 +1009,7 @@ fn surface(in: Varying, front: bool, ground: bool) -> Surface {
         } else {
             var tn = decode_normal(textureSampleGrad(normal_tex, normal_smp, l.uv[0], l.dx[0], l.dy[0]));
             tn = vec3<f32>(tn.xy * relief, tn.z);
-            s.n = uv_normal(tn, n, in.world, in.uv);
+            s.n = uv_normal(tn, n, dwx, -dwy, duvx, -duvy);
         }
     }
     s.emissive = material.emissive.rgb;
@@ -1181,10 +1240,12 @@ struct Shaded {
 // and contact shadows (not for transparent surfaces, which are not in the
 // depth pre-pass).
 fn shade(in: Varying, front: bool, screen_effects: bool, ground: bool) -> Shaded {
+    // In uniform control flow, before the branch below (on the material).
+    let curvature = length(fwidth(normalize(in.normal)));
     // Glass drawn as an opaque pane (the water's reflection): what the glass passes show, its
     // reflection over the dim room behind it, so the reflected house matches the house.
     if material.alpha.z == 1.0 && g.time.w < 0.5 {
-        let t = glass_terms(in);
+        let t = glass_terms(in, curvature);
         let room = t.transmitted * ROOM_ALBEDO * sh_irradiance(normalize(in.normal)) / PI;
         return Shaded(apply_fog(t.reflected + room, in.world), 1.0, false);
     }
@@ -1273,7 +1334,7 @@ fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, aging: Agin
         s.n = normalize(mix(s.n, s.geometric, snow * 0.8));
     }
     var base = s.base.rgb;
-    if in.face == g.highlight.y && draw.mesh.x == g.highlight.x {
+    if in.face == g.highlight.y && mesh_of(in.mesh_id) == g.highlight.x {
         base = mix(base, vec3<f32>(0.25, 0.55, 1.0), 0.35);
     }
     // Wet surfaces and puddles (wet.wgsl): the wetness here and the puddle on it, and a puddle's
@@ -1727,6 +1788,7 @@ fn photo_bounce(p: vec3<f32>, n: vec3<f32>, pixel: vec2<f32>, ao: f32, occ: SkyO
 
 @fragment
 fn fs_main(in: Varying, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    load_material(in.material_id);
     if scratch_floor_taken() {
         return scratch_floor(in.clip);
     }
@@ -1956,6 +2018,9 @@ fn vs_ground(@builtin(vertex_index) vi: u32) -> Varying {
     out.normal = normalize(vec3<f32>(-sx, e, -sz));
     out.face = GROUND_FACE;
     out.uv = world.xz;
+    // No instance: the material and the mesh come from the ground's draw slot.
+    out.material_id = 0u;
+    out.mesh_id = 0u;
     return out;
 }
 
@@ -1976,6 +2041,7 @@ const EARTH_RADIUS_M: f32 = 6.36e6;
 
 @fragment
 fn fs_ground(in_raw: Varying) -> @location(0) vec4<f32> {
+    load_material(in_raw.material_id);
     if scratch_floor_taken() {
         return scratch_floor(in_raw.clip);
     }
@@ -2041,6 +2107,7 @@ fn fs_ground(in_raw: Varying) -> @location(0) vec4<f32> {
 // first and the discard last, so derivatives stay in uniform control flow.
 @fragment
 fn fs_reflect(in: Varying, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    load_material(in.material_id);
     if scratch_floor_taken() {
         return scratch_floor(in.clip);
     }
@@ -2050,6 +2117,7 @@ fn fs_reflect(in: Varying, @builtin(front_facing) front: bool) -> @location(0) v
 // The endless ground in the reflection.
 @fragment
 fn fs_reflect_ground(in: Varying, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    load_material(in.material_id);
     if scratch_floor_taken() {
         return scratch_floor(in.clip);
     }
@@ -2101,8 +2169,9 @@ struct GlassTerms {
     transmitted: vec3<f32>,
 }
 
-fn glass_terms(in: Varying) -> GlassTerms {
-    let curvature = length(fwidth(normalize(in.normal)));
+// `curvature`: length(fwidth(normalize(in.normal))), taken by the caller in uniform control
+// flow (the branch that leads here is on the material, which may be the instance's).
+fn glass_terms(in: Varying, curvature: f32) -> GlassTerms {
     let v = normalize(to_eye(in.world));
     var n = normalize(in.normal);
     if dot(n, v) < 0.0 {
@@ -2252,7 +2321,7 @@ fn fs_glass_transmit(in: Varying) -> @location(0) vec4<f32> {
     if g.time.w > 0.5 {
         return vec4<f32>(0.65); // clay: a pale veil
     }
-    return vec4<f32>(glass_terms(in).transmitted, 1.0);
+    return vec4<f32>(glass_terms(in, length(fwidth(normalize(in.normal)))).transmitted, 1.0);
 }
 
 // Pass 2: the reflection, plus the haze in front of the pane in proportion
@@ -2265,7 +2334,7 @@ fn fs_glass_reflect(in: Varying, @builtin(front_facing) front: bool) -> @locatio
     if g.time.w > 0.5 {
         return vec4<f32>(shade(in, front, false, false).color * 0.35, 0.0);
     }
-    let t = glass_terms(in);
+    let t = glass_terms(in, length(fwidth(normalize(in.normal))));
     let block = 1.0 - dot(t.transmitted, vec3<f32>(1.0 / 3.0));
     let c = fog_premultiplied(vec4<f32>(t.reflected, block), in.world);
     return vec4<f32>(c.rgb, 0.0);
@@ -2380,6 +2449,7 @@ fn water(in: Varying) -> vec4<f32> {
 // Premultiplied alpha out (blend: One, OneMinusSrcAlpha).
 @fragment
 fn fs_transparent(in: Varying, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    load_material(in.material_id);
     if scratch_floor_taken() {
         return scratch_floor(in.clip);
     }

@@ -813,7 +813,9 @@ enum Pipe {
 /// What a planned draw binds as group 1.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Group1 {
-    Material(u32),
+    /// A texture set (`Renderer::texture_sets`): every material with these maps shares it, and
+    /// each instance names its own row of the material table.
+    Set(u32),
     Terrain,
     Impostor(u32),
 }
@@ -875,8 +877,8 @@ struct Batch {
     draw: Draw,
     /// The nearest run's sort key.
     first: f32,
-    /// Sort key, first pool instance and count of each run.
-    runs: Vec<(f32, u32, u32)>,
+    /// Sort key, first pool instance, count and material row of each run.
+    runs: Vec<(f32, u32, u32, u32)>,
 }
 
 #[derive(Default)]
@@ -944,8 +946,16 @@ impl RunCache {
 }
 
 impl Batches {
-    /// Adds `item`'s `runs` (of its own instances, with sort keys) to the batch of `draw`.
-    fn add(&mut self, tag: u8, draw: Draw, item: &Item, runs: &[(f32, std::ops::Range<u32>)]) {
+    /// Adds `item`'s `runs` (of its own instances, with sort keys) of parts with material `row`
+    /// to the batch of `draw`.
+    fn add(
+        &mut self,
+        tag: u8,
+        draw: Draw,
+        item: &Item,
+        row: u32,
+        runs: &[(f32, std::ops::Range<u32>)],
+    ) {
         if runs.is_empty() {
             return;
         }
@@ -971,13 +981,14 @@ impl Batches {
         for (k, r) in runs {
             let k = *k;
             b.first = b.first.min(k);
-            b.runs.push((k, item.base + r.start, r.len() as u32));
+            b.runs.push((k, item.base + r.start, r.len() as u32, row));
         }
     }
 
-    /// One draw per batch (by tag and pipeline, then front to back): a single run straight
-    /// from the pool, several gathered (their pool indices appended to `gather`, nearest first).
-    fn emit(&mut self, draws: &mut Vec<Draw>, gather: &mut Vec<u32>) {
+    /// One draw per batch (by tag and pipeline, then front to back), all gathered: each run's
+    /// pool indices go into `gather` with its material row, nearest first (a single run too: the
+    /// draw then needs no slot with a material, and every batch draws the same way).
+    fn emit(&mut self, draws: &mut Vec<Draw>, gather: &mut batch::GatherList) {
         self.index.clear();
         let mut list = std::mem::take(&mut self.list);
         list.sort_by(|a, b| {
@@ -986,18 +997,17 @@ impl Batches {
                 .then(a.first.total_cmp(&b.first))
         });
         for mut b in list {
-            if let [(_, start, n)] = b.runs[..] {
-                b.draw.instances = start..start + n;
-                b.draw.src = Src::Pool;
-            } else {
-                b.runs.sort_by(|x, y| x.0.total_cmp(&y.0));
-                let at = gather.len() as u32;
-                for &(_, start, n) in &b.runs {
-                    gather.extend(start..start + n);
-                }
-                b.draw.instances = at..gather.len() as u32;
-                b.draw.src = Src::Gathered;
+            b.runs.sort_by(|x, y| x.0.total_cmp(&y.0));
+            let start = gather.indices.len() as u32;
+            for &(_, first, n, row) in &b.runs {
+                gather.indices.extend(first..first + n);
+                gather
+                    .materials
+                    .extend(std::iter::repeat_n(row, n as usize));
             }
+            let mesh = b.draw.mesh.map_or(FROM_INSTANCE, |m| m.id);
+            b.draw.instances = gather.batch(start, mesh);
+            b.draw.src = Src::Gathered;
             draws.push(b.draw);
         }
     }
@@ -1035,10 +1045,74 @@ struct FarCache {
     matrix: Mat4,
 }
 
+/// The endless ground's own material: row 0 of the material table.
+const GROUND_ROW: u32 = 0;
+
+/// The mesh id, or material row, of a draw slot whose draw takes it from each instance instead
+/// (`Gather`; `scene.wgsl` `FROM_INSTANCE`).
+const FROM_INSTANCE: u32 = u32::MAX;
+
 struct GpuMaterial {
-    buffer: wgpu::Buffer,
-    bind: wgpu::BindGroup,
+    /// Its texture set: the bind group of group 1 (`Renderer::texture_sets`).
+    set: u32,
     cpu: Material,
+    /// Its base map is bound (the impostor bake picks its pipeline by it).
+    has_base: bool,
+    /// The identity instance the impostor bake draws its parts with, carrying the material's
+    /// row as a gathered instance does (`write_instances` leaves it out of the pool).
+    identity: wgpu::Buffer,
+}
+
+/// One bind group of group 1: a material table and six maps with their samplers.
+struct GpuTextureSet {
+    bind: wgpu::BindGroup,
+    /// The maps it binds, to make its bind group again when the table grows.
+    maps: [Option<TextureId>; 6],
+}
+
+/// The texture sets in use and how many materials use each (index 0, never given back, binds
+/// no map: every untextured material's).
+#[derive(Default)]
+struct TextureSets {
+    index:
+        std::collections::HashMap<[Option<TextureId>; 6], u32, std::hash::BuildHasherDefault<Fx>>,
+    users: Vec<usize>,
+    free: Vec<u32>,
+}
+
+impl TextureSets {
+    /// The set that binds `maps`, counted one user more: a new one (a freed index, or the next)
+    /// when none does.
+    fn acquire(&mut self, maps: [Option<TextureId>; 6]) -> (u32, bool) {
+        if let Some(&i) = self.index.get(&maps) {
+            self.users[i as usize] += 1;
+            return (i, false);
+        }
+        let i = self.free.pop().unwrap_or(self.users.len() as u32);
+        if i as usize == self.users.len() {
+            self.users.push(0);
+        }
+        self.users[i as usize] = 1;
+        self.index.insert(maps, i);
+        (i, true)
+    }
+
+    /// One user fewer of the set `set` of `maps`: whether it was the last (index 0 stays).
+    fn release(&mut self, maps: [Option<TextureId>; 6], set: u32) -> bool {
+        let users = &mut self.users[set as usize];
+        *users -= 1;
+        if *users > 0 || set == 0 {
+            return false;
+        }
+        self.index.remove(&maps);
+        self.free.push(set);
+        true
+    }
+}
+
+/// The row of material `id` in the material table.
+fn row(id: MaterialId) -> u32 {
+    id.0 + 1
 }
 
 struct Layouts {
@@ -1329,10 +1403,12 @@ pub struct Renderer {
     bounce_albedo: Option<Vec3>,
     atmosphere: Atmosphere,
     ground: Option<Ground>,
-    ground_material: GpuMaterial,
     /// A scene material the ground is drawn with (`set_ground_material`).
     ground_look: Option<MaterialId>,
     ground_slot: u32,
+    /// The draw slot of every gathered mesh batch: its mesh id and material row come from each
+    /// instance, so the slot stays bound over them all (`FROM_INSTANCE`).
+    batch_slot: u32,
     terrain: terrain::TerrainGpu,
     sea: sea::SeaGpu,
     /// GPU grass over the lawns and meadows (`set_grass`).
@@ -1421,6 +1497,16 @@ pub struct Renderer {
     arenas: Vec<batch::MeshArena>,
     mesh_ranges: batch::MeshRanges,
     meshes: Vec<Option<GpuMesh>>,
+    /// Every material's parameters (`scene.wgsl` `materials`): row 0 the endless ground's own,
+    /// row `id + 1` each material. Grown like the arenas (every texture set's bind group is made
+    /// again: all of them bind it); `material_bytes` is its CPU copy for that.
+    material_table: wgpu::Buffer,
+    material_capacity: u32,
+    material_bytes: Vec<u8>,
+    /// Group 1 by texture set: which maps, how many materials use them (`TextureSets`), and
+    /// the bind group of each index.
+    sets: TextureSets,
+    texture_sets: Vec<Option<GpuTextureSet>>,
     materials: Vec<Option<GpuMaterial>>,
     textures: Vec<Option<texture::GpuTexture>>,
     items: Vec<Option<Item>>,
@@ -1685,27 +1771,12 @@ impl Renderer {
         let mipmapper = texture::Mipmapper::new(device, module(&modules, "mip"));
         let sun = Sun::from_angles(180.0, 45.0);
         let sky = sky::Sky::new(sun.direction);
-        let ground_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("ground material"),
-            size: MATERIAL_SIZE,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        let material_capacity = 64u32;
+        let material_table = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("materials"),
+            size: u64::from(material_capacity) * MATERIAL_SIZE,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
-        });
-        // The ground's material has no maps: white textures, repeat sampler.
-        let ground_entries: Vec<_> = (0..13)
-            .map(|b| wgpu::BindGroupEntry {
-                binding: b,
-                resource: match b {
-                    0 => ground_buffer.as_entire_binding(),
-                    1..=6 => wgpu::BindingResource::TextureView(&white),
-                    _ => wgpu::BindingResource::Sampler(&repeat_sampler),
-                },
-            })
-            .collect();
-        let ground_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("ground material"),
-            layout: &layouts.material,
-            entries: &ground_entries,
         });
         let cloud_volume = clouds::CloudVolume::new(device, queue, &layouts);
         let layouts_terrain = layouts.terrain.clone();
@@ -1763,12 +1834,8 @@ impl Renderer {
             atmosphere: Atmosphere::default(),
             ground: None,
             ground_look: None,
-            ground_material: GpuMaterial {
-                buffer: ground_buffer,
-                bind: ground_bind,
-                cpu: Material::default(),
-            },
             ground_slot: 0,
+            batch_slot: 0,
             terrain: terrain::TerrainGpu::new(device, queue, &layouts_terrain),
             sea: sea::SeaGpu::new(device, &layouts_sea),
             grass: grass::GrassGpu::new(device),
@@ -1817,6 +1884,11 @@ impl Renderer {
             arenas: Vec::new(),
             mesh_ranges: batch::MeshRanges::default(),
             meshes: Vec::new(),
+            material_table,
+            material_capacity,
+            material_bytes: vec![0; (material_capacity * MATERIAL_SIZE as u32) as usize],
+            sets: TextureSets::default(),
+            texture_sets: Vec::new(),
             materials: Vec::new(),
             textures: Vec::new(),
             items: Vec::new(),
@@ -1854,7 +1926,14 @@ impl Renderer {
             #[cfg(not(target_arch = "wasm32"))]
             stage_log: stage::StageLog::from_env(),
         };
-        renderer.ground_slot = renderer.alloc_slot(MeshId(u32::MAX - 1));
+        // The set without maps (every untextured material's), the ground's row and the two
+        // slots that never change.
+        let (set, new) = renderer.sets.acquire([None; 6]);
+        assert!(new && set == 0);
+        renderer.put_set(set, [None; 6]);
+        renderer.write_row(GROUND_ROW, &material_bytes(&Material::default(), 0));
+        renderer.ground_slot = renderer.alloc_slot(MeshId(u32::MAX - 1), GROUND_ROW);
+        renderer.batch_slot = renderer.alloc_slot(MeshId(FROM_INSTANCE), FROM_INSTANCE);
         renderer.update_ambient(true);
         renderer
     }
@@ -2227,12 +2306,7 @@ impl Renderer {
                 projection: Projection::Triplanar { scale_m: 1.0 },
                 ..Default::default()
             };
-            self.queue.write_buffer(
-                &self.ground_material.buffer,
-                0,
-                &material_bytes(&material, 0),
-            );
-            self.ground_material.cpu = material;
+            self.write_row(GROUND_ROW, &material_bytes(&material, 0));
         }
         if relight {
             self.update_ambient(true);
@@ -3001,11 +3075,18 @@ impl Renderer {
             }
             let dm = m.draw(mesh);
             let arena = &self.arenas[dm.arena as usize];
+            let set = self
+                .texture_sets
+                .get(mat.set as usize)
+                .and_then(Option::as_ref)
+                .ok_or("material without a texture set")?;
             list.push(impostor::BakePart {
                 vertices: &arena.vertices,
                 indices: &arena.indices,
                 mesh: dm,
-                material: &mat.bind,
+                material: &set.bind,
+                identity: &mat.identity,
+                has_base: mat.has_base,
             });
         }
         let bounds = bounds.or(union_bounds).ok_or("nothing to bake")?;
@@ -3042,7 +3123,7 @@ impl Renderer {
         if !matches!(self.impostors.get(impostor.0 as usize), Some(Some(_))) {
             return Err("unknown or removed impostor".into());
         }
-        let slot = self.alloc_slot(MeshId(u32::MAX - 2));
+        let slot = self.alloc_slot(MeshId(u32::MAX - 2), FROM_INSTANCE);
         self.impostor_slots_dirty = true;
         let Some(Some(it)) = self.items.get_mut(item.0 as usize) else {
             self.free_slots.push(slot);
@@ -3287,40 +3368,96 @@ impl Renderer {
     }
 
     pub fn add_material(&mut self, material: &Material) -> MaterialId {
-        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("material"),
-            size: MATERIAL_SIZE,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        let id = MaterialId(self.materials.len() as u32);
+        self.ensure_rows(row(id) + 1);
+        // Its set until `set_material` gives it the real one.
+        let (set, _) = self.sets.acquire([None; 6]);
+        // An instance that is the identity with the material's row in `m1.w`: what the bake
+        // draws the material's parts with (`write_instances` does the same for the pool).
+        let identity = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("material identity instance"),
+            size: batch::INSTANCE_BYTES,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let bind = self.material_bind(&buffer, material);
+        let mut instance = [0.0; 16];
+        for i in [0, 5, 10, 15] {
+            instance[i] = 1.0;
+        }
+        instance[7] = f32::from_bits(row(id));
+        self.queue.write_buffer(&identity, 0, &f32_bytes(&instance));
         self.materials.push(Some(GpuMaterial {
-            buffer,
-            bind,
+            set,
             cpu: *material,
+            has_base: false,
+            identity,
         }));
-        let id = MaterialId(self.materials.len() as u32 - 1);
         self.set_material(id, material);
         id
     }
 
-    fn material_bind(&self, buffer: &wgpu::Buffer, material: &Material) -> wgpu::BindGroup {
-        let maps = material.maps().map(|id| {
-            match id.and_then(|id| self.textures.get(id.0 as usize)?.as_ref()) {
-                Some(t) => (
-                    &t.view,
-                    if t.repeat {
-                        &self.repeat_sampler
-                    } else {
-                        &self.clamp_sampler
-                    },
-                ),
-                None => (&self.white, &self.repeat_sampler),
+    /// Room for `rows` rows of the material table: a larger buffer (twice this one, or just
+    /// enough) with every row copied in front, and every texture set's bind group made again.
+    fn ensure_rows(&mut self, rows: u32) {
+        if rows <= self.material_capacity {
+            return;
+        }
+        let max = (self.device.limits().max_storage_buffer_binding_size / MATERIAL_SIZE) as u32;
+        assert!(
+            rows <= max,
+            "{rows} materials: more than the device's largest buffer holds"
+        );
+        let capacity = rows.max(self.material_capacity.saturating_mul(2)).min(max);
+        let table = self.storage_buffer("materials", u64::from(capacity) * MATERIAL_SIZE);
+        self.queue.write_buffer(&table, 0, &self.material_bytes);
+        self.material_table = table;
+        self.material_capacity = capacity;
+        self.material_bytes
+            .resize((capacity * MATERIAL_SIZE as u32) as usize, 0);
+        let maps: Vec<_> = self
+            .texture_sets
+            .iter()
+            .map(|s| s.as_ref().map(|s| s.maps))
+            .collect();
+        let binds: Vec<_> = maps
+            .iter()
+            .map(|maps| maps.map(|maps| self.texture_set_bind(maps)))
+            .collect();
+        for (set, bind) in self.texture_sets.iter_mut().zip(binds) {
+            if let Some((set, bind)) = set.as_mut().zip(bind) {
+                set.bind = bind;
             }
-        });
+        }
+    }
+
+    /// Writes a row of the material table (and its CPU copy).
+    fn write_row(&mut self, row: u32, bytes: &[u8]) {
+        let at = row as usize * MATERIAL_SIZE as usize;
+        self.material_bytes[at..at + bytes.len()].copy_from_slice(bytes);
+        self.queue
+            .write_buffer(&self.material_table, at as u64, bytes);
+    }
+
+    /// Group 1 of the maps `maps`: the material table and the six maps with their samplers
+    /// (absent ones: the white texture, repeating).
+    fn texture_set_bind(&self, maps: [Option<TextureId>; 6]) -> wgpu::BindGroup {
+        let maps =
+            maps.map(
+                |id| match id.and_then(|id| self.textures.get(id.0 as usize)?.as_ref()) {
+                    Some(t) => (
+                        &t.view,
+                        if t.repeat {
+                            &self.repeat_sampler
+                        } else {
+                            &self.clamp_sampler
+                        },
+                    ),
+                    None => (&self.white, &self.repeat_sampler),
+                },
+            );
         let mut entries = vec![wgpu::BindGroupEntry {
             binding: 0,
-            resource: buffer.as_entire_binding(),
+            resource: self.material_table.as_entire_binding(),
         }];
         for (i, (view, sampler)) in maps.iter().enumerate() {
             entries.push(wgpu::BindGroupEntry {
@@ -3333,38 +3470,56 @@ impl Renderer {
             });
         }
         self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("material"),
+            label: Some("texture set"),
             layout: &self.layouts.material,
             entries: &entries,
         })
+    }
+
+    /// Makes the bind group of the texture set `set` (newly acquired) over `maps`.
+    fn put_set(&mut self, set: u32, maps: [Option<TextureId>; 6]) {
+        let bind = self.texture_set_bind(maps);
+        if set as usize == self.texture_sets.len() {
+            self.texture_sets.push(None);
+        }
+        self.texture_sets[set as usize] = Some(GpuTextureSet { bind, maps });
     }
 
     pub fn set_material(&mut self, id: MaterialId, material: &Material) {
         let Some(Some(m)) = self.materials.get(id.0 as usize) else {
             return;
         };
-        let bind = self.material_bind(&m.buffer, material);
+        let (old_set, old_maps) = (m.set, m.cpu.maps());
+        let maps = material.maps();
         let present = |t: Option<TextureId>| {
             t.and_then(|t| self.textures.get(t.0 as usize)?.as_ref())
                 .is_some()
         };
-        let bits = texture_bits(
-            material.maps().map(present),
-            material.occlusion_map.is_none(),
-        );
-        self.queue
-            .write_buffer(&m.buffer, 0, &material_bytes(material, bits));
-        if let Some(Some(m)) = self.materials.get_mut(id.0 as usize) {
-            m.bind = bind;
-            m.cpu = *material;
+        let bits = texture_bits(maps.map(present), material.occlusion_map.is_none());
+        let (set, new) = self.sets.acquire(maps);
+        if new {
+            self.put_set(set, maps);
         }
+        if self.sets.release(old_maps, old_set) {
+            self.texture_sets[old_set as usize] = None;
+        }
+        self.write_row(row(id), &material_bytes(material, bits));
+        let Some(Some(m)) = self.materials.get_mut(id.0 as usize) else {
+            return;
+        };
+        m.set = set;
+        m.cpu = *material;
+        m.has_base = (bits & 1) != 0;
     }
 
     /// Frees a material. Items still using it draw nothing; the id is not
     /// reused.
     pub fn remove_material(&mut self, id: MaterialId) {
-        if let Some(slot) = self.materials.get_mut(id.0 as usize) {
-            *slot = None;
+        if let Some(slot) = self.materials.get_mut(id.0 as usize)
+            && let Some(m) = slot.take()
+            && self.sets.release(m.cpu.maps(), m.set)
+        {
+            self.texture_sets[m.set as usize] = None;
         }
     }
 
@@ -3399,7 +3554,7 @@ impl Renderer {
                     .iter()
                     .position(|&d| d == distance.max(0.0))
                     .unwrap_or(lods.len() - 1) as u8,
-                slot: self.alloc_slot(mesh),
+                slot: self.alloc_slot(mesh, row(material)),
             })
             .collect();
         // Terrain chunks cast with the level they are drawn with: a coarser level lies above the
@@ -3433,7 +3588,7 @@ impl Renderer {
         id
     }
 
-    fn alloc_slot(&mut self, mesh: MeshId) -> u32 {
+    fn alloc_slot(&mut self, mesh: MeshId, material: u32) -> u32 {
         let slot = self.free_slots.pop().unwrap_or_else(|| {
             self.next_slot += 1;
             self.next_slot - 1
@@ -3451,20 +3606,23 @@ impl Renderer {
             self.queue.write_buffer(
                 &self.draw_buffer,
                 self.ground_slot as u64 * SLOT,
-                &mesh_slot(MeshId(u32::MAX - 1)),
+                &mesh_slot(MeshId(u32::MAX - 1), GROUND_ROW),
             );
             for item in self.items.iter().flatten() {
                 for p in &item.parts {
                     self.queue.write_buffer(
                         &self.draw_buffer,
                         p.slot as u64 * SLOT,
-                        &mesh_slot(p.mesh),
+                        &mesh_slot(p.mesh, row(p.material)),
                     );
                 }
             }
         }
-        self.queue
-            .write_buffer(&self.draw_buffer, slot as u64 * SLOT, &mesh_slot(mesh));
+        self.queue.write_buffer(
+            &self.draw_buffer,
+            slot as u64 * SLOT,
+            &mesh_slot(mesh, material),
+        );
         slot
     }
 
@@ -3473,6 +3631,14 @@ impl Renderer {
         let Some(Some(item)) = self.items.get_mut(id.0 as usize) else {
             return;
         };
+        // The last row but the wind's frequency (x's w) is spare: gathered instances carry their
+        // material and mesh there (`Gather`).
+        assert!(
+            instances
+                .iter()
+                .all(|m| m.y_axis.w == 0.0 && m.z_axis.w == 0.0 && m.w_axis.w == 1.0),
+            "instance matrices must be affine (last row 0, 0, 0, 1)"
+        );
         // More than its range holds: a new range, or (none left) a larger pool.
         let mut repack = false;
         if n > item.cap {
@@ -3885,7 +4051,7 @@ impl Renderer {
                     self.queue.write_buffer(
                         &self.draw_buffer,
                         slot as u64 * SLOT,
-                        &fade_slot(MeshId(u32::MAX - 2), 1.0),
+                        &fade_slot(MeshId(u32::MAX - 2), FROM_INSTANCE, 1.0),
                     );
                 }
             }
@@ -3933,7 +4099,7 @@ impl Renderer {
         // are gathered on the GPU first (`batch.rs`).
         let layers = self.targets.shadow_layers.len();
         let ssr = self.quality.screen_reflections > 0;
-        let mut gather = Vec::new();
+        let mut gather = batch::GatherList::default();
         let mut plan = |cull: Mat4, near_far: bool, kind: Pass, small: Option<(Vec3, f32)>| {
             self.plan_items(cull, near_far, kind, small, &mut gather)
         };
@@ -4502,11 +4668,16 @@ impl Renderer {
         const SEGMENTS: u32 = 192;
         // A material of the scene (the terrain's base layer) when one is set: the ground then
         // looks like it, texture, tiling phase and variation alike, so their border vanishes.
-        let bind = self
+        // A scene material's texture set (its row is not the ground's: the slot names row 0,
+        // whose parameters `set_ground` keeps from the ground's colour and roughness).
+        let set = self
             .ground_look
             .and_then(|id| self.materials.get(id.0 as usize)?.as_ref())
-            .map_or(&self.ground_material.bind, |m| &m.bind);
-        pass.set_bind_group(1, bind, &[]);
+            .map_or(0, |m| m.set);
+        let Some(Some(texture_set)) = self.texture_sets.get(set as usize) else {
+            return;
+        };
+        pass.set_bind_group(1, &texture_set.bind, &[]);
         pass.set_bind_group(
             2,
             &self.draw_bind,
@@ -4641,7 +4812,7 @@ impl Renderer {
         near_far: bool,
         kind: Pass,
         small: Option<(Vec3, f32)>,
-        gather: &mut Vec<u32>,
+        gather: &mut batch::GatherList,
     ) -> Vec<Draw> {
         let shadow = matches!(kind, Pass::Shadow { .. });
         let shaded = matches!(
@@ -4735,7 +4906,7 @@ impl Renderer {
                 let g1 = if weights {
                     Some(Group1::Terrain)
                 } else if shaded || category == 1 {
-                    Some(Group1::Material(part.material.0))
+                    Some(Group1::Set(material.set))
                 } else {
                     None
                 };
@@ -4762,14 +4933,22 @@ impl Renderer {
                             .map(|(_, r)| draw(pipe, g1, g2, item.pool_range(r))),
                     );
                 } else {
-                    batches.add(category as u8, draw(pipe, g1, g2, 0..0), item, settled);
+                    // A batch spans materials (one texture set): each instance names its row.
+                    let batched = shaded.then_some((false, self.batch_slot));
+                    batches.add(
+                        category as u8,
+                        draw(pipe, g1, batched, 0..0),
+                        item,
+                        row(part.material),
+                        settled,
+                    );
                 }
                 if can_fade && dissolving {
                     let pipe = match kind {
                         Pass::Depth => Pipe::DepthFade(ds),
                         _ => Pipe::Forward(2 + ds),
                     };
-                    let g1 = Some(Group1::Material(part.material.0));
+                    let g1 = Some(Group1::Set(material.set));
                     for (c, _) in item.clusters.iter().zip(&levels).filter(|(c, l)| {
                         l.is_some() && c.fading && (c.lod == part.lod || c.far == part.lod)
                     }) {
@@ -4808,7 +4987,7 @@ impl Renderer {
                     view: false,
                 };
                 let settled = runs.get(item, &levels, 1, SHADOW_CASTER_LEVEL, false);
-                batches.add(4, draw, item, settled);
+                batches.add(4, draw, item, FROM_INSTANCE, settled);
             }
         }
         batches.emit(&mut draws, gather);
@@ -4864,6 +5043,7 @@ impl Renderer {
             1,
             draw((!shadow).then_some((false, slot)), 0..0),
             item,
+            FROM_INSTANCE,
             settled,
         );
         // Dissolving clusters draw their impostor with their own fade slot when it is the far
@@ -4943,11 +5123,11 @@ impl Renderer {
                 && g1 != Some(g)
             {
                 let bind = match g {
-                    Group1::Material(id) => self
-                        .materials
-                        .get(id as usize)
+                    Group1::Set(set) => self
+                        .texture_sets
+                        .get(set as usize)
                         .and_then(Option::as_ref)
-                        .map(|m| &m.bind),
+                        .map(|s| &s.bind),
                     Group1::Terrain => Some(&self.terrain.bind),
                     Group1::Impostor(id) => self
                         .impostors
@@ -5061,7 +5241,10 @@ impl Renderer {
             };
             let dm = mesh.draw(part.mesh);
             let arena = &self.arenas[dm.arena as usize];
-            pass.set_bind_group(1, &material.bind, &[]);
+            let Some(Some(texture_set)) = self.texture_sets.get(material.set as usize) else {
+                continue;
+            };
+            pass.set_bind_group(1, &texture_set.bind, &[]);
             pass.set_bind_group(2, &self.draw_bind, &[(part.slot as u64 * SLOT) as u32]);
             pass.set_vertex_buffer(0, arena.vertices.slice(..));
             pass.set_vertex_buffer(1, self.pool.buffer.slice(..));
@@ -5233,10 +5416,14 @@ impl Renderer {
                         // The far mesh level keeps the samples the near one gives
                         // up: a negative fade (impostor.wgsl `fade_keeps`).
                         let f = if p.lod == c.far { -fade } else { fade };
-                        fade_bytes.extend_from_slice(&fade_slot(p.mesh, f));
+                        fade_bytes.extend_from_slice(&fade_slot(p.mesh, row(p.material), f));
                         fade_bytes.resize(fade_bytes.len() + SLOT as usize - 16, 0);
                     }
-                    fade_bytes.extend_from_slice(&fade_slot(MeshId(u32::MAX - 2), fade));
+                    fade_bytes.extend_from_slice(&fade_slot(
+                        MeshId(u32::MAX - 2),
+                        FROM_INSTANCE,
+                        fade,
+                    ));
                     fade_bytes.resize(fade_bytes.len() + SLOT as usize - 16, 0);
                     fade_used += item.parts.len() + 1;
                     c.fading = true;
@@ -5975,15 +6162,18 @@ fn texture_size(view: &wgpu::TextureView) -> (u32, u32) {
 
 /// A draw slot that also carries a dissolve's progress, 0 the last mesh
 /// level .. 1 the impostor or nothing (impostor.wgsl `lod_fade`).
-fn fade_slot(mesh: MeshId, fade: f32) -> [u8; 16] {
-    let mut out = mesh_slot(mesh);
+fn fade_slot(mesh: MeshId, material: u32, fade: f32) -> [u8; 16] {
+    let mut out = mesh_slot(mesh, material);
     out[8..12].copy_from_slice(&fade.to_le_bytes());
     out
 }
 
-fn mesh_slot(mesh: MeshId) -> [u8; 16] {
+/// A draw slot (`scene.wgsl` `Draw`): x the mesh id for the face highlight, y the material's
+/// row; `FROM_INSTANCE` where a gathered instance carries it.
+fn mesh_slot(mesh: MeshId, material: u32) -> [u8; 16] {
     let mut out = [0u8; 16];
     out[..4].copy_from_slice(&mesh.0.to_le_bytes());
+    out[4..8].copy_from_slice(&material.to_le_bytes());
     out
 }
 
@@ -6396,7 +6586,17 @@ impl Layouts {
         let filterable = S::Float { filterable: true };
         let fs = wgpu::ShaderStages::FRAGMENT;
         let vfs = wgpu::ShaderStages::VERTEX_FRAGMENT;
-        let mut material = vec![uniform_entry(0, fs, None)];
+        // Binding 0: every material's parameters (scene.wgsl `materials`), read-only storage.
+        let mut material = vec![wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: fs,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        }];
         material.extend((1..=6).map(|b| texture_entry(b, filterable, D::D2, false)));
         material.extend((7..=12).map(|b| sampler_entry(b, B::Filtering)));
         Self {
@@ -8445,6 +8645,110 @@ mod tests {
                     panic!("{name} {} (fast {fast}): {detail}", ep.name);
                 }
             }
+        }
+    }
+
+    /// Materials with the same maps share a texture set; a set no material uses is freed, and
+    /// its index used again; the set without maps (index 0) never is.
+    #[test]
+    fn texture_sets_are_shared_and_freed() {
+        let mut sets = TextureSets::default();
+        let (a, new) = sets.acquire([None; 6]);
+        assert!(new && a == 0);
+        assert_eq!(
+            sets.acquire([None; 6]).0,
+            0,
+            "untextured materials share set 0"
+        );
+        let tex = TextureId(3);
+        let maps = [Some(tex), None, None, None, None, None];
+        let (b, new) = sets.acquire(maps);
+        assert!(new && b == 1);
+        assert_eq!(sets.acquire(maps), (1, false));
+        assert!(!sets.release(maps, 1), "one user is left");
+        assert!(sets.release(maps, 1), "the last user frees it");
+        let other = [None, None, None, None, None, Some(tex)];
+        assert_eq!(sets.acquire(other), (1, true), "the freed index again");
+        assert!(!sets.release([None; 6], 0));
+        assert!(!sets.release([None; 6], 0), "set 0 is never given back");
+        assert_eq!(sets.acquire([None; 6]), (0, false), "set 0 stays");
+    }
+
+    /// A row of boxes, each its own untextured material (the material table grows on the way):
+    /// one batch draws them all, each shaded with its own row.
+    #[test]
+    fn many_materials_draw_their_own_colour_in_one_batch() {
+        let (device, queue) = pollster::block_on(headless_device()).expect("device");
+        let (w, h) = (320u32, 60u32);
+        let n = 150u32;
+        let scene = |own: bool| {
+            let mut r = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+            let mut m = demo::MeshData::default();
+            m.add_box(Vec3::new(-1.0, 0.0, -1.0), Vec3::new(1.0, 2.0, 1.0));
+            let mesh = r.add_mesh(&m.mesh()).expect("mesh");
+            let first = r.add_material(&Material {
+                base_color: [1.0, 0.2, 0.0, 1.0],
+                roughness: 0.9,
+                ..Default::default()
+            });
+            for k in 0..n {
+                let t = k as f32 / n as f32;
+                let material = if own {
+                    r.add_material(&Material {
+                        base_color: [1.0 - t, 0.2, t, 1.0],
+                        roughness: 0.9,
+                        ..Default::default()
+                    })
+                } else {
+                    first
+                };
+                r.add_item(
+                    mesh,
+                    material,
+                    &[Mat4::from_translation(Vec3::new(2.5 * k as f32, 0.0, 0.0))],
+                );
+            }
+            r.resize(w, h);
+            r.set_quality(Quality::LOW);
+            let (half, eye) = (
+                2.5 * n as f32 * 0.5,
+                Vec3::new(2.5 * n as f32 * 0.5 - 1.25, 1.0, 20.0),
+            );
+            let view = Mat4::look_at_rh(eye, Vec3::new(eye.x, 1.0, 0.0), Vec3::Y);
+            let proj = Mat4::orthographic_rh(-half, half, -1.5, 1.5, 0.1, 100.0);
+            r.set_camera(view, proj, eye);
+            r
+        };
+        let forward = |r: &Renderer| {
+            r.stats()
+                .pass_draws
+                .iter()
+                .find(|(l, _)| *l == "forward")
+                .map(|(_, n)| *n)
+                .expect("a forward pass")
+        };
+        let mut one = scene(false);
+        pixels(&mut one, &device, &queue, w, h);
+        let (one_px, one_forward) = (pixels(&mut one, &device, &queue, w, h), forward(&one));
+        assert!(one_forward <= 3, "{one_forward} forward draws");
+        let mut own = scene(true);
+        pixels(&mut own, &device, &queue, w, h);
+        let own_px = pixels(&mut own, &device, &queue, w, h);
+        assert_eq!(
+            forward(&own),
+            one_forward,
+            "colour alone does not split draws"
+        );
+        assert_ne!(own_px, one_px, "the colours differ");
+        // The row's left is red and its right blue, past the table's growth from 64 rows.
+        for (k, red) in [(2u32, true), (70, true), (80, false), (147, false)] {
+            let x = ((2.5 * (k as f32 + 0.5)) / (2.5 * n as f32) * w as f32) as usize;
+            let i = ((h as usize / 2) * w as usize + x) * 4;
+            let (r, b) = (own_px[i] as i32, own_px[i + 2] as i32);
+            assert!(
+                if red { r > b + 20 } else { b > r + 20 },
+                "box {k} at pixel {x}: {r} {b}"
+            );
         }
     }
 

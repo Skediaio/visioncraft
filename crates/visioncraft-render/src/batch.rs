@@ -12,6 +12,10 @@
 //! The static meshes' vertices and indices lie in one vertex buffer and one index buffer too
 //! ([`MeshRanges`]): a mesh holds ranges of both, and a draw names its index range and its base
 //! vertex, so a pass binds the two buffers once instead of per mesh.
+//!
+//! A batch spans items with several materials (the same texture set): the gather gives each
+//! copied instance its material's row and the batch's mesh in the spare components of its
+//! matrix ([`GatherList`]), so a draw needs no per-material binding.
 
 use std::ops::Range;
 
@@ -382,24 +386,65 @@ fn pool_buffer(device: &wgpu::Device, capacity: u32) -> wgpu::Buffer {
     })
 }
 
+/// Instances per batch in the gathered buffer: one workgroup of the gather copies one batch,
+/// so a batch starts every `BATCH` instances and the lanes past its end are never drawn.
+pub const BATCH: u32 = 64;
+
 const GATHER_WGSL: &str = r#"
-// The frame's batched instances: out[i] = pool[idx[i + 4]], idx[0] the count. Copied as bits.
+// The frame's batched instances, one workgroup of 64 lanes per batch b (lib.rs `GatherList`):
+// out[b * 64 + lane] = pool[p] as bits, with the material's row in m1.w and the batch's mesh
+// in m2.w (scene.wgsl `model`). idx: [batches, instances, 0, 0], then per batch (its first
+// instance in the stream, its count), then per batch its mesh, then per instance its pool
+// index, then per instance its material row.
 @group(0) @binding(0) var<storage, read> pool: array<vec4<u32>>;
 @group(0) @binding(1) var<storage, read> idx: array<u32>;
 @group(0) @binding(2) var<storage, read_write> out: array<vec4<u32>>;
 
 @compute @workgroup_size(64)
-fn cs_gather(@builtin(global_invocation_id) id: vec3<u32>) {
-    let i = id.x + id.y * 4194240u;
-    if i >= idx[0] {
+fn cs_gather(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index) lane: vec3<u32>) {
+    let b = group.x + group.y * 65535u;
+    let batches = idx[0];
+    if b >= batches {
         return;
     }
-    let at = idx[i + 4u] * 4u;
-    for (var k = 0u; k < 4u; k++) {
-        out[i * 4u + k] = pool[at + k];
+    let first = idx[4u + 2u * b];
+    let n = idx[5u + 2u * b];
+    if lane.x >= n {
+        return;
     }
+    let s = first + lane.x;
+    let base = 4u + 3u * batches;
+    let at = idx[base + s] * 4u;
+    let o = (b * 64u + lane.x) * 4u;
+    for (var k = 0u; k < 4u; k++) {
+        out[o + k] = pool[at + k];
+    }
+    out[o + 7u] = idx[base + idx[1] + s];
+    out[o + 11u] = idx[4u + 2u * batches + b];
 }
 "#;
+
+/// A frame's gathered instances (`lib.rs` `plan_items`, `Batches::emit`): each one's index in
+/// the pool and its material's row in the material table; and per batch, in draw order, where
+/// its instances start in the stream, how many there are and its mesh.
+#[derive(Default)]
+pub struct GatherList {
+    pub indices: Vec<u32>,
+    pub materials: Vec<u32>,
+    /// (first in the stream, count, mesh id).
+    pub batches: Vec<(u32, u32, u32)>,
+}
+
+impl GatherList {
+    /// Closes the batch whose instances were appended since there were `start` in the stream:
+    /// where they lie in the gathered buffer (every `BATCH` instances).
+    pub fn batch(&mut self, start: u32, mesh: u32) -> std::ops::Range<u32> {
+        let n = self.indices.len() as u32 - start;
+        let first = self.batches.len() as u32 * BATCH;
+        self.batches.push((start, n, mesh));
+        first..first + n
+    }
+}
 
 /// Workgroups along x before the dispatch wraps into y (the limit is 65,535 a dimension).
 const ROW: u32 = 65_535;
@@ -462,26 +507,29 @@ impl Gather {
         }
     }
 
-    /// Copies `pool[indices[i]]` to `out[i]` (none when `indices` is empty).
+    /// Copies every instance of `list` out of the pool into `out`, batch by batch (nothing
+    /// when there is none).
     pub fn run(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         pool: &InstancePool,
-        indices: &[u32],
+        list: &GatherList,
     ) {
-        if indices.is_empty() {
+        let batches = list.batches.len() as u32;
+        if batches == 0 {
             return;
         }
-        let n = indices.len() as u32;
-        if n + 4 > self.idx_capacity {
-            self.idx_capacity = (n + 4).next_power_of_two();
+        let words = 4 + 3 * batches as usize + 2 * list.indices.len();
+        if words > self.idx_capacity as usize {
+            self.idx_capacity = words.next_power_of_two() as u32;
             self.idx = idx_buffer(device, self.idx_capacity);
             self.bind = None;
         }
-        if n > self.out_capacity {
-            self.out_capacity = n.next_power_of_two();
+        let out_instances = batches * BATCH;
+        if out_instances > self.out_capacity {
+            self.out_capacity = out_instances.next_power_of_two();
             self.out = out_buffer(device, self.out_capacity);
             self.bind = None;
         }
@@ -507,9 +555,14 @@ impl Gather {
             });
             self.bind = Some((pool.generation, bind));
         }
-        let mut words = Vec::with_capacity(indices.len() + 4);
-        words.extend_from_slice(&[n, 0, 0, 0]);
-        words.extend_from_slice(indices);
+        let mut words = Vec::with_capacity(words);
+        words.extend_from_slice(&[batches, list.indices.len() as u32, 0, 0]);
+        for &(first, n, _) in &list.batches {
+            words.extend_from_slice(&[first, n]);
+        }
+        words.extend(list.batches.iter().map(|&(_, _, mesh)| mesh));
+        words.extend_from_slice(&list.indices);
+        words.extend_from_slice(&list.materials);
         let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
         queue.write_buffer(&self.idx, 0, &bytes);
         let Some((_, bind)) = &self.bind else { return };
@@ -519,8 +572,7 @@ impl Gather {
         });
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, bind, &[]);
-        let groups = n.div_ceil(64);
-        pass.dispatch_workgroups(groups.min(ROW), groups.div_ceil(ROW), 1);
+        pass.dispatch_workgroups(batches.min(ROW), batches.div_ceil(ROW), 1);
     }
 }
 
@@ -700,6 +752,24 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Each batch takes a block of `BATCH` gathered instances, in the order the batches close.
+    #[test]
+    fn batches_lie_in_blocks_of_64_gathered_instances() {
+        let mut list = GatherList::default();
+        let add = |list: &mut GatherList, mesh: u32, rows: &[u32]| {
+            let start = list.indices.len() as u32;
+            for (i, &row) in rows.iter().enumerate() {
+                list.indices.push(100 + i as u32);
+                list.materials.push(row);
+            }
+            list.batch(start, mesh)
+        };
+        assert_eq!(add(&mut list, 7, &[1, 1, 2]), 0..3);
+        assert_eq!(add(&mut list, 9, &[3; 70]), 64..134);
+        assert_eq!(add(&mut list, 7, &[4]), 128..129);
+        assert_eq!(list.batches, vec![(0, 3, 7), (3, 70, 9), (73, 1, 7)]);
     }
 
     #[test]

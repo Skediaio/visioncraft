@@ -98,11 +98,29 @@ Recipe, a time-of-day drag:
 - **One instance pool, batched draws** (`batch.rs`). Every item's instances live in one buffer.
   A frame plans all its passes before recording any (`plan_items`): per pass each cluster's
   level is found once and an item's runs once per level, then the visible runs of every item that
-  shares a pipeline, a material and a mesh (the same species in several plantings, the same rock
-  or chair placed many times, all impostors of one atlas) become one draw. Their pool indices go
-  into one list that a compute dispatch copies into a frame buffer before the first pass, nearest
-  first. Dissolving clusters and terrain chunks draw straight from the pool. Nothing in the
-  shaders changed: the gather copies the instance bits.
+  shares a pipeline, a texture set and a mesh (the same species in several plantings, the same
+  rock or chair placed many times, all impostors of one atlas) become one draw. Their pool
+  indices go into one list that a compute dispatch copies into a frame buffer before the first
+  pass, nearest first, in blocks of 64 instances a batch. Dissolving clusters, terrain chunks
+  and transparents draw straight from the pool.
+- **One vertex buffer and one index buffer** for the static meshes (`batch.rs` `MeshRanges`): a
+  mesh holds a range of each, a draw names its index range and its base vertex, and a pass binds
+  the two buffers once (again only when a mesh of another arena follows). A mesh replaced by as
+  much or less data stays where it is; more takes a new range and the old one is freed (freed
+  ranges join their neighbours). An arena that is full grows, and its meshes keep their place,
+  until it is at the device's largest buffer; then a second one starts. Terrain chunks are in
+  the arenas too; only their layer weights (vertex slot 2) keep a buffer each.
+- **One material table** (a read-only storage buffer, group 1 binding 0): every material's
+  parameters by row, the endless ground's own being row 0. Group 1 is a material's *texture
+  set*, one bind group per set of six maps, shared by every material with those maps: all
+  untextured colours share one. So a batch may span materials: the gather writes each copied
+  instance its material's row and its mesh id into the spare components of its matrix's last
+  row (`m1.w`, `m2.w`; `m0.w` is the wind's frequency) and the shaders rebuild the matrix;
+  draws straight from the pool (dissolving clusters, terrain, transparents) name both in their
+  draw slot. Material values are therefore not uniform in a fragment stage, and nothing
+  branches on them around derivatives or implicit-level sampling. Per stage the scene
+  pipelines bind at most three read-only storage buffers in the fragment stage (the lights,
+  their grid, the materials) and none in the vertex stage.
 - **Shadows**: the near cascade every frame, the middle ones on alternate frames, the last one
   cached while the camera stays within its margin, each culled by its own cascade. The snow
   cover map (on a coast also the sea's bed) follows the eye in steps of eight texels and is
