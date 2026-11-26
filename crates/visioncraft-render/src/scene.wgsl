@@ -81,8 +81,9 @@ struct Draw {
 @group(3) @binding(1) var shadow_sampler: sampler_comparison;
 @group(3) @binding(2) var occlusion: texture_2d<f32>; // half (or full) res: r ambient occlusion, g contact shadow
 @group(3) @binding(3) var linear_depth: texture_2d<f32>;
-// The scene mirrored about the water plane (reflection pass), pre-exposed HDR.
-@group(3) @binding(4) var planar_reflection: texture_2d<f32>;
+// The scene mirrored about a water plane (the reflection passes), pre-exposed HDR: one layer
+// per plane with a planar reflection this frame (`water_plane_at`).
+@group(3) @binding(4) var planar_reflection: texture_2d_array<f32>;
 // A photo's previous sample, pre-exposed HDR (1x1 outside photos and without screen-space
 // reflections): the bounce light's source; with those, the opaque scene before the glass.
 @group(3) @binding(5) var previous_hdr: texture_2d<f32>;
@@ -2296,6 +2297,19 @@ fn wave_slope(p: vec2<f32>) -> vec2<f32> {
     return a + rot * b * 2.03 * 0.5;
 }
 
+// The water plane whose planar reflection covers a surface at `height`: its entry in
+// `g.reflection_planes` (on, and within 5 cm of the surface, as water.rs groups surfaces into
+// planes), else -1.
+fn water_plane_at(height: f32) -> i32 {
+    for (var i = 0; i < 4; i++) {
+        let p = g.reflection_planes[i];
+        if p.z > 0.5 && abs(height - p.x) < 0.05 {
+            return i;
+        }
+    }
+    return -1;
+}
+
 // Fraction of light left after `path` metres through water of turbidity
 // 0..1 (Beer-Lambert with an absorption coefficient from 0.25 to 3 per
 // metre); lib.rs has the same curve (`water_transmittance`) for tests.
@@ -2309,9 +2323,9 @@ fn water_transmittance(path: f32, turbidity: f32) -> f32 {
 // absorption: the water path length comes from the linear depth of the
 // opaque scene below (shallow edges clear, deep water takes base_color.rgb,
 // the deep colour; base_color.a is the turbidity), with a soft fade where
-// the water meets the shore. The reflection is the planar reflection pass
-// when it rendered this water's plane, distorted by the ripples' slope,
-// otherwise the environment cube.
+// the water meets the shore. The reflection is the planar reflection layer
+// of this water's plane when it has one (`water_plane_at`), distorted by the
+// ripples' slope, otherwise the environment cube.
 fn water(in: Varying) -> vec4<f32> {
     let eye_vec = to_eye(in.world);
     let dist = length(eye_vec);
@@ -2336,12 +2350,19 @@ fn water(in: Varying) -> vec4<f32> {
     let f = f_schlick(nov, vec3<f32>(0.02)).r;
     let r = reflect(-v, n);
     var reflected: vec3<f32>;
-    if g.reflection.x > 0.5 && abs(in.world.y - g.reflection.y) < 0.05 {
+    let plane = water_plane_at(in.world.y);
+    if plane >= 0 {
         // The ripples' tilt in view space shifts the lookup, less with distance.
         let tilt = (g.view * vec4<f32>(n.x, 0.0, n.z, 0.0)).xy;
         let size = vec2<f32>(textureDimensions(planar_reflection));
         let uv = in.clip.xy * g.viewport.zw + tilt * vec2<f32>(1.0, -1.0) * 0.6 / max(depth, 1.0);
-        reflected = textureSampleLevel(planar_reflection, env_sampler, clamp(uv, 0.5 / size, 1.0 - 0.5 / size), 0.0).rgb;
+        reflected = textureSampleLevel(
+            planar_reflection,
+            env_sampler,
+            clamp(uv, 0.5 / size, 1.0 - 0.5 / size),
+            i32(g.reflection_planes[plane].y),
+            0.0,
+        ).rgb;
     } else {
         // A garden pond reflects hedges, walls and trees near the horizon,
         // not sky: the cube's reflection is darkened towards the horizon (a

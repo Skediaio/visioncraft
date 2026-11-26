@@ -52,6 +52,7 @@
 //! detail, 1920x1080, native offscreen, Intel UHD 620): see that example.
 
 use std::cell::Cell;
+use std::iter::once;
 use std::num::NonZeroU64;
 
 use glam::{Mat4, Vec2, Vec3, Vec4};
@@ -215,7 +216,7 @@ const CLUSTER_CELL: f32 = 8.0;
 /// `set_time` wraps here (seconds) to keep f32 precision in the shaders.
 const TIME_WRAP: f64 = 4096.0;
 /// Byte offset of the SH in the globals (written by the GPU, see env.rs).
-const SH_OFFSET: u64 = 9 * 64 + 62 * 16;
+const SH_OFFSET: u64 = 9 * 64 + 66 * 16;
 /// The roughness up to which a metal is a mirror (`Material::mirror`, scene.wgsl `light`).
 const MIRROR_ROUGHNESS: f32 = 0.1;
 
@@ -1020,7 +1021,9 @@ struct FramePlans {
     shadows: Vec<Vec<Draw>>,
     snow: Option<Vec<Draw>>,
     depth: Vec<Draw>,
-    reflection: Option<Vec<Draw>>,
+    /// Per layer of the planar reflection (empty: none): the scene mirrored about that
+    /// plane.
+    reflections: Vec<Vec<Draw>>,
     forward: Vec<Draw>,
     mirrors: Option<Vec<Draw>>,
 }
@@ -1165,7 +1168,11 @@ struct Targets {
     /// follows.
     ldr: [wgpu::TextureView; 2],
     bloom: Vec<wgpu::TextureView>,
+    /// The planar reflection of the water planes (`Quality::water_planes` layers, at least
+    /// one: a 1x1 stand-in while it is off): the whole array, to sample.
     reflection: wgpu::TextureView,
+    /// Its layers, to draw into (one pass each).
+    reflection_layers: Vec<wgpu::TextureView>,
     reflection_depth: wgpu::TextureView,
     shadow_layers: Vec<wgpu::TextureView>,
     resolve_bind: wgpu::BindGroup,
@@ -1303,9 +1310,10 @@ pub struct Renderer {
 
     globals: wgpu::Buffer,
     globals_bind: wgpu::BindGroup,
-    /// The mirrored camera's globals for the reflection pass.
-    reflect_globals: wgpu::Buffer,
-    reflect_globals_bind: wgpu::BindGroup,
+    /// The mirrored camera's globals for the reflection passes: one per plane with a planar
+    /// reflection (layer `k` of the planar reflection draws with `reflect_globals[k]`).
+    reflect_globals: [wgpu::Buffer; water::MAX_PLANES as usize],
+    reflect_globals_bind: [wgpu::BindGroup; water::MAX_PLANES as usize],
     globals_only_bind: wgpu::BindGroup,
     /// Globals, sampler and sky source for the environment passes.
     sky_bind: wgpu::BindGroup,
@@ -1532,7 +1540,8 @@ impl Renderer {
             })
         };
         let globals = uniform("globals", globals_size());
-        let reflect_globals = uniform("reflection globals", globals_size());
+        let reflect_globals =
+            std::array::from_fn(|_| uniform("reflection globals", globals_size()));
         let env = env::Env::new(device, queue, module(&modules, "env"), &layouts.sky_source);
         let globals_only_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("globals only"),
@@ -1662,17 +1671,19 @@ impl Renderer {
             &physical.sky_view,
             [&room_volume.1, &occupancy.1, &sky_occ.1],
         );
-        let reflect_globals_bind = globals_bind_group(
-            device,
-            &layouts.globals,
-            &reflect_globals,
-            &env.view,
-            &env_sampler,
-            &light_buffer,
-            &grid_buffer,
-            &physical.sky_view,
-            [&room_volume.1, &occupancy.1, &sky_occ.1],
-        );
+        let reflect_globals_bind = reflect_globals.each_ref().map(|buffer| {
+            globals_bind_group(
+                device,
+                &layouts.globals,
+                buffer,
+                &env.view,
+                &env_sampler,
+                &light_buffer,
+                &grid_buffer,
+                &physical.sky_view,
+                [&room_volume.1, &occupancy.1, &sky_occ.1],
+            )
+        });
         let sky_bind = sky_bind_group(
             device,
             &layouts.sky_source,
@@ -2639,10 +2650,11 @@ impl Renderer {
             SkySource::Physical => &self.physical.sky_view,
             SkySource::Preetham => &self.white,
         };
-        for (buffer, bind) in [
-            (&self.globals, &mut self.globals_bind),
-            (&self.reflect_globals, &mut self.reflect_globals_bind),
-        ] {
+        for (buffer, bind) in once((&self.globals, &mut self.globals_bind)).chain(
+            self.reflect_globals
+                .iter()
+                .zip(self.reflect_globals_bind.iter_mut()),
+        ) {
             *bind = globals_bind_group(
                 &self.device,
                 &self.layouts.globals,
@@ -3738,11 +3750,19 @@ impl Renderer {
         .flatten()
         .map(|(lo, hi)| snow_cover_matrix(self.eye, lo, hi, self.quality.shadow_resolution));
         let view_proj = self.proj * self.view;
-        // The water planes of the frame, ranked; the best one gets the planar reflection.
+        // The water planes of the frame, ranked (`rank_water`): those with a planar pass, in the
+        // order of the reflection's layers.
         self.rank_water(view_proj);
-        let water = (0..self.water.planes.len())
-            .find(|&i| self.water.layer_of(i) == Some(0))
-            .map(|i| self.water.planes[i].height);
+        let mut planar = [(0usize, 0.0f32); water::MAX_PLANES as usize];
+        let mut passes = 0usize;
+        for i in 0..self.water.planes.len() {
+            if let Some(layer) = self.water.layer_of(i) {
+                planar[layer as usize] = (i, self.water.planes[i].height);
+                passes = passes.max(layer as usize + 1);
+            }
+        }
+        let planes: [(f32, u32); water::MAX_PLANES as usize] =
+            std::array::from_fn(|k| (planar[k].1, k as u32));
         self.write_sea();
         let t = &self.targets;
         self.write_globals(
@@ -3750,18 +3770,18 @@ impl Renderer {
             &cascades,
             (self.view, self.proj, self.eye),
             t.size,
-            water,
+            &planes[..passes],
             None,
         );
-        let mirror = water.map(mirror_matrix);
-        if let (Some(m), Some(h)) = (mirror, water) {
+        for (k, (_, h)) in planar.iter().enumerate().take(passes) {
+            let m = mirror_matrix(*h);
             self.write_globals(
-                &self.reflect_globals,
+                &self.reflect_globals[k],
                 &cascades,
                 (self.view * m, self.proj, m.transform_point3(self.eye)),
                 texture_size(&t.reflection),
-                water,
-                Some(h),
+                &[],
+                Some(*h),
             );
         }
         let mut slots = vec![0u8; SLOT as usize * (shadow::MAX_CASCADES + 1)];
@@ -3796,10 +3816,15 @@ impl Renderer {
                 .update(encoder, &self.globals_only_bind, self.timer.as_ref());
         }
         self.sky_view_dirty = false;
+        let globals_all: [&wgpu::Buffer; 1 + water::MAX_PLANES as usize] =
+            std::array::from_fn(|i| match i {
+                0 => &self.globals,
+                _ => &self.reflect_globals[i - 1],
+            });
         self.env.update(
             encoder,
             &self.sky_bind,
-            &[&self.globals, &self.reflect_globals],
+            &globals_all,
             SH_OFFSET,
             self.timer.as_ref(),
         );
@@ -3877,17 +3902,23 @@ impl Renderer {
             let reflected_px =
                 self.proj.y_axis.y.abs() * texture_size(&self.targets.reflection).1 as f32 * 0.5;
             let perspective = !shadow::is_orthographic(self.proj);
-            let reflection = mirror.map(|m| {
-                let small = perspective.then(|| (m.transform_point3(self.eye), reflected_px));
-                plan(view_proj * m, true, Pass::Reflection { coarsest }, small)
-            });
+            // Each water plane with a pass: the scene mirrored about it (layer = its rank).
+            let reflections: Vec<Vec<Draw>> = planar
+                .iter()
+                .take(passes)
+                .map(|(_, h)| {
+                    let m = mirror_matrix(*h);
+                    let small = perspective.then(|| (m.transform_point3(self.eye), reflected_px));
+                    plan(view_proj * m, true, Pass::Reflection { coarsest }, small)
+                })
+                .collect();
             let forward = plan(view_proj, true, Pass::Forward, None);
             let mirrors = ssr.then(|| plan(view_proj, true, Pass::Mirrors, None));
             FramePlans {
                 shadows,
                 snow,
                 depth,
-                reflection,
+                reflections,
                 forward,
                 mirrors,
             }
@@ -4025,11 +4056,28 @@ impl Renderer {
                 self.cloud_volume.off();
             }
             self.counters.split("clouds");
-            if let Some(draws) = &plans.reflection {
+            // One pass per water plane with a planar reflection, into its layer of the array:
+            // scissored to where the plane shows on the render target (padded for the ripples
+            // in `rank_water`), so its fill is only where that water is.
+            let reflection_size = texture_size(&t.reflection);
+            for (k, draws) in plans.reflections.iter().enumerate() {
+                let (_, h) = planar[k];
+                let rect = self.water.planes[planar[k].0].rect;
+                let from = u64::from(t.size.0.max(1)).max(1);
+                let from_y = u64::from(t.size.1.max(1));
+                let scaled = |a: u32, b: u32, from: u64, to: u32| {
+                    // Outward, so the scissor never cuts into the plane's rectangle.
+                    let to = u64::from(to);
+                    let lo = (u64::from(a) * to / from).min(to - 1);
+                    let hi = (u64::from(a + b) * to).div_ceil(from).clamp(lo + 1, to);
+                    (lo as u32, hi as u32)
+                };
+                let (x0, x1) = scaled(rect.x, rect.w, from, reflection_size.0);
+                let (y0, y1) = scaled(rect.y, rect.h, from_y, reflection_size.1);
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("reflection"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &t.reflection,
+                        view: &t.reflection_layers[k],
                         depth_slice: None,
                         resolve_target: None,
                         ops: wgpu::Operations {
@@ -4049,16 +4097,14 @@ impl Renderer {
                     occlusion_query_set: None,
                     multiview_mask: None,
                 });
-                pass.set_bind_group(0, &self.reflect_globals_bind, &[]);
+                pass.set_scissor_rect(x0, y0, x1 - x0, y1 - y0);
+                pass.set_bind_group(0, &self.reflect_globals_bind[k], &[]);
                 pass.set_bind_group(3, &t.reflect_forward_bind, &[]);
                 self.record(&mut pass, draws);
                 // The endless ground has no hole where the terrain is dug out:
                 // seen from water below its height (a pond in the lawn) it would
                 // cover the sky the water mirrors.
-                if self
-                    .ground
-                    .is_some_and(|g| water.is_some_and(|h| h >= g.height))
-                {
+                if self.ground.is_some_and(|g| h >= g.height) {
                     self.draw_ground(&mut pass, &[&self.pipelines.reflect_ground]);
                 }
                 pass.set_pipeline(&self.pipelines.reflect_sky);
@@ -5250,15 +5296,16 @@ impl Renderer {
     }
 
     /// One globals block (common.wgsl `Globals`) without the SH, which the
-    /// GPU writes: for the camera, or (`clip`: the water height) for the
-    /// mirrored camera of the planar reflection.
+    /// GPU writes: for the camera (`planes`: the water planes with a planar
+    /// reflection this frame, each its height and its layer), or (`clip`: the
+    /// water height, no planes) for the mirrored camera of one of them.
     fn write_globals(
         &self,
         buffer: &wgpu::Buffer,
         cascades: &shadow::Cascades,
         (view, proj, eye): (Mat4, Mat4, Vec3),
         (w, h): (u32, u32),
-        water: Option<f32>,
+        planes: &[(f32, u32)],
         clip: Option<f32>,
     ) {
         let exposure = self.exposure();
@@ -5367,11 +5414,17 @@ impl Renderer {
             ground_height,
         ]);
         b.floats(&[
-            if water.is_some() { 1.0 } else { 0.0 },
-            water.unwrap_or(0.0),
+            0.0,
+            0.0,
             if clip.is_some() { 1.0 } else { 0.0 },
             clip.unwrap_or(0.0),
         ]);
+        for slot in 0..water::MAX_PLANES as usize {
+            let (height, layer, on) = planes
+                .get(slot)
+                .map_or((0.0, 0.0, 0.0), |&(h, l)| (h, l as f32, 1.0));
+            b.floats(&[height, layer, on, 0.0]);
+        }
         b.floats(&[
             self.grade.0,
             self.grade.1,
@@ -5831,7 +5884,7 @@ fn snow_cover_matrix(eye: Vec3, lo: Vec3, hi: Vec3, resolution: u32) -> Mat4 {
 const SNOW_COVER_M: f32 = 160.0;
 
 fn globals_size() -> u64 {
-    // 9 matrices, 62 vec4s, the 9 SH vec4s last; see common.wgsl.
+    // 9 matrices, 66 vec4s, the 9 SH vec4s last; see common.wgsl.
     SH_OFFSET + 9 * 16
 }
 
@@ -6403,7 +6456,8 @@ impl Layouts {
                     sampler_entry(1, B::Comparison),
                     texture_entry(2, unfilterable, D::D2, false),
                     texture_entry(3, unfilterable, D::D2, false),
-                    texture_entry(4, filterable, D::D2, false),
+                    // The planar reflection: one layer per water plane with a pass.
+                    texture_entry(4, filterable, D::D2Array, false),
                     texture_entry(5, unfilterable, D::D2, false),
                 ],
             ),
@@ -7514,13 +7568,66 @@ impl Targets {
             .checked_div(divisor)
             .zip(height.checked_div(divisor))
             .map_or((1, 1), |(w, h)| (w.max(1), h.max(1)));
-        let reflection = view(texture_sized(
-            "reflection",
-            HDR,
-            1,
-            sampled,
-            reflection_size,
-        ));
+        // A one-layer array standing in for the planar reflection in the reflection passes' own
+        // bind group (group 3 binding 4 is an array there too, and is not read).
+        let white_array = device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("reflection stand-in"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&wgpu::TextureViewDescriptor {
+                dimension: Some(wgpu::TextureViewDimension::D2Array),
+                ..Default::default()
+            });
+        // One layer per planar water pass (a single 1x1 layer while the reflection is off).
+        let reflection_layers = quality.plane_budget().max(1);
+        let reflection_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("reflection"),
+            size: wgpu::Extent3d {
+                width: reflection_size.0,
+                height: reflection_size.1,
+                depth_or_array_layers: reflection_layers,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: HDR,
+            usage: sampled,
+            view_formats: &[],
+        });
+        let reflection = reflection_texture.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("reflection array"),
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            ..Default::default()
+        });
+        let reflection_layer_views: Vec<_> = (0..reflection_layers)
+            .map(|i| {
+                reflection_texture.create_view(&wgpu::TextureViewDescriptor {
+                    label: Some("reflection layer"),
+                    dimension: Some(wgpu::TextureViewDimension::D2),
+                    base_array_layer: i,
+                    array_layer_count: Some(1),
+                    ..Default::default()
+                })
+            })
+            .collect();
+        bytes.set(
+            bytes.get()
+                + u64::from(reflection_size.0)
+                    * u64::from(reflection_size.1)
+                    * 8
+                    * u64::from(reflection_layers),
+        );
         let reflection_depth = view(texture_sized(
             "reflection depth",
             DEPTH,
@@ -7686,7 +7793,7 @@ impl Targets {
             upscale_bind: [post(&ldr[0], white), post(&ldr[1], white)],
             overlay_bind: bind("overlay", &l.texture, &[(0, tv(&linear_depth))]),
             forward_bind: forward(&occlusion[0], &linear_depth, &reflection, &prev_view),
-            reflect_forward_bind: forward(white, white, white, white),
+            reflect_forward_bind: forward(white, white, &white_array, white),
             resolve_bind,
             depth,
             hdr_msaa,
@@ -7703,6 +7810,7 @@ impl Targets {
             ldr,
             bloom,
             reflection,
+            reflection_layers: reflection_layer_views,
             reflection_depth,
             shadow_layers,
             shafts,

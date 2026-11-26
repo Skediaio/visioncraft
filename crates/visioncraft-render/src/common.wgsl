@@ -77,7 +77,11 @@ struct Globals {
     sky: vec4<f32>,             // x source (0 Preetham, 1 physical, 2 HDRI), y HDRI rotation (rad), z source -> kcd/m2, w HDRI mip count
     ground: vec4<f32>,          // rgb: HDRI radiance below the horizon (kcd/m2), analytic skies the ground albedo (sky.wgsl ground_kcd); w HDRI below the horizon (0/1)
     options: vec4<f32>,         // x PCF taps (4 or 9), y bloom strength, z AO target divisor (1 full, 2 half), w ground height
-    reflection: vec4<f32>,      // x planar reflection available (0/1), y water height (m), z clip below (0/1), w clip height (m)
+    // The mirrored pass of a water plane: z clip what lies below it (0/1), w its height (m); xy unused.
+    reflection: vec4<f32>,
+    // The camera's pass: the water planes with a planar reflection this frame, each x its height (m), y its layer of
+    // the planar reflection, z on (0/1), w unused (lib.rs `write_globals`, water.rs).
+    reflection_planes: array<vec4<f32>, 4>,
     grade: vec4<f32>,           // x look contrast power, y look saturation (1, 1: plain AgX), z camera indoors (0/1), w photo sample seed
     clouds: vec4<f32>,          // x cover 0..1, y overcast (0/1), zw drift (m)
     snow_cover: mat4x4<f32>,    // world -> the snow cover map (straight down, last shadow layer)

@@ -23,7 +23,8 @@
 use glam::{Mat4, Vec3};
 
 /// The planar reflection's layers in the globals (`reflection_planes`); `Quality::water_planes`
-/// is clamped to it.
+/// is clamped to it. Far under WebGPU's default `max_texture_array_layers` (256), so the array
+/// target needs no limit of its own.
 pub(crate) const MAX_PLANES: u32 = 4;
 /// A surface joins the plane being built within this distance of the plane's height (m).
 pub(crate) const GROUP_M: f32 = 0.04;
