@@ -174,7 +174,7 @@ fn grass_light(clip: vec4<f32>, world: vec3<f32>, n: vec3<f32>, base: vec3<f32>,
     let t_tint = select(LEAF_T_TINT, vec3<f32>(LEAF_T), clay);
     var sun = vec3<f32>(0.0);
     if g.sun_light.r + g.sun_light.g + g.sun_light.b > 0.0 {
-        let shadow = min(sun_shadow(clip.xy, world, n, abs(nol_raw), depth), screen.g);
+        let shadow = min(sun_shadow(world, n, abs(nol_raw), depth), screen.g);
         let diffuse = mix(abs(nol_raw), 0.5, 0.5);
         let dc = diffuse_color * mix(vec3<f32>(1.0), t_tint / LEAF_T, back) * mix(1.0, LEAF_T, back);
         let lt = normalize(l + n * 0.3);

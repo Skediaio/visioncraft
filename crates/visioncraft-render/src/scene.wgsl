@@ -569,16 +569,17 @@ fn environment(r: vec3<f32>, roughness: f32) -> vec3<f32> {
 //   than about 1.5 texels is no longer gap-free and shows stacked copies of the edge. They do
 //   not depend on the penumbra's radius.
 // - 16 taps: a Vogel disk (r = sqrt((i + 0.5) / 16), the golden angle 2.399963 apart) over
-//   `g.shadow_filter.x` metres in the world, the same in every cascade, turned per pixel by
-//   the interleaved gradient noise (common.wgsl `ign_sampled`: turned again per photo sample,
-//   so a photo averages the grain away and a still is the same every time).
+//   `g.shadow_filter.x` metres in the world, the same in every cascade, turned by the
+//   interleaved gradient noise of its place in the shadow map (common.wgsl `ign_sampled`: turned
+//   again per photo sample, so a photo averages the grain away and a still is the same every
+//   time); each tap is compared against the receiver plane's own depth where it lands.
 // Under FAST_SHADING (lib.rs compiles MEDIUM and LOW's shaders with it: register pressure on
 // integrated GPUs) only the 1- and 4-tap paths exist, and lib.rs writes 4 there for 9 and 16.
 // -1 when the point is outside this cascade's map (cascades refreshed every other frame lag
 // the camera by a frame).
 // Normal offset: Holbert, "Saying Goodbye to Shadow Acne", GDC 2011 poster;
 // the slope-scaled raster bias is in the shadow pipeline.
-fn cascade_shadow(c: u32, frag: vec2<f32>, world: vec3<f32>, n: vec3<f32>, nol: f32) -> f32 {
+fn cascade_shadow(c: u32, world: vec3<f32>, n: vec3<f32>, nol: f32) -> f32 {
     let offset = n * g.texel[c] * (0.6 + 1.4 * (1.0 - nol));
     let p = g.cascades[c] * vec4<f32>(world + offset, 1.0);
     let uv = vec2<f32>(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);
@@ -596,21 +597,57 @@ fn cascade_shadow(c: u32, frag: vec2<f32>, world: vec3<f32>, n: vec3<f32>, nol: 
         // 2x2-texel footprint each, still cover it); beyond 6 texels the penumbra stops growing
         // in this cascade.
         let spread = clamp(g.shadow_filter.x / g.texel[c], 1.5, 6.0);
-        let turn = 6.2831853 * ign_sampled(frag);
-        // A tap r metres from the receiver, in the light's plane, hits the receiver's own plane
-        // up to r * tan(theta) metres nearer the light (theta: normal to light), and a metre
-        // along the light is `dz_per_m` of depth (the cascade matrix's depth row). So the tap is
-        // compared against that depth, `p.z` minus it (depth grows away from the light): against
-        // `p.z` itself, on a slope the taps towards the light shade the surface (stripes on lit
-        // ground). tan(theta) is clamped at 4 (76 degrees).
-        let dz_per_m = length(vec3<f32>(g.cascades[c][0].z, g.cascades[c][1].z, g.cascades[c][2].z));
-        let tan_theta = min(sqrt(max(1.0 - nol * nol, 0.0)) / max(nol, 0.05), 4.0);
+        // The disk's turn comes from the interleaved gradient noise of the lookup's place in the
+        // map, two cells per texel: in the world, so the grain stays on the ground while the
+        // camera moves. (From the fragment's pixel it would be fixed to the screen and swim
+        // over the ground in a walkthrough: there is no temporal antialiasing to average it.)
+        let turn = 6.2831853 * ign_sampled(uv * g.shadow.y * 2.0);
+        // Each tap is compared against the depth of the receiver's own plane where the tap
+        // lands, a quarter texel less (Isidoro, "Shadow Mapping: GPU-based Tips and
+        // Techniques", GDC 2006). Against the receiver's depth `p.z` itself, the taps of a
+        // slope towards the light shade the surface (stripes on lit ground); slackened by the
+        // worst case, `r * tan(theta)` at every tap, the taps away from the light let a caster's
+        // depth past and lift real shadows off the ground (a wall's shadow leaves its base at a
+        // low sun). The plane is taken from the geometric normal, never from derivatives: this
+        // runs in non-uniform control flow.
+        // The cascade matrix is an orthographic projection after a rotation (shadow.rs `fit`),
+        // so the rows of its linear part A are orthogonal, scaled axes `a_i` (WGSL matrices are
+        // column-major: row i is `vec3<f32>(M[0][i], M[1][i], M[2][i])`). Light clip coords are
+        // `q = A x + b`, with `uv = (q.x * 0.5 + 0.5, 0.5 - q.y * 0.5)` and depth `q.z`. The
+        // receiver plane `n . dx = 0` has the normal `m = A^-T n` in clip space,
+        // `m_i = dot(a_i, n) / dot(a_i, a_i)`. A tap `o` from `uv` moves `dq = (2 du, -2 dv)` in
+        // clip x and y, and the plane's depth changes `-(m.x * dq.x + m.y * dq.y) / m.z`:
+        // `k = -m.xy / m.z`, `dz = dot(k, dq)`, the depth to compare `p.z + dz`.
+        let light_vp = g.cascades[c];
+        let a0 = vec3<f32>(light_vp[0].x, light_vp[1].x, light_vp[2].x);
+        let a1 = vec3<f32>(light_vp[0].y, light_vp[1].y, light_vp[2].y);
+        let a2 = vec3<f32>(light_vp[0].z, light_vp[1].z, light_vp[2].z);
+        // The depth row: a metre along the light is `dz_per_m` of depth (glam `orthographic_rh`:
+        // depth 0 at the near plane, growing away from the light).
+        let dz_per_m = length(a2);
+        let plane_n = vec3<f32>(
+            dot(a0, n) / dot(a0, a0),
+            dot(a1, n) / dot(a1, a1),
+            dot(a2, n) / dot(a2, a2),
+        );
+        // `a2` points away from the light, so `plane_n.z` has the opposite sign of `n . sun`:
+        // a receiver facing the light has `plane_n.z < 0`. Edge-on, the slope is clamped as the
+        // worst-case bias was (tan 4): at most 4 m of depth per metre in the light's plane. A
+        // metre there is `1 / |a0|` in clip x or y (the cascade is square) and `dz_per_m` in
+        // depth, so `|plane_n.xy| / |plane_n.z| <= 4 * dz_per_m / |a0|`.
+        let slope_max = 4.0 * dz_per_m / length(a0);
+        let facing = plane_n.z < 0.0;
+        let plane_z = -select(1.0, max(-plane_n.z, length(plane_n.xy) / slope_max), facing);
+        // A receiver facing away from the light gets no plane: its taps take `p.z`.
+        let k = select(vec2<f32>(0.0), -plane_n.xy / plane_z, facing);
+        // The map holds the depth of its texels' centres, and a tap lies between them.
+        let small = 0.25 * g.texel[c] * dz_per_m;
         for (var i = 0u; i < 16u; i++) {
             let r_texels = sqrt((f32(i) + 0.5) / 16.0) * spread;
             let a = f32(i) * 2.399963 + turn;
             let o = vec2<f32>(cos(a), sin(a)) * (r_texels * g.shadow.z);
-            let depth = p.z - dz_per_m * (r_texels * g.texel[c]) * tan_theta;
-            sum += textureSampleCompareLevel(shadow_map, shadow_sampler, uv + o, i32(c), depth);
+            let dz = dot(k, vec2<f32>(2.0 * o.x, -2.0 * o.y));
+            sum += textureSampleCompareLevel(shadow_map, shadow_sampler, uv + o, i32(c), p.z + dz - small);
         }
         return sum / 16.0;
     }
@@ -630,16 +667,16 @@ fn cascade_shadow(c: u32, frag: vec2<f32>, world: vec3<f32>, n: vec3<f32>, nol: 
     return sum * 0.25;
 }
 
-// The sun's visibility at `world` (`frag`: the fragment's pixel, for the 16-tap disk): the
-// cascades' shadow times the clouds' (common.wgsl `cloud_shadow`, 1 without volumetric clouds).
-fn sun_shadow(frag: vec2<f32>, world: vec3<f32>, n: vec3<f32>, nol: f32, depth: f32) -> f32 {
-    return cascades_shadow(frag, world, n, nol, depth) * cloud_shadow(world);
+// The sun's visibility at `world`: the cascades' shadow times the clouds' (common.wgsl
+// `cloud_shadow`, 1 without volumetric clouds).
+fn sun_shadow(world: vec3<f32>, n: vec3<f32>, nol: f32, depth: f32) -> f32 {
+    return cascades_shadow(world, n, nol, depth) * cloud_shadow(world);
 }
 
 // Cascade selection by view depth, blending into the next cascade over the
 // last 15% of each range and fading out at the end of the last one; a point
 // a cascade does not cover falls through to the next.
-fn cascades_shadow(frag: vec2<f32>, world: vec3<f32>, n: vec3<f32>, nol: f32, depth: f32) -> f32 {
+fn cascades_shadow(world: vec3<f32>, n: vec3<f32>, nol: f32, depth: f32) -> f32 {
     let count = u32(g.shadow.x);
     var c = 0u;
     while c < count && depth > g.splits[c] {
@@ -647,7 +684,7 @@ fn cascades_shadow(frag: vec2<f32>, world: vec3<f32>, n: vec3<f32>, nol: f32, de
     }
     var s = -1.0;
     while c < count && s < 0.0 {
-        s = cascade_shadow(c, frag, world, n, nol);
+        s = cascade_shadow(c, world, n, nol);
         if s < 0.0 {
             c++;
         }
@@ -662,7 +699,7 @@ fn cascades_shadow(frag: vec2<f32>, world: vec3<f32>, n: vec3<f32>, nol: f32, de
         return s;
     }
     if c + 1u < count {
-        let next = cascade_shadow(c + 1u, frag, world, n, nol);
+        let next = cascade_shadow(c + 1u, world, n, nol);
         return mix(s, select(next, s, next < 0.0), t);
     }
     return mix(s, 1.0, t);
@@ -1378,7 +1415,7 @@ fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, aging: Agin
     let nol = max(nol_raw, 0.0);
     if g.sun_light.r + g.sun_light.g + g.sun_light.b > 0.0 && (nol > 0.0 || foliage) {
         let shadow = min(
-            sun_shadow(in.clip.xy, in.world, s.geometric, max(dot(s.geometric, l), 0.0), depth),
+            sun_shadow(in.world, s.geometric, max(dot(s.geometric, l), 0.0), depth),
             screen.g,
         ) * (1.0 - s.self_shadow);
         sunlit = shadow * smoothstep(0.0, 0.15, nol);
@@ -2169,7 +2206,7 @@ fn glass_terms(in: Varying) -> GlassTerms {
     let a = roughness * roughness;
     var sun = vec3<f32>(0.0);
     if nol > 0.0 {
-        let shadow = sun_shadow(in.clip.xy, in.world, n, nol, depth);
+        let shadow = sun_shadow(in.world, n, nol, depth);
         // The sun's mirror image in a pane: spread over the disc's half degree and the glass's
         // waviness, and held below a few times a white wall's brightness, so a window that
         // catches the sun glints instead of burning a white hole into the picture.
@@ -2395,7 +2432,7 @@ fn water(in: Varying) -> vec4<f32> {
     var glint = local_lights(in.world, n, v, nov, vec3<f32>(0.0), vec3<f32>(0.02), 0.01, false);
     var sun_on = 0.0;
     if nol > 0.0 {
-        sun_on = sun_shadow(in.clip.xy, in.world, vec3<f32>(0.0, 1.0, 0.0), nol, depth);
+        sun_on = sun_shadow(in.world, vec3<f32>(0.0, 1.0, 0.0), nol, depth);
         glint += specular(n, v, l, nol, nov, vec3<f32>(0.02), 0.02) * nol * g.sun_light.rgb * sun_on;
     }
     let transmit = water_transmittance(path, material.base_color.a);

@@ -1049,11 +1049,11 @@ fn across(row: &[f32]) -> (f32, f32, [usize; 2]) {
 /// the median of the open ground 60..120 px to both sides of it, and the band is the pixels
 /// within 60 px of the darkest pixel that lie strictly between a tenth and nine tenths of the
 /// way from the shadow to the lit ground. Few with one comparison tap (`Hard`), more with the
-/// 3x3 grid, more again with the 16-tap disk the wider its radius (the only kernel that takes
-/// one), which leaves at least three band pixels on each of the shadow's two edges. And on a
-/// lit patch of the ground away from the pole, every row's mean luminance differs from the
-/// mean of its two neighbouring rows by at most 2 % (a filter that shades a lit slope shows
-/// stripes), for `Hard` too.
+/// 3x3 grid, at least as many again with the 16-tap disk (the only kernel that takes a radius,
+/// never narrower than 1.5 texels), more the wider its radius; it leaves at least three band
+/// pixels on each of the shadow's two edges. And on a lit patch of the ground away from the
+/// pole, every row's mean luminance differs from the mean of its two neighbouring rows by at
+/// most 2 % (a filter that shades a lit slope shows stripes), for `Hard` too.
 #[test]
 fn pole_shadow_penumbra() {
     let (w, h) = (1920, 1080);
@@ -1119,9 +1119,10 @@ fn pole_shadow_penumbra() {
             let (dark, lit, on_edge) = across(&row);
             band[0] += (on_edge[0] + on_edge[1]) as f32;
             band[1] += on_edge[0].min(on_edge[1]) as f32;
-            levels = (dark, lit);
+            levels = (levels.0 + dark, levels.1 + lit);
         }
         let band = band.map(|b| b / 5.0);
+        let levels = (levels.0 / 5.0, levels.1 / 5.0);
         // The lit patch: columns 200..400, from 50 px below the horizon (where a point at eye
         // height far away ahead of the camera appears) to the bottom of the picture.
         let horizon = r
@@ -1176,6 +1177,112 @@ fn pole_shadow_penumbra() {
         "pcf16: {} band pixels per row on its narrower edge",
         pcf16.1[1]
     );
+    assert!(
+        pcf16.1[0] >= pcf9.1[0],
+        "pcf16 {} < pcf9 {} band pixels per row: the disk is softer than the grid",
+        pcf16.1[0],
+        pcf9.1[0]
+    );
+}
+
+/// A wall's shadow stays attached to its base (`Quality::shadow_filter`): a 4 m wide, 2 m high,
+/// 0.2 m thick wall on flat ground 40 m away (the far cascade) and the sun 15 degrees up
+/// behind it, so its shadow runs 7.5 m towards the camera. The camera is 10 m up, so a screen
+/// row is 17 cm of ground at the wall (at eye height it would be 0.7 m). The ground just in
+/// front of the base lies in that shadow's umbra: the rows 1 to 3 pixels below the wall's
+/// bottom edge on screen (the base's own row may blend wall and ground through MSAA) are at
+/// most 40 % as bright as lit ground as far aside again, with ULTRA's 16-tap disk and with
+/// HIGH's 9-tap grid. With the disk on HIGH's maps too (`view.render`'s `quality: "high"` with
+/// `shadow_filter: "pcf16"`, 9 cm texels in the far cascade), the row next to the base may be
+/// 50 %: a disk of `r` metres spreads over the ground as `r / sin(elevation)`, 0.52 m there, so
+/// its taps reach past the wall's foot into lit ground and that one row is a penumbra (43 %).
+/// A filter that slackens every tap by the worst-case slope, `r * tan(theta)` (50 cm towards
+/// the light there), lets the wall's stored depth past the taps away from the light and suns
+/// that row (64 %) and the base's own row.
+#[test]
+fn wall_base_keeps_its_shadow() {
+    let (w, h) = (1920, 1080);
+    // (name, quality, the most the row next to the base may be of lit ground, in per cent).
+    let filters = [
+        ("ultra", Quality::ULTRA, 40.0),
+        ("high", Quality::HIGH, 40.0),
+        (
+            "high_pcf16",
+            Quality {
+                shadow_filter: Quality::ULTRA.shadow_filter,
+                ..Quality::HIGH
+            },
+            50.0,
+        ),
+    ];
+    for (name, quality, next_to_the_base) in filters {
+        let mut r = renderer(w, h);
+        r.set_quality(quality);
+        let mut ground = MeshData::default();
+        ground.add_box(Vec3::new(-80.0, -0.1, -80.0), Vec3::new(80.0, 0.0, 120.0));
+        let ground = r.add_mesh(&ground.mesh()).expect("ground");
+        let grey = r.add_material(&Material {
+            base_color: [0.2, 0.2, 0.2, 1.0],
+            roughness: 0.95,
+            ..Default::default()
+        });
+        r.add_item(ground, grey, &[Mat4::IDENTITY]);
+        r.set_ground(Some(visioncraft_render::Ground {
+            color: [0.2, 0.2, 0.2],
+            variation: 0.0,
+            ..Default::default()
+        }));
+        let mut box_ = MeshData::default();
+        box_.add_box(Vec3::new(-2.0, 0.0, 39.9), Vec3::new(2.0, 2.0, 40.1));
+        // The wall's face towards the camera is dark (it is in the shade anyway), so that where
+        // MSAA blends it into the base's own row it can only darken that row.
+        let wall = r.add_mesh(&box_.mesh()).expect("wall");
+        let dark = r.add_material(&Material {
+            base_color: [0.05, 0.05, 0.05, 1.0],
+            roughness: 0.9,
+            ..Default::default()
+        });
+        r.add_item(wall, dark, &[Mat4::IDENTITY]);
+        // The wall 40 m straight ahead, the camera 10 m up; the sun low in the south (+Z),
+        // behind it.
+        let eye = Vec3::new(0.0, 10.0, 0.0);
+        let cam = demo::camera(eye, Vec3::new(0.0, 1.0, 40.0), w as f32 / h as f32);
+        setup(&mut r, cam, Sun::from_angles(180.0, 15.0), 12.5);
+        settle(&mut r);
+        let px = capture(&mut r, w, h);
+        write_png(&out_dir().join(format!("wall_base_{name}.png")), &px, w, h);
+        // Screen columns: the ground under the middle two metres of the wall, and lit ground
+        // from 6 to 10 m to each side of it. (Looking down +Z, screen x runs opposite to world
+        // x.)
+        let x = |world_x: f32| r.project(Vec3::new(world_x, 0.0, 39.9)).expect("in view").x as u32;
+        let span = |a: f32, b: f32| {
+            let (a, b) = (x(a), x(b));
+            (a.min(b), a.max(b))
+        };
+        let (left, right) = span(-1.0, 1.0);
+        let (far_left, near_left) = span(-10.0, -6.0);
+        let (near_right, far_right) = span(6.0, 10.0);
+        let base = r.project(Vec3::new(0.0, 0.0, 39.9)).expect("in view").y as u32;
+        eprintln!("{name}: the wall's base is at row {base}; ground columns {left}..{right}");
+        for dy in 1..=3 {
+            let y = base + dy;
+            let mean = |x0: u32, x1: u32| {
+                let row = row_luminance(&px, w, y, x0, x1);
+                row.iter().sum::<f32>() / row.len() as f32
+            };
+            let shade = mean(left, right);
+            let lit = 0.5 * (mean(far_left, near_left) + mean(near_right, far_right));
+            let share = 100.0 * shade / lit;
+            let most = if dy == 1 { next_to_the_base } else { 40.0 };
+            eprintln!(
+                "{name}: row {y} ({dy} px below the base): in the shadow {shade:.3}, lit {lit:.3}: {share:.0} % (at most {most:.0})"
+            );
+            assert!(
+                share <= most,
+                "{name}: row {y}, {dy} px below the base, is {share:.0} % of the lit ground (at most {most:.0})"
+            );
+        }
+    }
 }
 
 /// A white wall on a green lawn after sunset (physical sky): lit by the

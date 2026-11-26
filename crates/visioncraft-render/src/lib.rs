@@ -476,9 +476,11 @@ pub enum ShadowFilter {
     /// Percentage-closer filtering. `taps` 4 (2x2 grid at +-0.75 texel) and 9 (3x3 grid at
     /// -1.5, 0, +1.5 texels) are fixed, texel-sized kernels: gap-free, as each hardware
     /// comparison tap covers 2 texels, and they ignore `radius_m`. `taps` 16 is a Vogel disk,
-    /// turned per pixel, spread over `radius_m` metres in the world, the same in every cascade
-    /// (clamped to 1.5..6 texels of a cascade: beyond 6 the penumbra stops growing there).
-    /// Under `Quality::fast_shading` only the 1- and 4-tap paths are compiled (register
+    /// turned by the noise of its place in the shadow map, spread over `radius_m` metres in the
+    /// world, the same in every cascade, and never narrower than 1.5 texels of a cascade (so a
+    /// radius of 0 is no hard edge: `Hard` is) nor wider than 6 (beyond that the penumbra stops
+    /// growing there). Each tap is compared against the receiver plane's own depth where it
+    /// lands. Under `Quality::fast_shading` only the 1- and 4-tap paths are compiled (register
     /// pressure on integrated GPUs): 9 and 16 fall back to 4 there.
     Pcf { taps: u32, radius_m: f32 },
 }
@@ -8643,6 +8645,186 @@ mod tests {
         ] {
             assert!(grids.contains(offsets), "a texel-sized grid: {offsets}");
         }
+    }
+
+    /// The 16-tap disk takes its turn from the noise of its place in the shadow map (two cells
+    /// per texel), not from the fragment's pixel: a pattern locked to the screen swims over the
+    /// ground in a walkthrough (there is no temporal antialiasing to average it away), one
+    /// locked to the map stays on it. So no `sun_shadow` caller passes a pixel, as on main. And
+    /// the disk compares each tap against the receiver plane's own depth where the tap lands, a
+    /// quarter texel less: not against the receiver's depth `p.z` (the taps of a slope towards
+    /// the light then shade the surface), nor that slackened by the worst-case slope `r * tan`
+    /// for every tap (the taps away from the light then lift real shadows off the ground).
+    #[test]
+    fn the_disk_is_turned_by_the_map_and_follows_the_receiver_plane() {
+        let scene = include_str!("scene.wgsl");
+        let body = &scene[scene.find("fn cascade_shadow(").unwrap()..];
+        let body = &body[..body.find("\n}\n").unwrap()];
+        let (disk, _) = body.split_once("taps > 8.5").expect("the 9-tap branch");
+        assert!(
+            disk.contains("ign_sampled(uv * g.shadow.y * 2.0)"),
+            "the turn comes from the place in the map:\n{disk}"
+        );
+        assert!(
+            disk.contains("p.z + dz - small"),
+            "a tap is compared against the receiver plane's depth:\n{disk}"
+        );
+        assert!(
+            disk.contains("let small = 0.25 * g.texel[c] * dz_per_m;"),
+            "a quarter texel of depth:\n{disk}"
+        );
+        assert!(
+            !disk.contains("tan_theta"),
+            "no worst-case slope bias:\n{disk}"
+        );
+        for (name, src) in [
+            ("scene", scene),
+            ("grass", include_str!("grass.wgsl")),
+            ("sea", include_str!("sea.wgsl")),
+        ] {
+            for line in src
+                .lines()
+                .filter(|l| l.contains("sun_shadow(") || l.contains("cascade_shadow("))
+            {
+                assert!(
+                    !line.contains("frag") && !line.contains("clip"),
+                    "{name}.wgsl passes no pixel to the shadow:\n{line}"
+                );
+            }
+        }
+    }
+
+    /// Scene.wgsl `cascade_shadow`'s receiver plane for the 16-tap disk, step by step as the
+    /// shader has it: `k`, the depth change of the receiver's plane per unit of clip x and y
+    /// (zero: no plane, for a receiver facing away from the light), and `dz_per_m`, a metre
+    /// along the light in depth.
+    fn receiver_plane(cascade: Mat4, n: Vec3) -> (Vec2, f32) {
+        // The rows of the linear part: `vec3<f32>(m[0].x, m[1].x, m[2].x)` and so on in WGSL.
+        let row = |i: usize| {
+            Vec3::new(cascade.col(0)[i], cascade.col(1)[i], cascade.col(2)[i])
+        };
+        let (a0, a1, a2) = (row(0), row(1), row(2));
+        let dz_per_m = a2.length();
+        let plane_n = Vec3::new(
+            a0.dot(n) / a0.dot(a0),
+            a1.dot(n) / a1.dot(a1),
+            a2.dot(n) / a2.dot(a2),
+        );
+        let slope_max = 4.0 * dz_per_m / a0.length();
+        let facing = plane_n.z < 0.0;
+        let plane_z = -if facing {
+            (-plane_n.z).max(Vec2::new(plane_n.x, plane_n.y).length() / slope_max)
+        } else {
+            1.0
+        };
+        let k = if facing {
+            -Vec2::new(plane_n.x, plane_n.y) / plane_z
+        } else {
+            Vec2::ZERO
+        };
+        (k, dz_per_m)
+    }
+
+    /// The 16-tap disk compares each tap against the depth of the receiver's own plane where
+    /// the tap lands (scene.wgsl `cascade_shadow`: Isidoro, "Shadow Mapping: GPU-based Tips
+    /// and Techniques", GDC 2006), with the maths mirrored in `receiver_plane`. The plane point
+    /// itself is found here along the light ray through the tap, with the cascade matrix's
+    /// inverse: for every cascade of a garden view, banks at several slopes, suns high and low
+    /// and taps out to 6 texels in eight directions, `p.z + dz` is the depth of the point of the
+    /// plane that projects to `uv + o`. A receiver that faces away from the light gets no plane,
+    /// and one the light grazes is clamped to the old worst-case bias: 4 m of depth per metre
+    /// in the light's plane.
+    #[test]
+    fn a_tap_is_compared_against_the_receiver_plane() {
+        let view = Mat4::look_at_rh(
+            Vec3::new(0.0, 1.7, 0.0),
+            Vec3::new(0.0, 1.0, 40.0),
+            Vec3::Y,
+        );
+        let proj = Mat4::perspective_rh(50f32.to_radians(), 16.0 / 9.0, 0.1, 1000.0);
+        let map = 2048.0;
+        let (mut exact, mut clamped, mut back) = (0, 0, 0);
+        for elevation in [60.0f32, 15.0] {
+            let sun = Sun::from_angles(180.0, elevation).direction;
+            let cascades = shadow::compute(view, proj, sun, 4, map as u32, 80.0, None);
+            for c in 0..cascades.count {
+                let m = cascades.view_proj[c];
+                let inv = m.inverse();
+                // A bank through this point, tilted `tilt` degrees towards the sun (+Z).
+                let x0 = Vec3::new(-2.0, 0.5, 35.0);
+                let p = m * x0.extend(1.0);
+                let uv = Vec2::new(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);
+                for tilt in [-13.0f32, -20.0, 0.0, 30.0, 70.0] {
+                    let (sin, cos) = tilt.to_radians().sin_cos();
+                    let n = Vec3::new(0.0, cos, sin);
+                    let (k, dz_per_m) = receiver_plane(m, n);
+                    // `tilt + elevation` is how far the light is from perpendicular to the bank:
+                    // its sine is `n . sun` (not positive: the bank faces away), its cosine the sine
+                    // of the angle between the normal and the light, whose tangent must stay under
+                    // 4 for the plane to be taken unclamped.
+                    let (to_sun, sine) = (tilt + elevation).to_radians().sin_cos();
+                    if to_sun <= 0.0 {
+                        assert_eq!(k, Vec2::ZERO, "cascade {c}, tilt {tilt}: no plane");
+                        back += 1;
+                        continue;
+                    }
+                    for steps in 0..8 {
+                        let angle = steps as f32 * std::f32::consts::FRAC_PI_4;
+                        for r_texels in [1.5, 3.0, 6.0] {
+                            let dir = Vec2::new(angle.cos(), angle.sin());
+                            let o = dir * (r_texels / map);
+                            let dz = k.dot(Vec2::new(2.0 * o.x, -2.0 * o.y));
+                            if sine / to_sun < 3.9 {
+                                // The point of the plane on the light ray through `uv + o`, by
+                                // depth t: x(t) = inv * (q.x, q.y, t, 1) = x(0) + t * w.
+                                let q = Vec4::new(
+                                    2.0 * (uv.x + o.x) - 1.0,
+                                    1.0 - 2.0 * (uv.y + o.y),
+                                    0.0,
+                                    1.0,
+                                );
+                                let at = (inv * q).truncate();
+                                let w = (inv * Vec4::new(0.0, 0.0, 1.0, 0.0)).truncate();
+                                let t = n.dot(x0 - at) / n.dot(w);
+                                let depth = (m * (at + w * t).extend(1.0)).z;
+                                assert!(
+                                    (depth - t).abs() < 1e-6,
+                                    "clip z is the depth: {depth} vs {t}"
+                                );
+                                assert!(
+                                    (p.z + dz - t).abs() < 1e-5,
+                                    "cascade {c}, sun {elevation}, tilt {tilt}, tap \
+                                     {r_texels} texels at {angle:.2}: p.z + dz {} vs the plane's {t}",
+                                    p.z + dz
+                                );
+                                exact += 1;
+                            } else {
+                                // Clamped as the worst-case bias was: at most 4 m of depth per
+                                // metre in the light's plane, so `4 * r * dz_per_m` at r metres,
+                                // and no less straight down the slope.
+                                let bound = 4.0 * (r_texels * cascades.texel[c]) * dz_per_m;
+                                assert!(
+                                    dz.abs() <= bound * (1.0 + 1e-4),
+                                    "cascade {c}, sun {elevation}, tilt {tilt}: dz {dz} over {bound}"
+                                );
+                                if dir.x.abs() < 0.5 {
+                                    assert!(
+                                        (dz.abs() - bound).abs() <= 1e-4 * bound,
+                                        "cascade {c}, sun {elevation}, tilt {tilt}: the clamp is \
+                                         reached straight down the slope: {dz} vs {bound}"
+                                    );
+                                }
+                                clamped += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // 2 suns x 4 cascades x 5 banks x 8 directions x 3 radii: 768 taps within the clamp
+        // (exact), 96 on the bank the low sun grazes (clamped), 96 behind the 4 banks facing
+        // away from the light (no plane).
+        assert_eq!((exact, clamped, back), (768, 96, 4));
     }
 
     /// `Quality::sanitized` is how any quality enters the renderer (`set_quality`, still.rs
