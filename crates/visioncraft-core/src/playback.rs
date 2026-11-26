@@ -200,6 +200,12 @@ impl Default for Playback {
     }
 }
 
+/// Whether every model of `clips` plays the clip `of` names for it (per model, as
+/// `model.play_clip` resolves a clip): `of` may name more models than `clips` holds.
+fn plays_within(clips: &BTreeMap<String, usize>, of: &BTreeMap<String, usize>) -> bool {
+    clips.iter().all(|(asset, i)| of.get(asset) == Some(i))
+}
+
 /// The clip `clip` names among `clips`: by its exact name first (of two with the same name the
 /// one with the lowest index), else an index (an integer), else a message that lists the names.
 pub fn clip_index(clips: &[Clip], clip: &str) -> Result<usize, String> {
@@ -270,11 +276,14 @@ impl Playback {
     }
 
     /// Ends the plays on `target`: of `clips` only, or of every clip. A whole planting
-    /// (`g4`) ends the plays on each of its objects (`g4#3`) too. Returns how many ended.
+    /// (`g4`) ends the plays on each of its objects (`g4#3`) too. `clips` names the clip per
+    /// model, and a play matches it when each of its models plays that clip: a play on one
+    /// object holds only its own model's. Returns how many ended.
     pub fn stop(&mut self, target: &ClipTarget, clips: Option<&BTreeMap<String, usize>>) -> usize {
         let before = self.plays.len();
-        self.plays
-            .retain(|p| !target.covers(&p.target) || clips.is_some_and(|c| p.clips != *c));
+        self.plays.retain(|p| {
+            !(target.covers(&p.target) && clips.is_none_or(|c| plays_within(&p.clips, c)))
+        });
         before - self.plays.len()
     }
 
@@ -289,7 +298,7 @@ impl Playback {
             && self.plays.iter().any(|p| {
                 p.target.planting == target.planting
                     && p.target.plant.is_none()
-                    && clips.is_none_or(|c| p.clips == *c)
+                    && clips.is_none_or(|c| plays_within(c, &p.clips))
             })
     }
 
@@ -697,6 +706,37 @@ mod tests {
             "the first at 20 s went"
         );
         assert!(p.flashes().iter().any(|f| f.id == 1));
+    }
+
+    /// A planting of two models, a stop with a clip (named per model): a play on one object
+    /// holds only its own model's clip, and a stop of the whole planting ends it.
+    #[test]
+    fn a_planting_stop_with_a_clip_ends_a_play_on_one_object() {
+        let mut p = Playback::default();
+        let one = BTreeMap::from([("user:a".to_string(), 0)]);
+        let both = BTreeMap::from([("user:a".to_string(), 0), ("user:b".to_string(), 1)]);
+        p.play(ClipTarget::parse("g4#3").unwrap(), one, "open", 0.0, false, 1.0);
+        assert_eq!(p.stop(&ClipTarget::all("g4"), Some(&both)), 1, "it stops");
+        assert!(p.plays().is_empty());
+        // Another clip of the same model is not stopped by it.
+        let other = BTreeMap::from([("user:a".to_string(), 2)]);
+        p.play(ClipTarget::parse("g4#3").unwrap(), other, "shut", 0.0, false, 1.0);
+        assert_eq!(p.stop(&ClipTarget::all("g4"), Some(&both)), 0);
+    }
+
+    /// A planting of two models plays as a whole: one object of it (of one model) cannot be
+    /// stopped alone with that clip, which it plays as part of the planting.
+    #[test]
+    fn one_object_of_a_planting_playing_whole_is_not_stopped_alone() {
+        let mut p = Playback::default();
+        let one = BTreeMap::from([("user:a".to_string(), 0)]);
+        let both = BTreeMap::from([("user:a".to_string(), 0), ("user:b".to_string(), 1)]);
+        p.play(ClipTarget::all("g4"), both, "open", 0.0, false, 1.0);
+        let object = ClipTarget::parse("g4#3").unwrap();
+        assert!(p.plays_on_its_planting(&object, Some(&one)), "the error");
+        assert!(p.plays_on_its_planting(&object, None));
+        let other = BTreeMap::from([("user:a".to_string(), 2)]);
+        assert!(!p.plays_on_its_planting(&object, Some(&other)));
     }
 
     #[test]
