@@ -19,6 +19,7 @@ pub mod grass;
 pub mod growth;
 pub mod house;
 mod import;
+pub mod keyframes;
 pub mod light;
 pub mod material;
 pub mod measure;
@@ -61,6 +62,7 @@ pub use commands::examples::{EXAMPLES, example, example_file, is_example_source}
 pub use export::export_presets;
 pub use film::{Film, Shot};
 pub use import::{import_3dcraft, import_obj};
+pub use keyframes::{Channel, Clip, Interpolation, Trs};
 pub use light::{
     Light, LightKind, LightSpec, kelvin_to_linear_rgb, lights_for_placement, lights_for_placements,
 };
