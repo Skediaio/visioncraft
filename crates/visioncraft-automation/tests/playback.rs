@@ -738,6 +738,27 @@ fn the_flash_cap_counts_flashes_at_once() {
     );
 }
 
+/// Flashes on a film's time are kept up to 256; the answer says when one had to go.
+#[test]
+fn the_answer_says_when_a_film_flash_was_dropped() {
+    let mut h = host();
+    let flash = |h: &mut Headless, i: usize| {
+        run(
+            h,
+            "effect.flash",
+            json!({"position": [0, 1, 0], "color": [1, 1, 1], "intensity": 100, "range_m": 2,
+                   "seconds": 0.1, "start_s": i as f64}),
+        )
+        .unwrap()
+    };
+    for i in 0..256 {
+        assert!(flash(&mut h, i).get("note").is_none());
+    }
+    let r = flash(&mut h, 256);
+    assert!(r["note"].as_str().unwrap().contains("ends first"), "{r}");
+    assert_eq!(r["flashes"], json!(256));
+}
+
 /// What plays belongs to the project it played on: an opened or a new project starts with
 /// nothing playing and no flash.
 #[test]

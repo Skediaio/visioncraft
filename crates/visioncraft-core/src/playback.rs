@@ -19,6 +19,19 @@ pub struct Animation {
 /// Most flashes at once (whose times overlap); over it the oldest of those goes.
 pub const MAX_FLASHES: usize = 16;
 
+/// Most flashes on a film's time (with a `start_s` of their own) kept at once: they are not
+/// forgotten when over, so over it the one that ends first goes.
+pub const MAX_STORED_FLASHES: usize = 256;
+
+/// Why adding a flash dropped another.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FlashDrop {
+    /// [`MAX_FLASHES`] were at the same time: the oldest of those went.
+    AtOnce,
+    /// [`MAX_STORED_FLASHES`] were on a film's time: the one that ends first went.
+    Stored,
+}
+
 /// The frame rate at least that a flash's `frames` are counted at for [`MAX_FLASHES`]: a window
 /// drawing slowly must not stretch film flashes into each other (a film's rate is not known
 /// when the flash is added).
@@ -356,8 +369,21 @@ impl Playback {
 
     /// Adds a flash at a time of its own (a film's): it stays until removed, so every render of
     /// the film shows it. Over [`MAX_FLASHES`] at once (flashes whose times overlap its) the
-    /// oldest of those goes; flashes at other times are not counted. Returns its id.
+    /// oldest of those goes; flashes at other times are not counted. Over
+    /// [`MAX_STORED_FLASHES`] on a film's time the one that ends first goes. Returns its id.
     pub fn flash(&mut self, flash: Flash) -> u64 {
+        self.add_flash(flash, false).0
+    }
+
+    /// Adds a flash that starts at the clock now (live): [`Self::prune_live`] forgets it once
+    /// it is over. Returns its id.
+    pub fn flash_live(&mut self, flash: Flash) -> u64 {
+        self.add_flash(flash, true).0
+    }
+
+    /// [`Self::flash`] (`live` false) or [`Self::flash_live`], and which flash it dropped
+    /// for room, if one.
+    pub fn add_flash(&mut self, flash: Flash, live: bool) -> (u64, Option<FlashDrop>) {
         let id = self.next_flash;
         self.next_flash += 1;
         let fps = self.fps.max(CAP_FPS);
@@ -374,19 +400,27 @@ impl Playback {
         at_once.sort_unstable();
         let over = (at_once.len() + 1).saturating_sub(MAX_FLASHES);
         let oldest = &at_once[..over];
+        let mut dropped = (over > 0).then_some(FlashDrop::AtOnce);
         self.flashes.retain(|f| !oldest.contains(&f.id));
         self.flashes.insert(0, Flash { id, ..flash });
         let flashes = &self.flashes;
         self.live.retain(|l| flashes.iter().any(|f| f.id == *l));
-        id
-    }
-
-    /// Adds a flash that starts at the clock now (live): [`Self::prune_live`] forgets it once
-    /// it is over. Returns its id.
-    pub fn flash_live(&mut self, flash: Flash) -> u64 {
-        let id = self.flash(flash);
-        self.live.push(id);
-        id
+        if live {
+            self.live.push(id);
+        } else {
+            // On a film's time: kept when over, so their number is capped too.
+            let live = &self.live;
+            let stored = || self.flashes.iter().filter(|f| !live.contains(&f.id));
+            if stored().count() > MAX_STORED_FLASHES {
+                let first = stored()
+                    .filter(|f| f.id != id)
+                    .min_by(|a, b| a.span(fps).1.total_cmp(&b.span(fps).1))
+                    .map(|f| f.id);
+                self.flashes.retain(|f| Some(f.id) != first);
+                dropped = Some(FlashDrop::Stored);
+            }
+        }
+        (id, dropped)
     }
 
     /// Removes the flash `id`; whether there was one.
@@ -765,6 +799,31 @@ mod tests {
             });
         }
         assert_eq!(p.flashes().len(), 30);
+    }
+
+    /// Flashes on a film's time are kept, up to 256: over it the one that ends first goes.
+    #[test]
+    fn at_most_so_many_film_flashes_are_kept() {
+        let mut p = Playback::default();
+        for i in 0..300 {
+            p.flash(Flash {
+                id: 0,
+                start_s: i as f32,
+                position: [0.0; 3],
+                color: [1.0; 3],
+                intensity: 100.0,
+                range_m: 2.0,
+                size_m: 0.0,
+                life: Life::Seconds(0.5),
+            });
+        }
+        assert_eq!(p.flashes().len(), 256);
+        let first = p
+            .flashes()
+            .iter()
+            .map(|f| f.start_s)
+            .fold(f32::MAX, f32::min);
+        assert_eq!(first, 44.0, "the 44 that end first went");
     }
 
     #[test]

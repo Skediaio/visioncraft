@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use visioncraft_core::keyframes::Sampler;
 use visioncraft_core::planting::{self, Generator};
 use visioncraft_core::{
-    Animation, ClipTarget, Flash, Life, MAX_FLASHES, Played, Project, Spot, clip_index,
+    Animation, ClipTarget, Flash, FlashDrop, Life, MAX_FLASHES, MAX_STORED_FLASHES, Played, Project, Spot, clip_index,
 };
 
 /// Side of a flash's glowing quad unless given (m).
@@ -371,7 +371,6 @@ pub(crate) fn flash(host: &mut dyn Host, id: &str, params: &Value) -> Result<Val
     };
     // Live, what is over on the session's clock goes first (a flash on a film's time stays).
     playback.prune_live(playback.clock);
-    let before = playback.flashes().len();
     let flash = Flash {
         id: 0,
         start_s,
@@ -382,12 +381,7 @@ pub(crate) fn flash(host: &mut dyn Host, id: &str, params: &Value) -> Result<Val
         size_m: size_m as f32,
         life,
     };
-    let flash_id = if given.is_some() {
-        playback.flash(flash)
-    } else {
-        playback.flash_live(flash)
-    };
-    let full = playback.flashes().len() <= before;
+    let (flash_id, dropped) = playback.add_flash(flash, given.is_none());
     let mut out = json!({
         "id": flash_id,
         "start_s": start_s,
@@ -398,10 +392,18 @@ pub(crate) fn flash(host: &mut dyn Host, id: &str, params: &Value) -> Result<Val
         Life::Frames(n) => out["frames"] = json!(n),
         Life::Seconds(s) => out["seconds"] = json!(s),
     }
-    if full {
-        out["note"] = json!(format!(
-            "the oldest flash at the same time was dropped: at most {MAX_FLASHES} play at once"
-        ));
+    match dropped {
+        Some(FlashDrop::AtOnce) => {
+            out["note"] = json!(format!(
+                "the oldest flash at the same time was dropped: at most {MAX_FLASHES} play at once"
+            ));
+        }
+        Some(FlashDrop::Stored) => {
+            out["note"] = json!(format!(
+                "the flash that ends first was dropped: at most {MAX_STORED_FLASHES} flashes with a `start_s` are kept"
+            ));
+        }
+        None => {}
     }
     Ok(out)
 }

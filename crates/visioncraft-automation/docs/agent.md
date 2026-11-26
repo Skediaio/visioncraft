@@ -371,7 +371,8 @@ camera, for `frames` frames of the rate in force (a film's fps, so the same fram
 time; 60 a second in a still) or for `seconds`, from `start_s` (the clock now); at most 16 flash
 at once (whose times overlap the new one's; `frames` are counted at 60 a second, or the rate
 in force if faster), and over it the oldest of those is dropped:
-flashes one after another are not counted together, so a film may schedule as many as it likes. A flash without `start_s` starts at the clock now and is
+flashes one after another are not counted together. Flashes with `start_s` are kept, at most 256:
+over it the one that ends first is dropped, and the answer's `note` says so. A flash without `start_s` starts at the clock now and is
 forgotten once over; one with `start_s` is kept, so every render of a film shows it. In a
 window the clock is the window's own frame time (seconds since it opened), not a film's: a clip
 or a flash meant for `film.render` takes its `start_s` on the film's time explicitly (`"start_s":

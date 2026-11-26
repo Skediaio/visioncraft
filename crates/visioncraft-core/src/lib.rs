@@ -84,7 +84,7 @@ pub use planting::{
     lawn_scatter_blended, lawn_scatter_within,
 };
 pub use playback::{
-    Animation, ClipTarget, Flash, Life, MAX_FLASHES, Play, Playback, Spot, clip_index,
+    Animation, ClipTarget, Flash, FlashDrop, Life, MAX_FLASHES, MAX_STORED_FLASHES, Play, Playback, Spot, clip_index,
 };
 pub use presets::{PlantingPreset, planting_presets};
 pub use project::{
