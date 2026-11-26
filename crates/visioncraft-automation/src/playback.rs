@@ -10,7 +10,8 @@ use std::collections::BTreeMap;
 use visioncraft_core::keyframes::Sampler;
 use visioncraft_core::planting::{self, Generator};
 use visioncraft_core::{
-    Animation, ClipTarget, Flash, FlashDrop, Life, MAX_FLASHES, MAX_STORED_FLASHES, Played, Project, Spot, clip_index,
+    Animation, ClipTarget, Flash, FlashDrop, Life, MAX_FLASHES, MAX_STORED_FLASHES, Played,
+    Project, Spot, clip_index,
 };
 
 /// Side of a flash's glowing quad unless given (m).

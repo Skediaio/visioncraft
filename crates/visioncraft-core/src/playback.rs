@@ -744,12 +744,26 @@ mod tests {
         let mut p = Playback::default();
         let one = BTreeMap::from([("user:a".to_string(), 0)]);
         let both = BTreeMap::from([("user:a".to_string(), 0), ("user:b".to_string(), 1)]);
-        p.play(ClipTarget::parse("g4#3").unwrap(), one, "open", 0.0, false, 1.0);
+        p.play(
+            ClipTarget::parse("g4#3").unwrap(),
+            one,
+            "open",
+            0.0,
+            false,
+            1.0,
+        );
         assert_eq!(p.stop(&ClipTarget::all("g4"), Some(&both)), 1, "it stops");
         assert!(p.plays().is_empty());
         // Another clip of the same model is not stopped by it.
         let other = BTreeMap::from([("user:a".to_string(), 2)]);
-        p.play(ClipTarget::parse("g4#3").unwrap(), other, "shut", 0.0, false, 1.0);
+        p.play(
+            ClipTarget::parse("g4#3").unwrap(),
+            other,
+            "shut",
+            0.0,
+            false,
+            1.0,
+        );
         assert_eq!(p.stop(&ClipTarget::all("g4"), Some(&both)), 0);
     }
 
