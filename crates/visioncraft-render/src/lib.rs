@@ -74,6 +74,7 @@ pub mod lod;
 mod sea;
 pub mod shadow;
 pub mod sky;
+#[cfg(not(target_arch = "wasm32"))]
 mod stage;
 mod stats;
 mod still;
@@ -704,14 +705,15 @@ pub fn water_transmittance(path_m: f32, turbidity: f32) -> f32 {
 type Bounds = (Vec3, Vec3);
 
 struct GpuMesh {
-    vertices: wgpu::Buffer,
-    indices: wgpu::Buffer,
+    /// Its vertices and indices in the arenas (`Renderer::arenas`).
+    place: batch::Placement,
+    /// Indices drawn: the range may be longer (a replacement that fitted kept it).
     index_count: u32,
     bounds: Option<Bounds>,
     /// Any vertex with a bend weight: bounds get padded for the sway.
     wind: bool,
-    /// Terrain chunks: eight u8 layer weights per vertex.
-    weights: Option<wgpu::Buffer>,
+    /// A terrain chunk: eight u8 layer weights per vertex, in its arena's weight buffer.
+    weights: bool,
 }
 
 /// One (mesh, material) of an item at one level of detail.
@@ -830,11 +832,10 @@ struct Draw {
     g1: Option<Group1>,
     /// Group 2: from the fade slots or the draw slots, and the slot.
     g2: Option<(bool, u32)>,
-    /// The mesh drawn indexed (`vertices` its index count), or `None` for impostor quads.
-    mesh: Option<u32>,
+    /// The mesh drawn indexed, or `None` for impostor quads.
+    mesh: Option<DrawMesh>,
+    /// The mesh's indices (`DrawMesh::range`'s length) or the quads' vertices.
     vertices: u32,
-    /// The terrain chunk (a mesh id) whose layer weights go in vertex slot 2.
-    weights: Option<u32>,
     src: Src,
     instances: std::ops::Range<u32>,
     triangles: u64,
@@ -842,10 +843,32 @@ struct Draw {
     view: bool,
 }
 
+/// A mesh a planned draw names (`Draw::mesh`): its id, its arena and its index range there, and
+/// its first vertex (the base vertex of `draw_indexed`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct DrawMesh {
+    id: u32,
+    arena: u32,
+    range: batch::Span,
+    base_vertex: i32,
+}
+
+impl GpuMesh {
+    /// What a draw of all its indices names.
+    fn draw(&self, id: MeshId) -> DrawMesh {
+        DrawMesh {
+            id: id.0,
+            arena: self.place.arena,
+            range: batch::Span::new(self.place.indices.first, self.index_count),
+            base_vertex: self.place.vertices.first as i32,
+        }
+    }
+}
+
 /// Draws that can share one: by `tag` (the category; impostors and shadow casters have their
 /// own), pipeline, group 1, mesh, and whether group 2 is bound (every part's draw slot holds
 /// just its mesh id, and every settled impostor's the same fade, so any of them serves).
-type BatchKey = (u8, Pipe, Option<Group1>, Option<u32>, u32, bool);
+type BatchKey = (u8, Pipe, Option<Group1>, Option<DrawMesh>, u32, bool);
 
 struct Batch {
     tag: u8,
@@ -1393,6 +1416,10 @@ pub struct Renderer {
     /// Every item's instances (`batch.rs`), and the frame's batches gathered from them.
     pool: batch::InstancePool,
     gather: batch::Gather,
+    /// The static meshes' vertex and index buffers: one arena until it is full at the device's
+    /// `max_buffer_size`, then one more (`batch::MeshRanges` says which mesh lies where).
+    arenas: Vec<batch::MeshArena>,
+    mesh_ranges: batch::MeshRanges,
     meshes: Vec<Option<GpuMesh>>,
     materials: Vec<Option<GpuMaterial>>,
     textures: Vec<Option<texture::GpuTexture>>,
@@ -1787,6 +1814,8 @@ impl Renderer {
             upload_belt: wgpu::util::StagingBelt::new(device.clone(), UPLOAD_CHUNK),
             pool: batch::InstancePool::new(device, 4096),
             gather: batch::Gather::new(device),
+            arenas: Vec::new(),
+            mesh_ranges: batch::MeshRanges::default(),
             meshes: Vec::new(),
             materials: Vec::new(),
             textures: Vec::new(),
@@ -2635,21 +2664,129 @@ impl Renderer {
     }
 
     pub fn add_mesh(&mut self, mesh: &Mesh) -> Result<MeshId, String> {
-        let gpu = self.upload_mesh(mesh)?;
+        let gpu = self.store_mesh(pack_mesh(mesh)?, None)?;
         self.meshes.push(Some(gpu));
         Ok(MeshId(self.meshes.len() as u32 - 1))
     }
 
-    /// Replaces a mesh in place: every item drawing it picks up the new data.
+    /// Replaces a mesh in place: every item drawing it picks up the new data. Data of the same
+    /// or a smaller size goes where the old was; more takes a new range of the arenas and the old
+    /// one is freed.
     pub fn replace_mesh(&mut self, id: MeshId, mesh: &Mesh) -> Result<(), String> {
-        let slot = self.meshes.get_mut(id.0 as usize).ok_or("unknown mesh")?;
-        if slot.is_none() {
-            return Err("mesh was removed".into());
-        }
-        let gpu = upload_mesh(&self.device, &self.queue, mesh)?;
+        self.replace_stored(id, pack_mesh(mesh)?, None)
+    }
+
+    /// Puts `packed` (and a terrain chunk's layer `weights`) where mesh `id`'s data was when
+    /// it fits, else in a new range of the arenas (the old one is freed).
+    fn replace_stored(
+        &mut self,
+        id: MeshId,
+        packed: PackedMesh,
+        weights: Option<Vec<u8>>,
+    ) -> Result<(), String> {
+        let old = match self.meshes.get(id.0 as usize) {
+            Some(Some(m)) => m.place,
+            Some(None) => return Err("mesh was removed".into()),
+            None => return Err("unknown mesh".into()),
+        };
+        let (vertices, indices) = (
+            packed.vertices.len() / VERTEX_STRIDE as usize,
+            packed.indices.len() / 4,
+        );
+        let gpu =
+            if vertices <= old.vertices.count as usize && indices <= old.indices.count as usize {
+                let arena = &self.arenas[old.arena as usize];
+                arena.write_vertices(&self.queue, old.vertices.first, &packed.vertices);
+                arena.write_indices(&self.queue, old.indices.first, &packed.indices);
+                if let Some(w) = &weights {
+                    arena.write_weights(&self.queue, old.vertices.first, w);
+                }
+                GpuMesh {
+                    place: old,
+                    index_count: indices as u32,
+                    bounds: packed.bounds,
+                    wind: packed.wind,
+                    weights: weights.is_some(),
+                }
+            } else {
+                let gpu = self.store_mesh(packed, weights)?;
+                self.mesh_ranges.release(&old);
+                gpu
+            };
         self.meshes[id.0 as usize] = Some(gpu);
         self.bounds_dirty = true;
         Ok(())
+    }
+
+    /// A mesh's packed data (and a terrain chunk's layer weights) into a range of the arenas.
+    fn store_mesh(
+        &mut self,
+        packed: PackedMesh,
+        weights: Option<Vec<u8>>,
+    ) -> Result<GpuMesh, String> {
+        let (vertices, indices) = (
+            packed.vertices.len() as u32 / VERTEX_STRIDE as u32,
+            packed.indices.len() as u32 / 4,
+        );
+        let place = self.place(vertices, indices)?;
+        let arena = &self.arenas[place.arena as usize];
+        arena.write_vertices(&self.queue, place.vertices.first, &packed.vertices);
+        arena.write_indices(&self.queue, place.indices.first, &packed.indices);
+        if let Some(w) = &weights {
+            arena.write_weights(&self.queue, place.vertices.first, w);
+        }
+        Ok(GpuMesh {
+            place,
+            index_count: indices,
+            bounds: packed.bounds,
+            wind: packed.wind,
+            weights: weights.is_some(),
+        })
+    }
+
+    /// Where a mesh of `vertices` vertices and `indices` indices goes: a free range of an arena;
+    /// else the last arena grows (its meshes keep their place: what it holds is copied in front
+    /// of the larger buffers, in an encoder submitted here, before any frame draws with it);
+    /// else a further arena, once that one is at the device's largest buffer.
+    fn place(&mut self, vertices: u32, indices: u32) -> Result<batch::Placement, String> {
+        if let Some(p) = self.mesh_ranges.alloc(vertices, indices) {
+            return Ok(p);
+        }
+        let max_buffer = self.device.limits().max_buffer_size;
+        let max = [(max_buffer / VERTEX_STRIDE) as u32, (max_buffer / 4) as u32];
+        let last = self.mesh_ranges.len().checked_sub(1);
+        let (arena, capacity) = match last.and_then(|i| {
+            self.mesh_ranges
+                .grow(i, vertices, indices, max)
+                .map(|c| (i, c))
+        }) {
+            Some(grown) => grown,
+            None => {
+                if vertices > max[0] || indices > max[1] {
+                    return Err(format!(
+                        "a mesh of {vertices} vertices and {indices} indices is larger than the device's largest buffer"
+                    ));
+                }
+                let i = self.mesh_ranges.push();
+                let capacity = self
+                    .mesh_ranges
+                    .grow(i, vertices, indices, max)
+                    .expect("a new arena takes the mesh");
+                (i, capacity)
+            }
+        };
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        if let Some(a) = self.arenas.get_mut(arena) {
+            a.grow(&self.device, &mut encoder, capacity);
+        } else {
+            self.arenas
+                .push(batch::MeshArena::new(&self.device, capacity, VERTEX_STRIDE));
+        }
+        self.mesh_ranges.set_capacity(arena, capacity.0, capacity.1);
+        self.queue.submit([encoder.finish()]);
+        self.mesh_ranges
+            .alloc(vertices, indices)
+            .ok_or_else(|| "no room in the arena that was just made for it".into())
     }
 
     /// A terrain chunk: a mesh (add it with `add_item` and any material,
@@ -2668,38 +2805,26 @@ impl Renderer {
         id: MeshId,
         chunk: &TerrainChunk,
     ) -> Result<(), String> {
-        match self.meshes.get(id.0 as usize) {
-            Some(Some(_)) => {}
-            Some(None) => return Err("mesh was removed".into()),
-            None => return Err("unknown mesh".into()),
-        }
-        let gpu = self.upload_terrain(chunk)?;
-        self.meshes[id.0 as usize] = Some(gpu);
-        self.bounds_dirty = true;
-        Ok(())
-    }
-
-    fn upload_terrain(&self, chunk: &TerrainChunk) -> Result<GpuMesh, String> {
-        let weights = terrain::weight_bytes(chunk)?;
-        let mut gpu = upload_mesh(
-            &self.device,
-            &self.queue,
-            &Mesh {
+        self.replace_stored(
+            id,
+            pack_mesh(&Mesh {
                 positions: chunk.positions,
                 normals: chunk.normals,
                 indices: chunk.indices,
                 ..Default::default()
-            },
-        )?;
-        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("terrain weights"),
-            size: (weights.len() as u64).max(8),
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        self.queue.write_buffer(&buffer, 0, &weights);
-        gpu.weights = Some(buffer);
-        Ok(gpu)
+            })?,
+            Some(terrain::weight_bytes(chunk)?),
+        )
+    }
+
+    fn upload_terrain(&mut self, chunk: &TerrainChunk) -> Result<GpuMesh, String> {
+        let packed = pack_mesh(&Mesh {
+            positions: chunk.positions,
+            normals: chunk.normals,
+            indices: chunk.indices,
+            ..Default::default()
+        })?;
+        self.store_mesh(packed, Some(terrain::weight_bytes(chunk)?))
     }
 
     /// The terrain's material layers (1..=8; weight k of a chunk vertex
@@ -2851,19 +2976,13 @@ impl Renderer {
         None
     }
 
-    /// The buffers and bind groups of `parts`, and the bounds to bake (given, else theirs).
-    #[allow(clippy::type_complexity)]
+    /// The arena buffers, index ranges and bind groups of `parts`, and the bounds to bake
+    /// (given, else theirs).
     fn bake_list(
         &self,
         parts: &[(MeshId, MaterialId)],
         bounds: Option<(Vec3, Vec3)>,
-    ) -> Result<
-        (
-            Vec<(&wgpu::Buffer, &wgpu::Buffer, u32, &wgpu::BindGroup)>,
-            (Vec3, Vec3),
-        ),
-        String,
-    > {
+    ) -> Result<(Vec<impostor::BakePart<'_>>, (Vec3, Vec3)), String> {
         let mut list = Vec::new();
         let mut union_bounds: Option<Bounds> = None;
         for &(mesh, material) in parts {
@@ -2880,7 +2999,14 @@ impl Renderer {
             if let Some(b) = m.bounds {
                 union_bounds = Some(union_bounds.map_or(b, |u| union(u, b)));
             }
-            list.push((&m.vertices, &m.indices, m.index_count, &mat.bind));
+            let dm = m.draw(mesh);
+            let arena = &self.arenas[dm.arena as usize];
+            list.push(impostor::BakePart {
+                vertices: &arena.vertices,
+                indices: &arena.indices,
+                mesh: dm,
+                material: &mat.bind,
+            });
         }
         let bounds = bounds.or(union_bounds).ok_or("nothing to bake")?;
         Ok((list, bounds))
@@ -3137,14 +3263,12 @@ impl Renderer {
 
     /// Frees a mesh. Items still referring to it draw nothing.
     pub fn remove_mesh(&mut self, id: MeshId) {
-        if let Some(slot) = self.meshes.get_mut(id.0 as usize) {
-            *slot = None;
+        if let Some(slot) = self.meshes.get_mut(id.0 as usize)
+            && let Some(old) = slot.take()
+        {
+            self.mesh_ranges.release(&old.place);
             self.bounds_dirty = true;
         }
-    }
-
-    fn upload_mesh(&self, mesh: &Mesh) -> Result<GpuMesh, String> {
-        upload_mesh(&self.device, &self.queue, mesh)
     }
 
     /// Uploads an RGBA8 image and generates its full mip chain on the GPU.
@@ -3285,7 +3409,7 @@ impl Renderer {
             self.meshes
                 .get(p.mesh.0 as usize)
                 .and_then(Option::as_ref)
-                .is_some_and(|m| m.weights.is_some())
+                .is_some_and(|m| m.weights)
         });
         let id = ItemId(self.items.len() as u32);
         self.items.push(Some(Item {
@@ -4590,7 +4714,7 @@ impl Renderer {
                 if !wanted(category) {
                     continue;
                 }
-                let weights = mesh.weights.is_some() && shaded;
+                let weights = mesh.weights && shaded;
                 // Opaque and cutout mesh levels dissolve in fading clusters (into each other,
                 // the impostor or nothing), through their own pipelines, one draw and fade slot
                 // per cluster; the settled clusters leave them out.
@@ -4598,7 +4722,7 @@ impl Renderer {
                 // their nearer level in every pass. Asked of the mesh, not of `weights` (none outside the
                 // shaded passes): a depth pre-pass that dithered both levels left the forward pass's level
                 // behind the coarser one, unshaded (black patches on the ground after a jump).
-                let can_fade = fades && category <= 1 && mesh.weights.is_none();
+                let can_fade = fades && category <= 1 && !mesh.weights;
                 let ds = m.double_sided as usize;
                 let pipe = match kind {
                     Pass::Shadow { .. } => Pipe::Shadow(category),
@@ -4615,20 +4739,21 @@ impl Renderer {
                 } else {
                     None
                 };
-                let draw = |pipe, g1, g2, instances| Draw {
+                let draw = |pipe, g1, g2, mesh: DrawMesh, instances| Draw {
                     pipe,
                     g1,
                     g2,
-                    mesh: Some(part.mesh.0),
-                    vertices: mesh.index_count,
-                    weights: weights.then_some(part.mesh.0),
+                    vertices: mesh.range.count,
+                    mesh: Some(mesh),
                     src: Src::Pool,
                     instances,
-                    triangles: mesh.index_count as u64 / 3,
+                    triangles: mesh.range.count as u64 / 3,
                     view,
                 };
                 let g2 = shaded.then_some((false, part.slot));
                 let settled = runs.get(item, &levels, order, part.lod, can_fade && dissolving);
+                let draw =
+                    |pipe, g1, g2, instances| draw(pipe, g1, g2, mesh.draw(part.mesh), instances);
                 if weights {
                     // A terrain chunk is its own mesh: nothing to share a draw with.
                     draws.extend(
@@ -4670,16 +4795,16 @@ impl Renderer {
                 && let Some(id) = item.shadow_caster
                 && let Some(Some(mesh)) = self.meshes.get(id.0 as usize)
             {
+                let dm = mesh.draw(id);
                 let draw = Draw {
                     pipe: Pipe::Shadow(3),
                     g1: None,
                     g2: None,
-                    mesh: Some(id.0),
-                    vertices: mesh.index_count,
-                    weights: None,
+                    vertices: dm.range.count,
+                    mesh: Some(dm),
                     src: Src::Pool,
                     instances: 0..0,
-                    triangles: mesh.index_count as u64 / 3,
+                    triangles: dm.range.count as u64 / 3,
                     view: false,
                 };
                 let settled = runs.get(item, &levels, 1, SHADOW_CASTER_LEVEL, false);
@@ -4728,7 +4853,6 @@ impl Renderer {
             mesh: None,
             // Shadows: two cards per plant (impostor.wgsl, `impostor_shadow_towards`).
             vertices: if shadow { 12 } else { 6 },
-            weights: None,
             src: Src::Pool,
             instances,
             triangles: 2,
@@ -4808,8 +4932,8 @@ impl Renderer {
         let mut g1 = None;
         let mut g2 = None;
         let mut mesh = None;
+        let mut arena = None;
         let mut src = None;
-        let mut weights = None;
         for d in draws {
             if pipe != Some(d.pipe) {
                 pass.set_pipeline(self.pipe(d.pipe));
@@ -4831,7 +4955,9 @@ impl Renderer {
                         .and_then(Option::as_ref)
                         .map(|i| &i.bind),
                 };
-                let Some(bind) = bind else { continue };
+                let Some(bind) = bind else {
+                    continue;
+                };
                 pass.set_bind_group(1, bind, &[]);
                 g1 = Some(g);
             }
@@ -4847,28 +4973,21 @@ impl Renderer {
                 pass.set_bind_group(2, slots, &[(slot as u64 * SLOT) as u32]);
                 g2 = Some(g);
             }
-            if let Some(id) = d.mesh
-                && mesh != Some(id)
+            // The mesh's vertex, index and (terrain) weight buffers are the arena's: bound
+            // once per pass, and again only when another arena's mesh follows.
+            if let Some(m) = d.mesh
+                && mesh != Some(m)
             {
-                let Some(Some(m)) = self.meshes.get(id as usize) else {
+                let Some(a) = self.arenas.get(m.arena as usize) else {
                     continue;
                 };
-                pass.set_vertex_buffer(0, m.vertices.slice(..));
-                pass.set_index_buffer(m.indices.slice(..), wgpu::IndexFormat::Uint32);
-                mesh = Some(id);
-            }
-            if let Some(id) = d.weights
-                && weights != Some(id)
-            {
-                let Some(Some(w)) = self
-                    .meshes
-                    .get(id as usize)
-                    .map(|m| m.as_ref().and_then(|m| m.weights.as_ref()))
-                else {
-                    continue;
-                };
-                pass.set_vertex_buffer(2, w.slice(..));
-                weights = Some(id);
+                if arena != Some(m.arena) {
+                    pass.set_vertex_buffer(0, a.vertices.slice(..));
+                    pass.set_index_buffer(a.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.set_vertex_buffer(2, a.weights.slice(..));
+                    arena = Some(m.arena);
+                }
+                mesh = Some(m);
             }
             if src != Some(d.src) {
                 let buffer = match d.src {
@@ -4881,7 +5000,7 @@ impl Renderer {
             self.counters
                 .add(d.triangles, d.instances.len() as u32, d.view);
             match d.mesh {
-                Some(_) => pass.draw_indexed(0..d.vertices, 0, d.instances.clone()),
+                Some(m) => pass.draw_indexed(m.range.range(), m.base_vertex, d.instances.clone()),
                 None => pass.draw(0..d.vertices, d.instances.clone()),
             }
         }
@@ -4940,16 +5059,18 @@ impl Renderer {
             } else {
                 &[&self.sampled.transparent[sided]]
             };
+            let dm = mesh.draw(part.mesh);
+            let arena = &self.arenas[dm.arena as usize];
             pass.set_bind_group(1, &material.bind, &[]);
             pass.set_bind_group(2, &self.draw_bind, &[(part.slot as u64 * SLOT) as u32]);
-            pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+            pass.set_vertex_buffer(0, arena.vertices.slice(..));
             pass.set_vertex_buffer(1, self.pool.buffer.slice(..));
-            pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+            pass.set_index_buffer(arena.indices.slice(..), wgpu::IndexFormat::Uint32);
             for p in pipelines {
                 pass.set_pipeline(p);
                 self.counters
                     .add(mesh.index_count as u64 / 3, range.len() as u32, true);
-                pass.draw_indexed(0..mesh.index_count, 0, item.pool_range(&range));
+                pass.draw_indexed(dm.range.range(), dm.base_vertex, item.pool_range(&range));
             }
         }
     }
@@ -4966,7 +5087,7 @@ impl Renderer {
                 self.meshes
                     .get(p.mesh.0 as usize)
                     .and_then(Option::as_ref)
-                    .is_some_and(|m| m.weights.is_some())
+                    .is_some_and(|m| m.weights)
             });
             let meshes: Vec<&GpuMesh> = item
                 .parts
@@ -5550,7 +5671,18 @@ impl Renderer {
     }
 }
 
-fn upload_mesh(device: &wgpu::Device, queue: &wgpu::Queue, mesh: &Mesh) -> Result<GpuMesh, String> {
+/// A mesh's vertices and indices as the arenas hold them (`Renderer::store_mesh`).
+struct PackedMesh {
+    vertices: Vec<u8>,
+    indices: Vec<u8>,
+    bounds: Option<Bounds>,
+    /// Any vertex with a bend weight: bounds get padded for the sway.
+    wind: bool,
+}
+
+/// A mesh's data, packed as the vertex and index arenas hold it; Err (nothing is made) when its
+/// arrays disagree.
+fn pack_mesh(mesh: &Mesh) -> Result<PackedMesh, String> {
     let n = mesh.positions.len();
     if mesh.normals.len() != n {
         return Err(format!("{} normals for {n} positions", mesh.normals.len()));
@@ -5591,28 +5723,16 @@ fn upload_mesh(device: &wgpu::Device, queue: &wgpu::Queue, mesh: &Mesh) -> Resul
     for i in mesh.indices {
         ix.extend_from_slice(&i.to_le_bytes());
     }
-    let buffer = |label, bytes: &[u8], usage| {
-        let b = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some(label),
-            size: (bytes.len() as u64).max(4).next_multiple_of(4),
-            usage: usage | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&b, 0, bytes);
-        b
-    };
     let bounds = mesh
         .positions
         .iter()
         .map(|p| (Vec3::from(*p), Vec3::from(*p)))
         .reduce(union);
-    Ok(GpuMesh {
-        vertices: buffer("vertices", &v.0, wgpu::BufferUsages::VERTEX),
-        indices: buffer("indices", &ix, wgpu::BufferUsages::INDEX),
-        index_count: mesh.indices.len() as u32,
+    Ok(PackedMesh {
+        vertices: v.0,
+        indices: ix,
         bounds,
         wind,
-        weights: None,
     })
 }
 
@@ -8393,6 +8513,7 @@ mod tests {
                 r.materials.iter().flatten().count(),
                 r.items.iter().flatten().count(),
                 r.next_slot as usize - r.free_slots.len(),
+                r.mesh_ranges.used(),
             )
         };
         let baseline = live(&r);
@@ -8469,11 +8590,166 @@ mod tests {
         assert_eq!(
             live(&r),
             baseline,
-            "(bytes, meshes, textures, materials, items, slots)"
+            "(bytes, meshes, textures, materials, items, slots, arena elements)"
         );
         // Guards against a runaway frame, not speed: a software rasteriser on a shared
         // machine has taken 2.1 s here.
         assert!(worst.get() < 6.0, "a frame took {:.2} s", worst.get());
+    }
+
+    /// Renders one frame and reads the output back as tightly packed RGBA8.
+    fn pixels(
+        r: &mut Renderer,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        w: u32,
+        h: u32,
+    ) -> Vec<u8> {
+        let mut encoder = device.create_command_encoder(&Default::default());
+        r.render(&mut encoder);
+        let stride = (w * 4).next_multiple_of(256);
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: (stride * h) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        encoder.copy_texture_to_buffer(
+            r.output_texture().as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(stride),
+                    rows_per_image: Some(h),
+                },
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit([encoder.finish()]);
+        buffer
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, |res| res.expect("map"));
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("poll");
+        let padded = buffer
+            .slice(..)
+            .get_mapped_range()
+            .expect("mapped")
+            .to_vec();
+        padded
+            .chunks(stride as usize)
+            .flat_map(|row| &row[..(w * 4) as usize])
+            .copied()
+            .collect()
+    }
+
+    /// The meshes of `replaced_and_removed_meshes_draw_the_same_as_fresh_ones`: a row of boxes,
+    /// the third of three before or after (more data), the sixth of two before and one after
+    /// (less), the eighth removed, two more after it. `end`: as they end up.
+    fn boxes(end: bool) -> Vec<demo::MeshData> {
+        (0..12)
+            .map(|i| {
+                let mut m = demo::MeshData::default();
+                let count = match (end, i) {
+                    (true, 3) => 3,
+                    (false, 5) => 2,
+                    _ => 1,
+                };
+                for k in 0..count {
+                    let x = 0.9 * k as f32;
+                    m.add_box(Vec3::new(x - 0.3, 0.0, -0.3), Vec3::new(x + 0.3, 0.5, 0.3));
+                }
+                m
+            })
+            .collect()
+    }
+
+    /// Ten meshes in the arenas, then one replaced by more data (a new range, the old one
+    /// freed), one by less (in place), one removed (its range freed) and two more added: the
+    /// picture is the one of the same final meshes uploaded fresh, pixel for pixel.
+    #[test]
+    fn replaced_and_removed_meshes_draw_the_same_as_fresh_ones() {
+        let (device, queue) = pollster::block_on(headless_device()).expect("device");
+        let (w, h) = (96, 54);
+        let (before, boxes) = (boxes(false), boxes(true));
+        let at = |i: usize| Mat4::from_translation(Vec3::new(2.5 * i as f32, 0.0, 0.0));
+        let look = |r: &mut Renderer| {
+            let aspect = w as f32 / h as f32;
+            let (view, proj, eye) = demo::camera(
+                Vec3::new(13.0, 9.0, 26.0),
+                Vec3::new(13.0, 0.5, 0.0),
+                aspect,
+            );
+            r.resize(w, h);
+            r.set_quality(Quality::MEDIUM);
+            r.set_camera(view, proj, eye);
+        };
+        // Edited: the first ten, then the edits, then two more.
+        let mut a = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let mut ids: Vec<MeshId> = before[..10]
+            .iter()
+            .map(|m| a.add_mesh(&m.mesh()).expect("mesh"))
+            .collect();
+        let material = a.add_material(&Material::default());
+        let items: Vec<ItemId> = ids
+            .iter()
+            .enumerate()
+            .map(|(i, &m)| a.add_item(m, material, &[at(i)]))
+            .collect();
+        look(&mut a);
+        pixels(&mut a, &device, &queue, w, h);
+        let (before3, before5) = (
+            a.meshes[3].as_ref().expect("3").place,
+            a.meshes[5].as_ref().expect("5").place,
+        );
+        a.replace_mesh(ids[3], &boxes[3].mesh())
+            .expect("replace, more data");
+        a.replace_mesh(ids[5], &boxes[5].mesh())
+            .expect("replace, less data");
+        a.remove_mesh(ids[7]);
+        a.remove_item(items[7]);
+        ids.extend(
+            boxes[10..]
+                .iter()
+                .map(|m| a.add_mesh(&m.mesh()).expect("mesh")),
+        );
+        for (i, &m) in ids[10..].iter().enumerate() {
+            a.add_item(m, material, &[at(10 + i)]);
+        }
+        let after = (
+            a.meshes[3].as_ref().expect("3").place,
+            a.meshes[5].as_ref().expect("5").place,
+        );
+        assert_ne!(after.0, before3, "more data: a new range");
+        assert_eq!(after.1, before5, "less data: in place");
+        assert!(a.meshes[7].is_none());
+        // Fresh: the same final meshes, in one go.
+        let mut b = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let material = b.add_material(&Material::default());
+        for (i, m) in boxes.iter().enumerate() {
+            if i == 7 {
+                continue;
+            }
+            let mesh = b.add_mesh(&m.mesh()).expect("mesh");
+            b.add_item(mesh, material, &[at(i)]);
+        }
+        look(&mut b);
+        pixels(&mut b, &device, &queue, w, h);
+        let (pa, pb) = (
+            pixels(&mut a, &device, &queue, w, h),
+            pixels(&mut b, &device, &queue, w, h),
+        );
+        assert_eq!(pa, pb, "the edited scene draws what the fresh one does");
+        assert!(
+            pa.chunks(4).any(|p| p[0] != p[1] || p[1] != p[2]),
+            "something is drawn"
+        );
     }
 
     #[test]

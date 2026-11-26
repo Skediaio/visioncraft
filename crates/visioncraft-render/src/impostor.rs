@@ -84,6 +84,15 @@ pub(crate) struct GpuImpostor {
     pub bytes: u64,
 }
 
+/// One part of the plant being baked (`Renderer::bake_list`): its arena's vertex and index
+/// buffers, its index range and base vertex in them, and its material's bind group.
+pub(crate) struct BakePart<'a> {
+    pub vertices: &'a wgpu::Buffer,
+    pub indices: &'a wgpu::Buffer,
+    pub mesh: crate::DrawMesh,
+    pub material: &'a wgpu::BindGroup,
+}
+
 /// Group 1 of the impostor pipelines: info, albedo, normal, sampler.
 pub(crate) fn layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -417,7 +426,7 @@ impl Baker {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         state: &mut BakeState,
-        parts: &[(&wgpu::Buffer, &wgpu::Buffer, u32, &wgpu::BindGroup)],
+        parts: &[BakePart<'_>],
         count: u32,
     ) {
         let total = state.views + 1;
@@ -466,11 +475,11 @@ impl Baker {
                 let (x, y) = ((k % state.cols) * tile, (k / state.cols) * tile);
                 pass.set_viewport(x as f32, y as f32, tile as f32, tile as f32, 0.0, 1.0);
                 pass.set_bind_group(2, &state.matrix_bind, &[(k as u64 * SLOT) as u32]);
-                for (vertices, indices, index_count, material) in parts {
-                    pass.set_bind_group(1, *material, &[]);
-                    pass.set_vertex_buffer(0, vertices.slice(..));
-                    pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
-                    pass.draw_indexed(0..*index_count, 0, 0..1);
+                for part in parts {
+                    pass.set_bind_group(1, part.material, &[]);
+                    pass.set_vertex_buffer(0, part.vertices.slice(..));
+                    pass.set_index_buffer(part.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(part.mesh.range.range(), part.mesh.base_vertex, 0..1);
                 }
             }
         }
