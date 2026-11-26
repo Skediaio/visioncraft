@@ -16,7 +16,7 @@ pub struct Animation {
     pub rig: Option<Rig>,
 }
 
-/// Most flashes at once; over it the oldest goes.
+/// Most flashes at once (whose times overlap); over it the oldest of those goes.
 pub const MAX_FLASHES: usize = 16;
 
 /// What a clip plays on: a planting (`g4`: every object it places) or one object of it
@@ -139,6 +139,16 @@ impl Flash {
         };
         let frame = (since * fps.max(1.0)).round();
         (0.0..frames).contains(&frame)
+    }
+
+    /// When it starts and ends on the clock, its frames counted at `fps`.
+    fn span(&self, fps: f64) -> (f64, f64) {
+        let start = f64::from(self.start_s);
+        let length = match self.life {
+            Life::Seconds(s) => f64::from(s),
+            Life::Frames(n) => f64::from(n) / fps.max(1.0),
+        };
+        (start, start + length)
     }
 
     /// Whether it is over at clock time `t` and can be forgotten (one that has not started is
@@ -306,12 +316,27 @@ impl Playback {
     }
 
     /// Adds a flash at a time of its own (a film's): it stays until removed, so every render of
-    /// the film shows it. Over [`MAX_FLASHES`] at once the oldest goes. Returns its id.
+    /// the film shows it. Over [`MAX_FLASHES`] at once (flashes whose times overlap its) the
+    /// oldest of those goes; flashes at other times are not counted. Returns its id.
     pub fn flash(&mut self, flash: Flash) -> u64 {
         let id = self.next_flash;
         self.next_flash += 1;
+        let (start, end) = flash.span(self.fps);
+        let fps = self.fps;
+        let mut at_once: Vec<u64> = self
+            .flashes
+            .iter()
+            .filter(|f| {
+                let (s, e) = f.span(fps);
+                s < end && start < e
+            })
+            .map(|f| f.id)
+            .collect();
+        at_once.sort_unstable();
+        let over = (at_once.len() + 1).saturating_sub(MAX_FLASHES);
+        let oldest = &at_once[..over];
+        self.flashes.retain(|f| !oldest.contains(&f.id));
         self.flashes.insert(0, Flash { id, ..flash });
-        self.flashes.truncate(MAX_FLASHES);
         let flashes = &self.flashes;
         self.live.retain(|l| flashes.iter().any(|f| f.id == *l));
         id
@@ -617,6 +642,33 @@ mod tests {
         p.clock = 31.0;
         assert_eq!(p.prune_flashes(31.0), 1);
         assert!(!p.animating() && p.is_empty());
+    }
+
+    #[test]
+    fn the_cap_drops_the_oldest_of_the_flashes_at_once_only() {
+        let mut p = Playback::default();
+        let flash = |start_s: f32| Flash {
+            id: 0,
+            start_s,
+            position: [0.0; 3],
+            color: [1.0; 3],
+            intensity: 100.0,
+            range_m: 2.0,
+            size_m: 0.0,
+            life: Life::Seconds(0.2),
+        };
+        // Twenty, one after the other over ten seconds: none overlaps another, all are kept.
+        for i in 0..20 {
+            p.flash(flash(i as f32 * 0.5));
+        }
+        assert_eq!(p.flashes().len(), 20);
+        // Seventeen at once at 20 s: the oldest of those goes, the twenty before stay.
+        for _ in 0..17 {
+            p.flash(flash(20.0));
+        }
+        assert_eq!(p.flashes().len(), 20 + MAX_FLASHES);
+        assert!(!p.flashes().iter().any(|f| f.id == 21), "the first at 20 s went");
+        assert!(p.flashes().iter().any(|f| f.id == 1));
     }
 
     #[test]

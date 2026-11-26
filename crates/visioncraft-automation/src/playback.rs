@@ -361,7 +361,9 @@ pub(crate) fn flash(host: &mut dyn Host, id: &str, params: &Value) -> Result<Val
             ));
         }
     };
-    let full = playback.flashes().len() >= MAX_FLASHES;
+    // Live, what is over on the session's clock goes first (a flash on a film's time stays).
+    playback.prune_live(playback.clock);
+    let before = playback.flashes().len();
     let flash = Flash {
         id: 0,
         start_s,
@@ -377,6 +379,7 @@ pub(crate) fn flash(host: &mut dyn Host, id: &str, params: &Value) -> Result<Val
     } else {
         playback.flash_live(flash)
     };
+    let full = playback.flashes().len() <= before;
     let mut out = json!({
         "id": flash_id,
         "start_s": start_s,
@@ -389,7 +392,7 @@ pub(crate) fn flash(host: &mut dyn Host, id: &str, params: &Value) -> Result<Val
     }
     if full {
         out["note"] = json!(format!(
-            "the oldest flash was dropped: at most {MAX_FLASHES} play at once"
+            "the oldest flash at the same time was dropped: at most {MAX_FLASHES} play at once"
         ));
     }
     Ok(out)

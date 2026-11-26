@@ -600,7 +600,7 @@ fn a_flash_comes_and_goes_by_the_clock() {
     assert_eq!(r["id"], json!(2));
     assert_eq!(r["seconds"], json!(0.5));
     assert!(r.get("frames").is_none());
-    // At most 16 at once: the oldest goes.
+    // At most 16 at once: the oldest of those goes (the one at 20 s is not at the same time).
     for _ in 0..20 {
         run(
             &mut h,
@@ -615,10 +615,11 @@ fn a_flash_comes_and_goes_by_the_clock() {
         json!({"position": [0, 0, 0], "color": [1, 1, 1], "intensity": 1, "range_m": 1}),
     )
     .unwrap();
-    assert_eq!(r["flashes"], json!(MAX_FLASHES));
+    assert_eq!(r["flashes"], json!(MAX_FLASHES + 1));
     assert!(r["note"].as_str().unwrap().contains("oldest"), "{r}");
-    assert_eq!(h.state.playback.flashes().len(), MAX_FLASHES);
+    assert_eq!(h.state.playback.flashes().len(), MAX_FLASHES + 1);
     assert_eq!(h.state.playback.flashes()[0].id, 23);
+    assert!(h.state.playback.flashes().iter().any(|f| f.id == 2));
     // The parameters are checked.
     for (params, word) in [
         (
@@ -656,6 +657,43 @@ fn a_flash_comes_and_goes_by_the_clock() {
     // Not an edit.
     assert_eq!(h.session.revision(), before.0);
     assert_eq!(*h.session.project(), before.1);
+}
+
+/// The cap is on flashes at once: twenty that follow one another over ten seconds are all
+/// kept for the film, and a live flash that is over goes when the next one comes.
+#[test]
+fn the_flash_cap_counts_flashes_at_once() {
+    let mut h = host();
+    for i in 0..20 {
+        let r = run(
+            &mut h,
+            "effect.flash",
+            json!({"position": [0, 1, 0], "color": [1, 1, 1], "intensity": 100, "range_m": 2,
+                   "seconds": 0.2, "start_s": i as f64 * 0.5}),
+        )
+        .unwrap();
+        assert!(r.get("note").is_none(), "{r}");
+    }
+    assert_eq!(h.state.playback.flashes().len(), 20, "none overlaps another");
+    // Live: one at the clock now, over a second later; the next one drops it.
+    h.state.playback.clock = 30.0;
+    let live = run(
+        &mut h,
+        "effect.flash",
+        json!({"position": [0, 1, 0], "color": [1, 1, 1], "intensity": 100, "range_m": 2}),
+    )
+    .unwrap();
+    assert_eq!(h.state.playback.flashes().len(), 21);
+    h.state.playback.clock = 31.0;
+    run(
+        &mut h,
+        "effect.flash",
+        json!({"position": [0, 1, 0], "color": [1, 1, 1], "intensity": 100, "range_m": 2}),
+    )
+    .unwrap();
+    let ids: Vec<u64> = h.state.playback.flashes().iter().map(|f| f.id).collect();
+    assert_eq!(ids.len(), 21, "{ids:?}");
+    assert!(!ids.contains(&live["id"].as_u64().unwrap()), "the live one is over");
 }
 
 /// Pictures that draw nothing and remember what they were asked for.
