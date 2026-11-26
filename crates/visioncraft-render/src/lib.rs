@@ -4549,6 +4549,7 @@ impl Renderer {
                     rect,
                     coverage,
                     distance,
+                    sea: false,
                 };
                 if surface.usable() {
                     water_seen.push(Seen {

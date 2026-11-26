@@ -423,6 +423,7 @@ impl Renderer {
             rect: sight.rect(size).padded(pad, size),
             coverage: coverage as f32,
             distance: sight.distance,
+            sea: true,
         })
     }
 

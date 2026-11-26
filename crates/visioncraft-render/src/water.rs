@@ -15,13 +15,16 @@
 //!   [`MATCH_M`] of the other's height: no water samples a layer that is not its own, outside
 //!   that layer's scissor and black. A surface of a merged plane further than [`MATCH_M`] from
 //!   its height finds no layer and reports its plane's fallback tier.
-//! - **Score**: the share of the render target the plane covers (its rectangle's area; for the
-//!   sea the share of the rays that met it) times 1 + nearness (1 at the eye, 0.5 at 10 m,
-//!   towards 0 far off). A near small pond outranks a far lake of its size on screen; a lake
-//!   several times larger still wins.
+//! - **Score**: the share of the render target the plane covers (its rectangle's area, of the
+//!   part of its box in front of the eye; for the sea the share of the rays that met it) times
+//!   1 + nearness (1 at the eye, 0.5 at 10 m, towards 0 far off). A near small pond outranks a
+//!   far lake of its size on screen; a lake several times larger still wins. The sea is
+//!   preferred: a pond takes its pass only when it scores [`KEEP_RATIO`] times the sea's, so a
+//!   garden pond does not routinely take a coast's only pass at Medium.
 //! - **Tiers**: the best `budget` planes get a mirrored pass each ([`WaterTier::Planar`]), the
 //!   rest reflect the opaque scene of this frame ([`WaterTier::ScreenSpace`]) when screen-space
-//!   reflections are on, else the environment cube ([`WaterTier::Environment`]).
+//!   reflections are on, else the environment cube ([`WaterTier::Environment`]). The sea has
+//!   no screen-space path (sea.wgsl): without a pass it takes the sky.
 //! - **Hysteresis**: a plane that had a pass keeps it over a plane scoring less than
 //!   [`KEEP_RATIO`] times its own, and gives it up only after [`KEEP_FRAMES`] consecutive
 //!   frames of such a challenger: two ponds close in score do not swap while walking.
@@ -96,6 +99,8 @@ pub(crate) struct Surface {
     pub coverage: f32,
     /// From the eye to the nearest of its visible bounds (m).
     pub distance: f32,
+    /// The sea, not a pond: preferred in the ranking, and the sky when it gets no pass.
+    pub sea: bool,
 }
 
 impl Surface {
@@ -129,9 +134,11 @@ pub struct WaterPlane {
 pub(crate) struct Ranking {
     /// This frame's planes, by height.
     pub planes: Vec<WaterPlane>,
-    /// Per surface of the frame: its plane's index in `planes`, and its height.
+    /// Per surface of the frame: its plane's index in `planes`, its height, and whether it is
+    /// the sea.
     owner: Vec<u16>,
     heights: Vec<f32>,
+    seas: Vec<bool>,
     /// Per plane: the heights its surfaces span.
     spans: Vec<Span>,
     /// Last frame's planes' heights (`Span::settle`).
@@ -157,12 +164,15 @@ struct Span {
     hi: f32,
     largest: f32,
     at: f32,
+    /// The sea is one of its surfaces.
+    sea: bool,
 }
 
 impl Span {
     fn merge(&mut self, other: Span) {
         self.lo = self.lo.min(other.lo);
         self.hi = self.hi.max(other.hi);
+        self.sea |= other.sea;
         if other.largest > self.largest {
             self.largest = other.largest;
             self.at = other.at;
@@ -259,6 +269,8 @@ impl Ranking {
         self.owner.resize(surfaces.len(), 0);
         self.heights.clear();
         self.heights.extend(surfaces.iter().map(|s| s.height));
+        self.seas.clear();
+        self.seas.extend(surfaces.iter().map(|s| s.sea));
         self.order.clear();
         self.order.extend(0..surfaces.len());
         self.order.sort_by(|&a, &b| {
@@ -287,6 +299,7 @@ impl Ranking {
                     hi: surface.height,
                     largest: f32::NEG_INFINITY,
                     at: surface.height,
+                    sea: false,
                 });
             }
             let i = self.planes.len() - 1;
@@ -302,6 +315,7 @@ impl Ranking {
                 hi: surface.height,
                 largest: surface.coverage,
                 at: surface.height,
+                sea: surface.sea,
             });
             self.owner[s] = i as u16;
         }
@@ -359,14 +373,20 @@ impl Ranking {
 
     /// How the surface `s` is reflected after the last [`Ranking::rank`]: its plane's tier, but
     /// a surface further than [`MATCH_M`] from its plane's height finds no layer in the shaders
-    /// and takes the fallback.
+    /// and takes the fallback, and the sea without a layer takes the sky (sea.wgsl has no
+    /// screen-space path).
     pub fn tier_of(&self, s: usize) -> WaterTier {
         let i = self.owner[s] as usize;
-        match self.tiers[i] {
+        let tier = match self.tiers[i] {
             WaterTier::Planar if (self.heights[s] - self.planes[i].height).abs() >= MATCH_M => {
                 self.fallback.unwrap_or(WaterTier::Environment)
             }
             t => t,
+        };
+        if self.seas[s] && tier == WaterTier::ScreenSpace {
+            WaterTier::Environment
+        } else {
+            tier
         }
     }
 
@@ -380,9 +400,9 @@ impl Ranking {
         })
     }
 
-    /// The best `budget` planes get a pass. An incumbent outside that selection keeps its pass
-    /// over the weakest newcomer until that one scores [`KEEP_RATIO`] times its own for
-    /// [`KEEP_FRAMES`] consecutive frames.
+    /// The best `budget` planes get a pass, the sea's score counting [`KEEP_RATIO`] times. An
+    /// incumbent outside that selection keeps its pass over the weakest newcomer until that one
+    /// scores [`KEEP_RATIO`] times its own for [`KEEP_FRAMES`] consecutive frames.
     fn assign(&mut self, n: usize, budget: u32, screen_space: bool) {
         let fallback = if screen_space {
             WaterTier::ScreenSpace
@@ -392,6 +412,7 @@ impl Ranking {
         self.fallback = Some(fallback);
         let Ranking {
             planes,
+            spans,
             tiers,
             held,
             order,
@@ -399,6 +420,9 @@ impl Ranking {
             streaks,
             ..
         } = self;
+        // What a pass is worth in the ranking: a pond has to score KEEP_RATIO times the sea's
+        // to take it.
+        let worth = |i: usize| planes[i].score * if spans[i].sea { KEEP_RATIO } else { 1.0 };
         tiers.clear();
         tiers.resize(n, fallback);
         chosen.clear();
@@ -407,7 +431,7 @@ impl Ranking {
         // Best first: by score, then by plane (the order of `planes`: by height).
         order.clear();
         order.extend(0..n);
-        order.sort_by(|&a, &b| planes[b].score.total_cmp(&planes[a].score).then(a.cmp(&b)));
+        order.sort_by(|&a, &b| worth(b).total_cmp(&worth(a)).then(a.cmp(&b)));
         for &i in &order[..take] {
             chosen[i] = true;
         }
@@ -421,11 +445,11 @@ impl Ranking {
                 // The weakest chosen plane that kept no pass last frame: the one `i` displaces.
                 let weak = (0..n)
                     .filter(|&j| chosen[j] && incumbent(j).is_none())
-                    .min_by(|&a, &b| planes[a].score.total_cmp(&planes[b].score));
+                    .min_by(|&a, &b| worth(a).total_cmp(&worth(b)));
                 let Some(w) = weak else {
                     continue;
                 };
-                let clearly_better = planes[w].score >= KEEP_RATIO * planes[i].score;
+                let clearly_better = worth(w) >= KEEP_RATIO * worth(i);
                 let streak = if clearly_better { streak + 1 } else { 0 };
                 streaks.push((key(planes[i].height), streak));
                 if streak >= KEEP_FRAMES {
@@ -470,38 +494,71 @@ fn key(height: f32) -> i32 {
     (height * 100.0).round() as i32
 }
 
-/// Where the box shows on a render target of `size` (pixels from its top left): the whole
-/// target when a corner is behind or beside the eye.
-pub(crate) fn screen_rect(view_proj: Mat4, (lo, hi): (Vec3, Vec3), size: (u32, u32)) -> Rect {
-    let (w, h) = (size.0 as f32, size.1 as f32);
+/// The corner `i` (0..8) of the box.
+fn corner((lo, hi): (Vec3, Vec3), i: usize) -> Vec3 {
+    Vec3::new(
+        if i & 1 == 0 { lo.x } else { hi.x },
+        if i & 2 == 0 { lo.y } else { hi.y },
+        if i & 4 == 0 { lo.z } else { hi.z },
+    )
+}
+
+/// Where the part of the box in front of the eye shows on a render target of `size` (pixels
+/// from its top left): the box is clipped to just in front of the eye's plane (its corners
+/// there, and where its 12 edges cross that plane) and the clipped points projected, so a pond
+/// reaching behind the eye covers the part of the view it reaches into, not the whole of it.
+/// The whole target when the projection breaks down (a non-finite matrix).
+pub(crate) fn screen_rect(view_proj: Mat4, b: (Vec3, Vec3), size: (u32, u32)) -> Rect {
+    /// Clip-space w the box is clipped at: points nearer project far off the target and are
+    /// cut to its edge.
+    const NEAR_W: f32 = 1e-3;
+    let clip: [glam::Vec4; 8] = std::array::from_fn(|i| view_proj * corner(b, i).extend(1.0));
+    if clip.iter().any(|p| p.w.is_nan()) {
+        return Rect::whole(size);
+    }
     let mut rect = Rect::default();
     for i in 0..8 {
-        let c = Vec3::new(
-            if i & 1 == 0 { lo.x } else { hi.x },
-            if i & 2 == 0 { lo.y } else { hi.y },
-            if i & 4 == 0 { lo.z } else { hi.z },
-        );
-        let p = view_proj * c.extend(1.0);
-        if p.w.is_nan() || p.w <= 1e-4 {
-            return Rect::whole(size);
+        if clip[i].w > NEAR_W {
+            match point_rect(clip[i], size) {
+                Some(r) => rect = rect.union(r),
+                None => return Rect::whole(size),
+            }
         }
-        let x = (p.x / p.w * 0.5 + 0.5) * w;
-        let y = (0.5 - p.y / p.w * 0.5) * h;
-        if !(x.is_finite() && y.is_finite()) {
-            return Rect::whole(size);
+        // The edges from this corner along +x, +y and +z that cross the plane.
+        for bit in [1, 2, 4] {
+            let (a, c) = (clip[i], clip[i | bit]);
+            if i & bit == 0 && (a.w > NEAR_W) != (c.w > NEAR_W) {
+                let p = a + (c - a) * ((NEAR_W - a.w) / (c.w - a.w));
+                match point_rect(p, size) {
+                    Some(r) => rect = rect.union(r),
+                    None => return Rect::whole(size),
+                }
+            }
         }
-        let x0 = x.floor().clamp(0.0, w) as u32;
-        let y0 = y.floor().clamp(0.0, h) as u32;
-        let x1 = (x.ceil().clamp(0.0, w) as u32).max(x0 + 1).min(size.0);
-        let y1 = (y.ceil().clamp(0.0, h) as u32).max(y0 + 1).min(size.1);
-        rect = rect.union(Rect {
-            x: x0,
-            y: y0,
-            w: x1 - x0,
-            h: y1 - y0,
-        });
     }
     rect
+}
+
+/// The pixel a clip-space point in front of the eye lands on, cut to the target (`None`: not a
+/// number).
+fn point_rect(p: glam::Vec4, size: (u32, u32)) -> Option<Rect> {
+    let (w, h) = (size.0 as f32, size.1 as f32);
+    let x = (p.x / p.w * 0.5 + 0.5) * w;
+    let y = (0.5 - p.y / p.w * 0.5) * h;
+    if !(x.is_finite() && y.is_finite()) {
+        return None;
+    }
+    // A point past the right or bottom edge lands on the last pixel, not on none.
+    let x0 = x.floor().clamp(0.0, (w - 1.0).max(0.0)) as u32;
+    let y0 = y.floor().clamp(0.0, (h - 1.0).max(0.0)) as u32;
+    let x1 = (x.ceil().clamp(0.0, w) as u32).max(x0 + 1).min(size.0);
+    let y1 = (y.ceil().clamp(0.0, h) as u32).max(y0 + 1).min(size.1);
+    Some(Rect {
+        x: x0,
+        y: y0,
+        w: x1 - x0,
+        h: y1 - y0,
+    })
 }
 
 /// How far the ripples can shift a surface's lookup, in pixels, on a target of `size`: the
@@ -540,6 +597,14 @@ mod tests {
             },
             coverage,
             distance,
+            sea: false,
+        }
+    }
+
+    fn sea(height: f32, coverage: f32, distance: f32) -> Surface {
+        Surface {
+            sea: true,
+            ..surface(height, coverage, distance)
         }
     }
 
@@ -778,7 +843,7 @@ mod tests {
     fn the_sea_counts_as_a_plane() {
         let mut r = Ranking::default();
         // The sea at 0 m covering a third of the view (its rays), a pond at 1.5 m.
-        let (sea, pond) = (surface(0.0, 0.3, 8.0), surface(1.5, 0.1, 3.0));
+        let (sea, pond) = (sea(0.0, 0.3, 8.0), surface(1.5, 0.1, 3.0));
         assert_eq!(
             rank(&mut r, &[sea, pond], 1, true),
             [WaterTier::Planar, WaterTier::ScreenSpace]
@@ -812,7 +877,7 @@ mod tests {
     }
 
     #[test]
-    fn the_screen_rect_holds_the_box_and_the_whole_target_behind_the_eye() {
+    fn the_screen_rect_holds_the_box_and_its_front_part_behind_the_eye() {
         let cam = Mat4::look_at_rh(Vec3::new(0.0, 1.6, 7.5), Vec3::ZERO, Vec3::Y);
         let proj = Mat4::perspective_rh(50f32.to_radians(), 16.0 / 9.0, 0.1, 1000.0);
         let view_proj = proj * cam;
@@ -845,13 +910,22 @@ mod tests {
                 "corner {i}: {py} vs {rect:?}"
             );
         }
-        // A box reaching behind the eye covers the whole target.
+        // A box reaching behind the eye, below it: its front part fills the bottom of the view
+        // from edge to edge (where it reaches the eye's plane), not the whole target.
         let behind = screen_rect(
             view_proj,
             (Vec3::new(-1.0, 0.0, 6.0), Vec3::new(1.0, 1.0, 9.0)),
             SIZE,
         );
-        assert_eq!(behind, Rect::whole(SIZE));
+        assert_eq!((behind.x, behind.w), (0, SIZE.0), "{behind:?}");
+        assert_eq!(behind.y + behind.h, SIZE.1, "{behind:?}");
+        assert!(behind.y > 170 && behind.y < 200, "{behind:?}");
+        // Nothing projects: the whole target.
+        let broken = Mat4::from_cols_array(&[f32::NAN; 16]);
+        assert_eq!(
+            screen_rect(broken, (Vec3::ZERO, Vec3::ONE), SIZE),
+            Rect::whole(SIZE)
+        );
         let project = |p: Vec3| {
             let c = view_proj * p.extend(1.0);
             (c.x / c.w * 0.5 + 0.5, 0.5 - c.y / c.w * 0.5)
@@ -1048,5 +1122,61 @@ mod tests {
         // Once the area at 0.03 m is gone the plane moves to the one left.
         rank(&mut r, &[surface(0.0, 0.3, 5.0), b], 1, true);
         assert_eq!(r.planes[0].height, 0.0);
+    }
+
+    #[test]
+    fn an_unbudgeted_sea_takes_the_sky_and_ponds_screen_space() {
+        let mut r = Ranking::default();
+        let (sea, pond) = (sea(0.0, 0.1, 50.0), surface(1.5, 0.3, 3.0));
+        rank(&mut r, &[sea, pond], 1, true);
+        assert_eq!(
+            (r.tier_of(0), r.tier_of(1)),
+            (WaterTier::Environment, WaterTier::Planar)
+        );
+        // No pass at all: a pond at the sea's level shares its plane and marches the screen,
+        // the sea (sea.wgsl has no screen-space path) takes the sky.
+        let shore = surface(0.01, 0.05, 5.0);
+        rank(&mut r, &[sea, pond, shore], 0, true);
+        assert_eq!(r.plane_of(0), r.plane_of(2));
+        assert_eq!(
+            (r.tier_of(0), r.tier_of(1), r.tier_of(2)),
+            (
+                WaterTier::Environment,
+                WaterTier::ScreenSpace,
+                WaterTier::ScreenSpace
+            )
+        );
+    }
+
+    #[test]
+    fn the_sea_keeps_its_pass_over_a_pond_unless_the_pond_scores_1_3_times_its_own() {
+        // The sea over 0.3 of the view, 20 m off: 0.3 (1 + 1/3) = 0.4. A pond at the eye
+        // scores twice its coverage.
+        let s = sea(0.0, 0.3, 20.0);
+        for (pond, winner) in [(0.24, 0), (0.25, 0), (0.27, 1)] {
+            let mut r = Ranking::default();
+            rank(&mut r, &[s, surface(1.0, pond, 0.0)], 1, true);
+            let planar = r.tiers.iter().position(|t| *t == WaterTier::Planar);
+            assert_eq!(planar, Some(winner), "pond {pond}: {:?}", r.planes);
+        }
+    }
+
+    #[test]
+    fn a_box_reaching_behind_the_eye_covers_what_shows_of_it() {
+        // Standing at the edge of a pond 4 m wide, a metre of it behind the eye, looking ahead
+        // and down: it shows over the bottom of the view only.
+        let eye = Vec3::new(0.0, 1.6, 0.0);
+        let cam = Mat4::look_at_rh(eye, Vec3::new(0.0, 0.0, -5.0), Vec3::Y);
+        let proj = Mat4::perspective_rh(50f32.to_radians(), 16.0 / 9.0, 0.1, 1000.0);
+        let rect = screen_rect(
+            proj * cam,
+            (Vec3::new(-2.0, 0.0, -3.0), Vec3::new(2.0, 0.0, 1.0)),
+            SIZE,
+        );
+        assert_eq!((rect.x, rect.w), (0, SIZE.0), "{rect:?}");
+        assert_eq!(rect.y + rect.h, SIZE.1, "{rect:?}");
+        assert!(rect.y > 180 && rect.y < 195, "{rect:?}");
+        let coverage = rect.area() as f32 / (SIZE.0 * SIZE.1) as f32;
+        assert!(coverage > 0.25 && coverage < 0.35, "{coverage}");
     }
 }
