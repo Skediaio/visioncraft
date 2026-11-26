@@ -755,6 +755,8 @@ struct Item {
     follows_reach: bool,
     /// Casts shadows with the level it is drawn with (`set_item_shadow_exact`).
     shadow_exact: bool,
+    /// Casts shadows into the cascades from this index on (`set_item_shadow_cascades`); 0: all.
+    shadow_from: u8,
     /// Casts shadows past its finest level with this mesh (a tree's few untextured blobs,
     /// dithered by the density in its UVs) instead of its impostor's cards.
     shadow_caster: Option<MeshId>,
@@ -1383,6 +1385,9 @@ enum Pass {
     Shadow {
         far: bool,
         coarse: bool,
+        /// The cascade, to leave out the items that cast into later ones only
+        /// (`set_item_shadow_cascades`); `usize::MAX` for the snow cover map, which takes all.
+        cascade: usize,
     },
     Depth,
     Forward,
@@ -3341,6 +3346,16 @@ impl Renderer {
         }
     }
 
+    /// The item casts shadows into the cascades from index `first` on only: 0 (the default)
+    /// all of them, a `first` past the last cascade none at all. For far cells of a large scene,
+    /// which need no shadow in the metres a near cascade covers. Which cascades a frame
+    /// refreshes does not depend on it; the snow cover map takes every item as before.
+    pub fn set_item_shadow_cascades(&mut self, item: ItemId, first: u8) {
+        if let Some(Some(it)) = self.items.get_mut(item.0 as usize) {
+            it.shadow_from = first;
+        }
+    }
+
     /// A mesh that casts the item's shadow in every level past the finest (`add_mesh`, same
     /// vertex layout, `uv.x` the share of shadow texels it covers).
     pub fn set_item_shadow_caster(&mut self, item: ItemId, mesh: MeshId) {
@@ -3820,6 +3835,7 @@ impl Renderer {
             size: 0.0,
             impostor: None,
             shadow_exact: terrain,
+            shadow_from: 0,
             shadow_caster: None,
             cull_fade: 0.0,
             follows_reach: false,
@@ -4396,7 +4412,11 @@ impl Renderer {
                     plan(
                         cascades.view_proj[c],
                         false,
-                        Pass::Shadow { far, coarse: c > 0 },
+                        Pass::Shadow {
+                            far,
+                            coarse: c > 0,
+                            cascade: c,
+                        },
                         None,
                     )
                 })
@@ -4414,6 +4434,7 @@ impl Renderer {
                     Pass::Shadow {
                         far: false,
                         coarse: false,
+                        cascade: usize::MAX,
                     },
                     None,
                 )
@@ -5047,6 +5068,7 @@ impl Renderer {
             | Pass::Shadow {
                 far: false,
                 coarse: false,
+                ..
             } => (cluster.lod + 1).min(levels - 1),
             // A tree at its finest level stands near the eye, and so does its shadow: its
             // impostor's two cards cast the side view's limbs metres long over the lawn there
@@ -5137,6 +5159,11 @@ impl Renderer {
         let mut levels: Vec<Option<u8>> = Vec::new();
         for (i, item) in self.items.iter().enumerate() {
             let Some(item) = item else { continue };
+            // Out of this cascade altogether (`set_item_shadow_cascades`): its clusters are
+            // not planned.
+            if matches!(kind, Pass::Shadow { cascade, .. } if cascade < item.shadow_from as usize) {
+                continue;
+            }
             let seen = &seen[offsets[i] as usize..offsets[i + 1] as usize];
             if !seen.iter().any(|&s| s) {
                 continue;
@@ -9832,6 +9859,69 @@ mod tests {
             "hand-overs dissolved on the way: {dissolving}"
         );
         assert!(skipped > 1000, "clusters past the last level: {skipped}");
+    }
+
+    /// An item that casts from cascade 1 on adds no draw to cascade 0 and the same draws as
+    /// before to the later ones; an item without the setting is as it was.
+    #[test]
+    fn an_item_can_stay_out_of_the_near_cascades() {
+        let (device, queue) = pollster::block_on(headless_device()).expect("device");
+        let mut r = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        r.resize(64, 36);
+        let mut m = demo::MeshData::default();
+        m.add_box(Vec3::new(-0.5, 0.0, -0.5), Vec3::new(0.5, 1.5, 0.5));
+        let mesh = r.add_mesh(&m.mesh()).expect("mesh");
+        let material = r.add_material(&Material::default());
+        let at: Vec<Mat4> = (0..40)
+            .map(|i| Mat4::from_translation(Vec3::new(3.0 * i as f32, 0.0, 0.0)))
+            .collect();
+        let plain = r.add_item(mesh, material, &at);
+        let late = r.add_item(mesh, material, &at);
+        r.set_item_shadow_cascades(late, 1);
+        // Among the boxes, so the near cascade has them in view.
+        let (view, proj, eye) =
+            demo::camera(Vec3::new(60.0, 3.0, 4.0), Vec3::new(60.0, 0.5, 0.0), 1.0);
+        r.set_camera(view, proj, eye);
+        r.update_bounds();
+        r.update_lods();
+        let draws = |r: &mut Renderer, cascade: usize| {
+            r.visibility.follow(&r.items);
+            let mut visibility = std::mem::take(&mut r.visibility);
+            let n = r
+                .plan_items(
+                    proj * view,
+                    false,
+                    Pass::Shadow {
+                        far: false,
+                        coarse: cascade > 0,
+                        cascade,
+                    },
+                    None,
+                    &mut batch::GatherList::default(),
+                    &mut visibility,
+                )
+                .len();
+            r.visibility = visibility;
+            n
+        };
+        let (far0, far1) = (draws(&mut r, 0), draws(&mut r, 1));
+        assert_eq!(
+            draws(&mut r, 2),
+            far1,
+            "the setting changes no later cascade"
+        );
+        // Both items share mesh and texture set: one batch per cascade.
+        assert_eq!((far0, far1), (1, 1));
+        r.remove_item(plain);
+        let (late0, late1) = (draws(&mut r, 0), draws(&mut r, 1));
+        assert_eq!(late0, 0, "nothing in cascade 0");
+        assert_eq!(late1, far1, "the later cascades as before");
+        r.set_item_shadow_cascades(late, u8::MAX);
+        assert_eq!(
+            draws(&mut r, 1),
+            0,
+            "past the last cascade: no shadow at all"
+        );
     }
 
     /// The plane test culls exactly what testing the eight corners culled.
