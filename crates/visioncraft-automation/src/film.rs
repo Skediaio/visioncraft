@@ -282,39 +282,46 @@ pub fn render_with_progress(
     let fps = f64::from(film.fps);
     // A flash's `frames` last frames of the film's rate, so the same frames show it every time.
     host.state().film_fps = Some(fps);
-    let mut last = Value::Null;
-    for (n, i) in frames.iter().enumerate() {
-        let t = *i as f64 / fps;
-        let f = tl.camera_at(t as f32).map_err(|e| format!("{name}: {e}"))?;
-        let mut p = frame_params(&f, t, width, height, quality);
-        p.insert(
-            "path".into(),
-            dir.join(format!("frame_{n:05}.png"))
-                .to_string_lossy()
-                .into_owned()
-                .into(),
-        );
-        // A film's photo frames average fewer samples than a still's: 8 unless told.
-        if quality == "photo" && a.get("samples").is_none() {
-            p.insert("samples".into(), FILM_PHOTO_SAMPLES.into());
-        }
-        for key in [
-            "samples",
-            "aperture",
-            "focus_m",
-            "focus_point",
-            "shutter_s",
-            "vignette",
-            "grain",
-        ] {
-            if let Some(v) = a.get(key) {
-                p.insert(key.into(), v.clone());
+    // The frames, then the film's rate goes with the film whatever happened to them.
+    let mut draw = || -> Result<Value, String> {
+        let mut last = Value::Null;
+        for (n, i) in frames.iter().enumerate() {
+            let t = *i as f64 / fps;
+            let f = tl.camera_at(t as f32).map_err(|e| format!("{name}: {e}"))?;
+            let mut p = frame_params(&f, t, width, height, quality);
+            p.insert(
+                "path".into(),
+                dir.join(format!("frame_{n:05}.png"))
+                    .to_string_lossy()
+                    .into_owned()
+                    .into(),
+            );
+            // A film's photo frames average fewer samples than a still's: 8 unless told.
+            if quality == "photo" && a.get("samples").is_none() {
+                p.insert("samples".into(), FILM_PHOTO_SAMPLES.into());
             }
+            for key in [
+                "samples",
+                "aperture",
+                "focus_m",
+                "focus_point",
+                "shutter_s",
+                "vignette",
+                "grain",
+            ] {
+                if let Some(v) = a.get(key) {
+                    p.insert(key.into(), v.clone());
+                }
+            }
+            last = commands::execute(host, "view.render", &Value::Object(p))
+                .map_err(|e| format!("{name}: frame {i} (t = {t:.2} s): {e}"))?;
+            progress(n + 1, frames.len());
         }
-        last = commands::execute(host, "view.render", &Value::Object(p))
-            .map_err(|e| format!("{name}: frame {i} (t = {t:.2} s): {e}"))?;
-        progress(n + 1, frames.len());
-    }
+        Ok(last)
+    };
+    let drawn = draw();
+    host.state().film_fps = None;
+    let last = drawn?;
     let out_fps = fps / every as f64;
     let first_t = frames[0] as f64 / fps;
     let mut sheet_part = Value::Null;
@@ -344,7 +351,6 @@ pub fn render_with_progress(
         sheet_part = sheet_json(&images, &times, &shots, 320.min(width as u32).max(64))
             .map_err(|e| format!("{name}: {e}"))?;
     }
-    host.state().film_fps = None;
     let mut result = json!({
         "dir": dir.display().to_string(), "frames": frames.len(),
         "framePattern": "frame_%05d.png", "fps": out_fps,

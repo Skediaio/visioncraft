@@ -912,6 +912,62 @@ fn a_still_is_sixty_frames_a_second() {
     assert_eq!(h.state.playback.fps, 30.0, "the host's own rate is left alone");
 }
 
+/// Pictures that fail from the third on, and remember what they were asked for.
+struct FailingFrom3(std::rc::Rc<std::cell::RefCell<Vec<RenderRequest>>>);
+
+impl visioncraft_automation::Pictures for FailingFrom3 {
+    fn render(
+        &mut self,
+        _project: &Project,
+        _models: &BTreeMap<String, visioncraft_automation::LoadedModel>,
+        request: &RenderRequest,
+    ) -> Result<Rendered, String> {
+        let mut asked = self.0.borrow_mut();
+        asked.push(request.clone());
+        if asked.len() >= 3 {
+            return Err("the GPU is gone".into());
+        }
+        Ok(Rendered {
+            png: one_pixel_png(),
+            info: json!({"renderer": "test"}),
+        })
+    }
+}
+
+/// A film that fails half way leaves no film rate behind: the next still is 60 a second.
+#[test]
+fn a_failed_film_leaves_no_rate_behind() {
+    let mut h = host();
+    let requests = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    h.pictures = Some(Box::new(FailingFrom3(requests.clone())));
+    h.session
+        .run("film.add", json!({"name": "F", "fps": 10}))
+        .unwrap();
+    h.session
+        .run(
+            "film.add_shot",
+            json!({"id": "f1", "shot": {"kind": "hold", "eye": [0, 1, 4], "target": [0, 0, 0], "duration_s": 0.5}}),
+        )
+        .unwrap();
+    let out = dir("failed-film");
+    let e = commands::execute(
+        &mut h,
+        "film.render",
+        &json!({"id": "f1", "dir": out.join("a"), "width": 16, "height": 16}),
+    )
+    .unwrap_err();
+    assert!(e.contains("the GPU is gone"), "{e}");
+    assert_eq!(requests.borrow()[1].fps, 10.0, "the film's frames are the film's rate");
+    assert_eq!(h.state.playback.fps, 60.0);
+    // The next still (it fails too, but is asked for at 60 a second).
+    let _ = run(
+        &mut h,
+        "view.render",
+        json!({"width": 16, "height": 16, "path": out.join("still.png")}),
+    );
+    assert_eq!(requests.borrow().last().unwrap().fps, 60.0);
+}
+
 fn played_of(playback: &visioncraft_core::Playback) -> Vec<visioncraft_core::Played> {
     let spot = visioncraft_core::Spot {
         planting: "g1",
