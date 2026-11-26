@@ -30,6 +30,7 @@ pub mod photo;
 pub mod plant_ground;
 pub mod plant_light;
 pub mod planting;
+pub mod playback;
 pub mod presets;
 pub mod project;
 pub mod quantities;
@@ -62,7 +63,7 @@ pub use commands::examples::{EXAMPLES, example, example_file, is_example_source}
 pub use export::export_presets;
 pub use film::{Film, Shot};
 pub use import::{import_3dcraft, import_obj};
-pub use keyframes::{Channel, Clip, Interpolation, Trs};
+pub use keyframes::{Channel, Clip, Interpolation, Played, Rig, Sampler, Trs};
 pub use light::{
     Light, LightKind, LightSpec, kelvin_to_linear_rgb, lights_for_placement, lights_for_placements,
 };
@@ -81,6 +82,7 @@ pub use planting::{
     evaluate_avoiding, evaluate_surface_fill, lawn_area, lawn_scatter, lawn_scatter_blended,
     lawn_scatter_within,
 };
+pub use playback::{ClipTarget, Flash, Life, MAX_FLASHES, Play, Playback, Spot, clip_index};
 pub use presets::{PlantingPreset, planting_presets};
 pub use project::{
     CLOUD_ALTITUDE_M, CLOUD_ALTITUDES_M, CloudBlend, CloudKind, CloudShape, Clouds, CustomSpecies,

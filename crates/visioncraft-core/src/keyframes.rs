@@ -258,12 +258,30 @@ impl Channel {
 /// after the last the end keys hold, unless `looped` takes `t` modulo the duration. A sampled
 /// rotation is always a unit quaternion.
 pub fn sample(clip: &Clip, t: f32, looped: bool, rest: &[Trs]) -> Vec<Trs> {
-    let mut out = rest.to_vec();
-    let t = if looped && t.is_finite() && clip.duration > 0.0 {
+    let mut out = Vec::new();
+    sample_into(clip, t, looped, rest, &mut out);
+    out
+}
+
+/// [`sample`] into `out`, which is filled afresh: no new allocation once it has its length.
+pub fn sample_into(clip: &Clip, t: f32, looped: bool, rest: &[Trs], out: &mut Vec<Trs>) {
+    out.clear();
+    out.extend_from_slice(rest);
+    apply(clip, wrap(clip, t, looped), out);
+}
+
+/// `t` as the clip takes it: modulo its duration when looped.
+fn wrap(clip: &Clip, t: f32, looped: bool) -> f32 {
+    if looped && t.is_finite() && clip.duration > 0.0 {
         t.rem_euclid(clip.duration)
     } else {
         t
-    };
+    }
+}
+
+/// The channels of `clip` over the transforms in `out`, each over what the channels before it
+/// left (so of two clips the one that started later wins where they share a property).
+fn apply(clip: &Clip, t: f32, out: &mut [Trs]) {
     for ch in &clip.channels {
         let Some(trs) = out.get_mut(ch.node) else {
             continue;
@@ -275,7 +293,6 @@ pub fn sample(clip: &Clip, t: f32, looped: bool, rest: &[Trs]) -> Vec<Trs> {
             Path::Scale => trs.scale = [v[0], v[1], v[2]],
         }
     }
-    out
 }
 
 fn lerp(a: [f32; 4], b: [f32; 4], u: f32) -> [f32; 4] {
@@ -377,19 +394,38 @@ fn mul(a: &Matrix, b: &Matrix) -> Matrix {
 }
 
 /// The model-space matrix of each node: its own transform after its parent chain's. `parents`
-/// names each node's parent (`None`: a root); a parent outside the slice counts as a root.
+/// names each node's parent (`None`: a root); a parent outside the slice counts as a root. A
+/// parent may come after its child.
 pub fn model_space(parents: &[Option<usize>], local: &[Trs]) -> Vec<Matrix> {
+    let mut out = Vec::new();
+    let mut done = Vec::new();
+    let mut chain = Vec::new();
+    model_space_into(parents, local, &mut out, &mut done, &mut chain);
+    out
+}
+
+/// [`model_space`] into `out` (its length is `parents.len()`), with `done` and `chain` as scratch:
+/// no new allocation once they have their lengths.
+fn model_space_into(
+    parents: &[Option<usize>],
+    local: &[Trs],
+    out: &mut Vec<Matrix>,
+    done: &mut Vec<bool>,
+    chain: &mut Vec<usize>,
+) {
     let n = parents.len().min(local.len());
     let root = |i: usize| parents[i].filter(|p| *p < n);
-    let mut out = vec![IDENTITY; n];
-    let mut done = vec![false; n];
+    out.clear();
+    out.resize(n, IDENTITY);
+    done.clear();
+    done.resize(n, false);
     for i in 0..n {
         if done[i] {
             continue;
         }
         // The chain up from `i` that is not computed yet, bottom first; one that loops back on
         // itself (not a hierarchy) stops at the node it meets.
-        let mut chain = Vec::new();
+        chain.clear();
         let mut at = Some(i);
         while let Some(k) = at
             && !done[k]
@@ -405,7 +441,6 @@ pub fn model_space(parents: &[Option<usize>], local: &[Trs]) -> Vec<Matrix> {
             };
         }
     }
-    out
 }
 
 /// A model's nodes as far as animation goes: each one's rest transform and parent, and the
@@ -416,6 +451,48 @@ pub struct Rig {
     pub rest: Vec<Trs>,
     pub parents: Vec<Option<usize>>,
     pub clips: Vec<Clip>,
+}
+
+/// A clip of a [`Rig`] playing: which one, from which time on the clock, and whether it loops.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Played {
+    pub clip: usize,
+    /// Seconds on the clock when the clip started.
+    pub start_s: f32,
+    pub looped: bool,
+}
+
+/// Scratch space for posing a [`Rig`] frame after frame without allocating.
+#[derive(Default)]
+pub struct Sampler {
+    local: Vec<Trs>,
+    out: Vec<Matrix>,
+    done: Vec<bool>,
+    chain: Vec<usize>,
+}
+
+impl Sampler {
+    /// The model-space matrix of every node of `rig` at clock time `t`, with `plays` playing
+    /// in the order they started: where two of them move the same property, the later one wins.
+    /// A node no clip moves is at rest.
+    pub fn pose(&mut self, rig: &Rig, plays: &[Played], t: f64) -> &[Matrix] {
+        self.local.clear();
+        self.local.extend_from_slice(&rig.rest);
+        for p in plays {
+            if let Some(clip) = rig.clips.get(p.clip) {
+                let at = (t - f64::from(p.start_s)) as f32;
+                apply(clip, wrap(clip, at, p.looped), &mut self.local);
+            }
+        }
+        model_space_into(
+            &rig.parents,
+            &self.local,
+            &mut self.out,
+            &mut self.done,
+            &mut self.chain,
+        );
+        &self.out
+    }
 }
 
 #[cfg(test)]
