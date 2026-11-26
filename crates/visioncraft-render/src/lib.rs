@@ -473,7 +473,11 @@ pub const DEFAULT_SHADOW_RADIUS_M: f32 = 0.03;
 pub const DEFAULT_PCSS_MAX_RADIUS_M: f32 = 0.15;
 
 /// How the sun's cascaded shadow maps are filtered (`Quality::shadow_filter`).
+///
+/// `#[non_exhaustive]`: another filter may be added later (another tap count, a softer mode),
+/// so outside this crate match it with a wildcard; the variants are constructed as ever.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum ShadowFilter {
     /// One hardware comparison tap (2x2 bilinear): the sharpest edge.
     Hard,

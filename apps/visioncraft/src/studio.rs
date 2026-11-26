@@ -423,7 +423,8 @@ pub fn auto_ev(elevation_deg: f32, moon_lux: f32, lamps: bool) -> f32 {
 /// own default, `DEFAULT_PCSS_MAX_RADIUS_M`; `Hard` and the grids have no radius (one given
 /// with them is kept in the filter, where their shaders ignore it: the command refuses the two
 /// together before this). A radius alone goes with the preset's filter: the 16-tap disk's
-/// radius, PCSS's largest. Whatever comes out is sanitized, as a preset is.
+/// radius, PCSS's largest; a filter added to the renderer since (`ShadowFilter` is
+/// non-exhaustive) stays as the preset's. Whatever comes out is sanitized, as a preset is.
 fn picture_shadow_filter(
     filter: Option<PictureShadowFilter>,
     radius_m: Option<f32>,
@@ -438,6 +439,9 @@ fn picture_shadow_filter(
                 ShadowFilter::Pcss { .. } => ShadowFilter::Pcss {
                     max_radius_m: radius_m,
                 },
+                // A filter added since (`ShadowFilter` is non-exhaustive): the preset's, as it
+                // is; the radius is not forced on a filter this crate does not know.
+                _ => preset,
             }
             .sanitized(),
         ),
