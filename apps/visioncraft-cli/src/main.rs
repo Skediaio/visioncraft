@@ -163,10 +163,11 @@ Options:
                   at ULTRA: soft shadows, smooth edges; slower)
   --shadow-filter F  The sun's shadow filter for this picture over the preset's: hard (the
                   sharpest edge), pcf4 or pcf9 (fixed grids a few shadow texels wide) or pcf16
-                  (a disk over --shadow-radius). Default the preset's; pcf9 and pcf16 run as
-                  pcf4 at quality low and medium
-  --shadow-radius M  The penumbra's radius in metres for this picture, 0 to 1: pcf16 alone
-                  spreads its taps over it (an error with another --shadow-filter). Default 0.03
+                  (a disk over --shadow-radius, never narrower than 1.5 shadow texels). Default
+                  the preset's; pcf9 and pcf16 run as pcf4 at quality low and medium
+  --shadow-radius M  The penumbra's radius in metres for this picture, 0 to 1: only pcf16
+                  spreads over it, so it needs --shadow-filter pcf16 or --quality ultra or
+                  photo. Never a hard edge. Default 0.03
 PHOTO_FLAGS
   --animation-s S The animation clock in seconds (wind, water). Default 0";
 

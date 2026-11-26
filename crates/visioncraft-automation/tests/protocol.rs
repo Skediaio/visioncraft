@@ -571,23 +571,29 @@ fn shadow_filter_parameters_are_checked_before_rendering() {
         "view.render: `shadow_radius_m` must be from 0 to 1"
     );
     assert!(error(&mut h, json!({"shadow_radius_m": -0.1})).contains("`shadow_radius_m`"));
-    // A radius is only the 16-tap disk's to spread over: with hard, pcf4 or pcf9 it is refused.
-    for filter in ["hard", "pcf4", "pcf9"] {
-        assert_eq!(
-            error(
-                &mut h,
-                json!({"shadow_filter": filter, "shadow_radius_m": 0.2})
-            ),
-            "view.render: `shadow_radius_m` needs shadow_filter pcf16 (or none)",
-            "{filter}"
-        );
+    // A radius is only the 16-tap disk's to spread over: with hard, pcf4 or pcf9 it is refused,
+    // and alone only ultra and photo filter with 16 taps (low, medium and high do not).
+    let needs_disk =
+        "view.render: `shadow_radius_m` needs a 16-tap filter: quality ultra or photo, or shadow_filter pcf16";
+    for params in [
+        json!({"shadow_radius_m": 0.2}),
+        json!({"quality": "high", "shadow_radius_m": 0.2}),
+        json!({"quality": "low", "shadow_radius_m": 0.0}),
+        json!({"shadow_filter": "hard", "shadow_radius_m": 0.2}),
+        json!({"shadow_filter": "pcf4", "shadow_radius_m": 0.2}),
+        json!({"shadow_filter": "pcf9", "shadow_radius_m": 0.2}),
+        json!({"quality": "ultra", "shadow_filter": "pcf9", "shadow_radius_m": 0.2}),
+    ] {
+        let text = params.to_string();
+        assert_eq!(error(&mut h, params), needs_disk, "{text}");
     }
-    // Valid: on to the renderer, which this host has not; alone or together, at any quality
-    // (a radius alone goes with the preset's filter).
+    // Valid: on to the renderer, which this host has not; alone or together, with a 16-tap
+    // filter (a radius alone goes with the preset's).
     for params in [
         json!({"shadow_filter": "hard"}),
         json!({"shadow_filter": "pcf16", "shadow_radius_m": 0.2}),
         json!({"quality": "photo", "shadow_radius_m": 0.0}),
+        json!({"quality": "ultra", "shadow_radius_m": 0.2}),
         json!({"quality": "low", "shadow_filter": "pcf9"}),
         json!({"quality": "low", "shadow_filter": "pcf16", "shadow_radius_m": 1}),
     ] {

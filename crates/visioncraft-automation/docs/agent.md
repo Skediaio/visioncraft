@@ -310,9 +310,10 @@ smooth edges and leaves without shimmer (seconds to minutes); recipe 41 has the 
 `view.render` also takes `shadow_filter` (`hard`, `pcf4`, `pcf9` or `pcf16`) and
 `shadow_radius_m` (0 to 1) to filter the sun's shadows of that one picture over the preset's: hard
 is the sharp edge, pcf4 and pcf9 fixed grids a few shadow texels wide, pcf16 16 taps spread over
-the radius in metres in the world, the same penumbra in every cascade. Give `shadow_radius_m`
-with pcf16 or alone (never with hard, pcf4 or pcf9: an error); pcf9 and pcf16 run as pcf4 at
-quality low and medium.
+the radius in metres in the world, the same penumbra in every cascade. The disk never gets
+narrower than 1.5 shadow texels, so a radius of 0 is not a hard edge (`hard` is). Give
+`shadow_radius_m` with pcf16, or alone at quality ultra or photo (with hard, pcf4 or pcf9, or
+alone at another quality: an error); pcf9 and pcf16 run as pcf4 at quality low and medium.
 
 Lamps and lit rooms follow the sun: on after sunset at the time shown, off before. `view.set
 {"lights": true}` or `false` fixes them for the project (the window's Lights button does the same),
