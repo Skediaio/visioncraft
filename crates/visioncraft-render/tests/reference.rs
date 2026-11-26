@@ -1195,7 +1195,7 @@ fn pole_shadow_penumbra() {
 /// cascade, so a band in pixels is the same band in the world on either row (same measurement as
 /// `pole_shadow_penumbra`: five rows, the pixels between a tenth and nine tenths of the way
 /// from the shadow to the lit ground, both edges). With PCSS the band at the contact is
-/// well under half the one 6 m from the foot (a plain disk at the widest radius, 6 texels on
+/// under two thirds of the one 6 m from the foot (a plain disk at the widest radius, 6 texels on
 /// both rows, reads about the same on each), and that one is at least 4 px per row; with the
 /// plain 16-tap disk at the presets' radius the two differ by at most 2 px (it does not
 /// harden). And
@@ -1313,7 +1313,7 @@ fn pcss_hardens_at_the_contact() {
     }
     let [pcss, pcf] = measured;
     let [contact, far] = pcss.1;
-    // Well under half: a plain disk at the widest radius reads about the same on both rows.
+    // Under two thirds: a plain disk at the widest radius reads about the same on both rows.
     assert!(
         contact[0] * 1.5 < far[0],
         "pcss: {:?} px per row at the contact, {:?} 6 m from the foot: it does not harden",
@@ -1346,10 +1346,12 @@ fn pcss_hardens_at_the_contact() {
 /// Only `high_pcf16` can catch that detachment: `ultra`'s disk is 1.5 texels of 4.5 cm there,
 /// within the wall's clearance, and `high` runs the unchanged 9-tap grid; both are controls
 /// that the shadow stays dark at the base with every preset.
-/// PCSS on HIGH's maps (`high_pcss`, `ShadowFilter::Pcss`) takes the contact line back to 40 %:
-/// its penumbra is the receiver's distance to its blockers times the sun's disc, millimetres
-/// where the ground lies against the wall, so its disk does not reach past the wall's foot as
-/// pcf16's 1.5 texels do (43 %); further from the wall, where the umbra is, it is no lighter.
+/// PCSS on HIGH's maps (`high_pcss`, `ShadowFilter::Pcss`) reads as `ultra` and `high` do
+/// again, 34 %, where at most 40 % may pass: its penumbra is the receiver's distance to its
+/// blockers times the sun's disc, millimetres where the ground lies against the wall (its
+/// disk's floor, 0.75 texel, stays under the wall's foot), so its disk does not reach into lit
+/// ground as pcf16's 1.5 texels do (43 %); further from the wall, where the umbra is, it is no
+/// lighter.
 #[test]
 fn wall_base_keeps_its_shadow() {
     let (w, h) = (1920, 1080);
