@@ -399,6 +399,12 @@ nothing here is a promise of a date.
 
 - Nothing has been verified on Windows or macOS.
 - Loading still hitches on weak integrated GPUs.
+- Plans and wall photos placed in the desktop app before EXIF orientation was honoured, from a
+  JPEG with an orientation other than 1 (a phone photo shot upright), were sized and cornered in
+  the stored frame; the pixels now come in the displayed frame, so such a wall photo's corners or
+  an underlay's calibration no longer fit. Re-place them; nothing migrates them yet (the web app
+  showed them wrongly before as well). PNG `eXIf` orientation is not read: browsers that honour
+  it turn such a PNG on the web only.
 - Tree crowns still read paler from above than from the side: leaves at the top of a crown face
   the noon sun squarely.
 - Every mesh level of a broadleaf tree now draws its leaves at 0.7 to 1.4 times their real size

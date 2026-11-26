@@ -400,10 +400,11 @@ export async function vc_fetch(url) {
   return new Uint8Array(await r.arrayBuffer());
 }
 // The browser decodes (off the main thread); the pixels come back through a canvas. A JPEG's
-// EXIF orientation is applied (`from-image`, also the browser's default; asked for so it stays),
-// so the pixels and their size are as the picture is displayed: what `image_size` reports.
+// EXIF orientation is applied (`imageOrientation` defaults to `from-image`; not passed, because
+// engines that predate that value reject an unknown one and would fail every decode), so the
+// pixels and their size are as the picture is displayed: what `image_size` reports.
 export async function vc_decode(bytes) {
-  const bmp = await createImageBitmap(new Blob([bytes]), { premultiplyAlpha: 'none', colorSpaceConversion: 'none', imageOrientation: 'from-image' });
+  const bmp = await createImageBitmap(new Blob([bytes]), { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
   const w = bmp.width, h = bmp.height;
   const c = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(w, h) : Object.assign(document.createElement('canvas'), { width: w, height: h });
   const g = c.getContext('2d', { willReadFrequently: true });
