@@ -2304,16 +2304,20 @@ fn wave_slope(p: vec2<f32>) -> vec2<f32> {
 }
 
 // The water plane whose planar reflection covers a surface at `height`: its entry in
-// `g.reflection_planes` (on, and within 5 cm of the surface, as water.rs groups surfaces into
-// planes), else -1.
+// `g.reflection_planes` (on, and the nearest within 5 cm of the surface: water.rs `MATCH_M`,
+// keeping planes 10 cm apart), else -1.
 fn water_plane_at(height: f32) -> i32 {
+    var best = -1;
+    var nearest = 0.05;
     for (var i = 0; i < 4; i++) {
         let p = g.reflection_planes[i];
-        if p.z > 0.5 && abs(height - p.x) < 0.05 {
-            return i;
+        let d = abs(height - p.x);
+        if p.z > 0.5 && d < nearest {
+            best = i;
+            nearest = d;
         }
     }
-    return -1;
+    return best;
 }
 
 // Fraction of light left after `path` metres through water of turbidity

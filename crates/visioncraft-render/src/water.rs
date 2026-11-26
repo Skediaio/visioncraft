@@ -5,10 +5,16 @@
 //! Each frame the visible water surfaces (the parts with a water material, the sea) are
 //! gathered as [`Surface`]s and ranked:
 //!
-//! - **Planes**: sorted by height, a surface joins the plane being built while it is within
-//!   [`GROUP_M`] of the plane's height; so two areas at one level share one plane. The shaders
-//!   match a surface to a plane within 5 cm (scene.wgsl `water`, sea.wgsl), a centimetre more,
-//!   so every surface of a plane is well inside its window.
+//! - **Planes**: sorted by height, a surface joins the group being built while it is within
+//!   [`GROUP_M`] of the group's lowest surface; so two areas at one level share one plane. A
+//!   group lies at the height of its largest surface when it first shows, and keeps last
+//!   frame's height while that still lies among its surfaces: the mirror and the hysteresis key
+//!   do not jump when two areas trade size. The shaders match a surface to the nearest plane
+//!   within [`MATCH_M`] (scene.wgsl `water_plane_at`), so neighbouring groups merge into one
+//!   plane until their heights are [`SEPARATE_M`] apart and no surface of one lies within
+//!   [`MATCH_M`] of the other's height: no water samples a layer that is not its own, outside
+//!   that layer's scissor and black. A surface of a merged plane further than [`MATCH_M`] from
+//!   its height finds no layer and reports its plane's fallback tier.
 //! - **Score**: the share of the render target the plane covers (its rectangle's area; for the
 //!   sea the share of the rays that met it) times 1 + nearness (1 at the eye, 0.5 at 10 m,
 //!   towards 0 far off). A near small pond outranks a far lake of its size on screen; a lake
@@ -26,8 +32,13 @@ use glam::{Mat4, Vec3};
 /// is clamped to it. Far under WebGPU's default `max_texture_array_layers` (256), so the array
 /// target needs no limit of its own.
 pub(crate) const MAX_PLANES: u32 = 4;
-/// A surface joins the plane being built within this distance of the plane's height (m).
+/// A surface joins the group being built within this distance of its lowest surface (m).
 pub(crate) const GROUP_M: f32 = 0.04;
+/// The shaders take a plane's layer for water within this distance of its height (m, scene.wgsl
+/// `water_plane_at`).
+pub(crate) const MATCH_M: f32 = 0.05;
+/// Two planes' heights lie at least this far apart (m): twice [`MATCH_M`].
+pub(crate) const SEPARATE_M: f32 = 2.0 * MATCH_M;
 /// Nearness halves at this distance (m).
 const NEAR_M: f32 = 10.0;
 /// A challenger must score this times an incumbent's score to take its planar pass.
@@ -99,8 +110,8 @@ impl Surface {
 /// The visible water surfaces at one height: one plane for the planar reflection.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WaterPlane {
-    /// The height its largest surface lies at; every surface of the plane is within
-    /// [`GROUP_M`] of it.
+    /// The height its largest surface lay at when it first showed, kept while it still lies
+    /// among its surfaces; [`SEPARATE_M`] from the next plane's at the least.
     pub height: f32,
     /// The union of its surfaces' rectangles.
     pub rect: Rect,
@@ -118,8 +129,17 @@ pub struct WaterPlane {
 pub(crate) struct Ranking {
     /// This frame's planes, by height.
     pub planes: Vec<WaterPlane>,
-    /// Per surface of the frame: its plane's index in `planes`.
+    /// Per surface of the frame: its plane's index in `planes`, and its height.
     owner: Vec<u16>,
+    heights: Vec<f32>,
+    /// Per plane: the heights its surfaces span.
+    spans: Vec<Span>,
+    /// Last frame's planes' heights (`Span::settle`).
+    last: Vec<f32>,
+    /// Per group of `GROUP_M`: the plane it merged into.
+    remap: Vec<u16>,
+    /// What a plane without a pass falls back to this frame.
+    fallback: Option<WaterTier>,
     /// Per plane: its tier.
     pub tiers: Vec<WaterTier>,
     /// Last frame's planar planes by key, and for how many consecutive frames a challenger
@@ -128,6 +148,44 @@ pub(crate) struct Ranking {
     order: Vec<usize>,
     chosen: Vec<bool>,
     streaks: Vec<(i32, u32)>,
+}
+
+/// The heights a plane's surfaces span, and its largest one.
+#[derive(Clone, Copy, Debug)]
+struct Span {
+    lo: f32,
+    hi: f32,
+    largest: f32,
+    at: f32,
+}
+
+impl Span {
+    fn merge(&mut self, other: Span) {
+        self.lo = self.lo.min(other.lo);
+        self.hi = self.hi.max(other.hi);
+        if other.largest > self.largest {
+            self.largest = other.largest;
+            self.at = other.at;
+        }
+    }
+
+    /// The plane's height: one of last frame's planes' within the span (the nearest to its
+    /// largest surface), else its largest surface's.
+    fn settle(&self, last: &[f32]) -> f32 {
+        last.iter()
+            .copied()
+            .filter(|h| (self.lo..=self.hi).contains(h))
+            .min_by(|a, b| (a - self.at).abs().total_cmp(&(b - self.at).abs()))
+            .unwrap_or(self.at)
+    }
+}
+
+impl WaterPlane {
+    fn merge(&mut self, other: WaterPlane) {
+        self.rect = self.rect.union(other.rect);
+        self.coverage = (self.coverage + other.coverage).min(1.0);
+        self.distance = self.distance.min(other.distance);
+    }
 }
 
 impl Rect {
@@ -193,9 +251,14 @@ impl Ranking {
     /// Ranks this frame's `surfaces`: `planes` by height, `tiers` per plane, and `owner` per
     /// surface. Nothing is allocated once the buffers have grown.
     pub fn rank(&mut self, surfaces: &[Surface], budget: u32, screen_space: bool) {
+        self.last.clear();
+        self.last.extend(self.planes.iter().map(|p| p.height));
         self.planes.clear();
+        self.spans.clear();
         self.owner.clear();
         self.owner.resize(surfaces.len(), 0);
+        self.heights.clear();
+        self.heights.extend(surfaces.iter().map(|s| s.height));
         self.order.clear();
         self.order.extend(0..surfaces.len());
         self.order.sort_by(|&a, &b| {
@@ -204,12 +267,13 @@ impl Ranking {
                 .total_cmp(&surfaces[b].height)
                 .then(a.cmp(&b))
         });
+        // Groups of GROUP_M, by height.
         for &s in &self.order {
             let surface = surfaces[s];
             let joins = self
-                .planes
+                .spans
                 .last()
-                .is_some_and(|p| surface.height.is_finite() && surface.height - p.height < GROUP_M);
+                .is_some_and(|g| surface.height - g.lo < GROUP_M);
             if !joins {
                 self.planes.push(WaterPlane {
                     height: surface.height,
@@ -218,25 +282,59 @@ impl Ranking {
                     distance: f32::INFINITY,
                     score: 0.0,
                 });
+                self.spans.push(Span {
+                    lo: surface.height,
+                    hi: surface.height,
+                    largest: f32::NEG_INFINITY,
+                    at: surface.height,
+                });
             }
             let i = self.planes.len() - 1;
-            let plane = &mut self.planes[i];
-            plane.rect = plane.rect.union(surface.rect);
-            plane.coverage = (plane.coverage + surface.coverage).min(1.0);
-            plane.distance = plane.distance.min(surface.distance);
+            self.planes[i].merge(WaterPlane {
+                height: surface.height,
+                rect: surface.rect,
+                coverage: surface.coverage,
+                distance: surface.distance,
+                score: 0.0,
+            });
+            self.spans[i].merge(Span {
+                lo: surface.height,
+                hi: surface.height,
+                largest: surface.coverage,
+                at: surface.height,
+            });
             self.owner[s] = i as u16;
         }
-        // The plane lies where its largest surface does (the height it shows from frame to
-        // frame); its members lie within GROUP_M of the lowest, so of it too.
-        for p in &mut self.planes {
-            p.score = f32::NEG_INFINITY;
-        }
-        for &s in &self.order {
-            let i = self.owner[s] as usize;
-            if surfaces[s].coverage > self.planes[i].score {
-                self.planes[i].score = surfaces[s].coverage;
-                self.planes[i].height = surfaces[s].height;
+        // Each group settles on its height, and merges into the plane below it until the two
+        // are apart (`apart`). Planes are only ever merged with their neighbours: once each
+        // pair of neighbours is apart, so is every pair (the spans are ordered and each height
+        // lies in its span).
+        self.remap.clear();
+        let mut kept = 0;
+        for g in 0..self.planes.len() {
+            self.planes[kept] = self.planes[g];
+            self.spans[kept] = self.spans[g];
+            self.planes[kept].height = self.spans[kept].settle(&self.last);
+            self.remap.push(kept as u16);
+            kept += 1;
+            while kept >= 2 && !self.apart(kept - 2, kept - 1) {
+                let (a, b) = (kept - 2, kept - 1);
+                let (plane, span) = (self.planes[b], self.spans[b]);
+                self.planes[a].merge(plane);
+                self.spans[a].merge(span);
+                self.planes[a].height = self.spans[a].settle(&self.last);
+                for r in &mut self.remap {
+                    if *r as usize == b {
+                        *r = a as u16;
+                    }
+                }
+                kept -= 1;
             }
+        }
+        self.planes.truncate(kept);
+        self.spans.truncate(kept);
+        for o in &mut self.owner {
+            *o = self.remap[*o as usize];
         }
         for p in &mut self.planes {
             p.score = p.coverage * (1.0 + nearness(p.distance));
@@ -244,14 +342,32 @@ impl Ranking {
         self.assign(self.planes.len(), budget, screen_space);
     }
 
+    /// Whether the planes `a` and `b` (`b` the higher, both settled) can each keep a layer of
+    /// their own: their heights [`SEPARATE_M`] apart, and no surface of either within
+    /// [`MATCH_M`] of the other's height.
+    fn apart(&self, a: usize, b: usize) -> bool {
+        let (ha, hb) = (self.planes[a].height, self.planes[b].height);
+        hb - ha >= SEPARATE_M
+            && self.spans[b].lo - ha >= MATCH_M
+            && hb - self.spans[a].hi >= MATCH_M
+    }
+
     /// The plane of the last [`Ranking::rank`] the surface `s` belongs to.
     pub fn plane_of(&self, s: usize) -> usize {
         self.owner[s] as usize
     }
 
-    /// How the surface `s` is reflected after the last [`Ranking::rank`].
+    /// How the surface `s` is reflected after the last [`Ranking::rank`]: its plane's tier, but
+    /// a surface further than [`MATCH_M`] from its plane's height finds no layer in the shaders
+    /// and takes the fallback.
     pub fn tier_of(&self, s: usize) -> WaterTier {
-        self.tiers[self.owner[s] as usize]
+        let i = self.owner[s] as usize;
+        match self.tiers[i] {
+            WaterTier::Planar if (self.heights[s] - self.planes[i].height).abs() >= MATCH_M => {
+                self.fallback.unwrap_or(WaterTier::Environment)
+            }
+            t => t,
+        }
     }
 
     /// The layer of the planar reflection the plane `i` draws into (`None`: no pass).
@@ -273,6 +389,7 @@ impl Ranking {
         } else {
             WaterTier::Environment
         };
+        self.fallback = Some(fallback);
         let Ranking {
             planes,
             tiers,
@@ -444,12 +561,31 @@ mod tests {
         assert_eq!(r.planes.len(), 2, "{:?}", r.planes);
         assert_eq!((r.plane_of(0), r.plane_of(1)), (1, 0));
         assert_eq!((r.planes[0].height, r.planes[1].height), (0.0, 0.1));
-        // The higher surface sets a new plane when it is more than GROUP_M above.
+        // The higher surface sets a new group when it is more than GROUP_M above; that group
+        // merges into the plane below while their heights are under SEPARATE_M apart.
+        r = Ranking::default();
         r.rank(
             &[
                 surface(0.0, 0.1, 3.0),
                 surface(0.039, 0.1, 3.0),
                 surface(0.078, 0.1, 3.0),
+            ],
+            4,
+            true,
+        );
+        assert_eq!(r.planes.len(), 1, "{:?}", r.planes);
+        assert_eq!(r.planes[0].height, 0.0);
+        // 7.8 cm from the plane's height: in no layer's window, so no planar pass reported.
+        assert_eq!(
+            (r.tier_of(0), r.tier_of(1), r.tier_of(2)),
+            (WaterTier::Planar, WaterTier::Planar, WaterTier::ScreenSpace)
+        );
+        r = Ranking::default();
+        r.rank(
+            &[
+                surface(0.0, 0.1, 3.0),
+                surface(0.039, 0.1, 3.0),
+                surface(0.15, 0.1, 3.0),
             ],
             4,
             true,
@@ -817,5 +953,100 @@ mod tests {
         ] {
             assert!(!bad.usable(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn surfaces_at_0_0_039_and_0_041_share_one_plane() {
+        // By GROUP_M alone 0 and 0.039 form a plane (at 0.039, the larger) and 0.041 one of its
+        // own, 2 mm away: each would match the other's layer within the shaders' 5 cm.
+        let mut r = Ranking::default();
+        let surfaces = [
+            surface(0.0, 0.02, 3.0),
+            surface(0.039, 0.2, 3.0),
+            surface(0.041, 0.05, 3.0),
+        ];
+        r.rank(&surfaces, 1, true);
+        assert_eq!(r.planes.len(), 1, "{:?}", r.planes);
+        assert_eq!(r.planes[0].height, 0.039);
+        assert_eq!((r.plane_of(0), r.plane_of(1), r.plane_of(2)), (0, 0, 0));
+        assert!((0..3).all(|s| r.tier_of(s) == WaterTier::Planar));
+    }
+
+    #[test]
+    fn no_surface_lies_in_the_shaders_window_of_a_plane_but_its_own() {
+        // Heights to the millimetre from a fixed sequence: clusters, staircases and near pairs.
+        let mut seed = 12345u32;
+        let mut next = move || {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 8) as f32 / (1u32 << 24) as f32
+        };
+        let mut r = Ranking::default();
+        for round in 0..500 {
+            let n = 2 + round % 11;
+            let surfaces: Vec<Surface> = (0..n)
+                .map(|_| {
+                    let h = (next() * 400.0).round() / 1000.0;
+                    surface(h, 0.01 + next() * 0.08, 1.0 + next() * 30.0)
+                })
+                .collect();
+            r.rank(&surfaces, 1 + round as u32 % 3, true);
+            for w in r.planes.windows(2) {
+                assert!(
+                    w[1].height - w[0].height >= 0.10,
+                    "round {round}: {:?}",
+                    r.planes
+                );
+            }
+            for (s, surface) in surfaces.iter().enumerate() {
+                let own = r.plane_of(s);
+                for (p, plane) in r.planes.iter().enumerate() {
+                    if p != own {
+                        assert!(
+                            (surface.height - plane.height).abs() >= MATCH_M,
+                            "round {round}: {} in {own} near {p}: {:?}",
+                            surface.height,
+                            r.planes
+                        );
+                    }
+                }
+                // A surface the shader finds no plane for does not report a planar pass.
+                if r.tier_of(s) == WaterTier::Planar {
+                    assert!((surface.height - r.planes[own].height).abs() < MATCH_M);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_swap_of_the_largest_member_keeps_the_height_and_the_pass() {
+        let mut r = Ranking::default();
+        // Plane A: two areas 3 cm apart; plane B a metre up, scoring just under A.
+        let a = |low: f32, high: f32| [surface(0.0, low, 5.0), surface(0.03, high, 5.0)];
+        let b = surface(1.0, 0.25, 5.0);
+        let [x, y] = a(0.05, 0.25);
+        assert_eq!(
+            rank(&mut r, &[x, y, b], 1, true),
+            [WaterTier::Planar, WaterTier::ScreenSpace]
+        );
+        assert_eq!(r.planes[0].height, 0.03);
+        // The two areas trade sizes frame after frame (A's total stays) while B scores 1.1x A,
+        // under the ratio: A keeps its height, its key and so its pass.
+        let b = surface(1.0, 0.33, 5.0);
+        for frame in 0..30 {
+            let [x, y] = if frame % 2 == 0 {
+                a(0.25, 0.05)
+            } else {
+                a(0.05, 0.25)
+            };
+            assert_eq!(
+                rank(&mut r, &[x, y, b], 1, true),
+                [WaterTier::Planar, WaterTier::ScreenSpace],
+                "frame {frame}"
+            );
+            assert_eq!(r.planes[0].height, 0.03, "frame {frame}");
+        }
+        // Once the area at 0.03 m is gone the plane moves to the one left.
+        rank(&mut r, &[surface(0.0, 0.3, 5.0), b], 1, true);
+        assert_eq!(r.planes[0].height, 0.0);
     }
 }
