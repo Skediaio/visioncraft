@@ -4504,7 +4504,9 @@ impl Renderer {
             quality,
             ..
         } = self;
-        if let Some(surface) = sea {
+        // Only surfaces that can be ranked (`water::Surface::usable`): a broken mesh or sea
+        // level must not take a planar pass.
+        if let Some(surface) = sea.filter(water::Surface::usable) {
             water_seen.push(Seen {
                 item: None,
                 surface,
@@ -4542,15 +4544,18 @@ impl Renderer {
                     water::ripple_pad(distance, water::POND_DISTORTION, tilt, size),
                     size,
                 );
-                water_seen.push(Seen {
-                    item: Some((i as u32, p as u32, part.material)),
-                    surface: water::Surface {
-                        height: hi.y,
-                        rect,
-                        coverage,
-                        distance,
-                    },
-                });
+                let surface = water::Surface {
+                    height: hi.y,
+                    rect,
+                    coverage,
+                    distance,
+                };
+                if surface.usable() {
+                    water_seen.push(Seen {
+                        item: Some((i as u32, p as u32, part.material)),
+                        surface,
+                    });
+                }
             }
         }
         water_surfaces.extend(water_seen.iter().map(|s| s.surface));

@@ -87,6 +87,15 @@ pub(crate) struct Surface {
     pub distance: f32,
 }
 
+impl Surface {
+    /// Whether it can be ranked: a height, a coverage and a distance that are numbers. A NaN
+    /// height would be a plane of its own whose key (`key`) is that of 0 m, and NaN sorts
+    /// above every score under `total_cmp`.
+    pub fn usable(&self) -> bool {
+        self.height.is_finite() && self.coverage.is_finite() && !self.distance.is_nan()
+    }
+}
+
 /// The visible water surfaces at one height: one plane for the planar reflection.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WaterPlane {
@@ -776,5 +785,37 @@ mod tests {
                 h: 20
             }
         );
+    }
+
+    #[test]
+    fn a_non_finite_surface_is_not_gathered() {
+        assert!(surface(0.0, 0.1, 3.0).usable());
+        // The sea seen only far off is still a surface.
+        assert!(
+            Surface {
+                distance: f32::INFINITY,
+                ..surface(0.0, 0.1, 3.0)
+            }
+            .usable()
+        );
+        let nan = f32::NAN;
+        for bad in [
+            Surface {
+                height: nan,
+                ..surface(0.0, 0.1, 3.0)
+            },
+            Surface {
+                height: f32::INFINITY,
+                ..surface(0.0, 0.1, 3.0)
+            },
+            Surface {
+                height: f32::NEG_INFINITY,
+                ..surface(0.0, 0.1, 3.0)
+            },
+            surface(0.0, nan, 3.0),
+            surface(0.0, 0.1, nan),
+        ] {
+            assert!(!bad.usable(), "{bad:?}");
+        }
     }
 }
