@@ -14,6 +14,17 @@ pub enum Season {
     Winter,
 }
 
+/// A month of the plants' tables (seasons, bloom; written for the north) at a site on
+/// `latitude`: six months on south of the equator, the month itself in the north. The one
+/// place the shift is written.
+pub fn shift_month(month: u32, latitude: f64) -> u32 {
+    if latitude < 0.0 {
+        (month + 5) % 12 + 1
+    } else {
+        month
+    }
+}
+
 impl Season {
     pub const ALL: [Season; 4] = [
         Season::Spring,
@@ -41,12 +52,7 @@ impl Season {
     /// The season of `month` (1..=12) at `latitude`: meteorological seasons (March to May is
     /// spring in the north), six months on south of the equator.
     pub fn of(month: u32, latitude: f64) -> Season {
-        let m = if latitude < 0.0 {
-            (month + 5) % 12 + 1
-        } else {
-            month
-        };
-        match m {
+        match shift_month(month, latitude) {
             3..=5 => Season::Spring,
             6..=8 => Season::Summer,
             9..=11 => Season::Autumn,
@@ -64,7 +70,7 @@ impl Season {
             Season::Winter => (1, 15),
         };
         if latitude < 0.0 {
-            ((m + 5) % 12 + 1, d)
+            (shift_month(m, latitude), d)
         } else {
             (m, d)
         }

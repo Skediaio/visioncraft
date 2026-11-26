@@ -1,5 +1,6 @@
 //! What a design contains, as numbers: areas, lengths, volumes and counts per shape, per planting
-//! and in total per material and per asset. Headless; the `query.quantities` command wraps it.
+//! and in total per material and per asset. Headless; the `query.quantities` command wraps it,
+//! and `query.bloom_calendar` counts the plants with the same selection and counting.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -28,7 +29,7 @@ fn triangle_area(model: &ImportedModel, t: [u32; 3]) -> f64 {
 }
 
 /// A plant species (`flora:...`), as opposed to a light or object placed by a generator.
-fn is_plant(asset: &str) -> bool {
+pub(crate) fn is_plant(asset: &str) -> bool {
     asset.starts_with("flora:")
 }
 
@@ -37,6 +38,122 @@ fn is_plant(asset: &str) -> bool {
 pub struct Filter<'a> {
     pub ids: Option<&'a [String]>,
     pub layer: Option<&'a str>,
+}
+
+/// The shapes and plantings a [`Filter`] selects, once checked against the project.
+pub(crate) struct Selection<'a> {
+    project: &'a Project,
+    filter: &'a Filter<'a>,
+}
+
+/// What `filter` selects: an error on an unknown layer or id.
+pub(crate) fn selection<'a>(
+    project: &'a Project,
+    filter: &'a Filter<'a>,
+) -> Result<Selection<'a>, String> {
+    if let Some(layer) = filter.layer
+        && !project.layers.iter().any(|l| l.id == layer)
+    {
+        return Err(format!("no layer `{layer}`"));
+    }
+    if let Some(ids) = filter.ids {
+        for id in ids {
+            let known = project.shapes.iter().any(|s| s.id() == id)
+                || project.generators.iter().any(|g| g.id() == id)
+                || project.models.iter().any(|m| m.id == *id);
+            if !known {
+                return Err(format!("no shape, planting or model `{id}`"));
+            }
+        }
+    }
+    Ok(Selection { project, filter })
+}
+
+impl Selection<'_> {
+    /// Whether the shape or planting `id` on `layer` is selected. Surroundings are not part of
+    /// the design: listed only when named by id or by their layer.
+    pub(crate) fn wanted(&self, id: &str, layer: &str) -> bool {
+        let (filter, project) = (self.filter, self.project);
+        let named = filter.ids.is_some_and(|ids| ids.iter().any(|i| i == id))
+            || filter.layer == Some(layer);
+        (filter.ids.is_none_or(|ids| ids.iter().any(|i| i == id))
+            && filter.layer.is_none_or(|l| l == layer))
+            && (named || !project.layer_is_context(layer))
+    }
+}
+
+/// The plantings a [`Selection`] holds, and their totals.
+pub(crate) struct PlantingCounts {
+    /// A row per planting, in the project's order.
+    pub rows: Vec<Value>,
+    /// Every placement per asset: plants, and what a planting else places (lights, objects).
+    pub by_asset: BTreeMap<String, usize>,
+    /// Placements that are plants.
+    pub plants: usize,
+    pub placements: usize,
+}
+
+/// The plantings `sel` selects with their plants per asset: from the planting evaluation on
+/// the terrain (height 0 without one), or as the host's `scene` draws them.
+pub(crate) fn planting_counts(
+    project: &Project,
+    sel: &Selection<'_>,
+    scene: Option<&Scene>,
+) -> PlantingCounts {
+    let floors = crate::terrace::ground_fn(project);
+    let ground = |x: f32, z: f32| floors(x, z).or(Some(0.0));
+    let mut out = PlantingCounts {
+        rows: Vec::new(),
+        by_asset: BTreeMap::new(),
+        plants: 0,
+        placements: 0,
+    };
+    for g in project
+        .generators
+        .iter()
+        .filter(|g| sel.wanted(g.id(), g.layer()))
+    {
+        let e = match scene {
+            Some(sc) => {
+                let (placements, truncated) = (sc.placements)(g);
+                crate::planting::Evaluation {
+                    placements,
+                    truncated,
+                }
+            }
+            None => evaluate(g, &ground),
+        };
+        let mut own: BTreeMap<String, usize> = BTreeMap::new();
+        for p in &e.placements {
+            *own.entry(p.asset.clone()).or_default() += 1;
+            *out.by_asset.entry(p.asset.clone()).or_default() += 1;
+        }
+        // Lights and objects placed along a line are placements too, but not plants.
+        let own_plants = e.placements.iter().filter(|p| is_plant(&p.asset)).count();
+        out.plants += own_plants;
+        out.placements += e.placements.len();
+        let kind = serde_json::to_value(g)
+            .ok()
+            .and_then(|v| v.get("type").cloned())
+            .unwrap_or(Value::Null);
+        let mut row = json!({
+            "id": g.id(), "name": g.name(), "layer": g.layer(), "kind": kind,
+            "count": e.placements.len(), "plants": own_plants, "truncated": e.truncated,
+            "assets": asset_rows(&own),
+        });
+        let o = row.as_object_mut().expect("a row is an object");
+        if let Some(outline) = planted_outline(g) {
+            o.insert(
+                "area_m2".into(),
+                f64::from(measure::polygon_area(&outline)).into(),
+            );
+        }
+        if let Generator::SplineMass(s) = g {
+            o.insert("length_m".into(), path_length(&s.points, s.closed).into());
+        }
+        out.rows.push(row);
+    }
+    out
 }
 
 fn path_length(points: &[[f32; 2]], closed: bool) -> f64 {
@@ -104,29 +221,7 @@ pub fn quantities_in(
     filter: &Filter,
     scene: Option<&Scene>,
 ) -> Result<Value, String> {
-    if let Some(layer) = filter.layer
-        && !project.layers.iter().any(|l| l.id == layer)
-    {
-        return Err(format!("no layer `{layer}`"));
-    }
-    if let Some(ids) = filter.ids {
-        for id in ids {
-            let known = project.shapes.iter().any(|s| s.id() == id)
-                || project.generators.iter().any(|g| g.id() == id)
-                || project.models.iter().any(|m| m.id == *id);
-            if !known {
-                return Err(format!("no shape, planting or model `{id}`"));
-            }
-        }
-    }
-    // Surroundings are not part of the design: listed only when named by id or by their layer.
-    let wanted = |id: &str, layer: &str| {
-        let named = filter.ids.is_some_and(|ids| ids.iter().any(|i| i == id))
-            || filter.layer == Some(layer);
-        (filter.ids.is_none_or(|ids| ids.iter().any(|i| i == id))
-            && filter.layer.is_none_or(|l| l == layer))
-            && (named || !project.layer_is_context(layer))
-    };
+    let sel = selection(project, filter)?;
 
     let lifts: HashMap<String, f32> = area_lifts(&project.shapes).into_iter().collect();
     let water = water_areas(project);
@@ -136,7 +231,11 @@ pub fn quantities_in(
     let mut furniture: BTreeMap<&'static str, Vec<Value>> = BTreeMap::new();
     let mut by_material: BTreeMap<Option<usize>, f64> = BTreeMap::new();
     let (mut total_plan, mut total_surface, mut total_volume) = (0.0, 0.0, 0.0);
-    for shape in project.shapes.iter().filter(|s| wanted(s.id(), s.layer())) {
+    for shape in project
+        .shapes
+        .iter()
+        .filter(|s| sel.wanted(s.id(), s.layer()))
+    {
         let (mesh, _) = placed_shape_mesh(project, shape, &lifts, &water)
             .map_err(|e| format!("shape `{}`: {e}", shape.id()))?;
         let owners = crate::material::resolve_materials(project, shape.id(), &mesh);
@@ -348,7 +447,11 @@ pub fn quantities_in(
     let mut models = Vec::new();
     let mut models_missing: Vec<&str> = Vec::new();
     if let Some(sc) = scene {
-        for m in project.models.iter().filter(|m| wanted(&m.id, &m.layer)) {
+        for m in project
+            .models
+            .iter()
+            .filter(|m| sel.wanted(&m.id, &m.layer))
+        {
             let Some(mesh) = (sc.models)(&m.id) else {
                 models_missing.push(&m.id);
                 continue;
@@ -363,56 +466,12 @@ pub fn quantities_in(
         }
     }
 
-    let floors = crate::terrace::ground_fn(project);
-    let ground = |x: f32, z: f32| floors(x, z).or(Some(0.0));
-    let mut plantings = Vec::new();
-    let mut by_asset: BTreeMap<String, usize> = BTreeMap::new();
-    let (mut plants, mut placements) = (0, 0);
-    for g in project
-        .generators
-        .iter()
-        .filter(|g| wanted(g.id(), g.layer()))
-    {
-        let e = match scene {
-            Some(sc) => {
-                let (placements, truncated) = (sc.placements)(g);
-                crate::planting::Evaluation {
-                    placements,
-                    truncated,
-                }
-            }
-            None => evaluate(g, &ground),
-        };
-        let mut own: BTreeMap<String, usize> = BTreeMap::new();
-        for p in &e.placements {
-            *own.entry(p.asset.clone()).or_default() += 1;
-            *by_asset.entry(p.asset.clone()).or_default() += 1;
-        }
-        // Lights and objects placed along a line are placements too, but not plants.
-        let own_plants = e.placements.iter().filter(|p| is_plant(&p.asset)).count();
-        plants += own_plants;
-        placements += e.placements.len();
-        let kind = serde_json::to_value(g)
-            .ok()
-            .and_then(|v| v.get("type").cloned())
-            .unwrap_or(Value::Null);
-        let mut row = json!({
-            "id": g.id(), "name": g.name(), "layer": g.layer(), "kind": kind,
-            "count": e.placements.len(), "plants": own_plants, "truncated": e.truncated,
-            "assets": asset_rows(&own),
-        });
-        let o = row.as_object_mut().expect("a row is an object");
-        if let Some(outline) = planted_outline(g) {
-            o.insert(
-                "area_m2".into(),
-                f64::from(measure::polygon_area(&outline)).into(),
-            );
-        }
-        if let Generator::SplineMass(s) = g {
-            o.insert("length_m".into(), path_length(&s.points, s.closed).into());
-        }
-        plantings.push(row);
-    }
+    let PlantingCounts {
+        rows: plantings,
+        by_asset,
+        plants,
+        placements,
+    } = planting_counts(project, &sel, scene);
 
     let mut out = json!({
         "counted_with": if scene.is_some() { "scene" } else { "plan" },

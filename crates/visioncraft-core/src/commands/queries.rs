@@ -1,5 +1,6 @@
 //! Read-only commands the core can answer from the project alone. They never touch history.
 
+use super::fail;
 use crate::measure;
 use crate::project::{Project, SunTime};
 use crate::session::{CommandError, Session, bad, parse};
@@ -84,6 +85,21 @@ pub(super) fn register(s: &mut Session) {
         .read_only(),
         plants_for_light_cmd,
     );
+    s.register_with_spec(
+        spec(
+            "query.bloom_calendar",
+            "Bloom Calendar",
+            &format!("What flowers each month in the design: for every month of the year the species in flower (most plants first) and how many plants flower; the species with the months they flower in; the months with nothing in flower (`gaps`); and the species without bloom data (`unknown`). A species flowers in a month when its bloom months (written for the northern hemisphere) hold it, six months on south of the equator (`hemisphere`). The plants are those of the plantings: built-in `flora:` species and the project's own species; lights and objects a planting places are not counted. They are counted as `query.quantities` counts them. {}", crate::bloom::CORE_NOTE),
+            vec![
+                param("planting", T::String, "One planting's id (`g1`); by default every planting of the design. An unknown id is an error."),
+                param("layer", T::String, "Only the plantings on this layer id, as `query.quantities` filters: an unknown layer is an error, and plantings on a context (surroundings) layer are left out unless `planting` names them or `layer` is that layer."),
+            ],
+            "{hemisphere (north|south), months: [{month, flowering: [{species, name?, plants, colour?}], plants, species}], species: [{species, name?, plants, bloom_months, colour?}], gaps: [month...], unknown: [{species, plants}]}",
+            json!({}),
+        )
+        .read_only(),
+        bloom_calendar_cmd,
+    );
 }
 
 fn plants_for_light_cmd(_project: &mut Project, params: &Value) -> Result<Value, CommandError> {
@@ -137,6 +153,23 @@ fn parse_grower_param(name: Option<&str>) -> Result<Option<crate::growth::Grower
         })
     })
     .transpose()
+}
+
+fn bloom_calendar_cmd(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct P {
+        planting: Option<String>,
+        layer: Option<String>,
+    }
+    let p: P = parse(params)?;
+    let filter = crate::quantities::Filter {
+        ids: p.planting.as_ref().map(std::slice::from_ref),
+        layer: p.layer.as_deref(),
+    };
+    // The core alone knows no species: everything is `unknown`; a host answers with the
+    // species library.
+    crate::bloom::calendar(project, &filter, None, &|_| None).map_err(fail)
 }
 
 fn quantities_cmd(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
