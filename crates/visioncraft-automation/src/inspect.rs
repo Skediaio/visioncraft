@@ -192,6 +192,57 @@ pub(crate) fn quantities_json(
     )
 }
 
+/// `query.bloom_calendar` as the host answers it: the core's calendar with the plants counted
+/// as the renderer draws them (as `query.quantities` does) and the bloom months, flower colours
+/// and names of the species library and of the project's own species.
+pub(crate) fn bloom_calendar_json(
+    session: &Session,
+    state: &HostState,
+    planting: Option<&str>,
+    layer: Option<&str>,
+) -> Result<Value, String> {
+    let p = session.project();
+    let owners = owners(p, &models_of(state));
+    let models = models_of(state);
+    let scene = visioncraft_core::quantities::Scene {
+        models: &models,
+        placements: &|g| placements(p, &owners, &state.catalog.assets, g),
+    };
+    let only = planting.map(|id| [id.to_string()]);
+    visioncraft_core::bloom::calendar(
+        p,
+        &visioncraft_core::quantities::Filter {
+            ids: only.as_ref().map(|ids| ids.as_slice()),
+            layer,
+        },
+        Some(&scene),
+        &|asset| bloom_of(p, asset),
+    )
+}
+
+/// When `asset` flowers, in what colour and under what name: a built-in species (`flora:`)
+/// from the library, a custom species of the project from the parameters it stores (a
+/// `PlantParams` as JSON, as the app draws it); `None` for anything else, which the calendar
+/// lists as unknown.
+fn bloom_of(p: &Project, asset: &str) -> Option<visioncraft_core::bloom::Bloom> {
+    use visioncraft_core::bloom::Bloom;
+    if let Some(id) = asset.strip_prefix("flora:") {
+        let s = visioncraft_flora::Species::by_id(id)?;
+        return Some(Bloom {
+            months: s.bloom_months.to_vec(),
+            colour: s.params.flowers.as_ref().map(|f| f.colour),
+            name: Some(s.common_name.to_string()),
+        });
+    }
+    let c = p.species.iter().find(|c| c.id == asset)?;
+    let params: visioncraft_flora::PlantParams = serde_json::from_value(c.params.clone()).ok()?;
+    Some(Bloom {
+        months: params.bloom_months,
+        colour: params.flowers.as_ref().map(|f| f.colour),
+        name: Some(c.name.clone()),
+    })
+}
+
 /// The placements of a generator, in world space.
 fn placements(
     project: &Project,

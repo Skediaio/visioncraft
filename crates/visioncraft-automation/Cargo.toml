@@ -10,8 +10,9 @@ workspace = true
 
 [dependencies]
 visioncraft-core = { path = "../visioncraft-core" }
-# The built-in species, for `species.list`.
-visioncraft-flora = { path = "../visioncraft-flora" }
+# The built-in species, for `species.list`; with `serde`, to read a custom species' stored
+# parameters (`query.bloom_calendar`).
+visioncraft-flora = { path = "../visioncraft-flora", features = ["serde"] }
 serde = "1"
 serde_json = "1"
 # 3dcraft (MIT), already a dependency of the core: SHA-256 for the control channel's
