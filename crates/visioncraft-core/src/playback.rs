@@ -19,6 +19,11 @@ pub struct Animation {
 /// Most flashes at once (whose times overlap); over it the oldest of those goes.
 pub const MAX_FLASHES: usize = 16;
 
+/// The frame rate at least that a flash's `frames` are counted at for [`MAX_FLASHES`]: a window
+/// drawing slowly must not stretch film flashes into each other (a film's rate is not known
+/// when the flash is added).
+const CAP_FPS: f64 = 60.0;
+
 /// What a clip plays on: a planting (`g4`: every object it places) or one object of it
 /// (`g4#12`, counted from 0 as `planting.replace_placement` counts them).
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -355,8 +360,8 @@ impl Playback {
     pub fn flash(&mut self, flash: Flash) -> u64 {
         let id = self.next_flash;
         self.next_flash += 1;
-        let (start, end) = flash.span(self.fps);
-        let fps = self.fps;
+        let fps = self.fps.max(CAP_FPS);
+        let (start, end) = flash.span(fps);
         let mut at_once: Vec<u64> = self
             .flashes
             .iter()
@@ -737,6 +742,29 @@ mod tests {
         assert!(p.plays_on_its_planting(&object, None));
         let other = BTreeMap::from([("user:a".to_string(), 2)]);
         assert!(!p.plays_on_its_planting(&object, Some(&other)));
+    }
+
+    /// The cap counts a flash's frames at 60 a second at least: a window drawing at 2 a second
+    /// does not stretch film flashes 50 ms apart into each other.
+    #[test]
+    fn a_slow_window_does_not_stretch_the_cap() {
+        let mut p = Playback {
+            fps: 2.0,
+            ..Default::default()
+        };
+        for i in 0..30 {
+            p.flash(Flash {
+                id: 0,
+                start_s: i as f32 * 0.05,
+                position: [0.0; 3],
+                color: [1.0; 3],
+                intensity: 100.0,
+                range_m: 2.0,
+                size_m: 0.0,
+                life: Life::Frames(2),
+            });
+        }
+        assert_eq!(p.flashes().len(), 30);
     }
 
     #[test]
