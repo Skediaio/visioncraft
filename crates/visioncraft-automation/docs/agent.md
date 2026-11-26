@@ -48,7 +48,9 @@ same over MCP (`visioncraft-cli mcp`), JSON lines (`visioncraft-cli serve`) and 
 - **Water.** Every water surface reflects its surroundings within the quality's budget
   (docs/performance.md): at Medium one water plane a frame gets a planar mirrored pass (two at
   High, three at Ultra), the others reflect what is on screen (`screen_space`), or the sky cube
-  (`environment`) when screen-space reflections are off; surfaces at one height share a plane.
+  (`environment`) when screen-space reflections are off; the sea without a pass always takes
+  the sky. Surfaces at one height share a plane; the sea competes with the ponds for the
+  passes, ahead of a pond unless the pond scores 1.3 times its score.
   `ui.get` → `water` lists the last frame's visible surfaces in order of height, each
   `{item, part, material, level_m, tier}` (the renderer's numbers: `ItemId::index`,
   `MaterialId::index`; the sea is `{"surface": "sea", ...}`), and `quality.waterPlanes` is the
@@ -315,7 +317,7 @@ and show in reflections and in the ambient light. The rendering quality and
 the texture resolution belong to the window, not the project: set them over the control channel
 with `ui.set {"quality": "auto" | "low" | "medium" | "high" | "ultra", "textures": "auto" | "1k"
 | "2k" | "4k"}`; `view.render` takes its own `quality`. The presets also set how many water
-planes a frame mirror (Low none, Medium 1, High 2, Ultra 3: the Water bullet above). For a final picture use `view.render
+planes a frame mirrors (Low none, Medium 1, High 2, Ultra 3: the Water bullet above). For a final picture use `view.render
 {"quality": "photo"}`: many frames averaged at ULTRA give soft shadows with real penumbrae,
 smooth edges and leaves without shimmer (seconds to minutes); recipe 41 has the lens.
 
