@@ -448,16 +448,6 @@ impl Playback {
             || self.flashes.iter().any(|f| !f.ended(self.clock, self.fps))
     }
 
-    /// Forgets the flashes that are over at clock time `t`. Returns how many went.
-    pub fn prune_flashes(&mut self, t: f64) -> usize {
-        let fps = self.fps;
-        let before = self.flashes.len();
-        self.flashes.retain(|f| !f.ended(t, fps));
-        let flashes = &self.flashes;
-        self.live.retain(|l| flashes.iter().any(|f| f.id == *l));
-        before - self.flashes.len()
-    }
-
     /// Forgets the live flashes ([`Self::flash_live`]) that are over at the live clock `t`; a
     /// flash on a film's time stays for the film. Returns how many went.
     pub fn prune_live(&mut self, t: f64) -> usize {
@@ -686,7 +676,7 @@ mod tests {
         assert!(!p.animating());
         // A flash for 2 frames at 25 a second is over from 2.08 s; one to come is not.
         p.fps = 25.0;
-        p.flash(Flash {
+        p.flash_live(Flash {
             id: 0,
             start_s: 2.0,
             position: [0.0; 3],
@@ -696,7 +686,7 @@ mod tests {
             size_m: 0.0,
             life: Life::Frames(2),
         });
-        p.flash(Flash {
+        p.flash_live(Flash {
             id: 0,
             start_s: 30.0,
             position: [0.0; 3],
@@ -708,12 +698,12 @@ mod tests {
         });
         p.clock = 1.0;
         assert!(p.animating());
-        assert_eq!(p.prune_flashes(2.04), 0, "not over yet");
+        assert_eq!(p.prune_live(2.04), 0, "not over yet");
         p.clock = 2.08;
-        assert_eq!(p.prune_flashes(2.08), 1);
+        assert_eq!(p.prune_live(2.08), 1);
         assert!(p.animating(), "the one at 30 s is still to come");
         p.clock = 31.0;
-        assert_eq!(p.prune_flashes(31.0), 1);
+        assert_eq!(p.prune_live(31.0), 1);
         assert!(!p.animating() && p.is_empty());
     }
 

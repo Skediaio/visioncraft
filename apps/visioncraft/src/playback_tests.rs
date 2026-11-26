@@ -340,10 +340,8 @@ fn a_flash_lights_the_ground_for_two_frames_and_is_gone() {
         "{} pixels differ half a second on",
         later_still.len()
     );
-    // And it is forgotten once over.
-    s.clock = 10.3;
-    s.playback.prune_flashes(10.3);
-    assert!(s.playback.flashes().is_empty());
+    // On a film's time it is kept for the film, and nothing of it is drawn once over.
+    assert_eq!(s.playback.flashes().len(), 1);
     let no_item = frame(&mut s, &device, &queue, 10.3);
     assert!(changed(&no_item, &after, 6).len() < (W * H / 100) as usize);
 }
