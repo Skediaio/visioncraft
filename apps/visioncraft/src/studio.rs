@@ -2057,7 +2057,8 @@ impl Studio {
 
     /// Brings the flashes' glowing quads in line with the flashes on screen this frame: a new
     /// one gets an item (a soft disc facing the camera, as bright as its flux over its area),
-    /// one that is over loses it, and each one on screen turns to the camera.
+    /// one not on screen loses it (over, or not yet: a flash on a film's time is kept after it
+    /// ends), and each one on screen turns to the camera.
     fn draw_flashes(&mut self) {
         let (t, fps) = (self.playback.clock, self.playback.fps);
         self.flash_now.clear();
@@ -2069,9 +2070,9 @@ impl Studio {
                 .filter(|(_, f)| f.size_m > 0.0 && f.shows_at(t, fps))
                 .map(|(i, _)| i),
         );
-        let flashes = self.playback.flashes();
+        let (flashes, now) = (self.playback.flashes(), &self.flash_now);
         self.flashes.retain(|d| {
-            let keep = flashes.iter().any(|f| f.id == d.id);
+            let keep = now.iter().any(|&i| flashes[i].id == d.id);
             if !keep {
                 self.renderer.remove_item(d.item);
                 self.renderer.remove_material(d.material);
