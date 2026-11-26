@@ -689,7 +689,11 @@ fn one_pixel_png() -> Vec<u8> {
 
 /// A temp dir of this test's own.
 fn dir(name: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("visioncraft-playback-{name}"));
+    // Tests may run side by side in another job: a folder of this process's own.
+    let d = std::env::temp_dir().join(format!(
+        "visioncraft-playback-{name}-{}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     d

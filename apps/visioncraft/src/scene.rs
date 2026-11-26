@@ -2722,6 +2722,11 @@ impl Scene {
             } else {
                 parts
             };
+            if parts.is_empty() {
+                // A model all of which moves: nothing stands still, and its parts are items
+                // of their own (`GroupRig`).
+                return Vec::new();
+            }
             let item = r.add_lod_item(parts, matrices);
             // A hedge's shadow is a band, not one blob per segment.
             let clipped = asset

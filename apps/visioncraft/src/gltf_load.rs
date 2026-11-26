@@ -1015,6 +1015,11 @@ pub(crate) mod tests {
             self.nodes.len() - 1
         }
 
+        /// Makes `child` a child of the node `parent`.
+        pub(crate) fn child_of(&mut self, parent: usize, child: usize) {
+            self.nodes[parent]["children"] = json!([child]);
+        }
+
         /// An animation `name` with one channel: `node`'s `path` follows `values` from key time
         /// to key time, interpolated `interpolation` (`LINEAR`, `STEP` or `CUBICSPLINE`).
         pub(crate) fn animation(

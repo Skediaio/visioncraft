@@ -286,3 +286,82 @@ fn a_flash_lights_the_ground_for_two_frames_and_is_gone() {
     let no_item = frame(&mut s, &device, &queue, 10.3);
     assert!(changed(&no_item, &after, 6).len() < (W * H / 100) as usize);
 }
+
+/// A chest that rises while its lid opens: nothing of it stands still, so the model has no
+/// static item, only its two parts. At the clips' first keys the picture is the file's rest
+/// pose; a second on, the chest is higher and the lid has swung.
+#[test]
+fn a_model_all_of_which_moves_draws_its_parts_alone() {
+    let Some((device, queue, mut s)) = studio() else {
+        eprintln!("no GPU adapter: skipped");
+        return;
+    };
+    let mut b = crate::gltf_load::tests::Builder::new("steel");
+    let (chest, lid) = (
+        b.triangle([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),
+        b.triangle([[2.0, 0.0, 0.0], [3.0, 0.0, 0.0], [2.0, 1.0, 0.0]]),
+    );
+    let c = b.node(serde_json::json!({"mesh": chest, "translation": [0.0, 1.0, 0.0]}));
+    let l = b.node(serde_json::json!({"mesh": lid, "translation": [1.0, 0.0, 0.0]}));
+    b.child_of(c, l);
+    b.animation(
+        "lift",
+        c,
+        "translation",
+        "LINEAR",
+        &[0.0, 1.0],
+        &[0.0, 1.0, 0.0, 0.0, 2.0, 0.0],
+    );
+    let q = std::f32::consts::FRAC_1_SQRT_2;
+    b.animation(
+        "open",
+        l,
+        "rotation",
+        "LINEAR",
+        &[0.0, 1.0],
+        &[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, q, q],
+    );
+    let asset = s
+        .import_object("Chest", b.finish())
+        .expect("the chest imports");
+    s.session
+        .run(
+            "planting.add_single",
+            serde_json::json!({"name": "Chest", "asset": asset, "position": [0, 0, 0]}),
+        )
+        .unwrap();
+    s.camera.fov_y = 30f32.to_radians();
+    s.camera
+        .look_from(Vec3::new(1.5, 1.8, 9.0), Vec3::new(1.5, 1.8, 0.0));
+    s.settle_for_picture();
+    assert_eq!(s.scene.library.resident_models(), 1);
+    assert_eq!(s.scene.animated_parts(), 2, "the chest and the lid");
+    let horizon = pixel(&s, Vec3::new(1.5, 0.0, -1.0e4)).1 + 2.0;
+    let below = |a: &[u8], b: &[u8]| -> Vec<(u32, u32)> {
+        changed(a, b, 6)
+            .into_iter()
+            .filter(|p| p.1 as f32 >= horizon)
+            .collect()
+    };
+    let rest = frame(&mut s, &device, &queue, 5.0);
+    for (clip, duration) in [("lift", 1.0), ("open", 1.0)] {
+        let index = usize::from(clip == "open");
+        s.playback.play(
+            ClipTarget::all("g1"),
+            BTreeMap::from([("user:uo1".to_string(), index)]),
+            clip,
+            5.0,
+            false,
+            duration,
+        );
+    }
+    let start = frame(&mut s, &device, &queue, 5.0);
+    let end = frame(&mut s, &device, &queue, 6.0);
+    save("chest_rest", &rest);
+    save("chest_end", &end);
+    assert!(
+        below(&rest, &start).is_empty(),
+        "the clips begin where the file has the chest"
+    );
+    assert!(below(&rest, &end).len() > 40, "a second on it has moved");
+}
