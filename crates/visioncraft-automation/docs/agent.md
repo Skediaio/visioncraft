@@ -72,7 +72,7 @@ same over MCP (`visioncraft-cli mcp`), JSON lines (`visioncraft-cli serve`) and 
 4. **Render.** `doc_render_preview {"viewpoint": ...}`: a PNG and what was drawn (camera, sun,
    `plantsPending`: 0 means every plant is drawn). Its `time` changes the picture only.
 5. **Verify** against the plan: `doc_inspect` (`area_m2`, `footprint_m2`, plant `count`),
-   `query.measure`, `query.plants_for_light {point | outline | hours}` (species ranked by the light a spot gets), `query.light_check` (every placed plant against its light range), `query.quantities {ids?, layer?}` (areas, lengths, volumes and plant counts per object, per material and per asset; linked models too, per body with surface and volume (closed bodies), scale applied, in `models`; plants are counted with the renderer's building rule, `counted_with: "scene"`), `query.raycast`, `query.sun_hours {point | outline, season | date, cell_m?, years?, plants?}` (hours of direct sun at a spot or as a grid over an area, with shadow from models, shapes, terrain and plant crowns; `view.set_sun_map` draws the same grid on the ground, recipe 26), `query.sky_view {point, normal?, years?}` (how open a spot is: the sky view factor 0..1, crowns letting sky through by their leaf density; recipe 43), `query.ground_height`, `query.ground_length`, `query.sun`, and `query.clips {model}` (the animation clips of a model that moves in parts: name, length and channel count; recipe 14). A film of camera moves is `film.*` (recipe 27); `film.preview` reads it without drawing.
+   `query.measure`, `query.plants_for_light {point | outline | hours}` (species ranked by the light a spot gets), `query.light_check` (every placed plant against its light range), `query.quantities {ids?, layer?}` (areas, lengths, volumes and plant counts per object, per material and per asset; linked models too, per body with surface and volume (closed bodies), scale applied, in `models`; plants are counted with the renderer's building rule, `counted_with: "scene"`), `query.raycast`, `query.sun_hours {point | outline, season | date, cell_m?, years?, plants?}` (hours of direct sun at a spot or as a grid over an area, with shadow from models, shapes, terrain and plant crowns; `view.set_sun_map` draws the same grid on the ground, recipe 26), `query.sky_view {point, normal?, years?}` (how open a spot is: the sky view factor 0..1, crowns letting sky through by their leaf density; recipe 43), `query.ground_height`, `query.ground_length`, `query.sun`, and `query.clips {model}` (the animation clips of a model that moves in parts: name, length and channel count; recipe 14, which also plays them with `model.play_clip`). A film of camera moves is `film.*` (recipe 27); `film.preview` reads it without drawing.
    Save with `command_run file.save {"path": ...}`.
 
 ## Recipes
@@ -344,11 +344,32 @@ project, `true` back on.
 catalogue asset as `user:<id>`. `object.remove` is refused while a planting uses it.
 
 A model with animations (glTF node animation: parts that turn, slide or tilt on keyframes) lists
-its clips with `query.clips {"model": "user:uo1"}`: `[{name, duration_s, channels}]`, the channel
-count of each; a model that stands still answers `{"clips": []}`. A catalogue asset is asked by
-its id, and its clips are those of its first level of detail. On the command line the file is read
-from the project's folder or the library folder (`--assets`); in a window a library model's clips
-are known once it is loaded. Playing a clip is not a command yet.
+its clips with `query.clips {"model": "user:uo1"}`: `{clips: [{name, duration_s, channels}],
+warnings}`, the channel count of each and what was left out of the file's animations and why (a
+malformed channel: the model still loads); a model that stands still answers `{"clips": [],
+"warnings": []}`. A catalogue asset is asked by its id, and its clips are those of its first
+level of detail. On the command line the file is read from the project's folder or the library
+folder (`--assets`); in a window a library model's clips are known once it is loaded.
+
+A clip plays on the placed objects, not on the model: `model.play_clip {"object": "g4", "clip":
+"fire", "start_s": 12.5}` (or `"loop": true`). `object` is a planting (`g4`: every object it
+places) or one of its objects (`g4#12`, counted from 0 as `planting.replace_placement` counts
+them); `clip` is a clip's name or its index from 0 (an exact name first; of two clips with the
+same name the lowest index; a name that is not there is an error that lists them). The clip is
+sampled at the session's clock from `start_s` (the clock now: a window's frame time, a film's
+time in `film.render`, the `animation_s` of the last picture on the command line), so the same
+time always gives the same pose. The same clip on the same object starts again; several clips
+may play at once, and where two move the same property the one started later wins; a clip that
+ends holds its last pose until `model.stop_clip {"object": "g4", "clip"?: ...}` (every clip
+without `clip`). `query.part_pose {"object": "g4", "t"?: ...}` reads the pose back: per object
+the matrix in model space (column-major, 16 numbers) of every moving part at time `t`, the
+clips on it composed as they are drawn. `effect.flash {"position": [x, y, z], "color": [r, g,
+b], "intensity": 2000, "range_m": 4, "size_m"?: 0.15, "frames"?: 2, "seconds"?, "start_s"?}` is a
+short-lived flash there: a point light (lumens, as a lamp's) and a glowing quad facing the
+camera, for `frames` frames of the rate in force (a film's fps, so the same frames show it every
+time; 60 a second in a still) or for `seconds`, from `start_s` (the clock now); at most 16 flash
+at once, the oldest is dropped. Playing and flashing are session state: not saved with the
+project, not an undo step.
 
 ### 15. The example garden
 

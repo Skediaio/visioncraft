@@ -274,8 +274,8 @@ pub fn host_docs() -> Vec<CommandDoc> {
         ),
         host_doc(
             "query.clips",
-            "Clips",
-            "The animation clips of a model that moves in parts (glTF node animation): each clip's name, how long it lasts in seconds and how many channels it has. `model` is a catalogue asset id, or `user:<id>` for an imported object (`object.list`); a model that stands still answers an empty list. A catalogue asset's clips are those of its first level of detail. The model's file has to be at hand: an imported object's always is, a library model's once it is loaded (in a window) or from the library folder (`visioncraft-cli`, `--assets`).",
+            "Animations",
+            "The animation clips of a model that moves in parts (glTF node animation): each clip's name, how long it lasts in seconds and how many channels it has. `model` is a catalogue asset id, or `user:<id>` for an imported object (`object.list`); a model that stands still answers an empty list. `warnings` says what was left out of the file's animations and why (a malformed channel; an animation that moves nothing here). A catalogue asset's clips are those of its first level of detail. The model's file has to be at hand: an imported object's always is, a library model's once it is loaded (in a window) or from the library folder (`visioncraft-cli`, `--assets`).",
             vec![p(
                 "model",
                 "string",
@@ -285,8 +285,192 @@ pub fn host_docs() -> Vec<CommandDoc> {
                 &[],
                 "A catalogue asset id, or `user:<id>` for an imported object",
             )],
-            "{clips: [{name, duration_s, channels}]}",
+            "{clips: [{name, duration_s, channels}], warnings: [string]}",
             json!({"model": "user:uo1"}),
+            false,
+        ),
+        host_doc(
+            "model.play_clip",
+            "Play Clip",
+            "Plays an animation clip of a model on the objects a planting places (glTF node animation; `query.clips` lists a model's clips). `object` is a planting (`g4`: every object it places) or one of its objects (`g4#12`, counted from 0 as `planting.replace_placement` counts them). `clip` is a clip's name, or its index from 0: an exact name wins, then an index (a whole number, or a numeric string); a name that is not there is an error that lists the clips, and of two clips with the same name the one with the lowest index plays. The clip is sampled at the session's clock (a window's frame time, a film's time in film.render, the `animation_s` of a still) from `start_s` (the clock now). The same clip on the same object starts again; several clips may play at once, and where two move the same property the one started later wins. A clip that ends holds its last pose until `model.stop_clip`, unless `loop` is set. Playing is session state: not saved and not an undo step. The model's file has to be at hand, as for `query.clips`; a model without clips is an error.",
+            vec![
+                p(
+                    "object",
+                    "string",
+                    None,
+                    true,
+                    None,
+                    &[],
+                    "A planting (`g4`) or one of its objects (`g4#12`)",
+                ),
+                p(
+                    "clip",
+                    "string | integer",
+                    None,
+                    true,
+                    None,
+                    &[],
+                    "The clip's name, or its index from 0",
+                ),
+                p(
+                    "start_s",
+                    "number",
+                    Some("s"),
+                    false,
+                    Some("the session's clock"),
+                    &[],
+                    "When the clip starts, on the session's clock",
+                ),
+                p(
+                    "loop",
+                    "boolean",
+                    None,
+                    false,
+                    Some("false"),
+                    &[],
+                    "Start over at the clip's end",
+                ),
+            ],
+            "{object, planting, plant, plants, clip, start_s, loop, duration_s, restarted, playing}",
+            json!({"object": "g4", "clip": "fire", "start_s": 12.5}),
+            false,
+        ),
+        host_doc(
+            "model.stop_clip",
+            "Stop Clip",
+            "Stops the clips playing on the objects a planting places (`object` as `model.play_clip` takes it): of `clip` only, or every clip without it. A stopped part is at rest again.",
+            vec![
+                p(
+                    "object",
+                    "string",
+                    None,
+                    true,
+                    None,
+                    &[],
+                    "A planting (`g4`) or one of its objects (`g4#12`)",
+                ),
+                p(
+                    "clip",
+                    "string | integer",
+                    None,
+                    false,
+                    Some("every clip"),
+                    &[],
+                    "Only this clip (its name or index)",
+                ),
+            ],
+            "{object, stopped, playing}",
+            json!({"object": "g4"}),
+            false,
+        ),
+        host_doc(
+            "query.part_pose",
+            "Part Pose",
+            "For each object `object` names (a planting `g4`, or one of its objects `g4#12`), the matrix in model space of every moving part of its model at clock time `t` (the session's clock now): the clips playing on it composed as they are drawn (the one started later wins where they share a property), a part at rest without any. Column-major, 16 numbers, as the renderer takes a matrix. The model's file has to be at hand, as for `query.clips`.",
+            vec![
+                p(
+                    "object",
+                    "string",
+                    None,
+                    true,
+                    None,
+                    &[],
+                    "A planting (`g4`) or one of its objects (`g4#12`)",
+                ),
+                p(
+                    "t",
+                    "number",
+                    Some("s"),
+                    false,
+                    Some("the session's clock"),
+                    &[],
+                    "The time on the session's clock",
+                ),
+            ],
+            "{object, t, plants: [{plant, asset, posed, clips, parts: [[16 numbers, column-major], ...]}]}",
+            json!({"object": "g4", "t": 12.75}),
+            false,
+        ),
+        host_doc(
+            "effect.flash",
+            "Flash",
+            "A short-lived flash at `position`: a point light of `color` (linear red, green, blue, 0..1), `intensity` in lumens and `range_m`, and when `size_m` is above 0 a glowing quad of that side facing the camera. It lasts `frames` frames (default 2) or `seconds`, not both, from `start_s` (the clock now), then goes. A frame is 1/fps of the rate in force where it is drawn: the film's in film.render, so the same frames show it every time; a window's own rate live; 60 a second in a still. Renderer-side and cheap: at most 16 flashes at once, over it the oldest is dropped. Answers the flash's `id`. Session state: not saved and not an undo step.",
+            vec![
+                p(
+                    "position",
+                    "[x, y, z]",
+                    Some("m"),
+                    true,
+                    None,
+                    &[],
+                    "Where the flash is",
+                ),
+                p(
+                    "color",
+                    "[r, g, b]",
+                    None,
+                    true,
+                    None,
+                    &[],
+                    "Linear red, green and blue, each 0..1",
+                ),
+                p(
+                    "intensity",
+                    "number",
+                    Some("lm"),
+                    true,
+                    None,
+                    &[],
+                    "Luminous flux of its light, as a lamp's",
+                ),
+                p(
+                    "range_m",
+                    "number",
+                    Some("m"),
+                    true,
+                    None,
+                    &[],
+                    "Where its light has faded to zero",
+                ),
+                p(
+                    "size_m",
+                    "number",
+                    Some("m"),
+                    false,
+                    Some("0.15"),
+                    &[],
+                    "Side of the glowing quad; 0 for none",
+                ),
+                p(
+                    "frames",
+                    "integer",
+                    None,
+                    false,
+                    Some("2"),
+                    &[],
+                    "How many frames it lasts (not with `seconds`), 1..1000",
+                ),
+                p(
+                    "seconds",
+                    "number",
+                    Some("s"),
+                    false,
+                    None,
+                    &[],
+                    "How long it lasts (not with `frames`)",
+                ),
+                p(
+                    "start_s",
+                    "number",
+                    Some("s"),
+                    false,
+                    Some("the session's clock"),
+                    &[],
+                    "When it starts, on the session's clock",
+                ),
+            ],
+            "{id, start_s, frames | seconds, size_m, flashes, note?}",
+            json!({"position": [0, 1.5, 0], "color": [1, 0.8, 0.5], "intensity": 2000, "range_m": 4}),
             false,
         ),
         host_doc(
@@ -1576,16 +1760,20 @@ pub fn execute(host: &mut dyn Host, id: &str, params: &Value) -> Result<Value, S
             inspect::light_check_json(session, state, &q)
         }
         "planting.add_border" => add_border_host(host, params),
+        "model.play_clip" => crate::playback::play_clip(host, id, params),
+        "model.stop_clip" => crate::playback::stop_clip(host, id, params),
+        "query.part_pose" => crate::playback::part_pose(host, id, params),
+        "effect.flash" => crate::playback::flash(host, id, params),
         "query.clips" => {
             Fields::new(id, "parameter", Some(params), &["model"])?;
             let model: String = need(id, params, "model")?;
-            host.clips(&model)
+            host.animation(&model)
                 .ok_or_else(|| {
                     format!(
                         "{id}: this session has no model files; the window, `visioncraft-cli` and the MCP server answer it"
                     )
                 })?
-                .map(|clips| clips_json(&clips))
+                .map(|animation| clips_json(&animation))
         }
         "query.ground_length" => {
             Fields::new(id, "parameter", Some(params), &["path"])?;
@@ -1983,13 +2171,15 @@ fn file_save(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
     Ok(json!({"path": target.display().to_string(), "bytes": bytes.len()}))
 }
 
-/// `query.clips`'s answer: per clip its name, its length in seconds and its channel count.
-fn clips_json(clips: &[visioncraft_core::Clip]) -> Value {
-    let clips: Vec<Value> = clips
+/// `query.clips`'s answer: per clip its name, its length in seconds and its channel count, and
+/// what was left out of the file's animations and why.
+fn clips_json(animation: &visioncraft_core::Animation) -> Value {
+    let clips: Vec<Value> = animation
+        .clips
         .iter()
         .map(|c| json!({"name": c.name, "duration_s": c.duration, "channels": c.channels.len()}))
         .collect();
-    json!({ "clips": clips })
+    json!({ "clips": clips, "warnings": animation.warnings })
 }
 
 fn catalog_search(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
@@ -2551,6 +2741,12 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
         ),
         None => None,
     };
+    // The session's clock is the picture's: a clip started without a time starts here.
+    host.state().playback.clock = animation_s;
+    let (playback, fps) = {
+        let playback = &host.state().playback;
+        (playback.clone(), playback.fps)
+    };
     let request = RenderRequest {
         width,
         height,
@@ -2558,6 +2754,8 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
         quality: quality.to_string(),
         photo,
         animation_s,
+        playback,
+        fps,
         lamp_level,
         exposure_offset_ev,
         grade_mix,

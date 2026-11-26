@@ -360,7 +360,7 @@ fn every_documented_example_runs() {
     for c in list["result"]["commands"].as_array().unwrap() {
         let (id, example) = (c["id"].as_str().unwrap(), &c["example"]);
         // Files, history and pictures need a file, a step and a GPU; model.add a model file,
-        // and so does query.clips (the clips come from the model's own file).
+        // and so do query.clips and the clip commands (the clips come from the model's file).
         if example.is_null()
             || id.starts_with("file.")
             || id.starts_with("edit.")
@@ -368,6 +368,9 @@ fn every_documented_example_runs() {
             || id == "film.render"
             || id == "model.add"
             || id == "query.clips"
+            || id == "query.part_pose"
+            || id.starts_with("model.play_clip")
+            || id.starts_with("model.stop_clip")
         {
             continue;
         }
