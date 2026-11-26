@@ -1178,10 +1178,6 @@ fn run_tiers<'a>(
     }
 }
 
-/// Turns a generator into placements. `ground(x, z)` is the terrain height; a point with no
-/// ground goes to y = 0. A [`SurfaceFill`] needs its owner's mesh and gives nothing here: use
-/// [`evaluate_surface_fill`].
-///
 /// [`evaluate`] with the rule of `avoid_buildings`: placements for which `blocked` is true are
 /// left out (the app and the automation give [`blocked_by_buildings`] the plant's size and their
 /// models). Generators without the switch evaluate as before.
@@ -1306,6 +1302,9 @@ fn spread_variants(ps: &mut [Placement]) {
     }
 }
 
+/// Turns a generator into placements. `ground(x, z)` is the terrain height; a point with no
+/// ground goes to y = 0. A [`SurfaceFill`] needs its owner's mesh and gives nothing here: use
+/// [`evaluate_surface_fill`].
 pub fn evaluate(generator: &Generator, ground: &dyn Fn(f32, f32) -> Option<f32>) -> Evaluation {
     let mut e = evaluate_raw(generator, ground);
     if generator.overrides().is_some_and(|o| !o.is_empty()) {
