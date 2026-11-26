@@ -759,6 +759,8 @@ struct Item {
     conifer: bool,
     /// Lawn grass (`set_item_grass`): bends far more with the gusts.
     grass: bool,
+    /// Listed in `Renderer::moved` (an instance moved since the last frame).
+    moved: bool,
 }
 
 /// Instances in one ground cell: culled as a unit, drawn as one range, one
@@ -3308,6 +3310,7 @@ impl Renderer {
             follows_reach: false,
             conifer: false,
             grass: false,
+            moved: false,
         }));
         self.set_instances(id, instances);
         id
@@ -3439,10 +3442,12 @@ impl Renderer {
             u64::from(item.base + index as u32) * batch::INSTANCE_BYTES,
             &bytes,
         );
-        self.items[id.0 as usize] = Some(item);
-        if self.moved.last() != Some(&id.0) {
+        // Listed once until the frame takes the list, however many of its instances move.
+        if !item.moved {
+            item.moved = true;
             self.moved.push(id.0);
         }
+        self.items[id.0 as usize] = Some(item);
     }
 
     /// The bounds of the items `set_instance` moved, and the scene's, made again (once a frame).
@@ -3464,6 +3469,7 @@ impl Renderer {
             }
             item.bounds = item.clusters.iter().filter_map(|c| c.bounds).reduce(union);
             item.size = item_size(&item, mesh_bounds);
+            item.moved = false;
             self.items[i as usize] = Some(item);
         }
         // Reused next frame: nothing is allocated while parts move.
@@ -7928,6 +7934,38 @@ mod tests {
             r.cascade_rendered.iter().all(Option::is_none) && r.far_cache.is_none(),
             "the window's cascades no longer cover the scene"
         );
+    }
+
+    /// Each moved item is listed once until the frame takes the list, however its moves
+    /// interleave with other items' (a host that prepares without drawing keeps it short).
+    #[test]
+    fn a_moved_item_is_listed_once() {
+        let (device, queue) = pollster::block_on(headless_device()).expect("device");
+        let mut r = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let p = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        let mesh = r
+            .add_mesh(&Mesh {
+                positions: &p,
+                normals: &[[0.0, 0.0, 1.0]; 3],
+                indices: &[0, 1, 2],
+                ..Default::default()
+            })
+            .unwrap();
+        let mat = r.add_material(&Material::default());
+        let at = |x: f32| Mat4::from_translation(Vec3::new(x, 0.0, 0.0));
+        let (a, b) = (
+            r.add_item(mesh, mat, &[at(0.0)]),
+            r.add_item(mesh, mat, &[at(8.0)]),
+        );
+        for k in 0..50 {
+            r.set_instance(a, 0, at(k as f32));
+            r.set_instance(b, 0, at(8.0 + k as f32));
+        }
+        assert_eq!(r.moved.len(), 2);
+        r.update_moved();
+        assert!(r.moved.is_empty());
+        r.set_instance(a, 0, at(0.0));
+        assert_eq!(r.moved.len(), 1, "listed again after the frame");
     }
 
     /// `set_sky_volume_light` needs the volume it changes the light of.
