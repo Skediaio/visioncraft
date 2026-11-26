@@ -948,6 +948,65 @@ mod tests {
         });
     }
 
+    /// The window's control channel and model files answer `query.clips` for a library model
+    /// that is loaded and stands still: `{clips: []}`, where the browser has no file to fall
+    /// back on (it only has what the library kept when it loaded the model).
+    #[test]
+    fn a_loaded_library_model_without_clips_answers_an_empty_list() {
+        let Ok((device, queue)) = pollster::block_on(visioncraft_render::headless_device()) else {
+            eprintln!("no GPU adapter: skipped");
+            return;
+        };
+        let renderer =
+            visioncraft_render::Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let mut studio = super::Studio::new(renderer, Project::default());
+        {
+            let s = &mut studio;
+            // The catalogue with the fixtures in it (a window gets it from catalog.json).
+            s.scene.library.merge_user_assets();
+            s.scene
+                .library
+                .note("g", "vc-bollard", &[glam::Mat4::IDENTITY]);
+            for _ in 0..500 {
+                let (lib, r) = (&mut s.scene.library, &mut s.renderer);
+                lib.pump(r, glam::Vec3::ZERO);
+                if lib.resident_models() == 1 && lib.idle() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            assert_eq!(
+                s.scene.library.resident_models(),
+                1,
+                "the bollard is loaded"
+            );
+        }
+        let (mut mode, mut selection) = (None, crate::selection::SelectionState::default());
+        let mut host_ui = crate::host_ui::HostUi::default();
+        let mut host = super::WindowHost {
+            studio: &mut studio,
+            device: &device,
+            queue: &queue,
+            mode: &mut mode,
+            selection: &mut selection,
+            extension_modes: &[],
+            host_ui: &mut host_ui,
+            now: 0.0,
+        };
+        let mut state = super::HostState::new(visioncraft_automation::Access::any());
+        let mut bound = super::Bound {
+            host: &mut host,
+            state: &mut state,
+        };
+        let r = visioncraft_automation::commands::execute(
+            &mut bound,
+            "query.clips",
+            &json!({"model": "vc-bollard"}),
+        )
+        .unwrap_or_else(|e| panic!("query.clips: {e}"));
+        assert_eq!(r, json!({"clips": []}));
+    }
+
     #[test]
     fn what_ui_select_selects_ui_get_reads_back() {
         use super::Host;

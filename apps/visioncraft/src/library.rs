@@ -241,8 +241,9 @@ pub struct Library {
     pub ground_offsets: HashMap<String, f32>,
     indexes_asked: bool,
     models: HashMap<String, Model>,
-    /// The clips of each model file that is loaded, by its path: in the browser a streamed
-    /// model's bytes are not kept, but its clips are still asked for (`query.clips`).
+    /// The clips of each model file that is loaded, by its path, an empty list for a model
+    /// that stands still: in the browser a streamed model's bytes are not kept, but its clips
+    /// are still asked for (`query.clips`).
     pub clips: HashMap<String, Vec<visioncraft_core::Clip>>,
     awaiting: HashSet<String>,
     uploading: Vec<Upload>,
@@ -901,9 +902,9 @@ impl Library {
         }
         self.store.track(Key::Glb(path.clone()), bytes);
         self.models.insert(path.clone(), model);
-        if !clips.is_empty() {
-            self.clips.insert(path, clips);
-        }
+        // Every loaded file, a model that stands still too: the browser has nothing else to
+        // answer `query.clips` from.
+        self.clips.insert(path, clips);
         self.rev += 1;
     }
 
