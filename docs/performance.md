@@ -131,10 +131,12 @@ by scenes with a river, ponds and canals at different heights, two to five in vi
   share of the render target they cover times 1 + the nearness of the nearest of them. A pond
   reaching behind the eye counts the part of the view its box reaches into in front of the
   eye. A plane lies at its largest surface's height when it first shows and keeps that height
-  while it still lies among its surfaces, so the mirror does not jump when two areas trade
-  size. The shaders give water the layer of the nearest plane within 5 cm, so neighbouring
-  planes merge until they are 10 cm apart and no surface of one lies within 5 cm of the
-  other: no water samples another plane's layer (black outside that layer's scissor). The CPU
+  while it still lies among its surfaces and the water within 5 cm of it covers at least
+  1 / 1.3 of what lies within 5 cm of the largest surface, so the mirror does not jump when two
+  areas trade size, and a plane of merged ponds moves to the one that comes to fill the view.
+  The shaders give water the layer of the nearest plane within 5 cm, so neighbouring planes
+  merge until they are 10 cm apart and no surface of one lies within 5 cm of the other: no
+  water samples another plane's layer (black outside that layer's scissor). The CPU
   side is one pass over the water parts (tens at most) into buffers that are reused: a steady
   frame allocates nothing for it.
 - **The sea competes.** The sea no longer always takes the planar pass, as it did before the
@@ -154,7 +156,9 @@ by scenes with a river, ponds and canals at different heights, two to five in vi
   pond but one did before. The sea has no screen-space path: without a pass it falls back to
   the sky (`environment`), whatever the screen-space setting.
 - **No flicker.** A plane keeps its pass until a challenger scores 1.3 times its own for 10
-  consecutive frames.
+  consecutive frames. These are the plain scores, the sea's included: its preference is that
+  same 1.3 already, so a pond takes the sea's held pass at 1.3 times the sea's score (not
+  1.3 squared), and the sea a pond's at 1.3 times the pond's.
 - **Stats.** `RenderStats::water` lists each visible surface with its height and its tier
   (`planar`, `screen_space` or `environment`); over the control channel it is `water` in
   `ui.get` and in a render's `stats` (`view.render`, `visioncraft-cli render`).
