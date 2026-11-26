@@ -225,8 +225,11 @@ impl Underlay {
     }
 }
 
-/// The width and height of a PNG or JPEG from its header, without decoding it: a message for
-/// anything else (never a panic, whatever the bytes).
+/// The width and height of a PNG or JPEG **as it is displayed**, from its header, without
+/// decoding it: a message for anything else (never a panic, whatever the bytes). A JPEG's EXIF
+/// orientation is honoured: the values 5..=8 turn the picture 90 degrees, so its sides are
+/// swapped as a viewer swaps them. The size is that of the pixels the app draws, and the pixel
+/// coordinates of `underlay.calibrate` and `wall_photo.add` are taken in this picture.
 pub fn image_size(bytes: &[u8]) -> Result<[u32; 2], String> {
     const PNG: &[u8] = b"\x89PNG\r\n\x1a\n";
     let size = if bytes.starts_with(PNG) {
@@ -239,7 +242,13 @@ pub fn image_size(bytes: &[u8]) -> Result<[u32; 2], String> {
         };
         [n(16), n(20)]
     } else if bytes.starts_with(&[0xFF, 0xD8]) {
-        jpeg_size(bytes).ok_or("the JPEG has no readable size (cut short or damaged)")?
+        let size =
+            jpeg_size(bytes).ok_or("the JPEG has no readable size (cut short or damaged)")?;
+        if jpeg_orientation(bytes) >= 5 {
+            [size[1], size[0]]
+        } else {
+            size
+        }
     } else {
         return Err("not a PNG or JPEG image (only those are read)".into());
     };
@@ -255,8 +264,18 @@ pub fn image_size(bytes: &[u8]) -> Result<[u32; 2], String> {
     Ok(size)
 }
 
-/// Walks the JPEG's segments to its first start-of-frame marker.
-fn jpeg_size(b: &[u8]) -> Option<[u32; 2]> {
+/// A start-of-frame marker: SOF0..SOF15, except DHT (C4), JPG (C8) and DAC (CC), which lie in
+/// that range but are no frames.
+fn is_sof(marker: u8) -> bool {
+    matches!(marker, 0xC0..=0xCF) && !matches!(marker, 0xC4 | 0xC8 | 0xCC)
+}
+
+/// Walks a JPEG's segments in order from behind its SOI, giving `visit` each one that has a
+/// length: its marker, the length it declares, and the file from the first byte behind that
+/// length (so the segment's own bytes are the first `len - 2` of it). The first result `visit`
+/// returns ends the walk. It also ends at the first start-of-frame (which `visit` sees), at a
+/// scan, at the end of the image or where the bytes run out: `None` then.
+fn jpeg_segments<T>(b: &[u8], mut visit: impl FnMut(u8, usize, &[u8]) -> Option<T>) -> Option<T> {
     let mut at = 2;
     loop {
         // skip fill bytes up to a marker
@@ -275,17 +294,102 @@ fn jpeg_size(b: &[u8]) -> Option<[u32; 2]> {
             _ => {}
         }
         let len = usize::from(u16::from_be_bytes([*b.get(at)?, *b.get(at + 1)?]));
-        // SOF0..SOF15 except DHT (C4), JPG (C8) and DAC (CC)
-        if matches!(marker, 0xC0..=0xCF) && !matches!(marker, 0xC4 | 0xC8 | 0xCC) {
-            let h = u16::from_be_bytes([*b.get(at + 3)?, *b.get(at + 4)?]);
-            let w = u16::from_be_bytes([*b.get(at + 5)?, *b.get(at + 6)?]);
-            return Some([u32::from(w), u32::from(h)]);
+        if let Some(found) = visit(marker, len, b.get(at + 2..).unwrap_or(&[])) {
+            return Some(found);
         }
-        if len < 2 {
+        if is_sof(marker) || len < 2 {
             return None;
         }
         at += len;
     }
+}
+
+/// The size the JPEG's first start-of-frame declares: `[width, height]` as stored.
+fn jpeg_size(b: &[u8]) -> Option<[u32; 2]> {
+    jpeg_segments(b, |marker, _, seg| {
+        if !is_sof(marker) {
+            return None;
+        }
+        // precision, height, width
+        let n = |at: usize| -> Option<u32> {
+            Some(u32::from(u16::from_be_bytes([
+                *seg.get(at)?,
+                *seg.get(at + 1)?,
+            ])))
+        };
+        Some([n(3)?, n(1)?])
+    })
+}
+
+/// The EXIF orientation of a JPEG: 1..=8 as EXIF 2.32 numbers it (1: as stored; 3: turned
+/// 180 degrees; 6: turned 90 degrees clockwise; 8: 90 degrees counter-clockwise; 2, 4, 5 and
+/// 7: those, mirrored), read from the TIFF tag 0x0112 in its APP1 `Exif` segment without
+/// decoding the picture. 1 for anything else: a JPEG without the tag, one whose segment is cut
+/// or damaged, or a value outside 1..=8; and for any other bytes. Never a panic, whatever the
+/// bytes.
+pub fn jpeg_orientation(bytes: &[u8]) -> u8 {
+    if !bytes.starts_with(&[0xFF, 0xD8]) {
+        return 1;
+    }
+    jpeg_segments(bytes, |marker, len, seg| {
+        if marker != 0xE1 {
+            return None;
+        }
+        // the whole segment as its length says: a cut one is not trusted
+        let body = seg.get(..len.checked_sub(2)?)?;
+        Some(exif_orientation(body.strip_prefix(b"Exif\0\0")?))
+    })
+    .flatten()
+    .unwrap_or(1)
+}
+
+/// The orientation tag (0x0112: a SHORT that comes once) in EXIF's TIFF data, whose offsets
+/// count from its start; its first two bytes give the byte order ("II" little-endian, "MM"
+/// big-endian). `None` without the tag, and wherever the bytes run out or disagree.
+fn exif_orientation(tiff: &[u8]) -> Option<u8> {
+    let be = if tiff.starts_with(b"MM") {
+        true
+    } else if tiff.starts_with(b"II") {
+        false
+    } else {
+        return None;
+    };
+    let u16_at = |at: usize| -> Option<u16> {
+        let b = tiff.get(at..at.checked_add(2)?)?;
+        Some(if be {
+            u16::from_be_bytes([b[0], b[1]])
+        } else {
+            u16::from_le_bytes([b[0], b[1]])
+        })
+    };
+    let u32_at = |at: usize| -> Option<u32> {
+        let b = tiff.get(at..at.checked_add(4)?)?;
+        Some(if be {
+            u32::from_be_bytes([b[0], b[1], b[2], b[3]])
+        } else {
+            u32::from_le_bytes([b[0], b[1], b[2], b[3]])
+        })
+    };
+    // 42 says TIFF; then where IFD0 lies
+    if u16_at(2)? != 42 {
+        return None;
+    }
+    let ifd = u32_at(4)? as usize;
+    let entries = usize::from(u16_at(ifd)?);
+    (0..entries).find_map(|i| {
+        let at = ifd.checked_add(2)?.checked_add(i.checked_mul(12)?)?;
+        let (tag, kind) = (u16_at(at)?, u16_at(at.checked_add(2)?)?);
+        let (count, value) = (u32_at(at.checked_add(4)?)?, u16_at(at.checked_add(8)?)?);
+        (tag == 0x0112 && kind == 3 && count == 1 && (1..=8).contains(&value))
+            .then_some(value as u8)
+    })
+}
+
+/// The orientation to display an image with, from its bytes: a JPEG's EXIF orientation
+/// ([`jpeg_orientation`]); 1 for anything else (a PNG is never turned). It is the turn
+/// [`image_size`] already counts; the app gives the decoded pixels the same turn.
+pub fn image_orientation(bytes: &[u8]) -> u8 {
+    jpeg_orientation(bytes)
 }
 
 #[cfg(test)]
@@ -454,5 +558,218 @@ mod tests {
                 .unwrap_err()
                 .contains("at most")
         );
+    }
+
+    // ---- JPEG EXIF orientation ----
+
+    /// An APP1 segment with `payload` behind its two length bytes.
+    fn app1(payload: &[u8]) -> Vec<u8> {
+        let mut s = vec![0xFF, 0xE1];
+        s.extend(u16::try_from(payload.len() + 2).unwrap().to_be_bytes());
+        s.extend(payload);
+        s
+    }
+
+    /// An IFD entry: tag, type, count, and a four-byte value field of which the first two bytes
+    /// are `value`, in the byte order `be` ("MM": big-endian, "II": little-endian).
+    fn entry(tag: u16, kind: u16, count: u32, value: u16, be: bool) -> [u8; 12] {
+        let w16 = |v: u16| if be { v.to_be_bytes() } else { v.to_le_bytes() };
+        let w32 = |v: u32| if be { v.to_be_bytes() } else { v.to_le_bytes() };
+        let mut e = Vec::new();
+        e.extend(w16(tag));
+        e.extend(w16(kind));
+        e.extend(w32(count));
+        e.extend(w16(value));
+        e.extend([0, 0]);
+        e.try_into().unwrap()
+    }
+
+    /// EXIF for an APP1 segment: `Exif\0\0`, a TIFF header in the byte order `be`, IFD0 at
+    /// offset 8 holding `entries`, and no next IFD.
+    fn exif(be: bool, entries: &[[u8; 12]]) -> Vec<u8> {
+        let mut tiff = if be {
+            b"MM\0\x2a\0\0\0\x08".to_vec()
+        } else {
+            b"II\x2a\0\x08\0\0\0".to_vec()
+        };
+        tiff.extend(if be {
+            [0, entries.len() as u8]
+        } else {
+            [entries.len() as u8, 0]
+        });
+        for e in entries {
+            tiff.extend(e);
+        }
+        tiff.extend([0; 4]);
+        let mut p = b"Exif\0\0".to_vec();
+        p.extend(tiff);
+        p
+    }
+
+    /// SOI, `segments`, SOF0 of `[width, height]` (one grey component) and EOI: a JPEG to read a
+    /// size and an orientation from.
+    fn jpeg_with(segments: &[Vec<u8>], [w, h]: [u16; 2]) -> Vec<u8> {
+        let mut b = vec![0xFF, 0xD8];
+        for s in segments {
+            b.extend(s);
+        }
+        b.extend([0xFF, 0xC0, 0x00, 0x0B, 8]);
+        b.extend(h.to_be_bytes());
+        b.extend(w.to_be_bytes());
+        b.extend([1, 1, 0x11, 0]);
+        b.extend([0xFF, 0xD9]);
+        b
+    }
+
+    /// A 500 x 300 JPEG whose EXIF orientation is `value`.
+    fn jpeg_turned(value: u16, be: bool) -> Vec<u8> {
+        jpeg_with(
+            &[app1(&exif(be, &[entry(0x0112, 3, 1, value, be)]))],
+            [500, 300],
+        )
+    }
+
+    #[test]
+    fn the_exif_orientation_is_read_in_both_byte_orders() {
+        for be in [true, false] {
+            for value in 1..=8 {
+                assert_eq!(
+                    jpeg_orientation(&jpeg_turned(value, be)),
+                    value as u8,
+                    "{}-endian",
+                    if be { "big" } else { "little" }
+                );
+            }
+        }
+        // As cameras write it: a JFIF APP0 first, and other tags round the orientation in IFD0.
+        let app0 = vec![
+            0xFF, 0xE0, 0x00, 0x10, b'J', b'F', b'I', b'F', 0, 1, 1, 0, 0, 1, 0, 1, 0, 0,
+        ];
+        let entries = [
+            entry(0x010F, 2, 4, 0, true),
+            entry(0x0112, 3, 1, 6, true),
+            entry(0x011A, 5, 1, 0, true),
+        ];
+        let file = jpeg_with(&[app0, app1(&exif(true, &entries))], [500, 300]);
+        assert_eq!(jpeg_orientation(&file), 6);
+        // The IFD0 offset is followed, not assumed to be 8.
+        let mut tiff = b"II\x2a\0\x10\0\0\0".to_vec();
+        tiff.extend([0; 8]);
+        tiff.extend([1, 0]);
+        tiff.extend(entry(0x0112, 3, 1, 8, false));
+        tiff.extend([0; 4]);
+        let payload = [b"Exif\0\0".as_slice(), tiff.as_slice()].concat();
+        assert_eq!(
+            jpeg_orientation(&jpeg_with(&[app1(&payload)], [500, 300])),
+            8
+        );
+    }
+
+    #[test]
+    fn image_size_is_the_size_as_displayed() {
+        for value in 1..=8u16 {
+            let expected = if (5..=8).contains(&value) {
+                [300, 500]
+            } else {
+                [500, 300]
+            };
+            assert_eq!(
+                image_size(&jpeg_turned(value, true)),
+                Ok(expected),
+                "orientation {value}"
+            );
+        }
+        // without the tag the stored size stands
+        assert_eq!(image_size(&jpeg_with(&[], [500, 300])), Ok([500, 300]));
+    }
+
+    #[test]
+    fn without_a_usable_exif_orientation_it_is_1() {
+        assert_eq!(jpeg_orientation(&jpeg_with(&[], [500, 300])), 1);
+        assert_eq!(image_orientation(&png_header(10, 10)), 1);
+        assert_eq!(image_orientation(b""), 1);
+        assert_eq!(image_orientation(&[0xFF, 0xD8]), 1);
+        // APP1 segments that are not EXIF: XMP, and `Exif\0\0` with no TIFF header behind it
+        let xmp = jpeg_with(
+            &[app1(b"http://ns.adobe.com/xap/1.0/\0<x:xmpmeta/>")],
+            [500, 300],
+        );
+        assert_eq!(jpeg_orientation(&xmp), 1);
+        let junk = jpeg_with(&[app1(b"Exif\0\0not a TIFF header at all")], [500, 300]);
+        assert_eq!(jpeg_orientation(&junk), 1);
+        // a TIFF header that is not one: another magic, another byte order, or cut
+        for head in [
+            b"MM\0\x2b\0\0\0\x08".as_slice(),
+            b"XX\0\x2a\0\0\0\x08",
+            b"MM\0\x2a",
+        ] {
+            let mut p = b"Exif\0\0".to_vec();
+            p.extend(head);
+            assert_eq!(
+                jpeg_orientation(&jpeg_with(&[app1(&p)], [500, 300])),
+                1,
+                "{head:?}"
+            );
+        }
+        // values outside 1..=8, and the tag with another type, another count or another number
+        for value in [0u16, 9, 255] {
+            assert_eq!(
+                jpeg_orientation(&jpeg_turned(value, false)),
+                1,
+                "value {value}"
+            );
+        }
+        for e in [
+            entry(0x0112, 4, 1, 6, true),
+            entry(0x0112, 3, 2, 6, true),
+            entry(0x0113, 3, 1, 6, true),
+        ] {
+            assert_eq!(
+                jpeg_orientation(&jpeg_with(&[app1(&exif(true, &[e]))], [500, 300])),
+                1,
+                "{e:?}"
+            );
+        }
+        // offsets and counts that point past the data
+        for tiff in [
+            b"MM\0\x2a\xff\xff\xff\xff".as_slice(),
+            b"MM\0\x2a\0\0\0\x08\xff\xff",
+            b"MM\0\x2a\0\0\0\x08\0\x01\0\x11",
+        ] {
+            let mut p = b"Exif\0\0".to_vec();
+            p.extend(tiff);
+            assert_eq!(
+                jpeg_orientation(&jpeg_with(&[app1(&p)], [500, 300])),
+                1,
+                "{tiff:?}"
+            );
+        }
+        // a segment length below its own two bytes ends the walk before the Exif segment
+        let bad = jpeg_with(
+            &[
+                vec![0xFF, 0xE1, 0x00, 0x01],
+                app1(&exif(true, &[entry(0x0112, 3, 1, 6, true)])),
+            ],
+            [500, 300],
+        );
+        assert_eq!(jpeg_orientation(&bad), 1);
+    }
+
+    #[test]
+    fn a_cut_exif_segment_reads_as_1_and_never_panics() {
+        let file = jpeg_turned(6, true);
+        let app1_end = 2 + app1(&exif(true, &[entry(0x0112, 3, 1, 6, true)])).len();
+        // every cut inside the APP1: the segment is not whole, so it is not trusted
+        for n in 0..app1_end {
+            assert_eq!(jpeg_orientation(&file[..n]), 1, "cut at {n}");
+        }
+        // the whole segment, whatever follows (or does not): read
+        assert_eq!(jpeg_orientation(&file[..app1_end]), 6);
+        // and no prefix of the file makes either function panic
+        for n in 0..=file.len() {
+            let _ = image_size(&file[..n]);
+            let _ = jpeg_orientation(&file[..n]);
+        }
+        assert_eq!(image_size(&file), Ok([300, 500]));
     }
 }
