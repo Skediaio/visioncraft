@@ -398,13 +398,22 @@ fn fs_sea(in: Varying) -> @location(0) vec4<f32> {
     let r = reflect(-v, n);
     var sky = environment(normalize(vec3<f32>(r.x, max(r.y, 0.0) + 2.0 * sigma, r.z)), rough);
     var reflected = sky;
-    if g.reflection.x > 0.5 && abs(sea.surface.x - g.reflection.y) < 0.05 {
+    // The sea is one of the frame's water planes (water.rs): the planar reflection's layer of
+    // its level when it has a pass.
+    let plane = water_plane_at(sea.surface.x);
+    if plane >= 0 {
         // The planar reflection at the mean level, shifted by the slope (less with distance);
         // where the surface is rough it blurs into the sky's prefiltered reflection.
         let tilt = (g.view * vec4<f32>(n.x, 0.0, n.z, 0.0)).xy;
         let size = vec2<f32>(textureDimensions(planar_reflection));
         let uv = in.clip.xy * g.viewport.zw + tilt * vec2<f32>(1.0, -1.0) * 1.2 / max(depth, 1.0);
-        let planar = textureSampleLevel(planar_reflection, env_sampler, clamp(uv, 0.5 / size, 1.0 - 0.5 / size), 0.0).rgb;
+        let planar = textureSampleLevel(
+            planar_reflection,
+            env_sampler,
+            clamp(uv, 0.5 / size, 1.0 - 0.5 / size),
+            i32(g.reflection_planes[plane].y),
+            0.0,
+        ).rgb;
         reflected = mix(planar, sky, max(smoothstep(0.15, 0.45, rough), smoothstep(0.05, 0.2, sigma)));
     }
     let l = g.sun_dir.xyz;

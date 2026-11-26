@@ -39,27 +39,96 @@ pub struct Sea {
     pub coast: Vec<[f32; 2]>,
 }
 
-/// Whether any of `sea`'s surface may show in the view `view_proj`: rays through a grid over the
+/// Where the sea shows in a view: what the planar reflection's ranking (`water.rs`) needs.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SeaSight {
+    /// The cells of the view's ray grid that met the water: how many, and their bounds (rows
+    /// and columns of the grid, inclusive).
+    pub hits: u32,
+    pub cells: Cells,
+    /// From the eye to the nearest point a ray met (m).
+    pub distance: f32,
+    /// The least view-space depth of those points (m): what sea.wgsl divides the ripples'
+    /// shift by.
+    pub depth: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Cells {
+    pub x0: u32,
+    pub y0: u32,
+    pub x1: u32,
+    pub y1: u32,
+}
+
+/// The cells the rays met, in pixels of a render target of `size` (top-left origin): a full
+/// cell past the outermost rays that met the water on every side, as far as the next ray, which
+/// missed it (half a cell left a black band of up to a cell's half along the horizon and the
+/// coast), cut to the target.
+impl SeaSight {
+    pub(crate) fn rect(self, size: (u32, u32)) -> crate::water::Rect {
+        let cell = |c: u32, n: u32, size: u32| {
+            (
+                ((c as f32 - 1.0).max(0.0) * size as f32 / n as f32).floor() as u32,
+                ((c as f32 + 1.0) * size as f32 / n as f32)
+                    .ceil()
+                    .min(size as f32) as u32,
+            )
+        };
+        let (x0, _) = cell(self.cells.x0, COLUMNS, size.0);
+        let (_, x1) = cell(self.cells.x1, COLUMNS, size.0);
+        let (y0, _) = cell(self.cells.y0, ROWS, size.1);
+        let (_, y1) = cell(self.cells.y1, ROWS, size.1);
+        crate::water::Rect {
+            x: x0,
+            y: y0,
+            w: x1.saturating_sub(x0),
+            h: y1.saturating_sub(y0),
+        }
+    }
+}
+
+/// The grid of rays through the view that looks for the sea: 32 x 24 cells.
+pub(crate) const COLUMNS: u32 = 32;
+pub(crate) const ROWS: u32 = 24;
+
+/// Where `sea`'s surface shows in the view `view_proj` of `eye`: rays through a grid over the
 /// view meet its level on the sea side of the coast (with a margin growing with the distance)
-/// and inside the outline, or a corner of the outline lies in the view. Hills and dunes between
-/// are not tested: what the view frames, it counts.
-pub(crate) fn sea_in_view(sea: &Sea, view_proj: glam::Mat4) -> bool {
+/// and inside the outline, and the corners of the outline that lie in the view. Hills and dunes
+/// between are not tested: what the view frames, it counts. Rows count from the top of the
+/// view, as the render target's pixels do.
+pub(crate) fn sea_sight(sea: &Sea, eye: glam::Vec3, view_proj: glam::Mat4) -> Option<SeaSight> {
     use glam::Vec3;
     let inverse = view_proj.inverse();
     let level = sea.level;
-    let corner_seen = sea.outline.iter().any(|&[x, z]| {
+    let mut sight: Option<SeaSight> = None;
+    // A corner of the outline in view: some of it shows where no ray through the grid lands.
+    // The rays still count: a corner alone gave a large sea a cell's rectangle (the scissor of
+    // its planar pass, black beyond) and a coverage of one ray.
+    for &[x, z] in sea.outline.iter().take(if sea.outline.len() >= 3 {
+        usize::MAX
+    } else {
+        0
+    }) {
         let c = view_proj * glam::Vec4::new(x, level, z, 1.0);
-        c.w > 0.0 && c.x.abs() <= c.w && c.y.abs() <= c.w
-    });
-    if sea.outline.len() >= 3 && corner_seen {
-        return true;
+        if c.w > 0.0 && c.x.abs() <= c.w && c.y.abs() <= c.w {
+            let ndc_x = (c.x / c.w * 0.5 + 0.5) * COLUMNS as f32;
+            let ndc_y = (0.5 - c.y / c.w * 0.5) * ROWS as f32;
+            see(
+                &mut sight,
+                (ndc_y as u32).min(ROWS),
+                (ndc_x as u32).min(COLUMNS),
+                Vec3::new(x, level, z),
+                eye,
+                c.w,
+            );
+        }
     }
-    const COLUMNS: usize = 32;
-    const ROWS: usize = 24;
     for row in 0..=ROWS {
         for column in 0..=COLUMNS {
             let x = -1.0 + 2.0 * column as f32 / COLUMNS as f32;
-            let y = -1.0 + 2.0 * row as f32 / ROWS as f32;
+            // Row 0 at the top (NDC y = 1), as the corners above and `SeaSight::rect` take it.
+            let y = 1.0 - 2.0 * row as f32 / ROWS as f32;
             let near = inverse.project_point3(Vec3::new(x, y, 0.0));
             let far = inverse.project_point3(Vec3::new(x, y, 1.0));
             // The ray from the near plane on (past the far plane too: the sea runs on to the
@@ -74,11 +143,44 @@ pub(crate) fn sea_in_view(sea: &Sea, view_proj: glam::Mat4) -> bool {
             let in_outline = sea.outline.len() < 3 || covers(&sea.outline, q);
             let sea_side = sea.coast.len() < 2 || coast_distance(&sea.coast, q) > -margin;
             if in_outline && sea_side {
-                return true;
+                let depth = (view_proj * p.extend(1.0)).w;
+                see(&mut sight, row, column, p, eye, depth);
             }
         }
     }
-    false
+    sight
+}
+
+/// Notes that the ray through grid cell `(row, column)` met the water at `at`, `depth` deep in
+/// the view.
+fn see(
+    sight: &mut Option<SeaSight>,
+    row: u32,
+    column: u32,
+    at: glam::Vec3,
+    eye: glam::Vec3,
+    depth: f32,
+) {
+    let c = sight.get_or_insert(SeaSight {
+        hits: 0,
+        cells: Cells {
+            x0: column,
+            y0: row,
+            x1: column,
+            y1: row,
+        },
+        distance: f32::INFINITY,
+        depth: f32::INFINITY,
+    });
+    c.hits += 1;
+    c.cells = Cells {
+        x0: c.cells.x0.min(column),
+        y0: c.cells.y0.min(row),
+        x1: c.cells.x1.max(column),
+        y1: c.cells.y1.max(row),
+    };
+    c.distance = c.distance.min(at.distance(eye));
+    c.depth = c.depth.min(depth);
 }
 
 /// Even-odd rule over an outline (as sea.wgsl `sea_covers`).
@@ -318,15 +420,27 @@ impl Renderer {
         self.sea.sea.as_ref()
     }
 
-    /// The height the planar reflection mirrors about while the sea is seen from above it and
-    /// some of it lies in the view `view_proj` (`sea_in_view`): looking inland, away from the
-    /// water, the pass drew the whole mirrored scene for nothing.
-    pub(crate) fn sea_plane(&self, view_proj: glam::Mat4) -> Option<f32> {
-        self.sea
-            .sea
-            .as_ref()
-            .filter(|s| self.eye.y > s.level && sea_in_view(s, view_proj))
-            .map(|s| s.level)
+    /// Where the sea shows while it is seen from above it and some of it lies in the view
+    /// `view_proj` (`sea_sight`): the surface the planar reflection's ranking (`water.rs`)
+    /// takes it for, its rectangle padded for the ripple distortion. Looking inland, away from
+    /// the water, the pass drew the whole mirrored scene for nothing.
+    pub(crate) fn sea_surface(
+        &self,
+        view_proj: glam::Mat4,
+        size: (u32, u32),
+        tilt: f32,
+    ) -> Option<crate::water::Surface> {
+        let s = self.sea.sea.as_ref().filter(|s| self.eye.y > s.level)?;
+        let sight = sea_sight(s, self.eye, view_proj)?;
+        let coverage = f64::from(sight.hits) / f64::from((ROWS + 1) * (COLUMNS + 1));
+        let pad = crate::water::ripple_pad(sight.depth, crate::water::SEA_DISTORTION, tilt, size);
+        Some(crate::water::Surface {
+            height: s.level,
+            rect: sight.rect(size).padded(pad, size),
+            coverage: coverage as f32,
+            distance: sight.distance,
+            sea: true,
+        })
     }
 
     /// Writes this frame's sea parameters (the wave count follows the quality).
@@ -419,21 +533,27 @@ mod tests {
         let proj = Mat4::perspective_rh(50f32.to_radians(), 16.0 / 9.0, 0.1, 3000.0);
         let look = |eye: Vec3, target: Vec3| proj * Mat4::look_at_rh(eye, target, Vec3::Y);
         let eye = Vec3::new(-50.0, 30.0, 0.0);
+        let seen = |s: &Sea, target: Vec3| sea_sight(s, eye, look(eye, target));
         // Towards the sea, and inland away from it.
-        assert!(sea_in_view(&s, look(eye, Vec3::new(50.0, 0.0, 0.0))));
-        assert!(!sea_in_view(&s, look(eye, Vec3::new(-150.0, 0.0, 0.0))));
-        // Along the coast the sea's side shows at the edge of the view.
-        assert!(sea_in_view(&s, look(eye, Vec3::new(-50.0, 0.0, -100.0))));
+        assert!(seen(&s, Vec3::new(50.0, 0.0, 0.0)).is_some());
+        assert!(seen(&s, Vec3::new(-150.0, 0.0, 0.0)).is_none());
+        // Along the coast the sea's side shows at the edge of the view: a few rays, in a strip.
+        let edge = seen(&s, Vec3::new(-50.0, 0.0, -100.0)).expect("seen along the coast");
+        assert!(edge.hits < 8 * 33, "{edge:?}");
         // Straight up at the sky: the level is behind every ray.
-        assert!(!sea_in_view(&s, look(eye, Vec3::new(-50.0, 100.0, 1.0))));
-        // No coast and no outline: the sea is everywhere below the horizon.
+        assert!(seen(&s, Vec3::new(-50.0, 100.0, 1.0)).is_none());
+        // No coast and no outline: the sea is everywhere below the horizon: most of the view,
+        // and the nearest water is not far from the eye looking down the shore.
         s.coast.clear();
-        assert!(sea_in_view(&s, look(eye, Vec3::new(-150.0, 0.0, 0.0))));
-        // A small outline in a corner of the view.
+        let open = seen(&s, Vec3::new(-150.0, 0.0, 0.0)).expect("open sea");
+        assert!(open.hits > 25 * 33 / 2, "{open:?}");
+        assert!(open.distance > 30.0 && open.distance < 200.0, "{open:?}");
+        // A small outline in a corner of the view: the corner counts where no ray lands.
         s.outline = vec![[-160.0, -10.0], [-150.0, -10.0], [-150.0, -5.0]];
-        assert!(sea_in_view(&s, look(eye, Vec3::new(-150.0, 0.0, 0.0))));
+        let corner = seen(&s, Vec3::new(-150.0, 0.0, 0.0)).expect("the outline in the corner");
+        assert!(corner.hits >= 1, "{corner:?}");
         s.outline = vec![[400.0, 400.0], [410.0, 400.0], [410.0, 410.0]];
-        assert!(!sea_in_view(&s, look(eye, Vec3::new(-150.0, 0.0, 0.0))));
+        assert!(seen(&s, Vec3::new(-150.0, 0.0, 0.0)).is_none());
     }
 
     fn sea(h: f32, l: f32) -> Sea {
@@ -477,5 +597,77 @@ mod tests {
     fn the_uniform_has_the_shaders_layout() {
         // SeaParams: five vec4, 16 waves of two vec4, 32 vec4 of outline points.
         assert_eq!(UNIFORM_SIZE, 80 + 16 * 32 + 32 * 16);
+    }
+
+    #[test]
+    fn the_sight_rect_reaches_a_full_cell_past_its_outer_rays() {
+        use crate::water::Rect;
+        let sight = |x0, y0, x1, y1| SeaSight {
+            hits: 1,
+            cells: Cells { x0, y0, x1, y1 },
+            distance: 1.0,
+            depth: 1.0,
+        };
+        // 320 x 240 over 32 x 24 cells: a cell is 10 x 10 pixels. The water reaches up to the
+        // next ray that missed it, a cell further on every side.
+        assert_eq!(
+            sight(4, 3, 10, 8).rect((320, 240)),
+            Rect {
+                x: 30,
+                y: 20,
+                w: 80,
+                h: 70
+            }
+        );
+        // Cut to the target at its edges.
+        assert_eq!(
+            sight(0, 0, COLUMNS, ROWS).rect((320, 240)),
+            Rect::whole((320, 240))
+        );
+        assert_eq!(
+            sight(0, 0, 0, 0).rect((320, 240)),
+            Rect {
+                x: 0,
+                y: 0,
+                w: 10,
+                h: 10
+            }
+        );
+    }
+
+    #[test]
+    fn a_bounded_sea_filling_the_view_with_one_corner_in_it_counts_its_rays() {
+        use glam::{Mat4, Vec3, Vec4};
+        // A sea inside a vast outline whose one near corner shows at the bottom left; the
+        // other corners lie beside and behind the eye.
+        let mut s = sea(1.0, 20.0);
+        s.outline = vec![
+            [0.0, 0.0],
+            [5000.0, -5000.0],
+            [30000.0, 10000.0],
+            [-20000.0, 20000.0],
+        ];
+        let eye = Vec3::new(5.0, 10.0, -30.0);
+        let proj = Mat4::perspective_rh(50f32.to_radians(), 16.0 / 9.0, 0.1, 3000.0);
+        let view_proj = proj * Mat4::look_at_rh(eye, Vec3::new(40.0, 0.0, 150.0), Vec3::Y);
+        let in_view = s
+            .outline
+            .iter()
+            .filter(|&&[x, z]| {
+                let c = view_proj * Vec4::new(x, 0.0, z, 1.0);
+                c.w > 0.0 && c.x.abs() <= c.w && c.y.abs() <= c.w
+            })
+            .count();
+        assert_eq!(in_view, 1);
+        let sight = sea_sight(&s, eye, view_proj).expect("the sea in view");
+        // Most of the view below the horizon is water: its rays count, not the corner alone.
+        let coverage = f64::from(sight.hits) / f64::from((ROWS + 1) * (COLUMNS + 1));
+        assert!(coverage > 0.35, "{coverage} {sight:?}");
+        // And the rectangle holds it: the whole width, from above the horizon (a little above
+        // the middle, the view looks down 3 degrees) to the bottom.
+        let rect = sight.rect((320, 240));
+        assert_eq!((rect.x, rect.w), (0, 320), "{rect:?}");
+        assert_eq!(rect.y + rect.h, 240, "{rect:?}");
+        assert!(rect.y > 80 && rect.y < 120, "{rect:?}");
     }
 }

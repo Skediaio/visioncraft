@@ -35,6 +35,31 @@ pub struct RenderStats {
     pub gpu_ms: Option<f32>,
     /// The scene's resolution after `render_scale`.
     pub render_size: (u32, u32),
+    /// The water surfaces of the frame and how each was reflected (`water.rs`): by plane, so
+    /// two areas at one level follow each other and share a tier. Empty while the planar
+    /// reflection is off (`Quality::water_reflection` 0) or no water is in view.
+    pub water: Vec<WaterSurface>,
+}
+
+/// A water surface of a frame and how it was reflected.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WaterSurface {
+    /// What draws it; `None` for the sea.
+    pub item: Option<WaterItem>,
+    /// The height of the surface (m).
+    pub level_m: f32,
+    pub tier: crate::WaterTier,
+}
+
+/// The item a water surface belongs to: numbers a host can match with `ItemId::index` and
+/// `MaterialId::index`. The renderer knows no names for them: a host that wants an object id
+/// in its stats keeps its own table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WaterItem {
+    pub item: u32,
+    /// The item's part (its index in the item's parts).
+    pub part: u32,
+    pub material: u32,
 }
 
 /// Frame-time budget the automatic choice aims for (30 fps).

@@ -45,6 +45,17 @@ same over MCP (`visioncraft-cli mcp`), JSON lines (`visioncraft-cli serve`) and 
   frame reached the screen, when plants, library files and the sky bakes were done, the stages
   by time, and per placed catalogue asset which level of detail it shows and why (`lods`). Read
   it when the person says loading is slow or a model looks coarse up close.
+- **Water.** Every water surface reflects its surroundings within the quality's budget
+  (docs/performance.md): at Medium one water plane a frame gets a planar mirrored pass (two at
+  High, three at Ultra), the others reflect what is on screen (`screen_space`), or the sky cube
+  (`environment`) when screen-space reflections are off; the sea without a pass always takes
+  the sky. Surfaces at one height share a plane; the sea competes with the ponds for the
+  passes, ahead of a pond unless the pond scores 1.3 times its score.
+  `ui.get` → `water` lists the last frame's visible surfaces in order of height, each
+  `{item, part, material, level_m, tier}` (the renderer's numbers: `ItemId::index`,
+  `MaterialId::index`; the sea is `{"surface": "sea", ...}`), and `quality.waterPlanes` is the
+  budget. Read it to tell which ponds mirror their surroundings in a picture; a render's `stats`
+  carries the same list under `water`.
 - **Editing one plant.** `planting.replace_placement {planting, index, asset?, scale?, offset?}`
   swaps, resizes or moves one plant; `planting.remove_placement {planting, index}` takes it out;
   `planting.reset_placements {planting, index?}` restores one or all. The planting stays one
@@ -184,7 +195,8 @@ dithers into whatever lies under it instead of ending on a line, and a lawn's gr
 into the band, thinning towards the area's inside. `planting.add_floor` sets 1.5 m by default
 (`edge_blend_m` there too; 0 gives the hard edge back). Only the band's triangles are drawn as
 cutouts. A render's result (`view.render`, `visioncraft-cli render`) carries `stats`: the frame's
-`triangles`, `draws` and `gpu_ms` (null without GPU timestamp queries).
+`triangles`, `draws`, `gpu_ms` (null without GPU timestamp queries) and `water` (each visible
+water surface with its height and how it was reflected: see Water above).
 
 ### 8. Lamps, and the garden at dusk
 
@@ -304,7 +316,8 @@ default at cover 0.35) or `overcast` (soft shadows, little direct sun); they dri
 and show in reflections and in the ambient light. The rendering quality and
 the texture resolution belong to the window, not the project: set them over the control channel
 with `ui.set {"quality": "auto" | "low" | "medium" | "high" | "ultra", "textures": "auto" | "1k"
-| "2k" | "4k"}`; `view.render` takes its own `quality`. For a final picture use `view.render
+| "2k" | "4k"}`; `view.render` takes its own `quality`. The presets also set how many water
+planes a frame mirrors (Low none, Medium 1, High 2, Ultra 3: the Water bullet above). For a final picture use `view.render
 {"quality": "photo"}`: many frames averaged at ULTRA give soft shadows with real penumbrae,
 smooth edges and leaves without shimmer (seconds to minutes); recipe 41 has the lens.
 `view.render` also takes `shadow_filter` (`hard`, `pcf4`, `pcf9`, `pcf16` or `pcss`) and
