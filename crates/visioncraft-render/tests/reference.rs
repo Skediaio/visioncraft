@@ -13,8 +13,8 @@ use std::sync::OnceLock;
 use glam::{Mat4, Vec3};
 use visioncraft_render::demo::{self, Camera, MeshData, PlantShape};
 use visioncraft_render::{
-    Atmosphere, HdriImage, LineVertex, Material, Quality, Renderer, ShadowFilter, Sky, Sun,
-    headless_device,
+    Atmosphere, DEFAULT_PCSS_MAX_RADIUS_M, HdriImage, LineVertex, Material, Quality, Renderer,
+    ShadowFilter, Sky, Sun, headless_device,
 };
 
 const W: u32 = 480;
@@ -1185,6 +1185,150 @@ fn pole_shadow_penumbra() {
     );
 }
 
+/// PCSS hardens at the contact (`Quality::shadow_filter`, `ShadowFilter::Pcss`): the pole
+/// scene with an 8 m pole, so its shadow runs 13.9 m, and the sun 30 degrees up. The penumbra
+/// of a point `s` metres from the pole's foot belongs to the pole at height `s * tan(30)`,
+/// `s / cos(30)` away along the light: 0.58 m at half a metre, 6.9 m at six, so millimetres of
+/// penumbra at the contact and the sun's disc times 6.9 m (6 cm, 6 texels of the cascade)
+/// further on. The camera looks straight down from 7.5 m over the middle of the ground between
+/// the two rows, 0.5 m and 6 m from the foot: both are the same distance from it and in the same
+/// cascade, so a band in pixels is the same band in the world on either row (same measurement as
+/// `pole_shadow_penumbra`: five rows, the pixels between a tenth and nine tenths of the way
+/// from the shadow to the lit ground, both edges). With PCSS the band at the contact is
+/// well under half the one 6 m from the foot (a plain disk at the widest radius, 6 texels on
+/// both rows, reads about the same on each), and that one is at least 4 px per row; with the
+/// plain 16-tap disk at the presets' radius the two differ by at most 2 px (it does not
+/// harden). And
+/// the lit ground is even for both: every row of a patch away from the shadow within 2 % of its
+/// neighbours (a blocker search that takes the ground for its own occluder shows as grain).
+#[test]
+fn pcss_hardens_at_the_contact() {
+    let (w, h) = (1920, 1080);
+    let (contact_m, far_m) = (0.5, 6.0);
+    // (name, filter): PCSS at its default radius, and the plain disk that does not harden.
+    let filters = [
+        (
+            "pcss",
+            ShadowFilter::Pcss {
+                max_radius_m: DEFAULT_PCSS_MAX_RADIUS_M,
+            },
+        ),
+        (
+            "pcf16",
+            ShadowFilter::Pcf {
+                taps: 16,
+                radius_m: 0.03,
+            },
+        ),
+    ];
+    // Per filter: the band per row (both edges, and the narrower one) on each of the two rows.
+    let measured = filters.map(|(name, filter)| {
+        let mut r = renderer(w, h);
+        r.set_quality(Quality {
+            shadow_filter: filter,
+            ..Quality::HIGH
+        });
+        let mut ground = MeshData::default();
+        ground.add_box(Vec3::new(-40.0, -0.1, -40.0), Vec3::new(40.0, 0.0, 40.0));
+        let ground = r.add_mesh(&ground.mesh()).expect("ground");
+        let grey = r.add_material(&Material {
+            base_color: [0.2, 0.2, 0.2, 1.0],
+            roughness: 0.95,
+            ..Default::default()
+        });
+        r.add_item(ground, grey, &[Mat4::IDENTITY]);
+        r.set_ground(Some(visioncraft_render::Ground {
+            color: [0.2, 0.2, 0.2],
+            variation: 0.0,
+            ..Default::default()
+        }));
+        let mut pole = MeshData::default();
+        pole.add_box(Vec3::new(-0.05, 0.0, -0.05), Vec3::new(0.05, 8.0, 0.05));
+        let pole = r.add_mesh(&pole.mesh()).expect("pole");
+        r.add_item(pole, grey, &[Mat4::IDENTITY]);
+        // The sun low in the south (+Z, 30 degrees up): the shadow runs towards -Z, 13.9 m.
+        // The camera straight down over the middle of the two rows, looking at the ground
+        // under it (screen right is -X), so both rows are the same distance from it.
+        let mid = 0.5 * (contact_m + far_m);
+        let eye = Vec3::new(0.0, 7.5, -mid);
+        let cam = (
+            Mat4::look_at_rh(eye, Vec3::new(0.0, 0.0, -mid), Vec3::Z),
+            Mat4::perspective_rh(50f32.to_radians(), w as f32 / h as f32, 0.1, 1000.0),
+            eye,
+        );
+        setup(&mut r, cam, Sun::from_angles(180.0, 30.0), 13.5);
+        settle(&mut r);
+        let px = capture(&mut r, w, h);
+        write_png(&out_dir().join(format!("pcss_pole_{name}.png")), &px, w, h);
+        // The first and last row of the two (screen up is +Z: the foot of the pole, at z = 0,
+        // is beyond the row 0.5 m from it).
+        let mut rows = (u32::MAX, 0);
+        let band = [contact_m, far_m].map(|s| {
+            let at = r
+                .project(Vec3::new(0.0, 0.0, -s))
+                .expect("the shadow in view");
+            let (cx, cy) = (at.x as u32, at.y as u32);
+            rows = (rows.0.min(cy), rows.1.max(cy));
+            let mut band = [0.0; 2];
+            for y in cy - 2..=cy + 2 {
+                let row = row_luminance(&px, w, y, cx - 200, cx + 200);
+                let (_, _, on_edge) = across(&row);
+                band[0] += (on_edge[0] + on_edge[1]) as f32;
+                band[1] += on_edge[0].min(on_edge[1]) as f32;
+            }
+            band.map(|b| b / 5.0)
+        });
+        eprintln!(
+            "{name}: band {:.1} px per row ({:.1} on its narrower edge) {contact_m} m from the \
+             foot, {:.1} ({:.1}) {far_m} m from it",
+            band[0][0], band[0][1], band[1][0], band[1][1]
+        );
+        // The lit patch: columns 200..400, the rows between the two, clear of the ends of
+        // that stretch (at the foot of the shadow stands the pole itself).
+        let (first, last) = (rows.0 + 60, rows.1 - 60);
+        let means: Vec<f32> = (first..last)
+            .map(|y| {
+                let row = row_luminance(&px, w, y, 200, 400);
+                row.iter().sum::<f32>() / row.len() as f32
+            })
+            .collect();
+        let (jump, row) = (1..means.len() - 1)
+            .map(|i| {
+                let neighbours = 0.5 * (means[i - 1] + means[i + 1]);
+                (
+                    100.0 * (means[i] - neighbours).abs() / neighbours,
+                    first + i as u32,
+                )
+            })
+            .max_by(|a, b| a.0.total_cmp(&b.0))
+            .expect("rows in the patch");
+        eprintln!("{name}: lit patch: row {row} is {jump:.2} % off its neighbours");
+        (name, band, jump, row)
+    });
+    for (name, _, jump, row) in measured {
+        assert!(
+            jump <= 2.0,
+            "{name}: the lit patch's row {row} is {jump:.2} % off its neighbours"
+        );
+    }
+    let [pcss, pcf] = measured;
+    let [contact, far] = pcss.1;
+    // Well under half: a plain disk at the widest radius reads about the same on both rows.
+    assert!(
+        contact[0] * 1.5 < far[0],
+        "pcss: {:?} px per row at the contact, {:?} 6 m from the foot: it does not harden",
+        contact,
+        far
+    );
+    assert!(far[0] >= 4.0, "pcss: {far:?} px per row 6 m from the foot");
+    let [contact, far] = pcf.1;
+    assert!(
+        (contact[0] - far[0]).abs() <= 2.0,
+        "pcf16: {contact:?} px per row at the contact vs {far:?} 6 m from the foot: the plain \
+         disk hardens"
+    );
+}
+
 /// A wall's shadow stays attached to its base (`Quality::shadow_filter`): a 4 m wide, 2 m high,
 /// 0.2 m thick wall on flat ground 40 m away (the far cascade) and the sun 15 degrees up
 /// behind it, so its shadow runs 7.5 m towards the camera. The camera is 10 m up, so a screen
@@ -1202,6 +1346,10 @@ fn pole_shadow_penumbra() {
 /// Only `high_pcf16` can catch that detachment: `ultra`'s disk is 1.5 texels of 4.5 cm there,
 /// within the wall's clearance, and `high` runs the unchanged 9-tap grid; both are controls
 /// that the shadow stays dark at the base with every preset.
+/// PCSS on HIGH's maps (`high_pcss`, `ShadowFilter::Pcss`) takes the contact line back to 40 %:
+/// its penumbra is the receiver's distance to its blockers times the sun's disc, millimetres
+/// where the ground lies against the wall, so its disk does not reach past the wall's foot as
+/// pcf16's 1.5 texels do (43 %); further from the wall, where the umbra is, it is no lighter.
 #[test]
 fn wall_base_keeps_its_shadow() {
     let (w, h) = (1920, 1080);
@@ -1216,6 +1364,16 @@ fn wall_base_keeps_its_shadow() {
                 ..Quality::HIGH
             },
             50.0,
+        ),
+        (
+            "high_pcss",
+            Quality {
+                shadow_filter: ShadowFilter::Pcss {
+                    max_radius_m: DEFAULT_PCSS_MAX_RADIUS_M,
+                },
+                ..Quality::HIGH
+            },
+            40.0,
         ),
     ];
     for (name, quality, next_to_the_base) in filters {

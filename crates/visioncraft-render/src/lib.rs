@@ -468,6 +468,10 @@ pub struct LineVertex {
 /// fixed texel size.
 pub const DEFAULT_SHADOW_RADIUS_M: f32 = 0.03;
 
+/// The largest penumbra of PCSS (`ShadowFilter::Pcss`) when its radius is not given: in metres
+/// in the world, measured across the light (so `r / sin(elevation)` over flat ground).
+pub const DEFAULT_PCSS_MAX_RADIUS_M: f32 = 0.15;
+
 /// How the sun's cascaded shadow maps are filtered (`Quality::shadow_filter`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ShadowFilter {
@@ -483,6 +487,14 @@ pub enum ShadowFilter {
     /// lands. Under `Quality::fast_shading` only the 1- and 4-tap paths are compiled (register
     /// pressure on integrated GPUs): 9 and 16 fall back to 4 there.
     Pcf { taps: u32, radius_m: f32 },
+    /// Percentage-closer soft shadows (Fernando, "Percentage-Closer Soft Shadows", NVIDIA,
+    /// SIGGRAPH 2005 sketch): the 16-tap disk of `Pcf` with a penumbra that grows with the
+    /// distance between the receiver and its occluder, as a real sun's does. Sharp where a
+    /// caster meets its shadow, and at most `max_radius_m` metres in the world (the sun's disc
+    /// as drawn, `sky::SUN_DISC_RADIUS`: a receiver `d` metres behind its occluder, along the
+    /// light, gets `d * tan(disc)`), never wider than 6 texels of a cascade. Falls back to the
+    /// 4-tap grid under `Quality::fast_shading`, as `Pcf` with 16 taps does.
+    Pcss { max_radius_m: f32 },
 }
 
 impl ShadowFilter {
@@ -491,19 +503,22 @@ impl ShadowFilter {
         match self {
             ShadowFilter::Hard => 1,
             ShadowFilter::Pcf { taps, .. } => taps,
+            ShadowFilter::Pcss { .. } => 16,
         }
     }
 
-    /// The penumbra's radius in the world (m); 0 for `Hard`.
+    /// The penumbra's radius in the world (m), PCSS's largest; 0 for `Hard`.
     pub fn radius_m(self) -> f32 {
         match self {
             ShadowFilter::Hard => 0.0,
             ShadowFilter::Pcf { radius_m, .. } => radius_m,
+            ShadowFilter::Pcss { max_radius_m } => max_radius_m,
         }
     }
 
-    /// This filter with `taps` the nearest of 4, 9 or 16 and `radius_m` clamped to 0..=1 (NaN:
-    /// the presets' radius), so two filters that shade the same compare equal (`Quality: Eq`).
+    /// This filter as the renderer holds it: `taps` the nearest of 4, 9 or 16 and a radius
+    /// clamped to 0..=1 (NaN: the presets' radius, for PCSS its own default), so two filters
+    /// that shade the same compare equal (`Quality: Eq`).
     pub fn sanitized(self) -> Self {
         match self {
             ShadowFilter::Hard => ShadowFilter::Hard,
@@ -513,18 +528,24 @@ impl ShadowFilter {
                     .into_iter()
                     .min_by_key(|&t| t.max(taps) - t.min(taps))
                     .unwrap_or(4),
-                radius_m: {
-                    let r = if radius_m.is_nan() {
-                        DEFAULT_SHADOW_RADIUS_M
-                    } else {
-                        radius_m.clamp(0.0, 1.0)
-                    };
-                    // One zero, not -0.0: they compare equal, but print apart.
-                    if r == 0.0 { 0.0 } else { r }
-                },
+                radius_m: sanitized_radius(radius_m, DEFAULT_SHADOW_RADIUS_M),
+            },
+            ShadowFilter::Pcss { max_radius_m } => ShadowFilter::Pcss {
+                max_radius_m: sanitized_radius(max_radius_m, DEFAULT_PCSS_MAX_RADIUS_M),
             },
         }
     }
+}
+
+/// A penumbra radius as the renderer holds it: clamped to 0..=1, a NaN one `default`.
+fn sanitized_radius(radius_m: f32, default: f32) -> f32 {
+    let r = if radius_m.is_nan() {
+        default
+    } else {
+        radius_m.clamp(0.0, 1.0)
+    };
+    // One zero, not -0.0: they compare equal, but print apart.
+    if r == 0.0 { 0.0 } else { r }
 }
 
 /// Effect switches so the app can fall back on slow GPUs.
@@ -552,8 +573,8 @@ pub struct Quality {
     /// Planar reflection of water: resolution divisor of the render size (2
     /// half, 4 quarter); 0 = off (water reflects the environment cube).
     pub water_reflection: u32,
-    /// The sun's shadow filter: the comparison taps, and for the 16-tap disk the penumbra's
-    /// radius in the world, the same in every cascade.
+    /// The sun's shadow filter: the comparison taps, and for the 16-tap filters the penumbra's
+    /// radius in the world (the disk's, PCSS's largest), the same in every cascade.
     pub shadow_filter: ShadowFilter,
     /// Ambient occlusion and contact shadows at the full render size
     /// (otherwise half size, upsampled depth-aware).
@@ -698,7 +719,7 @@ impl Quality {
     }
 
     /// The sun shadow's comparison taps the shaders run: under `fast_shading` only the 1- and
-    /// 4-tap paths are compiled, so 9 and 16 fall back to 4.
+    /// 4-tap paths are compiled, so 9 and 16 (and PCSS) fall back to 4.
     fn shadow_taps(&self) -> u32 {
         let taps = self.shadow_filter.taps();
         if self.fast_shading && taps > 4 {
@@ -706,6 +727,15 @@ impl Quality {
         } else {
             taps
         }
+    }
+
+    /// `Globals.shadow_filter.xy` (common.wgsl): the penumbra's radius in the world, the
+    /// 16-tap disk's or PCSS's largest, and the mode the 16-tap branch of `cascade_shadow`
+    /// runs: 0 PCF, 1 PCSS. Under `fast_shading` always PCF: only the 1- and 4-tap paths are
+    /// compiled there.
+    fn shadow_filter_uniform(&self) -> [f32; 2] {
+        let pcss = matches!(self.shadow_filter, ShadowFilter::Pcss { .. }) && !self.fast_shading;
+        [self.shadow_filter.radius_m(), if pcss { 1.0 } else { 0.0 }]
     }
 
     /// This quality as the renderer holds it (`set_quality`, still.rs `render_offscreen` and
@@ -5263,7 +5293,8 @@ impl Renderer {
         b.floats(&cascades.texel);
         let res = q.shadow_resolution as f32;
         b.floats(&[cascades.count as f32, res, 1.0 / res, self.shadow_distance]);
-        b.floats(&[q.shadow_filter.radius_m(), 0.0, 0.0, 0.0]);
+        let [shadow_radius_m, shadow_mode] = q.shadow_filter_uniform();
+        b.floats(&[shadow_radius_m, shadow_mode, 0.0, 0.0]);
         let (w, h) = (w as f32, h as f32);
         b.floats(&[w, h, 1.0 / w, 1.0 / h]);
         b.floats(&[
@@ -8561,10 +8592,11 @@ mod tests {
     }
 
     /// `ShadowFilter::sanitized` keeps `Quality: Eq` total: taps become the nearest of 4, 9 and
-    /// 16, a NaN radius the presets', and the radius stays within 0..=1.
+    /// 16, a NaN radius the presets' (PCSS: its own default), and a radius stays within 0..=1.
     #[test]
     fn shadow_filter_sanitizes_taps_and_radius() {
         let pcf = |taps, radius_m| ShadowFilter::Pcf { taps, radius_m };
+        let pcss = |max_radius_m| ShadowFilter::Pcss { max_radius_m };
         assert_eq!(pcf(7, 0.05).sanitized(), pcf(9, 0.05));
         assert_eq!(pcf(1, 0.05).sanitized(), pcf(4, 0.05));
         assert_eq!(pcf(12, 0.05).sanitized(), pcf(9, 0.05));
@@ -8578,18 +8610,32 @@ mod tests {
         assert_eq!(pcf(9, -0.0).sanitized(), pcf(9, 0.0));
         assert_eq!(pcf(9, f32::INFINITY).sanitized(), pcf(9, 1.0));
         assert_eq!(ShadowFilter::Hard.sanitized(), ShadowFilter::Hard);
+        assert_eq!(pcss(f32::NAN).sanitized(), pcss(DEFAULT_PCSS_MAX_RADIUS_M));
+        assert_eq!(pcss(5.0).sanitized(), pcss(1.0));
+        assert_eq!(pcss(-1.0).sanitized(), pcss(0.0));
+        assert_eq!(pcss(-0.0).sanitized(), pcss(0.0));
+        assert_eq!(pcss(f32::INFINITY).sanitized(), pcss(1.0));
+        assert_eq!(pcss(0.15).sanitized(), pcss(0.15));
         // Idempotent, so a preset equals its own sanitized self (the renderer compares).
-        for f in [pcf(9, 0.05), pcf(16, 0.2), ShadowFilter::Hard] {
+        for f in [
+            pcf(9, 0.05),
+            pcf(16, 0.2),
+            pcss(0.2),
+            pcss(f32::NAN),
+            ShadowFilter::Hard,
+        ] {
             assert_eq!(f.sanitized().sanitized(), f.sanitized());
         }
         // A NaN radius would break `==` (and so `Eq`): sanitized, a filter equals itself.
         let f = pcf(9, f32::NAN).sanitized();
         assert_eq!(f, f);
+        let f = pcss(f32::NAN).sanitized();
+        assert_eq!(f, f);
     }
 
     /// Every preset filters the sun's shadows with PCF at today's tap counts (LOW and MEDIUM
     /// 4, HIGH 9, ULTRA 16); the radius is the 16-tap disk's alone, and under `fast_shading` the
-    /// shaders run 4 taps at most.
+    /// shaders run 4 taps at most, PCSS included.
     #[test]
     fn every_preset_filters_shadows_with_pcf() {
         for (name, q) in Quality::PRESETS {
@@ -8618,6 +8664,73 @@ mod tests {
             }
             .shadow_taps(),
             1
+        );
+        // PCSS is the 16-tap disk: 16 taps, and 4 under fast shading, as pcf16.
+        let pcss = ShadowFilter::Pcss {
+            max_radius_m: DEFAULT_PCSS_MAX_RADIUS_M,
+        };
+        assert_eq!(pcss.taps(), 16);
+        assert_eq!(pcss.radius_m(), DEFAULT_PCSS_MAX_RADIUS_M);
+        assert_eq!(
+            Quality {
+                shadow_filter: pcss,
+                ..Quality::HIGH
+            }
+            .shadow_taps(),
+            16
+        );
+        assert_eq!(
+            Quality {
+                shadow_filter: pcss,
+                ..Quality::MEDIUM
+            }
+            .shadow_taps(),
+            4
+        );
+    }
+
+    /// `Globals.shadow_filter` carries the penumbra's radius and the 16-tap branch's mode: PCSS
+    /// (1) for `ShadowFilter::Pcss`, PCF (0) for every other filter and under `fast_shading`,
+    /// where the branch is not compiled.
+    #[test]
+    fn the_shadow_filter_uniform_switches_to_pcss() {
+        assert_eq!(
+            Quality::ULTRA.shadow_filter_uniform(),
+            [DEFAULT_SHADOW_RADIUS_M, 0.0]
+        );
+        assert_eq!(
+            Quality {
+                shadow_filter: ShadowFilter::Hard,
+                ..Quality::HIGH
+            }
+            .shadow_filter_uniform(),
+            [0.0, 0.0]
+        );
+        let pcss = Quality {
+            shadow_filter: ShadowFilter::Pcss { max_radius_m: 0.15 },
+            ..Quality::HIGH
+        };
+        assert_eq!(pcss.shadow_filter_uniform(), [0.15, 1.0]);
+        // A 16-tap disk is PCF at any radius.
+        assert_eq!(
+            Quality {
+                shadow_filter: ShadowFilter::Pcf {
+                    taps: 16,
+                    radius_m: 0.2,
+                },
+                ..Quality::ULTRA
+            }
+            .shadow_filter_uniform(),
+            [0.2, 0.0]
+        );
+        // Under fast shading the 16-tap branch is not compiled: PCSS runs as the 4-tap grid.
+        assert_eq!(
+            Quality {
+                shadow_filter: pcss.shadow_filter,
+                ..Quality::MEDIUM
+            }
+            .shadow_filter_uniform(),
+            [0.15, 0.0]
         );
     }
 
@@ -8654,37 +8767,56 @@ mod tests {
     /// the disk compares each tap against the receiver plane's own depth where the tap lands, a
     /// quarter texel less: not against the receiver's depth `p.z` (the taps of a slope towards
     /// the light then shade the surface), nor that slackened by the worst-case slope `r * tan`
-    /// for every tap (the taps away from the light then lift real shadows off the ground).
+    /// for every tap (the taps away from the light then lift real shadows off the ground). The
+    /// loop itself is `shadow_disk`, the one disk both the PCF and the PCSS modes filter with.
     #[test]
     fn the_disk_is_turned_by_the_map_and_follows_the_receiver_plane() {
         let scene = include_str!("scene.wgsl");
-        let body = &scene[scene.find("fn cascade_shadow(").unwrap()..];
-        let body = &body[..body.find("\n}\n").unwrap()];
-        let (disk, _) = body.split_once("taps > 8.5").expect("the 9-tap branch");
+        let branch = wgsl_fn(scene, "fn cascade_shadow(");
+        let (disk, _) = branch.split_once("taps > 8.5").expect("the 9-tap branch");
         assert!(
             disk.contains("ign_sampled(uv * g.shadow.y * 2.0)"),
             "the turn comes from the place in the map:\n{disk}"
         );
         assert!(
-            disk.contains("p.z + dz - small"),
-            "a tap is compared against the receiver plane's depth:\n{disk}"
-        );
-        assert!(
             disk.contains("let small = 0.25 * g.texel[c] * dz_per_m;"),
             "a quarter texel of depth:\n{disk}"
         );
+        let filter = wgsl_fn(scene, "fn shadow_disk(");
         assert!(
-            !disk.contains("tan_theta"),
-            "no worst-case slope bias:\n{disk}"
+            filter.contains("z + dz - small"),
+            "a tap is compared against the receiver plane's depth:\n{filter}"
+        );
+        assert!(
+            filter.contains("for (var i = 0u; i < 16u; i++)"),
+            "16 taps:\n{filter}"
+        );
+        assert!(
+            !disk.contains("tan_theta") && !filter.contains("tan_theta"),
+            "no worst-case slope bias:\n{disk}\n{filter}"
         );
         // The plane maths `receiver_plane` mirrors (the uv's y runs against the clip's y).
         for line in [
             "let slope_max = 4.0 * dz_per_m / length(a0);",
             "let plane_z = -select(1.0, max(-plane_n.z, length(plane_n.xy) / slope_max), facing);",
             "let k = select(vec2<f32>(0.0), -plane_n.xy / plane_z, facing);",
-            "let dz = dot(k, vec2<f32>(2.0 * o.x, -2.0 * o.y));",
         ] {
-            assert!(disk.contains(line), "the receiver plane as mirrored: {line}");
+            assert!(
+                disk.contains(line),
+                "the receiver plane as mirrored: {line}"
+            );
+        }
+        // Each tap's depth on that plane, by the one line both loops share (the uv's y runs
+        // against the clip's y).
+        assert!(
+            wgsl_fn(scene, "fn plane_dz(").contains("dot(k, vec2<f32>(2.0 * o.x, -2.0 * o.y))"),
+            "the plane's depth change at a tap"
+        );
+        for helper in ["fn shadow_disk(", "fn shadow_blockers("] {
+            assert!(
+                wgsl_fn(scene, helper).contains("let dz = plane_dz(o, k);"),
+                "{helper} compares against the receiver plane"
+            );
         }
         for (name, src) in [
             ("scene", scene),
@@ -8703,15 +8835,168 @@ mod tests {
         }
     }
 
+    /// The text of the WGSL function that starts at `signature`, to its closing brace.
+    fn wgsl_fn<'a>(src: &'a str, signature: &str) -> &'a str {
+        let start = src
+            .find(signature)
+            .unwrap_or_else(|| panic!("{signature} not in the shader"));
+        let body = &src[start..];
+        &body[..body.find("\n}\n").expect("the function's end")]
+    }
+
+    /// PCSS (`ShadowFilter::Pcss`; Fernando, "Percentage-Closer Soft Shadows", NVIDIA,
+    /// SIGGRAPH 2005 sketch) runs in the 16-tap branch of `cascade_shadow` when
+    /// `g.shadow_filter.y` is 1, and changes nothing else: a blocker search over the same turned
+    /// Vogel disk as the filter, reading raw depths and taking a tap for a blocker when it lies
+    /// before the receiver plane where the tap lands (as the filter's taps are compared, a
+    /// quarter texel less, so a sloped receiver is not its own occluder); lit at once without a
+    /// blocker; a penumbra of the receiver's distance to the blockers along the light, times the
+    /// tangent of the sun's disc (`g.sun_light.w`: its cosine), no more than the filter's
+    /// radius; then the one disk, `shadow_disk`, at that spread, in texels and no wider than
+    /// 6, with no floor: at the contact the taps fall within one texel, the hard edge. The
+    /// plain disk keeps its floor of 1.5 texels.
+    #[test]
+    fn pcss_searches_blockers_on_the_disk_and_widens_with_their_distance() {
+        let scene = include_str!("scene.wgsl");
+        let branch = wgsl_fn(scene, "fn cascade_shadow(");
+        let (disk, _) = branch.split_once("taps > 8.5").expect("the 9-tap branch");
+        assert!(
+            disk.contains("if g.shadow_filter.y > 0.5 {"),
+            "PCSS only in mode 1:\n{disk}"
+        );
+        for line in [
+            "let search = clamp(g.shadow_filter.x / g.texel[c], 1.5, 6.0);",
+            "let blocker = shadow_blockers(c, uv, p.z, k, small, search, turn);",
+            "if blocker < 0.0 {",
+            "return 1.0;",
+            "let tan_sun = sqrt(max(1.0 - g.sun_light.w * g.sun_light.w, 0.0)) / g.sun_light.w;",
+            "let w = clamp((p.z - blocker) / dz_per_m * tan_sun, 0.0, g.shadow_filter.x);",
+            "return shadow_disk(c, uv, p.z, k, small, min(w / g.texel[c], 6.0), turn);",
+            "let spread = clamp(g.shadow_filter.x / g.texel[c], 1.5, 6.0);",
+            "return shadow_disk(c, uv, p.z, k, small, spread, turn);",
+        ] {
+            assert!(
+                disk.contains(line),
+                "the PCSS branch as written:\n{line}\n{disk}"
+            );
+        }
+        assert_eq!(
+            disk.matches("return shadow_disk(").count(),
+            2,
+            "one disk, for PCSS and for PCF:\n{disk}"
+        );
+        let search = wgsl_fn(scene, "fn shadow_blockers(");
+        for line in [
+            "for (var i = 0u; i < 16u; i++)",
+            "let o = disk_offset(i, search, turn);",
+            "let dz = plane_dz(o, k);",
+            "let t = clamp(vec2<i32>((uv + o) * vec2<f32>(dims)), vec2<i32>(0), vec2<i32>(dims) - 1);",
+            "let stored = textureLoad(shadow_map, t, i32(c), 0);",
+            "if stored < z + dz - small {",
+        ] {
+            assert!(
+                search.contains(line),
+                "the blocker search as written:\n{line}\n{search}"
+            );
+        }
+        // The filter walks the same disk.
+        let filter = wgsl_fn(scene, "fn shadow_disk(");
+        assert!(
+            filter.contains("let o = disk_offset(i, spread, turn);"),
+            "the filter's taps:\n{filter}"
+        );
+        let offset = wgsl_fn(scene, "fn disk_offset(");
+        assert!(
+            offset.contains("let r_texels = sqrt((f32(i) + 0.5) / 16.0) * spread;"),
+            "the Vogel disk:\n{offset}"
+        );
+        assert!(
+            offset.contains("let a = f32(i) * 2.399963 + turn;"),
+            "turned:\n{offset}"
+        );
+        assert_eq!(
+            scene.matches("disk_offset(").count(),
+            3,
+            "the disk's offset is defined once and walked by the search and the filter"
+        );
+    }
+
+    /// Scene.wgsl `cascade_shadow`'s PCSS penumbra, mirrored: a receiver `d` metres behind its
+    /// blockers along the light gets `d * tan(sun disc)` (the disc as drawn,
+    /// `sky::SUN_DISC_RADIUS`), between 0 and the filter's radius.
+    fn pcss_penumbra_m(receiver: f32, blocker: f32, dz_per_m: f32, max_radius_m: f32) -> f32 {
+        let cos_sun = sky::SUN_DISC_RADIUS.cos();
+        let tan_sun = (1.0 - cos_sun * cos_sun).max(0.0).sqrt() / cos_sun;
+        ((receiver - blocker) / dz_per_m * tan_sun).clamp(0.0, max_radius_m)
+    }
+
+    /// The blocker search's depths are the shadow map's: a receiver's depth minus its blocker's,
+    /// over `dz_per_m`, is the distance between the two along the light, whatever cascade is
+    /// read. A pole's shadow: the receiver on the ground `s` metres from the foot and the pole
+    /// at height `s * tan(elevation)` lie on one light ray (the same place in every cascade's
+    /// map), `s / cos(elevation)` apart. So PCSS's penumbra there is millimetres at the foot
+    /// (sharp: the contact) and centimetres further on, capped by the filter's radius.
+    #[test]
+    fn a_blockers_depth_is_its_distance_along_the_light() {
+        let view = Mat4::look_at_rh(
+            Vec3::new(0.0, 7.5, -3.25),
+            Vec3::new(0.0, 0.0, -3.25),
+            Vec3::Z,
+        );
+        let proj = Mat4::perspective_rh(50f32.to_radians(), 16.0 / 9.0, 0.1, 1000.0);
+        let elevation = 30.0f32;
+        let sun = Sun::from_angles(180.0, elevation).direction;
+        let cascades = shadow::compute(view, proj, sun, 4, 2048, 80.0, None);
+        let angle = elevation.to_radians();
+        let (tan, cos) = (angle.tan(), angle.cos());
+        let cos_sun = sky::SUN_DISC_RADIUS.cos();
+        let tan_sun = (1.0 - cos_sun * cos_sun).sqrt() / cos_sun;
+        for (c, m) in cascades
+            .view_proj
+            .iter()
+            .copied()
+            .enumerate()
+            .take(cascades.count)
+        {
+            let depth = |x: Vec3| (m * x.extend(1.0)).z;
+            let uv = |x: Vec3| {
+                let p = m * x.extend(1.0);
+                Vec2::new(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5)
+            };
+            // The depth row (`a2` in the shader): a metre along the light, in depth.
+            let dz_per_m = Vec3::new(m.col(0).z, m.col(1).z, m.col(2).z).length();
+            // Metres from the pole's foot: at the contact, mid-shadow, and far enough for the
+            // cap (0.15 m is reached 17 m along the light).
+            let cap = 0.15;
+            for s in [0.5f32, 6.0, 20.0] {
+                let receiver = Vec3::new(0.0, 0.0, -s);
+                let blocker = Vec3::new(0.0, s * tan, 0.0);
+                assert!(
+                    (uv(receiver) - uv(blocker)).length() * 2048.0 < 0.01,
+                    "cascade {c}, {s} m: the blocker is over its shadow in the map"
+                );
+                let along = (depth(receiver) - depth(blocker)) / dz_per_m;
+                assert!(
+                    (along - s / cos).abs() < 1e-3 * s,
+                    "cascade {c}, {s} m: depth over dz_per_m is {along}, the distance {}",
+                    s / cos
+                );
+                let w = pcss_penumbra_m(depth(receiver), depth(blocker), dz_per_m, cap);
+                assert!(
+                    (w - (s / cos * tan_sun).min(cap)).abs() < 1e-5,
+                    "cascade {c}, {s} m: penumbra {w}"
+                );
+            }
+        }
+    }
+
     /// Scene.wgsl `cascade_shadow`'s receiver plane for the 16-tap disk, step by step as the
     /// shader has it: `k`, the depth change of the receiver's plane per unit of clip x and y
     /// (zero: no plane, for a receiver facing away from the light), and `dz_per_m`, a metre
     /// along the light in depth.
     fn receiver_plane(cascade: Mat4, n: Vec3) -> (Vec2, f32) {
         // The rows of the linear part: `vec3<f32>(m[0].x, m[1].x, m[2].x)` and so on in WGSL.
-        let row = |i: usize| {
-            Vec3::new(cascade.col(0)[i], cascade.col(1)[i], cascade.col(2)[i])
-        };
+        let row = |i: usize| Vec3::new(cascade.col(0)[i], cascade.col(1)[i], cascade.col(2)[i]);
         let (a0, a1, a2) = (row(0), row(1), row(2));
         let dz_per_m = a2.length();
         let plane_n = Vec3::new(
@@ -8745,11 +9030,7 @@ mod tests {
     /// in the light's plane.
     #[test]
     fn a_tap_is_compared_against_the_receiver_plane() {
-        let view = Mat4::look_at_rh(
-            Vec3::new(0.0, 1.7, 0.0),
-            Vec3::new(0.0, 1.0, 40.0),
-            Vec3::Y,
-        );
+        let view = Mat4::look_at_rh(Vec3::new(0.0, 1.7, 0.0), Vec3::new(0.0, 1.0, 40.0), Vec3::Y);
         let proj = Mat4::perspective_rh(50f32.to_radians(), 16.0 / 9.0, 0.1, 1000.0);
         let map = 2048.0;
         let (mut exact, mut clamped, mut back) = (0, 0, 0);

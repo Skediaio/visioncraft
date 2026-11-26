@@ -562,7 +562,7 @@ fn environment(r: vec3<f32>, roughness: f32) -> vec3<f32> {
 }
 
 // One cascade of the sun's shadow map, filtered as the quality asks (lib.rs `ShadowFilter`,
-// `g.options.x` the taps; `frag` the fragment's pixel, which turns the 16-tap disk):
+// `g.options.x` the taps):
 // - 1 tap: one hardware comparison (a 2x2 bilinear footprint): the hard edge.
 // - 4 and 9 taps: a 2x2 grid at +-0.75 texel and a 3x3 grid at -1.5, 0, +1.5 texels. Fixed,
 //   texel-sized kernels, as ever: each comparison tap covers 2 texels, so a grid spaced wider
@@ -572,7 +572,10 @@ fn environment(r: vec3<f32>, roughness: f32) -> vec3<f32> {
 //   `g.shadow_filter.x` metres in the world, the same in every cascade, turned by the
 //   interleaved gradient noise of its place in the shadow map (common.wgsl `ign_sampled`: turned
 //   again per photo sample, so a photo averages the grain away and a still is the same every
-//   time); each tap is compared against the receiver plane's own depth where it lands.
+//   time); each tap is compared against the receiver plane's own depth where it lands
+//   (`shadow_disk`). With `g.shadow_filter.y` 1 it is PCSS instead: the same disk, as wide as
+//   the receiver's distance to its occluders makes the penumbra (`shadow_blockers`), at most
+//   `g.shadow_filter.x` metres.
 // Under FAST_SHADING (lib.rs compiles MEDIUM and LOW's shaders with it: register pressure on
 // integrated GPUs) only the 1- and 4-tap paths exist, and lib.rs writes 4 there for 9 and 16.
 // -1 when the point is outside this cascade's map (cascades refreshed every other frame lag
@@ -642,14 +645,34 @@ fn cascade_shadow(c: u32, world: vec3<f32>, n: vec3<f32>, nol: f32) -> f32 {
         let k = select(vec2<f32>(0.0), -plane_n.xy / plane_z, facing);
         // The map holds the depth of its texels' centres, and a tap lies between them.
         let small = 0.25 * g.texel[c] * dz_per_m;
-        for (var i = 0u; i < 16u; i++) {
-            let r_texels = sqrt((f32(i) + 0.5) / 16.0) * spread;
-            let a = f32(i) * 2.399963 + turn;
-            let o = vec2<f32>(cos(a), sin(a)) * (r_texels * g.shadow.z);
-            let dz = dot(k, vec2<f32>(2.0 * o.x, -2.0 * o.y));
-            sum += textureSampleCompareLevel(shadow_map, shadow_sampler, uv + o, i32(c), p.z + dz - small);
+        if g.shadow_filter.y > 0.5 {
+            // Percentage-closer soft shadows (Fernando, "Percentage-Closer Soft Shadows", NVIDIA,
+            // SIGGRAPH 2005 sketch): the penumbra is as wide as the receiver's distance to its
+            // occluders makes it, so a shadow is sharp where its caster meets the ground and
+            // softens further away, as a real sun's. In three steps.
+            // 1. The blocker search: the mean depth of the occluders over the disk, here as wide
+            //    as the penumbra can get, read from the map's raw depths.
+            let search = clamp(g.shadow_filter.x / g.texel[c], 1.5, 6.0);
+            let blocker = shadow_blockers(c, uv, p.z, k, small, search, turn);
+            //    Nothing between the receiver and the sun: lit, without the filter pass.
+            if blocker < 0.0 {
+                return 1.0;
+            }
+            // 2. The penumbra, in metres across the light: the receiver's distance to the
+            //    blockers along the light (depth grows away from it: `p.z - blocker`, over the
+            //    depth of a metre) times the tangent of the sun's angular radius (`g.sun_light.w`
+            //    is its cosine), at most the filter's radius.
+            let tan_sun = sqrt(max(1.0 - g.sun_light.w * g.sun_light.w, 0.0)) / g.sun_light.w;
+            let w = clamp((p.z - blocker) / dz_per_m * tan_sun, 0.0, g.shadow_filter.x);
+            // 3. The filter pass: the disk over that penumbra, in this cascade's texels; at 6
+            //    it stops growing in this cascade, as the plain disk does. No floor of 1.5
+            //    texels as that one: where a caster meets its shadow the penumbra is millimetres
+            //    and the 16 taps fall within one texel, the hard edge. With the floor the
+            //    contact stayed as soft as the plain disk (a wall's foot, a low sun: 43 % of
+            //    lit ground in the row under the base, where the umbra is 34 %).
+            return shadow_disk(c, uv, p.z, k, small, min(w / g.texel[c], 6.0), turn);
         }
-        return sum / 16.0;
+        return shadow_disk(c, uv, p.z, k, small, spread, turn);
     }
     if !FAST_SHADING && taps > 8.5 {
         for (var y = -1; y <= 1; y++) {
@@ -665,6 +688,58 @@ fn cascade_shadow(c: u32, world: vec3<f32>, n: vec3<f32>, nol: f32) -> f32 {
         sum += textureSampleCompareLevel(shadow_map, shadow_sampler, uv + o, i32(c), p.z);
     }
     return sum * 0.25;
+}
+
+// Tap `i` of the 16-tap Vogel disk of `cascade_shadow`: `spread` shadow texels wide, turned by
+// `turn`; its offset from the lookup, in uv.
+fn disk_offset(i: u32, spread: f32, turn: f32) -> vec2<f32> {
+    let r_texels = sqrt((f32(i) + 0.5) / 16.0) * spread;
+    let a = f32(i) * 2.399963 + turn;
+    return vec2<f32>(cos(a), sin(a)) * (r_texels * g.shadow.z);
+}
+
+// The receiver plane's change of depth at a tap `o` (in uv) from the lookup: `k` as
+// `cascade_shadow` takes it from the plane (the uv's y runs against the clip's y).
+fn plane_dz(o: vec2<f32>, k: vec2<f32>) -> f32 {
+    return dot(k, vec2<f32>(2.0 * o.x, -2.0 * o.y));
+}
+
+// The 16-tap filter over the turned Vogel disk of `spread` texels: every tap compared against
+// the receiver plane's own depth where it lands, a quarter texel less (`cascade_shadow`).
+fn shadow_disk(c: u32, uv: vec2<f32>, z: f32, k: vec2<f32>, small: f32, spread: f32, turn: f32) -> f32 {
+    var sum = 0.0;
+    for (var i = 0u; i < 16u; i++) {
+        let o = disk_offset(i, spread, turn);
+        let dz = plane_dz(o, k);
+        sum += textureSampleCompareLevel(shadow_map, shadow_sampler, uv + o, i32(c), z + dz - small);
+    }
+    return sum / 16.0;
+}
+
+// PCSS's blocker search (Fernando, "Percentage-Closer Soft Shadows", NVIDIA, SIGGRAPH 2005
+// sketch): the mean depth of the occluders over the 16-tap disk of `search` texels round a
+// receiver at `uv`, depth `z`, read from the map texel by texel (raw depths, clamped to the
+// map), or -1 where there is none. A tap is an occluder when its depth lies before the
+// receiver's plane where the tap lands, a quarter texel less: exactly what the filter's tap
+// there is compared against (`shadow_disk`), so a receiver that slopes is not its own occluder.
+fn shadow_blockers(c: u32, uv: vec2<f32>, z: f32, k: vec2<f32>, small: f32, search: f32, turn: f32) -> f32 {
+    let dims = textureDimensions(shadow_map);
+    var sum = 0.0;
+    var count = 0.0;
+    for (var i = 0u; i < 16u; i++) {
+        let o = disk_offset(i, search, turn);
+        let dz = plane_dz(o, k);
+        let t = clamp(vec2<i32>((uv + o) * vec2<f32>(dims)), vec2<i32>(0), vec2<i32>(dims) - 1);
+        let stored = textureLoad(shadow_map, t, i32(c), 0);
+        if stored < z + dz - small {
+            sum += stored;
+            count += 1.0;
+        }
+    }
+    if count == 0.0 {
+        return -1.0;
+    }
+    return sum / count;
 }
 
 // The sun's visibility at `world`: the cascades' shadow times the clouds' (common.wgsl
