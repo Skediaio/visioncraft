@@ -359,13 +359,15 @@ fn every_documented_example_runs() {
     let list = ask(&mut h, json!({"id": 1, "method": "engine.commands"}));
     for c in list["result"]["commands"].as_array().unwrap() {
         let (id, example) = (c["id"].as_str().unwrap(), &c["example"]);
-        // Files, history and pictures need a file, a step and a GPU; model.add a model file.
+        // Files, history and pictures need a file, a step and a GPU; model.add a model file,
+        // and so does query.clips (the clips come from the model's own file).
         if example.is_null()
             || id.starts_with("file.")
             || id.starts_with("edit.")
             || id == "view.render"
             || id == "film.render"
             || id == "model.add"
+            || id == "query.clips"
         {
             continue;
         }

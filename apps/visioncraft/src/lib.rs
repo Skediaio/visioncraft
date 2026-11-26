@@ -26,6 +26,7 @@ pub mod light_ui;
 pub mod load_stats;
 pub mod material_library;
 pub mod materials;
+pub mod model_clips;
 pub mod modelui;
 pub mod objects;
 pub mod placeholder;

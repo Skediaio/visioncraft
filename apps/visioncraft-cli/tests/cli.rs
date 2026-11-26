@@ -227,6 +227,98 @@ fn serve_speaks_json_lines() {
     assert!(d.join("s.visioncraft").exists());
 }
 
+/// `query.clips` through the built program: listed with its parameter, answered for a garden
+/// light (the program makes its file itself, so it is always at hand), refused for a model that
+/// does not exist, and answered by `serve` too. A model that moves has its clips read in the
+/// app's own tests (`model_clips`), through the same host as here.
+#[test]
+fn the_cli_lists_the_clips_of_a_model() {
+    let d = dir("clips");
+    let lamp = visioncraft::fixtures::assets()[0].id.clone();
+    let listed = cli(&["commands", "--filter", "query.clips"], &d);
+    assert!(
+        listed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&listed.stderr)
+    );
+    let text = String::from_utf8_lossy(&listed.stdout);
+    assert!(
+        text.contains("query.clips") && text.contains("\"model\": string"),
+        "{text}"
+    );
+
+    let params = format!("{{\"model\": \"{lamp}\"}}");
+    let out = cli(
+        &[
+            "run",
+            "--new",
+            "{}",
+            "--cmd",
+            "query.clips",
+            "--params",
+            &params,
+        ],
+        &d,
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(lines(&out), vec![json!({"clips": []})]);
+
+    let out = cli(
+        &[
+            "run",
+            "--new",
+            "{}",
+            "--cmd",
+            "query.clips",
+            "--params",
+            r#"{"model": "user:uo9"}"#,
+            "--keep-going",
+        ],
+        &d,
+    );
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(
+        lines(&out),
+        vec![json!({
+            "failed": "query.clips",
+            "step": 0,
+            "error": "no imported object `uo9`: object.list names them",
+        })]
+    );
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_visioncraft-cli"))
+        .args(["serve", "--automation-write-root", "."])
+        .current_dir(&d)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    use std::io::Write;
+    let mut stdin = child.stdin.take().unwrap();
+    writeln!(
+        stdin,
+        r#"{{"id": 1, "method": "engine.execute", "params": {{"command": "query.clips", "params": {{"model": "{lamp}"}}}}}}"#
+    )
+    .unwrap();
+    drop(stdin);
+    let out = child.wait_with_output().unwrap();
+    let replies = lines(&out);
+    assert_eq!(replies.len(), 1, "{replies:?}");
+    // The reply also carries the wall-clock `ms`.
+    assert_eq!(
+        (
+            replies[0]["id"].clone(),
+            replies[0]["ok"].clone(),
+            replies[0]["result"].clone()
+        ),
+        (json!(1), json!(true), json!({"clips": []}))
+    );
+}
+
 /// Needs a GPU: `cargo test -p visioncraft-cli -- --ignored`. Writes the picture to
 /// `$VISIONCRAFT_RENDER_OUT` too when set, to look at.
 #[test]

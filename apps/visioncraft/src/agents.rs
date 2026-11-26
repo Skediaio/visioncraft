@@ -454,6 +454,48 @@ impl Host for Bound<'_, '_> {
         })
     }
 
+    /// `query.clips`: an imported object's file is in the window's files, a library model's
+    /// clips were kept when it was loaded (all a browser has), or its file is on disk.
+    fn clips(&mut self, model: &str) -> Option<Result<Vec<visioncraft_core::Clip>, String>> {
+        use crate::model_clips::Held;
+        let s = &self.host.studio;
+        let assets: Vec<&visioncraft_core::catalog::Asset> = s
+            .scene
+            .library
+            .catalog
+            .iter()
+            .flat_map(|c| c.assets.iter())
+            .chain(&s.assets)
+            .collect();
+        let store = &s.scene.library.store;
+        let loaded = &s.scene.library.clips;
+        let object = |file: &str| {
+            store
+                .provided(file)
+                .map(Held::Bytes)
+                .ok_or_else(|| format!("`{file}` is not among the window's files"))
+        };
+        let library = |file: &str| {
+            if let Some(clips) = loaded.get(file) {
+                return Ok(Held::Clips(clips.clone()));
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(bytes) = store.library_file(file) {
+                return Ok(Held::Bytes(Arc::from(bytes)));
+            }
+            Err(format!(
+                "`{file}` is not loaded here: place the model, or ask `visioncraft-cli`, which reads the library folder"
+            ))
+        };
+        Some(crate::model_clips::clips_of(
+            s.project(),
+            &assets,
+            &object,
+            &library,
+            model,
+        ))
+    }
+
     fn methods(&self) -> &[Method] {
         UI_METHODS
     }
@@ -874,6 +916,35 @@ mod tests {
                     .import_object("Bad", b"nope".to_vec())
                     .is_err()
             );
+        });
+    }
+
+    #[test]
+    fn the_window_answers_the_clips_of_an_imported_model() {
+        use super::Host;
+        with_host(Project::default(), |h| {
+            let id = h
+                .host
+                .studio
+                .import_object("Hinge", crate::gltf_load::tests::hinge().finish())
+                .unwrap();
+            assert_eq!(id, "user:uo1");
+            let clips = h
+                .clips("user:uo1")
+                .expect("the window answers")
+                .expect("the hinge's file is among its files");
+            assert_eq!(clips.len(), 1);
+            assert_eq!(
+                (
+                    clips[0].name.as_str(),
+                    clips[0].duration,
+                    clips[0].channels.len()
+                ),
+                ("swing", 1.0, 1)
+            );
+            assert_eq!(h.clips("user:uo1").unwrap().unwrap(), clips);
+            let e = h.clips("nope").unwrap().unwrap_err();
+            assert!(e.contains("no model `nope`"), "{e}");
         });
     }
 

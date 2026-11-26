@@ -135,6 +135,7 @@ loaded geometry or a GPU:
 | `query.plants_for_light` | `{point \| outline \| hours, season \| date?, grower?, limit? = 25, cell_m? = 1, plants? = true, years?}` | the spot's hours (`spot`: min, mean, max) and the species ranked by fit (`full` or `partial`) with reason, estimated light range and growth flags; `hours` alone runs without a host; the day defaults to the summer solstice |
 | `query.light_check` | `{season \| date?, years?, ids?, layer?, suggestions? = 3, include_ok?, limit? = 200, step_minutes? = 15, plants? = true}` | `summary` (checked, ok, too_sunny, too_shady), the misfit `plants` with hours, light range and swap `suggestions`, `by_species`, `by_planting` |
 | `query.ground_height` | `{x, z}` | `{x, z, height}` (terrain, areas and models; `null` over nothing) |
+| `query.clips` | `{model}` | `{clips: [{name, duration_s, channels}]}`: the animation clips of a model that moves in parts (glTF node animation), a catalogue asset id or `user:<id>`; `channels` is how many channels a clip has, an empty list for a model that stands still; the model's file must be at hand (an imported object's always is; a library model's once loaded, or from the library folder on the command line) |
 | `agent.log` | `{limit? = 50}` | `{total, entries}` (above) |
 | `catalog.search` | `{query?, category?, exposure?, max_height_m?, limit? = 50}` | `{total, assets: [{id, name, category, size_m, license, author, plant}]}` |
 | `species.list` | `{filter?, category?}` | `{species: [{asset: "flora:<id>", common_name, ...}], custom: [{asset, name, base}]}` |

@@ -410,6 +410,10 @@ fn headless(access: Access) -> Headless {
         .catalog
         .assets
         .extend(own.into_iter().flat_map(|c| c.assets));
+    // `query.clips` reads an imported object's file and a library model's from these folders.
+    host.clips = Some(Box::new(visioncraft::model_clips::FolderClips::new(
+        dir.into(),
+    )));
     host
 }
 

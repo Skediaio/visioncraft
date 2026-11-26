@@ -273,6 +273,23 @@ pub fn host_docs() -> Vec<CommandDoc> {
             false,
         ),
         host_doc(
+            "query.clips",
+            "Clips",
+            "The animation clips of a model that moves in parts (glTF node animation): each clip's name, how long it lasts in seconds and how many channels it has. `model` is a catalogue asset id, or `user:<id>` for an imported object (`object.list`); a model that stands still answers an empty list. A catalogue asset's clips are those of its first level of detail. The model's file has to be at hand: an imported object's always is, a library model's once it is loaded (in a window) or from the library folder (`visioncraft-cli`, `--assets`).",
+            vec![p(
+                "model",
+                "string",
+                None,
+                true,
+                None,
+                &[],
+                "A catalogue asset id, or `user:<id>` for an imported object",
+            )],
+            "{clips: [{name, duration_s, channels}]}",
+            json!({"model": "user:uo1"}),
+            false,
+        ),
+        host_doc(
             "query.clearance",
             "Clearance",
             "Whether one can walk and see from one place to another: the straight line on the ground between `from` and `to` against what a person cannot walk through (houses and blocks, walls and fences, water, hedges and shrubs, trunks; as plants are at `years`), and an eye-high line of sight against the same and the crowns. When something is in the way the answer plans a route round it. `from` and `to` are [x, z], [x, y, z] or a reference (a shape id, a planting, a name: its centre).",
@@ -1559,6 +1576,17 @@ pub fn execute(host: &mut dyn Host, id: &str, params: &Value) -> Result<Value, S
             inspect::light_check_json(session, state, &q)
         }
         "planting.add_border" => add_border_host(host, params),
+        "query.clips" => {
+            Fields::new(id, "parameter", Some(params), &["model"])?;
+            let model: String = need(id, params, "model")?;
+            host.clips(&model)
+                .ok_or_else(|| {
+                    format!(
+                        "{id}: this session has no model files; the window, `visioncraft-cli` and the MCP server answer it"
+                    )
+                })?
+                .map(|clips| clips_json(&clips))
+        }
         "query.ground_length" => {
             Fields::new(id, "parameter", Some(params), &["path"])?;
             let path = need::<Vec<[f32; 2]>>(id, params, "path")?;
@@ -1953,6 +1981,15 @@ fn file_save(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
     state.file = Some(target.clone());
     state.saved = Some(project);
     Ok(json!({"path": target.display().to_string(), "bytes": bytes.len()}))
+}
+
+/// `query.clips`'s answer: per clip its name, its length in seconds and its channel count.
+fn clips_json(clips: &[visioncraft_core::Clip]) -> Value {
+    let clips: Vec<Value> = clips
+        .iter()
+        .map(|c| json!({"name": c.name, "duration_s": c.duration, "channels": c.channels.len()}))
+        .collect();
+    json!({ "clips": clips })
 }
 
 fn catalog_search(host: &mut dyn Host, params: &Value) -> Result<Value, String> {

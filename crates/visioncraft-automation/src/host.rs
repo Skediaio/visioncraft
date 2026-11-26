@@ -45,6 +45,24 @@ pub trait Host {
         let _ = (method, params);
         None
     }
+    /// The animation clips of a model for `query.clips`; `None` when this host has no model
+    /// files (a bare session).
+    fn clips(&mut self, model: &str) -> Option<Result<Vec<visioncraft_core::Clip>, String>> {
+        let _ = model;
+        None
+    }
+}
+
+/// `query.clips` reads the models' GLB files, which the app holds (the window's asset store,
+/// the project's folder, the library's folder): a host that has them answers through this.
+pub trait Clips {
+    /// The clips of a model: a catalogue asset id, or `user:<id>` for an imported object.
+    fn clips(
+        &mut self,
+        model: &str,
+        project: &Project,
+        state: &HostState,
+    ) -> Result<Vec<visioncraft_core::Clip>, String>;
 }
 
 /// Draws pictures for [`Headless`] (the CLI's GPU renderer).
@@ -351,11 +369,12 @@ pub fn builtin_catalog() -> Catalog {
 }
 
 /// The host of `visioncraft-cli` (and of tests): a session, its state, and pictures when
-/// [`Headless::pictures`] is set.
+/// [`Headless::pictures`] is set; the models' clips when [`Headless::clips`] is.
 pub struct Headless {
     pub session: Session,
     pub state: HostState,
     pub pictures: Option<Box<dyn Pictures>>,
+    pub clips: Option<Box<dyn Clips>>,
 }
 
 impl Headless {
@@ -364,6 +383,7 @@ impl Headless {
             session: Session::new(Project::default()),
             state: HostState::new(access),
             pictures: None,
+            clips: None,
         }
     }
 }
@@ -371,6 +391,13 @@ impl Headless {
 impl Host for Headless {
     fn parts(&mut self) -> (&mut Session, &mut HostState) {
         (&mut self.session, &mut self.state)
+    }
+
+    fn clips(&mut self, model: &str) -> Option<Result<Vec<visioncraft_core::Clip>, String>> {
+        let (session, state) = (&mut self.session, &mut self.state);
+        self.clips
+            .as_mut()
+            .map(|clips| clips.clips(model, session.project(), state))
     }
 
     fn render(
