@@ -281,11 +281,7 @@ pub fn render_with_progress(
         .map_err(|e| format!("{name}: cannot make `{}`: {e}", dir.display()))?;
     let fps = f64::from(film.fps);
     // A flash's `frames` last frames of the film's rate, so the same frames show it every time.
-    let live_fps = host.playback().map(|p| {
-        let was = p.fps;
-        p.fps = fps;
-        was
-    });
+    host.state().film_fps = Some(fps);
     let mut last = Value::Null;
     for (n, i) in frames.iter().enumerate() {
         let t = *i as f64 / fps;
@@ -348,11 +344,7 @@ pub fn render_with_progress(
         sheet_part = sheet_json(&images, &times, &shots, 320.min(width as u32).max(64))
             .map_err(|e| format!("{name}: {e}"))?;
     }
-    if let Some(was) = live_fps
-        && let Some(p) = host.playback()
-    {
-        p.fps = was;
-    }
+    host.state().film_fps = None;
     let mut result = json!({
         "dir": dir.display().to_string(), "frames": frames.len(),
         "framePattern": "frame_%05d.png", "fps": out_fps,

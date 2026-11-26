@@ -251,6 +251,9 @@ pub struct HostState {
     /// (the `animation_s` of the last picture in a session without a window). Session state,
     /// not saved and not an undo step.
     pub playback: visioncraft_core::Playback,
+    /// The frames a second of the film `film.render` is drawing, while it draws it: what its
+    /// pictures' flashes count `frames` in. `None` outside a film, where a still is 60.
+    pub film_fps: Option<f64>,
     /// The agent's name (MCP `clientInfo.name`), for the agent log.
     pub client: Option<String>,
     /// What agents did, oldest first (`agent.log`); session state, not saved.

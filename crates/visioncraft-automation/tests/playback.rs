@@ -891,6 +891,27 @@ fn a_film_shows_the_same_frames_every_time() {
     assert_eq!(h.state.playback.fps, 60.0);
 }
 
+/// A still's frames are 60 a second whatever rate the host draws at (a window's own): only a
+/// film sets the film's.
+#[test]
+fn a_still_is_sixty_frames_a_second() {
+    let mut h = host();
+    let requests = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    h.pictures = Some(Box::new(Recorder(requests.clone())));
+    // As a window has it: its own rate live.
+    h.state.playback.fps = 30.0;
+    let out = dir("still");
+    run(
+        &mut h,
+        "view.render",
+        json!({"width": 16, "height": 16, "path": out.join("still.png")}),
+    )
+    .unwrap();
+    assert_eq!(requests.borrow()[0].fps, 60.0);
+    assert_eq!(requests.borrow()[0].playback.fps, 60.0);
+    assert_eq!(h.state.playback.fps, 30.0, "the host's own rate is left alone");
+}
+
 fn played_of(playback: &visioncraft_core::Playback) -> Vec<visioncraft_core::Played> {
     let spot = visioncraft_core::Spot {
         planting: "g1",

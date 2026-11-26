@@ -2065,6 +2065,9 @@ impl EditState {
     }
 }
 
+/// The frames a second of a still: what a flash's `frames` count in outside a film.
+const STILL_FPS: f64 = 60.0;
+
 fn file_new(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
     Fields::new("file.new", "parameter", Some(params), &[])?;
     let (session, state) = host.parts();
@@ -2752,13 +2755,17 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
         None => None,
     };
     // The session's clock is the picture's: a clip started without a time starts here. The
-    // playback and the rate are the host's own (a window's is its studio's, not its state's).
-    let (playback, fps) = match host.playback() {
+    // playback is the host's own (a window's is its studio's, not its state's); the rate is a
+    // film's in film.render and 60 in a still, never the rate a window happens to draw at.
+    let fps = host.state().film_fps.unwrap_or(STILL_FPS);
+    let playback = match host.playback() {
         Some(p) => {
             p.clock = animation_s;
-            (p.clone(), p.fps)
+            let mut playback = p.clone();
+            playback.fps = fps;
+            playback
         }
-        None => (Default::default(), 60.0),
+        None => Default::default(),
     };
     let request = RenderRequest {
         width,
