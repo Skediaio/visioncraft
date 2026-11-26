@@ -8677,6 +8677,15 @@ mod tests {
             !disk.contains("tan_theta"),
             "no worst-case slope bias:\n{disk}"
         );
+        // The plane maths `receiver_plane` mirrors (the uv's y runs against the clip's y).
+        for line in [
+            "let slope_max = 4.0 * dz_per_m / length(a0);",
+            "let plane_z = -select(1.0, max(-plane_n.z, length(plane_n.xy) / slope_max), facing);",
+            "let k = select(vec2<f32>(0.0), -plane_n.xy / plane_z, facing);",
+            "let dz = dot(k, vec2<f32>(2.0 * o.x, -2.0 * o.y));",
+        ] {
+            assert!(disk.contains(line), "the receiver plane as mirrored: {line}");
+        }
         for (name, src) in [
             ("scene", scene),
             ("grass", include_str!("grass.wgsl")),
@@ -8821,9 +8830,10 @@ mod tests {
                 }
             }
         }
-        // 2 suns x 4 cascades x 5 banks x 8 directions x 3 radii: 768 taps within the clamp
-        // (exact), 96 on the bank the low sun grazes (clamped), 96 behind the 4 banks facing
-        // away from the light (no plane).
+        // 2 suns x 4 cascades x 5 banks x 8 directions x 3 radii: 864 taps checked, 768 within
+        // the clamp (exact) and 96 on the bank the low sun grazes (clamped); `back` counts the
+        // 4 (sun, cascade, bank) cases facing away from the light (no plane), whose taps are
+        // skipped.
         assert_eq!((exact, clamped, back), (768, 96, 4));
     }
 

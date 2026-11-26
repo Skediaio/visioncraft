@@ -1199,6 +1199,9 @@ fn pole_shadow_penumbra() {
 /// A filter that slackens every tap by the worst-case slope, `r * tan(theta)` (50 cm towards
 /// the light there), lets the wall's stored depth past the taps away from the light and suns
 /// that row (64 %) and the base's own row.
+/// Only `high_pcf16` can catch that detachment: `ultra`'s disk is 1.5 texels of 4.5 cm there,
+/// within the wall's clearance, and `high` runs the unchanged 9-tap grid; both are controls
+/// that the shadow stays dark at the base with every preset.
 #[test]
 fn wall_base_keeps_its_shadow() {
     let (w, h) = (1920, 1080);

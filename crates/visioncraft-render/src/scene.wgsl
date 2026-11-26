@@ -1414,10 +1414,7 @@ fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, aging: Agin
     let nol_raw = dot(n, l);
     let nol = max(nol_raw, 0.0);
     if g.sun_light.r + g.sun_light.g + g.sun_light.b > 0.0 && (nol > 0.0 || foliage) {
-        let shadow = min(
-            sun_shadow(in.world, s.geometric, max(dot(s.geometric, l), 0.0), depth),
-            screen.g,
-        ) * (1.0 - s.self_shadow);
+        let shadow = min(sun_shadow(in.world, s.geometric, max(dot(s.geometric, l), 0.0), depth), screen.g) * (1.0 - s.self_shadow);
         sunlit = shadow * smoothstep(0.0, 0.15, nol);
         var diffuse = nol;
         // Snow is no Lambertian surface: its grains scatter a low sun forward and up, so a
