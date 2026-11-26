@@ -474,14 +474,18 @@ pub struct Sampler {
 impl Sampler {
     /// The model-space matrix of every node of `rig` at clock time `t`, with `plays` playing
     /// in the order they started: where two of them move the same property, the later one wins.
-    /// A node no clip moves is at rest.
+    /// A node no clip moves is at rest, and so is one before its clips start: a play that has
+    /// not started contributes nothing (it neither holds its first key nor loops early).
     pub fn pose(&mut self, rig: &Rig, plays: &[Played], t: f64) -> &[Matrix] {
         self.local.clear();
         self.local.extend_from_slice(&rig.rest);
         for p in plays {
+            let since = t - f64::from(p.start_s);
+            if since < 0.0 {
+                continue;
+            }
             if let Some(clip) = rig.clips.get(p.clip) {
-                let at = (t - f64::from(p.start_s)) as f32;
-                apply(clip, wrap(clip, at, p.looped), &mut self.local);
+                apply(clip, wrap(clip, since as f32, p.looped), &mut self.local);
             }
         }
         model_space_into(
@@ -542,6 +546,43 @@ mod tests {
         let mut c = of(channel(path, interpolation, times, values));
         c.duration = c.end();
         c
+    }
+
+    /// One node at rest unturned, and a clip that starts it turned a quarter about Z and turns
+    /// it back: its first key is not the rest pose.
+    fn turned_rig() -> Rig {
+        Rig {
+            rest: vec![Trs::IDENTITY],
+            parents: vec![None],
+            clips: vec![clip(
+                R,
+                Interpolation::Linear,
+                &[0.0, 1.0],
+                &[0.0, 0.0, Q, Q, 0.0, 0.0, 0.0, 1.0],
+            )],
+        }
+    }
+
+    #[test]
+    fn before_its_start_a_clip_leaves_the_rest_pose_alone() {
+        let r = turned_rig();
+        let rest = model_space(&r.parents, &r.rest)[0];
+        let mut s = Sampler::default();
+        for looped in [false, true] {
+            let plays = [Played {
+                clip: 0,
+                start_s: 10.0,
+                looped,
+            }];
+            for t in [0.0, 5.0, 8.5, 9.999] {
+                assert!(
+                    near16(s.pose(&r, &plays, t)[0], rest),
+                    "looped {looped}, t = {t}: not at rest"
+                );
+            }
+            // From its start it plays: its first key, not the rest.
+            assert!(!near16(s.pose(&r, &plays, 10.0)[0], rest), "looped {looped}");
+        }
     }
 
     #[test]
