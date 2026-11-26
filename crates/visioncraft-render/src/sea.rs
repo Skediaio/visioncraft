@@ -94,15 +94,17 @@ pub(crate) const ROWS: u32 = 24;
 
 /// Where `sea`'s surface shows in the view `view_proj` of `eye`: rays through a grid over the
 /// view meet its level on the sea side of the coast (with a margin growing with the distance)
-/// and inside the outline, or a corner of the outline lies in the view. Hills and dunes between
-/// are not tested: what the view frames, it counts.
+/// and inside the outline, and the corners of the outline that lie in the view. Hills and dunes
+/// between are not tested: what the view frames, it counts. Rows count from the top of the
+/// view, as the render target's pixels do.
 pub(crate) fn sea_sight(sea: &Sea, eye: glam::Vec3, view_proj: glam::Mat4) -> Option<SeaSight> {
     use glam::Vec3;
     let inverse = view_proj.inverse();
     let level = sea.level;
     let mut sight: Option<SeaSight> = None;
     // A corner of the outline in view: some of it shows where no ray through the grid lands.
-    let mut corner_seen = false;
+    // The rays still count: a corner alone gave a large sea a cell's rectangle (the scissor of
+    // its planar pass, black beyond) and a coverage of one ray.
     for &[x, z] in sea.outline.iter().take(if sea.outline.len() >= 3 {
         usize::MAX
     } else {
@@ -120,16 +122,13 @@ pub(crate) fn sea_sight(sea: &Sea, eye: glam::Vec3, view_proj: glam::Mat4) -> Op
                 eye,
                 c.w,
             );
-            corner_seen = true;
         }
-    }
-    if corner_seen {
-        return sight;
     }
     for row in 0..=ROWS {
         for column in 0..=COLUMNS {
             let x = -1.0 + 2.0 * column as f32 / COLUMNS as f32;
-            let y = -1.0 + 2.0 * row as f32 / ROWS as f32;
+            // Row 0 at the top (NDC y = 1), as the corners above and `SeaSight::rect` take it.
+            let y = 1.0 - 2.0 * row as f32 / ROWS as f32;
             let near = inverse.project_point3(Vec3::new(x, y, 0.0));
             let far = inverse.project_point3(Vec3::new(x, y, 1.0));
             // The ray from the near plane on (past the far plane too: the sea runs on to the
@@ -634,5 +633,41 @@ mod tests {
                 h: 10
             }
         );
+    }
+
+    #[test]
+    fn a_bounded_sea_filling_the_view_with_one_corner_in_it_counts_its_rays() {
+        use glam::{Mat4, Vec3, Vec4};
+        // A sea inside a vast outline whose one near corner shows at the bottom left; the
+        // other corners lie beside and behind the eye.
+        let mut s = sea(1.0, 20.0);
+        s.outline = vec![
+            [0.0, 0.0],
+            [5000.0, -5000.0],
+            [30000.0, 10000.0],
+            [-20000.0, 20000.0],
+        ];
+        let eye = Vec3::new(5.0, 10.0, -30.0);
+        let proj = Mat4::perspective_rh(50f32.to_radians(), 16.0 / 9.0, 0.1, 3000.0);
+        let view_proj = proj * Mat4::look_at_rh(eye, Vec3::new(40.0, 0.0, 150.0), Vec3::Y);
+        let in_view = s
+            .outline
+            .iter()
+            .filter(|&&[x, z]| {
+                let c = view_proj * Vec4::new(x, 0.0, z, 1.0);
+                c.w > 0.0 && c.x.abs() <= c.w && c.y.abs() <= c.w
+            })
+            .count();
+        assert_eq!(in_view, 1);
+        let sight = sea_sight(&s, eye, view_proj).expect("the sea in view");
+        // Most of the view below the horizon is water: its rays count, not the corner alone.
+        let coverage = f64::from(sight.hits) / f64::from((ROWS + 1) * (COLUMNS + 1));
+        assert!(coverage > 0.35, "{coverage} {sight:?}");
+        // And the rectangle holds it: the whole width, from above the horizon (a little above
+        // the middle, the view looks down 3 degrees) to the bottom.
+        let rect = sight.rect((320, 240));
+        assert_eq!((rect.x, rect.w), (0, 320), "{rect:?}");
+        assert_eq!(rect.y + rect.h, 240, "{rect:?}");
+        assert!(rect.y > 80 && rect.y < 120, "{rect:?}");
     }
 }
