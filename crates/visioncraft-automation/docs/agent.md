@@ -655,7 +655,9 @@ of radius 5 has an area within 0.1% of 25 pi).
 side and 64 MB) flat under the drawing. `file` is relative to the project file (or the read root),
 and the host reads its size into `size_px` itself (a missing, unreadable or other file is an
 error that says so; a caller that states `size_px` may name a file this host does not have, which
-`document.inspect` then reports with an `error`). The image's top-left lands on `origin`
+`document.inspect` then reports with an `error`). A JPEG's EXIF orientation is applied: `size_px` and
+the pixel positions of `underlay.calibrate` are as the picture is displayed (a phone's portrait
+photo stands upright). The image's top-left lands on `origin`
 (`[0, 0]`), one pixel is `metres_per_pixel` (a guess of 0.05 until you set it); at rotation 0 image
 +x runs along +X (east) and image +y along +Z (south), and `rotation_deg` turns it
 counter-clockwise seen from above, like a model's rotation. It is drawn flat, unlit and see-through
@@ -689,7 +691,8 @@ A PDF page is not read yet: export it as a PNG first.
 `wall_photo.add` puts a PNG or JPEG (at most 16384 pixels on a side and 64 MB) on **one wall face**
 as its texture. `file` is relative to the project file (or the read root); the host reads its size
 into `size_px` itself, with the same errors as `underlay.add` (a missing, unreadable or other file
-is refused). `target` names the face: `{"type": "face", "owner": "S1", "face": "S1:side(2)"}`
+is refused). A JPEG's EXIF orientation is applied, as for a plan: `size_px` and `corners_px` are as
+the photo is displayed. `target` names the face: `{"type": "face", "owner": "S1", "face": "S1:side(2)"}`
 (a model's faces are named as `document.inspect` lists them). A photo of a building is seen at an
 angle, so give `corners_px`: the **facade's four corners as they stand in the photo**, in pixels
 (top-left of the image is 0, 0; y runs down), in the order **bottom-left, bottom-right,
@@ -711,8 +714,7 @@ same face replaces it. `wall_photo.set` changes any field (`region: null` makes 
 again), `wall_photo.remove` takes the photo away (the file stays). It follows its side when a
 vertex is inserted or removed, and goes with its shape. In a bundle the image travels as
 `photos/<name>`. Not yet: several photos on one face, removing what stands in front of the facade
-(trees, cars), matching the photo's colour to the sun, and a photo's EXIF rotation (turn it
-upright first).
+(trees, cars), matching the photo's colour to the sun.
 
 ### 26. A sun map of the lawn in winter, seen from above
 

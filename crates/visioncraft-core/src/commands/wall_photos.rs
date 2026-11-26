@@ -19,14 +19,14 @@ pub(super) fn register(s: &mut Session) {
         spec(
             "wall_photo.add",
             "Add Wall Photo",
-            "Puts a photo of a facade (PNG or JPEG) on one wall face as its texture, straightened and scaled. `corners_px` are the facade's four corners as they stand in the photo (bottom-left, bottom-right, top-right, top-left as seen from outside): the photo is warped so that this four-sided shape fills `region`, a rectangle on the face in metres (u along the face to the right seen from outside, v up, from the face's lowest left point); the whole face when no region is given. Without `corners_px` the photo is taken as already straight (its own corners). The photo replaces the face's material inside the region, is lit like any surface and casts shadows like the wall. The host reads the image's size (`size_px`). A face that lies flat (a floor) or is curved takes no photo.",
+            "Puts a photo of a facade (PNG or JPEG) on one wall face as its texture, straightened and scaled. `corners_px` are the facade's four corners as they stand in the photo (bottom-left, bottom-right, top-right, top-left as seen from outside): the photo is warped so that this four-sided shape fills `region`, a rectangle on the face in metres (u along the face to the right seen from outside, v up, from the face's lowest left point); the whole face when no region is given. Without `corners_px` the photo is taken as already straight (its own corners). The photo replaces the face's material inside the region, is lit like any surface and casts shadows like the wall. The host reads the image's size (`size_px`, as the photo is displayed: a JPEG's EXIF orientation is applied). A face that lies flat (a floor) or is curved takes no photo.",
             vec![
                 param("file", T::String, "Image path relative to the project file, or `photos/<name>` inside a bundle.").required(),
                 param("target", T::Object, "The face: {\"type\": \"face\", \"owner\": \"S1\", \"face\": \"S1:side(2)\"} (the faces are in `document.inspect`).").required(),
-                param("corners_px", T::Array, "The facade's four corners in the photo, [[x, y], ...] in pixels (top-left of the image is 0, 0; y runs down): bottom-left, bottom-right, top-right, top-left as seen from outside. Default: the photo's own corners.").unit("px"),
+                param("corners_px", T::Array, "The facade's four corners in the photo, [[x, y], ...] in pixels as the photo is displayed (top-left of the image is 0, 0; y runs down): bottom-left, bottom-right, top-right, top-left as seen from outside. Default: the photo's own corners.").unit("px"),
                 param("region", T::Object, "{u0, v0, u1, v1}: where on the face the facade lies, metres. Default: the whole face.").unit("m"),
                 param("name", T::String, "Display name.").default(json!("the file's name")),
-                param("size_px", T::Array, "[width, height] of the image in pixels; filled in by the host when it can read the file, required otherwise.").unit("px"),
+                param("size_px", T::Array, "[width, height] of the image in pixels as it is displayed (a JPEG's EXIF orientation is applied); filled in by the host when it can read the file, required otherwise.").unit("px"),
             ],
             "{id} (p1, p2...)",
             json!({"file": "facade.jpg", "target": {"type": "face", "owner": "S2", "face": "S2:side(2)"}, "corners_px": [[100, 700], [900, 650], [820, 150], [160, 100]], "size_px": [1000, 800]}),

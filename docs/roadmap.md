@@ -43,8 +43,10 @@ nothing here is a promise of a date.
   reveals keep the wall's material. `wall_photo.set` and `wall_photo.remove`; one photo a face; it
   travels in the bundle as `photos/<name>` and `document.inspect` lists it with the face's size. In
   the window: Materials, click a wall, Photo on wall…, drag four corner handles onto the facade,
-  type a region, Apply. Next: several photos on one face (a facade in tiles), removing what
-  stands in front of it (trees, cars), matching the photo's colour to the sun, EXIF rotation.
+  type a region, Apply. A JPEG's EXIF orientation is honoured: a phone's portrait photo stands
+  upright, and `size_px` and `corners_px` are as the photo is displayed. Next: several photos on
+  one face (a facade in tiles), removing what stands in front of it (trees, cars), matching the
+  photo's colour to the sun.
 - **Films from camera moves:** `film.add` and `film.add_shot` describe a film as shots: `walk`
   (the eye follows the real ground, looks ahead), `glide` (a smooth curve through points), `rise`,
   `orbit` (round a spot, any number of turns), `flyover` (a drone looking ahead and down) and

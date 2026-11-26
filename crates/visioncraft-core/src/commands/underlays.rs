@@ -13,7 +13,7 @@ pub(super) fn register(s: &mut Session) {
         spec(
             "underlay.add",
             "Add Underlay",
-            "Places a plan image (PNG or JPEG: a floor plan, a site plan) flat under the drawing to trace over. The host reads the image's size when it can (`size_px`); the scale is a guess until `underlay.calibrate` or `underlay.scale_by_distance` sets it. The image is drawn see-through and unlit, casts no shadow and is not picked.",
+            "Places a plan image (PNG or JPEG: a floor plan, a site plan) flat under the drawing to trace over. The host reads the image's size when it can (`size_px`, as the picture is displayed: a JPEG's EXIF orientation is applied); the scale is a guess until `underlay.calibrate` or `underlay.scale_by_distance` sets it. The image is drawn see-through and unlit, casts no shadow and is not picked.",
             vec![
                 param("file", T::String, "Path relative to the project file, or `underlays/<name>` inside a bundle.").required(),
                 param("name", T::String, "Display name.").default(json!("the file's name")),
@@ -23,7 +23,7 @@ pub(super) fn register(s: &mut Session) {
                 param("rotation_deg", T::Number, "Turn about the origin, counter-clockwise seen from above (like a model's rotation).").unit("deg").default(json!(0)),
                 param("opacity", T::Number, "0 (invisible) to 1 (opaque).").default(json!(0.5)),
                 param("elevation", T::Number, "Height above the ground plane, a little above so it does not flicker with it.").unit("m").default(json!(0.02)),
-                param("size_px", T::Array, "[width, height] of the image in pixels; filled in by the host when it can read the file, required otherwise.").unit("px"),
+                param("size_px", T::Array, "[width, height] of the image in pixels as it is displayed (a JPEG's EXIF orientation is applied); filled in by the host when it can read the file, required otherwise.").unit("px"),
             ],
             "{id} (u1, u2...)",
             json!({"file": "plan.png", "name": "Site plan", "origin": [0, 0], "metres_per_pixel": 0.05, "opacity": 0.6, "size_px": [800, 600]}),
