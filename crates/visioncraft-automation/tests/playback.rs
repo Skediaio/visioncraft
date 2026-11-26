@@ -479,6 +479,41 @@ fn a_whole_planting_and_one_plant_of_it() {
     assert_eq!(h.state.playback.plays().len(), 1);
 }
 
+/// Stopping a planting stops every play on it, those on one of its objects too; stopping one
+/// object while the whole planting plays is an error that says to stop the planting.
+#[test]
+fn stopping_a_planting_stops_its_objects_too() {
+    let mut h = host();
+    h.session
+        .run(
+            "planting.add_cluster",
+            json!({"name": "Hinges", "center": [8, 0], "radius_m": 1.0, "count": 2,
+                "asset_palette": [{"asset": "user:uo1", "weight": 1.0}]}),
+        )
+        .unwrap();
+    for object in ["g3#0", "g3#1"] {
+        run(
+            &mut h,
+            "model.play_clip",
+            json!({"object": object, "clip": "swing", "start_s": 0}),
+        )
+        .unwrap();
+    }
+    let r = run(&mut h, "model.stop_clip", json!({"object": "g3"})).unwrap();
+    assert_eq!(r["stopped"], json!(2), "{r}");
+    assert!(h.state.playback.plays().is_empty());
+    // The whole planting plays: one of its objects cannot be stopped on its own.
+    run(
+        &mut h,
+        "model.play_clip",
+        json!({"object": "g3", "clip": "swing", "start_s": 0}),
+    )
+    .unwrap();
+    let e = run(&mut h, "model.stop_clip", json!({"object": "g3#1"})).unwrap_err();
+    assert!(e.contains("stop `g3`"), "{e}");
+    assert_eq!(h.state.playback.plays().len(), 1, "nothing was stopped");
+}
+
 #[test]
 fn errors_name_the_object_the_clip_and_the_parameters() {
     let mut h = host();

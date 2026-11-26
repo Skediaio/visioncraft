@@ -233,6 +233,14 @@ pub(crate) fn stop_clip(host: &mut dyn Host, id: &str, params: &Value) -> Result
         }
     };
     let playback = playback(host)?;
+    // One object of a planting that plays as a whole would go on moving with it.
+    if playback.plays_on_its_planting(&target, clips.as_ref()) {
+        return Err(format!(
+            "{id}: `{}` plays as part of its whole planting: stop `{}` (every object of it) instead",
+            target.name(),
+            target.planting
+        ));
+    }
     let stopped = playback.stop(&target, clips.as_ref());
     Ok(json!({
         "object": target.name(),

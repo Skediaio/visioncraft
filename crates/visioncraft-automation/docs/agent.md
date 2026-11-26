@@ -361,7 +361,8 @@ time in `film.render`, the `animation_s` of the last picture on the command line
 time always gives the same pose. The same clip on the same object starts again; several clips
 may play at once, and where two move the same property the one started later wins; a clip that
 ends holds its last pose until `model.stop_clip {"object": "g4", "clip"?: ...}` (every clip
-without `clip`). `query.part_pose {"object": "g4", "t"?: ...}` reads the pose back: per object
+without `clip`; a planting stops the clips on each of its objects too, and one object of a
+planting that plays as a whole cannot be stopped alone: stop the planting). `query.part_pose {"object": "g4", "t"?: ...}` reads the pose back: per object
 the matrix in model space (column-major, 16 numbers) of every moving part at time `t`, the
 clips on it composed as they are drawn. `effect.flash {"position": [x, y, z], "color": [r, g,
 b], "intensity": 2000, "range_m": 4, "size_m"?: 0.15, "frames"?: 2, "seconds"?, "start_s"?}` is a

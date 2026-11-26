@@ -58,6 +58,12 @@ impl ClipTarget {
         })
     }
 
+    /// Whether a play on `other` is one on this target: the same, or one object of this
+    /// whole planting.
+    pub fn covers(&self, other: &ClipTarget) -> bool {
+        self.planting == other.planting && (self.plant.is_none() || self.plant == other.plant)
+    }
+
     /// As it is written: `g4` or `g4#12`.
     pub fn name(&self) -> String {
         match self.plant {
@@ -263,12 +269,28 @@ impl Playback {
         restarted
     }
 
-    /// Ends the plays on `target`: of `clips` only, or of every clip. Returns how many ended.
+    /// Ends the plays on `target`: of `clips` only, or of every clip. A whole planting
+    /// (`g4`) ends the plays on each of its objects (`g4#3`) too. Returns how many ended.
     pub fn stop(&mut self, target: &ClipTarget, clips: Option<&BTreeMap<String, usize>>) -> usize {
         let before = self.plays.len();
         self.plays
-            .retain(|p| p.target != *target || clips.is_some_and(|c| p.clips != *c));
+            .retain(|p| !target.covers(&p.target) || clips.is_some_and(|c| p.clips != *c));
         before - self.plays.len()
+    }
+
+    /// Whether a play on the whole planting of `target` (one object of it) would go on moving
+    /// that object if the object's own plays were stopped: of `clips` only, or of any clip.
+    pub fn plays_on_its_planting(
+        &self,
+        target: &ClipTarget,
+        clips: Option<&BTreeMap<String, usize>>,
+    ) -> bool {
+        target.plant.is_some()
+            && self.plays.iter().any(|p| {
+                p.target.planting == target.planting
+                    && p.target.plant.is_none()
+                    && clips.is_none_or(|c| p.clips == *c)
+            })
     }
 
     /// Ends every play.
