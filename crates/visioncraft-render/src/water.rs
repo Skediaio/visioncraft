@@ -8,13 +8,15 @@
 //! - **Planes**: sorted by height, a surface joins the group being built while it is within
 //!   [`GROUP_M`] of the group's lowest surface; so two areas at one level share one plane. A
 //!   group lies at the height of its largest surface when it first shows, and keeps last
-//!   frame's height while that still lies among its surfaces: the mirror and the hysteresis key
-//!   do not jump when two areas trade size. The shaders match a surface to the nearest plane
-//!   within [`MATCH_M`] (scene.wgsl `water_plane_at`), so neighbouring groups merge into one
-//!   plane until their heights are [`SEPARATE_M`] apart and no surface of one lies within
-//!   [`MATCH_M`] of the other's height: no water samples a layer that is not its own, outside
-//!   that layer's scissor and black. A surface of a merged plane further than [`MATCH_M`] from
-//!   its height finds no layer and reports its plane's fallback tier.
+//!   frame's height while that still lies among its surfaces and the water within [`MATCH_M`]
+//!   of it covers 1 / [`KEEP_RATIO`] of what lies within [`MATCH_M`] of the largest surface:
+//!   the mirror and the hysteresis key do not jump when two areas trade size, and a merged
+//!   plane moves to the pond that comes to dominate it. The shaders match a surface to the
+//!   nearest plane within [`MATCH_M`] (scene.wgsl `water_plane_at`), so neighbouring groups
+//!   merge into one plane until their heights are [`SEPARATE_M`] apart and no surface of one
+//!   lies within [`MATCH_M`] of the other's height: no water samples a layer that is not its
+//!   own, outside that layer's scissor and black. A surface of a merged plane further than
+//!   [`MATCH_M`] from its height finds no layer and reports its plane's fallback tier.
 //! - **Score**: the share of the render target the plane covers (its rectangle's area, of the
 //!   part of its box in front of the eye; for the sea the share of the rays that met it) times
 //!   1 + nearness (1 at the eye, 0.5 at 10 m, towards 0 far off). A near small pond outranks a
@@ -116,7 +118,8 @@ impl Surface {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WaterPlane {
     /// The height its largest surface lay at when it first showed, kept while it still lies
-    /// among its surfaces; [`SEPARATE_M`] from the next plane's at the least.
+    /// among its surfaces and the water at it is not [`KEEP_RATIO`] times outcovered
+    /// (`Span::settle`); [`SEPARATE_M`] from the next plane's at the least.
     pub height: f32,
     /// The union of its surfaces' rectangles.
     pub rect: Rect,
@@ -180,11 +183,25 @@ impl Span {
     }
 
     /// The plane's height: one of last frame's planes' within the span (the nearest to its
-    /// largest surface), else its largest surface's.
-    fn settle(&self, last: &[f32]) -> f32 {
+    /// largest surface) while the water the shaders give that height's layer covers at least
+    /// 1 / [`KEEP_RATIO`] of what its largest surface's height would get, else its largest
+    /// surface's. Within a group of [`GROUP_M`] every height gets all of it, so two areas
+    /// trading size keep the plane where it is; a merged plane wider than [`MATCH_M`] moves to
+    /// the pond that comes to dominate it.
+    fn settle(&self, last: &[f32], surfaces: &[Surface]) -> f32 {
+        let covered = |h: f32| -> f32 {
+            surfaces
+                .iter()
+                .filter(|s| (self.lo..=self.hi).contains(&s.height))
+                .filter(|s| (s.height - h).abs() < MATCH_M)
+                .map(|s| s.coverage)
+                .sum()
+        };
+        let best = covered(self.at);
         last.iter()
             .copied()
             .filter(|h| (self.lo..=self.hi).contains(h))
+            .filter(|&h| covered(h) * KEEP_RATIO >= best)
             .min_by(|a, b| (a - self.at).abs().total_cmp(&(b - self.at).abs()))
             .unwrap_or(self.at)
     }
@@ -328,7 +345,7 @@ impl Ranking {
         for g in 0..self.planes.len() {
             self.planes[kept] = self.planes[g];
             self.spans[kept] = self.spans[g];
-            self.planes[kept].height = self.spans[kept].settle(&self.last);
+            self.planes[kept].height = self.spans[kept].settle(&self.last, surfaces);
             self.remap.push(kept as u16);
             kept += 1;
             while kept >= 2 && !self.apart(kept - 2, kept - 1) {
@@ -336,7 +353,7 @@ impl Ranking {
                 let (plane, span) = (self.planes[b], self.spans[b]);
                 self.planes[a].merge(plane);
                 self.spans[a].merge(span);
-                self.planes[a].height = self.spans[a].settle(&self.last);
+                self.planes[a].height = self.spans[a].settle(&self.last, surfaces);
                 for r in &mut self.remap {
                     if *r as usize == b {
                         *r = a as u16;
@@ -1128,6 +1145,35 @@ mod tests {
         }
         // Once the area at 0.03 m is gone the plane moves to the one left.
         rank(&mut r, &[surface(0.0, 0.3, 5.0), b], 1, true);
+        assert_eq!(r.planes[0].height, 0.0);
+    }
+
+    #[test]
+    fn a_merged_plane_moves_to_the_pond_that_comes_to_dominate_it() {
+        // Cascade ponds 7 cm apart: one plane (under SEPARATE_M apart), at the larger one's
+        // height when it first shows.
+        let mut r = Ranking::default();
+        let cascade = |low: f32, high: f32| [surface(0.0, low, 5.0), surface(0.07, high, 5.0)];
+        r.rank(&cascade(0.3, 0.05), 1, true);
+        assert_eq!(r.planes.len(), 1, "{:?}", r.planes);
+        assert_eq!(r.planes[0].height, 0.0);
+        // The upper pond grows to nearly the lower's size: under KEEP_RATIO times it, the
+        // plane stays.
+        r.rank(&cascade(0.3, 0.35), 1, true);
+        assert_eq!(r.planes[0].height, 0.0);
+        // Walking up to it, the upper pond fills the view: the plane follows it, and it is
+        // the one mirrored.
+        r.rank(&cascade(0.05, 0.6), 1, true);
+        assert_eq!(r.planes.len(), 1, "{:?}", r.planes);
+        assert_eq!(r.planes[0].height, 0.07);
+        assert_eq!(
+            (r.tier_of(0), r.tier_of(1)),
+            (WaterTier::ScreenSpace, WaterTier::Planar)
+        );
+        // And back only once the lower one scores KEEP_RATIO times the upper.
+        r.rank(&cascade(0.35, 0.3), 1, true);
+        assert_eq!(r.planes[0].height, 0.07);
+        r.rank(&cascade(0.6, 0.3), 1, true);
         assert_eq!(r.planes[0].height, 0.0);
     }
 
