@@ -1362,7 +1362,11 @@ mod tests {
         l.store.evict(crate::assets::Key::Glb(file.clone()));
         l.pump(&mut r, Vec3::ZERO);
         assert_eq!(l.resident_models(), 0, "evicted");
-        assert_eq!(l.animation(&file), Some(&loaded), "its clips are still known");
+        assert_eq!(
+            l.animation(&file),
+            Some(&loaded),
+            "its clips are still known"
+        );
     }
 
     /// Below HIGH a catalogue plant wanted by a generator gets an impostor, baked from its model

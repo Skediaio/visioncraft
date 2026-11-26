@@ -138,7 +138,11 @@ fn a_planting_on_a_hidden_layer_has_no_items() {
         )
         .unwrap();
     s.settle_for_picture();
-    assert_eq!(s.scene.gen_stats("g1").map(|g| g.count), Some(1), "still counted");
+    assert_eq!(
+        s.scene.gen_stats("g1").map(|g| g.count),
+        Some(1),
+        "still counted"
+    );
     assert_eq!(s.scene.animated_parts(), 0, "the lid is not drawn");
     // Back to what the scene draws without it: the body and the lid were at least two.
     assert!(

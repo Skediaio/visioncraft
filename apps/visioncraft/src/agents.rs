@@ -1137,10 +1137,8 @@ mod tests {
         )
         .unwrap();
         let project = s.project().clone();
-        let out = std::env::temp_dir().join(format!(
-            "visioncraft-window-film-{}",
-            std::process::id()
-        ));
+        let out =
+            std::env::temp_dir().join(format!("visioncraft-window-film-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&out);
         let mut ran = false;
         with_host(project, |h| {
@@ -1192,7 +1190,10 @@ mod tests {
                 );
             }
             for film in &films {
-                let dark = [0, 4, 7, 9].map(|n| film[n]).into_iter().fold(0.0, f32::max);
+                let dark = [0, 4, 7, 9]
+                    .map(|n| film[n])
+                    .into_iter()
+                    .fold(0.0, f32::max);
                 assert!(
                     film[5] > dark + 0.01 && film[6] > dark + 0.01,
                     "frames 5 and 6 (0.5 s and 0.6 s) show the flash: {films:?}"

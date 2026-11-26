@@ -692,7 +692,10 @@ mod tests {
             p.flash(flash(20.0));
         }
         assert_eq!(p.flashes().len(), 20 + MAX_FLASHES);
-        assert!(!p.flashes().iter().any(|f| f.id == 21), "the first at 20 s went");
+        assert!(
+            !p.flashes().iter().any(|f| f.id == 21),
+            "the first at 20 s went"
+        );
         assert!(p.flashes().iter().any(|f| f.id == 1));
     }
 

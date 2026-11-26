@@ -1066,14 +1066,30 @@ impl GroupRig {
                 }
                 self.posed[index] = false;
                 self.held[index] = None;
-                write_instance(r, &self.items, &self.order, self.lift, matrices[index], index, &self.rest)
+                write_instance(
+                    r,
+                    &self.items,
+                    &self.order,
+                    self.lift,
+                    matrices[index],
+                    index,
+                    &self.rest,
+                )
             } else {
                 let moving = playback.moves(&spot, t);
                 if !moving && self.held[index].as_deref() == Some(&self.played[..]) {
                     continue;
                 }
                 let pose = self.sampler.pose(&self.rig, &self.played, t);
-                let n = write_instance(r, &self.items, &self.order, self.lift, matrices[index], index, pose);
+                let n = write_instance(
+                    r,
+                    &self.items,
+                    &self.order,
+                    self.lift,
+                    matrices[index],
+                    index,
+                    pose,
+                );
                 self.posed[index] = true;
                 self.held[index] = (!moving).then(|| self.played.clone());
                 n
@@ -1108,7 +1124,11 @@ fn write_instance(
 ) -> usize {
     let before = m * lift;
     for (k, (item, part)) in items.iter().enumerate() {
-        r.set_instance(*item, order[k][index] as usize, before * matrix_of(pose, *part));
+        r.set_instance(
+            *item,
+            order[k][index] as usize,
+            before * matrix_of(pose, *part),
+        );
     }
     items.len()
 }

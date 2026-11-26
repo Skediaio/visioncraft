@@ -709,7 +709,11 @@ fn the_flash_cap_counts_flashes_at_once() {
         .unwrap();
         assert!(r.get("note").is_none(), "{r}");
     }
-    assert_eq!(h.state.playback.flashes().len(), 20, "none overlaps another");
+    assert_eq!(
+        h.state.playback.flashes().len(),
+        20,
+        "none overlaps another"
+    );
     // Live: one at the clock now, over a second later; the next one drops it.
     h.state.playback.clock = 30.0;
     let live = run(
@@ -728,7 +732,10 @@ fn the_flash_cap_counts_flashes_at_once() {
     .unwrap();
     let ids: Vec<u64> = h.state.playback.flashes().iter().map(|f| f.id).collect();
     assert_eq!(ids.len(), 21, "{ids:?}");
-    assert!(!ids.contains(&live["id"].as_u64().unwrap()), "the live one is over");
+    assert!(
+        !ids.contains(&live["id"].as_u64().unwrap()),
+        "the live one is over"
+    );
 }
 
 /// What plays belongs to the project it played on: an opened or a new project starts with
@@ -757,11 +764,17 @@ fn an_opened_or_new_project_plays_nothing() {
     run(&mut h, "file.open", json!({"path": file})).unwrap();
     let r = run(&mut h, "query.part_pose", json!({"object": "g1", "t": 0.5})).unwrap();
     assert_eq!(
-        (r["plants"][0]["posed"].clone(), r["plants"][0]["clips"].clone()),
+        (
+            r["plants"][0]["posed"].clone(),
+            r["plants"][0]["clips"].clone()
+        ),
         (json!(false), json!([])),
         "{r}"
     );
-    assert!(h.state.playback.is_empty(), "opened: nothing plays or flashes");
+    assert!(
+        h.state.playback.is_empty(),
+        "opened: nothing plays or flashes"
+    );
     busy(&mut h);
     run(&mut h, "file.new", json!({})).unwrap();
     assert!(h.state.playback.is_empty(), "new: nothing plays or flashes");
@@ -909,7 +922,10 @@ fn a_still_is_sixty_frames_a_second() {
     .unwrap();
     assert_eq!(requests.borrow()[0].fps, 60.0);
     assert_eq!(requests.borrow()[0].playback.fps, 60.0);
-    assert_eq!(h.state.playback.fps, 30.0, "the host's own rate is left alone");
+    assert_eq!(
+        h.state.playback.fps, 30.0,
+        "the host's own rate is left alone"
+    );
 }
 
 /// Pictures that fail from the third on, and remember what they were asked for.
@@ -957,7 +973,11 @@ fn a_failed_film_leaves_no_rate_behind() {
     )
     .unwrap_err();
     assert!(e.contains("the GPU is gone"), "{e}");
-    assert_eq!(requests.borrow()[1].fps, 10.0, "the film's frames are the film's rate");
+    assert_eq!(
+        requests.borrow()[1].fps,
+        10.0,
+        "the film's frames are the film's rate"
+    );
     assert_eq!(h.state.playback.fps, 60.0);
     // The next still (it fails too, but is asked for at 60 a second).
     let _ = run(

@@ -7881,7 +7881,11 @@ mod tests {
         r.set_instance(item, 1, at(9.0));
         frame(&mut r);
         assert_eq!(r.shadow_invalidations - before, 1, "once for the frame");
-        assert_eq!(r.scene_bounds.unwrap().1.x, 10.0, "the scene's bounds follow");
+        assert_eq!(
+            r.scene_bounds.unwrap().1.x,
+            10.0,
+            "the scene's bounds follow"
+        );
         // A frame in which nothing moved keeps them.
         let before = r.shadow_invalidations;
         frame(&mut r);

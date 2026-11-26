@@ -581,7 +581,10 @@ mod tests {
                 );
             }
             // From its start it plays: its first key, not the rest.
-            assert!(!near16(s.pose(&r, &plays, 10.0)[0], rest), "looped {looped}");
+            assert!(
+                !near16(s.pose(&r, &plays, 10.0)[0], rest),
+                "looped {looped}"
+            );
         }
     }
 
