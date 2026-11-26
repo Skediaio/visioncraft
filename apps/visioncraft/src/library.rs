@@ -146,7 +146,12 @@ pub fn emitter_luminance(lumens: f32) -> f32 {
 }
 
 fn glb_slots(glb: &Glb) -> Vec<(usize, bool)> {
-    let used: HashSet<usize> = glb.prims.iter().map(|p| p.material).collect();
+    let used: HashSet<usize> = glb
+        .prims
+        .iter()
+        .chain(glb.parts.iter().flat_map(|part| &part.prims))
+        .map(|p| p.material)
+        .collect();
     let mut slots = Vec::new();
     for m in glb
         .materials
@@ -236,6 +241,9 @@ pub struct Library {
     pub ground_offsets: HashMap<String, f32>,
     indexes_asked: bool,
     models: HashMap<String, Model>,
+    /// The clips of each model file that is loaded, by its path: in the browser a streamed
+    /// model's bytes are not kept, but its clips are still asked for (`query.clips`).
+    pub clips: HashMap<String, Vec<visioncraft_core::Clip>>,
     awaiting: HashSet<String>,
     uploading: Vec<Upload>,
     garbage: Vec<Model>,
@@ -305,6 +313,7 @@ impl Library {
             ground_offsets: HashMap::new(),
             indexes_asked: false,
             models: HashMap::new(),
+            clips: HashMap::new(),
             awaiting: HashSet::new(),
             uploading: Vec::new(),
             garbage: Vec::new(),
@@ -789,11 +798,15 @@ impl Library {
     fn finish(&mut self, r: &mut Renderer, up: Upload) {
         let Upload {
             path,
-            data,
+            mut data,
             slots,
             ids,
             lumens,
         } = up;
+        // The whole model at its rest pose, until playback moves the parts on their own (part B
+        // replaces this with an item per part).
+        let clips = std::mem::take(&mut data.glb.clips);
+        let whole = data.glb.rest_prims();
         let bytes: u64 = slots
             .iter()
             .map(|&(i, _)| texture_cost(data.images[i].w, data.images[i].h))
@@ -819,9 +832,7 @@ impl Library {
             .iter()
             .any(|a| a.lods.iter().any(|l| l.file == path))
         {
-            let low = data
-                .glb
-                .prims
+            let low = whole
                 .iter()
                 .flat_map(|p| &p.positions)
                 .map(|q| q[1])
@@ -832,7 +843,7 @@ impl Library {
             0.0
         };
         self.ground_offsets.insert(path.clone(), lift);
-        for p in &data.glb.prims {
+        for p in whole.iter() {
             let lifted: Vec<[f32; 3]>;
             let positions = if lift == 0.0 {
                 &p.positions
@@ -889,7 +900,10 @@ impl Library {
             self.lamps_applied = None;
         }
         self.store.track(Key::Glb(path.clone()), bytes);
-        self.models.insert(path, model);
+        self.models.insert(path.clone(), model);
+        if !clips.is_empty() {
+            self.clips.insert(path, clips);
+        }
         self.rev += 1;
     }
 
@@ -918,6 +932,7 @@ impl Library {
             if let Key::Glb(p) = key
                 && let Some(m) = self.models.remove(&p)
             {
+                self.clips.remove(&p);
                 self.garbage.push(m);
                 self.rev += 1;
             }

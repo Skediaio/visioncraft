@@ -107,7 +107,7 @@ pub fn files() -> Vec<(String, Vec<u8>)> {
         let path = glb_path(f.id);
         if let Ok(g) = gltf_load::parse(&bytes) {
             let (mut lo, mut hi) = (glam::Vec3::splat(f32::MAX), glam::Vec3::splat(f32::MIN));
-            for p in g.prims.iter().flat_map(|p| &p.positions) {
+            for p in g.rest_prims().iter().flat_map(|p| &p.positions) {
                 lo = lo.min(glam::Vec3::from(*p));
                 hi = hi.max(glam::Vec3::from(*p));
             }
