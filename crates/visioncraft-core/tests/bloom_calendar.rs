@@ -270,6 +270,76 @@ fn twelve_months_and_every_species_in_its_own_months() {
     assert!(!out.to_string().contains("vc-path-light"));
 }
 
+/// The calendar and the quantities count the same plants: a plant species is a built-in one or
+/// the project's own to both, so a month's `plants` are those the quantities count for the
+/// species in flower in it.
+#[test]
+fn a_months_plants_are_those_the_quantities_count() {
+    let mut s = Session::new(Project::default());
+    let run = |s: &mut Session, name: &str, p: Value| s.run(name, p).unwrap();
+    run(
+        &mut s,
+        "species.add",
+        json!({"name": "Red thing", "base": "geranium-rozanne", "params": {"height_m": 0.4}}),
+    );
+    run(
+        &mut s,
+        "planting.add_spline",
+        json!({"name": "Lavender", "asset_palette": [{"asset": "flora:lavandula-angustifolia", "weight": 1}], "points": [[0, 0], [6, 0]], "spacing": {"count": 5}, "seed": 1}),
+    );
+    run(
+        &mut s,
+        "planting.add_single",
+        json!({"name": "Custom", "asset": "sp1", "position": [6, 0, 8]}),
+    );
+    // The custom species flowers when the lavender does, so a month holds both.
+    let both = |asset: &str| {
+        flowering(asset).map(|b| {
+            if asset == "sp1" {
+                Bloom {
+                    months: vec![6, 7, 8],
+                    ..b
+                }
+            } else {
+                b
+            }
+        })
+    };
+    let out =
+        visioncraft_core::bloom::calendar(s.project(), &Filter::default(), None, &both).unwrap();
+    let q = s.run("query.quantities", json!({})).unwrap();
+    // Five lavender and one plant of the project's own: six plants to the quantities as well.
+    assert_eq!(q["plantings"][0]["plants"], 5);
+    assert_eq!(q["plantings"][1]["plants"], 1);
+    let total = q["totals"]["plants"].as_u64().unwrap();
+    assert_eq!(total, 6);
+    // June, both in flower: its plants are what the quantities count for the two of them.
+    let june = &out["months"][5];
+    assert_eq!(
+        ids(&june["flowering"]),
+        ["flora:lavandula-angustifolia", "sp1"]
+    );
+    assert_eq!(
+        june["flowering"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(plants)
+            .collect::<Vec<_>>(),
+        [5, 1]
+    );
+    assert_eq!(plants(june), total);
+    // The garden of these tests, lamps and all: what it holds as plants is the quantities'
+    // `plants` total.
+    let mut g = garden();
+    assert_eq!(
+        counted_plants(&g),
+        g.run("query.quantities", json!({})).unwrap()["totals"]["plants"]
+            .as_u64()
+            .unwrap()
+    );
+}
+
 #[test]
 fn south_of_the_equator_every_species_flowers_six_months_on() {
     let mut s = garden();

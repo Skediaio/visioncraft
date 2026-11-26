@@ -28,9 +28,11 @@ fn triangle_area(model: &ImportedModel, t: [u32; 3]) -> f64 {
     (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt() / 2.0
 }
 
-/// A plant species (`flora:...`), as opposed to a light or object placed by a generator.
-pub(crate) fn is_plant(asset: &str) -> bool {
-    asset.starts_with("flora:")
+/// A plant species of the project: a built-in one (`flora:...`) or one the project made itself
+/// ([`Project::species`]), as opposed to a light or object placed by a generator. What
+/// `query.quantities` counts as `plants` and `query.bloom_calendar` lists.
+pub(crate) fn is_plant_species(project: &Project, asset: &str) -> bool {
+    asset.starts_with("flora:") || project.species.iter().any(|c| c.id == asset)
 }
 
 /// Which shapes and plantings to list; `None`: all.
@@ -129,7 +131,11 @@ pub(crate) fn planting_counts(
             *out.by_asset.entry(p.asset.clone()).or_default() += 1;
         }
         // Lights and objects placed along a line are placements too, but not plants.
-        let own_plants = e.placements.iter().filter(|p| is_plant(&p.asset)).count();
+        let own_plants = e
+            .placements
+            .iter()
+            .filter(|p| is_plant_species(project, &p.asset))
+            .count();
         out.plants += own_plants;
         out.placements += e.placements.len();
         let kind = serde_json::to_value(g)

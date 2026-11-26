@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 use serde_json::{Value, json};
 
 use crate::project::Project;
-use crate::quantities::{Filter, Scene, is_plant, planting_counts, selection};
+use crate::quantities::{Filter, Scene, is_plant_species, planting_counts, selection};
 use crate::season::shift_month;
 
 /// Said in the command's description when only the core answers; a host replaces it with
@@ -32,21 +32,16 @@ pub struct Bloom {
     pub name: Option<String>,
 }
 
-/// A species of the design: a built-in one (`flora:`), or one the project made itself.
-fn is_species(project: &Project, asset: &str) -> bool {
-    is_plant(asset) || project.species.iter().any(|c| c.id == asset)
-}
-
 /// The species a calendar row is about.
 fn species_id(row: &Value) -> &str {
     row["species"].as_str().unwrap_or_default()
 }
 
 /// The bloom calendar of the plantings `filter` selects: `{hemisphere, months, species, gaps,
-/// unknown}`. Their plants are counted per asset as [`crate::quantities::quantities_in`] counts
-/// its `assets` (`scene`: as the host draws them); unlike its `plants` total, which counts only
-/// `flora:` species, the project's own species are included; lights and objects a planting places are not species and
-/// are left out. A species flowers in a month when that month is in its bloom months, shifted
+/// unknown}`. Their plants are counted as [`crate::quantities::quantities_in`] counts them: a
+/// plant species is a built-in one or the project's own, and lights and objects a planting
+/// places are not species and are left out (`scene`: as the host draws them). A species
+/// flowers in a month when that month is in its bloom months, shifted
 /// for the site's hemisphere ([`shift_month`]); `bloom` says when a species flowers, and a
 /// species it knows nothing about, or whose data holds no month of the year, is `unknown`.
 /// Within a month the species stand by their plants, the most first, then by id. An error on
@@ -68,7 +63,7 @@ pub fn calendar(
     let (mut species, mut unknown) = (Vec::new(), Vec::new());
     // By asset id, so each month's list starts in the order the tie-break wants.
     for (asset, plants) in &planting_counts(project, &sel, scene).by_asset {
-        if !is_species(project, asset) {
+        if !is_plant_species(project, asset) {
             continue;
         }
         let info = bloom(asset);

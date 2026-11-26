@@ -663,3 +663,55 @@ fn quantities_filter_by_id_and_layer_and_name_what_is_unknown() {
         .unwrap_err();
     assert!(err.to_string().contains("nope"), "{err}");
 }
+
+/// A plant species is a built-in one or one the project made itself: both are `plants`, here
+/// each in a planting of their own next to a built-in one; a light a planting places is not.
+#[test]
+fn quantities_count_the_projects_own_species_as_plants() {
+    let mut s = quantities_session();
+    let run = |s: &mut Session, name: &str, p: Value| s.run(name, p).unwrap();
+    run(
+        &mut s,
+        "species.add",
+        json!({"name": "Tall hedge", "base": "carpinus-hedge", "params": {"height_m": 3.0}}),
+    );
+    run(
+        &mut s,
+        "planting.add_spline",
+        json!({"name": "Own hedge", "asset_palette": [{"asset": "sp1", "weight": 1}], "points": [[0, 4], [6, 4]], "spacing": {"count": 3}, "seed": 1}),
+    );
+    run(
+        &mut s,
+        "planting.add_spline",
+        json!({"name": "Lavender", "asset_palette": [{"asset": "flora:lavandula-angustifolia", "weight": 1}], "points": [[0, 6], [6, 6]], "spacing": {"count": 5}, "seed": 1}),
+    );
+    let q = s.run("query.quantities", json!({})).unwrap();
+    let plantings = q["plantings"].as_array().unwrap();
+    // Three of the project's own species and five lavender: all of them plants.
+    assert_eq!(plantings[2]["name"], "Own hedge");
+    assert_eq!(plantings[2]["count"], 3);
+    assert_eq!(plantings[2]["plants"], 3);
+    assert_eq!(
+        plantings[2]["assets"],
+        json!([{"asset": "sp1", "count": 3}])
+    );
+    assert_eq!(plantings[3]["plants"], 5);
+    // The light a planting places is still not a plant.
+    assert_eq!(plantings[1]["count"], 2);
+    assert_eq!(plantings[1]["plants"], 0);
+    assert_eq!(
+        q["assets"],
+        json!([
+            {"asset": "flora:a", "count": 4},
+            {"asset": "flora:lavandula-angustifolia", "count": 5},
+            {"asset": "sp1", "count": 3},
+            {"asset": "vc-path-light", "count": 2}
+        ])
+    );
+    assert_eq!(q["totals"]["plants"], 12);
+    assert_eq!(q["totals"]["placements"], 14);
+    // One planting named: its own plants, the project's own species among them.
+    let one = s.run("query.quantities", json!({"ids": ["g3"]})).unwrap();
+    assert_eq!(one["plantings"][0]["plants"], 3);
+    assert_eq!(one["totals"]["plants"], 3);
+}
