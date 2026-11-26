@@ -239,13 +239,12 @@ fn fs_depth_cutout_1x(in: DepthOut) {
 fn depth_cutout_mask(in: DepthOut) -> u32 {
     load_instance_material(in.material_id);
     let a = cutout_alpha(in.uv) * edge_fade(in.world, normalize(to_eye(in.world)));
+    // The cutout's share of the samples first (a derivative): `edge_coverage` may return from a
+    // branch on the material, and nothing takes derivatives after that.
+    let cut = alpha_samples(a, material.alpha.x);
     let soft = edge_coverage(in.uv, in.world);
     // A soft edge covers `soft` of the samples; any other cutout as alpha to coverage.
-    let n = select(
-        alpha_samples(a, material.alpha.x),
-        u32(round(soft * f32(SAMPLES))),
-        soft >= 0.0,
-    );
+    let n = select(cut, u32(round(soft * f32(SAMPLES))), soft >= 0.0);
     return select(sample_run(n, u32(ign_sampled(in.clip.xy) * f32(SAMPLES))), 0u, n == 0u);
 }
 
@@ -943,11 +942,33 @@ struct Surface {
     puddle: f32,         // 0..1: how far puddles may form here when it is wet (0 on lawns, leaves, glass; wet.wgsl)
 }
 
+// The pixel's derivatives, taken by a fragment entry point in uniform control flow, before
+// anything branches on the material: a batch spans materials, so a material's values are not
+// uniform, and derivatives may not be taken after a branch on them (`shade`, `surface`).
+struct Derivs {
+    dwx: vec3<f32>,
+    dwy: vec3<f32>,
+    duvx: vec2<f32>,
+    duvy: vec2<f32>,
+    // length(fwidth(normalize(normal))): how fast the normal turns on screen (glass).
+    curvature: f32,
+}
+
+fn derivs(in: Varying) -> Derivs {
+    return Derivs(
+        dpdx(in.world),
+        dpdy(in.world),
+        dpdx(in.uv),
+        dpdy(in.uv),
+        length(fwidth(normalize(in.normal))),
+    );
+}
+
 // Base colour, normal and the occlusion / roughness / metallic maps, for
 // either projection. Called from uniform control flow (it takes derivatives). `ground`: the
 // endless ground's entry points, the only ones that paint the surroundings (a constant at each
 // call, so the other entry points compile without that code).
-fn surface(in: Varying, front: bool, ground: bool) -> Surface {
+fn surface(in: Varying, front: bool, ground: bool, d: Derivs) -> Surface {
     var s: Surface;
     var n = normalize(in.normal);
     // Double-sided: back faces shade with the flipped normal, except foliage,
@@ -957,12 +978,11 @@ fn surface(in: Varying, front: bool, ground: bool) -> Surface {
         n = -n;
     }
     s.geometric = n;
-    // Derivatives first, in uniform control flow: the material is not uniform (it may be the
-    // instance's), and nothing may branch on it around these.
-    let dwx = dpdx(in.world);
-    let dwy = dpdy(in.world);
-    let duvx = dpdx(in.uv);
-    let duvy = dpdy(in.uv);
+    // The derivatives `shade`'s caller took (`Derivs`).
+    let dwx = d.dwx;
+    let dwy = d.dwy;
+    let duvx = d.duvx;
+    let duvy = d.duvy;
     let triplanar_on = material.alpha.y > 0.0;
     var l: Lookup;
     if triplanar_on {
@@ -1239,17 +1259,15 @@ struct Shaded {
 // The full opaque shading model. `screen_effects`: use the screen-space AO
 // and contact shadows (not for transparent surfaces, which are not in the
 // depth pre-pass).
-fn shade(in: Varying, front: bool, screen_effects: bool, ground: bool) -> Shaded {
-    // In uniform control flow, before the branch below (on the material).
-    let curvature = length(fwidth(normalize(in.normal)));
+fn shade(in: Varying, front: bool, screen_effects: bool, ground: bool, d: Derivs) -> Shaded {
+    var s = surface(in, front, ground, d);
     // Glass drawn as an opaque pane (the water's reflection): what the glass passes show, its
     // reflection over the dim room behind it, so the reflected house matches the house.
     if material.alpha.z == 1.0 && g.time.w < 0.5 {
-        let t = glass_terms(in, curvature);
+        let t = glass_terms(in, d.curvature);
         let room = t.transmitted * ROOM_ALBEDO * sh_irradiance(normalize(in.normal)) / PI;
         return Shaded(apply_fog(t.reflected + room, in.world), 1.0, false);
     }
-    var s = surface(in, front, ground);
     // Leaves, and the branches among them (both tagged by the app).
     s.ao *= crown_sky(in.face);
     // Standard surfaces age (no glass, water or leaves).
@@ -1792,7 +1810,7 @@ fn fs_main(in: Varying, @builtin(front_facing) front: bool) -> @location(0) vec4
     if scratch_floor_taken() {
         return scratch_floor(in.clip);
     }
-    let shaded = shade(in, front, true, false);
+    let shaded = shade(in, front, true, false, derivs(in));
     return vec4<f32>(shaded.color, select(1.0, 0.0, shaded.emits));
 }
 
@@ -2062,7 +2080,7 @@ fn fs_ground(in_raw: Varying) -> @location(0) vec4<f32> {
             in.world = g.camera.xyz + normalize(ray) * horizon_m;
         }
     }
-    let c = shade(in, true, false, true).color;
+    let c = shade(in, true, false, true, derivs(in)).color;
     if is_ortho() {
         return vec4<f32>(c, 1.0);
     }
@@ -2103,7 +2121,7 @@ fn fs_ground(in_raw: Varying) -> @location(0) vec4<f32> {
 
 // The scene seen in the water plane: drawn with the mirrored camera (lib.rs
 // writes a second globals block), cut at the water height (a clip plane done
-// by discard), alpha-tested cutouts, no screen-space effects. Shading comes
+// by discard), alpha-tested cutouts, no screen-space effects. The cutout's derivative comes
 // first and the discard last, so derivatives stay in uniform control flow.
 @fragment
 fn fs_reflect(in: Varying, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
@@ -2125,8 +2143,8 @@ fn fs_reflect_ground(in: Varying, @builtin(front_facing) front: bool) -> @locati
 }
 
 fn reflected(in: Varying, front: bool, ground: bool) -> vec4<f32> {
-    let shaded = shade(in, front, false, ground);
     let a = cutout_alpha(in.uv);
+    let shaded = shade(in, front, false, ground, derivs(in));
     if (g.reflection.z > 0.5 && in.world.y < g.reflection.w) || (material.alpha.x > 0.0 && a < material.alpha.x) {
         discard;
     }
@@ -2169,8 +2187,8 @@ struct GlassTerms {
     transmitted: vec3<f32>,
 }
 
-// `curvature`: length(fwidth(normalize(in.normal))), taken by the caller in uniform control
-// flow (the branch that leads here is on the material, which may be the instance's).
+// `curvature`: length(fwidth(normalize(in.normal))), from the caller's `Derivs` (taken in uniform
+// control flow: the branch that leads here is on the material, which may be the instance's).
 fn glass_terms(in: Varying, curvature: f32) -> GlassTerms {
     let v = normalize(to_eye(in.world));
     var n = normalize(in.normal);
@@ -2315,26 +2333,32 @@ const SSR_REACH_M: f32 = 40.0;
 // Pass 1: what shows through (multiplied into the target).
 @fragment
 fn fs_glass_transmit(in: Varying) -> @location(0) vec4<f32> {
+    load_material(in.material_id);
     if scratch_floor_taken() {
         return scratch_floor(in.clip);
     }
+    // The glass's curvature (a derivative) before the branch below.
+    let curvature = length(fwidth(normalize(in.normal)));
     if g.time.w > 0.5 {
         return vec4<f32>(0.65); // clay: a pale veil
     }
-    return vec4<f32>(glass_terms(in, length(fwidth(normalize(in.normal)))).transmitted, 1.0);
+    return vec4<f32>(glass_terms(in, curvature).transmitted, 1.0);
 }
 
 // Pass 2: the reflection, plus the haze in front of the pane in proportion
 // to how much the pane blocks.
 @fragment
 fn fs_glass_reflect(in: Varying, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    load_material(in.material_id);
     if scratch_floor_taken() {
         return scratch_floor(in.clip);
     }
+    // The derivatives before the branch below (their functions take none of their own).
+    let d = derivs(in);
     if g.time.w > 0.5 {
-        return vec4<f32>(shade(in, front, false, false).color * 0.35, 0.0);
+        return vec4<f32>(shade(in, front, false, false, d).color * 0.35, 0.0);
     }
-    let t = glass_terms(in, length(fwidth(normalize(in.normal))));
+    let t = glass_terms(in, d.curvature);
     let block = 1.0 - dot(t.transmitted, vec3<f32>(1.0 / 3.0));
     let c = fog_premultiplied(vec4<f32>(t.reflected, block), in.world);
     return vec4<f32>(c.rgb, 0.0);
@@ -2453,16 +2477,17 @@ fn fs_transparent(in: Varying, @builtin(front_facing) front: bool) -> @location(
     if scratch_floor_taken() {
         return scratch_floor(in.clip);
     }
-    // Branches on uniforms only, so shade() may take derivatives.
+    // The derivatives before the branches on the material (not uniform: a batch spans materials).
+    let d = derivs(in);
     let kind = material.alpha.z;
     if g.time.w > 0.5 {
         // Clay: water as a pale matte surface (glass has its own passes).
-        return vec4<f32>(shade(in, front, false, false).color, 1.0);
+        return vec4<f32>(shade(in, front, false, false, d).color, 1.0);
     }
     if kind > 1.5 {
         return water(in);
     }
-    let shaded = shade(in, front, false, false);
+    let shaded = shade(in, front, false, false, d);
     let alpha = clamp(shaded.alpha, 0.0, 1.0);
     return vec4<f32>(shaded.color * alpha, alpha);
 }

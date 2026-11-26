@@ -3608,6 +3608,13 @@ impl Renderer {
                 self.ground_slot as u64 * SLOT,
                 &mesh_slot(MeshId(u32::MAX - 1), GROUND_ROW),
             );
+            // The gathered batches' slot too: a new buffer starts at zero, and row 0 is the
+            // ground's material (every instance of a batch then shaded like the ground).
+            self.queue.write_buffer(
+                &self.draw_buffer,
+                self.batch_slot as u64 * SLOT,
+                &mesh_slot(MeshId(FROM_INSTANCE), FROM_INSTANCE),
+            );
             for item in self.items.iter().flatten() {
                 for p in &item.parts {
                     self.queue.write_buffer(
@@ -8602,6 +8609,62 @@ mod tests {
         }
     }
 
+    /// The scene module's functions that take a screen derivative or sample a texture by implicit
+    /// derivatives. Each does so in uniform control flow, at the top of its fragment stage and
+    /// before any branch on the material: a material's values are not uniform (the material table:
+    /// a batch spans materials), and Chrome's shader compiler rejects a derivative taken after a
+    /// branch on one ("must only be called from uniform control flow") where naga accepts it, so
+    /// the gates on the build server cannot see it. A function not listed here takes none.
+    #[test]
+    fn derivatives_are_taken_only_where_the_flow_is_uniform() {
+        let allowed: std::collections::BTreeSet<&str> = [
+            "alpha_samples",
+            "cutout_alpha",
+            "depth_fade_mask",
+            "derivs",
+            "edge_fade",
+            "fs_bake",
+            "fs_glass_transmit",
+            "fs_sea",
+            "impostor_alpha",
+            "impostor_sample",
+            "terrain_surface",
+        ]
+        .into_iter()
+        .collect();
+        let takes_derivatives = |function: &naga::Function| {
+            function.expressions.iter().any(|(_, e)| {
+                matches!(e, naga::Expression::Derivative { .. })
+                    || matches!(
+                        e,
+                        naga::Expression::ImageSample {
+                            level: naga::SampleLevel::Auto,
+                            ..
+                        }
+                    )
+            })
+        };
+        let (_, parts) = SHADERS.iter().find(|(name, _)| *name == "scene").unwrap();
+        for fast in [false, true] {
+            let source = module_source("scene", parts, fast, coverage::Coverage::Masked);
+            let module = naga::front::wgsl::parse_str(&source).expect("parses");
+            let mut names: std::collections::BTreeSet<&str> = module
+                .functions
+                .iter()
+                .filter(|&(_, f)| takes_derivatives(f))
+                .filter_map(|(_, f)| f.name.as_deref())
+                .collect();
+            names.extend(
+                module
+                    .entry_points
+                    .iter()
+                    .filter(|ep| takes_derivatives(&ep.function))
+                    .map(|ep| ep.name.as_str()),
+            );
+            assert_eq!(names, allowed, "fast shading {fast}");
+        }
+    }
+
     #[test]
     fn photo_shader_validates() {
         let source = include_str!("photo.wgsl");
@@ -8740,16 +8803,43 @@ mod tests {
             "colour alone does not split draws"
         );
         assert_ne!(own_px, one_px, "the colours differ");
-        // The row's left is red and its right blue, past the table's growth from 64 rows.
-        for (k, red) in [(2u32, true), (70, true), (80, false), (147, false)] {
-            let x = ((2.5 * (k as f32 + 0.5)) / (2.5 * n as f32) * w as f32) as usize;
-            let i = ((h as usize / 2) * w as usize + x) * 4;
-            let (r, b) = (own_px[i] as i32, own_px[i + 2] as i32);
-            assert!(
-                if red { r > b + 20 } else { b > r + 20 },
-                "box {k} at pixel {x}: {r} {b}"
-            );
-        }
+        // Red minus blue, averaged over the middle row's left and right quarter (at LOW the
+        // boxes are under two pixels wide and upscaled, so one pixel mixes its neighbours): the
+        // row's left stays red, as with one material, and its right turns blue, with the
+        // materials past the table's growth from 64 rows (boxes 113 on use rows 115 on). The
+        // light is the sky's, blue: a material with less than about three times more red than
+        // blue (box 40 on) reads blue itself, so the left quarter is the red one.
+        let quarter = |px: &[u8], from: usize| {
+            let mut sum = [0i64; 3];
+            for x in from..from + w as usize / 4 {
+                let i = ((h as usize / 2) * w as usize + x) * 4;
+                for (c, s) in sum.iter_mut().enumerate() {
+                    *s += i64::from(px[i + c]);
+                }
+            }
+            let n = (w / 4) as f32;
+            (sum[0] as f32 / n, sum[2] as f32 / n)
+        };
+        let (right_from, left_from) = (w as usize / 4 * 3, 0);
+        let (one_left, one_right) = (quarter(&one_px, left_from), quarter(&one_px, right_from));
+        let (own_left, own_right) = (quarter(&own_px, left_from), quarter(&own_px, right_from));
+        let red = |q: (f32, f32)| q.0 - q.1;
+        assert!(
+            red(one_left) > 40.0 && red(one_right) > 40.0,
+            "one red material, both quarters red: {one_left:?} {one_right:?}"
+        );
+        assert!(
+            red(own_left) > 40.0,
+            "the left quarter stays red: {own_left:?}"
+        );
+        assert!(
+            red(own_right) < -10.0,
+            "the right quarter is blue: {own_right:?}"
+        );
+        assert!(
+            red(own_right) < red(one_right) - 40.0,
+            "the right quarter differs from one material's: {own_right:?} against {one_right:?}"
+        );
     }
 
     /// The plane test culls exactly what testing the eight corners culled.

@@ -401,7 +401,7 @@ const GATHER_WGSL: &str = r#"
 @group(0) @binding(2) var<storage, read_write> out: array<vec4<u32>>;
 
 @compute @workgroup_size(64)
-fn cs_gather(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index) lane: vec3<u32>) {
+fn cs_gather(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_index) lane: u32) {
     let b = group.x + group.y * 65535u;
     let batches = idx[0];
     if b >= batches {
@@ -409,18 +409,18 @@ fn cs_gather(@builtin(workgroup_id) group: vec3<u32>, @builtin(local_invocation_
     }
     let first = idx[4u + 2u * b];
     let n = idx[5u + 2u * b];
-    if lane.x >= n {
+    if lane >= n {
         return;
     }
-    let s = first + lane.x;
+    let s = first + lane;
     let base = 4u + 3u * batches;
     let at = idx[base + s] * 4u;
-    let o = (b * 64u + lane.x) * 4u;
+    let o = (b * 64u + lane) * 4u;
     for (var k = 0u; k < 4u; k++) {
         out[o + k] = pool[at + k];
     }
-    out[o + 7u] = idx[base + idx[1] + s];
-    out[o + 11u] = idx[4u + 2u * batches + b];
+    out[o + 1u].w = idx[base + idx[1] + s];
+    out[o + 2u].w = idx[4u + 2u * batches + b];
 }
 "#;
 
@@ -437,11 +437,16 @@ pub struct GatherList {
 
 impl GatherList {
     /// Closes the batch whose instances were appended since there were `start` in the stream:
-    /// where they lie in the gathered buffer (every `BATCH` instances).
+    /// where they lie in the gathered buffer. The gather copies one workgroup of `BATCH` lanes
+    /// per entry, so the batch gets an entry per 64 of its instances, in order; its range is
+    /// contiguous all the same.
     pub fn batch(&mut self, start: u32, mesh: u32) -> std::ops::Range<u32> {
         let n = self.indices.len() as u32 - start;
         let first = self.batches.len() as u32 * BATCH;
-        self.batches.push((start, n, mesh));
+        for at in (start..start + n).step_by(BATCH as usize) {
+            let count = (start + n - at).min(BATCH);
+            self.batches.push((at, count, mesh));
+        }
         first..first + n
     }
 }
@@ -754,7 +759,8 @@ mod tests {
         }
     }
 
-    /// Each batch takes a block of `BATCH` gathered instances, in the order the batches close.
+    /// A batch takes one entry per 64 of its instances, each a block of `BATCH` gathered
+    /// instances, in the order the batches close.
     #[test]
     fn batches_lie_in_blocks_of_64_gathered_instances() {
         let mut list = GatherList::default();
@@ -768,8 +774,11 @@ mod tests {
         };
         assert_eq!(add(&mut list, 7, &[1, 1, 2]), 0..3);
         assert_eq!(add(&mut list, 9, &[3; 70]), 64..134);
-        assert_eq!(add(&mut list, 7, &[4]), 128..129);
-        assert_eq!(list.batches, vec![(0, 3, 7), (3, 70, 9), (73, 1, 7)]);
+        assert_eq!(add(&mut list, 7, &[4]), 192..193);
+        assert_eq!(
+            list.batches,
+            vec![(0, 3, 7), (3, 64, 9), (67, 6, 9), (73, 1, 7)]
+        );
     }
 
     #[test]

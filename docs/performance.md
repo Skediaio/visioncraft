@@ -117,10 +117,13 @@ Recipe, a time-of-day drag:
   instance its material's row and its mesh id into the spare components of its matrix's last
   row (`m1.w`, `m2.w`; `m0.w` is the wind's frequency) and the shaders rebuild the matrix;
   draws straight from the pool (dissolving clusters, terrain, transparents) name both in their
-  draw slot. Material values are therefore not uniform in a fragment stage, and nothing
-  branches on them around derivatives or implicit-level sampling. Per stage the scene
-  pipelines bind at most three read-only storage buffers in the fragment stage (the lights,
-  their grid, the materials) and none in the vertex stage.
+  draw slot. Material values are therefore not uniform in a fragment stage, so no derivative
+  may be taken after a branch on one: each fragment stage that shades takes its screen
+  derivatives first, in uniform control flow (`scene.wgsl` `Derivs`), and hands them to `shade`
+  and `surface`. Chrome's shader compiler rejects a derivative taken later ("must only be
+  called from uniform control flow"); naga accepts one, so a unit test lists the functions that
+  take any. Per stage the scene pipelines bind at most three read-only storage buffers in the
+  fragment stage (the lights, their grid, the materials) and none in the vertex stage.
 - **Shadows**: the near cascade every frame, the middle ones on alternate frames, the last one
   cached while the camera stays within its margin, each culled by its own cascade. The snow
   cover map (on a coast also the sea's bed) follows the eye in steps of eight texels and is
