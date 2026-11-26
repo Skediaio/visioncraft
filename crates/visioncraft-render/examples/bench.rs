@@ -20,6 +20,15 @@
 //! `--woodland`: 23 303 plants of 8 species (3 trees, 5 shrubs, each its
 //! own item with two mesh levels and an impostor) over 4 ha, about the
 //! app's mixed-woodland planting: many items, many draws.
+//! `--town [N]`: a synthetic town laid out like GameCraft's, N boxes (default
+//! 300 000) of 4 kinds and 8 colours over 12 x 12 cells of 128 m
+//! (`--town-cells K`): about 30 near items spanning the whole town (one per
+//! kind and colour, drawn to 300 m), and one far item per (cell, colour) with
+//! a merged mesh, its own material and one instance, drawn beyond 300 m. Two
+//! camera paths: a street and 150 m up. With `VISIONCRAFT_STAGE_TIMINGS=<file>`
+//! the renderer logs its CPU stages per frame; the bench prints the frame
+//! range of each measured path (`stages.py` in the render-perf-1 specs
+//! averages them).
 //! With a device that has timestamp queries, GPU ms per pass are printed.
 //! `--pipelined`: wait only for the previous frame's submission instead of
 //! this one's, so recording overlaps the GPU (one frame in flight), as an
@@ -27,7 +36,7 @@
 //! `render()` plus `encoder.finish()` (record) and of `queue.submit`
 //! (submit), and the draw calls per pass.
 
-use glam::Vec3;
+use glam::{Mat4, Vec3};
 use visioncraft_render::demo::{self, BudgetOptions};
 use visioncraft_render::{Atmosphere, Light, LightKind, Quality, Renderer, Sun};
 
@@ -53,6 +62,13 @@ fn main() {
         .unwrap_or(150);
     let presets = value("--presets").unwrap_or_else(|| "low,medium,high,custom".into());
     let sun_every_frame = has("--sun-every-frame");
+    let in_town = has("--town");
+    let town_boxes: usize = value("--town")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(300_000);
+    let town_cells: usize = value("--town-cells")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(12);
     let pipelined = has("--pipelined");
     let (device, queue) = pollster::block_on(device_with_timestamps());
     let (w, h) = value("--size")
@@ -97,7 +113,10 @@ fn main() {
         r.set_quality(quality);
         let garden = has("--garden");
         let forest = has("--forest") || has("--woodland");
-        let (tris, instanced) = if has("--woodland") {
+        let (tris, instanced) = if in_town {
+            town(&mut r, town_boxes, town_cells);
+            (0, 0)
+        } else if has("--woodland") {
             (0, woodland(&mut r))
         } else if forest {
             // 20 000 trees and 60 000 understory plants over 4 ha.
@@ -175,15 +194,38 @@ fn main() {
         r.set_sun(&Sun::from_angles(200.0, elevation));
         r.set_exposure(15.0);
         // Two camera paths: an orbit that sees the whole garden (worst case,
-        // nothing to cull) and an eye-level walk through it (the product).
-        for path in ["orbit", "eye-level walk"] {
+        // nothing to cull) and an eye-level walk through it (the product); the town: a street
+        // and 150 m up.
+        let paths = if in_town {
+            ["street", "150 m up"]
+        } else {
+            ["orbit", "eye-level walk"]
+        };
+        for path in paths {
             let encode = std::cell::Cell::new(0.0);
+            let rendered = std::cell::Cell::new(0u64);
             let submit = std::cell::Cell::new(0.0);
             let finish = std::cell::Cell::new(0.0);
             let mut previous: Option<wgpu::SubmissionIndex> = None;
             let mut frame = |i: u32| {
+                rendered.set(rendered.get() + 1);
                 let aspect = w as f32 / h as f32;
-                let (view, proj, eye) = if forest && path == "orbit" {
+                // The town is 1.5 km wide: a far plane beyond it.
+                let far = Mat4::perspective_rh(50f32.to_radians(), aspect, 0.5, 4000.0);
+                let (view, proj, eye) = if in_town && path == "street" {
+                    // Eye level along the town's north-south street, 0.5 m a frame.
+                    let t = i as f32 * 0.5;
+                    let eye = Vec3::new(STREET_X, 1.7, STREET_Z + t);
+                    (
+                        Mat4::look_at_rh(eye, eye + Vec3::new(0.1, 0.04, 1.0), Vec3::Y),
+                        far,
+                        eye,
+                    )
+                } else if in_town {
+                    let yaw = i as f32 * 0.002;
+                    let eye = Vec3::new(yaw.sin() * 600.0, 150.0, yaw.cos() * 600.0);
+                    (Mat4::look_at_rh(eye, Vec3::ZERO, Vec3::Y), far, eye)
+                } else if forest && path == "orbit" {
                     let yaw = i as f32 * 0.01;
                     let eye = Vec3::new(yaw.sin() * 110.0, 60.0, yaw.cos() * 110.0);
                     demo::camera(eye, Vec3::ZERO, aspect)
@@ -263,6 +305,7 @@ fn main() {
             let mut gpu: Vec<(&'static str, f32)> = Vec::new();
             let start = std::time::Instant::now();
             let mut worst = 0f64;
+            let first = rendered.get() + 1;
             for i in 0..frames {
                 let t = std::time::Instant::now();
                 let (timings, pass_draws) = frame(i);
@@ -276,6 +319,7 @@ fn main() {
                 }
             }
             let ms = start.elapsed().as_secs_f64() * 1000.0 / f64::from(frames);
+            println!("    stage frames {first}..={}", rendered.get());
             println!(
                 "{w}x{h} {tris} static + {instanced} instanced (LOD 0) tris, {name}, {path}{}: {ms:.2} ms/frame ({:.1} fps), worst {worst:.1} ms, CPU record {:.2} ms (of which finish {:.2}), submit {:.2} ms{}",
                 if pipelined { " pipelined" } else { "" },
@@ -305,6 +349,131 @@ fn main() {
             }
         }
     }
+}
+
+/// Where the town's two streets cross (`--town`): the street camera walks north along
+/// x = `STREET_X` from z = `STREET_Z`; no box stands in either street.
+const STREET_X: f32 = -4.0;
+const STREET_Z: f32 = -740.0;
+
+/// A synthetic town laid out like GameCraft's (`--town`): `boxes` boxes of 4 kinds and 8 colours
+/// over `cells` x `cells` cells of 128 m. Near: one item per (kind, colour), its instances spread
+/// over the whole town, drawn up to 300 m. Far: one item per (cell, colour) with a merged mesh of
+/// that cell's boxes of that colour, a material of its own and one instance, and an empty first
+/// level, so it draws beyond 300 m (nothing merges: every far item is its own mesh and material).
+fn town(r: &mut Renderer, boxes: usize, cells: usize) {
+    use visioncraft_render::demo::MeshData;
+    use visioncraft_render::{Ground, Material};
+    const CELL: f32 = 128.0;
+    const TAKE_OVER: f32 = 300.0;
+    const KINDS: [[f32; 3]; 4] = [
+        [8.0, 5.0, 8.0],
+        [4.0, 3.0, 4.0],
+        [12.0, 4.0, 6.0],
+        [6.0, 14.0, 6.0],
+    ];
+    const COLOURS: [[f32; 3]; 8] = [
+        [0.42, 0.13, 0.08],
+        [0.75, 0.68, 0.55],
+        [0.35, 0.35, 0.36],
+        [0.85, 0.85, 0.82],
+        [0.15, 0.22, 0.32],
+        [0.12, 0.25, 0.12],
+        [0.30, 0.18, 0.10],
+        [0.70, 0.55, 0.12],
+    ];
+    let half = cells as f32 * CELL * 0.5;
+    r.set_ground(Some(Ground::default()));
+    let mut meshes = Vec::new();
+    for size in KINDS {
+        let mut m = MeshData::default();
+        m.add_box(Vec3::ZERO, Vec3::from(size));
+        meshes.push(r.add_mesh(&m.mesh()).expect("mesh"));
+    }
+    let materials: Vec<_> = COLOURS
+        .iter()
+        .map(|c| {
+            r.add_material(&Material {
+                base_color: [c[0], c[1], c[2], 1.0],
+                roughness: 0.85,
+                ..Default::default()
+            })
+        })
+        .collect();
+    let empty = r.add_mesh(&MeshData::default().mesh()).expect("empty mesh");
+    // Every box: its kind, colour and place, kept out of the two streets.
+    let mut rng = demo::Rng::new(11);
+    let mut placed = Vec::with_capacity(boxes);
+    while placed.len() < boxes {
+        let (x, z) = (
+            rng.unit() * 2.0 * half - half,
+            rng.unit() * 2.0 * half - half,
+        );
+        if (x - STREET_X).abs() < 6.0 || (z - STREET_Z).abs() < 6.0 {
+            continue;
+        }
+        let i = placed.len();
+        placed.push(((i % 4) as u32, ((i / 4) % 8) as u32, x, z));
+    }
+    // Near: one item per (kind, colour) over the whole town.
+    let mut near = 0;
+    for (k, mesh) in meshes.iter().enumerate() {
+        for (c, material) in materials.iter().enumerate() {
+            let at: Vec<Mat4> = placed
+                .iter()
+                .filter(|(pk, pc, ..)| *pk == k as u32 && *pc == c as u32)
+                .map(|&(_, _, x, z)| Mat4::from_translation(Vec3::new(x, 0.0, z)))
+                .collect();
+            if at.is_empty() {
+                continue;
+            }
+            r.add_lod_item(&[(*mesh, *material, TAKE_OVER)], &at);
+            near += 1;
+        }
+    }
+    // Far: one merged mesh, material and item per (cell, colour).
+    let mut buckets = vec![Vec::new(); cells * cells * COLOURS.len()];
+    for &(kind, colour, x, z) in &placed {
+        let (cx, cz) = (((x + half) / CELL) as usize, ((z + half) / CELL) as usize);
+        let i = (cz.min(cells - 1) * cells + cx.min(cells - 1)) * COLOURS.len() + colour as usize;
+        buckets[i].push((kind as usize, x, z));
+    }
+    let mut far = 0;
+    for (i, bucket) in buckets.iter().enumerate() {
+        if bucket.is_empty() {
+            continue;
+        }
+        let (cx, cz) = ((i / COLOURS.len()) % cells, (i / COLOURS.len()) / cells);
+        let origin = Vec3::new(cx as f32 * CELL - half, 0.0, cz as f32 * CELL - half);
+        let mut m = MeshData::default();
+        for &(kind, x, z) in bucket {
+            m.add_box(
+                Vec3::new(x, 0.0, z) - origin,
+                Vec3::new(x, 0.0, z) - origin + Vec3::from(KINDS[kind]),
+            );
+        }
+        let mesh = r.add_mesh(&m.mesh()).expect("mesh");
+        let c = COLOURS[i % COLOURS.len()];
+        let material = r.add_material(&Material {
+            base_color: [c[0], c[1], c[2], 1.0],
+            roughness: 0.85,
+            ..Default::default()
+        });
+        r.add_lod_item(
+            &[
+                (empty, material, TAKE_OVER),
+                (mesh, material, f32::INFINITY),
+            ],
+            &[Mat4::from_translation(origin)],
+        );
+        far += 1;
+    }
+    println!(
+        "town: {boxes} boxes of {} kinds and {} colours over {cells} x {cells} cells of {CELL} m: {near} near items (to {TAKE_OVER} m), {far} far items (one per cell and colour, each its own mesh and material), {} items in all",
+        KINDS.len(),
+        COLOURS.len(),
+        near + far
+    );
 }
 
 /// 23 303 plants of 8 species over 200 x 200 m (see `--woodland`).

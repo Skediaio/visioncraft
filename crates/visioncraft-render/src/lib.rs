@@ -74,6 +74,7 @@ pub mod lod;
 mod sea;
 pub mod shadow;
 pub mod sky;
+mod stage;
 mod stats;
 mod still;
 mod terrain;
@@ -1208,6 +1209,12 @@ struct Counters {
     /// Triangles per pass group, as `passes`.
     pass_triangles: std::cell::RefCell<Vec<(&'static str, u64)>>,
     triangle_mark: Cell<u64>,
+    /// CPU ms of the passes' planning (`plan_items`, all passes) and of the cluster visibility
+    /// tests inside it (`visible_clusters`): `StageLog`. Native only: the web has no clock.
+    #[cfg(not(target_arch = "wasm32"))]
+    plan_ms: Cell<f64>,
+    #[cfg(not(target_arch = "wasm32"))]
+    visible_ms: Cell<f64>,
 }
 
 impl Counters {
@@ -1436,6 +1443,10 @@ pub struct Renderer {
     timer: Option<timing::Timer>,
     counters: Counters,
     last_stats: RenderStats,
+    /// The CPU stage times of each frame, a line per frame (`StageLog`): when
+    /// `VISIONCRAFT_STAGE_TIMINGS` names a file (native tools: the bench).
+    #[cfg(not(target_arch = "wasm32"))]
+    stage_log: Option<Box<stage::StageLog>>,
 }
 
 impl Renderer {
@@ -1811,6 +1822,8 @@ impl Renderer {
             timer: timing::Timer::new(device, queue),
             counters: Counters::default(),
             last_stats: RenderStats::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            stage_log: stage::StageLog::from_env(),
         };
         renderer.ground_slot = renderer.alloc_slot(MeshId(u32::MAX - 1));
         renderer.update_ambient(true);
@@ -3606,6 +3619,12 @@ impl Renderer {
     fn render_part(&mut self, encoder: &mut wgpu::CommandEncoder, part: FramePart) {
         #[cfg(not(target_arch = "wasm32"))]
         let cpu_start = std::time::Instant::now();
+        #[cfg(not(target_arch = "wasm32"))]
+        let lods_ms: f64;
+        #[cfg(not(target_arch = "wasm32"))]
+        let gather_ms: f64;
+        #[cfg(not(target_arch = "wasm32"))]
+        let record_ms: f64;
         if let Some(t) = &mut self.timer {
             t.begin();
         }
@@ -3615,7 +3634,13 @@ impl Renderer {
             self.invalidate_shadows(); // the scene changed
         }
         self.update_bounds();
+        #[cfg(not(target_arch = "wasm32"))]
+        let stage = std::time::Instant::now();
         self.update_lods();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            lods_ms = stage.elapsed().as_secs_f64() * 1000.0;
+        }
         let mut cascades = shadow::compute(
             self.view,
             self.proj,
@@ -3842,13 +3867,21 @@ impl Renderer {
                 mirrors,
             }
         });
+        #[cfg(not(target_arch = "wasm32"))]
+        let stage = std::time::Instant::now();
         self.gather
             .run(&self.device, &self.queue, encoder, &self.pool, &gather);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            gather_ms = stage.elapsed().as_secs_f64() * 1000.0;
+        }
         if plans.as_ref().is_some_and(|p| p.snow.is_some()) {
             self.snow_drawn = self.snow_cover;
         }
 
         let t = &self.targets;
+        #[cfg(not(target_arch = "wasm32"))]
+        let stage = std::time::Instant::now();
         if let Some(plans) = &plans {
             for (c, layer) in t.shadow_layers.iter().enumerate() {
                 // The last layer is the snow cover map, drawn after the cascades.
@@ -4077,6 +4110,20 @@ impl Renderer {
             }
         }
         self.counters.split("forward");
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            record_ms = stage.elapsed().as_secs_f64() * 1000.0;
+            if let Some(log) = &mut self.stage_log {
+                log.frame(
+                    self.frame,
+                    lods_ms,
+                    self.counters.plan_ms.get(),
+                    self.counters.visible_ms.get(),
+                    gather_ms,
+                    record_ms,
+                );
+            }
+        }
         let post = |encoder: &mut wgpu::CommandEncoder,
                     label: &'static str,
                     target: &wgpu::TextureView,
@@ -4489,7 +4536,13 @@ impl Renderer {
             Pass::Mirrors => category == 3,
             _ => category < 2 + glass as usize,
         };
+        #[cfg(not(target_arch = "wasm32"))]
+        let plan_start = std::time::Instant::now();
         let visible = self.visible_clusters(cull, near_far, small);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.counters
+            .visible_ms
+            .set(self.counters.visible_ms.get() + stage::cpu_ms(plan_start));
         let mut draws = Vec::new();
         let mut batches = Batches::default();
         let mut levels: Vec<Option<u8>> = Vec::new();
@@ -4634,6 +4687,10 @@ impl Renderer {
             }
         }
         batches.emit(&mut draws, gather);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.counters
+            .plan_ms
+            .set(self.counters.plan_ms.get() + stage::cpu_ms(plan_start));
         draws
     }
 
