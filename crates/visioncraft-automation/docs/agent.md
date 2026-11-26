@@ -72,7 +72,7 @@ same over MCP (`visioncraft-cli mcp`), JSON lines (`visioncraft-cli serve`) and 
 4. **Render.** `doc_render_preview {"viewpoint": ...}`: a PNG and what was drawn (camera, sun,
    `plantsPending`: 0 means every plant is drawn). Its `time` changes the picture only.
 5. **Verify** against the plan: `doc_inspect` (`area_m2`, `footprint_m2`, plant `count`),
-   `query.measure`, `query.plants_for_light {point | outline | hours}` (species ranked by the light a spot gets), `query.light_check` (every placed plant against its light range), `query.quantities {ids?, layer?}` (areas, lengths, volumes and plant counts per object, per material and per asset; linked models too, per body with surface and volume (closed bodies), scale applied, in `models`; plants are counted with the renderer's building rule, `counted_with: "scene"`), `query.raycast`, `query.sun_hours {point | outline, season | date, cell_m?, years?, plants?}` (hours of direct sun at a spot or as a grid over an area, with shadow from models, shapes, terrain and plant crowns; `view.set_sun_map` draws the same grid on the ground, recipe 26), `query.sky_view {point, normal?, years?}` (how open a spot is: the sky view factor 0..1, crowns letting sky through by their leaf density; recipe 43), `query.ground_height`, `query.ground_length`, `query.sun`. A film of camera moves is `film.*` (recipe 27); `film.preview` reads it without drawing.
+   `query.measure`, `query.plants_for_light {point | outline | hours}` (species ranked by the light a spot gets), `query.light_check` (every placed plant against its light range), `query.quantities {ids?, layer?}` (areas, lengths, volumes and plant counts per object, per material and per asset; linked models too, per body with surface and volume (closed bodies), scale applied, in `models`; plants are counted with the renderer's building rule, `counted_with: "scene"`), `query.raycast`, `query.sun_hours {point | outline, season | date, cell_m?, years?, plants?}` (hours of direct sun at a spot or as a grid over an area, with shadow from models, shapes, terrain and plant crowns; `view.set_sun_map` draws the same grid on the ground, recipe 26), `query.sky_view {point, normal?, years?}` (how open a spot is: the sky view factor 0..1, crowns letting sky through by their leaf density; recipe 43), `query.ground_height`, `query.ground_length`, `query.sun`, and `query.clips {model}` (the animation clips of a model that moves in parts: name, length and channel count; recipe 14). A film of camera moves is `film.*` (recipe 27); `film.preview` reads it without drawing.
    Save with `command_run file.save {"path": ...}`.
 
 ## Recipes
@@ -342,6 +342,13 @@ project, `true` back on.
 
 `object.add` records the file (relative to the project) and its size; it is placed like any
 catalogue asset as `user:<id>`. `object.remove` is refused while a planting uses it.
+
+A model with animations (glTF node animation: parts that turn, slide or tilt on keyframes) lists
+its clips with `query.clips {"model": "user:uo1"}`: `[{name, duration_s, channels}]`, the channel
+count of each; a model that stands still answers `{"clips": []}`. A catalogue asset is asked by
+its id, and its clips are those of its first level of detail. On the command line the file is read
+from the project's folder or the library folder (`--assets`); in a window a library model's clips
+are known once it is loaded. Playing a clip is not a command yet.
 
 ### 15. The example garden
 
