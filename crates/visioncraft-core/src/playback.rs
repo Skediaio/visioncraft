@@ -87,8 +87,19 @@ pub struct Play {
     /// Seconds on the session's clock when the clip started.
     pub start_s: f32,
     pub looped: bool,
+    /// How long the clip is (its longest among the assets): past it an unlooped play only
+    /// holds its last pose, so nothing moves.
+    pub duration_s: f32,
     /// When it started, among all plays: of two that move the same property, the later wins.
     serial: u64,
+}
+
+impl Play {
+    /// Whether anything still moves at clock time `t`: a loop always does, an unlooped play
+    /// until its clip's end.
+    fn moving(&self, t: f64) -> bool {
+        self.looped || (t - f64::from(self.start_s)) < f64::from(self.duration_s)
+    }
 }
 
 /// How long a flash lasts: a number of frames, or a number of seconds.
@@ -129,6 +140,16 @@ impl Flash {
         let frame = (since * fps.max(1.0)).round();
         (0.0..frames).contains(&frame)
     }
+
+    /// Whether it is over at clock time `t` and can be forgotten (one that has not started is
+    /// not).
+    pub fn ended(&self, t: f64, fps: f64) -> bool {
+        let since = t - f64::from(self.start_s);
+        match self.life {
+            Life::Seconds(s) => since >= f64::from(s),
+            Life::Frames(n) => (since * fps.max(1.0)).round() >= f64::from(n),
+        }
+    }
 }
 
 /// The clips and flashes playing, with the clock they are sampled at.
@@ -162,6 +183,9 @@ impl Default for Playback {
 /// The clip `clip` names among `clips`: by its exact name first (of two with the same name the
 /// one with the lowest index), else an index (an integer), else a message that lists the names.
 pub fn clip_index(clips: &[Clip], clip: &str) -> Result<usize, String> {
+    if clips.is_empty() {
+        return Err("the model has no animation clips".to_string());
+    }
     if let Some(i) = clips.iter().position(|c| c.name == clip) {
         return Ok(i);
     }
@@ -185,15 +209,16 @@ pub fn clip_index(clips: &[Clip], clip: &str) -> Result<usize, String> {
             }
         })
         .collect();
-    Err(match names.is_empty() {
-        true => "the model has no animation clips".to_string(),
-        false => format!("no clip `{clip}`; the clips are: {}", names.join(", ")),
-    })
+    Err(format!(
+        "no clip `{clip}`; the clips are: {}",
+        names.join(", ")
+    ))
 }
 
 impl Playback {
     /// Starts clip `clips` (per asset, from [`clip_index`]) on `target` at `start_s`. A clip
-    /// that plays there already starts again. Returns whether it did.
+    /// that plays there already starts again. Returns whether it did. `duration_s` is the
+    /// clip's length, to know when an unlooped play has stopped moving.
     pub fn play(
         &mut self,
         target: ClipTarget,
@@ -201,6 +226,7 @@ impl Playback {
         name: &str,
         start_s: f32,
         looped: bool,
+        duration_s: f32,
     ) -> bool {
         let again = self
             .plays
@@ -217,6 +243,7 @@ impl Playback {
             name: name.to_string(),
             start_s,
             looped,
+            duration_s,
             serial: self.serial,
         });
         restarted
@@ -288,6 +315,21 @@ impl Playback {
     pub fn is_empty(&self) -> bool {
         self.plays.is_empty() && self.flashes.is_empty()
     }
+
+    /// Whether anything still moves at [`Self::clock`]: a flash that has not ended, a looped
+    /// play, or one whose clip has not ended (an ended clip only holds its pose).
+    pub fn animating(&self) -> bool {
+        self.plays.iter().any(|p| p.moving(self.clock))
+            || self.flashes.iter().any(|f| !f.ended(self.clock, self.fps))
+    }
+
+    /// Forgets the flashes that are over at clock time `t`. Returns how many went.
+    pub fn prune_flashes(&mut self, t: f64) -> usize {
+        let fps = self.fps;
+        let before = self.flashes.len();
+        self.flashes.retain(|f| !f.ended(t, fps));
+        before - self.flashes.len()
+    }
 }
 
 #[cfg(test)]
@@ -309,6 +351,9 @@ mod tests {
         }
     }
 
+    /// The sine and the cosine of 45 degrees.
+    const Q: f32 = std::f32::consts::FRAC_1_SQRT_2;
+
     /// A lid on a hinge at 1 m up: one node, two clips turning it a quarter about Z in 1 s.
     fn rig() -> Rig {
         Rig {
@@ -318,16 +363,8 @@ mod tests {
             }],
             parents: vec![None],
             clips: vec![
-                clip(
-                    "open",
-                    &[0.0, 1.0],
-                    &[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.7071068, 0.7071068],
-                ),
-                clip(
-                    "shut",
-                    &[0.0, 2.0],
-                    &[0.0, 0.0, 0.7071068, 0.7071068, 0.0, 0.0, 0.0, 1.0],
-                ),
+                clip("open", &[0.0, 1.0], &[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, Q, Q]),
+                clip("shut", &[0.0, 2.0], &[0.0, 0.0, Q, Q, 0.0, 0.0, 0.0, 1.0]),
             ],
         }
     }
@@ -343,12 +380,14 @@ mod tests {
     ) -> bool {
         let target = ClipTarget::parse(object).unwrap();
         let index = clip_index(clips, name).unwrap();
+        let duration = clips[index].duration;
         p.play(
             target,
             BTreeMap::from([(asset.to_string(), index)]),
             name,
             start,
             looped,
+            duration,
         )
     }
 
@@ -487,6 +526,55 @@ mod tests {
         assert_eq!(pose(&p, &mut sampler, &mut played, 31.5), half);
         assert_eq!(pose(&p, &mut sampler, &mut played, 32.0), rest);
         assert_eq!(pose(&p, &mut sampler, &mut played, 41.5), half);
+    }
+
+    #[test]
+    fn what_still_moves_and_what_is_forgotten() {
+        let mut p = Playback::default();
+        assert!(!p.animating());
+        let (r, asset) = (rig(), "user:uo1");
+        // `open` is 1 s long: it moves until 11 s, then holds its pose.
+        play(&mut p, "g1", asset, &r.clips, "open", 10.0, false);
+        p.clock = 10.5;
+        assert!(p.animating());
+        p.clock = 11.0;
+        assert!(!p.animating(), "an ended clip only holds its pose");
+        assert!(!p.is_empty(), "but it is still a play");
+        play(&mut p, "g1", asset, &r.clips, "shut", 20.0, true);
+        assert!(p.animating(), "a loop always moves");
+        p.stop(&ClipTarget::all("g1"), None);
+        assert!(!p.animating());
+        // A flash for 2 frames at 25 a second is over from 2.08 s; one to come is not.
+        p.fps = 25.0;
+        p.flash(Flash {
+            id: 0,
+            start_s: 2.0,
+            position: [0.0; 3],
+            color: [1.0; 3],
+            intensity: 100.0,
+            range_m: 2.0,
+            size_m: 0.0,
+            life: Life::Frames(2),
+        });
+        p.flash(Flash {
+            id: 0,
+            start_s: 30.0,
+            position: [0.0; 3],
+            color: [1.0; 3],
+            intensity: 100.0,
+            range_m: 2.0,
+            size_m: 0.0,
+            life: Life::Seconds(1.0),
+        });
+        p.clock = 1.0;
+        assert!(p.animating());
+        assert_eq!(p.prune_flashes(2.04), 0, "not over yet");
+        p.clock = 2.08;
+        assert_eq!(p.prune_flashes(2.08), 1);
+        assert!(p.animating(), "the one at 30 s is still to come");
+        p.clock = 31.0;
+        assert_eq!(p.prune_flashes(31.0), 1);
+        assert!(!p.animating() && p.is_empty());
     }
 
     #[test]
