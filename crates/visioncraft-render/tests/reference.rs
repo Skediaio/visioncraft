@@ -1349,7 +1349,7 @@ fn pcss_hardens_at_the_contact() {
 /// PCSS on HIGH's maps (`high_pcss`, `ShadowFilter::Pcss`) reads as `ultra` and `high` do
 /// again, 34 %, where at most 40 % may pass: its penumbra is the receiver's distance to its
 /// blockers times the sun's disc, millimetres where the ground lies against the wall (its
-/// disk's floor, 0.75 texel, stays under the wall's foot), so its disk does not reach into lit
+/// disk's floor, half a texel, stays under the wall's foot), so its disk does not reach into lit
 /// ground as pcf16's 1.5 texels do (43 %); further from the wall, where the umbra is, it is no
 /// lighter.
 #[test]

@@ -496,7 +496,7 @@ pub enum ShadowFilter {
     /// distance between the receiver and its occluder. Sharp where a caster meets its shadow,
     /// and at most `max_radius_m` metres in the world (a receiver `d` metres behind its
     /// occluder, along the light, gets `d * tan(disc)`), never wider than 6 texels of a cascade
-    /// and never narrower than 0.75 texel (where the sun's disc alone gives less, the disk
+    /// and never narrower than half a texel (where the sun's disc alone gives less, the disk
     /// still rounds the edge's texel steps). The penumbra is about twice as wide as a real
     /// sun's: the sun's disc as drawn (`sky::SUN_DISC_RADIUS`, 0.5 degrees) has about twice the
     /// real sun's angular radius (0.267 degrees).
@@ -8867,7 +8867,7 @@ mod tests {
     /// blocker; a penumbra of the receiver's distance to the blockers along the light, times the
     /// tangent of the sun's disc (`g.sun_light.w`: its cosine), no more than the filter's
     /// radius; then the one disk, `shadow_disk`, at that spread, in texels and no wider than
-    /// 6, as the plain disk, and never narrower than 0.75 texel (its floor is 1.5: at the
+    /// 6, as the plain disk, and never narrower than half a texel (its floor is 1.5: at the
     /// contact that one is the plain disk's softness). The plain disk keeps its floor of 1.5
     /// texels.
     #[test]
@@ -8886,7 +8886,7 @@ mod tests {
             "return 1.0;",
             "let tan_sun = sqrt(max(1.0 - g.sun_light.w * g.sun_light.w, 0.0)) / g.sun_light.w;",
             "let w = clamp((p.z - blocker) / dz_per_m * tan_sun, 0.0, g.shadow_filter.x);",
-            "return shadow_disk(c, uv, p.z, k, small, clamp(w / g.texel[c], 0.75, 6.0), turn);",
+            "return shadow_disk(c, uv, p.z, k, small, clamp(w / g.texel[c], 0.5, 6.0), turn);",
             "let spread = clamp(g.shadow_filter.x / g.texel[c], 1.5, 6.0);",
             "return shadow_disk(c, uv, p.z, k, small, spread, turn);",
         ] {
@@ -8950,7 +8950,7 @@ mod tests {
     /// read. A pole's shadow: the receiver on the ground `s` metres from the foot and the pole
     /// at height `s * tan(elevation)` lie on one light ray (the same place in every cascade's
     /// map), `s / cos(elevation)` apart. So PCSS's penumbra there is millimetres at the foot
-    /// (sharp: the contact, where the filter pass's disk is floored at 0.75 texel) and
+    /// (sharp: the contact, where the filter pass's disk is floored at half a texel) and
     /// centimetres further on, capped by the filter's radius.
     #[test]
     fn a_blockers_depth_is_its_distance_along_the_light() {

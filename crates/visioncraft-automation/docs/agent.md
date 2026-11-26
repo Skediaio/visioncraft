@@ -312,7 +312,7 @@ smooth edges and leaves without shimmer (seconds to minutes); recipe 41 has the 
 is the sharp edge, pcf4 and pcf9 fixed grids a few shadow texels wide, pcf16 16 taps spread over
 the radius in metres in the world, the same penumbra in every cascade, and pcss (percentage-closer
 soft shadows) the same 16 taps over a penumbra that grows with the distance to the occluder: sharp
-where a caster meets its shadow (never narrower than 0.75 shadow texels), at most the radius (0.15
+where a caster meets its shadow (never narrower than half a shadow texel), at most the radius (0.15
 unless given), about twice as wide as a real sun's (the sun's disc as drawn is twice the real
 one's angular radius). The pcf16 disk never gets narrower than 1.5 shadow texels, so with it a
 radius of 0 is not a hard edge (`hard` is). Give `shadow_radius_m` with pcf16 or pcss, or alone at

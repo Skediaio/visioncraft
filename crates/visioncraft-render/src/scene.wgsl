@@ -575,7 +575,7 @@ fn environment(r: vec3<f32>, roughness: f32) -> vec3<f32> {
 //   time); each tap is compared against the receiver plane's own depth where it lands
 //   (`shadow_disk`). With `g.shadow_filter.y` 1 it is PCSS instead: the same disk, as wide as
 //   the receiver's distance to its occluders makes the penumbra (`shadow_blockers`), at least
-//   0.75 texel, at most `g.shadow_filter.x` metres.
+//   half a texel, at most `g.shadow_filter.x` metres.
 // Under FAST_SHADING (lib.rs compiles MEDIUM and LOW's shaders with it: register pressure on
 // integrated GPUs) only the 1- and 4-tap paths exist, and lib.rs writes 4 there for 9 and 16.
 // -1 when the point is outside this cascade's map (cascades refreshed every other frame lag
@@ -668,7 +668,7 @@ fn cascade_shadow(c: u32, world: vec3<f32>, n: vec3<f32>, nol: f32) -> f32 {
             let tan_sun = sqrt(max(1.0 - g.sun_light.w * g.sun_light.w, 0.0)) / g.sun_light.w;
             let w = clamp((p.z - blocker) / dz_per_m * tan_sun, 0.0, g.shadow_filter.x);
             // 3. The filter pass: the disk over that penumbra, in this cascade's texels, never
-            //    narrower than 0.75 texel and at most 6 (beyond that it stops growing in this
+            //    narrower than half a texel and at most 6 (beyond that it stops growing in this
             //    cascade, as the plain disk does). The plain disk's floor of 1.5 texels is too
             //    wide: where a caster meets its shadow the penumbra is millimetres, and with it
             //    the contact stayed as soft as the plain disk (a wall's foot, a low sun: 43 % of
@@ -676,11 +676,13 @@ fn cascade_shadow(c: u32, world: vec3<f32>, n: vec3<f32>, nol: f32) -> f32 {
             //    this pass is the one bilinear comparison, with its texels' stair steps, until the
             //    penumbra reaches a texel of the cascade, at 0.87 % of the distance along the
             //    light: 2.3 m from it with 2 cm texels, 10 m with 9 cm ones. Not only at the
-            //    contact. So 0.75 texel: the widest of the floors tried (0.5, 0.75) for which the
-            //    row under a wall's base still reads as its umbra (34 % of lit ground; at most
-            //    40 % is allowed there). Where the floor holds, the 16 taps fall within one texel
-            //    and a half.
-            return shadow_disk(c, uv, p.z, k, small, clamp(w / g.texel[c], 0.75, 6.0), turn);
+            //    contact. So half a texel: of the floors tried (0.5, 0.75) the one that leaves
+            //    the contact as clean as no floor. With 0.75 the rows under a wall's base still
+            //    passed (34 % of lit ground), but the base's own row lightened from the umbra to
+            //    about 39 %, the soft contact line coming back; with 0.5 those rows are pixel
+            //    for pixel what no floor draws, and the edges further out still get a disk
+            //    instead of the one tap. Where the floor holds, the 16 taps fall within a texel.
+            return shadow_disk(c, uv, p.z, k, small, clamp(w / g.texel[c], 0.5, 6.0), turn);
         }
         return shadow_disk(c, uv, p.z, k, small, spread, turn);
     }
