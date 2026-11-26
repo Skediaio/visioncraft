@@ -406,7 +406,10 @@ mod native {
                     q.shadow_resolution,
                     q.msaa
                 );
-                println!("plant bench pass draws: {:?}", st.pass_draws);
+                println!(
+                    "plant bench pass draws: {:?}, calls: {:?}",
+                    st.pass_draws, st.pass_calls
+                );
             }
             other => return Err(format!("unknown plant op `{other}`")),
         }

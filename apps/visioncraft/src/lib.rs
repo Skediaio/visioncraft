@@ -2469,13 +2469,18 @@ impl App {
             .iter()
             .map(|(k, t)| format!("\"{k}\":{t}"))
             .collect();
+        let calls: Vec<String> = st
+            .pass_calls
+            .iter()
+            .map(|(k, c)| format!("\"{k}\":{c}"))
+            .collect();
         let gpu: Vec<String> = st
             .gpu_passes
             .iter()
             .map(|(k, ms)| format!("\"{k}\":{ms:.2}"))
             .collect();
         let json = format!(
-            "{{\"prepare_ms\":{:.2},\"render_ms\":{:.2},\"ui_ms\":{:.2},\"prepare_max_ms\":{:.2},\"render_max_ms\":{:.2},\"ui_max_ms\":{:.2},\"draws\":{},\"pass_draws\":{{{}}},\"instances\":{},\"triangles\":{},\"pass_triangles\":{{{}}},\"gpu_ms\":{},\"gpu_passes\":{{{}}}}}",
+            "{{\"prepare_ms\":{:.2},\"render_ms\":{:.2},\"ui_ms\":{:.2},\"prepare_max_ms\":{:.2},\"render_max_ms\":{:.2},\"ui_max_ms\":{:.2},\"draws\":{},\"pass_draws\":{{{}}},\"pass_calls\":{{{}}},\"instances\":{},\"triangles\":{},\"pass_triangles\":{{{}}},\"gpu_ms\":{},\"gpu_passes\":{{{}}}}}",
             f[0] / n,
             f[1] / n,
             f[2] / n,
@@ -2484,6 +2489,7 @@ impl App {
             self.frame_cpu_max[2],
             st.draw_calls,
             passes.join(","),
+            calls.join(","),
             st.instances,
             st.triangles,
             triangles.join(","),

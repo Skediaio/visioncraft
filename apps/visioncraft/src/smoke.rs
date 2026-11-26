@@ -789,12 +789,13 @@ mod native {
                     };
                     let rs = s.renderer.stats();
                     println!(
-                        "bench cpu ms (median): prepare {:.2}, record {:.2}, submit {:.2}; draws {} {:?}; instances {}; triangles {:?}",
+                        "bench cpu ms (median): prepare {:.2}, record {:.2}, submit {:.2}; draws {} {:?}; calls {:?}; instances {}; triangles {:?}",
                         med(&mut cpu[0]),
                         med(&mut cpu[1]),
                         med(&mut cpu[2]),
                         rs.draw_calls,
                         rs.pass_draws,
+                        rs.pass_calls,
                         rs.instances,
                         rs.pass_triangles
                     );

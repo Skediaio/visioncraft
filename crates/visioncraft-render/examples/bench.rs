@@ -293,7 +293,7 @@ fn main() {
                         .expect("poll");
                 }
                 let stats = r.stats();
-                (stats.gpu_passes, stats.pass_draws)
+                (stats.gpu_passes, stats.pass_draws, stats.pass_calls)
             };
             for i in 0..20 {
                 frame(i);
@@ -302,14 +302,16 @@ fn main() {
             submit.set(0.0);
             finish.set(0.0);
             let mut draws = Vec::new();
+            let mut calls = Vec::new();
             let mut gpu: Vec<(&'static str, f32)> = Vec::new();
             let start = std::time::Instant::now();
             let mut worst = 0f64;
             let first = rendered.get() + 1;
             for i in 0..frames {
                 let t = std::time::Instant::now();
-                let (timings, pass_draws) = frame(i);
+                let (timings, pass_draws, pass_calls) = frame(i);
                 draws = pass_draws;
+                calls = pass_calls;
                 worst = worst.max(t.elapsed().as_secs_f64() * 1000.0);
                 for (label, ms) in timings {
                     match gpu.iter_mut().find(|(l, _)| *l == label) {
@@ -338,6 +340,12 @@ fn main() {
                 "    draws (last frame): {} (sum {})",
                 parts.join(", "),
                 draws.iter().map(|d| d.1).sum::<u32>()
+            );
+            let parts: Vec<String> = calls.iter().map(|(l, n)| format!("{l} {n}")).collect();
+            println!(
+                "    calls (last frame): {} (sum {})",
+                parts.join(", "),
+                calls.iter().map(|d| d.1).sum::<u32>()
             );
             if !gpu.is_empty() {
                 let parts: Vec<String> = gpu
@@ -521,7 +529,8 @@ async fn device_with_timestamps() -> (wgpu::Device, wgpu::Queue) {
         .await
         .expect("adapter");
     eprintln!("adapter: {:?}", adapter.get_info());
-    let required_features = adapter.features() & wgpu::Features::TIMESTAMP_QUERY;
+    let required_features = adapter.features()
+        & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::INDIRECT_FIRST_INSTANCE);
     adapter
         .request_device(&wgpu::DeviceDescriptor {
             required_features,

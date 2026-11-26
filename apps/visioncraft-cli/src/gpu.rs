@@ -189,6 +189,7 @@ impl Pictures for GpuPictures {
                 "stats": {
                     "triangles": stats.triangles,
                     "draws": stats.draw_calls,
+                    "pass_calls": stats.pass_calls,
                     "instances": stats.instances,
                     "gpu_ms": stats.gpu_ms,
                     "gpu_passes": stats.gpu_passes,

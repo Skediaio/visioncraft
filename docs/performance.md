@@ -124,6 +124,16 @@ Recipe, a time-of-day drag:
   called from uniform control flow"); naga accepts one, so a unit test lists the functions that
   take any. Per stage the scene pipelines bind at most three read-only storage buffers in the
   fragment stage (the lights, their grid, the materials) and none in the vertex stage.
+- **One indirect buffer per frame** (`write_indirect`, `record`). A run of two or more batched
+  draws with the same pipeline, texture set and draw slot is one `multi_draw_indexed_indirect`
+  call: their `first_instance` points into the gathered buffer, which needs
+  `INDIRECT_FIRST_INSTANCE` (asked for where the adapter has it); without it every draw is a
+  direct call of the same arguments and the picture is the same. In the browser, wgpu's WebGPU
+  backend runs a multi-draw as a loop of indirect draws with no binds between them, and
+  validates the arguments on the GPU (one buffer a frame, so one validation batch).
+  Dissolving clusters, impostor quads and transparents stay direct. `pass_draws` keeps counting
+  sub-draws; `pass_calls` (`view.render`'s stats, `window.__vcFrame`) counts the calls issued
+  per pass, a multi-draw being one.
 - **Shadows**: the near cascade every frame, the middle ones on alternate frames, the last one
   cached while the camera stays within its margin, each culled by its own cascade. The snow
   cover map (on a coast also the sea's bed) follows the eye in steps of eight texels and is

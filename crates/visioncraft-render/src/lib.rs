@@ -1022,6 +1022,88 @@ struct FramePlans {
     reflection: Option<Vec<Draw>>,
     forward: Vec<Draw>,
     mirrors: Option<Vec<Draw>>,
+    /// Where each pass's indirect arguments start (`Renderer::write_indirect`): the shadow
+    /// layers, then the snow cover map, the depth pre-pass, the reflection, the forward pass,
+    /// the mirrors.
+    args: Vec<u32>,
+}
+
+/// Bytes of one `DrawIndexedIndirectArgs` (five u32).
+const INDIRECT_ARGS: u32 = 20;
+
+/// A batched mesh draw can go through the indirect buffer (`Calls`).
+fn indirectable(d: &Draw) -> bool {
+    d.src == Src::Gathered && d.mesh.is_some()
+}
+
+/// Whether two draws share what one indirect call keeps: the pipeline, group 1 and group 2.
+fn same_bindings(a: &Draw, b: &Draw) -> bool {
+    a.pipe == b.pipe && a.g1 == b.g1 && a.g2 == b.g2
+}
+
+/// The indirect arguments of a batched mesh draw: what its direct `draw_indexed` names.
+fn draw_args(d: &Draw) -> [u32; 5] {
+    let m = d.mesh.expect("a mesh draw");
+    [
+        m.range.count,
+        d.instances.len() as u32,
+        m.range.first,
+        m.base_vertex as u32,
+        d.instances.start,
+    ]
+}
+
+/// How `record` issues planned draws, in their order: each on its own, or a run of two or more
+/// batched mesh draws with the same bindings as one indirect call (whose sub-draws are the
+/// run's draws). Yields (first draw, count).
+#[derive(Clone, Copy)]
+struct Calls<'a> {
+    draws: &'a [Draw],
+    at: usize,
+    /// Runs may be indirect calls (the device's `INDIRECT_FIRST_INSTANCE`).
+    indirect: bool,
+}
+
+impl<'a> Calls<'a> {
+    fn new(draws: &'a [Draw], indirect: bool) -> Self {
+        Self {
+            draws,
+            at: 0,
+            indirect,
+        }
+    }
+}
+
+impl Iterator for Calls<'_> {
+    type Item = (usize, usize);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let i = self.at;
+        let draws = self.draws;
+        let d = draws.get(i)?;
+        let mut n = 1;
+        if self.indirect && indirectable(d) {
+            while draws
+                .get(i + n)
+                .is_some_and(|next| indirectable(next) && same_bindings(d, next))
+            {
+                n += 1;
+            }
+        }
+        self.at = i + n;
+        Some((i, n))
+    }
+}
+
+/// Appends the arguments of every draw `record` sends through an indirect call.
+fn pack_args(out: &mut Vec<u8>, draws: &[Draw], indirect: bool) {
+    for (at, n) in Calls::new(draws, indirect) {
+        if n > 1 {
+            for d in &draws[at..at + n] {
+                out.extend_from_slice(&u32_bytes(&draw_args(d)));
+            }
+        }
+    }
 }
 
 const LOD_UNSET: u8 = u8::MAX;
@@ -1312,6 +1394,10 @@ struct Counters {
     plan_ms: Cell<f64>,
     #[cfg(not(target_arch = "wasm32"))]
     visible_ms: Cell<f64>,
+    /// Draw calls issued since the last split (`call`), per pass group as `passes`.
+    calls: Cell<u32>,
+    pass_calls: std::cell::RefCell<Vec<(&'static str, u32)>>,
+    call_mark: Cell<u32>,
 }
 
 impl Counters {
@@ -1322,6 +1408,16 @@ impl Counters {
         if view {
             self.instances.set(self.instances.get() + instances);
         }
+    }
+
+    /// `n` draw calls issued (`pass_calls`).
+    fn calls(&self, n: u32) {
+        self.calls.set(self.calls.get() + n);
+    }
+
+    /// One draw call issued (`pass_calls`).
+    fn call(&self) {
+        self.calls(1);
     }
 
     /// Attributes the draws since the last split to `label`.
@@ -1337,6 +1433,12 @@ impl Counters {
         match triangles.iter_mut().find(|(l, _)| *l == label) {
             Some(e) => e.1 += t,
             None => triangles.push((label, t)),
+        }
+        let c = self.calls.get() - self.call_mark.replace(self.calls.get());
+        let mut calls = self.pass_calls.borrow_mut();
+        match calls.iter_mut().find(|(l, _)| *l == label) {
+            Some(e) => e.1 += c,
+            None => calls.push((label, c)),
         }
     }
 }
@@ -1492,6 +1594,16 @@ pub struct Renderer {
     /// Every item's instances (`batch.rs`), and the frame's batches gathered from them.
     pool: batch::InstancePool,
     gather: batch::Gather,
+    /// The frame's indirect draws (`write_indirect`): one buffer, rewritten every frame, a
+    /// range per pass; grown when needed, never shrunk.
+    indirect: wgpu::Buffer,
+    /// Arguments (`INDIRECT_ARGS` bytes each) it holds.
+    indirect_capacity: u32,
+    /// This frame's arguments, packed; kept between frames.
+    indirect_args: Vec<u8>,
+    /// Batched draws go through the indirect buffer (the device's `INDIRECT_FIRST_INSTANCE`):
+    /// else each is a direct draw of the same arguments (`record`). A test switches it off.
+    multi_draw: bool,
     /// The static meshes' vertex and index buffers: one arena until it is full at the device's
     /// `max_buffer_size`, then one more (`batch::MeshRanges` says which mesh lies where).
     arenas: Vec<batch::MeshArena>,
@@ -1774,6 +1886,13 @@ impl Renderer {
             false,
         );
         let mipmapper = texture::Mipmapper::new(device, module(&modules, "mip"));
+        let indirect_capacity = 256u32;
+        let indirect = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("indirect draws"),
+            size: u64::from(indirect_capacity) * u64::from(INDIRECT_ARGS),
+            usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let sun = Sun::from_angles(180.0, 45.0);
         let sky = sky::Sky::new(sun.direction);
         let material_capacity = 64u32;
@@ -1886,6 +2005,12 @@ impl Renderer {
             upload_belt: wgpu::util::StagingBelt::new(device.clone(), UPLOAD_CHUNK),
             pool: batch::InstancePool::new(device, 4096),
             gather: batch::Gather::new(device),
+            indirect,
+            indirect_capacity,
+            indirect_args: Vec::new(),
+            multi_draw: device
+                .features()
+                .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE),
             arenas: Vec::new(),
             mesh_ranges: batch::MeshRanges::default(),
             meshes: Vec::new(),
@@ -4157,7 +4282,7 @@ impl Renderer {
         let mut plan = |cull: Mat4, near_far: bool, kind: Pass, small: Option<(Vec3, f32)>| {
             self.plan_items(cull, near_far, kind, small, &mut gather)
         };
-        let plans = (!develop).then(|| {
+        let mut plans = (!develop).then(|| {
             let shadows: Vec<Vec<Draw>> = (0..layers)
                 .map(|c| {
                     // The last layer is the snow cover map, drawn after the cascades.
@@ -4209,6 +4334,7 @@ impl Renderer {
                 reflection,
                 forward,
                 mirrors,
+                args: Vec::new(),
             }
         });
         #[cfg(not(target_arch = "wasm32"))]
@@ -4218,6 +4344,9 @@ impl Renderer {
         #[cfg(not(target_arch = "wasm32"))]
         {
             gather_ms = stage.elapsed().as_secs_f64() * 1000.0;
+        }
+        if let Some(p) = plans.as_mut() {
+            self.write_indirect(p);
         }
         if plans.as_ref().is_some_and(|p| p.snow.is_some()) {
             self.snow_drawn = self.snow_cover;
@@ -4241,7 +4370,7 @@ impl Renderer {
                 );
                 pass.set_bind_group(0, &self.globals_bind, &[]);
                 pass.set_bind_group(2, &self.cascade_bind, &[(c as u64 * SLOT) as u32]);
-                self.record(&mut pass, &plans.shadows[c]);
+                self.record(&mut pass, &plans.shadows[c], plans.args[c]);
             }
             if let (Some(draws), Some(layer)) = (&plans.snow, t.shadow_layers.last()) {
                 let mut pass = depth_pass(encoder, "snow cover", layer, wgpu::StoreOp::Store, None);
@@ -4251,7 +4380,7 @@ impl Renderer {
                     &self.cascade_bind,
                     &[(shadow::MAX_CASCADES as u64 * SLOT) as u32],
                 );
-                self.record(&mut pass, draws);
+                self.record(&mut pass, draws, plans.args[layers]);
             }
             self.counters.split("shadow");
             {
@@ -4263,8 +4392,8 @@ impl Renderer {
                     self.ts("depth"),
                 );
                 pass.set_bind_group(0, &self.globals_bind, &[]);
-                self.record(&mut pass, &plans.depth);
-                self.grass.draw_depth(&mut pass);
+                self.record(&mut pass, &plans.depth, plans.args[layers + 1]);
+                self.counters.calls(self.grass.draw_depth(&mut pass));
             }
             self.counters.split("depth");
             {
@@ -4280,6 +4409,7 @@ impl Renderer {
                 pass.set_bind_group(0, &self.globals_bind, &[]);
                 pass.set_bind_group(1, &t.resolve_bind, &[]);
                 pass.draw(0..3, 0..1);
+                self.counters.call();
             }
             if self.quality.ao_samples > 0 || self.quality.contact_shadows {
                 let mut pass = color_pass(
@@ -4294,6 +4424,7 @@ impl Renderer {
                 pass.set_bind_group(0, &self.globals_bind, &[]);
                 pass.set_bind_group(1, &t.ssao_bind, &[]);
                 pass.draw(0..3, 0..1);
+                self.counters.call();
                 drop(pass);
                 for (i, pipeline) in [&self.pipelines.blur_h, &self.pipelines.blur_v]
                     .into_iter()
@@ -4311,6 +4442,7 @@ impl Renderer {
                     pass.set_bind_group(0, &self.globals_bind, &[]);
                     pass.set_bind_group(1, &t.blur_bind[i], &[]);
                     pass.draw(0..3, 0..1);
+                    self.counters.call();
                 }
             } else {
                 color_pass(
@@ -4346,6 +4478,8 @@ impl Renderer {
                     },
                     ts,
                 );
+                // One render pass, whatever it dispatches.
+                self.counters.call();
                 self.cloud_jump = false;
                 self.cloud_picture = false;
             } else {
@@ -4378,7 +4512,7 @@ impl Renderer {
                 });
                 pass.set_bind_group(0, &self.reflect_globals_bind, &[]);
                 pass.set_bind_group(3, &t.reflect_forward_bind, &[]);
-                self.record(&mut pass, draws);
+                self.record(&mut pass, draws, plans.args[layers + 2]);
                 // The endless ground has no hole where the terrain is dug out:
                 // seen from water below its height (a pond in the lawn) it would
                 // cover the sky the water mirrors.
@@ -4391,6 +4525,7 @@ impl Renderer {
                 pass.set_pipeline(&self.pipelines.reflect_sky);
                 pass.set_bind_group(2, self.cloud_volume.sky_bind(), &[]);
                 pass.draw(0..3, 0..1);
+                self.counters.call();
             }
             self.counters.split("reflection");
             {
@@ -4406,12 +4541,13 @@ impl Renderer {
                     forward_pass(encoder, "forward", targets, (true, ssr), self.ts("forward"));
                 pass.set_bind_group(0, &self.globals_bind, &[]);
                 pass.set_bind_group(3, &t.forward_bind, &[]);
-                self.record(&mut pass, &plans.forward);
-                self.grass.draw(
+                self.record(&mut pass, &plans.forward, plans.args[layers + 3]);
+                let grass = self.grass.draw(
                     &mut pass,
                     &self.draw_bind,
                     (self.ground_slot as u64 * SLOT) as u32,
                 );
+                self.counters.calls(grass);
                 if self.ground.is_some() {
                     // The cells near the sky volume only when there is one, and after the others:
                     // all ground lies at one depth, so of two cells over the same pixel the last
@@ -4428,7 +4564,9 @@ impl Renderer {
                 pass.set_pipeline(&self.sampled.sky);
                 pass.set_bind_group(2, self.cloud_volume.sky_bind(), &[]);
                 pass.draw(0..3, 0..1);
-                self.draw_sea(&mut pass);
+                self.counters.call();
+                let sea = self.draw_sea(&mut pass);
+                self.counters.calls(sea);
                 if ssr {
                     drop(pass);
                     encoder.copy_texture_to_texture(
@@ -4441,7 +4579,7 @@ impl Renderer {
                     pass.set_bind_group(0, &self.globals_bind, &[]);
                     pass.set_bind_group(3, &t.forward_bind, &[]);
                     if let Some(draws) = &plans.mirrors {
-                        self.record(&mut pass, draws);
+                        self.record(&mut pass, draws, plans.args[layers + 4]);
                     }
                 }
                 self.draw_transparent(&mut pass, view_proj);
@@ -4450,6 +4588,7 @@ impl Renderer {
                     pass.set_bind_group(0, &self.globals_bind, &[]);
                     pass.set_bind_group(3, &t.forward_bind, &[]);
                     pass.draw(0..3, 0..1);
+                    self.counters.call();
                 }
             }
         }
@@ -4480,6 +4619,7 @@ impl Renderer {
             pass.set_bind_group(1, bind, &[]);
             pass.draw(0..3, 0..1);
             self.counters.add(1, 1, false);
+            self.counters.call();
         };
         // The air: light shafts, the sun's glare and the aerial perspective, onto the HDR image.
         // A photo's mean has them in already.
@@ -4607,6 +4747,7 @@ impl Renderer {
             for (i, bind) in self.underlays.binds.iter().enumerate() {
                 pass.set_bind_group(2, bind, &[]);
                 pass.draw(i as u32 * 6..i as u32 * 6 + 6, 0..1);
+                self.counters.call();
             }
         }
         if let (Some(buffer), true) = (&self.overlay, self.overlay_count > 0) {
@@ -4623,6 +4764,7 @@ impl Renderer {
             pass.set_bind_group(1, &t.overlay_bind, &[]);
             pass.set_vertex_buffer(0, buffer.slice(..));
             pass.draw(0..6, 0..self.overlay_count);
+            self.counters.call();
         }
         self.counters.split("post");
         if let Some(t) = &mut self.timer {
@@ -4702,6 +4844,7 @@ impl Renderer {
         self.last_stats = RenderStats {
             draw_calls: self.counters.draws.get(),
             pass_draws: self.counters.passes.take(),
+            pass_calls: self.counters.pass_calls.take(),
             pass_triangles: self.counters.pass_triangles.take(),
             triangles: self.counters.triangles.get(),
             instances: self.counters.instances.get(),
@@ -4737,6 +4880,7 @@ impl Renderer {
             pass.set_pipeline(pipeline);
             pass.draw(0..RINGS * SEGMENTS * 6, 0..1);
             self.counters.add((RINGS * SEGMENTS * 2) as u64, 1, false);
+            self.counters.call();
         }
     }
 
@@ -5155,16 +5299,68 @@ impl Renderer {
         }
     }
 
+    /// Packs the frame's indirect draws: per pass, the arguments of every batched mesh draw
+    /// that `record` sends through the indirect buffer (runs of two or more with the same
+    /// bindings), in their record order, into one buffer; where each pass's start is, is
+    /// `plans.args`.
+    fn write_indirect(&mut self, plans: &mut FramePlans) {
+        self.indirect_args.clear();
+        let FramePlans {
+            shadows,
+            snow,
+            depth,
+            reflection,
+            forward,
+            mirrors,
+            args,
+        } = plans;
+        args.clear();
+        args.reserve(shadows.len() + 5);
+        let mut base = |draws: &[Draw]| {
+            let base = self.indirect_args.len() as u32 / INDIRECT_ARGS;
+            pack_args(&mut self.indirect_args, draws, self.multi_draw);
+            base
+        };
+        for shadow in shadows {
+            args.push(base(shadow));
+        }
+        args.push(base(snow.as_deref().unwrap_or(&[])));
+        args.push(base(depth));
+        args.push(base(reflection.as_deref().unwrap_or(&[])));
+        args.push(base(forward));
+        args.push(base(mirrors.as_deref().unwrap_or(&[])));
+        let n = self.indirect_args.len() as u32 / INDIRECT_ARGS;
+        if n == 0 {
+            return;
+        }
+        if n > self.indirect_capacity {
+            self.indirect_capacity = n.next_power_of_two();
+            self.indirect = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("indirect draws"),
+                size: u64::from(self.indirect_capacity) * u64::from(INDIRECT_ARGS),
+                usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+        }
+        self.queue
+            .write_buffer(&self.indirect, 0, &self.indirect_args);
+    }
+
     /// Records planned draws (`plan_items`), setting only what changes from one to the next:
-    /// in the browser every set is a call into its WebGPU.
-    fn record(&self, pass: &mut wgpu::RenderPass, draws: &[Draw]) {
+    /// in the browser every set is a call into its WebGPU. A run of two or more batched mesh
+    /// draws with the same bindings is one indirect call (`Calls`; their arguments are at `args`
+    /// in the buffer `write_indirect` packed); without the device's `INDIRECT_FIRST_INSTANCE`
+    /// each is a direct draw of the same arguments. A draw whose bind group, mesh or arena went
+    /// away since the plan is left out.
+    fn record(&self, pass: &mut wgpu::RenderPass, draws: &[Draw], args: u32) {
         let mut pipe = None;
         let mut g1 = None;
         let mut g2 = None;
         let mut mesh = None;
         let mut arena = None;
         let mut src = None;
-        for d in draws {
+        // Binds what `d` needs and is not bound; false when something it needs is gone.
+        let mut bind = |pass: &mut wgpu::RenderPass, d: &Draw| -> bool {
             if pipe != Some(d.pipe) {
                 pass.set_pipeline(self.pipe(d.pipe));
                 pipe = Some(d.pipe);
@@ -5172,7 +5368,7 @@ impl Renderer {
             if let Some(g) = d.g1
                 && g1 != Some(g)
             {
-                let bind = match g {
+                let group = match g {
                     Group1::Set(set) => self
                         .texture_sets
                         .get(set as usize)
@@ -5185,10 +5381,10 @@ impl Renderer {
                         .and_then(Option::as_ref)
                         .map(|i| &i.bind),
                 };
-                let Some(bind) = bind else {
-                    continue;
+                let Some(group) = group else {
+                    return false;
                 };
-                pass.set_bind_group(1, bind, &[]);
+                pass.set_bind_group(1, group, &[]);
                 g1 = Some(g);
             }
             if let Some(g) = d.g2
@@ -5209,7 +5405,7 @@ impl Renderer {
                 && mesh != Some(m)
             {
                 let Some(a) = self.arenas.get(m.arena as usize) else {
-                    continue;
+                    return false;
                 };
                 if arena != Some(m.arena) {
                     pass.set_vertex_buffer(0, a.vertices.slice(..));
@@ -5227,11 +5423,32 @@ impl Renderer {
                 pass.set_vertex_buffer(1, buffer.slice(..));
                 src = Some(d.src);
             }
-            self.counters
-                .add(d.triangles, d.instances.len() as u32, d.view);
-            match d.mesh {
-                Some(m) => pass.draw_indexed(m.range.range(), m.base_vertex, d.instances.clone()),
-                None => pass.draw(0..d.vertices, d.instances.clone()),
+            true
+        };
+        let mut next_args = u64::from(args) * u64::from(INDIRECT_ARGS);
+        for (i, n) in Calls::new(draws, self.multi_draw) {
+            let d = &draws[i];
+            let bound = bind(pass, d);
+            if n > 1 {
+                if bound {
+                    pass.multi_draw_indexed_indirect(&self.indirect, next_args, n as u32);
+                }
+                next_args += u64::from(n as u32) * u64::from(INDIRECT_ARGS);
+                for d in &draws[i..i + n] {
+                    self.counters
+                        .add(d.triangles, d.instances.len() as u32, d.view);
+                }
+                self.counters.call();
+            } else if bound {
+                self.counters
+                    .add(d.triangles, d.instances.len() as u32, d.view);
+                self.counters.call();
+                match d.mesh {
+                    Some(m) => {
+                        pass.draw_indexed(m.range.range(), m.base_vertex, d.instances.clone())
+                    }
+                    None => pass.draw(0..d.vertices, d.instances.clone()),
+                }
             }
         }
     }
@@ -5303,6 +5520,7 @@ impl Renderer {
                 pass.set_pipeline(p);
                 self.counters
                     .add(mesh.index_count as u64 / 3, range.len() as u32, true);
+                self.counters.call();
                 pass.draw_indexed(dm.range.range(), dm.base_vertex, item.pool_range(&range));
             }
         }
@@ -8067,8 +8285,12 @@ pub async fn headless_device() -> Result<(wgpu::Device, wgpu::Queue), String> {
     eprintln!("adapter: {:?}", adapter.get_info());
     // Timestamp queries when the adapter has them (headless only: tools and
     // benches), so `stats()` reports GPU time per pass.
+    // Indirect first instance: batched draws go through one indirect buffer per frame
+    // (`record`); without it every draw is direct.
     let required_features = adapter.features()
-        & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TEXTURE_COMPRESSION_BC);
+        & (wgpu::Features::TIMESTAMP_QUERY
+            | wgpu::Features::TEXTURE_COMPRESSION_BC
+            | wgpu::Features::INDIRECT_FIRST_INSTANCE);
     adapter
         .request_device(&wgpu::DeviceDescriptor {
             required_features,
@@ -9135,6 +9357,131 @@ mod tests {
             red(own_right) < red(one_right) - 40.0,
             "the right quarter differs from one material's: {own_right:?} against {one_right:?}"
         );
+    }
+
+    /// How planned draws are issued: batched mesh draws with the same bindings run as one
+    /// indirect call, everything between them one draw each; the arguments packed are those of
+    /// the runs' draws, and are what their direct draws name.
+    #[test]
+    fn runs_of_batched_draws_with_the_same_bindings_share_a_call() {
+        let mesh = |first: u32, id: u32| DrawMesh {
+            id,
+            arena: 0,
+            range: batch::Span::new(first, 12),
+            base_vertex: 0,
+        };
+        let draw = |mesh, g1, src| Draw {
+            pipe: Pipe::Depth(0),
+            g1,
+            g2: None,
+            mesh,
+            vertices: 12,
+            src,
+            instances: 0..3,
+            triangles: 4,
+            view: false,
+        };
+        let set = Some(Group1::Set(0));
+        let draws = vec![
+            draw(Some(mesh(0, 0)), set, Src::Gathered),
+            draw(Some(mesh(12, 1)), set, Src::Gathered),
+            draw(None, set, Src::Gathered),
+            draw(Some(mesh(24, 2)), set, Src::Gathered),
+            draw(Some(mesh(36, 3)), None, Src::Gathered),
+            draw(Some(mesh(48, 4)), None, Src::Gathered),
+            draw(Some(mesh(60, 5)), None, Src::Pool),
+        ];
+        let calls = |indirect: bool| Calls::new(&draws, indirect).collect::<Vec<_>>();
+        assert_eq!(calls(true), vec![(0, 2), (2, 1), (3, 1), (4, 2), (6, 1)]);
+        assert_eq!(
+            calls(false),
+            (0..draws.len()).map(|i| (i, 1)).collect::<Vec<_>>()
+        );
+        let mut args = Vec::new();
+        pack_args(&mut args, &draws, true);
+        assert_eq!(args.len(), INDIRECT_ARGS as usize * 4, "two runs of two");
+        assert_eq!(&args[..20], &u32_bytes(&[12, 3, 0, 0, 0]));
+        assert_eq!(&args[20..40], &u32_bytes(&[12, 3, 12, 0, 0]));
+        assert_eq!(draw_args(&draws[4]), [12, 3, 36, 0, 0]);
+        args.clear();
+        pack_args(&mut args, &draws, false);
+        assert!(args.is_empty(), "every draw direct");
+    }
+
+    /// Forty meshes of one texture set: the forward pass issues one call for them all (a run
+    /// through the indirect buffer), so `pass_calls` is below `pass_draws`; with the direct
+    /// fallback every draw is a call, and the picture is the same.
+    #[test]
+    fn many_meshes_draw_in_one_indirect_call_and_the_fallback_draws_the_same() {
+        let (device, queue) = pollster::block_on(headless_device()).expect("device");
+        let (w, h) = (320u32, 60u32);
+        let scene = || {
+            let mut r = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+            let material = r.add_material(&Material::default());
+            let mut rng = demo::Rng::new(5);
+            for k in 0..40 {
+                let mut m = demo::MeshData::default();
+                let a = 0.4 + rng.unit() * 0.5;
+                let b = 0.6 + rng.unit() * 1.5;
+                m.add_box(Vec3::new(-a, 0.0, -a), Vec3::new(a, b, a));
+                let mesh = r.add_mesh(&m.mesh()).expect("mesh");
+                r.add_item(
+                    mesh,
+                    material,
+                    &[Mat4::from_translation(Vec3::new(2.5 * k as f32, 0.0, 0.0))],
+                );
+            }
+            r.resize(w, h);
+            r.set_quality(Quality::LOW);
+            let (half, eye) = (50.0f32, Vec3::new(48.75, 1.0, 20.0));
+            let view = Mat4::look_at_rh(eye, Vec3::new(eye.x, 1.0, 0.0), Vec3::Y);
+            let proj = Mat4::orthographic_rh(-half, half, -1.5, 1.5, 0.1, 100.0);
+            r.set_camera(view, proj, eye);
+            r
+        };
+        let count = |r: &Renderer, calls: bool, key: &str| -> u32 {
+            r.stats()
+                .pass_calls
+                .iter()
+                .filter(|(l, _)| calls || *l == key)
+                .map(|(_, n)| n)
+                .sum()
+        };
+        let draw_count = |r: &Renderer, key: &str| -> u32 {
+            r.stats()
+                .pass_draws
+                .iter()
+                .find(|(l, _)| *l == key)
+                .map(|(_, n)| n)
+                .expect("the pass")
+        };
+        let mut indirect = scene();
+        let with_feature = indirect.multi_draw;
+        pixels(&mut indirect, &device, &queue, w, h);
+        let indirect_px = pixels(&mut indirect, &device, &queue, w, h);
+        let (draws, calls) = (
+            draw_count(&indirect, "forward"),
+            count(&indirect, true, "forward"),
+        );
+        let mut direct = scene();
+        direct.multi_draw = false;
+        pixels(&mut direct, &device, &queue, w, h);
+        let direct_px = pixels(&mut direct, &device, &queue, w, h);
+        assert_eq!(indirect_px, direct_px, "the same picture either way");
+        let direct_calls = count(&direct, true, "forward");
+        assert_eq!(
+            direct_calls,
+            draw_count(&direct, "forward"),
+            "a call per draw"
+        );
+        if with_feature {
+            assert!(calls < draws, "{calls} calls for {draws} draws");
+        } else {
+            eprintln!(
+                "the adapter has no INDIRECT_FIRST_INSTANCE: {calls} calls for {draws} draws"
+            );
+            assert_eq!(calls, direct_calls);
+        }
     }
 
     /// The plane test culls exactly what testing the eight corners culled.
