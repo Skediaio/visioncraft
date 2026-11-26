@@ -368,7 +368,13 @@ mod io {
     }
 
     pub async fn decode(bytes: Vec<u8>) -> Result<Rgba, String> {
-        let img = image::load_from_memory(&bytes).map_err(|e| e.to_string())?;
+        let mut img = image::load_from_memory(&bytes).map_err(|e| e.to_string())?;
+        // A JPEG's EXIF orientation (a phone's portrait shot is stored landscape and turned by
+        // its tag): the pixels come as the picture is displayed, in the size `image_size` reports.
+        let exif = visioncraft_core::underlay::image_orientation(&bytes);
+        if let Some(turn) = image::metadata::Orientation::from_exif(exif) {
+            img.apply_orientation(turn);
+        }
         let rgba = img.into_rgba8();
         Ok(Rgba::new(rgba.width(), rgba.height(), rgba.into_raw()))
     }
@@ -393,9 +399,11 @@ export async function vc_fetch(url) {
   if (!r.ok) throw new Error(r.status + ' ' + r.statusText);
   return new Uint8Array(await r.arrayBuffer());
 }
-// The browser decodes (off the main thread); the pixels come back through a canvas.
+// The browser decodes (off the main thread); the pixels come back through a canvas. A JPEG's
+// EXIF orientation is applied (`from-image`, also the browser's default; asked for so it stays),
+// so the pixels and their size are as the picture is displayed: what `image_size` reports.
 export async function vc_decode(bytes) {
-  const bmp = await createImageBitmap(new Blob([bytes]), { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
+  const bmp = await createImageBitmap(new Blob([bytes]), { premultiplyAlpha: 'none', colorSpaceConversion: 'none', imageOrientation: 'from-image' });
   const w = bmp.width, h = bmp.height;
   const c = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(w, h) : Object.assign(document.createElement('canvas'), { width: w, height: h });
   const g = c.getContext('2d', { willReadFrequently: true });
@@ -1283,6 +1291,95 @@ mod tests {
         assert_eq!(spec.file, "photos/a:b.jpg");
         assert!(super::parse_photo_path("materials/brick/basecolor.jpg").is_none());
         assert!(super::parse_photo_path("wallphoto:garbage").is_none());
+    }
+
+    /// A 4 x 2 JPEG (its left half red, its right half blue) with an EXIF orientation of
+    /// `value` spliced in behind its SOI, and the EXIF bytes (a TIFF header) the APP1 holds:
+    /// big-endian when `be`, little-endian otherwise.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn jpeg_with_orientation(value: u16, be: bool) -> (Vec<u8>, Vec<u8>) {
+        use image::ImageEncoder;
+        let mut px = Vec::new();
+        for _ in 0..2 {
+            for x in 0..4 {
+                px.extend(if x < 2 { [220, 30, 30] } else { [30, 30, 220] });
+            }
+        }
+        let mut encoded = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new(&mut encoded)
+            .write_image(&px, 4, 2, image::ExtendedColorType::Rgb8)
+            .unwrap();
+        assert!(encoded.starts_with(&[0xFF, 0xD8]));
+        // a TIFF header, IFD0 at 8 with the orientation tag (0x0112, a SHORT that comes once),
+        // and no next IFD
+        let mut tiff = if be {
+            b"MM\0\x2a\0\0\0\x08\0\x01\x01\x12\0\x03\0\0\0\x01".to_vec()
+        } else {
+            b"II\x2a\0\x08\0\0\0\x01\0\x12\x01\x03\0\x01\0\0\0".to_vec()
+        };
+        tiff.extend(if be {
+            value.to_be_bytes()
+        } else {
+            value.to_le_bytes()
+        });
+        tiff.extend([0; 6]);
+        let mut bytes = encoded[..2].to_vec();
+        bytes.extend([0xFF, 0xE1]);
+        bytes.extend(u16::try_from(tiff.len() + 8).unwrap().to_be_bytes());
+        bytes.extend(b"Exif\0\0");
+        bytes.extend(&tiff);
+        bytes.extend(&encoded[2..]);
+        (bytes, tiff)
+    }
+
+    /// A JPEG's pixels come as the picture is displayed: the core reads the EXIF orientation
+    /// (as the `image` crate's own reader does), `decode` turns the pixels by it, and the size
+    /// is the one the core's `image_size` reports.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn decode_turns_a_jpeg_as_its_exif_orientation_says() {
+        use visioncraft_core::underlay;
+        for be in [true, false] {
+            for value in 1..=8u16 {
+                let (bytes, tiff) = jpeg_with_orientation(value, be);
+                let expected = if (5..=8).contains(&value) {
+                    [2, 4]
+                } else {
+                    [4, 2]
+                };
+                assert_eq!(
+                    underlay::jpeg_orientation(&bytes),
+                    value as u8,
+                    "orientation {value}"
+                );
+                assert_eq!(
+                    underlay::image_size(&bytes),
+                    Ok(expected),
+                    "orientation {value}"
+                );
+                assert_eq!(
+                    image::metadata::Orientation::from_exif(value as u8),
+                    image::metadata::Orientation::from_exif_chunk(&tiff),
+                    "orientation {value}"
+                );
+                let img = pollster::block_on(super::io::decode(bytes)).unwrap();
+                assert_eq!([img.w, img.h], expected, "orientation {value}");
+                // 6 turns 90 degrees clockwise (the red left half comes on top), 8 the other way
+                if value == 6 || value == 8 {
+                    for y in 0..4u32 {
+                        for x in 0..2u32 {
+                            let p = &img.px[(y * 2 + x) as usize * 4..][..3];
+                            let red = (y < 2) == (value == 6);
+                            if red {
+                                assert!(p[0] > 150 && p[2] < 100, "({x}, {y}): {p:?}");
+                            } else {
+                                assert!(p[2] > 150 && p[0] < 100, "({x}, {y}): {p:?}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]
