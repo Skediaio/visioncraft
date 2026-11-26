@@ -50,7 +50,8 @@ same over MCP (`visioncraft-cli mcp`), JSON lines (`visioncraft-cli serve`) and 
   High, three at Ultra), the others reflect what is on screen (`screen_space`), or the sky cube
   (`environment`) when screen-space reflections are off; the sea without a pass always takes
   the sky. Surfaces at one height share a plane; the sea competes with the ponds for the
-  passes, ahead of a pond unless the pond scores 1.3 times its score.
+  passes, ahead of a pond unless the pond scores 1.3 times its score; whichever holds a pass
+  keeps it until the other scores 1.3 times its own for 10 frames.
   `ui.get` → `water` lists the last frame's visible surfaces in order of height, each
   `{item, part, material, level_m, tier}` (the renderer's numbers: `ItemId::index`,
   `MaterialId::index`; the sea is `{"surface": "sea", ...}`), and `quality.waterPlanes` is the

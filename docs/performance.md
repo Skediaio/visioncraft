@@ -156,7 +156,9 @@ by scenes with a river, ponds and canals at different heights, two to five in vi
   pond but one did before. The sea has no screen-space path: without a pass it falls back to
   the sky (`environment`), whatever the screen-space setting.
 - **No flicker.** A plane keeps its pass until a challenger scores 1.3 times its own for 10
-  consecutive frames.
+  consecutive frames. These are the plain scores, the sea's included: its preference is that
+  same 1.3 already, so a pond takes the sea's held pass at 1.3 times the sea's score (not
+  1.3 squared), and the sea a pond's at 1.3 times the pond's.
 - **Stats.** `RenderStats::water` lists each visible surface with its height and its tier
   (`planar`, `screen_space` or `environment`); over the control channel it is `water` in
   `ui.get` and in a render's `stats` (`view.render`, `visioncraft-cli render`).

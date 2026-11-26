@@ -22,7 +22,9 @@
 //!   1 + nearness (1 at the eye, 0.5 at 10 m, towards 0 far off). A near small pond outranks a
 //!   far lake of its size on screen; a lake several times larger still wins. The sea is
 //!   preferred: a pond takes its pass only when it scores [`KEEP_RATIO`] times the sea's, so a
-//!   garden pond does not routinely take a coast's only pass at Medium.
+//!   garden pond does not routinely take a coast's only pass at Medium. Once either holds the
+//!   pass the hysteresis compares plain scores, so the other needs [`KEEP_RATIO`] times its
+//!   score from either side.
 //! - **Tiers**: the best `budget` planes get a mirrored pass each ([`WaterTier::Planar`]), the
 //!   rest reflect the opaque scene of this frame ([`WaterTier::ScreenSpace`]) when screen-space
 //!   reflections are on, else the environment cube ([`WaterTier::Environment`]). The sea has
@@ -419,7 +421,9 @@ impl Ranking {
 
     /// The best `budget` planes get a pass, the sea's score counting [`KEEP_RATIO`] times. An
     /// incumbent outside that selection keeps its pass over the weakest newcomer until that one
-    /// scores [`KEEP_RATIO`] times its own for [`KEEP_FRAMES`] consecutive frames.
+    /// scores [`KEEP_RATIO`] times its own for [`KEEP_FRAMES`] consecutive frames: the plain
+    /// scores, so a pond takes the sea's held pass, and the sea a pond's, at [`KEEP_RATIO`]
+    /// times the other's score, as a pond takes it from a fresh ranking.
     fn assign(&mut self, n: usize, budget: u32, screen_space: bool) {
         let fallback = if screen_space {
             WaterTier::ScreenSpace
@@ -466,7 +470,9 @@ impl Ranking {
                 let Some(w) = weak else {
                     continue;
                 };
-                let clearly_better = worth(w) >= KEEP_RATIO * worth(i);
+                // Without the sea's preference: that is the ratio already, and counting it
+                // again would ask a pond for KEEP_RATIO squared times the sea's score.
+                let clearly_better = planes[w].score >= KEEP_RATIO * planes[i].score;
                 let streak = if clearly_better { streak + 1 } else { 0 };
                 streaks.push((key(planes[i].height), streak));
                 if streak >= KEEP_FRAMES {
@@ -1212,6 +1218,71 @@ mod tests {
             let planar = r.tiers.iter().position(|t| *t == WaterTier::Planar);
             assert_eq!(planar, Some(winner), "pond {pond}: {:?}", r.planes);
         }
+    }
+
+    #[test]
+    fn a_pond_takes_the_seas_held_pass_at_1_3_times_its_score_for_10_frames() {
+        // The sea scores 0.4 (as above); a pond at the eye twice its coverage.
+        let s = sea(0.0, 0.3, 20.0);
+        let mut r = Ranking::default();
+        assert_eq!(
+            rank(&mut r, &[s, surface(1.0, 0.1, 0.0)], 1, true),
+            [WaterTier::Planar, WaterTier::ScreenSpace]
+        );
+        // 1.275x the sea's: the sea keeps its pass, frame after frame.
+        for frame in 0..200 {
+            assert_eq!(
+                rank(&mut r, &[s, surface(1.0, 0.255, 0.0)], 1, true),
+                [WaterTier::Planar, WaterTier::ScreenSpace],
+                "frame {frame}"
+            );
+        }
+        // 1.35x: nine frames keep, the tenth consecutive frame swaps.
+        let pond = surface(1.0, 0.27, 0.0);
+        for frame in 1..10 {
+            assert_eq!(
+                rank(&mut r, &[s, pond], 1, true),
+                [WaterTier::Planar, WaterTier::ScreenSpace],
+                "frame {frame}"
+            );
+        }
+        assert_eq!(
+            rank(&mut r, &[s, pond], 1, true),
+            [WaterTier::ScreenSpace, WaterTier::Planar]
+        );
+    }
+
+    #[test]
+    fn the_sea_takes_a_ponds_held_pass_at_1_3_times_its_score_for_10_frames() {
+        let s = sea(0.0, 0.3, 20.0);
+        let mut r = Ranking::default();
+        // The pond scores 0.6, 1.5x the sea's 0.4: it takes the pass.
+        assert_eq!(
+            rank(&mut r, &[s, surface(1.0, 0.3, 0.0)], 1, true),
+            [WaterTier::ScreenSpace, WaterTier::Planar]
+        );
+        // The pond shrinks to 0.32: the sea scores 1.25x it, under the ratio, and the pond
+        // keeps its pass though a fresh ranking would give it to the sea.
+        for frame in 0..200 {
+            assert_eq!(
+                rank(&mut r, &[s, surface(1.0, 0.16, 0.0)], 1, true),
+                [WaterTier::ScreenSpace, WaterTier::Planar],
+                "frame {frame}"
+            );
+        }
+        // 0.3: the sea scores 1.33x, nine frames keep, the tenth swaps.
+        let pond = surface(1.0, 0.15, 0.0);
+        for frame in 1..10 {
+            assert_eq!(
+                rank(&mut r, &[s, pond], 1, true),
+                [WaterTier::ScreenSpace, WaterTier::Planar],
+                "frame {frame}"
+            );
+        }
+        assert_eq!(
+            rank(&mut r, &[s, pond], 1, true),
+            [WaterTier::Planar, WaterTier::ScreenSpace]
+        );
     }
 
     #[test]
