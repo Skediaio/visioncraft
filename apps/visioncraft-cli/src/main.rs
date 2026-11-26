@@ -126,7 +126,7 @@ Usage: visioncraft-cli render FILE --out PNG [--size WxH] [--viewpoint V]
                               [--white-balance WB] [--grade G]
                               [--sky-occlusion on|off]
                               [--quality low|medium|high|ultra|photo] [--samples N]
-                              [--shadow-filter hard|pcf4|pcf9|pcf16] [--shadow-radius M]
+                              [--shadow-filter hard|pcf4|pcf9|pcf16|pcss] [--shadow-radius M]
                               [--aperture F] [--focus M|auto|target] [--focus-point X,Y]
                               [--shutter S] [--vignette N] [--grain N] [--animation-s S]
 
@@ -162,12 +162,14 @@ Options:
   --quality Q     low, medium, high (default), ultra or photo (many frames averaged
                   at ULTRA: soft shadows, smooth edges; slower)
   --shadow-filter F  The sun's shadow filter for this picture over the preset's: hard (the
-                  sharpest edge), pcf4 or pcf9 (fixed grids a few shadow texels wide) or pcf16
-                  (a disk over --shadow-radius, never narrower than 1.5 shadow texels). Default
-                  the preset's; pcf9 and pcf16 run as pcf4 at quality low and medium
-  --shadow-radius M  The penumbra's radius in metres for this picture, 0 to 1: only pcf16
-                  spreads over it, so it needs --shadow-filter pcf16 or --quality ultra or
-                  photo. Never a hard edge. Default 0.03
+                  sharpest edge), pcf4 or pcf9 (fixed grids a few shadow texels wide), pcf16
+                  (a disk over --shadow-radius, never narrower than 1.5 shadow texels) or pcss
+                  (the same 16 taps over a penumbra that grows with the distance to the
+                  occluder: sharp at the contact, at most --shadow-radius). Default the
+                  preset's; pcf9, pcf16 and pcss run as pcf4 at quality low and medium
+  --shadow-radius M  The penumbra's radius in metres for this picture, 0 to 1: only pcf16 and
+                  pcss spread over it, so it needs --shadow-filter pcf16 or pcss, or --quality
+                  ultra or photo. Default 0.03, for pcss 0.15
 PHOTO_FLAGS
   --animation-s S The animation clock in seconds (wind, water). Default 0";
 

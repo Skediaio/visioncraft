@@ -551,7 +551,8 @@ fn photo_parameters_are_checked_before_rendering() {
 
 /// `view.render`'s `shadow_filter` and `shadow_radius_m` override the preset's sun shadow filter
 /// for that picture: a wrong name or a radius outside 0..1 is refused before rendering, a good
-/// one goes on to the renderer.
+/// one goes on to the renderer. `pcss` is one of the names, and takes the radius as its largest
+/// penumbra.
 #[test]
 fn shadow_filter_parameters_are_checked_before_rendering() {
     let mut h = Headless::new(Access::default());
@@ -563,7 +564,7 @@ fn shadow_filter_parameters_are_checked_before_rendering() {
     };
     assert_eq!(
         error(&mut h, json!({"shadow_filter": "pcf7"})),
-        "view.render: `shadow_filter` must be hard, pcf4, pcf9 or pcf16, got `pcf7`"
+        "view.render: `shadow_filter` must be hard, pcf4, pcf9, pcf16 or pcss, got `pcf7`"
     );
     assert!(error(&mut h, json!({"shadow_filter": "soft"})).contains("`shadow_filter`"));
     assert_eq!(
@@ -571,10 +572,9 @@ fn shadow_filter_parameters_are_checked_before_rendering() {
         "view.render: `shadow_radius_m` must be from 0 to 1"
     );
     assert!(error(&mut h, json!({"shadow_radius_m": -0.1})).contains("`shadow_radius_m`"));
-    // A radius is only the 16-tap disk's to spread over: with hard, pcf4 or pcf9 it is refused,
-    // and alone only ultra and photo filter with 16 taps (low, medium and high do not).
-    let needs_disk =
-        "view.render: `shadow_radius_m` needs a 16-tap filter: quality ultra or photo, or shadow_filter pcf16";
+    // A radius is only the 16-tap filters' to spread over: with hard, pcf4 or pcf9 it is
+    // refused, and alone only ultra and photo filter with 16 taps (low, medium and high do not).
+    let needs_disk = "view.render: `shadow_radius_m` needs a 16-tap filter: quality ultra or photo, or shadow_filter pcf16 or pcss";
     for params in [
         json!({"shadow_radius_m": 0.2}),
         json!({"quality": "high", "shadow_radius_m": 0.2}),
@@ -592,6 +592,10 @@ fn shadow_filter_parameters_are_checked_before_rendering() {
     for params in [
         json!({"shadow_filter": "hard"}),
         json!({"shadow_filter": "pcf16", "shadow_radius_m": 0.2}),
+        json!({"shadow_filter": "pcss"}),
+        json!({"shadow_filter": "pcss", "shadow_radius_m": 0.2}),
+        json!({"shadow_filter": "pcss", "shadow_radius_m": 0}),
+        json!({"quality": "low", "shadow_filter": "pcss"}),
         json!({"quality": "photo", "shadow_radius_m": 0.0}),
         json!({"quality": "ultra", "shadow_radius_m": 0.2}),
         json!({"quality": "low", "shadow_filter": "pcf9"}),

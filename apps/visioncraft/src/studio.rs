@@ -6,12 +6,14 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use visioncraft_automation::PhotoRequest;
+use visioncraft_automation::{PhotoRequest, PictureShadowFilter};
 use visioncraft_core::{
     Asset, Generator, ImportedModel, Material, ModelKind, Project, Session, Shape, Site, SunTime,
     catalog::Category, import_3dcraft, import_obj, sun::sun_position,
 };
-use visioncraft_render::{LineVertex, Quality, Renderer, ShadowFilter, Sun};
+use visioncraft_render::{
+    DEFAULT_PCSS_MAX_RADIUS_M, LineVertex, Quality, Renderer, ShadowFilter, Sun,
+};
 
 use crate::camera::{Camera, View, ray_through};
 use crate::scene::{Loaded, Pick, Scene, box_outline, light_markers, model_matrix};
@@ -1900,23 +1902,44 @@ impl Studio {
     }
 
     /// `view.render`'s shadow filter over the preset's (`None`: the preset's again) for the
-    /// pictures taken from now on: `taps` comparison taps (1: the hard edge; 4, 9 or 16:
-    /// percentage-closer filtering; `None`: the preset's taps) and `radius_m`, the penumbra's
-    /// radius in the world (`None`: the preset's radius; only the 16-tap disk spreads over it,
-    /// `Hard` has none).
-    pub fn set_shadow_filter(&mut self, taps: Option<u32>, radius_m: Option<f32>) {
+    /// pictures taken from now on: `filter` is the command's (`PictureShadowFilter`, mapped
+    /// here to the renderer's `ShadowFilter`) and `radius_m` the penumbra's radius in the world
+    /// (`None`: the preset's radius; PCSS without one takes its own default,
+    /// `DEFAULT_PCSS_MAX_RADIUS_M`). A radius alone goes with the preset's filter: the 16-tap
+    /// disk's radius, PCSS's largest. Only those two spread over the radius; `Hard` and the
+    /// grids have none.
+    pub fn set_shadow_filter(
+        &mut self,
+        filter: Option<PictureShadowFilter>,
+        radius_m: Option<f32>,
+    ) {
         let preset = if self.quality_auto {
             self.auto_quality
         } else {
             Quality::PRESETS[self.quality].1
         };
-        self.shadow_filter = match (taps, radius_m) {
+        self.shadow_filter = match (filter, radius_m) {
             (None, None) => None,
-            (Some(1), _) => Some(ShadowFilter::Hard),
-            (taps, radius_m) => Some(
-                ShadowFilter::Pcf {
-                    taps: taps.unwrap_or_else(|| preset.shadow_filter.taps()),
-                    radius_m: radius_m.unwrap_or_else(|| preset.shadow_filter.radius_m()),
+            (None, Some(radius_m)) => Some(
+                match preset.shadow_filter {
+                    ShadowFilter::Hard => ShadowFilter::Hard,
+                    ShadowFilter::Pcf { taps, .. } => ShadowFilter::Pcf { taps, radius_m },
+                    ShadowFilter::Pcss { .. } => ShadowFilter::Pcss {
+                        max_radius_m: radius_m,
+                    },
+                }
+                .sanitized(),
+            ),
+            (Some(filter), radius_m) => Some(
+                match filter {
+                    PictureShadowFilter::Hard => ShadowFilter::Hard,
+                    PictureShadowFilter::Pcf { taps } => ShadowFilter::Pcf {
+                        taps,
+                        radius_m: radius_m.unwrap_or_else(|| preset.shadow_filter.radius_m()),
+                    },
+                    PictureShadowFilter::Pcss => ShadowFilter::Pcss {
+                        max_radius_m: radius_m.unwrap_or(DEFAULT_PCSS_MAX_RADIUS_M),
+                    },
                 }
                 .sanitized(),
             ),

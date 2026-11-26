@@ -57,6 +57,20 @@ pub trait Pictures {
     ) -> Result<Rendered, String>;
 }
 
+/// `view.render`'s `shadow_filter`: the sun's shadow filter of one picture, over the preset's.
+/// This crate does not depend on visioncraft-render, whose `ShadowFilter` the app maps it to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PictureShadowFilter {
+    /// One comparison tap: the hard edge.
+    Hard,
+    /// Percentage-closer filtering: 4 taps (a 2x2 grid), 9 (a 3x3 grid) or 16 (a disk over
+    /// [`RenderRequest::shadow_radius_m`]).
+    Pcf { taps: u32 },
+    /// Percentage-closer soft shadows: 16 taps, a penumbra that grows with the receiver's
+    /// distance to its occluder, at most [`RenderRequest::shadow_radius_m`].
+    Pcss,
+}
+
 /// What `view.render` asks for. The camera is the viewpoint's, else `camera`, else the whole
 /// scene framed from the default orbit.
 #[derive(Clone, Debug, PartialEq)]
@@ -81,13 +95,12 @@ pub struct RenderRequest {
     /// A second grade mixed in: the grade and how much of it, 0..1 (the project's grade is the
     /// first).
     pub grade_mix: Option<(visioncraft_core::Grade, f32)>,
-    /// `view.render`'s `shadow_filter`, over the preset's sun shadow filter for this picture:
-    /// the comparison taps (1: one hardware tap, the hard edge; 4, 9 or 16: percentage-closer
-    /// filtering); `None`: the preset's.
-    pub shadow_taps: Option<u32>,
+    /// `view.render`'s `shadow_filter`, over the preset's sun shadow filter for this picture
+    /// ([`PictureShadowFilter`]); `None`: the preset's.
+    pub shadow_filter: Option<PictureShadowFilter>,
     /// `view.render`'s `shadow_radius_m`: the penumbra's radius in the world (m, 0..1) over the
-    /// preset's; `None`: the presets'. Only a 16-tap filter spreads over it (the command refuses
-    /// it together with hard, pcf4 or pcf9).
+    /// preset's; `None`: the preset's (PCSS: its own default). Only the 16-tap filters spread
+    /// over it (the command refuses it together with hard, pcf4 or pcf9).
     pub shadow_radius_m: Option<f32>,
     /// The project's image files (plan underlays, wall photos) by their `file` (see
     /// [`HostState::images`]).

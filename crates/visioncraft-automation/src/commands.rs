@@ -5,7 +5,7 @@
 use crate::MAX_BATCH_STEPS;
 use crate::docs::{CommandDoc, ParamDoc, from_spec};
 use crate::fields::{Fields, describe, shorten};
-use crate::host::{Host, PhotoRequest, RenderRequest, missing_json};
+use crate::host::{Host, PhotoRequest, PictureShadowFilter, RenderRequest, missing_json};
 use crate::inspect::{self, Verbosity};
 use serde_json::{Map, Value, json};
 use std::path::{Path, PathBuf};
@@ -986,8 +986,8 @@ pub fn host_docs() -> Vec<CommandDoc> {
                     None,
                     false,
                     Some("the preset's"),
-                    &["hard", "pcf4", "pcf9", "pcf16"],
-                    "The sun's shadow filter for this picture, over the preset's: hard is one comparison tap (the sharpest edge); pcf4 and pcf9 are fixed 2x2 and 3x3 grids a few shadow texels wide; pcf16 spreads 16 taps (a disk, never narrower than 1.5 shadow texels) over `shadow_radius_m` metres in the world, the same penumbra in every cascade. At quality low and medium only the 1- and 4-tap filters are compiled: pcf9 and pcf16 run as pcf4 there",
+                    &["hard", "pcf4", "pcf9", "pcf16", "pcss"],
+                    "The sun's shadow filter for this picture, over the preset's: hard is one comparison tap (the sharpest edge); pcf4 and pcf9 are fixed 2x2 and 3x3 grids a few shadow texels wide; pcf16 spreads 16 taps (a disk, never narrower than 1.5 shadow texels) over `shadow_radius_m` metres in the world, the same penumbra in every cascade; pcss (percentage-closer soft shadows) spreads the same 16 taps over a penumbra that grows with the distance to the occluder, as a real sun's: sharp where a caster meets its shadow, at most `shadow_radius_m` metres (0.15 unless given). At quality low and medium only the 1- and 4-tap filters are compiled: pcf9, pcf16 and pcss run as pcf4 there",
                 ),
                 p(
                     "shadow_radius_m",
@@ -996,7 +996,7 @@ pub fn host_docs() -> Vec<CommandDoc> {
                     false,
                     Some("0.03"),
                     &[],
-                    "The penumbra's radius in the world for this picture, 0 to 1, over the preset's: only the 16-tap disk spreads over it, so it needs a 16-tap filter: `shadow_filter` pcf16, or alone a preset that filters with 16 taps (ultra, photo); with anything else it is an error. The disk never gets narrower than 1.5 shadow texels, so 0 is not a hard edge (that is `shadow_filter` hard), and beyond 6 texels of a cascade the penumbra stops growing there",
+                    "The penumbra's radius in the world for this picture, 0 to 1, over the preset's (pcss: its largest): only the 16-tap filters spread over it, so it needs one: `shadow_filter` pcf16 or pcss, or alone a preset that filters with 16 taps (ultra, photo); with anything else it is an error. The pcf16 disk never gets narrower than 1.5 shadow texels, so 0 is not a hard edge (that is `shadow_filter` hard), and beyond 6 texels of a cascade the penumbra stops growing there",
                 ),
                 p(
                     "samples",
@@ -2296,16 +2296,17 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
         ));
     }
     // The sun's shadow filter over the preset's, for this picture only.
-    let shadow_taps = match a.str("shadow_filter")? {
+    let shadow_filter = match a.str("shadow_filter")? {
         None => None,
         Some(name) => Some(match name {
-            "hard" => 1,
-            "pcf4" => 4,
-            "pcf9" => 9,
-            "pcf16" => 16,
+            "hard" => PictureShadowFilter::Hard,
+            "pcf4" => PictureShadowFilter::Pcf { taps: 4 },
+            "pcf9" => PictureShadowFilter::Pcf { taps: 9 },
+            "pcf16" => PictureShadowFilter::Pcf { taps: 16 },
+            "pcss" => PictureShadowFilter::Pcss,
             _ => {
                 return Err(format!(
-                    "{id}: `shadow_filter` must be hard, pcf4, pcf9 or pcf16, got `{}`",
+                    "{id}: `shadow_filter` must be hard, pcf4, pcf9, pcf16 or pcss, got `{}`",
                     shorten(name)
                 ));
             }
@@ -2315,17 +2316,18 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
     if shadow_radius_m.is_some_and(|r| !(0.0..=1.0).contains(&r)) {
         return Err(format!("{id}: `shadow_radius_m` must be from 0 to 1"));
     }
-    // Only the 16-tap disk spreads over a radius, so it needs one: `shadow_filter` pcf16, or
-    // alone the preset's own filter, which only ULTRA's is (and so photo's; a preset is
+    // Only the 16-tap filters spread over a radius, so they need one: `shadow_filter` pcf16 or
+    // pcss, or alone the preset's own filter, which only ULTRA's is (and so photo's; a preset is
     // `Quality` in visioncraft-render, which this crate does not see).
     if shadow_radius_m.is_some()
-        && !match shadow_taps {
-            Some(taps) => taps == 16,
+        && !match shadow_filter {
+            Some(PictureShadowFilter::Pcf { taps: 16 }) | Some(PictureShadowFilter::Pcss) => true,
+            Some(_) => false,
             None => matches!(quality, "ultra" | "photo"),
         }
     {
         return Err(format!(
-            "{id}: `shadow_radius_m` needs a 16-tap filter: quality ultra or photo, or shadow_filter pcf16"
+            "{id}: `shadow_radius_m` needs a 16-tap filter: quality ultra or photo, or shadow_filter pcf16 or pcss"
         ));
     }
     let mut project = host.session().project().clone();
@@ -2577,7 +2579,7 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
         lamp_level,
         exposure_offset_ev,
         grade_mix,
-        shadow_taps,
+        shadow_filter,
         shadow_radius_m: shadow_radius_m.map(|r| r as f32),
         images: {
             let state = host.state();

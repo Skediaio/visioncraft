@@ -412,7 +412,7 @@ impl Host for Bound<'_, '_> {
             .position(|(n, _)| n.eq_ignore_ascii_case(&request.quality))
             .unwrap_or(if request.photo.is_some() { 3 } else { 2 });
         h.studio
-            .set_shadow_filter(request.shadow_taps, request.shadow_radius_m);
+            .set_shadow_filter(request.shadow_filter, request.shadow_radius_m);
         let before = h.studio.problems.len();
         let png = match &request.photo {
             Some(p) => {

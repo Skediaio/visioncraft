@@ -35,7 +35,8 @@ pub mod rpc;
 mod sheet;
 
 pub use host::{
-    Access, Headless, Host, HostState, LoadedModel, PhotoRequest, Pictures, RenderRequest, Rendered,
+    Access, Headless, Host, HostState, LoadedModel, PhotoRequest, PictureShadowFilter, Pictures,
+    RenderRequest, Rendered,
 };
 pub use inspect::{
     LightCheckQuery, SkyVisJob, SunGrid, SunGridJob, SunGridQuery, light_check, sky_scene,
