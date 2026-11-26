@@ -179,17 +179,29 @@ pub(crate) fn quantities_json(
     layer: Option<&str>,
 ) -> Result<Value, String> {
     let p = session.project();
-    let owners = owners(p, &models_of(state));
+    with_host_scene(p, state, |scene| {
+        visioncraft_core::quantities::quantities_in(
+            p,
+            &visioncraft_core::quantities::Filter { ids, layer },
+            Some(scene),
+        )
+    })
+}
+
+/// The scene a host counts plants in (the renderer's building rule, the linked models), handed
+/// to `f`: shared by `query.quantities` and `query.bloom_calendar`.
+fn with_host_scene<R>(
+    p: &Project,
+    state: &HostState,
+    f: impl FnOnce(&visioncraft_core::quantities::Scene) -> R,
+) -> R {
     let models = models_of(state);
+    let owners = owners(p, &models);
     let scene = visioncraft_core::quantities::Scene {
         models: &models,
         placements: &|g| placements(p, &owners, &state.catalog.assets, g),
     };
-    visioncraft_core::quantities::quantities_in(
-        p,
-        &visioncraft_core::quantities::Filter { ids, layer },
-        Some(&scene),
-    )
+    f(&scene)
 }
 
 /// `query.bloom_calendar` as the host answers it: the core's calendar with the plants counted
@@ -202,28 +214,27 @@ pub(crate) fn bloom_calendar_json(
     layer: Option<&str>,
 ) -> Result<Value, String> {
     let p = session.project();
-    let owners = owners(p, &models_of(state));
-    let models = models_of(state);
-    let scene = visioncraft_core::quantities::Scene {
-        models: &models,
-        placements: &|g| placements(p, &owners, &state.catalog.assets, g),
-    };
     let only = planting.map(|id| [id.to_string()]);
-    visioncraft_core::bloom::calendar(
-        p,
-        &visioncraft_core::quantities::Filter {
-            ids: only.as_ref().map(|ids| ids.as_slice()),
-            layer,
-        },
-        Some(&scene),
-        &|asset| bloom_of(p, asset),
-    )
+    with_host_scene(p, state, |scene| {
+        visioncraft_core::bloom::calendar(
+            p,
+            &visioncraft_core::quantities::Filter {
+                ids: only.as_ref().map(|ids| ids.as_slice()),
+                layer,
+            },
+            Some(scene),
+            &|asset| bloom_of(p, asset),
+        )
+    })
 }
 
 /// When `asset` flowers, in what colour and under what name: a built-in species (`flora:`)
 /// from the library, a custom species of the project from the parameters it stores (a
 /// `PlantParams` as JSON, as the app draws it); `None` for anything else, which the calendar
-/// lists as unknown.
+/// lists as unknown. The two sources differ on purpose: a built-in species gives its botanical
+/// bloom months (`Species::bloom_months`) even when it has no flower parameters to draw, while a
+/// custom species only has `PlantParams::bloom_months`, which the library leaves empty for a
+/// species without flowers; so an unedited custom copy of such a species is `unknown`.
 fn bloom_of(p: &Project, asset: &str) -> Option<visioncraft_core::bloom::Bloom> {
     use visioncraft_core::bloom::Bloom;
     if let Some(id) = asset.strip_prefix("flora:") {

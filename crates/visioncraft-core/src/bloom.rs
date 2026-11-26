@@ -43,8 +43,9 @@ fn species_id(row: &Value) -> &str {
 }
 
 /// The bloom calendar of the plantings `filter` selects: `{hemisphere, months, species, gaps,
-/// unknown}`. Their plants are counted as [`crate::quantities::quantities_in`] counts them
-/// (`scene`: as the host draws them); lights and objects a planting places are not species and
+/// unknown}`. Their plants are counted per asset as [`crate::quantities::quantities_in`] counts
+/// its `assets` (`scene`: as the host draws them); unlike its `plants` total, which counts only
+/// `flora:` species, the project's own species are included; lights and objects a planting places are not species and
 /// are left out. A species flowers in a month when that month is in its bloom months, shifted
 /// for the site's hemisphere ([`shift_month`]); `bloom` says when a species flowers, and a
 /// species it knows nothing about, or whose data holds no month of the year, is `unknown`.
