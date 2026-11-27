@@ -28,6 +28,36 @@ pub struct Placement {
     pub layer: Option<u32>,
 }
 
+impl Placement {
+    /// The matrix a plant is drawn with: it scales, then rotates about +Y, then translates
+    /// (column-major, 16 numbers). The window's instance matrix (`plant_scene::group_numbered`),
+    /// before the years shown scale it; a moving part's world matrix is this times its
+    /// model-space matrix.
+    pub fn matrix(&self) -> crate::keyframes::Matrix {
+        let (s, c) = self.rotation_y_deg.to_radians().sin_cos();
+        let k = self.scale;
+        let [x, y, z] = self.position;
+        [
+            c * k,
+            0.0,
+            -s * k,
+            0.0,
+            0.0,
+            k,
+            0.0,
+            0.0,
+            s * k,
+            0.0,
+            c * k,
+            0.0,
+            x,
+            y,
+            z,
+            1.0,
+        ]
+    }
+}
+
 /// What is changed about one plant of a generator (see [`Generator::overrides`]).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -2091,6 +2121,34 @@ mod tests {
 
     fn flat(_: f32, _: f32) -> Option<f32> {
         None
+    }
+
+    #[test]
+    fn a_placement_matrix_scales_rotates_then_moves() {
+        let p = Placement {
+            asset: "oak".into(),
+            position: [3.0, 0.2, -1.5],
+            rotation_y_deg: 90.0,
+            scale: 2.0,
+            variant: 0,
+            layer: None,
+        };
+        let m = p.matrix();
+        let at = |v: [f32; 3]| {
+            std::array::from_fn(|r| (0..3).map(|k| m[k * 4 + r] * v[k]).sum::<f32>() + m[12 + r])
+        };
+        let near = |a: [f32; 3], b: [f32; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-6);
+        // A quarter turn counter-clockwise seen from above (+x goes to -z, +z to +x), twice as
+        // big, then moved.
+        for (v, want) in [
+            ([1.0, 0.0, 0.0], [3.0, 0.2, -3.5]),
+            ([0.0, 0.0, 1.0], [5.0, 0.2, -1.5]),
+            ([0.0, 1.0, 0.0], [3.0, 2.2, -1.5]),
+            ([0.0, 0.0, 0.0], [3.0, 0.2, -1.5]),
+        ] {
+            assert!(near(at(v), want), "{v:?} goes to {:?}", at(v));
+        }
+        assert_eq!((m[3], m[7], m[11], m[15]), (0.0, 0.0, 0.0, 1.0));
     }
 
     fn area(outline: Vec<[f32; 2]>, density: f32) -> AreaScatter {

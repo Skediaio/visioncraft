@@ -1125,7 +1125,7 @@ mod tests {
         let r = visioncraft_automation::commands::execute(
             &mut h,
             "query.part_pose",
-            &json!({"object": "g1", "t": 40.5}),
+            &json!({"object": "g1", "t": 40.5, "space": "model"}),
         )
         .unwrap();
         let rig = crate::gltf_load::parse(&bytes).unwrap().rig().unwrap();

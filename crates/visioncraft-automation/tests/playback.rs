@@ -131,9 +131,14 @@ fn run(h: &mut Headless, command: &str, params: Value) -> Result<Value, String> 
     commands::execute(h, command, &params)
 }
 
-/// The pose `query.part_pose` answers for the hinge (`g1`), at clock time `t`.
+/// The pose `query.part_pose` answers for the hinge (`g1`) in model space, at clock time `t`.
 fn lid(h: &mut Headless, t: f64) -> Matrix {
-    let r = run(h, "query.part_pose", json!({"object": "g1#0", "t": t})).unwrap();
+    let r = run(
+        h,
+        "query.part_pose",
+        json!({"object": "g1#0", "t": t, "space": "model"}),
+    )
+    .unwrap();
     let m: Vec<f32> = serde_json::from_value(r["plants"][0]["parts"][0].clone()).unwrap();
     std::array::from_fn(|i| m[i])
 }
@@ -435,7 +440,12 @@ fn a_whole_planting_and_one_plant_of_it() {
         (r["plant"].clone(), r["plants"].clone()),
         (json!(1), json!(1))
     );
-    let r = run(&mut h, "query.part_pose", json!({"object": "g3", "t": 0.5})).unwrap();
+    let r = run(
+        &mut h,
+        "query.part_pose",
+        json!({"object": "g3", "t": 0.5, "space": "model"}),
+    )
+    .unwrap();
     let plants = r["plants"].as_array().unwrap();
     assert_eq!(plants.len(), 2);
     assert_eq!(
@@ -477,6 +487,237 @@ fn a_whole_planting_and_one_plant_of_it() {
     .unwrap();
     assert_eq!(r["stopped"], json!(1));
     assert_eq!(h.state.playback.plays().len(), 1);
+}
+
+/// The matrix of a placement by hand, as the window draws a plant with it: scale, then
+/// rotation about +Y, then translation (column-major).
+fn placement_at(p: [f32; 3], rotation_y_deg: f32, scale: f32) -> Matrix {
+    let (s, c) = rotation_y_deg.to_radians().sin_cos();
+    let k = scale;
+    [
+        c * k,
+        0.0,
+        -s * k,
+        0.0,
+        0.0,
+        k,
+        0.0,
+        0.0,
+        s * k,
+        0.0,
+        c * k,
+        0.0,
+        p[0],
+        p[1],
+        p[2],
+        1.0,
+    ]
+}
+
+/// `a` after `b` (both column-major).
+fn times(a: &Matrix, b: &Matrix) -> Matrix {
+    std::array::from_fn(|i| {
+        let (col, row) = (i / 4, i % 4);
+        (0..4).map(|k| a[k * 4 + row] * b[col * 4 + k]).sum()
+    })
+}
+
+fn matrix(value: &Value) -> Matrix {
+    serde_json::from_value(value.clone()).unwrap()
+}
+
+/// A hinge (`user:uo1`) as `g3`, turned a quarter, twice as big, 3 m east and 20 cm up.
+fn turned(h: &mut Headless) {
+    h.session
+        .run(
+            "planting.add_single",
+            json!({"name": "Turned", "asset": "user:uo1", "position": [3.0, 0.2, -1.5],
+                "rotation_y_deg": 90.0, "scale": 2.0}),
+        )
+        .unwrap();
+}
+
+/// `space` (the default, `world`) answers every part as the window draws it: the plant's
+/// placement (scale, then Y rotation, then translation) times the model-space pose; `model` is
+/// the pose on its own. Each plant tells its placement, so a caller can compose or invert it.
+#[test]
+fn world_space_is_the_placement_times_the_model_pose() {
+    let mut h = host();
+    turned(&mut h);
+    run(
+        &mut h,
+        "model.play_clip",
+        json!({"object": "g3", "clip": "swing", "start_s": 0}),
+    )
+    .unwrap();
+    let placement = placement_at([3.0, 0.2, -1.5], 90.0, 2.0);
+    let model = by_hand(0, 0.0, 0.5, false);
+    let world = times(&placement, &model);
+    assert_ne!(world, model, "the placement is not the identity");
+    // The default is world space: as drawn, not the model-space pose.
+    let r = run(&mut h, "query.part_pose", json!({"object": "g3", "t": 0.5})).unwrap();
+    let plant = &r["plants"][0];
+    assert_eq!(
+        (plant["plant"].clone(), plant["asset"].clone()),
+        (json!(0), json!("user:uo1"))
+    );
+    assert!(
+        near(matrix(&plant["parts"][0]), world),
+        "world {:?} vs the pose on its own {model:?}",
+        plant["parts"][0]
+    );
+    assert_eq!(r["space"], json!("world"));
+    assert!(near(matrix(&plant["placement"]), placement));
+    // Said in as many words: the same.
+    let said = run(
+        &mut h,
+        "query.part_pose",
+        json!({"object": "g3", "t": 0.5, "space": "world"}),
+    )
+    .unwrap();
+    assert_eq!(said["plants"][0]["parts"][0], plant["parts"][0]);
+    // Model space: the pose on its own, as before; the placement is there too.
+    let r = run(
+        &mut h,
+        "query.part_pose",
+        json!({"object": "g3", "t": 0.5, "space": "model"}),
+    )
+    .unwrap();
+    assert_eq!(r["space"], json!("model"));
+    assert_eq!(r["plants"][0]["parts"][0], json!(model));
+    assert!(near(matrix(&r["plants"][0]["placement"]), placement));
+    // And the one composes into the other.
+    assert!(near(
+        times(
+            &matrix(&r["plants"][0]["placement"]),
+            &matrix(&r["plants"][0]["parts"][0])
+        ),
+        world
+    ));
+}
+
+/// With years after planting shown, the window scales a model to its size then: so does the
+/// world pose (`model` stays the pose on its own).
+#[test]
+fn with_years_shown_the_world_pose_is_scaled_as_the_window_draws_it() {
+    let mut h = host();
+    turned(&mut h);
+    run(&mut h, "view.set", json!({"years": 1})).unwrap();
+    run(
+        &mut h,
+        "model.play_clip",
+        json!({"object": "g3", "clip": "swing", "start_s": 0}),
+    )
+    .unwrap();
+    // The hinge is 1 m by 3 m (`object.add`): a plant that size, a year after planting, as a
+    // fraction of its full height.
+    let growth = visioncraft_core::growth::growth_of("user:uo1", Some((1.0, 3.0)));
+    let k = growth.size(growth.planted_age_years + 1.0).height;
+    assert!((0.1..0.99).contains(&k), "{k}");
+    let placement = placement_at([3.0, 0.2, -1.5], 90.0, 2.0 * k);
+    let model = by_hand(0, 0.0, 0.5, false);
+    let r = run(&mut h, "query.part_pose", json!({"object": "g3", "t": 0.5})).unwrap();
+    assert!(near(matrix(&r["plants"][0]["placement"]), placement));
+    assert!(near(
+        matrix(&r["plants"][0]["parts"][0]),
+        times(&placement, &model)
+    ));
+    let r = run(
+        &mut h,
+        "query.part_pose",
+        json!({"object": "g3", "t": 0.5, "space": "model"}),
+    )
+    .unwrap();
+    assert_eq!(r["plants"][0]["parts"][0], json!(model));
+}
+
+/// Only the plants the window draws are reached: one under the sea is left out, the other
+/// keeps its number, and naming the one under the sea is an error that says so.
+#[test]
+fn a_plant_under_the_sea_is_not_reached() {
+    let mut h = host();
+    // Two hinges close together (`g3`): where they stand is the generator's own.
+    h.session
+        .run(
+            "planting.add_cluster",
+            json!({"name": "Hinges", "center": [8, 0], "radius_m": 1.0, "count": 2, "seed": 4,
+                "asset_palette": [{"asset": "user:uo1", "weight": 1.0}]}),
+        )
+        .unwrap();
+    let g3 = h
+        .session
+        .project()
+        .generators
+        .iter()
+        .find(|g| g.id() == "g3")
+        .cloned()
+        .unwrap();
+    let ground = |_: f32, _: f32| Some(0.0f32);
+    let numbered = visioncraft_core::planting::evaluate_numbered(&g3, &ground).0;
+    assert_eq!(
+        numbered.iter().map(|(n, _)| *n).collect::<Vec<_>>(),
+        vec![0, 1]
+    );
+    // A 3 m wide lake up to the line between the two of them from the west: half a metre deep
+    // over plant 0, dry land where plant 1 stands.
+    let (a, b) = (numbered[0].1.position, numbered[1].1.position);
+    assert!(
+        b[0] - a[0] > 0.05,
+        "plant 1 is east of plant 0: {a:?} {b:?}"
+    );
+    let edge = (a[0] + b[0]) / 2.0;
+    run(
+        &mut h,
+        "water.set_sea",
+        json!({"level": 0.5, "outline": [[edge - 3.0, -60.0], [edge, -60.0], [edge, 60.0], [edge - 3.0, 60.0]]}),
+    )
+    .unwrap();
+    // The planting: plant 1 alone, under its own number.
+    let r = run(&mut h, "query.part_pose", json!({"object": "g3"})).unwrap();
+    assert_eq!(
+        r["plants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["plant"].clone())
+            .collect::<Vec<_>>(),
+        vec![json!(1)],
+        "{r}"
+    );
+    // Plant 0, named: an error that says why, wherever it is named.
+    for (command, params) in [
+        ("query.part_pose", json!({"object": "g3#0"})),
+        ("model.play_clip", json!({"object": "g3#0", "clip": 0})),
+        ("model.stop_clip", json!({"object": "g3#0"})),
+    ] {
+        let e = run(&mut h, command, params).unwrap_err();
+        assert!(
+            e.contains("plant 0 of planting `g3` is not drawn: it is under the sea"),
+            "{command}: {e}"
+        );
+    }
+    // Without the sea, both.
+    run(&mut h, "water.remove_sea", json!({})).unwrap();
+    let r = run(&mut h, "query.part_pose", json!({"object": "g3"})).unwrap();
+    assert_eq!(r["plants"].as_array().unwrap().len(), 2);
+}
+
+/// `space` is `world` or `model`: anything else is an error that names both.
+#[test]
+fn a_bad_space_is_an_error() {
+    let mut h = host();
+    for bad in [json!("mars"), json!(1), json!(true)] {
+        let e = run(
+            &mut h,
+            "query.part_pose",
+            json!({"object": "g1", "space": bad}),
+        )
+        .unwrap_err();
+        assert!(
+            e.contains("`space` must be `world` or `model`"),
+            "{bad}: {e}"
+        );
+    }
 }
 
 /// Stopping a planting stops every play on it, those on one of its objects too; stopping one
@@ -1115,8 +1356,8 @@ fn the_docs_list_the_commands() {
         ),
         (
             "query.part_pose",
-            vec!["object", "t"],
-            "{object, t, plants: [{plant, asset, posed, clips, parts: [[16 numbers, column-major], ...]}]}",
+            vec!["object", "t", "space"],
+            "{object, t, space, plants: [{plant, asset, placement, posed, clips, parts: [[16 numbers, column-major], ...]}]}",
         ),
         (
             "effect.flash",

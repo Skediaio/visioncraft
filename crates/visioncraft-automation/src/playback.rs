@@ -7,11 +7,11 @@ use crate::host::Host;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
-use visioncraft_core::keyframes::Sampler;
-use visioncraft_core::planting::{self, Generator};
+use visioncraft_core::keyframes::{Matrix, Sampler, mul};
+use visioncraft_core::planting::Generator;
 use visioncraft_core::{
-    Animation, ClipTarget, Flash, FlashDrop, Life, MAX_FLASHES, MAX_STORED_FLASHES, Played,
-    Project, Spot, clip_index,
+    Animation, ClipTarget, Flash, FlashDrop, Life, MAX_FLASHES, MAX_STORED_FLASHES, Played, Spot,
+    clip_index,
 };
 
 /// Side of a flash's glowing quad unless given (m).
@@ -54,16 +54,21 @@ fn target(id: &str, object: &str) -> Result<ClipTarget, String> {
     ClipTarget::parse(object).map_err(|e| format!("{id}: `object`: {e}"))
 }
 
-/// A plant a command reaches: its number in its planting and its asset.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+/// A plant a command reaches: its number in its planting, its asset, and the matrix the window
+/// draws it with (a moving part's world matrix is this times its model-space matrix).
+#[derive(Clone, Debug, PartialEq)]
 struct Plant {
     number: u32,
     asset: String,
+    matrix: Matrix,
 }
 
-/// The plants `target` reaches, in order: a plant taken out is missing, the others keep their
-/// numbers (`planting.replace_placement`'s counting).
-fn plants(project: &Project, id: &str, target: &ClipTarget) -> Result<Vec<Plant>, String> {
+/// The plants `target` reaches, in order, as the window draws them: what the building rule and
+/// the sea leave out is missing, the others keep their numbers (`planting.replace_placement`'s
+/// counting).
+fn plants(host: &mut dyn Host, id: &str, target: &ClipTarget) -> Result<Vec<Plant>, String> {
+    let (session, state) = host.parts();
+    let project = session.project();
     let ids: Vec<&str> = project.generators.iter().map(Generator::id).collect();
     let g = project
         .generators
@@ -86,31 +91,69 @@ fn plants(project: &Project, id: &str, target: &ClipTarget) -> Result<Vec<Plant>
             target.planting
         ));
     }
-    let floor = visioncraft_core::terrace::ground_fn(project);
-    let ground = |x: f32, z: f32| floor(x, z).or(Some(0.0));
-    let numbered = planting::evaluate_numbered(g, &ground).0;
-    let count = numbered.len();
+    let assets = &state.catalog.assets;
+    let (numbered, _) = crate::inspect::plants_of(session, state, g);
     let plants: Vec<Plant> = numbered
         .into_iter()
         .filter(|(n, _)| target.plant.is_none_or(|p| p == *n as u32))
         .map(|(n, p)| Plant {
             number: n as u32,
+            matrix: crate::inspect::drawn_matrix(project, assets, g, &p),
             asset: p.asset,
         })
         .collect();
     if plants.is_empty() {
-        return Err(match target.plant {
-            Some(n) => format!(
-                "{id}: `object`: planting `{}` has no plant {n}: its plants are numbered from 0 as planting.replace_placement counts them, a plant taken out is missing (it places {count})",
-                target.planting
-            ),
-            None => format!(
-                "{id}: `object`: planting `{}` places nothing",
-                target.planting
-            ),
-        });
+        return Err(not_drawn(id, target, g, session, state));
     }
     Ok(plants)
+}
+
+/// Why `target` reaches no plant: the planting places none it names, or the plants it names
+/// are not drawn (the building rule, the sea).
+fn not_drawn(
+    id: &str,
+    target: &ClipTarget,
+    g: &Generator,
+    session: &visioncraft_core::Session,
+    state: &crate::host::HostState,
+) -> String {
+    let stages = crate::inspect::stages(session, state, g);
+    let planting = &target.planting;
+    match target.plant {
+        Some(n) => {
+            let n = n as usize;
+            let why = if !stages.placed.contains(&n) {
+                return format!(
+                    "{id}: `object`: planting `{planting}` has no plant {n}: its plants are numbered from 0 as planting.replace_placement counts them, a plant taken out is missing (it places {})",
+                    stages.placed.len()
+                );
+            } else if !stages.clear.contains(&n) {
+                "it stands inside a building"
+            } else {
+                "it is under the sea"
+            };
+            format!("{id}: `object`: plant {n} of planting `{planting}` is not drawn: {why}")
+        }
+        None if stages.placed.is_empty() => {
+            format!("{id}: `object`: planting `{planting}` places nothing")
+        }
+        None => {
+            let in_building = stages.placed.len() - stages.clear.len();
+            let under_sea = stages.clear.len();
+            let mut why = Vec::new();
+            if in_building > 0 {
+                why.push(format!("{in_building} stand inside a building"));
+            }
+            if under_sea > 0 {
+                why.push(format!("{under_sea} are under the sea"));
+            }
+            format!(
+                "{id}: `object`: planting `{planting}` draws none of its {} plants: {}",
+                stages.placed.len(),
+                why.join(" and ")
+            )
+        }
+    }
 }
 
 /// The distinct assets of `plants`, sorted.
@@ -200,7 +243,7 @@ pub(crate) fn play_clip(host: &mut dyn Host, id: &str, params: &Value) -> Result
         }
     };
     let looped = a.bool("loop")?.unwrap_or(false);
-    let plants = plants(host.session().project(), id, &target)?;
+    let plants = plants(host, id, &target)?;
     let animations = animations(host, id, &assets_of(&plants))?;
     let (clips, name, duration) = resolve(id, &text, &animations)?;
     let playback = playback(host)?;
@@ -225,7 +268,7 @@ pub(crate) fn play_clip(host: &mut dyn Host, id: &str, params: &Value) -> Result
 pub(crate) fn stop_clip(host: &mut dyn Host, id: &str, params: &Value) -> Result<Value, String> {
     let a = Fields::new(id, "parameter", Some(params), &["object", "clip"])?;
     let target = target(id, a.required_str("object")?)?;
-    let plants = plants(host.session().project(), id, &target)?;
+    let plants = plants(host, id, &target)?;
     let clips = match a.get("clip") {
         None => None,
         Some(_) => {
@@ -251,10 +294,46 @@ pub(crate) fn stop_clip(host: &mut dyn Host, id: &str, params: &Value) -> Result
     }))
 }
 
-/// `query.part_pose {object, t?}`: for each plant the object names, the matrix in model space
-/// of every moving part at clock time `t` (the session's clock), column-major.
+/// The space `query.part_pose` answers in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Space {
+    /// The world, as the window draws it: a part's matrix is its plant's `placement` times the
+    /// part's matrix in model space.
+    World,
+    /// The model's own space: a part's matrix on its own.
+    Model,
+}
+
+impl Space {
+    fn name(self) -> &'static str {
+        match self {
+            Self::World => "world",
+            Self::Model => "model",
+        }
+    }
+}
+
+/// `space` as given: `world` (the default) or `model`.
+fn space(id: &str, a: &Fields) -> Result<Space, String> {
+    match a.get("space") {
+        None => Ok(Space::World),
+        Some(Value::String(s)) if s == "world" => Ok(Space::World),
+        Some(Value::String(s)) if s == "model" => Ok(Space::Model),
+        Some(other) => Err(format!(
+            "{id}: `space` must be `world` or `model`, got {}",
+            describe(other)
+        )),
+    }
+}
+
+/// `query.part_pose {object, t?, space?}`: for each plant the object names, the matrix of every
+/// moving part at clock time `t` (the session's clock), column-major, 16 numbers. In `world`
+/// (the default) as the window draws it: the plant's `placement` (scale, then Y rotation, then
+/// translation, under the growth of the years shown) times the part's matrix in model space; in
+/// `model` that matrix on its own. Each plant tells its `placement`, to compose or invert.
+/// Only the plants the window draws are reached (the building rule, the sea).
 pub(crate) fn part_pose(host: &mut dyn Host, id: &str, params: &Value) -> Result<Value, String> {
-    let a = Fields::new(id, "parameter", Some(params), &["object", "t"])?;
+    let a = Fields::new(id, "parameter", Some(params), &["object", "t", "space"])?;
     let target = target(id, a.required_str("object")?)?;
     let t = match a.number("t")? {
         None => None,
@@ -265,7 +344,8 @@ pub(crate) fn part_pose(host: &mut dyn Host, id: &str, params: &Value) -> Result
             ));
         }
     };
-    let plants = plants(host.session().project(), id, &target)?;
+    let space = space(id, &a)?;
+    let plants = plants(host, id, &target)?;
     let animations = animations(host, id, &assets_of(&plants))?;
     let playback = playback(host)?;
     let t = t.unwrap_or(playback.clock);
@@ -290,15 +370,20 @@ pub(crate) fn part_pose(host: &mut dyn Host, id: &str, params: &Value) -> Result
             asset: &plant.asset,
         }));
         let pose = sampler.pose(rig, &played, t);
+        let parts: Vec<Matrix> = match space {
+            Space::World => pose.iter().map(|m| mul(&plant.matrix, m)).collect(),
+            Space::Model => pose.to_vec(),
+        };
         out.push(json!({
             "plant": plant.number,
             "asset": plant.asset,
+            "placement": plant.matrix,
             "posed": !played.is_empty(),
             "clips": played.iter().map(|p| rig.clips[p.clip].name.clone()).collect::<Vec<_>>(),
-            "parts": pose.iter().collect::<Vec<_>>(),
+            "parts": parts,
         }));
     }
-    Ok(json!({ "object": target.name(), "t": t, "plants": out }))
+    Ok(json!({ "object": target.name(), "t": t, "space": space.name(), "plants": out }))
 }
 
 /// `effect.flash {position, color, intensity, range_m, size_m?, frames? | seconds?, start_s?}`.
