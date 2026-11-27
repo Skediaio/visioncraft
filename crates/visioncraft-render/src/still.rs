@@ -1,6 +1,7 @@
 //! Offscreen stills: one frame at any size up to 3840x2160, always at
 //! `Quality::HIGH`, read back as RGBA8, without touching the live view's
-//! targets, quality, camera, cached shadow cascade or level-of-detail state.
+//! targets, quality, camera, cached shadow cascades, snow cover map or
+//! level-of-detail state.
 //!
 //! The frame is submitted at once; the pixels arrive asynchronously (on the
 //! web nothing can block), so `render_still` returns a [`Still`] to poll.
@@ -223,6 +224,12 @@ impl Renderer {
         let live_cache = self.far_cache.take();
         let live_cascades = std::mem::take(&mut self.cascade_rendered);
         let live_stale = std::mem::take(&mut self.cascade_stale);
+        // The snow cover map too: these targets never drew one, and the next offscreen frame's
+        // must not count a map of targets gone since (every still makes new ones; a photo keeps
+        // its targets, but the live view's map may be the one remembered). Without this the
+        // second still in a row from one camera skipped the map, and read its empty layer as a
+        // cover over everything: with snow, rain or a sea on, it showed no snow on open ground.
+        let live_snow = self.snow_drawn.take();
         if let Some(t) = &self.timer {
             t.paused.set(true);
         }
@@ -266,6 +273,7 @@ impl Renderer {
         self.far_cache = live_cache;
         self.cascade_rendered = live_cascades;
         self.cascade_stale = live_stale;
+        self.snow_drawn = live_snow;
         if let Some(t) = &self.timer {
             t.paused.set(false);
         }
