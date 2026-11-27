@@ -13,7 +13,8 @@ use glam::{Mat4, Vec3};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use visioncraft_core::Catalog;
+use visioncraft_core::keyframes::{Matrix, model_space};
+use visioncraft_core::{Animation, Catalog};
 use visioncraft_render::{
     AlphaMode, ColorSpace, ImpostorBake, ImpostorId, Material, MaterialId, Mesh, MeshId,
     Projection, Renderer, Surface, TextureDesc, TextureId,
@@ -120,7 +121,9 @@ struct Textured {
 
 // ---- models ----
 
-struct Model {
+pub(crate) struct Model {
+    /// Tells one loaded model from another (`AssetRig`).
+    pub(crate) id: u64,
     parts: Vec<(MeshId, MaterialId)>,
     /// Emitting materials with their template (strength 0), for the lamps toggle.
     emitters: Vec<(MaterialId, Material)>,
@@ -128,8 +131,41 @@ struct Model {
     textures: Vec<TextureId>,
     meshes: Vec<MeshId>,
     materials: Vec<MaterialId>,
+    /// The file's animation: its clips, what was left out of them, and the bones they move
+    /// (`None` in `rig` for a model that stands still).
+    pub(crate) anim: Animation,
+    /// The moving parts with their triangles, in the rig's order: a part without triangles (a
+    /// skeleton joint) has none and gets no item. Empty for a model that stands still.
+    pub(crate) bones: Vec<Bone>,
+    /// Metres the whole model is raised by to stand on the ground (an imported object), in
+    /// model space before its pose.
+    pub(crate) lift: f32,
 }
 
+/// One moving part of a loaded model ([`Model::bones`]).
+pub(crate) struct Bone {
+    /// The part's node in the file: how another level of detail knows the same part.
+    pub(crate) node: usize,
+    /// Its prims in the node's own space.
+    pub(crate) prims: Vec<(MeshId, MaterialId)>,
+    /// The part's matrix in model space at rest.
+    pub(crate) rest_space: Matrix,
+}
+
+impl Model {
+    /// Whether a clip can move this model.
+    fn animated(&self) -> bool {
+        self.anim.rig.is_some()
+    }
+}
+
+/// An animated catalogue asset as the scene draws it: the loaded model whose bones and clips
+/// pose it (the first level of detail's, else the finest loaded that moves), and per level of
+/// detail the model drawn there with the level's distance.
+pub(crate) struct AssetRig<'a> {
+    pub rig: &'a Model,
+    pub levels: Vec<(&'a Model, f32)>,
+}
 struct Upload {
     path: String,
     data: GlbData,
@@ -146,7 +182,12 @@ pub fn emitter_luminance(lumens: f32) -> f32 {
 }
 
 fn glb_slots(glb: &Glb) -> Vec<(usize, bool)> {
-    let used: HashSet<usize> = glb.prims.iter().map(|p| p.material).collect();
+    let used: HashSet<usize> = glb
+        .prims
+        .iter()
+        .chain(glb.parts.iter().flat_map(|part| &part.prims))
+        .map(|p| p.material)
+        .collect();
     let mut slots = Vec::new();
     for m in glb
         .materials
@@ -236,6 +277,11 @@ pub struct Library {
     pub ground_offsets: HashMap<String, f32>,
     indexes_asked: bool,
     models: HashMap<String, Model>,
+    /// The animation of every model file loaded so far, kept when the model is evicted: what
+    /// `query.clips` and playback read in a browser, which has no file to read again.
+    animations: HashMap<String, Animation>,
+    /// The id of the next loaded model (`Model::id`).
+    next_model_id: u64,
     awaiting: HashSet<String>,
     uploading: Vec<Upload>,
     garbage: Vec<Model>,
@@ -305,6 +351,8 @@ impl Library {
             ground_offsets: HashMap::new(),
             indexes_asked: false,
             models: HashMap::new(),
+            animations: HashMap::new(),
+            next_model_id: 0,
             awaiting: HashSet::new(),
             uploading: Vec::new(),
             garbage: Vec::new(),
@@ -359,10 +407,10 @@ impl Library {
         self.wants.remove(generator);
     }
 
-    /// The resident parts of a catalogue asset as (mesh, material, max distance) of an LOD item:
-    /// each level uses its own model, else the next coarser one in memory, else a finer one.
-    /// `None` while nothing of it is resident (the caller keeps the placeholder).
-    pub fn parts(&self, asset: &str) -> Option<Vec<(MeshId, MaterialId, f32)>> {
+    /// Per level of detail of a catalogue asset the loaded model drawn there and the level's
+    /// distance: each level uses its own model, else the next coarser one in memory, else a
+    /// finer one. `None` while nothing of it is resident (the caller keeps the placeholder).
+    fn levels(&self, asset: &str) -> Option<Vec<(&Model, f32)>> {
         let a = self.catalog.as_ref()?.asset(asset)?;
         let n = a.lods.len();
         let loaded: Vec<Option<&Model>> = a
@@ -383,15 +431,37 @@ impl Library {
             let m = (i..n)
                 .find_map(|j| loaded[j])
                 .or_else(|| (0..i).rev().find_map(|j| loaded[j]))?;
-            out.extend(
-                m.parts
-                    .iter()
-                    .map(|&(mesh, mat)| (mesh, mat, lod.max_distance_m)),
-            );
+            out.push((m, lod.max_distance_m));
         }
         Some(out)
     }
 
+    /// The resident parts of a catalogue asset as (mesh, material, max distance) of an LOD item:
+    /// what stands still in it, from [`Self::levels`]. Empty for a model all of which moves
+    /// (its parts are items of their own, [`Self::rig`]).
+    pub fn parts(&self, asset: &str) -> Option<Vec<(MeshId, MaterialId, f32)>> {
+        Some(
+            self.levels(asset)?
+                .iter()
+                .flat_map(|(m, d)| m.parts.iter().map(move |&(mesh, mat)| (mesh, mat, *d)))
+                .collect(),
+        )
+    }
+
+    /// An animated catalogue asset ([`AssetRig`]), once a level that moves is resident.
+    pub(crate) fn rig(&self, asset: &str) -> Option<AssetRig<'_>> {
+        let levels = self.levels(asset)?;
+        let rig = levels
+            .iter()
+            .find_map(|(m, _)| m.animated().then_some(*m))?;
+        Some(AssetRig { rig, levels })
+    }
+
+    /// The animation of a model file loaded once (its clips, what was left out, and its
+    /// bones), whether or not it is still resident.
+    pub fn animation(&self, file: &str) -> Option<&Animation> {
+        self.animations.get(file)
+    }
     /// Which level of detail each placed catalogue asset shows and why, for agents (`ui.load`):
     /// the nearest instance's distance, the level that distance needs, the levels resident,
     /// the level drawn there, and in words why it is not the one needed.
@@ -786,42 +856,26 @@ impl Library {
         }
     }
 
+    /// Uploads a model file: what stands still as one mesh per material, each moving part as
+    /// its own meshes in the part's space ([`Model::bones`], posed by the scene).
     fn finish(&mut self, r: &mut Renderer, up: Upload) {
         let Upload {
             path,
-            data,
+            mut data,
             slots,
             ids,
             lumens,
         } = up;
-        let bytes: u64 = slots
-            .iter()
-            .map(|&(i, _)| texture_cost(data.images[i].w, data.images[i].h))
-            .sum();
-        let tex = |img: Option<usize>, srgb: bool| {
-            let i = img?;
-            let s = slots.iter().position(|s| *s == (i, srgb))?;
-            ids.get(s).copied()
-        };
-        let mut model = Model {
-            parts: Vec::new(),
-            emitters: Vec::new(),
-            lumens,
-            textures: ids.clone(),
-            meshes: Vec::new(),
-            materials: Vec::new(),
-        };
-        let mut made: HashMap<usize, MaterialId> = HashMap::new();
+        let glb = &mut data.glb;
         // An imported object stands on its lowest point, wherever its file put the origin; the
-        // offset is kept, the file is not changed.
+        // offset is kept, the file is not changed. Measured at its rest pose: bounds at rest.
         let lift = if self
             .user_assets
             .iter()
             .any(|a| a.lods.iter().any(|l| l.file == path))
         {
-            let low = data
-                .glb
-                .prims
+            let low = glb
+                .rest_prims()
                 .iter()
                 .flat_map(|p| &p.positions)
                 .map(|q| q[1])
@@ -832,7 +886,30 @@ impl Library {
             0.0
         };
         self.ground_offsets.insert(path.clone(), lift);
-        for p in &data.glb.prims {
+        let bytes: u64 = slots
+            .iter()
+            .map(|&(i, _)| texture_cost(data.images[i].w, data.images[i].h))
+            .sum();
+        let tex = |img: Option<usize>, srgb: bool| {
+            let i = img?;
+            let s = slots.iter().position(|s| *s == (i, srgb))?;
+            ids.get(s).copied()
+        };
+        self.next_model_id += 1;
+        let mut model = Model {
+            id: self.next_model_id,
+            parts: Vec::new(),
+            emitters: Vec::new(),
+            lumens,
+            textures: ids.clone(),
+            meshes: Vec::new(),
+            materials: Vec::new(),
+            anim: glb.animation(),
+            bones: Vec::new(),
+            lift,
+        };
+        let mut made: HashMap<usize, MaterialId> = HashMap::new();
+        for p in glb.prims.iter() {
             let lifted: Vec<[f32; 3]>;
             let positions = if lift == 0.0 {
                 &p.positions
@@ -844,32 +921,15 @@ impl Library {
                     .collect();
                 &lifted
             };
-            let mat = match made.get(&p.material) {
-                Some(m) => *m,
-                None => {
-                    let gm = &data.glb.materials[p.material];
-                    let mut m = model_material(gm, &tex);
-                    if gm.emitter {
-                        m.emissive_strength = 0.0;
-                    }
-                    let id = r.add_material(&m);
-                    if gm.emitter {
-                        model.emitters.push((id, m));
-                    }
-                    model.materials.push(id);
-                    made.insert(p.material, id);
-                    id
-                }
-            };
-            let mesh = r.add_mesh(&Mesh {
+            let mat = self.material_of(r, &mut model, &mut made, glb, &tex, p.material);
+            match r.add_mesh(&Mesh {
                 positions,
                 normals: &p.normals,
                 indices: &p.indices,
                 face_ids: None,
                 uvs: Some(&p.uvs),
                 wind: None,
-            });
-            match mesh {
+            }) {
                 Ok(mesh) => {
                     model.meshes.push(mesh);
                     model.parts.push((mesh, mat));
@@ -879,7 +939,37 @@ impl Library {
                     .push(format!("A part of {path} is not drawn: {e}")),
             }
         }
-        if model.parts.is_empty() {
+        if let Some(rig) = &model.anim.rig {
+            let rest_space = model_space(&rig.parents, &rig.rest);
+            for (part, rest_space) in glb.parts.iter().zip(&rest_space) {
+                let mut prims = Vec::new();
+                for p in &part.prims {
+                    let mat = self.material_of(r, &mut model, &mut made, glb, &tex, p.material);
+                    match r.add_mesh(&Mesh {
+                        positions: &p.positions,
+                        normals: &p.normals,
+                        indices: &p.indices,
+                        face_ids: None,
+                        uvs: Some(&p.uvs),
+                        wind: None,
+                    }) {
+                        Ok(mesh) => {
+                            model.meshes.push(mesh);
+                            prims.push((mesh, mat));
+                        }
+                        Err(e) => self
+                            .messages
+                            .push(format!("A part of {path} is not drawn: {e}")),
+                    }
+                }
+                model.bones.push(Bone {
+                    node: part.node,
+                    prims,
+                    rest_space: *rest_space,
+                });
+            }
+        }
+        if model.meshes.is_empty() {
             free(r, model);
             self.store
                 .fail_key(Key::Glb(path), "it has nothing to draw");
@@ -889,10 +979,37 @@ impl Library {
             self.lamps_applied = None;
         }
         self.store.track(Key::Glb(path.clone()), bytes);
+        self.animations.insert(path.clone(), model.anim.clone());
         self.models.insert(path, model);
         self.rev += 1;
     }
 
+    /// The renderer material of glTF material `index`, made once per model.
+    fn material_of(
+        &mut self,
+        r: &mut Renderer,
+        model: &mut Model,
+        made: &mut HashMap<usize, MaterialId>,
+        glb: &Glb,
+        tex: &dyn Fn(Option<usize>, bool) -> Option<TextureId>,
+        index: usize,
+    ) -> MaterialId {
+        if let Some(m) = made.get(&index) {
+            return *m;
+        }
+        let gm = &glb.materials[index];
+        let mut m = model_material(gm, tex);
+        if gm.emitter {
+            m.emissive_strength = 0.0;
+        }
+        let id = r.add_material(&m);
+        if gm.emitter {
+            model.emitters.push((id, m));
+        }
+        model.materials.push(id);
+        made.insert(index, id);
+        id
+    }
     /// One frame of streaming: loads, uploads within the budget, evictions, requests from the
     /// camera position, lamps. Returns true when scene items must be rebuilt.
     pub fn pump(&mut self, r: &mut Renderer, eye: Vec3) -> bool {
@@ -1216,6 +1333,39 @@ mod tests {
                 .assets
                 .len(),
             1
+        );
+    }
+
+    /// A model's clips outlive the model: once it was loaded, `query.clips` and playback still
+    /// know them after memory pressure evicted it (a browser has no file to read them again).
+    #[test]
+    fn a_model_s_clips_are_known_after_it_is_evicted() {
+        let Ok((device, queue)) = pollster::block_on(visioncraft_render::headless_device()) else {
+            eprintln!("no GPU adapter: skipped");
+            return;
+        };
+        let mut r = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+        let mut l = Library::new();
+        l.merge_user_assets();
+        l.note("g", "vc-bollard", &[Mat4::IDENTITY]);
+        for _ in 0..500 {
+            l.pump(&mut r, Vec3::ZERO);
+            if l.resident_models() == 1 && l.idle() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(l.resident_models(), 1, "the bollard is loaded");
+        let file = crate::fixtures::glb_path("vc-bollard");
+        let loaded = l.animation(&file).cloned().expect("its animation");
+        assert!(loaded.clips.is_empty(), "the bollard stands still");
+        l.store.evict(crate::assets::Key::Glb(file.clone()));
+        l.pump(&mut r, Vec3::ZERO);
+        assert_eq!(l.resident_models(), 0, "evicted");
+        assert_eq!(
+            l.animation(&file),
+            Some(&loaded),
+            "its clips are still known"
         );
     }
 

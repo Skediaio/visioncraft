@@ -116,18 +116,38 @@ impl DirtyLog {
 
 /// Instance matrices per (asset, variant), in first-seen order.
 pub fn group_placements(placements: &[Placement], variants: u32) -> Vec<(String, u32, Vec<Mat4>)> {
-    let mut out: Vec<(String, u32, Vec<Mat4>)> = Vec::new();
+    group_numbered(
+        &placements
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (i, p.clone()))
+            .collect::<Vec<_>>(),
+        variants,
+    )
+    .into_iter()
+    .map(|(asset, variant, matrices, _)| (asset, variant, matrices))
+    .collect()
+}
+
+/// Instance matrices per (asset, variant), in first-seen order, each with the plant's number
+/// (the one `planting.replace_placement` counts by): what a playing clip is addressed by.
+pub fn group_numbered(
+    placements: &[(usize, Placement)],
+    variants: u32,
+) -> Vec<(String, u32, Vec<Mat4>, Vec<usize>)> {
+    let mut out: Vec<(String, u32, Vec<Mat4>, Vec<usize>)> = Vec::new();
     let mut index: HashMap<(&str, u32), usize> = HashMap::new();
-    for p in placements {
+    for (number, p) in placements {
         let m = Mat4::from_translation(Vec3::from(p.position))
             * Mat4::from_rotation_y(p.rotation_y_deg.to_radians())
             * Mat4::from_scale(Vec3::splat(p.scale));
         let variant = p.variant % variants.max(1);
         let i = *index.entry((p.asset.as_str(), variant)).or_insert_with(|| {
-            out.push((p.asset.clone(), variant, Vec::new()));
+            out.push((p.asset.clone(), variant, Vec::new(), Vec::new()));
             out.len() - 1
         });
         out[i].2.push(m);
+        out[i].3.push(*number);
     }
     out
 }
@@ -300,6 +320,33 @@ mod tests {
             .map(|(a, v, m)| (a.as_str(), *v, m.len()))
             .collect();
         assert_eq!(keys, vec![("a", 0, 2), ("b", 1, 1), ("a", 1, 1)]);
+        // With the plants' numbers: each instance keeps its own.
+        let g = group_numbered(
+            &[
+                (0, p("a", 0, 0.0)),
+                (5, p("b", 1, 1.0)),
+                (2, p("a", 3, 2.0)),
+                (9, p("a", 1, 3.0)),
+            ],
+            3,
+        );
+        let numbers: Vec<_> = g.iter().map(|(_, _, _, n)| n.clone()).collect();
+        assert_eq!(numbers, vec![vec![0, 2], vec![5], vec![9]]);
+        assert_eq!(
+            g.iter().map(|(_, _, m, _)| m.clone()).collect::<Vec<_>>(),
+            group_placements(
+                &[
+                    p("a", 0, 0.0),
+                    p("b", 1, 1.0),
+                    p("a", 3, 2.0),
+                    p("a", 1, 3.0)
+                ],
+                3
+            )
+            .into_iter()
+            .map(|(_, _, m)| m)
+            .collect::<Vec<_>>()
+        );
     }
 
     #[test]

@@ -8,7 +8,9 @@ use std::collections::HashMap;
 use crate::catalog::Asset;
 use crate::material::{SurfaceKind, resolve_materials};
 use crate::model::ImportedModel;
-use crate::planting::{Evaluation, Generator, Placement, blocked_by_buildings, evaluate_avoiding};
+use crate::planting::{
+    Evaluation, Generator, Placement, blocked_by_buildings, evaluate_avoiding_numbered,
+};
 use crate::project::Project;
 use crate::shape::{
     Shape, ShapeError, areas_over, footing, shape_mesh, shape_mesh_on_terrain_with,
@@ -146,7 +148,23 @@ pub fn evaluate_in_scene(
     up: &dyn Fn([f32; 3]) -> Option<f32>,
     size: &dyn Fn(&str) -> (f32, f32),
 ) -> Evaluation {
-    evaluate_avoiding(g, ground, &|p: &Placement| {
+    let (list, truncated) = evaluate_in_scene_numbered(g, ground, open_ground, up, size);
+    Evaluation {
+        placements: list.into_iter().map(|(_, p)| p).collect(),
+        truncated,
+    }
+}
+
+/// [`evaluate_in_scene`] with each plant's number (`evaluate_avoiding_numbered`): what stands
+/// in a building is missing, the others keep their numbers.
+pub fn evaluate_in_scene_numbered(
+    g: &Generator,
+    ground: &dyn Fn(f32, f32) -> Option<f32>,
+    open_ground: &dyn Fn(f32, f32) -> Option<f32>,
+    up: &dyn Fn([f32; 3]) -> Option<f32>,
+    size: &dyn Fn(&str) -> (f32, f32),
+) -> (Vec<(usize, Placement)>, bool) {
+    evaluate_avoiding_numbered(g, ground, &|p: &Placement| {
         let (h, r) = size(&p.asset);
         let open = open_ground(p.position[0], p.position[2]).unwrap_or(0.0);
         blocked_by_buildings(p.position, h * p.scale, r * p.scale, open, up)

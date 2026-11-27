@@ -5,14 +5,15 @@ use glam::{Mat4, Vec3};
 use std::collections::HashMap;
 use std::sync::Arc;
 use visioncraft_core::grass;
+use visioncraft_core::keyframes::{Matrix, Played, Rig, Sampler};
 use visioncraft_core::material::Lawn3d;
 use visioncraft_core::wall_photo::{Corner, face_frame, rectified_size, split_by_region};
 use visioncraft_core::{
-    Asset, Evaluation, Generator, ImportedModel, LawnWindow, Material, ModelRef, Project, Shape,
-    SurfaceKind, Terrain, area_lifts, areas_over, blends_over, blocked_by_buildings,
-    evaluate_in_scene, evaluate_surface_fill, ground_height, inside_outline, lawn_area,
-    lawn_scatter_blended, placed_shape, raycast, resolve_materials, shape_mesh,
-    shape_mesh_on_terrain_with, water_areas,
+    Asset, Evaluation, Generator, ImportedModel, LawnWindow, Material, ModelRef, Placement,
+    Project, Shape, SurfaceKind, Terrain, area_lifts, areas_over, blends_over,
+    blocked_by_buildings, evaluate_in_scene_numbered, evaluate_surface_fill, ground_height,
+    inside_outline, keep_dry_numbered, lawn_area, lawn_scatter_blended, placed_shape, raycast,
+    resolve_materials, shape_mesh, shape_mesh_on_terrain_with, water_areas,
 };
 use visioncraft_flora as flora;
 use visioncraft_render::{ImpostorId, ItemId, LineVertex, Renderer};
@@ -913,12 +914,231 @@ struct Group {
     /// levels) still means new items.
     impostor: Option<ImpostorId>,
     matrices: Vec<Mat4>,
+    /// The plant's number of each instance, as `planting.replace_placement` counts them: what
+    /// a playing clip (`model.play_clip`) is addressed by.
+    numbers: Vec<usize>,
+    /// The moving parts of an animated catalogue model, one item each.
+    rig: Option<GroupRig>,
     /// The growth stage its plants are drawn at (`When::age`), and the one wanted (the same
     /// once generated).
     age: Option<u8>,
     want: Option<u8>,
 }
 
+/// The moving parts of an animated catalogue model (a weapon, a box with a lid): per part with
+/// triangles one LOD item that draws the same instances as the group's other items, each under
+/// the part's pose. A level of detail draws the part as its own file has it, matched by the
+/// part's node; the first level's rig poses them all. Parts without triangles (skeleton joints)
+/// get no item.
+struct GroupRig {
+    /// The loaded model whose bones and clips pose the parts (`Model::id`).
+    model: u64,
+    /// Each part's item and the part's index in `rig`.
+    items: Vec<(ItemId, usize)>,
+    rig: Rig,
+    /// Each part's matrix in model space at rest.
+    rest: Vec<Matrix>,
+    /// To the ground (an imported object stands on its lowest point), before the pose.
+    lift: Mat4,
+    /// Per item, instance `i` of the group is instance `order[k][i]` of item `k` (items sort
+    /// their instances by ground cell, the part's own place at rest).
+    order: Vec<Vec<u32>>,
+    /// Which instances were last written posed rather than at rest.
+    posed: Vec<bool>,
+    /// Per instance, the plays it was last written under while none of them moved (its held
+    /// pose): written again only once that changes or one moves.
+    held: Vec<Option<Vec<Played>>>,
+    /// Scratch: the clips that reach the instance being posed.
+    played: Vec<Played>,
+    sampler: Sampler,
+    /// Instances written, for tests that a held pose is not written frame after frame.
+    #[cfg(test)]
+    writes: usize,
+}
+
+impl GroupRig {
+    /// The items of the asset's moving parts for `matrices`, every instance at rest. `None`
+    /// for an asset that does not move, or is not loaded far enough to know.
+    fn new(r: &mut Renderer, library: &Library, asset: &str, matrices: &[Mat4]) -> Option<Self> {
+        let source = library.rig(asset)?;
+        let rig = source.rig.anim.rig.clone()?;
+        let k = matrices
+            .iter()
+            .map(|m| m.x_axis.length().max(m.y_axis.length()))
+            .fold(1.0_f32, f32::max);
+        let mut items = Vec::new();
+        for (k_part, bone) in source.rig.bones.iter().enumerate() {
+            if bone.prims.is_empty() {
+                continue;
+            }
+            let entries: LodParts = source
+                .levels
+                .iter()
+                .flat_map(|(model, distance)| {
+                    model
+                        .bones
+                        .iter()
+                        .filter(|b| b.node == bone.node)
+                        .flat_map(move |b| {
+                            b.prims
+                                .iter()
+                                .map(move |&(mesh, mat)| (mesh, mat, (distance * k).min(f32::MAX)))
+                        })
+                })
+                .collect();
+            if entries.is_empty() {
+                continue;
+            }
+            items.push((entries, k_part));
+        }
+        let rest: Vec<Matrix> = source.rig.bones.iter().map(|b| b.rest_space).collect();
+        let lift = Mat4::from_translation(Vec3::Y * source.rig.lift);
+        // Each item made at once with every instance at rest.
+        let mut order = Vec::with_capacity(items.len());
+        let items = items
+            .into_iter()
+            .map(|(entries, part)| {
+                let at = at_rest(matrices, lift, &rest, part);
+                order.push(Renderer::instance_order(&at));
+                (r.add_lod_item(&entries, &at), part)
+            })
+            .collect();
+        Some(Self {
+            model: source.rig.id,
+            items,
+            rest,
+            rig,
+            lift,
+            order,
+            posed: vec![false; matrices.len()],
+            held: vec![None; matrices.len()],
+            played: Vec::new(),
+            sampler: Sampler::default(),
+            #[cfg(test)]
+            writes: 0,
+        })
+    }
+
+    /// Other (or moved) instances, as many: every one at rest under them, each item written
+    /// whole.
+    fn follow(&mut self, r: &mut Renderer, matrices: &[Mat4]) {
+        for (k, (item, part)) in self.items.iter().enumerate() {
+            let at = at_rest(matrices, self.lift, &self.rest, *part);
+            self.order[k] = Renderer::instance_order(&at);
+            r.set_instances(*item, &at);
+        }
+        self.posed.fill(false);
+        self.held.fill(None);
+    }
+
+    /// Whether any instance is drawn posed.
+    fn any_posed(&self) -> bool {
+        self.posed.iter().any(|p| *p)
+    }
+
+    /// Poses every instance of the group for the frame at clock time `t`: those a clip reaches
+    /// under their clips (in the order they started), the ones whose clips all ended back at
+    /// rest. Nothing is written for an instance that did not change: one at rest that stays
+    /// so, or one that holds the pose it was written at (no clip on it moves, and they are the
+    /// same clips).
+    #[allow(clippy::too_many_arguments)]
+    fn animate(
+        &mut self,
+        r: &mut Renderer,
+        playback: &visioncraft_core::Playback,
+        planting: &str,
+        asset: &str,
+        numbers: &[usize],
+        matrices: &[Mat4],
+        t: f64,
+    ) {
+        for (index, number) in numbers.iter().enumerate() {
+            let spot = visioncraft_core::Spot {
+                planting,
+                plant: Some(*number as u32),
+                asset,
+            };
+            self.played.clear();
+            self.played.extend(playback.played(&spot));
+            let written = if self.played.is_empty() {
+                if !self.posed[index] {
+                    continue;
+                }
+                self.posed[index] = false;
+                self.held[index] = None;
+                write_instance(
+                    r,
+                    &self.items,
+                    &self.order,
+                    self.lift,
+                    matrices[index],
+                    index,
+                    &self.rest,
+                )
+            } else {
+                let moving = playback.moves(&spot, t);
+                if !moving && self.held[index].as_deref() == Some(&self.played[..]) {
+                    continue;
+                }
+                let pose = self.sampler.pose(&self.rig, &self.played, t);
+                let n = write_instance(
+                    r,
+                    &self.items,
+                    &self.order,
+                    self.lift,
+                    matrices[index],
+                    index,
+                    pose,
+                );
+                self.posed[index] = true;
+                self.held[index] = (!moving).then(|| self.played.clone());
+                n
+            };
+            #[cfg(test)]
+            {
+                self.writes += written;
+            }
+            #[cfg(not(test))]
+            let _ = written;
+        }
+    }
+}
+
+/// Every instance of `matrices` with part `part` at rest: the group's matrix, then the lift,
+/// then the part's rest matrix in model space.
+fn at_rest(matrices: &[Mat4], lift: Mat4, rest: &[Matrix], part: usize) -> Vec<Mat4> {
+    let m = lift * matrix_of(rest, part);
+    matrices.iter().map(|g| *g * m).collect()
+}
+
+/// Writes instance `index` (its group matrix `m`) of each part's item under `pose`: the group's
+/// matrix, then the lift, then the part's matrix in model space. Returns how many it wrote.
+fn write_instance(
+    r: &mut Renderer,
+    items: &[(ItemId, usize)],
+    order: &[Vec<u32>],
+    lift: Mat4,
+    m: Mat4,
+    index: usize,
+    pose: &[Matrix],
+) -> usize {
+    let before = m * lift;
+    for (k, (item, part)) in items.iter().enumerate() {
+        r.set_instance(
+            *item,
+            order[k][index] as usize,
+            before * matrix_of(pose, *part),
+        );
+    }
+    items.len()
+}
+
+/// Part `part`'s matrix in model space from a pose (the identity for a part it lacks).
+fn matrix_of(pose: &[Matrix], part: usize) -> Mat4 {
+    Mat4::from_cols_array(pose.get(part).unwrap_or(&[
+        1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+    ]))
+}
 /// What a plant generation depends on besides the species: the month (its season) and, while
 /// the years after planting are shown, its growth stage in tenths of maturity (1..=9; none: full
 /// grown).
@@ -1215,6 +1435,9 @@ impl Scene {
     fn drop_groups(r: &mut Renderer, groups: HashMap<(String, u32), Group>) {
         for g in groups.into_values() {
             g.items.into_iter().for_each(|i| r.remove_item(i));
+            if let Some(rig) = g.rig {
+                rig.items.into_iter().for_each(|(i, _)| r.remove_item(i));
+            }
         }
     }
 
@@ -2566,6 +2789,11 @@ impl Scene {
             } else {
                 parts
             };
+            if parts.is_empty() {
+                // A model all of which moves: nothing stands still, and its parts are items
+                // of their own (`GroupRig`).
+                return Vec::new();
+            }
             let item = r.add_lod_item(parts, matrices);
             // A hedge's shadow is a band, not one blob per segment.
             let clipped = asset
@@ -2704,10 +2932,16 @@ impl Scene {
             let imp = self
                 .impostor_for(project, asset, *variant, when)
                 .map(|i| i.0);
-            if src == grp.parts && imp == grp.impostor {
+            // The model that poses the parts may have arrived (or gone) while the parts stayed.
+            let model = self.library.rig(asset).map(|a| a.rig.id);
+            if src == grp.parts && imp == grp.impostor && model == grp.rig.as_ref().map(|g| g.model)
+            {
                 continue;
             }
             grp.items.drain(..).for_each(|i| r.remove_item(i));
+            if let Some(rig) = grp.rig.take() {
+                rig.items.into_iter().for_each(|(i, _)| r.remove_item(i));
+            }
             grp.items = self.make_items(
                 r,
                 project,
@@ -2718,6 +2952,7 @@ impl Scene {
                 src.as_ref(),
                 &grp.matrices,
             );
+            grp.rig = GroupRig::new(r, &self.library, asset, &grp.matrices);
             grp.parts = src;
             grp.impostor = imp;
         }
@@ -2740,17 +2975,23 @@ impl Scene {
         let t0 = plant_scene::now_ms();
         // A planting on a hidden layer is evaluated all the same (the panel counts its plants)
         // and draws nothing.
-        let e = self.evaluate_generator(g);
-        let (count, truncated) = (e.placements.len(), e.truncated);
-        let placements = if sig.2 { e.placements } else { Vec::new() };
+        let (numbered, truncated) = self.evaluate_generator_numbered(g);
+        let count = numbered.len();
+        let placements: Vec<Placement> = if sig.2 {
+            numbered.iter().map(|(_, p)| p.clone()).collect()
+        } else {
+            Vec::new()
+        };
         let t1 = plant_scene::now_ms();
         let month = sig.1;
         let stamp = self.dirty.stamp();
         let mut old_groups = old.map(|o| o.groups).unwrap_or_default();
         let mut groups: HashMap<(String, u32), Group> = HashMap::new();
         self.library.forget_generator(g.id());
-        for (asset, variant, matrices) in
-            plant_scene::group_placements(&placements, plants::VARIANTS)
+        // Grouped from what is drawn: nothing on a hidden layer.
+        let drawn: &[(usize, Placement)] = if sig.2 { &numbered } else { &[] };
+        for (asset, variant, matrices, numbers) in
+            plant_scene::group_numbered(drawn, plants::VARIANTS)
         {
             // Grown for the years shown: a growth stage to generate at, and the scale to it.
             let stage = self.growth_stage(project, assets, g, &asset);
@@ -2773,18 +3014,36 @@ impl Scene {
             let imp = self
                 .impostor_for(project, &asset, variant, when)
                 .map(|i| i.0);
-            let items = match old_groups.remove(&(asset.clone(), variant)) {
-                Some(prev) if prev.parts == src && prev.impostor == imp && prev.age == age => {
+            let (items, rig) = match old_groups.remove(&(asset.clone(), variant)) {
+                Some(mut prev) if prev.parts == src && prev.impostor == imp && prev.age == age => {
                     prev.items
                         .iter()
                         .for_each(|i| r.set_instances(*i, &matrices));
-                    prev.items
+                    // The same parts, other instances (or the same): the moving parts follow
+                    // them, at rest; made again if there are not as many.
+                    let rig = 'rig: {
+                        if let Some(rig) = &mut prev.rig
+                            && rig.posed.len() == matrices.len()
+                        {
+                            rig.follow(r, &matrices);
+                            break 'rig prev.rig.take();
+                        }
+                        if let Some(old) = prev.rig.take() {
+                            old.items.into_iter().for_each(|(i, _)| r.remove_item(i));
+                        }
+                        GroupRig::new(r, &self.library, &asset, &matrices)
+                    };
+                    (prev.items, rig)
                 }
                 prev => {
                     if let Some(p) = prev {
                         p.items.into_iter().for_each(|i| r.remove_item(i));
+                        if let Some(rig) = p.rig {
+                            rig.items.into_iter().for_each(|(i, _)| r.remove_item(i));
+                        }
                     }
-                    self.make_items(
+                    let rig = GroupRig::new(r, &self.library, &asset, &matrices);
+                    let items = self.make_items(
                         r,
                         project,
                         assets,
@@ -2793,7 +3052,8 @@ impl Scene {
                         when,
                         src.as_ref(),
                         &matrices,
-                    )
+                    );
+                    (items, rig)
                 }
             };
             groups.insert(
@@ -2803,6 +3063,8 @@ impl Scene {
                     parts: src,
                     impostor: imp,
                     matrices,
+                    numbers,
+                    rig,
                     age,
                     want,
                 },
@@ -2939,43 +3201,99 @@ impl Scene {
     /// The placements of a generator against the current ground (a surface fill against its
     /// owner's mesh), in world space. Also what the tools preview.
     pub fn evaluate_generator(&self, g: &Generator) -> Evaluation {
+        let (placements, truncated) = self.evaluate_generator_numbered(g);
+        Evaluation {
+            placements: placements.into_iter().map(|(_, p)| p).collect(),
+            truncated,
+        }
+    }
+
+    /// [`Self::evaluate_generator`] with each plant's number (as
+    /// `planting.replace_placement` counts them) kept through the building rule and the sea.
+    pub fn evaluate_generator_numbered(&self, g: &Generator) -> (Vec<(usize, Placement)>, bool) {
+        let (mut placements, truncated) = self.evaluate_numbered_raw(g);
+        let catalog = self.library.catalog.as_ref();
+        keep_dry_numbered(self.sea.as_ref(), &mut placements, &|a| {
+            catalog
+                .and_then(|c| c.asset(a))
+                .is_some_and(visioncraft_core::water::floats)
+        });
+        (placements, truncated)
+    }
+
+    /// The same before the sea is applied.
+    fn evaluate_numbered_raw(&self, g: &Generator) -> (Vec<(usize, Placement)>, bool) {
         match g {
             Generator::SurfaceFill(f) => match self.owners.get(&f.owner) {
                 Some(o) => {
                     let e = evaluate_surface_fill(f, &o.geom);
-                    Evaluation {
-                        placements: e
-                            .placements
-                            .into_iter()
-                            .map(|mut p| {
-                                p.position =
-                                    o.xf.transform_point3(Vec3::from(p.position)).to_array();
-                                p
-                            })
-                            .collect(),
-                        truncated: e.truncated,
-                    }
+                    let placements = e
+                        .placements
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, mut p)| {
+                            p.position = o.xf.transform_point3(Vec3::from(p.position)).to_array();
+                            (i, p)
+                        })
+                        .collect();
+                    (placements, e.truncated)
                 }
-                None => Evaluation {
-                    placements: Vec::new(),
-                    truncated: false,
-                },
+                None => (Vec::new(), false),
             },
-            _ => {
-                let mut e = evaluate_in_scene(
-                    g,
-                    &self.ground_fn(),
-                    &|x, z| self.open_ground(x, z),
-                    &|p| self.up_to_building(p),
-                    &|a| self.plant_dims(a),
+            _ => evaluate_in_scene_numbered(
+                g,
+                &self.ground_fn(),
+                &|x, z| self.open_ground(x, z),
+                &|p| self.up_to_building(p),
+                &|a| self.plant_dims(a),
+            ),
+        }
+    }
+
+    /// How many instances of moving parts `animate` has written so far.
+    #[cfg(test)]
+    pub fn rig_writes(&self) -> usize {
+        self.gens
+            .values()
+            .flat_map(|g| g.groups.values())
+            .filter_map(|grp| grp.rig.as_ref())
+            .map(|rig| rig.writes)
+            .sum()
+    }
+
+    /// How many moving parts of animated models are drawn as items of their own.
+    pub fn animated_parts(&self) -> usize {
+        self.gens
+            .values()
+            .flat_map(|g| g.groups.values())
+            .filter_map(|grp| grp.rig.as_ref())
+            .map(|rig| rig.items.len())
+            .sum()
+    }
+
+    /// Poses the moving parts of every animated model for the frame at the playback's clock:
+    /// the instances a clip reaches under their clips, the others back at rest once their
+    /// clips ended. Nothing is done for a planting nothing plays on and nothing of which is
+    /// posed.
+    pub fn animate(&mut self, r: &mut Renderer, playback: &visioncraft_core::Playback) {
+        for (id, gpu) in &mut self.gens {
+            let playing = playback.playing_on(id);
+            for ((asset, _), grp) in &mut gpu.groups {
+                let Some(rig) = &mut grp.rig else {
+                    continue;
+                };
+                if !playing && !rig.any_posed() {
+                    continue;
+                }
+                rig.animate(
+                    r,
+                    playback,
+                    id,
+                    asset,
+                    &grp.numbers,
+                    &grp.matrices,
+                    playback.clock,
                 );
-                let catalog = self.library.catalog.as_ref();
-                visioncraft_core::keep_dry(self.sea.as_ref(), &mut e, &|a| {
-                    catalog
-                        .and_then(|c| c.asset(a))
-                        .is_some_and(visioncraft_core::water::floats)
-                });
-                e
             }
         }
     }

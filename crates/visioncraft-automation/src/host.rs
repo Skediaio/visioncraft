@@ -45,6 +45,30 @@ pub trait Host {
         let _ = (method, params);
         None
     }
+    /// A model's animation (its clips, what was left out of them, and the bones they move) for
+    /// `query.clips` and playback; `None` when this host has no model files (a bare session).
+    fn animation(&mut self, model: &str) -> Option<Result<visioncraft_core::Animation, String>> {
+        let _ = model;
+        None
+    }
+    /// What plays beside the project (`model.play_clip`, `effect.flash`), with the clock it is
+    /// sampled at; the host keeps it current. `None` for a host that keeps none.
+    fn playback(&mut self) -> Option<&mut visioncraft_core::Playback> {
+        Some(&mut self.state().playback)
+    }
+}
+
+/// `query.clips` and playback read the models' GLB files, which the app holds (the window's
+/// asset store, the project's folder, the library's folder): a host that has them answers
+/// through this.
+pub trait Animations {
+    /// The animation of a model: a catalogue asset id, or `user:<id>` for an imported object.
+    fn animation(
+        &mut self,
+        model: &str,
+        project: &Project,
+        state: &HostState,
+    ) -> Result<visioncraft_core::Animation, String>;
 }
 
 /// Draws pictures for [`Headless`] (the CLI's GPU renderer).
@@ -90,8 +114,14 @@ pub struct RenderRequest {
     /// A photo (quality `photo`, or frames averaged, a lens or a shutter at another): how to
     /// take it. `None`: the plain still.
     pub photo: Option<PhotoRequest>,
-    /// The animation clock (s) the picture is taken at: wind and water move with it.
+    /// The animation clock (s) the picture is taken at: wind and water move with it, and the
+    /// clips playing on the scene are sampled at it.
     pub animation_s: f64,
+    /// What plays beside the project when the picture is taken (the host's playback), and the
+    /// frames a second of the frames this picture is one of: a film's `fps` (a flash's `frames`
+    /// last that long there, the same frames every time), 60 for a still.
+    pub playback: visioncraft_core::Playback,
+    pub fps: f64,
     /// How much of the lamps' light is on, 0..1 (1: all of it; whether the lamps are on at all
     /// is the project's `view.lights` or the sun's).
     pub lamp_level: f32,
@@ -244,6 +274,13 @@ pub struct HostState {
     pub image_missing: BTreeMap<String, String>,
     /// The project as it was last opened or saved, for `dirty`.
     pub saved: Option<Project>,
+    /// What plays beside the project: clips on placed objects and flashes, sampled at `clock`
+    /// (the `animation_s` of the last picture in a session without a window). Session state,
+    /// not saved and not an undo step.
+    pub playback: visioncraft_core::Playback,
+    /// The frames a second of the film `film.render` is drawing, while it draws it: what its
+    /// pictures' flashes count `frames` in. `None` outside a film, where a still is 60.
+    pub film_fps: Option<f64>,
     /// The agent's name (MCP `clientInfo.name`), for the agent log.
     pub client: Option<String>,
     /// What agents did, oldest first (`agent.log`); session state, not saved.
@@ -378,11 +415,12 @@ pub fn builtin_catalog() -> Catalog {
 }
 
 /// The host of `visioncraft-cli` (and of tests): a session, its state, and pictures when
-/// [`Headless::pictures`] is set.
+/// [`Headless::pictures`] is set; the models' animations when [`Headless::animations`] is.
 pub struct Headless {
     pub session: Session,
     pub state: HostState,
     pub pictures: Option<Box<dyn Pictures>>,
+    pub animations: Option<Box<dyn Animations>>,
 }
 
 impl Headless {
@@ -391,6 +429,7 @@ impl Headless {
             session: Session::new(Project::default()),
             state: HostState::new(access),
             pictures: None,
+            animations: None,
         }
     }
 }
@@ -398,6 +437,13 @@ impl Headless {
 impl Host for Headless {
     fn parts(&mut self) -> (&mut Session, &mut HostState) {
         (&mut self.session, &mut self.state)
+    }
+
+    fn animation(&mut self, model: &str) -> Option<Result<visioncraft_core::Animation, String>> {
+        let (session, state) = (&mut self.session, &mut self.state);
+        self.animations
+            .as_mut()
+            .map(|animations| animations.animation(model, session.project(), state))
     }
 
     fn render(

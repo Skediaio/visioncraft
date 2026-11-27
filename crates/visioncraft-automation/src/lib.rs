@@ -8,7 +8,8 @@
 //! - [`rpc`]: `{"id", "method", "params"}` in, `{"id", "ok", "result" | "error"}` out.
 //! - [`mcp`]: the Model Context Protocol (JSON-RPC 2.0, one message per line).
 //! - [`commands`]: what both run: the core's commands plus the host's own (`file.*`,
-//!   `edit.*`, `document.inspect`, `view.render`, queries), all-or-nothing batches.
+//!   `edit.*`, `document.inspect`, `view.render`, queries), all-or-nothing batches; a query
+//!   that needs the models' files (`query.clips`) goes through [`host::Animations`].
 //! - [`bridge`], [`control`], [`discovery`] (native only): the loopback control channel of a
 //!   running window, client and server side.
 //!
@@ -30,13 +31,14 @@ pub mod host;
 mod inspect;
 mod lines;
 pub mod mcp;
+mod playback;
 pub mod proof;
 pub mod rpc;
 mod sheet;
 
 pub use host::{
-    Access, Headless, Host, HostState, LoadedModel, PhotoRequest, PictureShadowFilter, Pictures,
-    RenderRequest, Rendered,
+    Access, Animations, Headless, Host, HostState, LoadedModel, PhotoRequest, PictureShadowFilter,
+    Pictures, RenderRequest, Rendered,
 };
 pub use inspect::{
     LightCheckQuery, SkyVisJob, SunGrid, SunGridJob, SunGridQuery, light_check, sky_scene,
