@@ -3594,9 +3594,30 @@ impl Renderer {
     /// all of them, a `first` past the last cascade none at all. For far cells of a large scene,
     /// which need no shadow in the metres a near cascade covers. Which cascades a frame
     /// refreshes does not depend on it; the snow cover map takes every item as before.
+    ///
+    /// A change makes stale the maps whose casters it changes, those of `min(old, new)` to
+    /// `max(old, new)` (the cached far one among them when it lies in that range): each still
+    /// shows the item as it was, and is sampled with its own matrix until `cascade_refresh`
+    /// redraws it, the next frame while the sun stands still (`cascade_stale`). The same value
+    /// again changes nothing.
     pub fn set_item_shadow_cascades(&mut self, item: ItemId, first: u8) {
-        if let Some(Some(it)) = self.items.get_mut(item.0 as usize) {
-            it.shadow_from = first;
+        let count = self.quality.cascades.clamp(1, shadow::MAX_CASCADES as u32) as usize;
+        let Some(Some(it)) = self.items.get_mut(item.0 as usize) else {
+            return;
+        };
+        if it.shadow_from == first {
+            return;
+        }
+        let (from, to) = (
+            it.shadow_from.min(first) as usize,
+            it.shadow_from.max(first) as usize,
+        );
+        it.shadow_from = first;
+        for c in from..to.min(count) {
+            // A map never drawn is drawn next frame anyway; nothing else's casters changed.
+            if self.cascade_rendered[c].is_some() {
+                self.cascade_stale[c] = true;
+            }
         }
     }
 
@@ -10758,6 +10779,91 @@ mod tests {
             0,
             "past the last cascade: no shadow at all"
         );
+    }
+
+    /// An item that changes the cascades it casts into makes stale the maps whose casters change
+    /// (`min(old, new)..max(old, new)`, the cached far one when it is in that range), and no
+    /// other; the next frame redraws them and plans the item in none it left.
+    #[test]
+    fn changing_an_item_s_cascades_refreshes_the_maps_it_leaves() {
+        let (device, queue) = pollster::block_on(headless_device()).expect("device");
+        let mut r = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        r.resize(64, 36);
+        r.set_quality(Quality {
+            cascades: 4,
+            ..Quality::MEDIUM
+        });
+        let mut m = demo::MeshData::default();
+        m.add_box(Vec3::new(-0.5, 0.0, -0.5), Vec3::new(0.5, 1.5, 0.5));
+        let mesh = r.add_mesh(&m.mesh()).expect("mesh");
+        let material = r.add_material(&Material::default());
+        let at: Vec<Mat4> = (0..40)
+            .map(|i| Mat4::from_translation(Vec3::new(3.0 * i as f32, 0.0, 0.0)))
+            .collect();
+        let plain = r.add_item(mesh, material, &at);
+        let late = r.add_item(mesh, material, &at);
+        let (view, proj, eye) =
+            demo::camera(Vec3::new(60.0, 3.0, 4.0), Vec3::new(60.0, 0.5, 0.0), 1.0);
+        r.set_camera(view, proj, eye);
+        let frame = |r: &mut Renderer| {
+            let mut e = device.create_command_encoder(&Default::default());
+            r.render(&mut e);
+            queue.submit([e.finish()]);
+            device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .expect("poll");
+        };
+        let shadow_draws = |r: &Renderer| {
+            r.stats()
+                .pass_draws
+                .iter()
+                .find(|(l, _)| *l == "shadow")
+                .map_or(0, |(_, n)| *n)
+        };
+        frame(&mut r);
+        assert!(
+            r.cascade_rendered.iter().all(Option::is_some) && r.far_cache.is_some(),
+            "the first frame draws every cascade and caches the far one"
+        );
+        assert_eq!(r.cascade_stale, [false; shadow::MAX_CASCADES]);
+        // The same value: nothing is made stale.
+        r.set_item_shadow_cascades(late, 0);
+        assert_eq!(r.cascade_stale, [false; shadow::MAX_CASCADES]);
+        // Out of the near three, still in the far one: those three no longer show the item.
+        r.set_item_shadow_cascades(late, 3);
+        assert_eq!(r.cascade_stale, [true, true, true, false]);
+        // Out of the far one too: its cached map no longer shows the item either.
+        r.set_item_shadow_cascades(late, 4);
+        assert_eq!(r.cascade_stale, [true; shadow::MAX_CASCADES]);
+        // The next frame (the sun stands still) redraws the four; without the stale marks
+        // only the first and the third drew (the middle ones alternate frames, the far one is
+        // reused). One batch per cascade: both items share mesh and texture set.
+        frame(&mut r);
+        assert_eq!(r.cascade_stale, [false; shadow::MAX_CASCADES]);
+        assert_eq!(shadow_draws(&r), 4, "every cascade drawn");
+        assert!(r.far_cache.is_some(), "drawn, and cached again");
+        // And the item is in none of them.
+        r.remove_item(plain);
+        for cascade in 0..4 {
+            r.visibility.follow(&r.items);
+            let mut visibility = std::mem::take(&mut r.visibility);
+            let n = r
+                .plan_items(
+                    proj * view,
+                    false,
+                    Pass::Shadow {
+                        far: cascade == 3,
+                        coarse: cascade > 0,
+                        cascade,
+                    },
+                    None,
+                    &mut batch::GatherList::default(),
+                    &mut visibility,
+                )
+                .len();
+            r.visibility = visibility;
+            assert_eq!(n, 0, "cascade {cascade}: nothing to draw");
+        }
     }
 
     /// The plane test culls exactly what testing the eight corners culled.
