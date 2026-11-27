@@ -3436,18 +3436,17 @@ impl Renderer {
         if rows <= self.material_capacity {
             return;
         }
-        let max = (self.device.limits().max_storage_buffer_binding_size / MATERIAL_SIZE) as u32;
-        assert!(
-            rows <= max,
-            "{rows} materials: more than the device's largest buffer holds"
+        let size = table_size(
+            rows,
+            self.material_capacity,
+            self.device.limits().max_storage_buffer_binding_size,
         );
-        let capacity = rows.max(self.material_capacity.saturating_mul(2)).min(max);
-        let table = self.storage_buffer("materials", u64::from(capacity) * MATERIAL_SIZE);
+        let table = self.storage_buffer("materials", size);
         self.queue.write_buffer(&table, 0, &self.material_bytes);
         self.material_table = table;
-        self.material_capacity = capacity;
+        self.material_capacity = u32::try_from(size / MATERIAL_SIZE).expect("rows fit a u32");
         self.material_bytes
-            .resize((capacity * MATERIAL_SIZE as u32) as usize, 0);
+            .resize((self.material_capacity * MATERIAL_SIZE as u32) as usize, 0);
         let maps: Vec<_> = self
             .texture_sets
             .iter()
@@ -6025,6 +6024,25 @@ impl Bytes {
             self.0.extend_from_slice(&x.to_le_bytes());
         }
     }
+}
+
+/// The material table's size in bytes for `rows` rows, from `capacity` rows before: twice the
+/// old capacity, or just enough when that is more, at most what one binding holds (`limit`:
+/// the device's largest storage buffer binding, `limit / MATERIAL_SIZE` rows). A power of two
+/// (`storage_buffer` rounds up to one) that never passes the limit, where the rounding up of
+/// the clamped size could.
+fn table_size(rows: u32, capacity: u32, limit: u64) -> u64 {
+    let max = limit / MATERIAL_SIZE;
+    assert!(
+        u64::from(rows) <= max,
+        "{rows} materials: more than the device's largest buffer holds"
+    );
+    let wanted = rows
+        .max(capacity.saturating_mul(2))
+        .min(u32::try_from(max).unwrap_or(u32::MAX));
+    (u64::from(wanted) * MATERIAL_SIZE)
+        .next_power_of_two()
+        .min(limit)
 }
 
 /// scene.wgsl's texture bits of the six map slots; a slot 6 filled while the material has no
@@ -8962,6 +8980,55 @@ mod tests {
                 "the slot of mesh {} keeps its mesh and row",
                 p.mesh.0
             );
+        }
+    }
+
+    /// The material table's size: twice the old capacity or just enough when that is more,
+    /// always room for the rows; a power of two; and never past the largest storage binding,
+    /// where a limit that is no power of two of bytes used to be passed by the rounding up.
+    #[test]
+    fn the_material_table_stays_within_one_binding() {
+        let mib = 1 << 20;
+        assert_eq!(
+            table_size(65, 64, 128 * mib),
+            16384,
+            "65 rows from 64: twice"
+        );
+        assert_eq!(table_size(1, 0, 128 * mib), 128, "one row, rounded up");
+        assert_eq!(
+            table_size(1, 64, 128 * mib),
+            16384,
+            "twice the old capacity, rounded up"
+        );
+        // A limit of 2^31 - 1 bytes holds 19 173 952 rows; their bytes rounded up are 2^31.
+        assert_eq!(
+            table_size(19_173_952, 64, (1u64 << 31) - 1),
+            (1u64 << 31) - 1,
+            "the rounding up stays under the limit"
+        );
+        for limit in [
+            112 * 1000 + 7,
+            1 << 27,
+            (1u64 << 31) - 1,
+            112 * 4096,
+            112u64 * 3000 - 1,
+        ] {
+            let last = (limit / MATERIAL_SIZE) as u32;
+            let mut samples = vec![1, 2, 63, 64, 65, 100, 146, 147, 999, 1000];
+            samples.extend([last / 2, last.saturating_sub(1), last]);
+            for capacity in [0u32, 1, 64, 146, 1000] {
+                for rows in samples.iter().copied().filter(|&r| r <= last) {
+                    let size = table_size(rows, capacity, limit);
+                    assert!(
+                        size <= limit,
+                        "{rows} rows from {capacity} under {limit}: {size}"
+                    );
+                    assert!(
+                        size / MATERIAL_SIZE >= u64::from(rows),
+                        "{rows} rows from {capacity} under {limit}: {size}"
+                    );
+                }
+            }
         }
     }
 
