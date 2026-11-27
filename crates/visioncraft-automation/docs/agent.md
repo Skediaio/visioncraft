@@ -373,7 +373,10 @@ its clips with `query.clips {"model": "user:uo1"}`: `{clips: [{name, duration_s,
 warnings}`, the channel count of each and what was left out of the file's animations and why (a
 malformed channel: the model still loads); a model that stands still answers `{"clips": [],
 "warnings": []}`. A catalogue asset is asked by its id, and its clips are those of its first
-level of detail. On the command line the file is read from the project's folder or the library
+level of detail. That level also poses every level of the asset, so `warnings` has a line for
+each other level whose file is at hand and differs from the first: a node the first level has no
+bone for (that part is drawn at rest), a clip that is missing there or lasts another length (the
+first level's plays). On the command line the file is read from the project's folder or the library
 folder (`--assets`); in a window a library model's clips are known once it is loaded.
 
 A clip plays on the placed objects, not on the model: `model.play_clip {"object": "g4", "clip":

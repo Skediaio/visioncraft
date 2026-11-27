@@ -506,6 +506,9 @@ impl Host for Bound<'_, '_> {
     /// is on disk.
     fn animation(&mut self, model: &str) -> Option<Result<visioncraft_core::Animation, String>> {
         use crate::model_animation::Held;
+        // A catalogue asset is posed by its first level, whatever level is resident: ask for
+        // that level's file when it was never read, so that a clip about to play moves it.
+        self.host.studio.scene.library.want_animation(model);
         let s = &self.host.studio;
         let assets: Vec<&visioncraft_core::catalog::Asset> = s
             .scene
@@ -524,8 +527,8 @@ impl Host for Bound<'_, '_> {
                 .ok_or_else(|| format!("`{file}` is not among the window's files"))
         };
         let files = |file: &str| {
-            if let Some(animation) = library.animation(file) {
-                return Ok(Held::Loaded(animation.clone()));
+            if let Some(kept) = library.kept(file) {
+                return Ok(Held::Loaded(kept.anim.clone(), kept.nodes.clone()));
             }
             #[cfg(not(target_arch = "wasm32"))]
             if let Some(bytes) = store.library_file(file) {
@@ -1063,6 +1066,143 @@ mod tests {
         )
         .unwrap_or_else(|e| panic!("query.clips: {e}"));
         assert_eq!(r, json!({"clips": [], "warnings": []}));
+    }
+
+    /// A catalogue asset's levels in a window (a browser has no file to read them again from):
+    /// while the first level was never loaded `query.clips` cannot answer and asks for that
+    /// level; once both are loaded, what the window kept of them gives the same warning as the
+    /// files do on the command line.
+    #[test]
+    fn the_window_compares_the_levels_of_an_asset_from_what_it_kept() {
+        use std::sync::Arc;
+        let Ok((device, queue)) = pollster::block_on(visioncraft_render::headless_device()) else {
+            eprintln!("no GPU adapter: skipped");
+            return;
+        };
+        let renderer =
+            visioncraft_render::Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let mut studio = super::Studio::new(renderer, Project::default());
+        let (lod0, lod1) = (
+            "models/chest/lod0.glb".to_string(),
+            "models/chest/lod1.glb".to_string(),
+        );
+        // Far from the chest: only the coarsest level is asked for.
+        let far = glam::Vec3::new(0.0, 0.0, 50.0);
+        {
+            let s = &mut studio;
+            s.scene.library.merge_user_assets();
+            for (path, bytes) in [
+                (&lod0, crate::gltf_load::tests::chest_lod0().finish()),
+                (&lod1, crate::gltf_load::tests::chest_lod1().finish()),
+            ] {
+                s.scene.library.store.provide(path, Arc::from(bytes));
+            }
+            let mut catalog = s
+                .scene
+                .library
+                .catalog
+                .as_deref()
+                .cloned()
+                .unwrap_or_default();
+            catalog.assets.push(visioncraft_core::catalog::Asset {
+                id: "chest".into(),
+                name: "Chest".into(),
+                category: visioncraft_core::catalog::Category::Other,
+                tags: Vec::new(),
+                license: "CC0-1.0".into(),
+                origin: visioncraft_core::catalog::Origin::BuiltIn,
+                author: String::new(),
+                source_url: String::new(),
+                size_m: [1.0; 3],
+                lods: vec![
+                    visioncraft_core::catalog::Lod {
+                        file: lod0.clone(),
+                        max_distance_m: 6.0,
+                    },
+                    visioncraft_core::catalog::Lod {
+                        file: lod1.clone(),
+                        max_distance_m: f32::INFINITY,
+                    },
+                ],
+                thumbnail: String::new(),
+                plant: None,
+                light: None,
+            });
+            s.scene.library.catalog = Some(Arc::new(catalog));
+            s.scene.library.note("g", "chest", &[glam::Mat4::IDENTITY]);
+            for _ in 0..500 {
+                let (lib, r) = (&mut s.scene.library, &mut s.renderer);
+                lib.pump(r, far);
+                if lib.resident_models() == 1 && lib.idle() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            assert_eq!(
+                s.scene.library.resident_models(),
+                1,
+                "only level 1 is loaded from far"
+            );
+        }
+        let (mut mode, mut selection) = (None, crate::selection::SelectionState::default());
+        let mut host_ui = crate::host_ui::HostUi::default();
+        let mut host = super::WindowHost {
+            studio: &mut studio,
+            device: &device,
+            queue: &queue,
+            mode: &mut mode,
+            selection: &mut selection,
+            extension_modes: &[],
+            host_ui: &mut host_ui,
+            now: 0.0,
+        };
+        let mut state = super::HostState::new(visioncraft_automation::Access::any());
+        let mut bound = super::Bound {
+            host: &mut host,
+            state: &mut state,
+        };
+        let ask = visioncraft_automation::commands::execute(
+            &mut bound,
+            "query.clips",
+            &json!({"model": "chest"}),
+        )
+        .unwrap_err();
+        assert!(ask.contains("not loaded here"), "{ask}");
+        {
+            let s = &mut bound.host.studio;
+            for _ in 0..500 {
+                let (lib, r) = (&mut s.scene.library, &mut s.renderer);
+                lib.pump(r, far);
+                if lib.resident_models() == 2 && lib.idle() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            assert_eq!(
+                s.scene.library.resident_models(),
+                2,
+                "the first level was asked for"
+            );
+        }
+        let r = visioncraft_automation::commands::execute(
+            &mut bound,
+            "query.clips",
+            &json!({"model": "chest"}),
+        )
+        .unwrap_or_else(|e| panic!("query.clips: {e}"));
+        assert_eq!(
+            r["clips"],
+            json!([
+                {"name": "open", "duration_s": 1.0, "channels": 1},
+                {"name": "shake", "duration_s": 1.0, "channels": 1},
+            ])
+        );
+        assert_eq!(
+            r["warnings"],
+            json!([
+                "level 1 (`models/chest/lod1.glb`): node `lid2` (2) is not in the first level, drawn at rest; clip `open` lasts 2 s here, 1 s in the first level; the first level's plays; clip `shake` is missing; this level is posed by the first level's clip"
+            ])
+        );
     }
 
     /// Through the window's host, as an agent or the page's scripts reach it: a placed hinge
