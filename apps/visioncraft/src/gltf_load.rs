@@ -82,6 +82,8 @@ pub struct Prim {
 pub struct AnimatedPart {
     /// The part's node in the file: how a level of detail's file knows the same part.
     pub node: usize,
+    /// The node's name in the file (empty without one): what a warning calls it by.
+    pub name: String,
     /// Its triangles in the node's own space: the node's own transform is not applied.
     pub prims: Vec<Prim>,
     /// The node's transform in the file.
@@ -137,6 +139,16 @@ impl Glb {
                 rest.iter().flat_map(|p| p.positions.iter()).map(|q| q[1]),
             ),
         }
+    }
+
+    /// The node of each moving part, as [`Self::parts`] have it: the glTF node's index in the
+    /// file (how a level of detail knows the same part) and its name. What the levels of a
+    /// catalogue asset are compared by (`model_animation::level_warnings`).
+    pub fn nodes(&self) -> Vec<(usize, String)> {
+        self.parts
+            .iter()
+            .map(|p| (p.node, p.name.clone()))
+            .collect()
     }
 }
 
@@ -605,12 +617,16 @@ pub fn parse(bytes: &[u8]) -> Result<Glb, String> {
         .iter()
         .map(|&n| {
             let node = doc.nodes().nth(n);
-            let (translation, rotation, scale) = node
-                .map_or(([0.0; 3], [0.0, 0.0, 0.0, 1.0], [1.0; 3]), |n| {
-                    n.transform().decomposed()
-                });
+            let (translation, rotation, scale, name) = node.map_or(
+                ([0.0; 3], [0.0, 0.0, 0.0, 1.0], [1.0; 3], String::new()),
+                |n| {
+                    let (t, r, s) = n.transform().decomposed();
+                    (t, r, s, n.name().unwrap_or_default().to_string())
+                },
+            );
             AnimatedPart {
                 node: n,
+                name,
                 prims: Vec::new(),
                 rest: Trs {
                     translation,
@@ -919,6 +935,10 @@ pub(crate) mod tests {
         }
     }
 
+    /// One track of an animation [`Builder::animation_of`] makes: the node, the path, the
+    /// interpolation, the key times and the values.
+    type Track<'a> = (usize, &'a str, &'a str, &'a [f32], &'a [f32]);
+
     /// A GLB under construction for the tests: triangles, a node tree, materials and animations,
     /// all in one BIN chunk. Every node no node lists as a child is a root.
     #[derive(Default)]
@@ -1036,12 +1056,27 @@ pub(crate) mod tests {
             times: &[f32],
             values: &[f32],
         ) {
-            let t = self.floats("SCALAR", times);
-            let v = self.floats(if path == "rotation" { "VEC4" } else { "VEC3" }, values);
+            self.animation_of(name, &[(node, path, interpolation, times, values)]);
+        }
+
+        /// An animation `name` with several channels, each as [`Self::animation`]'s one.
+        pub(crate) fn animation_of(&mut self, name: &str, channels: &[Track]) {
+            let (samplers, targets): (Vec<Value>, Vec<Value>) = channels
+                .iter()
+                .enumerate()
+                .map(|(i, &(node, path, interpolation, times, values))| {
+                    let t = self.floats("SCALAR", times);
+                    let v = self.floats(if path == "rotation" { "VEC4" } else { "VEC3" }, values);
+                    (
+                        json!({"input": t, "interpolation": interpolation, "output": v}),
+                        json!({"sampler": i, "target": {"node": node, "path": path}}),
+                    )
+                })
+                .unzip();
             self.animations.push(json!({
                 "name": name,
-                "samplers": [{"input": t, "interpolation": interpolation, "output": v}],
-                "channels": [{"sampler": 0, "target": {"node": node, "path": path}}],
+                "samplers": samplers,
+                "channels": targets,
             }));
         }
 
@@ -1117,6 +1152,147 @@ pub(crate) mod tests {
         b
     }
 
+    /// The sine and the cosine of half a turn of `deg` degrees about Z: its quaternion.
+    fn about_z(deg: f32) -> [f32; 4] {
+        let half = deg.to_radians() / 2.0;
+        [0.0, 0.0, half.sin(), half.cos()]
+    }
+
+    /// Rotation keys: each quaternion's four numbers in a row.
+    fn turns(quats: &[[f32; 4]]) -> Vec<f32> {
+        quats.iter().flatten().copied().collect()
+    }
+
+    /// No rotation.
+    const SHUT: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+
+    /// A chest in two levels of detail, for the tests of a catalogue asset's clips and pose
+    /// (`model_animation`, `playback_tests`, `agents`): a body with a lid on it that opens
+    /// upward. The first level (`chest_lod0`) is the authority: `open` swings the lid up (a
+    /// quarter turn about Z in a second) and `shake` rattles it. The second level (`chest_lod1`)
+    /// has the same `body` and `lid` nodes, a knob `lid2` of its own that its `open` moves too,
+    /// no `shake`, and an `open` that takes twice as long.
+    pub(crate) fn chest_lod0() -> Builder {
+        let mut b = Builder::new("steel");
+        let body = b.triangle(A);
+        let lid = b.triangle(LID);
+        let n0 = b.node(json!({"name": "body", "mesh": body}));
+        let n1 = b.node(json!({"name": "lid", "mesh": lid, "translation": [0.0, 1.0, 0.0]}));
+        b.nodes[n0]["children"] = json!([n1]);
+        b.animation(
+            "open",
+            n1,
+            "rotation",
+            "LINEAR",
+            &[0.0, 1.0],
+            &turns(&[SHUT, about_z(90.0)]),
+        );
+        b.animation(
+            "shake",
+            n1,
+            "rotation",
+            "LINEAR",
+            &[0.0, 0.25, 0.5, 0.75, 1.0],
+            &turns(&[
+                SHUT,
+                about_z(5.0),
+                about_z(-5.0),
+                about_z(5.0),
+                about_z(-5.0),
+            ]),
+        );
+        b
+    }
+
+    /// The chest's second level of detail ([`chest_lod0`]).
+    pub(crate) fn chest_lod1() -> Builder {
+        let mut b = Builder::new("steel");
+        let body = b.triangle(A);
+        let lid = b.triangle(LID);
+        let knob = b.triangle(KNOB);
+        let n0 = b.node(json!({"name": "body", "mesh": body}));
+        let n1 = b.node(json!({"name": "lid", "mesh": lid, "translation": [0.0, 1.0, 0.0]}));
+        let n2 = b.node(json!({"name": "lid2", "mesh": knob, "translation": [0.0, 1.0, 0.1]}));
+        b.nodes[n0]["children"] = json!([n1, n2]);
+        b.animation_of(
+            "open",
+            &[
+                (
+                    n1,
+                    "rotation",
+                    "LINEAR",
+                    &[0.0, 2.0],
+                    &turns(&[SHUT, about_z(90.0)]),
+                ),
+                (
+                    n2,
+                    "translation",
+                    "LINEAR",
+                    &[0.0, 2.0],
+                    &[0.0, 0.0, 0.0, 0.0, 0.5, 0.0],
+                ),
+            ],
+        );
+        b
+    }
+
+    const LID: [[f32; 3]; 3] = [[0.0, 0.0, 0.0], [0.8, 0.0, 0.0], [0.0, 0.15, 0.0]];
+    const KNOB: [[f32; 3]; 3] = [[0.3, 0.0, 0.0], [0.5, 0.0, 0.0], [0.4, 0.15, 0.0]];
+
+    #[test]
+    fn the_chest_levels_are_loaded_as_the_tests_expect() {
+        let first = parse(&chest_lod0().finish()).unwrap();
+        let second = parse(&chest_lod1().finish()).unwrap();
+        fn lengths(c: &Clip) -> (&str, f32) {
+            (c.name.as_str(), c.duration)
+        }
+        assert_eq!(
+            first.clips.iter().map(lengths).collect::<Vec<_>>(),
+            [("open", 1.0), ("shake", 1.0)]
+        );
+        assert_eq!(
+            second.clips.iter().map(lengths).collect::<Vec<_>>(),
+            [("open", 2.0)]
+        );
+        assert_eq!(first.parts.iter().map(|p| p.node).collect::<Vec<_>>(), [1]);
+        assert_eq!(
+            second.parts.iter().map(|p| p.node).collect::<Vec<_>>(),
+            [1, 2]
+        );
+        // Both levels' bodies stand still and both lids hang at the same place.
+        assert_eq!(first.prims, second.prims);
+        assert_eq!(first.parts[0].rest, second.parts[0].rest);
+        // `open` turns the lid a quarter about its hinge (0, 1, 0) in a second: its tip (0.8 m
+        // along x) is then 0.8 m above the hinge, and half way it is at 45 degrees. Level 1's
+        // takes twice as long: at 1 s it is where the first level is at 0.5 s.
+        let mut sampler = keyframes::Sampler::default();
+        let play = [keyframes::Played {
+            clip: 0,
+            start_s: 0.0,
+            looped: false,
+        }];
+        let tip = |pose: &[f32; 16]| {
+            Mat4::from_cols_array(pose).transform_point3(Vec3::new(0.8, 0.0, 0.0))
+        };
+        let rig = first.rig().unwrap();
+        let up = tip(&sampler.pose(&rig, &play, 1.0)[0]);
+        assert!(
+            (up - Vec3::new(0.0, 1.8, 0.0)).length() < 1e-4,
+            "the lid is up: {up:?}"
+        );
+        let half = tip(&sampler.pose(&rig, &play, 0.5)[0]);
+        assert!(
+            (half - Vec3::new(0.8 * Q, 1.0 + 0.8 * Q, 0.0)).length() < 1e-4,
+            "half way: {half:?}"
+        );
+        let rig = second.rig().unwrap();
+        let slow = tip(&sampler.pose(&rig, &play, 1.0)[0]);
+        assert!(
+            (slow - half).length() < 1e-4,
+            "level 1's open takes 2 s: {slow:?}"
+        );
+    }
+
     #[test]
     fn a_hinge_is_one_part_with_its_clip() {
         let g = parse(&hinge().finish()).unwrap();
@@ -1126,6 +1302,7 @@ pub(crate) mod tests {
             g.parts,
             vec![AnimatedPart {
                 node: 1,
+                name: String::new(),
                 prims: vec![as_is(B)],
                 rest: Trs {
                     translation: [1.0, 0.0, 0.0],

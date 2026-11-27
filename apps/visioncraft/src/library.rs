@@ -11,8 +11,10 @@ use crate::assets::{
 use crate::gltf_load::{Alpha, Glb, GlbMaterial};
 use glam::{Mat4, Vec3};
 use serde::Deserialize;
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use visioncraft_core::catalog::Origin;
 use visioncraft_core::keyframes::{Matrix, model_space};
 use visioncraft_core::{Animation, Catalog};
 use visioncraft_render::{
@@ -131,9 +133,6 @@ pub(crate) struct Model {
     textures: Vec<TextureId>,
     meshes: Vec<MeshId>,
     materials: Vec<MaterialId>,
-    /// The file's animation: its clips, what was left out of them, and the bones they move
-    /// (`None` in `rig` for a model that stands still).
-    pub(crate) anim: Animation,
     /// The moving parts with their triangles, in the rig's order: a part without triangles (a
     /// skeleton joint) has none and gets no item. Empty for a model that stands still.
     pub(crate) bones: Vec<Bone>,
@@ -152,19 +151,31 @@ pub(crate) struct Bone {
     pub(crate) rest_space: Matrix,
 }
 
-impl Model {
-    /// Whether a clip can move this model.
-    fn animated(&self) -> bool {
-        self.anim.rig.is_some()
-    }
+/// The animation of a model file, kept from its first load for as long as the session lasts
+/// ([`Library::animations`]): what poses a catalogue asset and what `query.clips` reads,
+/// whether or not the model is still resident.
+pub(crate) struct Kept {
+    /// Tells one kept animation from another: what a scene group's moving parts are built
+    /// under.
+    pub(crate) id: u64,
+    /// The file's animation: its clips, what was left out of them, and the bones they move
+    /// (`None` in `rig` for a model that stands still).
+    pub(crate) anim: Animation,
+    /// The glTF node of each bone ([`Bone::node`], and its name): how a level of detail's file
+    /// knows the same part.
+    pub(crate) nodes: Vec<(usize, String)>,
+    /// Metres the model is raised by, as [`Model::lift`] when it is resident.
+    pub(crate) lift: f32,
 }
 
-/// An animated catalogue asset as the scene draws it: the loaded model whose bones and clips
-/// pose it (the first level of detail's, else the finest loaded that moves), and per level of
-/// detail the model drawn there with the level's distance.
+/// An animated catalogue asset as the scene draws it: per level of detail the model drawn
+/// there with the level's distance, and the first level's animation ([`AssetRig::authority`]),
+/// which poses every level whether or not the first level is resident.
 pub(crate) struct AssetRig<'a> {
-    pub rig: &'a Model,
-    pub levels: Vec<(&'a Model, f32)>,
+    /// The first level's animation ([`Library::authority`]): `None` until its file was read
+    /// once, then every part is drawn at rest.
+    pub(crate) authority: Option<&'a Kept>,
+    pub(crate) levels: Vec<(&'a Model, f32)>,
 }
 struct Upload {
     path: String,
@@ -278,10 +289,13 @@ pub struct Library {
     indexes_asked: bool,
     models: HashMap<String, Model>,
     /// The animation of every model file loaded so far, kept when the model is evicted: what
-    /// `query.clips` and playback read in a browser, which has no file to read again.
-    animations: HashMap<String, Animation>,
+    /// `query.clips` and playback read in a browser, which has no file to read again, and the
+    /// first level of detail's entry is what poses a catalogue asset ([`Self::authority`]).
+    animations: HashMap<String, Kept>,
     /// The id of the next loaded model (`Model::id`).
     next_model_id: u64,
+    /// The id of the next kept animation (`Kept::id`).
+    next_anim_id: u64,
     awaiting: HashSet<String>,
     uploading: Vec<Upload>,
     garbage: Vec<Model>,
@@ -353,6 +367,7 @@ impl Library {
             models: HashMap::new(),
             animations: HashMap::new(),
             next_model_id: 0,
+            next_anim_id: 0,
             awaiting: HashSet::new(),
             uploading: Vec::new(),
             garbage: Vec::new(),
@@ -448,18 +463,53 @@ impl Library {
         )
     }
 
-    /// An animated catalogue asset ([`AssetRig`]), once a level that moves is resident.
+    /// An animated catalogue asset as the scene draws it ([`AssetRig`]): per level of detail
+    /// what is drawn there, and the first level's animation that poses them. `None` while
+    /// nothing of it is resident (the caller keeps the placeholder).
     pub(crate) fn rig(&self, asset: &str) -> Option<AssetRig<'_>> {
-        let levels = self.levels(asset)?;
-        let rig = levels
-            .iter()
-            .find_map(|(m, _)| m.animated().then_some(*m))?;
-        Some(AssetRig { rig, levels })
+        Some(AssetRig {
+            authority: self.authority(asset),
+            levels: self.levels(asset)?,
+        })
+    }
+
+    /// The first level of detail's animation of a catalogue asset, from its file's first load.
+    /// It is the authority over the asset: its clips are the asset's, and its bones and their
+    /// rest poses pose every level, whatever level is resident. `None` until the file was read
+    /// once: then nothing poses the asset, and its parts are drawn at rest.
+    pub(crate) fn authority(&self, asset: &str) -> Option<&Kept> {
+        let first = self.catalog.as_ref()?.asset(asset)?.lods.first()?;
+        self.animations.get(&first.file)
+    }
+
+    /// Asks for the first level's file of a catalogue asset whose animation is not known yet (a
+    /// clip is about to play on it, or `query.clips` asks): once read, that level's rig poses
+    /// the asset whatever level is resident. Nothing for an imported object, whose file is the
+    /// host's.
+    pub fn want_animation(&mut self, asset: &str) {
+        let first = self
+            .catalog
+            .as_ref()
+            .and_then(|c| c.asset(asset))
+            .filter(|a| a.origin != Origin::User)
+            .and_then(|a| a.lods.first().map(|l| (l.file.clone(), a.lods.len())));
+        let Some((file, levels)) = first else {
+            return;
+        };
+        if !self.animations.contains_key(&file) {
+            self.request(&file, priority(0.0, 0, levels - 1));
+        }
     }
 
     /// The animation of a model file loaded once (its clips, what was left out, and its
     /// bones), whether or not it is still resident.
     pub fn animation(&self, file: &str) -> Option<&Animation> {
+        self.animations.get(file).map(|k| &k.anim)
+    }
+
+    /// All that is kept of a model file loaded once ([`Kept`]), whether or not it is still
+    /// resident.
+    pub(crate) fn kept(&self, file: &str) -> Option<&Kept> {
         self.animations.get(file)
     }
     /// Which level of detail each placed catalogue asset shows and why, for agents (`ui.load`):
@@ -905,7 +955,6 @@ impl Library {
             textures: ids.clone(),
             meshes: Vec::new(),
             materials: Vec::new(),
-            anim: glb.animation(),
             bones: Vec::new(),
             lift,
         };
@@ -940,7 +989,7 @@ impl Library {
                     .push(format!("A part of {path} is not drawn: {e}")),
             }
         }
-        if let Some(rig) = &model.anim.rig {
+        if let Some(rig) = glb.rig() {
             let rest_space = model_space(&rig.parents, &rig.rest);
             for (part, rest_space) in glb.parts.iter().zip(&rest_space) {
                 let mut prims = Vec::new();
@@ -980,9 +1029,42 @@ impl Library {
             self.lamps_applied = None;
         }
         self.store.track(Key::Glb(path.clone()), bytes);
-        self.animations.insert(path.clone(), model.anim.clone());
+        self.keep_animation(&path, glb.animation(), glb.nodes(), lift);
         self.models.insert(path, model);
         self.rev += 1;
+    }
+
+    /// Keeps a model file's animation once it is loaded, for as long as the session lasts
+    /// ([`Self::animations`]): the same file again keeps its id, so what was built under it
+    /// stays, unless the file changed.
+    fn keep_animation(
+        &mut self,
+        path: &str,
+        anim: Animation,
+        nodes: Vec<(usize, String)>,
+        lift: f32,
+    ) {
+        match self.animations.entry(path.to_string()) {
+            Entry::Occupied(mut e) => {
+                let kept = e.get_mut();
+                if kept.anim != anim {
+                    self.next_anim_id += 1;
+                    kept.id = self.next_anim_id;
+                }
+                kept.anim = anim;
+                kept.nodes = nodes;
+                kept.lift = lift;
+            }
+            Entry::Vacant(e) => {
+                self.next_anim_id += 1;
+                e.insert(Kept {
+                    id: self.next_anim_id,
+                    anim,
+                    nodes,
+                    lift,
+                });
+            }
+        }
     }
 
     /// The renderer material of glTF material `index`, made once per model.

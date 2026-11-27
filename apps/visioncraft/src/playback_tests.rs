@@ -424,3 +424,232 @@ fn a_model_all_of_which_moves_draws_its_parts_alone() {
     );
     assert!(below(&rest, &end).len() > 40, "a second on it has moved");
 }
+
+/// A studio with a catalogue chest of two levels of detail (`gltf_load::tests::chest_lod0`,
+/// `chest_lod1`) placed once at the origin: level 0 up to 6 m, level 1 beyond. Only `levels`
+/// have their file at hand. The camera looks at the chest from `eye`.
+fn chest_studio(
+    id: &str,
+    levels: &[usize],
+    eye: Vec3,
+) -> Option<(wgpu::Device, wgpu::Queue, Studio)> {
+    use visioncraft_core::catalog::{Asset, Category, Lod, Origin};
+    let (device, queue, mut s) = studio()?;
+    let files = [
+        (
+            format!("models/{id}/lod0.glb"),
+            crate::gltf_load::tests::chest_lod0().finish(),
+        ),
+        (
+            format!("models/{id}/lod1.glb"),
+            crate::gltf_load::tests::chest_lod1().finish(),
+        ),
+    ];
+    for (i, (path, bytes)) in files.iter().enumerate() {
+        if levels.contains(&i) {
+            s.scene
+                .library
+                .store
+                .provide(path, std::sync::Arc::from(bytes.clone()));
+        }
+    }
+    let mut catalog = s
+        .scene
+        .library
+        .catalog
+        .as_deref()
+        .cloned()
+        .unwrap_or_default();
+    catalog.assets.push(Asset {
+        id: id.into(),
+        name: id.into(),
+        category: Category::Other,
+        tags: Vec::new(),
+        license: "CC0-1.0".into(),
+        origin: Origin::BuiltIn,
+        author: String::new(),
+        source_url: String::new(),
+        size_m: [1.0, 2.0, 0.1],
+        lods: vec![
+            Lod {
+                file: files[0].0.clone(),
+                max_distance_m: 6.0,
+            },
+            Lod {
+                file: files[1].0.clone(),
+                max_distance_m: f32::INFINITY,
+            },
+        ],
+        thumbnail: String::new(),
+        plant: None,
+        light: None,
+    });
+    s.scene.library.catalog = Some(std::sync::Arc::new(catalog));
+    s.session
+        .run(
+            "planting.add_single",
+            serde_json::json!({"name": "Chest", "asset": id, "position": [0, 0, 0]}),
+        )
+        .unwrap();
+    s.camera.fov_y = 30f32.to_radians();
+    s.camera.look_from(eye, Vec3::new(0.4, 0.9, 0.0));
+    Some((device, queue, s))
+}
+
+/// From near (3.5 m) the chest needs level 0; from far (8.9 m) level 1 only.
+const NEAR: Vec3 = Vec3::new(0.4, 1.3, 3.2);
+const FAR: Vec3 = Vec3::new(0.4, 2.5, 8.5);
+
+/// The pixels the chest's lid can cover from closed to upright: its corners at 0, 45 and 90
+/// degrees about its hinge at (0, 1, 0), in a box.
+fn lid_box(s: &Studio) -> [f32; 4] {
+    let mut points = Vec::new();
+    for deg in [0.0_f32, 45.0, 90.0] {
+        let swing = Mat4::from_translation(Vec3::new(0.0, 1.0, 0.0))
+            * Mat4::from_rotation_z(deg.to_radians());
+        for v in [[0.0, 0.0, 0.0], [0.8, 0.0, 0.0], [0.0, 0.15, 0.0]] {
+            points.push(pixel(s, swing.transform_point3(Vec3::from(v))));
+        }
+    }
+    box_of(&points, 2.0)
+}
+
+/// How many pixels differ within `region` between two frames.
+fn moved_within(region: [f32; 4], a: &[u8], b: &[u8]) -> usize {
+    changed(a, b, 6)
+        .into_iter()
+        .filter(|p| inside(region, *p))
+        .count()
+}
+
+/// The first level of detail is the authority over an animated asset's pose, whether or not
+/// it is resident: with both levels loaded the lid is where level 0's `open` (1 s) leaves it
+/// at t = 1.5 s, and it is still there once level 0 is evicted and only level 1 is left
+/// (whose own `open` takes 2 s, and would still be swinging then).
+#[test]
+fn the_pose_stays_when_the_first_level_is_evicted() {
+    let Some((device, queue, mut s)) = chest_studio("chest", &[0, 1], NEAR) else {
+        eprintln!("no GPU adapter: skipped");
+        return;
+    };
+    s.settle_for_picture();
+    assert_eq!(
+        s.scene.library.resident_models(),
+        2,
+        "both levels are loaded from near"
+    );
+    s.camera.look_from(FAR, Vec3::new(0.4, 0.9, 0.0));
+    s.settle_for_picture();
+    let rest = frame(&mut s, &device, &queue, 1.5);
+    let region = lid_box(&s);
+    // `open` from the clock's 0: the lid is up (a quarter turn) from 1 s on, and holds there.
+    s.playback.play(
+        ClipTarget::all("g1"),
+        BTreeMap::from([("chest".to_string(), 0)]),
+        "open",
+        0.0,
+        false,
+        1.0,
+    );
+    let up = frame(&mut s, &device, &queue, 1.5);
+    save("lod_up", &up);
+    assert!(
+        moved_within(region, &rest, &up) > 40,
+        "the lid is up: {} pixels differ in {region:?}",
+        moved_within(region, &rest, &up)
+    );
+    // Only level 1 is left.
+    s.scene
+        .library
+        .store
+        .evict(crate::assets::Key::Glb("models/chest/lod0.glb".into()));
+    s.settle_for_picture();
+    assert_eq!(
+        s.scene.library.resident_models(),
+        1,
+        "level 0 is evicted, and not asked for from far"
+    );
+    let after = frame(&mut s, &device, &queue, 1.5);
+    save("lod_after", &after);
+    let n = moved_within(region, &up, &after);
+    assert!(
+        n < 20,
+        "the lid moved once the first level was evicted: {n} pixels differ in {region:?}"
+    );
+}
+
+/// Before the first level's file was ever read the asset has no rig: with only level 1
+/// resident nothing is posed, the parts stay at rest (never posed by level 1's own clips);
+/// once it is read, the first level poses the asset, and keeps doing so after it is evicted.
+#[test]
+fn nothing_is_posed_until_the_first_level_is_known() {
+    let Some((device, queue, mut s)) = chest_studio("coffer", &[1], FAR) else {
+        eprintln!("no GPU adapter: skipped");
+        return;
+    };
+    s.settle_for_picture();
+    assert_eq!(
+        s.scene.library.resident_models(),
+        1,
+        "only level 1 is asked for from far"
+    );
+    let rest = frame(&mut s, &device, &queue, 2.5);
+    let region = lid_box(&s);
+    // `open` from the clock's 1 s. On level 1's file it takes 2 s: the lid would be half up
+    // at 2 s and three quarters at 2.5 s.
+    s.playback.play(
+        ClipTarget::all("g1"),
+        BTreeMap::from([("coffer".to_string(), 0)]),
+        "open",
+        1.0,
+        false,
+        1.0,
+    );
+    let half = frame(&mut s, &device, &queue, 2.0);
+    let late = frame(&mut s, &device, &queue, 2.5);
+    save("coffer_rest", &rest);
+    save("coffer_t2", &half);
+    save("coffer_t25", &late);
+    for (name, f) in [("2 s", &half), ("2.5 s", &late)] {
+        let n = moved_within(region, &rest, f);
+        assert!(
+            n < 20,
+            "posed by level 1's clip before the first level is known: {n} pixels differ at {name} in {region:?}"
+        );
+    }
+    // The first level's file arrives (asked for, as it is when a clip is about to play): the
+    // same play now has the lid up, where level 0's `open` (1 s) holds it from 2 s on. Evicted
+    // again, the level leaves the lid there: its animation is kept.
+    let lod0 = "models/coffer/lod0.glb";
+    s.scene.library.store.provide(
+        lod0,
+        std::sync::Arc::from(crate::gltf_load::tests::chest_lod0().finish()),
+    );
+    s.scene.library.want_animation("coffer");
+    s.settle_for_picture();
+    assert_eq!(
+        s.scene.library.resident_models(),
+        2,
+        "the first level was asked for"
+    );
+    let up = frame(&mut s, &device, &queue, 2.5);
+    save("coffer_up", &up);
+    assert!(
+        moved_within(region, &rest, &up) > 40,
+        "posed by the first level's clip: {} pixels differ in {region:?}",
+        moved_within(region, &rest, &up)
+    );
+    s.scene
+        .library
+        .store
+        .evict(crate::assets::Key::Glb(lod0.into()));
+    s.settle_for_picture();
+    assert_eq!(s.scene.library.resident_models(), 1, "evicted again");
+    let kept = frame(&mut s, &device, &queue, 2.5);
+    save("coffer_kept", &kept);
+    let n = moved_within(region, &up, &kept);
+    assert!(
+        n < 20,
+        "the lid moved once the first level was evicted: {n} pixels differ in {region:?}"
+    );
+}
