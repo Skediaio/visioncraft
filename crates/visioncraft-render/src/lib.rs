@@ -7059,11 +7059,16 @@ fn shadow_reach(b: Bounds, light: Vec3, floor: f32, scene: Option<Bounds>) -> Bo
 }
 
 /// The nearest and the farthest view depth of a box: metres along the view axis, what the
-/// cascade splits are in (shadow.rs `Cascades::splits`).
+/// cascade splits are in (shadow.rs `Cascades::splits`). The axis is the view matrix's third
+/// row (as `outside` reads rows); its third column is the axis only for a camera that looks
+/// along a world axis, and a camera looking diagonally read its depths along another line. A
+/// mirrored view (`mirror_matrix`) gives the depth of the box's mirror image, as a planar
+/// reflection pass shades it.
 fn depth_range(view: Mat4, b: Bounds) -> (f32, f32) {
     let (c, e) = ((b.0 + b.1) * 0.5, (b.1 - b.0) * 0.5);
-    let mid = -(view.z_axis.truncate().dot(c) + view.w_axis.z);
-    let ext = view.z_axis.truncate().abs().dot(e);
+    let z = view.row(2);
+    let mid = -(z.truncate().dot(c) + z.w);
+    let ext = z.truncate().abs().dot(e);
     (mid - ext, mid + ext)
 }
 
@@ -9556,13 +9561,37 @@ mod tests {
         assert_eq!(shadow_reach(b, Vec3::Y, 0.0, None), b, "no scene: the box");
     }
 
-    /// The nearest and farthest view depth of a box, along the view axis.
+    /// The nearest and farthest view depth of a box, along the view axis: the view matrix's
+    /// third row, whichever way the camera points. A mirrored view (`mirror_matrix`: the
+    /// reflection in a water plane) gives the depth of the box's mirror image, as the planar
+    /// reflection pass shades it.
     #[test]
     fn depth_range_is_along_the_view_axis() {
         let view = Mat4::look_at_rh(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO, Vec3::Y);
         let b = (Vec3::new(-1.0, -1.0, -1.0), Vec3::new(1.0, 1.0, 1.0));
         assert_eq!(depth_range(view, b), (4.0, 6.0));
         assert_eq!(depth_range(Mat4::IDENTITY, b), (-1.0, 1.0));
+        // A camera looking diagonally: a box centred on its axis is at the eye's distance from
+        // it, along that axis. (The matrix's third column is not the axis: it read 1.08 here.)
+        let (eye, target) = (Vec3::new(0.0, 3.0, 5.0), Vec3::new(4.0, 0.0, 1.0));
+        let view = Mat4::look_at_rh(eye, target, Vec3::Y);
+        let half = Vec3::splat(0.5);
+        let (near, far) = depth_range(view, (target - half, target + half));
+        let axis = (target - eye).normalize();
+        assert!(
+            ((near + far) * 0.5 - (target - eye).length()).abs() < 1e-4,
+            "{near} {far}"
+        );
+        assert!(
+            (far - near - (axis.x.abs() + axis.y.abs() + axis.z.abs())).abs() < 1e-4,
+            "{near} {far}"
+        );
+        // Mirrored about y = 2: the depth of the mirror image.
+        let m = mirror_matrix(2.0);
+        let (near, far) = depth_range(view * m, b);
+        let (image_near, image_far) = depth_range(view, transform_bounds(m, b));
+        assert!((near - image_near).abs() < 1e-4, "{near} {image_near}");
+        assert!((far - image_far).abs() < 1e-4, "{far} {image_far}");
     }
 
     /// A still taken right after instances moved: the window's own shadow caches (swapped out
