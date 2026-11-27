@@ -1036,9 +1036,13 @@ fn indirectable(d: &Draw) -> bool {
     d.src == Src::Gathered && d.mesh.is_some()
 }
 
-/// Whether two draws share what one indirect call keeps: the pipeline, group 1 and group 2.
+/// Whether two draws share what one indirect call keeps: the pipeline, group 1 and group 2, and
+/// the arena, whose vertex and index buffers the pass binds for the run's first draw.
 fn same_bindings(a: &Draw, b: &Draw) -> bool {
-    a.pipe == b.pipe && a.g1 == b.g1 && a.g2 == b.g2
+    a.pipe == b.pipe
+        && a.g1 == b.g1
+        && a.g2 == b.g2
+        && a.mesh.map(|m| m.arena) == b.mesh.map(|m| m.arena)
 }
 
 /// The indirect arguments of a batched mesh draw: what its direct `draw_indexed` names.
@@ -9382,6 +9386,10 @@ mod tests {
             view: false,
         };
         let set = Some(Group1::Set(0));
+        let elsewhere = |first: u32, id: u32| DrawMesh {
+            arena: 1,
+            ..mesh(first, id)
+        };
         let draws = vec![
             draw(Some(mesh(0, 0)), set, Src::Gathered),
             draw(Some(mesh(12, 1)), set, Src::Gathered),
@@ -9390,19 +9398,29 @@ mod tests {
             draw(Some(mesh(36, 3)), None, Src::Gathered),
             draw(Some(mesh(48, 4)), None, Src::Gathered),
             draw(Some(mesh(60, 5)), None, Src::Pool),
+            draw(Some(elsewhere(72, 6)), None, Src::Gathered),
+            draw(Some(elsewhere(84, 7)), None, Src::Gathered),
+            draw(Some(mesh(96, 8)), None, Src::Gathered),
         ];
         let calls = |indirect: bool| Calls::new(&draws, indirect).collect::<Vec<_>>();
-        assert_eq!(calls(true), vec![(0, 2), (2, 1), (3, 1), (4, 2), (6, 1)]);
+        assert_eq!(
+            calls(true),
+            vec![(0, 2), (2, 1), (3, 1), (4, 2), (6, 1), (7, 2), (9, 1)],
+            "a run stays in one arena"
+        );
         assert_eq!(
             calls(false),
             (0..draws.len()).map(|i| (i, 1)).collect::<Vec<_>>()
         );
         let mut args = Vec::new();
         pack_args(&mut args, &draws, true);
-        assert_eq!(args.len(), INDIRECT_ARGS as usize * 4, "two runs of two");
+        assert_eq!(args.len(), INDIRECT_ARGS as usize * 6, "three runs of two");
         assert_eq!(&args[..20], &u32_bytes(&[12, 3, 0, 0, 0]));
         assert_eq!(&args[20..40], &u32_bytes(&[12, 3, 12, 0, 0]));
-        assert_eq!(draw_args(&draws[4]), [12, 3, 36, 0, 0]);
+        assert_eq!(&args[40..60], &u32_bytes(&[12, 3, 36, 0, 0]));
+        assert_eq!(&args[60..80], &u32_bytes(&[12, 3, 48, 0, 0]));
+        assert_eq!(&args[80..100], &u32_bytes(&[12, 3, 72, 0, 0]));
+        assert_eq!(&args[100..120], &u32_bytes(&[12, 3, 84, 0, 0]));
         args.clear();
         pack_args(&mut args, &draws, false);
         assert!(args.is_empty(), "every draw direct");
@@ -9439,12 +9457,13 @@ mod tests {
             r.set_camera(view, proj, eye);
             r
         };
-        let count = |r: &Renderer, calls: bool, key: &str| -> u32 {
+        // The calls of one pass group (the forward pass's: the batches' and the sky's).
+        let calls_of = |r: &Renderer, key: &str| -> u32 {
             r.stats()
                 .pass_calls
                 .iter()
-                .filter(|(l, _)| calls || *l == key)
-                .map(|(_, n)| n)
+                .filter(|(l, _)| *l == key)
+                .map(|(_, n)| *n)
                 .sum()
         };
         let draw_count = |r: &Renderer, key: &str| -> u32 {
@@ -9452,7 +9471,7 @@ mod tests {
                 .pass_draws
                 .iter()
                 .find(|(l, _)| *l == key)
-                .map(|(_, n)| n)
+                .map(|(_, n)| *n)
                 .expect("the pass")
         };
         let mut indirect = scene();
@@ -9461,17 +9480,18 @@ mod tests {
         let indirect_px = pixels(&mut indirect, &device, &queue, w, h);
         let (draws, calls) = (
             draw_count(&indirect, "forward"),
-            count(&indirect, true, "forward"),
+            calls_of(&indirect, "forward"),
         );
         let mut direct = scene();
         direct.multi_draw = false;
         pixels(&mut direct, &device, &queue, w, h);
         let direct_px = pixels(&mut direct, &device, &queue, w, h);
         assert_eq!(indirect_px, direct_px, "the same picture either way");
-        let direct_calls = count(&direct, true, "forward");
+        let direct_calls = calls_of(&direct, "forward");
+        // A call per draw, and the sky's, which `pass_draws` does not count.
         assert_eq!(
             direct_calls,
-            draw_count(&direct, "forward"),
+            draw_count(&direct, "forward") + 1,
             "a call per draw"
         );
         if with_feature {

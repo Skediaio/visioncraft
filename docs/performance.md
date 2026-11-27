@@ -129,8 +129,11 @@ Recipe, a time-of-day drag:
   call: their `first_instance` points into the gathered buffer, which needs
   `INDIRECT_FIRST_INSTANCE` (asked for where the adapter has it); without it every draw is a
   direct call of the same arguments and the picture is the same. In the browser, wgpu's WebGPU
-  backend runs a multi-draw as a loop of indirect draws with no binds between them, and
-  validates the arguments on the GPU (one buffer a frame, so one validation batch).
+  backend runs a multi-draw as a loop of indirect draws with no binds between them (one
+  JavaScript call a sub-draw). wgpu checks every indirect call on the CPU (the buffer's usage,
+  the offset's alignment, the arguments lying within the buffer); its GPU-side validation of
+  indirect arguments exists only behind `InstanceFlags::VALIDATION_INDIRECT_CALL`, which the
+  renderer does not set.
   Dissolving clusters, impostor quads and transparents stay direct. `pass_draws` keeps counting
   sub-draws; `pass_calls` (`view.render`'s stats, `window.__vcFrame`) counts the calls issued
   per pass, a multi-draw being one.
