@@ -9,6 +9,12 @@
 //! draws the LUTs first. Reproduced on llvmpipe; the simple scenes of the reference tests never
 //! showed it because they leave the perspective off.
 //!
+//! The other way round, stills with snow, rain or a sea on: the first of two in a row from one
+//! camera differed from every later one, nearly everywhere. A still's targets are new each
+//! time, but the snow cover map counted as drawn since the still before (`snow_drawn` was not
+//! put out with the live view's shadow caches in `render_offscreen`), so the later ones read an
+//! empty map as a cover over everything. Every offscreen frame draws its own now.
+
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
@@ -226,6 +232,54 @@ fn frames(r: &mut Renderer, cam: Camera, (w, h): (u32, u32), n: usize) -> Vec<Ve
         .collect()
 }
 
+/// A meadow with a table over part of it and snow on the ground: the snow cover map (the last
+/// shadow layer, drawn straight down) decides where the snow stays.
+fn snowy_yard(r: &mut Renderer) -> Camera {
+    meadow(r);
+    let mut table = MeshData::default();
+    table.add_box(Vec3::new(-1.0, 1.0, -1.0), Vec3::new(1.0, 1.1, 1.0));
+    for (x, z) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+        table.add_box(
+            Vec3::new(x - 0.05, 0.0, z - 0.05),
+            Vec3::new(x + 0.05, 1.0, z + 0.05),
+        );
+    }
+    let wood = r.add_material(&Material {
+        base_color: [0.5, 0.33, 0.18, 1.0],
+        roughness: 0.6,
+        ..Default::default()
+    });
+    let mesh = r.add_mesh(&table.mesh()).expect("table");
+    r.add_item(
+        mesh,
+        wood,
+        &[Mat4::from_translation(Vec3::new(1.0, 0.0, -1.0))],
+    );
+    r.set_sky(&Sky::Physical).expect("sky");
+    r.set_sun(&Sun::from_angles(180.0, 40.0));
+    r.set_exposure(14.0);
+    r.set_snow(1.0);
+    demo::camera(
+        Vec3::new(2.5, 5.0, 4.0),
+        Vec3::new(0.5, 0.0, -0.5),
+        4.0 / 3.0,
+    )
+}
+
+/// Mean RGB of a rectangle of the picture.
+fn mean(pixels: &[u8], w: u32, (x0, y0, x1, y1): (u32, u32, u32, u32)) -> [f32; 3] {
+    let mut sum = [0.0f32; 3];
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let i = ((y * w + x) * 4) as usize;
+            for c in 0..3 {
+                sum[c] += f32::from(pixels[i + c]);
+            }
+        }
+    }
+    sum.map(|s| s / ((x1 - x0) * (y1 - y0)) as f32)
+}
+
 /// `n` stills of the same view through `Renderer::render_still`.
 fn stills(r: &mut Renderer, cam: Camera, size: (u32, u32), n: usize) -> Vec<Vec<u8>> {
     (0..n)
@@ -284,4 +338,27 @@ fn the_first_still_is_every_later_still() {
     r.finish_environment();
     let shots = stills(&mut r, cam, size, 3);
     assert_steady("still", &shots, size);
+}
+
+/// Every still draws its own snow cover map. A still's targets are new each time, but the
+/// second of two in a row from one camera used to skip the map as the live view does while
+/// nothing moves, and read its empty layer as a cover over everything: the snow was gone from
+/// the open ground, so it differed from the first (nearly every byte, by up to 149).
+#[test]
+fn every_still_draws_its_snow_cover() {
+    let size = (320, 240);
+    let mut r = renderer(size.0, size.1, Quality::LOW);
+    let cam = snowy_yard(&mut r);
+    let shots = stills(&mut r, cam, size, 3);
+    assert_steady("still-snow", &shots, size);
+    // And the snow is there: the open meadow in the bottom left corner is white in each.
+    for (i, shot) in shots.iter().enumerate() {
+        let corner = mean(shot, size.0, (8, 200, 60, 232));
+        eprintln!("still-snow {}: open ground {corner:?}", i + 1);
+        assert!(
+            corner[1] > 185.0 && corner[0] > 185.0,
+            "still {}: the open ground is not under snow: {corner:?}",
+            i + 1
+        );
+    }
 }
