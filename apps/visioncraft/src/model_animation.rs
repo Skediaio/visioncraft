@@ -10,6 +10,8 @@ use visioncraft_automation::{Animations, HostState};
 use visioncraft_core::catalog::{Asset, Lod};
 use visioncraft_core::{Animation, Project};
 
+use crate::gltf_load::match_level;
+
 /// The file a model is.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ModelFile {
@@ -118,11 +120,12 @@ fn with_level_warnings(
 /// What level of detail `index` of a catalogue asset (`file` its model file; `level` its
 /// animation and the node of each of its bones) does not share with the first level's (`first`,
 /// `first_nodes`): one line naming the file, none when they agree. The first level is the
-/// authority: its clips are the asset's and its bones pose every level. So a bone of this level
-/// whose node it lacks is drawn at rest, one of its own bones this level lacks is not drawn at
-/// this level, a clip that is missing here is played all the same, one that lasts another
-/// length here is played at the first level's length, and a clip only this level has never
-/// plays.
+/// authority: its clips are the asset's and its bones pose every level. A bone of this level is
+/// one of the first level's by name ([`match_level`]), so a bone this level has and the first
+/// level lacks is drawn at rest, one of the first level's bones this level lacks is not drawn at
+/// this level, and a name that appears twice in a level is said to be matched by index instead. A
+/// clip that is missing here is played all the same, one that lasts another length here is
+/// played at the first level's length, and a clip only this level has never plays.
 pub fn level_warnings(
     index: usize,
     file: &str,
@@ -131,20 +134,37 @@ pub fn level_warnings(
     first: &Animation,
     first_nodes: &[(usize, String)],
 ) -> Vec<String> {
+    let matched = match_level(first_nodes, level_nodes);
     let mut diffs = Vec::new();
-    for (node, name) in level_nodes {
-        if !first_nodes.iter().any(|(n, _)| n == node) {
+    for (li, (node, name)) in level_nodes.iter().enumerate() {
+        if matched.of_level[li].is_none() {
             diffs.push(format!(
-                "{} is not in the first level, drawn at rest",
-                named(*node, name)
+                "{} is not in the first level{}, drawn at rest",
+                named(*node, name),
+                by_name(name)
             ));
         }
     }
-    for (node, name) in first_nodes {
-        if !level_nodes.iter().any(|(n, _)| n == node) {
+    for (fj, (node, name)) in first_nodes.iter().enumerate() {
+        if matched.of_first[fj].is_none() {
             diffs.push(format!(
-                "{} of the first level is not in it, so it is not drawn at this level",
-                named(*node, name)
+                "{} of the first level is not in it{}, so it is not drawn at this level",
+                named(*node, name),
+                by_name(name)
+            ));
+        }
+    }
+    for (name, here, in_first) in &matched.twice {
+        if *here > 1 {
+            diffs.push(format!(
+                "node name `{name}` appears {} here, matched by index",
+                times(*here)
+            ));
+        }
+        if *in_first > 1 {
+            diffs.push(format!(
+                "node name `{name}` appears {} in the first level, matched by index",
+                times(*in_first)
             ));
         }
     }
@@ -187,6 +207,21 @@ fn named(node: usize, name: &str) -> String {
         format!("node {node}")
     } else {
         format!("node `{name}` ({node})")
+    }
+}
+
+/// The words "by name" for a node with a name, the rule that found no counterpart for it;
+/// nothing for a node without one, which is matched by index if at all.
+fn by_name(name: &str) -> &'static str {
+    if name.is_empty() { "" } else { " by name" }
+}
+
+/// How many times a name appears: `twice`, `3 times`.
+fn times(n: usize) -> String {
+    if n == 2 {
+        "twice".to_string()
+    } else {
+        format!("{n} times")
     }
 }
 
@@ -404,14 +439,15 @@ mod tests {
         assert_eq!(host.session.revision(), before);
     }
 
-    /// A catalogue asset's clips are its first level's, and `warnings` has one line per other
-    /// level whose file differs from the first level's: a node it lacks (drawn at rest), a clip
-    /// that is missing or lasts another length. A level whose file is not there is not compared.
-    #[test]
-    fn an_asset_s_clips_are_its_first_level_s_and_its_other_levels_are_compared() {
-        let dir = std::env::temp_dir().join("visioncraft-model-clips-levels");
+    /// A host whose library folder has the chest's levels ([`crate::gltf_load::tests::chest_lod0`])
+    /// for four assets of two levels: `chest` (level 1 as `chest_lod1`), `alike` (both levels the
+    /// first file), `ark` (level 1 with its nodes reordered and suffixed, `chest_lod1_named`) and
+    /// `ghost` (its second file is not there). `name` tells the folder apart: tests run side by
+    /// side.
+    fn levels(name: &str) -> Headless {
+        let dir = std::env::temp_dir().join(format!("visioncraft-model-clips-{name}"));
         let _ = std::fs::remove_dir_all(&dir);
-        for a in ["chest", "alike", "ghost"] {
+        for a in ["chest", "alike", "ghost", "ark"] {
             std::fs::create_dir_all(dir.join("models").join(a)).unwrap();
         }
         let (first, second) = (
@@ -423,6 +459,12 @@ mod tests {
         std::fs::write(dir.join("models/alike/lod0.glb"), &first).unwrap();
         std::fs::write(dir.join("models/alike/lod1.glb"), &first).unwrap();
         std::fs::write(dir.join("models/ghost/lod0.glb"), &first).unwrap();
+        std::fs::write(dir.join("models/ark/lod0.glb"), &first).unwrap();
+        std::fs::write(
+            dir.join("models/ark/lod1.glb"),
+            crate::gltf_load::tests::chest_lod1_named().finish(),
+        )
+        .unwrap();
         let two = |id: &str, second: &str| Asset {
             lods: [
                 Lod {
@@ -444,12 +486,24 @@ mod tests {
             two("chest", "models/chest/lod1.glb"),
             two("alike", "models/alike/lod1.glb"),
             two("ghost", "models/ghost/missing.glb"),
+            two("ark", "models/ark/lod1.glb"),
         ];
         host.animations = Some(Box::new(FolderAnimations::new(dir)));
-        let ask = |host: &mut Headless, model: &str| {
-            commands::execute(host, "query.clips", &json!({"model": model}))
-        };
-        let r = ask(&mut host, "chest").unwrap();
+        host
+    }
+
+    fn ask_clips(host: &mut Headless, model: &str) -> Value {
+        commands::execute(host, "query.clips", &json!({"model": model}))
+            .unwrap_or_else(|e| panic!("query.clips {model}: {e}"))
+    }
+
+    /// A catalogue asset's clips are its first level's, and `warnings` has one line per other
+    /// level whose file differs from the first level's: a node it lacks (drawn at rest), a clip
+    /// that is missing or lasts another length. A level whose file is not there is not compared.
+    #[test]
+    fn an_asset_s_clips_are_its_first_level_s_and_its_other_levels_are_compared() {
+        let mut host = levels("levels");
+        let r = ask_clips(&mut host, "chest");
         // The first level's clips, with the first level's lengths.
         assert_eq!(
             r["clips"],
@@ -462,16 +516,42 @@ mod tests {
         assert_eq!(
             r["warnings"],
             json!([
-                "level 1 (`models/chest/lod1.glb`): node `lid2` (2) is not in the first level, drawn at rest; clip `open` lasts 2 s here, 1 s in the first level; the first level's plays; clip `shake` is missing; this level is posed by the first level's clip"
+                "level 1 (`models/chest/lod1.glb`): node `lid2` (2) is not in the first level by name, drawn at rest; clip `open` lasts 2 s here, 1 s in the first level; the first level's plays; clip `shake` is missing; this level is posed by the first level's clip"
             ]),
             "{r}"
         );
         // A level that agrees says nothing, and one whose file is not there is not compared.
         for model in ["alike", "ghost"] {
-            let r = ask(&mut host, model).unwrap();
+            let r = ask_clips(&mut host, model);
             assert_eq!(r["warnings"], json!([]), "{model}: {r}");
             assert_eq!(r["clips"][0]["name"], "open", "{model}");
         }
+    }
+
+    /// A level's moving parts are the first level's by node name, without the `_LOD<n>` suffix.
+    /// `ark`'s second level has `lid_LOD1` as node 0 and `body_LOD1` as node 1, where the first
+    /// level has no bone and its `lid`: so its lid is the first level's lid, and `query.clips`
+    /// warns about its knob only, by its name in the file. (By node index both the lid and the
+    /// knob would be warned about, and the first level's lid as not drawn at this level.)
+    #[test]
+    fn a_level_s_nodes_are_matched_to_the_first_level_s_by_name() {
+        let mut host = levels("named");
+        let r = ask_clips(&mut host, "ark");
+        assert_eq!(
+            r["warnings"],
+            json!([
+                "level 1 (`models/ark/lod1.glb`): node `knob_LOD1` (2) is not in the first level by name, drawn at rest"
+            ]),
+            "{r}"
+        );
+        assert_eq!(
+            r["clips"],
+            json!([
+                {"name": "open", "duration_s": 1.0, "channels": 1},
+                {"name": "shake", "duration_s": 1.0, "channels": 1},
+            ]),
+            "the first level's clips: {r}"
+        );
     }
 
     /// A level's warning names what it does not share with the first level: a bone of its own
@@ -506,7 +586,7 @@ mod tests {
                 &first_nodes
             ),
             [
-                "level 2 (`oak_lod2.glb`): node `body` (0) is not in the first level, drawn at rest; node 2 of the first level is not in it, so it is not drawn at this level; clip `bounce` is only here; it never plays"
+                "level 2 (`oak_lod2.glb`): node `body` (0) is not in the first level by name, drawn at rest; node 2 of the first level is not in it, so it is not drawn at this level; clip `bounce` is only here; it never plays"
             ]
         );
         assert!(
@@ -530,6 +610,68 @@ mod tests {
         ] {
             assert_eq!(seconds(s), text);
         }
+    }
+
+    /// A name that appears twice in a level makes the match by name ambiguous: its parts are
+    /// matched by index instead, and the level's warning says so: in the first level, in the
+    /// level itself, and as three times when it is three.
+    #[test]
+    fn a_name_that_appears_twice_is_matched_by_index_and_said_so() {
+        let still = Animation::default();
+        let nodes = |xs: &[(usize, &str)]| -> Vec<(usize, String)> {
+            xs.iter().map(|(n, name)| (*n, name.to_string())).collect()
+        };
+        // Twice in the first level: the door at the same index is its door, the other door of
+        // the first level is not drawn at this level.
+        assert_eq!(
+            level_warnings(
+                1,
+                "twin.glb",
+                &still,
+                &nodes(&[(3, "door"), (7, "lid")]),
+                &still,
+                &nodes(&[(3, "door"), (5, "door"), (7, "lid")]),
+            ),
+            [
+                "level 1 (`twin.glb`): node `door` (5) of the first level is not in it by name, so it is not drawn at this level; node name `door` appears twice in the first level, matched by index"
+            ]
+        );
+        // Twice here: the door at the same index is the first level's door, the other one is
+        // its own.
+        assert_eq!(
+            level_warnings(
+                1,
+                "twin.glb",
+                &still,
+                &nodes(&[(3, "door"), (5, "door_LOD1")]),
+                &still,
+                &nodes(&[(3, "door")]),
+            ),
+            [
+                "level 1 (`twin.glb`): node `door_LOD1` (5) is not in the first level by name, drawn at rest; node name `door` appears twice here, matched by index"
+            ]
+        );
+        // Three times is said as three, and the door at the first level's node is its door.
+        let lines = level_warnings(
+            1,
+            "thrice.glb",
+            &still,
+            &nodes(&[(1, "door"), (2, "door"), (3, "door")]),
+            &still,
+            &nodes(&[(1, "door")]),
+        );
+        assert!(
+            lines[0].contains("node name `door` appears 3 times here, matched by index"),
+            "{lines:?}"
+        );
+        assert!(
+            lines[0].contains("node `door` (2) is not in the first level by name, drawn at rest"),
+            "{lines:?}"
+        );
+        assert!(
+            !lines[0].contains("node `door` (1) is not"),
+            "the door at the first level's node is matched by index: {lines:?}"
+        );
     }
 
     #[test]

@@ -376,8 +376,11 @@ malformed channel: the model still loads); a model that stands still answers `{"
 level of detail. That level also poses every level of the asset, so `warnings` has a line for
 each other level whose file is at hand and differs from the first: a node the first level has no
 bone for (that part is drawn at rest), a clip that is missing there or lasts another length (the
-first level's plays). On the command line the file is read from the project's folder or the library
-folder (`--assets`); in a window a library model's clips are known once it is loaded.
+first level's plays). The moving parts of a level are matched to the first level's bones by node
+name without a trailing `_LOD<n>` (`door_LOD1` is `door`); only where a name is missing or appears
+twice in a level is the node's index matched instead, and the warning says so. On the command line
+the file is read from the project's folder or the library folder (`--assets`); in a window a library
+model's clips are known once it is loaded.
 
 A clip plays on the placed objects, not on the model: `model.play_clip {"object": "g4", "clip":
 "fire", "start_s": 12.5}` (or `"loop": true`). `object` is a planting (`g4`: every object it

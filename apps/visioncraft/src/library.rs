@@ -141,10 +141,24 @@ pub(crate) struct Model {
     pub(crate) lift: f32,
 }
 
+impl Model {
+    /// The node of each moving part and its name, as [`Glb::nodes`] has it: what the first
+    /// level's bones are matched to this level's by ([`crate::gltf_load::match_level`]).
+    pub(crate) fn nodes(&self) -> Vec<(usize, String)> {
+        self.bones
+            .iter()
+            .map(|b| (b.node, b.name.clone()))
+            .collect()
+    }
+}
+
 /// One moving part of a loaded model ([`Model::bones`]).
 pub(crate) struct Bone {
-    /// The part's node in the file: how another level of detail knows the same part.
+    /// The part's node in the file, and its name (empty without one): what tells it from
+    /// another level of detail's part, by name first ([`crate::gltf_load::part_key`]), by
+    /// index where a name is missing or appears twice.
     pub(crate) node: usize,
+    pub(crate) name: String,
     /// Its prims in the node's own space.
     pub(crate) prims: Vec<(MeshId, MaterialId)>,
     /// The part's matrix in model space at rest.
@@ -162,7 +176,7 @@ pub(crate) struct Kept {
     /// (`None` in `rig` for a model that stands still).
     pub(crate) anim: Animation,
     /// The glTF node of each bone ([`Bone::node`], and its name): how a level of detail's file
-    /// knows the same part.
+    /// knows the same part, by name first ([`crate::gltf_load::match_level`]).
     pub(crate) nodes: Vec<(usize, String)>,
     /// Metres the model is raised by, as [`Model::lift`] when it is resident.
     pub(crate) lift: f32,
@@ -1014,6 +1028,7 @@ impl Library {
                 }
                 model.bones.push(Bone {
                     node: part.node,
+                    name: part.name.clone(),
                     prims,
                     rest_space: *rest_space,
                 });

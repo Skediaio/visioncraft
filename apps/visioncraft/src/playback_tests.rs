@@ -433,6 +433,16 @@ fn chest_studio(
     levels: &[usize],
     eye: Vec3,
 ) -> Option<(wgpu::Device, wgpu::Queue, Studio)> {
+    chest_studio_of(id, levels, eye, crate::gltf_load::tests::chest_lod1())
+}
+
+/// As [`chest_studio`], with `second` the file of level 1.
+fn chest_studio_of(
+    id: &str,
+    levels: &[usize],
+    eye: Vec3,
+    second: crate::gltf_load::tests::Builder,
+) -> Option<(wgpu::Device, wgpu::Queue, Studio)> {
     use visioncraft_core::catalog::{Asset, Category, Lod, Origin};
     let (device, queue, mut s) = studio()?;
     let files = [
@@ -440,10 +450,7 @@ fn chest_studio(
             format!("models/{id}/lod0.glb"),
             crate::gltf_load::tests::chest_lod0().finish(),
         ),
-        (
-            format!("models/{id}/lod1.glb"),
-            crate::gltf_load::tests::chest_lod1().finish(),
-        ),
+        (format!("models/{id}/lod1.glb"), second.finish()),
     ];
     for (i, (path, bytes)) in files.iter().enumerate() {
         if levels.contains(&i) {
@@ -576,6 +583,68 @@ fn the_pose_stays_when_the_first_level_is_evicted() {
         n < 20,
         "the lid moved once the first level was evicted: {n} pixels differ in {region:?}"
     );
+}
+
+/// The parts of a level are posed by the first level's bones of the same **name** (a trailing
+/// `_LOD<n>` ignored), not by node index. Level 1 here (`gltf_load::tests::chest_lod1_named`)
+/// has `lid_LOD1` as node 0 and `body_LOD1` as node 1, where the first level has no bone and
+/// its `lid`: from far only level 1 draws, and its lid is up under level 0's `open` at
+/// t = 1.5 s. Its own `knob_LOD1`, which no bone of the first level poses, stays at rest.
+#[test]
+fn a_level_s_parts_are_posed_by_node_name() {
+    let Some((device, queue, mut s)) = chest_studio_of(
+        "ark",
+        &[0, 1],
+        NEAR,
+        crate::gltf_load::tests::chest_lod1_named(),
+    ) else {
+        eprintln!("no GPU adapter: skipped");
+        return;
+    };
+    s.settle_for_picture();
+    assert_eq!(
+        s.scene.library.resident_models(),
+        2,
+        "both levels are loaded from near"
+    );
+    s.camera.look_from(FAR, Vec3::new(0.4, 0.9, 0.0));
+    s.settle_for_picture();
+    let rest = frame(&mut s, &device, &queue, 1.5);
+    let region = lid_box(&s);
+    // `open` from the clock's 0: the lid is up (a quarter turn) from 1 s on, and holds there.
+    s.playback.play(
+        ClipTarget::all("g1"),
+        BTreeMap::from([("ark".to_string(), 0)]),
+        "open",
+        0.0,
+        false,
+        1.0,
+    );
+    let up = frame(&mut s, &device, &queue, 1.5);
+    save("named_rest", &rest);
+    save("named_up", &up);
+    let n = moved_within(region, &rest, &up);
+    assert!(
+        n > 40,
+        "the lid is up by name: {n} pixels differ in {region:?}"
+    );
+    // The knob stays where its file has it: nothing appeared where its own `open` would have
+    // slid it (half a metre along x).
+    let gone = box_of(
+        &[
+            pixel(&s, Vec3::new(0.85, 1.0, 0.1)),
+            pixel(&s, Vec3::new(1.0, 1.0, 0.1)),
+            pixel(&s, Vec3::new(0.9, 1.15, 0.1)),
+        ],
+        2.0,
+    );
+    let n = moved_within(gone, &rest, &up);
+    assert!(
+        n < 10,
+        "the knob slid, or the lid's rest place still shows: {n} pixels differ in {gone:?}"
+    );
+    // The first level's `lid` poses the lid of both levels in one item; the knob is its own.
+    assert_eq!(s.scene.part_items(), (1, 1), "posed items, parts at rest");
 }
 
 /// Before the first level's file was ever read the asset has no rig: with only level 1

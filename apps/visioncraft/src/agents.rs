@@ -1200,7 +1200,7 @@ mod tests {
         assert_eq!(
             r["warnings"],
             json!([
-                "level 1 (`models/chest/lod1.glb`): node `lid2` (2) is not in the first level, drawn at rest; clip `open` lasts 2 s here, 1 s in the first level; the first level's plays; clip `shake` is missing; this level is posed by the first level's clip"
+                "level 1 (`models/chest/lod1.glb`): node `lid2` (2) is not in the first level by name, drawn at rest; clip `open` lasts 2 s here, 1 s in the first level; the first level's plays; clip `shake` is missing; this level is posed by the first level's clip"
             ])
         );
     }

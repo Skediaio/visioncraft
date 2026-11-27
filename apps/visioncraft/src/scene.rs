@@ -19,6 +19,7 @@ use visioncraft_flora as flora;
 use visioncraft_render::{ImpostorId, ItemId, LineVertex, Renderer};
 pub use visioncraft_render::{MaterialId, MeshId};
 
+use crate::gltf_load::{LevelMatch, match_level};
 use crate::library::{self, Library};
 use crate::material_library;
 use crate::placeholder::{self, MeshData};
@@ -931,11 +932,11 @@ struct Group {
 /// The moving parts of an animated catalogue model (a weapon, a box with a lid): per part one
 /// LOD item that draws the same instances as the group's other items, each under the part's
 /// pose. The first level of detail is the authority: its bones pose every level, and each
-/// draws its own triangles under the bone of the same node, whatever level is resident. A part
-/// of a level whose node the first level has no bone for is drawn at rest where that level
-/// draws, never posed (`query.clips` names it in the asset's warnings); so is every part while
-/// the first level's animation is not known yet. Parts without triangles (skeleton joints) get
-/// no item.
+/// draws its own triangles under the bone of the same name ([`crate::gltf_load::match_level`]),
+/// whatever level is resident. A part of a level that is no bone of the first level's is drawn
+/// at rest where that level draws, never posed (`query.clips` names it in the asset's
+/// warnings); so is every part while the first level's animation is not known yet. Parts
+/// without triangles (skeleton joints) get no item.
 struct GroupRig {
     /// The first level's rig, whose clips pose the parts. `None` while the first level's
     /// animation is not known, or when it stands still: then nothing is posed.
@@ -966,8 +967,8 @@ struct GroupRig {
 }
 
 /// The first level's animation as the scene poses an asset with it: its rig, each bone's
-/// matrix in model space at rest, the metres the model is raised by, and the glTF node of each
-/// bone (how a level of detail knows the same part).
+/// matrix in model space at rest, the metres the model is raised by, and the glTF node of
+/// each bone with its name (how a level of detail's parts are matched to them).
 struct Authority<'a> {
     rig: Rig,
     rest: Vec<Matrix>,
@@ -993,6 +994,14 @@ impl GroupRig {
             })
         });
         let posed: &[(usize, String)] = authority.as_ref().map_or(&[], |a| a.nodes);
+        // Which bone of each resident level is which bone of the first level: the same in
+        // every band a level is drawn in.
+        let mut matched: HashMap<u64, LevelMatch> = HashMap::new();
+        for (model, _) in &source.levels {
+            matched
+                .entry(model.id)
+                .or_insert_with(|| match_level(posed, &model.nodes()));
+        }
         let lift = authority
             .as_ref()
             .map_or(Mat4::IDENTITY, |a| Mat4::from_translation(Vec3::Y * a.lift));
@@ -1003,16 +1012,18 @@ impl GroupRig {
             .map(|m| m.x_axis.length().max(m.y_axis.length()))
             .fold(1.0_f32, f32::max);
         let mut items = Vec::new();
-        for (part, (node, _)) in posed.iter().enumerate() {
+        for (part, _) in posed.iter().enumerate() {
             let entries: LodParts = source
                 .levels
                 .iter()
                 .flat_map(|(model, distance)| {
+                    let of = &matched[&model.id].of_level;
                     model
                         .bones
                         .iter()
-                        .filter(|b| b.node == *node)
-                        .flat_map(move |b| {
+                        .zip(of)
+                        .filter(|(_, of)| **of == Some(part))
+                        .flat_map(move |(b, _)| {
                             b.prims
                                 .iter()
                                 .map(move |&(mesh, mat)| (mesh, mat, (distance * k).min(f32::MAX)))
@@ -1041,8 +1052,8 @@ impl GroupRig {
                 .map(|(_, d)| (d * k).min(f32::MAX))
                 .collect();
             let lift = Mat4::from_translation(Vec3::Y * model.lift);
-            for bone in &model.bones {
-                if bone.prims.is_empty() || posed.iter().any(|(n, _)| *n == bone.node) {
+            for (bone, of) in model.bones.iter().zip(&matched[&model.id].of_level) {
+                if bone.prims.is_empty() || of.is_some() {
                     continue;
                 }
                 let entries: LodParts = bands
@@ -3357,6 +3368,19 @@ impl Scene {
             .filter_map(|grp| grp.rig.as_ref())
             .map(|rig| rig.items.len() + rig.still.len())
             .sum()
+    }
+
+    /// How many items of moving parts are posed under the first level's bones, and how many
+    /// parts of a level are drawn at rest because no bone of the first level is theirs.
+    #[cfg(test)]
+    pub fn part_items(&self) -> (usize, usize) {
+        self.gens
+            .values()
+            .flat_map(|g| g.groups.values())
+            .filter_map(|grp| grp.rig.as_ref())
+            .fold((0, 0), |(posed, still), rig| {
+                (posed + rig.items.len(), still + rig.still.len())
+            })
     }
 
     /// Poses the moving parts of every animated model for the frame at the playback's clock:
