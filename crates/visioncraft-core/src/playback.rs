@@ -108,8 +108,9 @@ pub struct Play {
     pub clips: BTreeMap<String, usize>,
     /// The clip's name, for a model that knows it under another index.
     pub name: String,
-    /// Seconds on the session's clock when the clip started.
-    pub start_s: f32,
+    /// Seconds on the session's clock when the clip started, in `f64` as the clock is: after a
+    /// day of uptime an `f32` steps in 8 ms, more than a frame at 144 a second.
+    pub start_s: f64,
     pub looped: bool,
     /// How long the clip is (its longest among the assets): past it an unlooped play only
     /// holds its last pose, so nothing moves.
@@ -122,7 +123,7 @@ impl Play {
     /// Whether anything still moves at clock time `t`: a loop always does, an unlooped play
     /// until its clip's end.
     fn moving(&self, t: f64) -> bool {
-        self.looped || (t - f64::from(self.start_s)) < f64::from(self.duration_s)
+        self.looped || (t - self.start_s) < f64::from(self.duration_s)
     }
 }
 
@@ -138,8 +139,8 @@ pub enum Life {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Flash {
     pub id: u64,
-    /// Seconds on the session's clock when it starts.
-    pub start_s: f32,
+    /// Seconds on the session's clock when it starts, in `f64` as the clock is ([`Play::start_s`]).
+    pub start_s: f64,
     pub position: [f32; 3],
     /// Linear colour.
     pub color: [f32; 3],
@@ -156,7 +157,7 @@ impl Flash {
     /// Whether the frame at clock time `t` shows it. A frame lasts `1 / fps` seconds of the
     /// frame rate in force: a film's, so the same frames show it every time.
     pub fn shows_at(&self, t: f64, fps: f64) -> bool {
-        let since = t - f64::from(self.start_s);
+        let since = t - self.start_s;
         let frames = match self.life {
             Life::Seconds(s) => return (0.0..f64::from(s)).contains(&since),
             Life::Frames(n) => f64::from(n),
@@ -167,7 +168,7 @@ impl Flash {
 
     /// When it starts and ends on the clock, its frames counted at `fps`.
     fn span(&self, fps: f64) -> (f64, f64) {
-        let start = f64::from(self.start_s);
+        let start = self.start_s;
         let length = match self.life {
             Life::Seconds(s) => f64::from(s),
             Life::Frames(n) => f64::from(n) / fps.max(1.0),
@@ -178,7 +179,7 @@ impl Flash {
     /// Whether it is over at clock time `t` and can be forgotten (one that has not started is
     /// not).
     pub fn ended(&self, t: f64, fps: f64) -> bool {
-        let since = t - f64::from(self.start_s);
+        let since = t - self.start_s;
         match self.life {
             Life::Seconds(s) => since >= f64::from(s),
             Life::Frames(n) => (since * fps.max(1.0)).round() >= f64::from(n),
@@ -268,7 +269,7 @@ impl Playback {
         target: ClipTarget,
         clips: BTreeMap<String, usize>,
         name: &str,
-        start_s: f32,
+        start_s: f64,
         looped: bool,
         duration_s: f32,
     ) -> bool {
@@ -505,7 +506,7 @@ mod tests {
         asset: &str,
         clips: &[Clip],
         name: &str,
-        start: f32,
+        start: f64,
         looped: bool,
     ) -> bool {
         let target = ClipTarget::parse(object).unwrap();
@@ -710,7 +711,7 @@ mod tests {
     #[test]
     fn the_cap_drops_the_oldest_of_the_flashes_at_once_only() {
         let mut p = Playback::default();
-        let flash = |start_s: f32| Flash {
+        let flash = |start_s: f64| Flash {
             id: 0,
             start_s,
             position: [0.0; 3],
@@ -722,7 +723,7 @@ mod tests {
         };
         // Twenty, one after the other over ten seconds: none overlaps another, all are kept.
         for i in 0..20 {
-            p.flash(flash(i as f32 * 0.5));
+            p.flash(flash(i as f64 * 0.5));
         }
         assert_eq!(p.flashes().len(), 20);
         // Seventeen at once at 20 s: the oldest of those goes, the twenty before stay.
@@ -793,7 +794,7 @@ mod tests {
         for i in 0..30 {
             p.flash(Flash {
                 id: 0,
-                start_s: i as f32 * 0.05,
+                start_s: i as f64 * 0.05,
                 position: [0.0; 3],
                 color: [1.0; 3],
                 intensity: 100.0,
@@ -812,7 +813,7 @@ mod tests {
         for i in 0..300 {
             p.flash(Flash {
                 id: 0,
-                start_s: i as f32,
+                start_s: i as f64,
                 position: [0.0; 3],
                 color: [1.0; 3],
                 intensity: 100.0,
@@ -826,7 +827,7 @@ mod tests {
             .flashes()
             .iter()
             .map(|f| f.start_s)
-            .fold(f32::MAX, f32::min);
+            .fold(f64::MAX, f64::min);
         assert_eq!(first, 44.0, "the 44 that end first went");
     }
 
@@ -876,5 +877,32 @@ mod tests {
         assert_eq!(p.flashes().len(), MAX_FLASHES);
         assert_eq!(p.flashes()[0].id, 22);
         assert_eq!(p.flashes()[MAX_FLASHES - 1].id, 22 - MAX_FLASHES as u64 + 1);
+    }
+
+    /// A window open for a day has a clock around 86 400 s, where an `f32` steps in 7.8 ms: more
+    /// than a frame at 144 a second. A one-frame flash started "now" then fell between two
+    /// frames or showed on the next one. The start is kept in `f64`, as the clock is.
+    #[test]
+    fn a_one_frame_flash_shows_on_its_frame_after_a_day() {
+        // A clock `f32` cannot hold: there it rounds up to 86 400.007 812 5, into the next
+        // frame. The literal has no suffix: it is what the field's type makes of it.
+        let flash = Flash {
+            id: 0,
+            start_s: 86_400.004,
+            position: [0.0; 3],
+            color: [1.0; 3],
+            intensity: 100.0,
+            range_m: 2.0,
+            size_m: 0.0,
+            life: Life::Frames(1),
+        };
+        let (clock, frame) = (86_400.004_f64, 1.0 / 144.0);
+        assert!(flash.shows_at(clock, 144.0), "the frame it started on");
+        assert!(!flash.shows_at(clock + frame, 144.0), "not the next one");
+        assert!(!flash.shows_at(clock - frame, 144.0), "not the one before");
+        assert!(
+            flash.ended(clock + frame, 144.0),
+            "over after its one frame"
+        );
     }
 }

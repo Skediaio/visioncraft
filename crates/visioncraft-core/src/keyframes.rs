@@ -279,6 +279,16 @@ fn wrap(clip: &Clip, t: f32, looped: bool) -> f32 {
     }
 }
 
+/// [`wrap`] for seconds on the clock: taken in `f64`, and narrowed to the clip's `f32` time
+/// only then, so a loop that ran for days keeps its phase (at 86 400 s an `f32` steps in 8 ms).
+fn wrap_clock(clip: &Clip, t: f64, looped: bool) -> f32 {
+    if looped && t.is_finite() && clip.duration > 0.0 {
+        t.rem_euclid(f64::from(clip.duration)) as f32
+    } else {
+        t as f32
+    }
+}
+
 /// The channels of `clip` over the transforms in `out`, each over what the channels before it
 /// left (so of two clips the one that started later wins where they share a property).
 fn apply(clip: &Clip, t: f32, out: &mut [Trs]) {
@@ -457,8 +467,8 @@ pub struct Rig {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Played {
     pub clip: usize,
-    /// Seconds on the clock when the clip started.
-    pub start_s: f32,
+    /// Seconds on the clock when the clip started, in `f64` as the clock is.
+    pub start_s: f64,
     pub looped: bool,
 }
 
@@ -480,12 +490,13 @@ impl Sampler {
         self.local.clear();
         self.local.extend_from_slice(&rig.rest);
         for p in plays {
-            let since = t - f64::from(p.start_s);
+            // In `f64`, as `t` and the starts are: it is narrowed once it is within the clip.
+            let since = t - p.start_s;
             if since < 0.0 {
                 continue;
             }
             if let Some(clip) = rig.clips.get(p.clip) {
-                apply(clip, wrap(clip, since as f32, p.looped), &mut self.local);
+                apply(clip, wrap_clock(clip, since, p.looped), &mut self.local);
             }
         }
         model_space_into(
@@ -586,6 +597,77 @@ mod tests {
                 "looped {looped}"
             );
         }
+    }
+
+    /// A quarter turn about Z in half a second, looped by the plays below.
+    fn half_turn() -> Rig {
+        Rig {
+            rest: vec![Trs::IDENTITY],
+            parents: vec![None],
+            clips: vec![clip(
+                R,
+                Interpolation::Linear,
+                &[0.0, 0.5],
+                &[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, Q, Q],
+            )],
+        }
+    }
+
+    /// Node 0 as the sampler poses `r` at clock time `t`.
+    fn posed(r: &Rig, plays: &[Played], t: f64) -> Matrix {
+        let mut s = Sampler::default();
+        s.pose(r, plays, t)[0]
+    }
+
+    /// Node 0 at clip time `ct`, without looping.
+    fn at_clip_time(r: &Rig, ct: f32) -> Matrix {
+        let local = sample(&r.clips[0], ct, false, &r.rest);
+        model_space(&r.parents, &local)[0]
+    }
+
+    fn within_1e_5(a: Matrix, b: Matrix) -> bool {
+        a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-5)
+    }
+
+    /// A window open for a day has a clock around 86 400 s, where an `f32` steps in 7.8 ms: a
+    /// clip started at such a time and narrowed to `f32` lost its phase. The start is the
+    /// clock's own `f64`: 0.125 s in is the pose at clip time 0.125.
+    #[test]
+    fn a_clip_keeps_its_phase_started_at_a_long_clock_time() {
+        let r = half_turn();
+        // 100 000.251 is not a number `f32` holds (there it is 100 000.25). The literal has no
+        // suffix: it is what the field's type makes of it.
+        let plays = [Played {
+            clip: 0,
+            start_s: 100_000.251,
+            looped: true,
+        }];
+        let pose = posed(&r, &plays, 100_000.251_f64 + 0.125);
+        let want = at_clip_time(&r, 0.125);
+        assert!(
+            within_1e_5(pose, want),
+            "{pose:?} is not the pose at clip time 0.125: {want:?}"
+        );
+    }
+
+    /// A looped clip keeps its phase after running for days: `since` is wrapped in `f64` and
+    /// narrowed to the clip's `f32` time only then. At 100 000 s an `f32` steps in 7.8 ms, 0.28
+    /// degrees of a quarter turn in half a second.
+    #[test]
+    fn a_looped_clip_keeps_its_phase_after_many_loops() {
+        let r = half_turn();
+        let plays = [Played {
+            clip: 0,
+            start_s: 100_000.25,
+            looped: true,
+        }];
+        // 100 000.1 s on: 200 000 loops and 0.1 s.
+        let pose = posed(&r, &plays, 200_000.35);
+        let want = at_clip_time(&r, 0.1);
+        assert!(
+            within_1e_5(pose, want),
+            "{pose:?} is not the pose at clip time 0.1: {want:?}"
+        );
     }
 
     #[test]
