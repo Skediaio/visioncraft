@@ -192,7 +192,7 @@ pub(crate) fn play_clip(host: &mut dyn Host, id: &str, params: &Value) -> Result
     let text = clip_text(id, &a)?;
     let start_s = match a.number("start_s")? {
         None => None,
-        Some(v) if v.is_finite() => Some(v as f32),
+        Some(v) if v.is_finite() => Some(v),
         Some(v) => {
             return Err(format!(
                 "{id}: `start_s` must be a finite number of seconds, got {v}"
@@ -204,7 +204,8 @@ pub(crate) fn play_clip(host: &mut dyn Host, id: &str, params: &Value) -> Result
     let animations = animations(host, id, &assets_of(&plants))?;
     let (clips, name, duration) = resolve(id, &text, &animations)?;
     let playback = playback(host)?;
-    let start_s = start_s.unwrap_or(playback.clock as f32);
+    // The clock itself, not its `f32` rounding: after a day of uptime that is a frame off.
+    let start_s = start_s.unwrap_or(playback.clock);
     let restarted = playback.play(target.clone(), clips, &name, start_s, looped, duration);
     Ok(json!({
         "object": target.name(),
@@ -362,8 +363,8 @@ pub(crate) fn flash(host: &mut dyn Host, id: &str, params: &Value) -> Result<Val
     // one it is on a film's time, and stays for every render of the film.
     let given = a.number("start_s")?;
     let start_s = match given {
-        None => playback.clock as f32,
-        Some(v) if v.is_finite() => v as f32,
+        None => playback.clock,
+        Some(v) if v.is_finite() => v,
         Some(v) => {
             return Err(format!(
                 "{id}: `start_s` must be a finite number of seconds, got {v}"

@@ -694,6 +694,47 @@ fn a_flash_comes_and_goes_by_the_clock() {
     assert_eq!(*h.session.project(), before.1);
 }
 
+/// A window open for a day has a clock around 86 400 s, where an `f32` steps in 7.8 ms: more
+/// than a frame at 144 a second. A one-frame flash started "now" then fell between two frames
+/// or showed on the next one, and a clip's start went the same way. The start is the clock
+/// itself, or the number given, not its `f32` rounding.
+#[test]
+fn the_start_is_the_clock_to_its_own_precision() {
+    let mut h = host();
+    // Not a number `f32` holds: there it rounds up to 86 400.007 812 5, into the next frame.
+    let clock = 86_400.004;
+    h.state.playback.clock = clock;
+    h.state.playback.fps = 144.0;
+    let r = run(
+        &mut h,
+        "effect.flash",
+        json!({"position": [0, 1, 0], "color": [1, 1, 1], "intensity": 100, "range_m": 2, "frames": 1}),
+    )
+    .unwrap();
+    assert_eq!(r["start_s"], json!(clock));
+    let f = h.state.playback.flashes()[0].clone();
+    assert!(f.shows_at(clock, 144.0), "the frame it started on");
+    assert!(!f.shows_at(clock + 1.0 / 144.0, 144.0), "not the next one");
+    // A clip's start, given or defaulted to the clock now, is kept as given too.
+    let r = run(
+        &mut h,
+        "model.play_clip",
+        json!({"object": "g1", "clip": "swing", "start_s": 100_000.251}),
+    )
+    .unwrap();
+    assert_eq!(r["start_s"], json!(100_000.251));
+    let r = run(
+        &mut h,
+        "model.play_clip",
+        json!({"object": "g1", "clip": "swing"}),
+    )
+    .unwrap();
+    assert_eq!(
+        (r["start_s"].clone(), r["restarted"].clone()),
+        (json!(clock), json!(true))
+    );
+}
+
 /// The cap is on flashes at once: twenty that follow one another over ten seconds are all
 /// kept for the film, and a live flash that is over goes when the next one comes.
 #[test]
