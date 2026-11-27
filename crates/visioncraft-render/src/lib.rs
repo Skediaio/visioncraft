@@ -3583,6 +3583,7 @@ impl Renderer {
         lods.sort_by(f32::total_cmp);
         lods.dedup();
         lods.truncate(LOD_UNSET as usize - 1);
+        let capacity = self.draw_capacity;
         let parts: Vec<Part> = parts
             .iter()
             .map(|&(mesh, material, distance)| Part {
@@ -3622,6 +3623,18 @@ impl Renderer {
             conifer: false,
             grass: false,
         }));
+        // The slots again when a later part's `alloc_slot` regrew the draw-slot buffer: its
+        // rewrite covers the parts of the items there are, and this one was not among them yet,
+        // so its earlier parts read zero there (the ground's material, mesh 0) until it is.
+        if self.draw_capacity != capacity
+            && let Some(Some(item)) = self.items.get(id.0 as usize)
+        {
+            for p in &item.parts {
+                let bytes = mesh_slot(p.mesh, row(p.material));
+                self.queue
+                    .write_buffer(&self.draw_buffer, u64::from(p.slot) * SLOT, &bytes);
+            }
+        }
         self.set_instances(id, instances);
         id
     }
@@ -8825,6 +8838,11 @@ mod tests {
         r.add_mesh(&m.mesh()).expect("mesh")
     }
 
+    /// Draw slots in use (the ground's and the batches' included).
+    fn live_slots(r: &Renderer) -> usize {
+        r.next_slot as usize - r.free_slots.len()
+    }
+
     /// The ground's draw slot in a renderer read back: its mesh id and material row.
     fn ground_words(r: &Renderer, device: &wgpu::Device, queue: &wgpu::Queue) -> (u32, u32) {
         slot_words(slots(r, device, queue)[r.ground_slot as usize])
@@ -8899,6 +8917,52 @@ mod tests {
             (u32::MAX - 1, GROUND_ROW),
             "the look removed: the ground's own row"
         );
+    }
+
+    /// An item whose later part makes the draw-slot buffer regrow keeps every part's slot: the
+    /// rewrite after a regrow covers the items there are, and the item being added was not one
+    /// yet, so its earlier parts read zero (the ground's material, mesh 0) and a glass part was
+    /// shaded as ground.
+    #[test]
+    fn an_item_added_as_the_slot_buffer_regrows_keeps_its_slots() {
+        let (device, queue) = pollster::block_on(headless_device()).expect("device");
+        let mut r = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let plain = r.add_material(&Material::default());
+        let glass = r.add_material(&Material {
+            surface: Surface::Glass,
+            ..Default::default()
+        });
+        // Mesh 0 is what a zero slot names: a spare mesh first, so the parts use later ones.
+        let spare = box_mesh(&mut r);
+        let (bark, leaves) = (box_mesh(&mut r), box_mesh(&mut r));
+        assert_ne!(bark.0, 0);
+        assert_ne!(leaves.0, 0);
+        let one = [Mat4::from_translation(Vec3::X)];
+        let capacity = r.draw_capacity;
+        while live_slots(&r) < capacity - 1 {
+            r.add_item(spare, plain, &one);
+        }
+        assert_eq!(
+            live_slots(&r),
+            capacity - 1,
+            "one slot left before the buffer doubles"
+        );
+        let item = r.add_lod_item(
+            &[(bark, plain, f32::INFINITY), (leaves, glass, f32::INFINITY)],
+            &one,
+        );
+        assert_eq!(r.draw_capacity, capacity * 2, "the second part regrew it");
+        let parts = &r.items[item.0 as usize].as_ref().expect("item").parts;
+        assert_eq!(parts.len(), 2);
+        let all = slots(&r, &device, &queue);
+        for p in parts {
+            assert_eq!(
+                slot_words(all[p.slot as usize]),
+                (p.mesh.0, row(p.material)),
+                "the slot of mesh {} keeps its mesh and row",
+                p.mesh.0
+            );
+        }
     }
 
     /// A row of boxes, each its own untextured material (the material table grows on the way):
