@@ -6541,8 +6541,13 @@ impl Renderer {
     /// reflection's (the camera's mirrored in a water plane, `mirror_matrix`).
     fn shade_view(&self, view: Mat4, cascades: &shadow::Cascades) -> ShadeView {
         let mut sealed = [true; shadow::MAX_CASCADES];
+        // `covers_slice` takes a cascade drawn this frame (the first, or one without a map) as
+        // covering because it is drawn with the camera's view: that says nothing of a mirrored
+        // view's slices, so for any other view no cascade after the first is sealed (its
+        // sampled range reaches down to the eye).
+        let own = view == self.view;
         for (k, s) in sealed.iter_mut().enumerate().take(cascades.count).skip(1) {
-            *s = (0..k).all(|j| self.covers_slice(j, cascades, view));
+            *s = own && (0..k).all(|j| self.covers_slice(j, cascades, view));
         }
         ShadeView {
             view,
@@ -9736,6 +9741,28 @@ mod tests {
             r.far_dirty_sampled(&cascades, &[(0, 0.0)], 1),
             "the reflection in the water at y = 0 shades the far cascade there"
         );
+    }
+
+    /// A mirrored view seals no cascade after the first: the cascades drawn this frame are
+    /// drawn for the camera's slices, not the reflection's, so its points may fall through to
+    /// the far map at any depth.
+    #[test]
+    fn a_reflection_view_seals_no_cascade_after_the_first() {
+        let (device, queue, mut r, _mover) = floating_mover_scene();
+        frame(&device, &queue, &mut r);
+        let cascades = r.cascades();
+        let own = r.shade_view(r.view, &cascades);
+        let mirrored = r.shade_view(r.view * mirror_matrix(0.0), &cascades);
+        assert!(own.sealed[0] && mirrored.sealed[0]);
+        for (c, sealed) in mirrored
+            .sealed
+            .iter()
+            .enumerate()
+            .take(cascades.count)
+            .skip(1)
+        {
+            assert!(!sealed, "cascade {c} sealed for the mirrored view");
+        }
     }
 
     /// Through a frame, with the sea below the floating mover: its planar reflection shades the
