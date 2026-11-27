@@ -1634,7 +1634,12 @@ impl Renderer {
             }],
         });
         let draw_capacity = 64;
-        let draw_buffer = uniform("draws", SLOT * draw_capacity as u64);
+        let draw_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("draws"),
+            size: SLOT * draw_capacity as u64,
+            usage: draw_slot_usage(),
+            mapped_at_creation: false,
+        });
         let draw_bind = draw_bind_group(device, &layouts.draw, &draw_buffer);
         let fade_buffer = uniform("fade draws", SLOT * FADE_SLOTS as u64);
         let fade_bind = draw_bind_group(device, &layouts.draw, &fade_buffer);
@@ -2316,7 +2321,36 @@ impl Renderer {
     /// Draws the endless ground with `material` (its maps, scale and variation) instead of the
     /// plain colour of `set_ground`, which still lights the environment below the horizon.
     pub fn set_ground_material(&mut self, material: Option<MaterialId>) {
+        if self.ground_look == material {
+            return;
+        }
         self.ground_look = material;
+        self.write_ground_slot();
+    }
+
+    /// The scene material the endless ground is drawn with (`set_ground_material`): `None`
+    /// without one, and once it was removed (the ground then takes its own look again).
+    fn ground_look_material(&self) -> Option<&GpuMaterial> {
+        self.materials.get(self.ground_look?.0 as usize)?.as_ref()
+    }
+
+    /// The row of the material table the endless ground is shaded with: its look's
+    /// (`set_ground_material`), else its own (`set_ground`, row 0). Its draw slot names it
+    /// (`write_ground_slot`).
+    fn ground_row(&self) -> u32 {
+        self.ground_look
+            .filter(|&id| matches!(self.materials.get(id.0 as usize), Some(Some(_))))
+            .map_or(GROUND_ROW, row)
+    }
+
+    /// The ground's draw slot, written for the material it is shaded with now (`ground_row`).
+    fn write_ground_slot(&mut self) {
+        let bytes = mesh_slot(MeshId(u32::MAX - 1), self.ground_row());
+        self.queue.write_buffer(
+            &self.draw_buffer,
+            u64::from(self.ground_slot) * SLOT,
+            &bytes,
+        );
     }
 
     /// The sky's source of light: the physical model (default), the
@@ -3513,13 +3547,17 @@ impl Renderer {
     }
 
     /// Frees a material. Items still using it draw nothing; the id is not
-    /// reused.
+    /// reused. A ground drawn with it goes back to its own look.
     pub fn remove_material(&mut self, id: MaterialId) {
+        let look = self.ground_look == Some(id);
         if let Some(slot) = self.materials.get_mut(id.0 as usize)
             && let Some(m) = slot.take()
             && self.sets.release(m.cpu.maps(), m.set)
         {
             self.texture_sets[m.set as usize] = None;
+        }
+        if look {
+            self.write_ground_slot();
         }
     }
 
@@ -3598,16 +3636,13 @@ impl Renderer {
             self.draw_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("draws"),
                 size: SLOT * self.draw_capacity as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                usage: draw_slot_usage(),
                 mapped_at_creation: false,
             });
             self.draw_bind = draw_bind_group(&self.device, &self.layouts.draw, &self.draw_buffer);
             self.impostor_slots_dirty = true;
-            self.queue.write_buffer(
-                &self.draw_buffer,
-                self.ground_slot as u64 * SLOT,
-                &mesh_slot(MeshId(u32::MAX - 1), GROUND_ROW),
-            );
+            // The ground's slot: the row it is shaded with now (a look's, else its own).
+            self.write_ground_slot();
             // The gathered batches' slot too: a new buffer starts at zero, and row 0 is the
             // ground's material (every instance of a batch then shaded like the ground).
             self.queue.write_buffer(
@@ -4674,13 +4709,9 @@ impl Renderer {
         const RINGS: u32 = 80;
         const SEGMENTS: u32 = 192;
         // A material of the scene (the terrain's base layer) when one is set: the ground then
-        // looks like it, texture, tiling phase and variation alike, so their border vanishes.
-        // A scene material's texture set (its row is not the ground's: the slot names row 0,
-        // whose parameters `set_ground` keeps from the ground's colour and roughness).
-        let set = self
-            .ground_look
-            .and_then(|id| self.materials.get(id.0 as usize)?.as_ref())
-            .map_or(0, |m| m.set);
+        // looks like it, texture, tiling phase and variation alike, so their border vanishes:
+        // its texture set here, and its row in the ground's draw slot (`ground_row`).
+        let set = self.ground_look_material().map_or(0, |m| m.set);
         let Some(Some(texture_set)) = self.texture_sets.get(set as usize) else {
             return;
         };
@@ -6173,6 +6204,18 @@ fn fade_slot(mesh: MeshId, material: u32, fade: f32) -> [u8; 16] {
     let mut out = mesh_slot(mesh, material);
     out[8..12].copy_from_slice(&fade.to_le_bytes());
     out
+}
+
+/// What the draw-slot buffer is for: a uniform the queue writes; in a test also one to copy
+/// from, to read a slot back (`tests::slots`).
+fn draw_slot_usage() -> wgpu::BufferUsages {
+    #[cfg(not(test))]
+    let usage = wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST;
+    // In a test the buffer is copied out for `tests::slots`.
+    #[cfg(test)]
+    let usage =
+        wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC;
+    usage
 }
 
 /// A draw slot (`scene.wgsl` `Draw`): x the mesh id for the face highlight, y the material's
@@ -8735,6 +8778,127 @@ mod tests {
         assert!(!sets.release([None; 6], 0));
         assert!(!sets.release([None; 6], 0), "set 0 is never given back");
         assert_eq!(sets.acquire([None; 6]), (0, false), "set 0 stays");
+    }
+
+    /// What the GPU's draw-slot buffer holds once the queue's writes are in (the test's copy
+    /// of it, read back): the first 16 bytes of every slot of `SLOT` bytes.
+    fn slots(r: &Renderer, device: &wgpu::Device, queue: &wgpu::Queue) -> Vec<[u8; 16]> {
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let size = SLOT * r.draw_capacity as u64;
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        encoder.copy_buffer_to_buffer(&r.draw_buffer, 0, &buffer, 0, size);
+        queue.submit([encoder.finish()]);
+        buffer
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, |res| res.expect("map"));
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("poll");
+        let bytes = buffer
+            .slice(..)
+            .get_mapped_range()
+            .expect("mapped")
+            .to_vec();
+        let (slots, rest) = bytes.as_chunks::<{ SLOT as usize }>();
+        assert!(rest.is_empty(), "a whole number of slots");
+        slots
+            .iter()
+            .map(|s| s[..16].try_into().expect("a slot"))
+            .collect()
+    }
+
+    /// A draw slot's mesh id and material row (`mesh_slot`).
+    fn slot_words(bytes: [u8; 16]) -> (u32, u32) {
+        let word = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().expect("word"));
+        (word(0), word(4))
+    }
+
+    /// One box on the ground, as a mesh (`tests`).
+    fn box_mesh(r: &mut Renderer) -> MeshId {
+        let mut m = demo::MeshData::default();
+        m.add_box(Vec3::new(-0.5, 0.0, -0.5), Vec3::new(0.5, 1.0, 0.5));
+        r.add_mesh(&m.mesh()).expect("mesh")
+    }
+
+    /// The ground's draw slot in a renderer read back: its mesh id and material row.
+    fn ground_words(r: &Renderer, device: &wgpu::Device, queue: &wgpu::Queue) -> (u32, u32) {
+        slot_words(slots(r, device, queue)[r.ground_slot as usize])
+    }
+
+    /// The endless ground with a look (`set_ground_material`) names the look's row in its
+    /// draw slot, a row whose bits say the maps are there, so the ground is shaded with the
+    /// material's parameters under its texture set and the terrain's edge vanishes; without a
+    /// look, and once the look is removed, the slot names the ground's own row; a draw-slot
+    /// buffer that regrew writes whichever holds.
+    #[test]
+    fn the_ground_with_a_look_material_names_its_row() {
+        let (device, queue) = pollster::block_on(headless_device()).expect("device");
+        let mut r = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        r.set_ground(Some(Ground::default()));
+        let grass = r
+            .add_texture(&TextureDesc {
+                width: 16,
+                height: 16,
+                rgba8: &[96; 16 * 16 * 4],
+                color_space: ColorSpace::Srgb,
+                repeat: true,
+            })
+            .expect("texture");
+        let lawn = r.add_material(&Material {
+            base_color_map: Some(grass),
+            projection: Projection::Triplanar { scale_m: 2.0 },
+            variation: 0.5,
+            ..Default::default()
+        });
+        assert_eq!(
+            ground_words(&r, &device, &queue),
+            (u32::MAX - 1, GROUND_ROW),
+            "no look: the ground's own row"
+        );
+        r.set_ground_material(Some(lawn));
+        assert_eq!(
+            ground_words(&r, &device, &queue),
+            (u32::MAX - 1, row(lawn)),
+            "the slot names the look's row"
+        );
+        // The look's row (the CPU copy, what was written): its texture bits (scene.wgsl
+        // `Material.flags.x`) say the base map is bound, where the ground's own say none.
+        let bits = |of: u32| {
+            let at = of as usize * MATERIAL_SIZE as usize + 64;
+            u32::from_le_bytes(r.material_bytes[at..at + 4].try_into().expect("bits"))
+        };
+        assert_eq!(bits(row(lawn)) & 1, 1, "the look's row is textured");
+        assert_eq!(bits(GROUND_ROW), 0, "the ground's own row has no map");
+        // Items until the draw-slot buffer regrows: the rewrite keeps the look's row.
+        let (mesh, material) = (box_mesh(&mut r), r.add_material(&Material::default()));
+        let one = [Mat4::from_translation(Vec3::X)];
+        let capacity = r.draw_capacity;
+        while r.draw_capacity == capacity {
+            r.add_item(mesh, material, &one);
+        }
+        assert_eq!(
+            ground_words(&r, &device, &queue),
+            (u32::MAX - 1, row(lawn)),
+            "a regrown buffer keeps the look's row"
+        );
+        r.set_ground_material(None);
+        assert_eq!(
+            ground_words(&r, &device, &queue),
+            (u32::MAX - 1, GROUND_ROW),
+            "no look again: the ground's own row"
+        );
+        r.set_ground_material(Some(lawn));
+        r.remove_material(lawn);
+        assert_eq!(
+            ground_words(&r, &device, &queue),
+            (u32::MAX - 1, GROUND_ROW),
+            "the look removed: the ground's own row"
+        );
     }
 
     /// A row of boxes, each its own untextured material (the material table grows on the way):
