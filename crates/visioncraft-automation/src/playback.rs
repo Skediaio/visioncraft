@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use visioncraft_core::keyframes::{Matrix, Sampler, mul};
 use visioncraft_core::planting::{self, Generator};
+use visioncraft_core::playback::raised;
 use visioncraft_core::{
     Animation, ClipTarget, Flash, FlashDrop, Life, MAX_FLASHES, MAX_STORED_FLASHES, Played, Spot,
     clip_index,
@@ -376,7 +377,7 @@ fn space(id: &str, a: &Fields) -> Result<Space, String> {
 /// (the default) as the window draws it: the plant's `placement` (scale, then Y rotation, then
 /// translation, under the growth of the years shown) times the part's matrix in model space; in
 /// `model` that matrix on its own. Each plant tells its `placement`, to compose or invert.
-/// Only the plants the window draws are reached (the building rule, the sea).
+/// Only the plants the window draws are reached (the building rule, the sea, a hidden layer).
 pub(crate) fn part_pose(host: &mut dyn Host, id: &str, params: &Value) -> Result<Value, String> {
     let a = Fields::new(id, "parameter", Some(params), &["object", "t", "space"])?;
     let target = target(id, a.required_str("object")?)?;
@@ -392,16 +393,33 @@ pub(crate) fn part_pose(host: &mut dyn Host, id: &str, params: &Value) -> Result
     let space = space(id, &a)?;
     let plants = plants(host, id, &target, Reach::Drawn)?;
     let animations = animations(host, id, &assets_of(&plants))?;
+    // The project's imported objects: what is raised to its lowest point.
+    let imported: Vec<String> = host
+        .session()
+        .project()
+        .objects
+        .iter()
+        .map(|o| o.asset_id())
+        .collect();
     let playback = playback(host)?;
     let t = t.unwrap_or(playback.clock);
     let mut out = Vec::new();
     let (mut sampler, mut played) = (Sampler::default(), Vec::<Played>::new());
     for plant in &plants {
+        // An imported object stands on its lowest point: the window raises it by as much
+        // (`Library::finish`), from the same lowest rest point of the same file.
+        let is_imported = imported.iter().any(|a| a == &plant.asset);
         let animation = &animations
             .iter()
             .find(|(asset, _)| asset == &plant.asset)
             .expect("each asset was resolved")
             .1;
+        let lift = animation.lift(is_imported);
+        let placement = if lift == 0.0 {
+            plant.matrix
+        } else {
+            mul(&plant.matrix, &raised(lift))
+        };
         let Some(rig) = &animation.rig else {
             return Err(format!(
                 "{id}: `{}` (plant {} of `{}`) stands still: it has no moving parts",
@@ -416,13 +434,13 @@ pub(crate) fn part_pose(host: &mut dyn Host, id: &str, params: &Value) -> Result
         }));
         let pose = sampler.pose(rig, &played, t);
         let parts: Vec<Matrix> = match space {
-            Space::World => pose.iter().map(|m| mul(&plant.matrix, m)).collect(),
+            Space::World => pose.iter().map(|m| mul(&placement, m)).collect(),
             Space::Model => pose.to_vec(),
         };
         out.push(json!({
             "plant": plant.number,
             "asset": plant.asset,
-            "placement": plant.matrix,
+            "placement": placement,
             "posed": !played.is_empty(),
             "clips": played.iter().map(|p| rig.clips[p.clip].name.clone()).collect::<Vec<_>>(),
             "parts": parts,

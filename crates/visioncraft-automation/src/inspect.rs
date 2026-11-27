@@ -317,8 +317,9 @@ pub(crate) fn stages(session: &Session, state: &HostState, g: &Generator) -> Sta
 }
 
 /// The matrix the window draws plant `p` of planting `g` with: its placement
-/// ([`visioncraft_core::Placement::matrix`]) under the growth scale of the years shown. A moving
-/// part's world matrix is this times the part's matrix in model space.
+/// ([`visioncraft_core::Placement::matrix`]) under the growth scale of the years shown, before
+/// an imported object's lift to its lowest point (`part_pose` adds it). A moving part's world
+/// matrix is this times the part's matrix in model space.
 pub(crate) fn drawn_matrix(
     project: &Project,
     assets: &[visioncraft_core::Asset],

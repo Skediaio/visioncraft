@@ -79,6 +79,8 @@ fn hinge() -> Animation {
         }),
         clips,
         warnings: Vec::new(),
+        // Its origin 50 cm above its lowest point: the window raises it by as much.
+        rest_low_y: Some(-0.5),
     }
 }
 
@@ -526,6 +528,12 @@ fn matrix(value: &Value) -> Matrix {
     serde_json::from_value(value.clone()).unwrap()
 }
 
+/// The hinge's matrix as the window draws it: its placement, then raised 50 cm to its lowest
+/// point (an imported object; `rest_low_y` of its animation).
+fn raised(m: &Matrix) -> Matrix {
+    times(m, &visioncraft_core::playback::raised(0.5))
+}
+
 /// A hinge (`user:uo1`) as `g3`, turned a quarter, twice as big, 3 m east and 20 cm up.
 fn turned(h: &mut Headless) {
     h.session
@@ -550,10 +558,15 @@ fn world_space_is_the_placement_times_the_model_pose() {
         json!({"object": "g3", "clip": "swing", "start_s": 0}),
     )
     .unwrap();
-    let placement = placement_at([3.0, 0.2, -1.5], 90.0, 2.0);
+    let placement = raised(&placement_at([3.0, 0.2, -1.5], 90.0, 2.0));
     let model = by_hand(0, 0.0, 0.5, false);
     let world = times(&placement, &model);
     assert_ne!(world, model, "the placement is not the identity");
+    // Raised 50 cm in the model's space: a metre at the plant's scale 2.
+    assert!(
+        (placement[12] - 3.0).abs() < 1e-5 && (placement[13] - 1.2).abs() < 1e-5,
+        "{placement:?}"
+    );
     // The default is world space: as drawn, not the model-space pose.
     let r = run(&mut h, "query.part_pose", json!({"object": "g3", "t": 0.5})).unwrap();
     let plant = &r["plants"][0];
@@ -614,7 +627,7 @@ fn with_years_shown_the_world_pose_is_scaled_as_the_window_draws_it() {
     let growth = visioncraft_core::growth::growth_of("user:uo1", Some((1.0, 3.0)));
     let k = growth.size(growth.planted_age_years + 1.0).height;
     assert!((0.1..0.99).contains(&k), "{k}");
-    let placement = placement_at([3.0, 0.2, -1.5], 90.0, 2.0 * k);
+    let placement = raised(&placement_at([3.0, 0.2, -1.5], 90.0, 2.0 * k));
     let model = by_hand(0, 0.0, 0.5, false);
     let r = run(&mut h, "query.part_pose", json!({"object": "g3", "t": 0.5})).unwrap();
     assert!(near(matrix(&r["plants"][0]["placement"]), placement));
@@ -1395,7 +1408,7 @@ fn both_protocols_carry_the_commands() {
     let input = [
         json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "test", "version": "0"}}}),
         json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
-        json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "command_run", "arguments": {"id": "query.part_pose", "params": {"object": "g1", "t": 0.5}}}}),
+        json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "command_run", "arguments": {"id": "query.part_pose", "params": {"object": "g1", "t": 0.5, "space": "model"}}}}),
         json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "command_run", "arguments": {"id": "effect.flash", "params": {"position": [0, 1, 0], "color": [1, 1, 1], "intensity": 100, "range_m": 2}}}}),
     ]
     .iter()

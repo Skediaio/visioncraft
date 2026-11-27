@@ -874,14 +874,15 @@ impl Library {
             .iter()
             .any(|a| a.lods.iter().any(|l| l.file == path))
         {
-            let low = glb
-                .rest_prims()
-                .iter()
-                .flat_map(|p| &p.positions)
-                .map(|q| q[1])
-                .filter(|y| y.is_finite())
-                .fold(f32::INFINITY, f32::min);
-            if low.is_finite() { -low } else { 0.0 }
+            // The same function the animation's `rest_low_y` comes from, so a headless host
+            // answers the lift the window draws with.
+            visioncraft_core::playback::lowest_y(
+                glb.rest_prims()
+                    .iter()
+                    .flat_map(|p| &p.positions)
+                    .map(|q| q[1]),
+            )
+            .map_or(0.0, |low| -low)
         } else {
             0.0
         };

@@ -14,6 +14,37 @@ pub struct Animation {
     pub clips: Vec<Clip>,
     pub warnings: Vec<String>,
     pub rig: Option<Rig>,
+    /// The lowest point of the model at its rest pose (y, metres): an imported object is
+    /// raised by its negative to stand on the ground ([`Animation::lift`]), a catalogue asset
+    /// is not. `None` without a finite one.
+    pub rest_low_y: Option<f32>,
+}
+
+impl Animation {
+    /// Metres the model is raised by to stand on the ground: an imported object's lowest rest
+    /// point brought to y = 0, 0 for a catalogue asset. The window's own lift
+    /// (`Library::finish`), from the same geometry.
+    pub fn lift(&self, imported_object: bool) -> f32 {
+        if imported_object {
+            -self.rest_low_y.unwrap_or(0.0)
+        } else {
+            0.0
+        }
+    }
+}
+
+/// The lowest finite y among `ys` (a model's rest pose), `None` without one. What the window's
+/// lift and [`Animation::rest_low_y`] both come from.
+pub fn lowest_y(ys: impl Iterator<Item = f32>) -> Option<f32> {
+    let low = ys.filter(|y| y.is_finite()).fold(f32::INFINITY, f32::min);
+    low.is_finite().then_some(low)
+}
+
+/// The matrix that raises a model by `lift` metres (column-major).
+pub fn raised(lift: f32) -> crate::keyframes::Matrix {
+    [
+        1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, lift, 0.0, 1.0,
+    ]
 }
 
 /// Most flashes at once (whose times overlap); over it the oldest of those goes.

@@ -125,12 +125,17 @@ impl Glb {
         })
     }
 
-    /// The clips, what was left out of them, and the bones they move ([`Self::rig`]).
+    /// The clips, what was left out of them, and the bones they move ([`Self::rig`]), and
+    /// where the model's lowest point is at rest (what an imported object is raised by).
     pub fn animation(&self) -> playback::Animation {
+        let rest = self.rest_prims();
         playback::Animation {
             clips: self.clips.clone(),
             warnings: self.animation_warnings.clone(),
             rig: self.rig(),
+            rest_low_y: playback::lowest_y(
+                rest.iter().flat_map(|p| p.positions.iter()).map(|q| q[1]),
+            ),
         }
     }
 }
@@ -1075,6 +1080,21 @@ pub(crate) mod tests {
         pub(crate) fn finish(self) -> Vec<u8> {
             self.finish_json(|_| {})
         }
+    }
+
+    /// The animation tells where the model's lowest point is at rest: what an imported object
+    /// is raised by, the number the window's lift is made of.
+    #[test]
+    fn the_animation_records_the_lowest_rest_point() {
+        let glb = parse(&hinge().finish()).unwrap();
+        let low = playback::lowest_y(
+            glb.rest_prims()
+                .iter()
+                .flat_map(|p| p.positions.iter())
+                .map(|q| q[1]),
+        );
+        assert_eq!(glb.animation().rest_low_y, low);
+        assert!(low.is_some(), "the hinge has a body");
     }
 
     /// A hinge: a body with a lid on it, a quarter turned in the file, that swings in one clip.
