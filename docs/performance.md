@@ -160,6 +160,22 @@ Recipe, a time-of-day drag:
   sun stops, every stale cascade draws, so the resting picture is the same as before.
   `finish_environment` (a picture of the live view) forces that refresh too; the offscreen
   stills start without any cache. The rule is `cascade_refresh` in `visioncraft-render`.
+  **While instances move** (a clip playing: the posed parts of a model) `set_instance` no
+  longer drops the caches either. An item that moved makes stale only the cascades that hold
+  it (its bounds before or after the move, within the light-space bounds of the map as drawn)
+  and that shade a part of the view its shadow can be sampled in: the view depths from the end
+  of the cascade before, less their blend band, up to its own split (a door by the eye never
+  reaches the cached far cascade; the band's lower end is dropped when the cascade before no
+  longer covers its slice, after a jump of the camera), and the snow cover map only when the
+  item lies over its square. The near cascade draws every frame as ever. `set_item_shadow_cascades`
+  marks the cascades an item leaves. The rule is `Renderer::stale_moved` in `visioncraft-render`.
+  A mover the far cascade is spared for (no view samples its shadow from it) is not lost: the
+  reach of its shadow is kept (`far_dirty`) until the far map is drawn again, and every frame's
+  views test it, the camera's and the planar reflections' (a mirrored camera shades the same
+  shadow at another view depth), so the frame one samples it in draws the far map. **While the
+  sun moves** a mover's shadow in a middle or the far cascade refreshes at the sun's cadence
+  (`FAR_SUN_PERIOD`: the far one every fourth frame, the middle ones on their alternate
+  frames), like the sun's own; the frame after the sun stops is exact.
 - **The water reflections** are drawn only for water the view frames: the sea counts when a
   grid of rays through the view lands on its side of the coast (`sea::sea_sight`), a pond when
   its clusters are in view. They draw the coarser levels, and leave out what would be under

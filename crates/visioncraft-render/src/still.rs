@@ -222,6 +222,7 @@ impl Renderer {
         let live_sampled = sampled.1.map(|s| std::mem::replace(&mut self.sampled, s));
         let live = (self.size, self.quality, self.view, self.proj, self.eye);
         let live_cache = self.far_cache.take();
+        let live_far_dirty = self.far_dirty.take();
         let live_cascades = std::mem::take(&mut self.cascade_rendered);
         let live_stale = std::mem::take(&mut self.cascade_stale);
         // The snow cover map too: these targets never drew one, and the next offscreen frame's
@@ -271,6 +272,7 @@ impl Renderer {
         let used_sampled = live_sampled.map(|s| std::mem::replace(&mut self.sampled, s));
         (self.size, self.quality, self.view, self.proj, self.eye) = live;
         self.far_cache = live_cache;
+        self.far_dirty = live_far_dirty;
         self.cascade_rendered = live_cascades;
         self.cascade_stale = live_stale;
         self.snow_drawn = live_snow;
