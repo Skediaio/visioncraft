@@ -631,12 +631,10 @@ fn with_years_shown_the_world_pose_is_scaled_as_the_window_draws_it() {
     assert_eq!(r["plants"][0]["parts"][0], json!(model));
 }
 
-/// Only the plants the window draws are reached: one under the sea is left out, the other
-/// keeps its number, and naming the one under the sea is an error that says so.
-#[test]
-fn a_plant_under_the_sea_is_not_reached() {
-    let mut h = host();
-    // Two hinges close together (`g3`): where they stand is the generator's own.
+/// Two hinges close together as `g3`, and `water.set_sea`'s parameters for a lake half a metre
+/// deep over plant 0 (the western one) with dry land where plant 1 stands.
+fn lake_over_plant_0(h: &mut Headless) -> Value {
+    // Where they stand is the generator's own.
     h.session
         .run(
             "planting.add_cluster",
@@ -658,20 +656,22 @@ fn a_plant_under_the_sea_is_not_reached() {
         numbered.iter().map(|(n, _)| *n).collect::<Vec<_>>(),
         vec![0, 1]
     );
-    // A 3 m wide lake up to the line between the two of them from the west: half a metre deep
-    // over plant 0, dry land where plant 1 stands.
     let (a, b) = (numbered[0].1.position, numbered[1].1.position);
     assert!(
         b[0] - a[0] > 0.05,
         "plant 1 is east of plant 0: {a:?} {b:?}"
     );
     let edge = (a[0] + b[0]) / 2.0;
-    run(
-        &mut h,
-        "water.set_sea",
-        json!({"level": 0.5, "outline": [[edge - 3.0, -60.0], [edge, -60.0], [edge, 60.0], [edge - 3.0, 60.0]]}),
-    )
-    .unwrap();
+    json!({"level": 0.5, "outline": [[edge - 3.0, -60.0], [edge, -60.0], [edge, 60.0], [edge - 3.0, 60.0]]})
+}
+
+/// Only the plants the window draws are played and read: one under the sea is left out, the
+/// other keeps its number, and naming the one under the sea is an error that says so.
+#[test]
+fn a_plant_under_the_sea_is_not_reached() {
+    let mut h = host();
+    let lake = lake_over_plant_0(&mut h);
+    run(&mut h, "water.set_sea", lake.clone()).unwrap();
     // The planting: plant 1 alone, under its own number.
     let r = run(&mut h, "query.part_pose", json!({"object": "g3"})).unwrap();
     assert_eq!(
@@ -684,11 +684,10 @@ fn a_plant_under_the_sea_is_not_reached() {
         vec![json!(1)],
         "{r}"
     );
-    // Plant 0, named: an error that says why, wherever it is named.
+    // Plant 0, named: an error that says why.
     for (command, params) in [
         ("query.part_pose", json!({"object": "g3#0"})),
         ("model.play_clip", json!({"object": "g3#0", "clip": 0})),
-        ("model.stop_clip", json!({"object": "g3#0"})),
     ] {
         let e = run(&mut h, command, params).unwrap_err();
         assert!(
@@ -700,6 +699,40 @@ fn a_plant_under_the_sea_is_not_reached() {
     run(&mut h, "water.remove_sea", json!({})).unwrap();
     let r = run(&mut h, "query.part_pose", json!({"object": "g3"})).unwrap();
     assert_eq!(r["plants"].as_array().unwrap().len(), 2);
+}
+
+/// A play is always stopped, also one on a plant that was hidden after its clip started:
+/// `model.stop_clip` reaches every plant the recipe places, drawn or not.
+#[test]
+fn a_clip_on_a_plant_hidden_since_is_still_stopped() {
+    let mut h = host();
+    let lake = lake_over_plant_0(&mut h);
+    let r = run(
+        &mut h,
+        "model.play_clip",
+        json!({"object": "g3#0", "clip": "swing", "start_s": 0, "loop": true}),
+    )
+    .unwrap();
+    assert_eq!(r["playing"], json!(1));
+    run(&mut h, "water.set_sea", lake.clone()).unwrap();
+    // Not drawn any more: not played, not read.
+    let e = run(&mut h, "query.part_pose", json!({"object": "g3#0"})).unwrap_err();
+    assert!(e.contains("is not drawn: it is under the sea"), "{e}");
+    // Stopped all the same.
+    let r = run(&mut h, "model.stop_clip", json!({"object": "g3#0"})).unwrap();
+    assert_eq!(r, json!({"object": "g3#0", "stopped": 1, "playing": 0}));
+    assert!(h.state.playback.is_empty(), "the play is gone");
+    // Seen once the sea is lowered again: at rest, no clip on it.
+    run(&mut h, "water.remove_sea", json!({})).unwrap();
+    let r = run(&mut h, "query.part_pose", json!({"object": "g3#0"})).unwrap();
+    assert_eq!(
+        (
+            r["plants"][0]["posed"].clone(),
+            r["plants"][0]["clips"].clone()
+        ),
+        (json!(false), json!([])),
+        "{r}"
+    );
 }
 
 /// `space` is `world` or `model`: anything else is an error that names both.

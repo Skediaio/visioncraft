@@ -338,7 +338,7 @@ pub fn host_docs() -> Vec<CommandDoc> {
         host_doc(
             "model.stop_clip",
             "Stop Clip",
-            "Stops the clips playing on the objects a planting places (`object` as `model.play_clip` takes it): of `clip` only, or every clip without it. A planting (`g4`) stops the clips on each of its objects (`g4#3`) too; one object of a planting a clip plays on as a whole cannot be stopped on its own (an error says to stop the planting). A stopped part is at rest again.",
+            "Stops the clips playing on the objects a planting places (`object` as `model.play_clip` takes it): of `clip` only, or every clip without it. A planting (`g4`) stops the clips on each of its objects (`g4#3`) too; one object of a planting a clip plays on as a whole cannot be stopped on its own (an error says to stop the planting). A plant that is not drawn any more (the building rule, the sea, a hidden layer) is stopped too. A stopped part is at rest again.",
             vec![
                 p(
                     "object",
@@ -347,7 +347,7 @@ pub fn host_docs() -> Vec<CommandDoc> {
                     true,
                     None,
                     &[],
-                    "A planting (`g4`) or one of its drawn objects (`g4#12`)",
+                    "A planting (`g4`) or one of its objects (`g4#12`), drawn or not",
                 ),
                 p(
                     "clip",
