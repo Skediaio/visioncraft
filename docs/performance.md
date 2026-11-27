@@ -105,11 +105,15 @@ Recipe, a time-of-day drag:
   and transparents draw straight from the pool.
 - **Culling without allocation, in 128 m blocks.** Each pass's cluster visibility is written
   into one flat list of flags the renderer keeps (an item's at its range, remade only when items
-  change). An item's instances are sorted by 128 m block of the ground grid, then by their 8 m
-  cell, so each block is a range of clusters with its own bounds: a block outside the view takes
-  its clusters with it. `update_lods` skips a block altogether beyond the item's last level
-  (hysteresis included) when all its clusters are already culled by distance and nothing
-  dissolves: no level there can change.
+  change); every cluster keeps its own test, 4 ns on a town: a test of its 128 m block first
+  cost more than it saved there (a lookup through the block is more than a test, and a wide view
+  keeps most blocks in view). The instances stay sorted by their 8 m cell (the order the pictures
+  were made in: it decides which of two equally distant leaves shows); each cluster knows its
+  block of the ground grid (`Item::block_of`), and a block has the bounds of its clusters, which
+  `update_lods` uses: beyond the item's last level (hysteresis included), a block whose clusters
+  are all culled by distance and none dissolving is left out, which halves that stage on the
+  town. An item with an impostor draws those clusters as impostors, so there they still get
+  their sort keys (a distance and a dot product) and nothing else.
 - **One vertex buffer and one index buffer** for the static meshes (`batch.rs` `MeshRanges`): a
   mesh holds a range of each, a draw names its index range and its base vertex, and a pass binds
   the two buffers once (again only when a mesh of another arena follows). A mesh replaced by as
