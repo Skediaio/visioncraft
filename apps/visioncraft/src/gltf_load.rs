@@ -80,8 +80,12 @@ pub struct Prim {
 /// their own. Until a clip plays, [`Glb::rest_prims`] draws it where the file has it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AnimatedPart {
-    /// The part's node in the file: how a level of detail's file knows the same part.
+    /// The part's node in the file: where to find it, and what matches it to a part of the
+    /// first level when it has no name ([`match_level`]).
     pub node: usize,
+    /// The node's name in the file (empty without one): what a level of detail's file knows
+    /// the same part by ([`part_key`]), and what a warning calls it by.
+    pub name: String,
     /// Its triangles in the node's own space: the node's own transform is not applied.
     pub prims: Vec<Prim>,
     /// The node's transform in the file.
@@ -90,6 +94,106 @@ pub struct AnimatedPart {
     /// nodes in the file, so a parent may have a higher index than its child: nothing may
     /// assume parents come first.
     pub parent: Option<usize>,
+}
+
+/// The key a level of detail's moving part is matched by: its node's name without a trailing
+/// `_LOD<n>` (`n` digits only; case-sensitive), `None` for a node without a name. `door_LOD2`
+/// and `door` are both `door`; `door_LODx`, `door_LOD` and `door_lod1` stay whole.
+pub fn part_key(name: &str) -> Option<&str> {
+    if name.is_empty() {
+        return None;
+    }
+    Some(match name.rsplit_once("_LOD") {
+        Some((key, n)) if !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit()) => key,
+        _ => name,
+    })
+}
+
+/// Which moving parts of a level of detail are which of the first level's: the one rule the
+/// window poses by ([`crate::scene`]) and `query.clips` warns by
+/// ([`crate::model_animation`]), so that the two cannot disagree.
+///
+/// A part is matched **by name**: its key ([`part_key`]) is looked up among the first level's
+/// parts. Only where no name decides does the node's **index** in the file match, as it always
+/// did: a node without a name on either side, or a name that appears twice in a level (which
+/// [`Self::twice`] says). A part of the first level that a name claimed is never matched by
+/// index as well.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LevelMatch {
+    /// Per part of the level, the first level's part it is (`None`: one of its own, drawn at
+    /// rest).
+    pub of_level: Vec<Option<usize>>,
+    /// Per part of the first level, the level's part that draws it (`None`: not drawn at this
+    /// level).
+    pub of_first: Vec<Option<usize>>,
+    /// Each name that appears more than once in a level and in the other level too, so that
+    /// its parts were matched by index: the name, how many times in the level, and in the
+    /// first level.
+    pub twice: Vec<(String, usize, usize)>,
+}
+
+/// Which parts of `level` are which of `first` ([`LevelMatch`]): per part its glTF node and
+/// name, as [`Glb::nodes`] has them.
+pub fn match_level(first: &[(usize, String)], level: &[(usize, String)]) -> LevelMatch {
+    fn keys(nodes: &[(usize, String)]) -> Vec<Option<&str>> {
+        nodes.iter().map(|(_, name)| part_key(name)).collect()
+    }
+    fn count(keys: &[Option<&str>], key: &str) -> usize {
+        keys.iter().filter(|k| **k == Some(key)).count()
+    }
+    let (first_keys, level_keys) = (keys(first), keys(level));
+    let mut m = LevelMatch {
+        of_level: vec![None; level.len()],
+        of_first: vec![None; first.len()],
+        twice: Vec::new(),
+    };
+    // By name: a key that appears once in each level.
+    for (li, key) in level_keys.iter().enumerate() {
+        let Some(k) = *key else {
+            continue;
+        };
+        if count(&level_keys, k) > 1 || count(&first_keys, k) > 1 {
+            continue;
+        }
+        if let Some(fj) = first_keys.iter().position(|x| *x == Some(k)) {
+            m.of_level[li] = Some(fj);
+            m.of_first[fj] = Some(li);
+        }
+    }
+    // By index, where no name decides: a node without a name on either side, or a name that
+    // appears twice in a level (then the same name on both sides). A part of the first level
+    // that a name claimed is left to it.
+    for (li, (node, _)) in level.iter().enumerate() {
+        if m.of_level[li].is_some() {
+            continue;
+        }
+        let Some(fj) = first.iter().position(|(n, _)| n == node) else {
+            continue;
+        };
+        if m.of_first[fj].is_some() {
+            continue;
+        }
+        let twice = match (level_keys[li], first_keys[fj]) {
+            (Some(a), Some(b)) => {
+                a == b && (count(&level_keys, a) > 1 || count(&first_keys, b) > 1)
+            }
+            _ => false,
+        };
+        if level_keys[li].is_none() || first_keys[fj].is_none() || twice {
+            m.of_level[li] = Some(fj);
+            m.of_first[fj] = Some(li);
+        }
+    }
+    // The names that made a match ambiguous: more than once in a level, and in the other level
+    // too.
+    for key in level_keys.iter().chain(&first_keys).flatten() {
+        let (in_level, in_first) = (count(&level_keys, key), count(&first_keys, key));
+        let ambiguous = (in_level > 1 && in_first > 0) || (in_first > 1 && in_level > 0);
+        if ambiguous && !m.twice.iter().any(|(k, _, _)| k == key) {
+            m.twice.push((key.to_string(), in_level, in_first));
+        }
+    }
+    m
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -137,6 +241,16 @@ impl Glb {
                 rest.iter().flat_map(|p| p.positions.iter()).map(|q| q[1]),
             ),
         }
+    }
+
+    /// The node of each moving part, as [`Self::parts`] have it: the glTF node's index in the
+    /// file and its name. What the parts of a level of detail are matched to the first level's
+    /// by ([`match_level`]), for the pose and for `query.clips`' warnings.
+    pub fn nodes(&self) -> Vec<(usize, String)> {
+        self.parts
+            .iter()
+            .map(|p| (p.node, p.name.clone()))
+            .collect()
     }
 }
 
@@ -605,12 +719,16 @@ pub fn parse(bytes: &[u8]) -> Result<Glb, String> {
         .iter()
         .map(|&n| {
             let node = doc.nodes().nth(n);
-            let (translation, rotation, scale) = node
-                .map_or(([0.0; 3], [0.0, 0.0, 0.0, 1.0], [1.0; 3]), |n| {
-                    n.transform().decomposed()
-                });
+            let (translation, rotation, scale, name) = node.map_or(
+                ([0.0; 3], [0.0, 0.0, 0.0, 1.0], [1.0; 3], String::new()),
+                |n| {
+                    let (t, r, s) = n.transform().decomposed();
+                    (t, r, s, n.name().unwrap_or_default().to_string())
+                },
+            );
             AnimatedPart {
                 node: n,
+                name,
                 prims: Vec::new(),
                 rest: Trs {
                     translation,
@@ -919,6 +1037,10 @@ pub(crate) mod tests {
         }
     }
 
+    /// One track of an animation [`Builder::animation_of`] makes: the node, the path, the
+    /// interpolation, the key times and the values.
+    type Track<'a> = (usize, &'a str, &'a str, &'a [f32], &'a [f32]);
+
     /// A GLB under construction for the tests: triangles, a node tree, materials and animations,
     /// all in one BIN chunk. Every node no node lists as a child is a root.
     #[derive(Default)]
@@ -1036,12 +1158,27 @@ pub(crate) mod tests {
             times: &[f32],
             values: &[f32],
         ) {
-            let t = self.floats("SCALAR", times);
-            let v = self.floats(if path == "rotation" { "VEC4" } else { "VEC3" }, values);
+            self.animation_of(name, &[(node, path, interpolation, times, values)]);
+        }
+
+        /// An animation `name` with several channels, each as [`Self::animation`]'s one.
+        pub(crate) fn animation_of(&mut self, name: &str, channels: &[Track]) {
+            let (samplers, targets): (Vec<Value>, Vec<Value>) = channels
+                .iter()
+                .enumerate()
+                .map(|(i, &(node, path, interpolation, times, values))| {
+                    let t = self.floats("SCALAR", times);
+                    let v = self.floats(if path == "rotation" { "VEC4" } else { "VEC3" }, values);
+                    (
+                        json!({"input": t, "interpolation": interpolation, "output": v}),
+                        json!({"sampler": i, "target": {"node": node, "path": path}}),
+                    )
+                })
+                .unzip();
             self.animations.push(json!({
                 "name": name,
-                "samplers": [{"input": t, "interpolation": interpolation, "output": v}],
-                "channels": [{"sampler": 0, "target": {"node": node, "path": path}}],
+                "samplers": samplers,
+                "channels": targets,
             }));
         }
 
@@ -1117,6 +1254,321 @@ pub(crate) mod tests {
         b
     }
 
+    /// The sine and the cosine of half a turn of `deg` degrees about Z: its quaternion.
+    fn about_z(deg: f32) -> [f32; 4] {
+        let half = deg.to_radians() / 2.0;
+        [0.0, 0.0, half.sin(), half.cos()]
+    }
+
+    /// Rotation keys: each quaternion's four numbers in a row.
+    fn turns(quats: &[[f32; 4]]) -> Vec<f32> {
+        quats.iter().flatten().copied().collect()
+    }
+
+    /// No rotation.
+    const SHUT: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+
+    /// A chest in two levels of detail, for the tests of a catalogue asset's clips and pose
+    /// (`model_animation`, `playback_tests`, `agents`): a body with a lid on it that opens
+    /// upward. The first level (`chest_lod0`) is the authority: `open` swings the lid up (a
+    /// quarter turn about Z in a second) and `shake` rattles it. The second level (`chest_lod1`)
+    /// has the same `body` and `lid` nodes, a knob `lid2` of its own that its `open` moves too,
+    /// no `shake`, and an `open` that takes twice as long.
+    pub(crate) fn chest_lod0() -> Builder {
+        let mut b = Builder::new("steel");
+        let body = b.triangle(A);
+        let lid = b.triangle(LID);
+        let n0 = b.node(json!({"name": "body", "mesh": body}));
+        let n1 = b.node(json!({"name": "lid", "mesh": lid, "translation": [0.0, 1.0, 0.0]}));
+        b.nodes[n0]["children"] = json!([n1]);
+        opens(&mut b, n1);
+        rattles(&mut b, n1);
+        b
+    }
+
+    /// The chest's second level of detail ([`chest_lod0`]).
+    pub(crate) fn chest_lod1() -> Builder {
+        let mut b = Builder::new("steel");
+        let body = b.triangle(A);
+        let lid = b.triangle(LID);
+        let knob = b.triangle(KNOB);
+        let n0 = b.node(json!({"name": "body", "mesh": body}));
+        let n1 = b.node(json!({"name": "lid", "mesh": lid, "translation": [0.0, 1.0, 0.0]}));
+        let n2 = b.node(json!({"name": "lid2", "mesh": knob, "translation": [0.0, 1.0, 0.1]}));
+        b.nodes[n0]["children"] = json!([n1, n2]);
+        b.animation_of(
+            "open",
+            &[
+                (
+                    n1,
+                    "rotation",
+                    "LINEAR",
+                    &[0.0, 2.0],
+                    &turns(&[SHUT, about_z(90.0)]),
+                ),
+                (
+                    n2,
+                    "translation",
+                    "LINEAR",
+                    &[0.0, 2.0],
+                    &[0.0, 0.0, 0.0, 0.0, 0.5, 0.0],
+                ),
+            ],
+        );
+        b
+    }
+
+    const LID: [[f32; 3]; 3] = [[0.0, 0.0, 0.0], [0.8, 0.0, 0.0], [0.0, 0.15, 0.0]];
+    const KNOB: [[f32; 3]; 3] = [[0.3, 0.0, 0.0], [0.5, 0.0, 0.0], [0.4, 0.15, 0.0]];
+
+    /// The chest's `open` on `lid`: a quarter turn up about its hinge in a second.
+    fn opens(b: &mut Builder, lid: usize) {
+        b.animation(
+            "open",
+            lid,
+            "rotation",
+            "LINEAR",
+            &[0.0, 1.0],
+            &turns(&[SHUT, about_z(90.0)]),
+        );
+    }
+
+    /// The chest's `shake` on `lid`: a second of rattling.
+    fn rattles(b: &mut Builder, lid: usize) {
+        b.animation(
+            "shake",
+            lid,
+            "rotation",
+            "LINEAR",
+            &[0.0, 0.25, 0.5, 0.75, 1.0],
+            &turns(&[
+                SHUT,
+                about_z(5.0),
+                about_z(-5.0),
+                about_z(5.0),
+                about_z(-5.0),
+            ]),
+        );
+    }
+
+    /// The chest's second level of detail with its nodes as GameCraft's files have them: in
+    /// another order than the first level's, and named with the level's suffix. `lid_LOD1` is
+    /// node 0 and `body_LOD1` node 1, where the first level has no bone and its `lid`; and it
+    /// has a knob of its own, `knob_LOD1`, that `open` slides. Its clips are the first level's
+    /// ([`chest_lod0`]), so that the nodes are all a warning can be about.
+    pub(crate) fn chest_lod1_named() -> Builder {
+        let mut b = Builder::new("steel");
+        let body = b.triangle(A);
+        let lid = b.triangle(LID);
+        let knob = b.triangle(KNOB);
+        let n_lid =
+            b.node(json!({"name": "lid_LOD1", "mesh": lid, "translation": [0.0, 1.0, 0.0]}));
+        let n_body = b.node(json!({"name": "body_LOD1", "mesh": body}));
+        let n_knob =
+            b.node(json!({"name": "knob_LOD1", "mesh": knob, "translation": [0.0, 1.0, 0.1]}));
+        b.nodes[n_body]["children"] = json!([n_lid, n_knob]);
+        b.animation_of(
+            "open",
+            &[
+                (
+                    n_lid,
+                    "rotation",
+                    "LINEAR",
+                    &[0.0, 1.0],
+                    &turns(&[SHUT, about_z(90.0)]),
+                ),
+                (
+                    n_knob,
+                    "translation",
+                    "LINEAR",
+                    &[0.0, 1.0],
+                    &[0.0, 0.0, 0.0, 0.5, 0.0, 0.0],
+                ),
+            ],
+        );
+        rattles(&mut b, n_lid);
+        b
+    }
+
+    #[test]
+    fn the_chest_levels_are_loaded_as_the_tests_expect() {
+        let first = parse(&chest_lod0().finish()).unwrap();
+        let second = parse(&chest_lod1().finish()).unwrap();
+        fn lengths(c: &Clip) -> (&str, f32) {
+            (c.name.as_str(), c.duration)
+        }
+        assert_eq!(
+            first.clips.iter().map(lengths).collect::<Vec<_>>(),
+            [("open", 1.0), ("shake", 1.0)]
+        );
+        assert_eq!(
+            second.clips.iter().map(lengths).collect::<Vec<_>>(),
+            [("open", 2.0)]
+        );
+        assert_eq!(first.parts.iter().map(|p| p.node).collect::<Vec<_>>(), [1]);
+        assert_eq!(
+            second.parts.iter().map(|p| p.node).collect::<Vec<_>>(),
+            [1, 2]
+        );
+        // Both levels' bodies stand still and both lids hang at the same place.
+        assert_eq!(first.prims, second.prims);
+        assert_eq!(first.parts[0].rest, second.parts[0].rest);
+        // `open` turns the lid a quarter about its hinge (0, 1, 0) in a second: its tip (0.8 m
+        // along x) is then 0.8 m above the hinge, and half way it is at 45 degrees. Level 1's
+        // takes twice as long: at 1 s it is where the first level is at 0.5 s.
+        let mut sampler = keyframes::Sampler::default();
+        let play = [keyframes::Played {
+            clip: 0,
+            start_s: 0.0,
+            looped: false,
+        }];
+        let tip = |pose: &[f32; 16]| {
+            Mat4::from_cols_array(pose).transform_point3(Vec3::new(0.8, 0.0, 0.0))
+        };
+        let rig = first.rig().unwrap();
+        let up = tip(&sampler.pose(&rig, &play, 1.0)[0]);
+        assert!(
+            (up - Vec3::new(0.0, 1.8, 0.0)).length() < 1e-4,
+            "the lid is up: {up:?}"
+        );
+        let half = tip(&sampler.pose(&rig, &play, 0.5)[0]);
+        assert!(
+            (half - Vec3::new(0.8 * Q, 1.0 + 0.8 * Q, 0.0)).length() < 1e-4,
+            "half way: {half:?}"
+        );
+        let rig = second.rig().unwrap();
+        let slow = tip(&sampler.pose(&rig, &play, 1.0)[0]);
+        assert!(
+            (slow - half).length() < 1e-4,
+            "level 1's open takes 2 s: {slow:?}"
+        );
+    }
+
+    /// A part's key is its name without the level's suffix: only a trailing `_LOD` with digits
+    /// goes, case-sensitively; a node without a name has no key.
+    #[test]
+    fn a_part_s_key_is_its_name_without_the_level_suffix() {
+        for (name, key) in [
+            ("door_LOD2", Some("door")),
+            ("door", Some("door")),
+            ("door_LODx", Some("door_LODx")),
+            ("door_LOD", Some("door_LOD")),
+            ("door_LOD2_top", Some("door_LOD2_top")),
+            ("door_lod1", Some("door_lod1")),
+            ("Door_LOD1", Some("Door")),
+            ("door_LOD01", Some("door")),
+            ("a_LOD1_LOD2", Some("a_LOD1")),
+            ("_LOD3", Some("")),
+            ("", None),
+        ] {
+            assert_eq!(part_key(name), key, "{name:?}");
+        }
+    }
+
+    fn nodes(xs: &[(usize, &str)]) -> Vec<(usize, String)> {
+        xs.iter().map(|(n, name)| (*n, name.to_string())).collect()
+    }
+
+    /// The parts of a level are the first level's by name ([`part_key`]): in another order and
+    /// with the level's suffix they are still found, and a name the first level lacks is not
+    /// matched by index. Only where no name decides the index does: a node without a name on
+    /// either side, a name that appears twice in a level (which is said, [`LevelMatch::twice`]).
+    #[test]
+    fn a_level_s_parts_are_the_first_level_s_by_name() {
+        // Reordered and suffixed: the lid and the body are found, the knob is not in the first
+        // level.
+        let first = nodes(&[(1, "lid"), (3, "body")]);
+        let level = nodes(&[(0, "lid_LOD1"), (1, "body_LOD1"), (2, "knob_LOD1")]);
+        let m = match_level(&first, &level);
+        assert_eq!(m.of_level, [Some(0), Some(1), None]);
+        assert_eq!(m.of_first, [Some(0), Some(1)]);
+        assert!(m.twice.is_empty());
+
+        // The same index is not the same part.
+        let none = LevelMatch {
+            of_level: vec![None],
+            of_first: vec![None],
+            twice: Vec::new(),
+        };
+        assert_eq!(
+            match_level(&nodes(&[(1, "lid")]), &nodes(&[(1, "knob")])),
+            none
+        );
+
+        // A node without a name, on either side, is matched by index.
+        let m = match_level(
+            &nodes(&[(1, ""), (2, "lid")]),
+            &nodes(&[(1, "body"), (2, "lid")]),
+        );
+        assert_eq!(m.of_level, [Some(0), Some(1)]);
+        assert_eq!(m.of_first, [Some(0), Some(1)]);
+        assert!(m.twice.is_empty());
+        let m = match_level(&nodes(&[(1, "lid")]), &nodes(&[(1, ""), (3, "x")]));
+        assert_eq!(m.of_level, [Some(0), None]);
+        assert_eq!(m.of_first, [Some(0)]);
+        // ... but not a part of the first level that a name gave to another.
+        // The level's lid is node 2 here and the first level's part 0; its node 1 without a
+        // name gets no part of the first level, as node 1 there is that lid.
+        let m = match_level(
+            &nodes(&[(1, "lid"), (2, "x")]),
+            &nodes(&[(1, ""), (2, "lid")]),
+        );
+        assert_eq!(m.of_level, [None, Some(0)]);
+        assert_eq!(m.of_first, [Some(1), None]);
+
+        // A name that appears twice is matched by index, and said so.
+        let m = match_level(
+            &nodes(&[(3, "door"), (5, "door"), (7, "lid")]),
+            &nodes(&[(3, "door"), (7, "lid")]),
+        );
+        assert_eq!(m.of_level, [Some(0), Some(2)]);
+        assert_eq!(m.of_first, [Some(0), None, Some(1)]);
+        assert_eq!(m.twice, [("door".to_string(), 1, 2)]);
+        let m = match_level(
+            &nodes(&[(3, "door")]),
+            &nodes(&[(3, "door"), (5, "door_LOD1")]),
+        );
+        assert_eq!(m.of_level, [Some(0), None]);
+        assert_eq!(m.of_first, [Some(0)]);
+        assert_eq!(m.twice, [("door".to_string(), 2, 1)]);
+        // Twice in a level the other level has no such name in: nothing is ambiguous.
+        let m = match_level(&nodes(&[(1, "lid")]), &nodes(&[(3, "door"), (5, "door")]));
+        assert_eq!(m.of_level, [None, None]);
+        assert!(m.twice.is_empty());
+    }
+
+    /// The chest's second level with its nodes reordered and suffixed ([`chest_lod1_named`])
+    /// loads as the others do, with the first level's clips; its lid is the first level's lid
+    /// by name, its knob is its own.
+    #[test]
+    fn the_named_level_is_loaded_as_the_tests_expect() {
+        let first = parse(&chest_lod0().finish()).unwrap();
+        let third = parse(&chest_lod1_named().finish()).unwrap();
+        fn lengths(c: &Clip) -> (&str, f32) {
+            (c.name.as_str(), c.duration)
+        }
+        assert_eq!(
+            third.clips.iter().map(lengths).collect::<Vec<_>>(),
+            first.clips.iter().map(lengths).collect::<Vec<_>>(),
+            "the same clips as the first level"
+        );
+        assert_eq!(
+            third.nodes(),
+            [(0, "lid_LOD1".to_string()), (2, "knob_LOD1".to_string())]
+        );
+        // Both bodies stand still and both lids hang at the same place.
+        assert_eq!(first.prims, third.prims);
+        assert_eq!(first.parts[0].rest, third.parts[0].rest);
+        let m = match_level(&first.nodes(), &third.nodes());
+        assert_eq!(
+            m.of_level,
+            [Some(0), None],
+            "the lid by name, the knob its own"
+        );
+        assert_eq!(m.of_first, [Some(0)]);
+        assert!(m.twice.is_empty());
+    }
+
     #[test]
     fn a_hinge_is_one_part_with_its_clip() {
         let g = parse(&hinge().finish()).unwrap();
@@ -1126,6 +1578,7 @@ pub(crate) mod tests {
             g.parts,
             vec![AnimatedPart {
                 node: 1,
+                name: String::new(),
                 prims: vec![as_is(B)],
                 rest: Trs {
                     translation: [1.0, 0.0, 0.0],
