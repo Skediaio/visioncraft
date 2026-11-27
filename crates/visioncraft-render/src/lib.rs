@@ -150,9 +150,9 @@ const FAR_SUN_PERIOD: u64 = 4;
 /// The share of a cascade's view-depth range over which scene.wgsl `cascades_shadow` blends
 /// into the next cascade (which it samples over that band too: `ShadeView::shades_from`).
 const CASCADE_BLEND: f32 = 0.15;
-/// Below this sine of the sun's elevation a shadow is taken to run over the whole scene
-/// (`shadow_reach`): at 2 degrees a 2 m post casts 57 m.
-const LOW_SUN: f32 = 0.035;
+/// The lowest sine of the sun's elevation `shadow_reach` sweeps along: a sun on the horizon
+/// throws a shadow a thousand times the caster's height.
+const HORIZON_SUN: f32 = 1e-3;
 
 /// Whether cascade `c` of `count` is drawn this frame. The near cascade every frame; the middle
 /// ones on alternate frames; the cached far one (`cached_far`) only when it is not `reuse`d (the
@@ -6508,7 +6508,7 @@ impl Renderer {
             let Some(was) = before.zip(after).map(|(a, b)| union(a, b)) else {
                 continue;
             };
-            let shadow = shadow_reach(was, light, floor.min(was.0.y), self.scene_bounds);
+            let shadow = shadow_reach(was, light, floor.min(was.0.y));
             for c in from as usize..cascades.count {
                 let Some(m) = self.cascade_rendered[c] else {
                     continue;
@@ -7124,16 +7124,12 @@ fn transform_bounds(m: Mat4, b: Bounds) -> Bounds {
 
 /// Where the shadow of what lies in `b` can be sampled: `b`, and the paths of its corners away
 /// from the sun (`light` points to it) down to `floor`, the lowest ground: every point a
-/// corner can shade lies in there, and no receiver outside it is in `b`'s shadow. A sun on the
-/// horizon (`LOW_SUN`) throws shadows over the whole scene (`scene`: none, the item is the
-/// scene): its bounds.
-fn shadow_reach(b: Bounds, light: Vec3, floor: f32, scene: Option<Bounds>) -> Bounds {
-    let Some(scene) = scene else {
-        return b;
-    };
-    if light.y < LOW_SUN {
-        return union(scene, b);
-    }
+/// corner can shade lies in there, and no receiver outside it is in `b`'s shadow. The ground
+/// goes on past the scene's bounds (the endless ground), so the paths are not cut at them: at
+/// 2 degrees a 5 m post casts 140 m. A sun lower than `HORIZON_SUN` is taken at it, so the
+/// paths end on the floor and stay finite.
+fn shadow_reach(b: Bounds, light: Vec3, floor: f32) -> Bounds {
+    let light = Vec3::new(light.x, light.y.max(HORIZON_SUN), light.z).normalize();
     corners(b).into_iter().fold(b, |out, c| {
         let p = c - light * ((c.y - floor) / light.y).max(0.0);
         union(out, (p, p))
@@ -9760,6 +9756,25 @@ mod tests {
         assert_eq!(r.far_draws, far_draws + 1);
     }
 
+    /// A low sun throws a mover's shadow over the endless ground past the scene's bounds: a 5 m
+    /// box in a scene that ends 12 m ahead, with the sun 2 degrees up behind the eye, throws its
+    /// shadow 135 m ahead, and the far cascade (first sampled 18 m away) is marked for it. The
+    /// reach used to be the scene's bounds for a sun that low: 12 m deep here, no far cascade.
+    #[test]
+    fn a_low_sun_throws_a_mover_s_shadow_onto_the_ground_past_the_scene() {
+        let (device, queue, mut r, mover) = mover_scene(5.0, 2);
+        // The sun 2 degrees up, from behind the eye: the shadows fall ahead of it.
+        r.set_sun(&Sun::from_angles(20.0, 2.0));
+        frame(&device, &queue, &mut r);
+        assert!(r.scene_bounds.unwrap().1.z < 12.1, "{:?}", r.scene_bounds);
+        r.set_instance(mover, 0, at_box(0.3, 2.0));
+        assert_eq!(
+            stale_after(&mut r),
+            [true, true, false, false],
+            "the near cascade and the far one: the shadow runs into its range"
+        );
+    }
+
     /// The blend band the renderer assumes between two cascades is the shader's.
     #[test]
     fn the_cascade_blend_band_is_the_shader_s() {
@@ -9771,27 +9786,34 @@ mod tests {
     }
 
     /// The shadow of a box reaches where its corners' paths away from the sun meet the ground:
-    /// `shadow_reach` is that box, and a sun low on the horizon throws it over the scene.
+    /// `shadow_reach` is that box, down to the floor under it, and a sun low on the horizon
+    /// throws it as far as the geometry says (3 m at 0.57 degrees: 300 m; at 2 degrees a 5 m box
+    /// casts 140 m), never cut at a scene's bounds. On the horizon the paths stay finite.
     #[test]
     fn a_shadow_reaches_the_ground_away_from_the_sun() {
         let b = (Vec3::new(-1.0, 1.0, -1.0), Vec3::new(1.0, 3.0, 1.0));
         // Straight down: the box, down to the floor under it.
         let down = (Vec3::new(-1.0, 0.0, -1.0), Vec3::new(1.0, 3.0, 1.0));
-        assert_eq!(shadow_reach(b, Vec3::Y, 0.0, Some(b)), down);
+        assert_eq!(shadow_reach(b, Vec3::Y, 0.0), down);
         // 45 degrees, the sun towards +z: the top corners land 3 m towards -z, on the floor.
         let light = Vec3::new(0.0, 1.0, 1.0).normalize();
-        let reach = shadow_reach(b, light, 0.0, Some(b));
+        let reach = shadow_reach(b, light, 0.0);
         assert!(reach.0.y.abs() < 1e-5, "down to the floor: {:?}", reach.0);
         assert!((reach.0.z + 4.0).abs() < 1e-5, "{reach:?}");
         assert_eq!((reach.1.x, reach.1.y, reach.1.z), (1.0, 3.0, 1.0));
         // A floor 10 m lower: the paths are longer.
-        let reach = shadow_reach(b, light, -10.0, Some(b));
+        let reach = shadow_reach(b, light, -10.0);
         assert!((reach.0.z + 14.0).abs() < 1e-5, "{reach:?}");
-        // A sun on the horizon: the whole scene.
-        let scene = (Vec3::new(-50.0, 0.0, -50.0), Vec3::new(50.0, 9.0, 50.0));
+        // A sun 0.57 degrees up: the top corners land 300 m away, on the floor.
         let low = Vec3::new(0.0, 0.01, 1.0).normalize();
-        assert_eq!(shadow_reach(b, low, 0.0, Some(scene)), scene);
-        assert_eq!(shadow_reach(b, Vec3::Y, 0.0, None), b, "no scene: the box");
+        let reach = shadow_reach(b, low, 0.0);
+        assert!((reach.0.z + 301.0).abs() < 0.5, "{reach:?}");
+        assert!(reach.0.y.abs() < 1e-3, "on the floor: {:?}", reach.0);
+        assert_eq!(reach.1, b.1);
+        // On the horizon: never infinite, a thousand times the height (`HORIZON_SUN`).
+        let reach = shadow_reach(b, Vec3::new(0.3, 0.0, 1.0), 0.0);
+        assert!(reach.0.z.is_finite() && reach.0.z < -2800.0, "{reach:?}");
+        assert!(reach.0.y.abs() < 1e-3, "on the floor: {:?}", reach.0);
     }
 
     /// The nearest and farthest view depth of a box, along the view axis: the view matrix's
