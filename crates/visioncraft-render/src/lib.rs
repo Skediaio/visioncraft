@@ -3694,6 +3694,16 @@ impl Renderer {
             })
             .flatten();
         self.write_sea();
+        // The physical sky's LUTs (its two fixed ones the first time) go before the globals are
+        // written: the air's aerial perspective is on only once they are drawn
+        // (`PhysicalSky::ready`), so a first frame written before them went without it, and its
+        // surfaces differed from every later frame's (shafts.wgsl `fs_composite`). The passes
+        // read the globals of this frame: their writes are staged before anything encoded runs.
+        if self.sky_view_dirty && matches!(self.sky_source, SkySource::Physical) {
+            self.physical
+                .update(encoder, &self.globals_only_bind, self.timer.as_ref());
+        }
+        self.sky_view_dirty = false;
         let t = &self.targets;
         self.write_globals(
             &self.globals,
@@ -3741,11 +3751,6 @@ impl Renderer {
                 }
             }
         }
-        if self.sky_view_dirty && matches!(self.sky_source, SkySource::Physical) {
-            self.physical
-                .update(encoder, &self.globals_only_bind, self.timer.as_ref());
-        }
-        self.sky_view_dirty = false;
         self.env.update(
             encoder,
             &self.sky_bind,
