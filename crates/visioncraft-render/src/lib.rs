@@ -204,8 +204,8 @@ fn far_matrix(draws: bool, fresh: Mat4, cached: Option<Mat4>) -> (Mat4, bool) {
 struct ShadeView {
     view: Mat4,
     view_proj: Mat4,
-    /// Per cascade: the cascade before it covers the whole slice of this view it shades
-    /// (`Renderer::covers_slice`), so nothing falls through to it from a view depth below its
+    /// Per cascade: every cascade before it covers the whole slice of this view it shades
+    /// (`Renderer::covers_slice`), so no point falls through to it from a view depth below its
     /// own slice's range.
     sealed: [bool; shadow::MAX_CASCADES],
 }
@@ -214,8 +214,9 @@ impl ShadeView {
     /// Whether the view shades from cascade `c` anywhere in `b` (a moved item's shadow, the
     /// ground it can fall on): the cascade is sampled where the view depth lies from the end of
     /// the cascade before, less their blend band (`CASCADE_BLEND`; from the eye for the first,
-    /// and from the eye too when the one before does not cover its whole slice, since a point
-    /// it misses falls through to this one), up to the cascade's own split (scene.wgsl
+    /// and from the eye too when any cascade before has a gap, i.e. does not cover its whole
+    /// slice with the map it was drawn with, since a point one misses falls through to the
+    /// next, which may miss it too), up to the cascade's own split (scene.wgsl
     /// `cascades_shadow`); and only inside the view.
     fn shades_from(self, b: Bounds, c: usize, splits: &[f32; shadow::MAX_CASCADES]) -> bool {
         let split = splits[c];
@@ -6541,7 +6542,7 @@ impl Renderer {
     fn shade_view(&self, view: Mat4, cascades: &shadow::Cascades) -> ShadeView {
         let mut sealed = [true; shadow::MAX_CASCADES];
         for (k, s) in sealed.iter_mut().enumerate().take(cascades.count).skip(1) {
-            *s = self.covers_slice(k - 1, cascades, view);
+            *s = (0..k).all(|j| self.covers_slice(j, cascades, view));
         }
         ShadeView {
             view,
@@ -9572,6 +9573,31 @@ mod tests {
         r.set_camera(view, proj, eye);
         r.set_instance(mover, 0, at_box(6.2, 2.0));
         assert_eq!(stale_after(&mut r), [true, false, true, true]);
+    }
+
+    /// The lower bound of a cascade's sampled range drops to the eye when any cascade before it
+    /// has a gap, not only the one just before: a point one map misses falls through to the
+    /// next, which may miss it too. Four cascades, a box 7 m ahead (in the second cascade's
+    /// slice). The eye moves half a metre: the frame draws the near cascade and the third, and
+    /// the second keeps the map of the eye before (a gap). The box's shadow is sampled from the
+    /// second and the third cascade, and from the far one through the gap; the near map does
+    /// not hold the box.
+    #[test]
+    fn a_gap_in_any_earlier_cascade_drops_the_lower_bound_to_the_eye() {
+        let (device, queue, mut r, mover) = mover_scene(1.0, 4);
+        r.set_instance(mover, 0, at_box(0.0, 7.0));
+        frame(&device, &queue, &mut r);
+        let eye = Vec3::new(0.5, 1.7, 0.0);
+        let (view, proj, _) = demo::camera(eye, eye + Vec3::Z, 16.0 / 9.0);
+        r.set_camera(view, proj, eye);
+        frame(&device, &queue, &mut r);
+        let cascades = r.cascades();
+        assert!(
+            !r.covers_slice(1, &cascades, view) && r.covers_slice(2, &cascades, view),
+            "the second map has a gap, the third covers its slice"
+        );
+        r.set_instance(mover, 0, at_box(0.2, 7.0));
+        assert_eq!(stale_after(&mut r), [false, true, true, true]);
     }
 
     /// Through `render`: a mover the cached far cascade does not shade from leaves its cache
