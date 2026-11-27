@@ -392,8 +392,8 @@ pub fn trs_matrix(trs: &Trs) -> Matrix {
     ]
 }
 
-/// `a` after `b` (both column-major).
-fn mul(a: &Matrix, b: &Matrix) -> Matrix {
+/// `a` after `b` (both column-major): what `b` maps a point to, then `a`.
+pub fn mul(a: &Matrix, b: &Matrix) -> Matrix {
     let mut m = [0.0; 16];
     for c in 0..4 {
         for r in 0..4 {
