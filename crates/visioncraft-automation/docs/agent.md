@@ -196,8 +196,10 @@ dithers into whatever lies under it instead of ending on a line, and a lawn's gr
 into the band, thinning towards the area's inside. `planting.add_floor` sets 1.5 m by default
 (`edge_blend_m` there too; 0 gives the hard edge back). Only the band's triangles are drawn as
 cutouts. A render's result (`view.render`, `visioncraft-cli render`) carries `stats`: the frame's
-`triangles`, `draws`, `gpu_ms` (null without GPU timestamp queries) and `water` (each visible
-water surface with its height and how it was reflected: see Water above).
+`triangles`, `draws`, `pass_calls` (the draw calls issued per pass group: shadow, depth,
+reflection, forward, post; `draws` counts every sub-draw of an indirect multi-draw, a multi-draw
+is one call), `gpu_ms` (null without GPU timestamp queries) and `water` (each visible water
+surface with its height and how it was reflected: see Water above).
 
 ### 8. Lamps, and the garden at dusk
 

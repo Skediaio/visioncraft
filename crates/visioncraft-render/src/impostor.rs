@@ -84,6 +84,18 @@ pub(crate) struct GpuImpostor {
     pub bytes: u64,
 }
 
+/// One part of the plant being baked (`Renderer::bake_list`): its arena's vertex and index
+/// buffers, its index range and base vertex in them, its material's texture set, the instance
+/// that carries the material's row, and whether its base map is bound.
+pub(crate) struct BakePart<'a> {
+    pub vertices: &'a wgpu::Buffer,
+    pub indices: &'a wgpu::Buffer,
+    pub mesh: crate::DrawMesh,
+    pub material: &'a wgpu::BindGroup,
+    pub identity: &'a wgpu::Buffer,
+    pub has_base: bool,
+}
+
 /// Group 1 of the impostor pipelines: info, albedo, normal, sampler.
 pub(crate) fn layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -108,7 +120,8 @@ pub(crate) fn layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
 }
 
 pub(crate) struct Baker {
-    bake: wgpu::RenderPipeline,
+    /// The bake of a part without and with a base map (`scene.wgsl` `BAKE_BASE`).
+    bake: [wgpu::RenderPipeline; 2],
     dilate_layout: wgpu::BindGroupLayout,
     dilate: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
@@ -131,20 +144,25 @@ fn two_targets(
     layout: &wgpu::PipelineLayout,
     buffers: &[Option<wgpu::VertexBufferLayout>],
     depth: Option<wgpu::DepthStencilState>,
+    constants: &[(&str, f64)],
 ) -> wgpu::RenderPipeline {
+    let options = wgpu::PipelineCompilationOptions {
+        constants,
+        ..Default::default()
+    };
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(label),
         layout: Some(layout),
         vertex: wgpu::VertexState {
             module,
             entry_point: Some(vs),
-            compilation_options: Default::default(),
+            compilation_options: options.clone(),
             buffers,
         },
         fragment: Some(wgpu::FragmentState {
             module,
             entry_point: Some(fs),
-            compilation_options: Default::default(),
+            compilation_options: options,
             targets: &[Some(ALBEDO.into()), Some(NORMAL.into())],
         }),
         primitive: Default::default(),
@@ -167,20 +185,25 @@ impl Baker {
             bind_group_layouts: &[None, Some(&l.material), Some(&l.cascade)],
             immediate_size: 0,
         });
-        let bake = two_targets(
-            device,
-            "impostor bake",
-            scene,
-            "vs_bake",
-            "fs_bake",
-            &bake_layout,
-            &crate::vertex_layouts(false),
-            Some(crate::depth_state(
-                true,
-                wgpu::CompareFunction::Less,
-                Default::default(),
-            )),
-        );
+        // The material comes from the instance drawn (`scene.wgsl` `load_instance_material`), so
+        // whether the base map is sampled is the pipeline's, not a branch on it.
+        let bake = [0.0, 1.0].map(|has_base| {
+            two_targets(
+                device,
+                "impostor bake",
+                scene,
+                "vs_bake",
+                "fs_bake",
+                &bake_layout,
+                &crate::vertex_layouts(false),
+                Some(crate::depth_state(
+                    true,
+                    wgpu::CompareFunction::Less,
+                    Default::default(),
+                )),
+                &[("BAKE_BASE", has_base)],
+            )
+        });
         let unfilterable = wgpu::TextureSampleType::Float { filterable: false };
         let dilate_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("dilate"),
@@ -204,6 +227,7 @@ impl Baker {
             &dilate_pipeline_layout,
             &[],
             None,
+            &[],
         );
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("impostor"),
@@ -384,17 +408,6 @@ impl Baker {
                 resource: crate::slot_binding(&matrices, crate::CASCADE_SIZE),
             }],
         });
-        let identity = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("identity instance"),
-            size: 64,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(
-            &identity,
-            0,
-            &crate::f32_bytes(&Mat4::IDENTITY.to_cols_array()),
-        );
         BakeState {
             bounds,
             views,
@@ -405,7 +418,6 @@ impl Baker {
             normal,
             depth,
             matrix_bind,
-            identity,
             next: 0,
         }
     }
@@ -417,7 +429,7 @@ impl Baker {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         state: &mut BakeState,
-        parts: &[(&wgpu::Buffer, &wgpu::Buffer, u32, &wgpu::BindGroup)],
+        parts: &[BakePart<'_>],
         count: u32,
     ) {
         let total = state.views + 1;
@@ -459,18 +471,19 @@ impl Baker {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(&self.bake);
-            pass.set_vertex_buffer(1, state.identity.slice(..));
+            pass.set_pipeline(&self.bake[0]);
             let tile = state.tile;
             for k in from..to {
                 let (x, y) = ((k % state.cols) * tile, (k / state.cols) * tile);
                 pass.set_viewport(x as f32, y as f32, tile as f32, tile as f32, 0.0, 1.0);
                 pass.set_bind_group(2, &state.matrix_bind, &[(k as u64 * SLOT) as u32]);
-                for (vertices, indices, index_count, material) in parts {
-                    pass.set_bind_group(1, *material, &[]);
-                    pass.set_vertex_buffer(0, vertices.slice(..));
-                    pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
-                    pass.draw_indexed(0..*index_count, 0, 0..1);
+                for part in parts {
+                    pass.set_pipeline(&self.bake[part.has_base as usize]);
+                    pass.set_vertex_buffer(1, part.identity.slice(..));
+                    pass.set_bind_group(1, part.material, &[]);
+                    pass.set_vertex_buffer(0, part.vertices.slice(..));
+                    pass.set_index_buffer(part.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(part.mesh.range.range(), part.mesh.base_vertex, 0..1);
                 }
             }
         }
@@ -620,7 +633,6 @@ pub struct BakeState {
     normal: [wgpu::Texture; 2],
     depth: wgpu::TextureView,
     matrix_bind: wgpu::BindGroup,
-    identity: wgpu::Buffer,
     /// The next view to draw.
     next: u32,
 }

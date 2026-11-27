@@ -11,6 +11,12 @@ pub struct RenderStats {
     /// `draw_calls` per pass group: shadow (all cascades), depth,
     /// reflection, forward (with sky and transparent), post.
     pub pass_draws: Vec<(&'static str, u32)>,
+    /// Draw calls issued per pass group, as `pass_draws`: one per direct draw and one per
+    /// indirect multi-draw, whose sub-draws `pass_draws` counts one each. Compute dispatches
+    /// are not draws. Without the device's `INDIRECT_FIRST_INSTANCE` every planned draw is its
+    /// own call; the calls also count the draws `record` does not plan (the sky, the ground,
+    /// grass, the sea), which `pass_draws` leaves out.
+    pub pass_calls: Vec<(&'static str, u32)>,
     /// Triangles submitted per pass group, as `pass_draws`.
     pub pass_triangles: Vec<(&'static str, u64)>,
     /// Triangles submitted in all passes.

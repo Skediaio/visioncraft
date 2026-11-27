@@ -303,7 +303,7 @@ fn terrain_surface(in: TerrainVarying) -> Surface {
 }
 
 fn terrain_varying(in: TerrainVarying) -> Varying {
-    return Varying(in.clip, in.world, in.normal, in.face, in.uv);
+    return Varying(in.clip, in.world, in.normal, in.face, in.uv, 0u, 0u);
 }
 
 @fragment

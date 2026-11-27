@@ -504,9 +504,9 @@ impl Renderer {
     }
 
     /// The wet band, then the water (forward pass, after the sky).
-    pub(crate) fn draw_sea(&self, pass: &mut wgpu::RenderPass) {
+    pub(crate) fn draw_sea(&self, pass: &mut wgpu::RenderPass) -> u32 {
         if self.sea.sea.is_none() {
-            return;
+            return 0;
         }
         pass.set_bind_group(0, &self.globals_bind, &[]);
         pass.set_bind_group(1, &self.sea.bind, &[]);
@@ -517,6 +517,7 @@ impl Renderer {
         pass.draw(0..RINGS * SEGMENTS * 6, 0..1);
         self.counters.add(1, 1, false);
         self.counters.add((RINGS * SEGMENTS * 2) as u64, 1, false);
+        2
     }
 }
 

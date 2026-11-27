@@ -98,11 +98,56 @@ Recipe, a time-of-day drag:
 - **One instance pool, batched draws** (`batch.rs`). Every item's instances live in one buffer.
   A frame plans all its passes before recording any (`plan_items`): per pass each cluster's
   level is found once and an item's runs once per level, then the visible runs of every item that
-  shares a pipeline, a material and a mesh (the same species in several plantings, the same rock
-  or chair placed many times, all impostors of one atlas) become one draw. Their pool indices go
-  into one list that a compute dispatch copies into a frame buffer before the first pass, nearest
-  first. Dissolving clusters and terrain chunks draw straight from the pool. Nothing in the
-  shaders changed: the gather copies the instance bits.
+  shares a pipeline, a texture set and a mesh (the same species in several plantings, the same
+  rock or chair placed many times, all impostors of one atlas) become one draw. Their pool
+  indices go into one list that a compute dispatch copies into a frame buffer before the first
+  pass, nearest first, in blocks of 64 instances a batch. Dissolving clusters, terrain chunks
+  and transparents draw straight from the pool.
+- **Culling without allocation, in 128 m blocks.** Each pass's cluster visibility is written
+  into one flat list of flags the renderer keeps (an item's at its range, remade only when items
+  change); every cluster keeps its own test, 4 ns on a town: a test of its 128 m block first
+  cost more than it saved there (a lookup through the block is more than a test, and a wide view
+  keeps most blocks in view). The instances stay sorted by their 8 m cell (the order the pictures
+  were made in: it decides which of two equally distant leaves shows); each cluster knows its
+  block of the ground grid (`Item::block_of`), and a block has the bounds of its clusters, which
+  `update_lods` uses: beyond the item's last level (hysteresis included), a block whose clusters
+  are all culled by distance and none dissolving is left out, which halves that stage on the
+  town. An item with an impostor draws those clusters as impostors, so there they still get
+  their sort keys (a distance and a dot product) and nothing else.
+- **One vertex buffer and one index buffer** for the static meshes (`batch.rs` `MeshRanges`): a
+  mesh holds a range of each, a draw names its index range and its base vertex, and a pass binds
+  the two buffers once (again only when a mesh of another arena follows). A mesh replaced by as
+  much or less data stays where it is; more takes a new range and the old one is freed (freed
+  ranges join their neighbours). An arena that is full grows, and its meshes keep their place,
+  until it is at the device's largest buffer; then a second one starts. Terrain chunks are in
+  the arenas too; only their layer weights (vertex slot 2) keep a buffer each.
+- **One material table** (a read-only storage buffer, group 1 binding 0): every material's
+  parameters by row, the endless ground's own being row 0. Group 1 is a material's *texture
+  set*, one bind group per set of six maps, shared by every material with those maps: all
+  untextured colours share one. So a batch may span materials: the gather writes each copied
+  instance its material's row and its mesh id into the spare components of its matrix's last
+  row (`m1.w`, `m2.w`; `m0.w` is the wind's frequency) and the shaders rebuild the matrix;
+  draws straight from the pool (dissolving clusters, terrain, transparents) name both in their
+  draw slot. Material values are therefore not uniform in a fragment stage, so no derivative
+  may be taken after a branch on one: each fragment stage that shades takes its screen
+  derivatives first, in uniform control flow (`scene.wgsl` `Derivs`), and hands them to `shade`
+  and `surface`. Chrome's shader compiler rejects a derivative taken later ("must only be
+  called from uniform control flow"); naga accepts one, so a unit test lists the functions that
+  take any. Per stage the scene pipelines bind at most three read-only storage buffers in the
+  fragment stage (the lights, their grid, the materials) and none in the vertex stage.
+- **One indirect buffer per frame** (`write_indirect`, `record`). A run of two or more batched
+  draws with the same pipeline, texture set and draw slot is one `multi_draw_indexed_indirect`
+  call: their `first_instance` points into the gathered buffer, which needs
+  `INDIRECT_FIRST_INSTANCE` (asked for where the adapter has it); without it every draw is a
+  direct call of the same arguments and the picture is the same. In the browser, wgpu's WebGPU
+  backend runs a multi-draw as a loop of indirect draws with no binds between them (one
+  JavaScript call a sub-draw). wgpu checks every indirect call on the CPU (the buffer's usage,
+  the offset's alignment, the arguments lying within the buffer); its GPU-side validation of
+  indirect arguments exists only behind `InstanceFlags::VALIDATION_INDIRECT_CALL`, which the
+  renderer does not set.
+  Dissolving clusters, impostor quads and transparents stay direct. `pass_draws` keeps counting
+  sub-draws; `pass_calls` (`view.render`'s stats, `window.__vcFrame`) counts the calls issued
+  per pass, a multi-draw being one.
 - **Shadows**: the near cascade every frame, the middle ones on alternate frames, the last one
   cached while the camera stays within its margin, each culled by its own cascade. The snow
   cover map (on a coast also the sea's bed) follows the eye in steps of eight texels and is

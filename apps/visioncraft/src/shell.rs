@@ -166,8 +166,12 @@ fn with_timestamps(mut setup: egui_wgpu::WgpuSetupCreateNew) -> egui_wgpu::WgpuS
     let base = setup.device_descriptor.clone();
     setup.device_descriptor = std::sync::Arc::new(move |adapter| {
         let mut d = base(adapter);
+        // Indirect first instance too: batched draws go through one indirect buffer a frame
+        // (`visioncraft_render`); where the adapter lacks it, every draw is direct.
         d.required_features |= adapter.features()
-            & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TEXTURE_COMPRESSION_BC);
+            & (wgpu::Features::TIMESTAMP_QUERY
+                | wgpu::Features::TEXTURE_COMPRESSION_BC
+                | wgpu::Features::INDIRECT_FIRST_INSTANCE);
         d
     });
     setup
