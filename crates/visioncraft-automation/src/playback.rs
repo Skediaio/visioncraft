@@ -155,8 +155,19 @@ fn not_drawn(
     session: &visioncraft_core::Session,
     state: &crate::host::HostState,
 ) -> String {
-    let stages = crate::inspect::stages(session, state, g);
     let planting = &target.planting;
+    if !session.project().layer_visible(g.layer()) {
+        return match target.plant {
+            Some(n) => format!(
+                "{id}: `object`: plant {n} of planting `{planting}` is not drawn: its layer is hidden"
+            ),
+            None => format!(
+                "{id}: `object`: planting `{planting}` is not drawn: its layer `{}` is hidden",
+                g.layer()
+            ),
+        };
+    }
+    let stages = crate::inspect::stages(session, state, g);
     match target.plant {
         Some(n) => {
             if !stages.placed.contains(&(n as usize)) {

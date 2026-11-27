@@ -276,13 +276,18 @@ fn plants_drawn(
 
 /// The plants of a planting on the ground as the window draws them, each with its number (the
 /// one `planting.replace_placement` counts by). For playback: a command reaches the plants
-/// that are drawn, not the ones the building rule or the sea leaves out.
+/// that are drawn, not the ones the building rule or the sea leaves out; a planting on a hidden
+/// layer draws nothing (`Scene::rebuild`). `query.quantities` goes by [`placements`], which counts
+/// a hidden layer's plants as before.
 pub(crate) fn plants_of(
     session: &Session,
     state: &HostState,
     g: &Generator,
 ) -> (Vec<(usize, visioncraft_core::Placement)>, bool) {
     let project = session.project();
+    if !project.layer_visible(g.layer()) {
+        return (Vec::new(), false);
+    }
     let owners = owners(project, &models_of(state));
     plants_drawn(project, &owners, &state.catalog.assets, g)
 }

@@ -379,8 +379,8 @@ folder (`--assets`); in a window a library model's clips are known once it is lo
 A clip plays on the placed objects, not on the model: `model.play_clip {"object": "g4", "clip":
 "fire", "start_s": 12.5}` (or `"loop": true`). `object` is a planting (`g4`: every object it
 places) or one of its objects (`g4#12`, counted from 0 as `planting.replace_placement` counts
-them); only the objects the window draws are reached: one the building rule or the sea leaves
-out is an error that says why. `clip` is a clip's name or its index from 0 (an exact name
+them); only the objects the window draws are reached: one the building rule, the sea or a hidden
+layer leaves out is an error that says why. `clip` is a clip's name or its index from 0 (an exact name
 first; of two clips with the same name the lowest index; a name that is not there is an error
 that lists them). The clip is
 sampled at the session's clock from `start_s` (the clock now: a window's frame time, a film's
@@ -392,8 +392,8 @@ without `clip`; a planting stops the clips on each of its objects too, an object
 is not drawn any more is stopped too, and one object of a
 planting that plays as a whole cannot be stopped alone: stop the planting). `query.part_pose {"object": "g4", "t"?: ..., "space"?: ...}` reads the pose back: per object the matrix (column-major, 16 numbers) of every moving part at time `t`, the
 clips on it composed as they are drawn. Only the objects the window draws are reached: one the
-building rule or the sea leaves out is missing, and naming it (`g4#7`) is an error that says
-why (it stands inside a building, it is under the sea). By default (`"space": "world"`) each
+building rule, the sea or a hidden layer leaves out is missing, and naming it (`g4#7`) is an
+error that says why (it stands inside a building, it is under the sea, its layer is hidden). By default (`"space": "world"`) each
 matrix is the one the window draws the part with: the plant's `placement` (also in the answer:
 scale, then Y rotation, then translation, grown for the years shown) times the part's matrix in
 model space. With `"space": "model"` it is that matrix on its own, whatever the plant's

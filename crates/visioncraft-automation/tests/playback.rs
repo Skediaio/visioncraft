@@ -735,6 +735,55 @@ fn a_clip_on_a_plant_hidden_since_is_still_stopped() {
     );
 }
 
+/// A planting on a hidden layer draws nothing: it is not played or read, naming it says so, and
+/// shown again it is. Stopping needs no layer shown.
+#[test]
+fn a_planting_on_a_hidden_layer_is_not_reached() {
+    let mut h = host();
+    let layer = h.session.project().generators[0].layer().to_string();
+    run(
+        &mut h,
+        "model.play_clip",
+        json!({"object": "g1", "clip": "swing", "loop": true}),
+    )
+    .unwrap();
+    run(
+        &mut h,
+        "layer.set_visible",
+        json!({"id": layer, "visible": false}),
+    )
+    .unwrap();
+    for (command, params) in [
+        ("query.part_pose", json!({"object": "g1#0"})),
+        ("model.play_clip", json!({"object": "g1#0", "clip": 0})),
+    ] {
+        let e = run(&mut h, command, params).unwrap_err();
+        assert!(
+            e.contains("plant 0 of planting `g1` is not drawn: its layer is hidden"),
+            "{command}: {e}"
+        );
+    }
+    let e = run(&mut h, "query.part_pose", json!({"object": "g1"})).unwrap_err();
+    assert!(
+        e.contains(&format!(
+            "planting `g1` is not drawn: its layer `{layer}` is hidden"
+        )),
+        "{e}"
+    );
+    // Stopping needs no layer shown.
+    let r = run(&mut h, "model.stop_clip", json!({"object": "g1"})).unwrap();
+    assert_eq!(r["stopped"], json!(1));
+    // Shown again: reached.
+    run(
+        &mut h,
+        "layer.set_visible",
+        json!({"id": layer, "visible": true}),
+    )
+    .unwrap();
+    let r = run(&mut h, "query.part_pose", json!({"object": "g1"})).unwrap();
+    assert_eq!(r["plants"].as_array().unwrap().len(), 1);
+}
+
 /// `space` is `world` or `model`: anything else is an error that names both.
 #[test]
 fn a_bad_space_is_an_error() {
