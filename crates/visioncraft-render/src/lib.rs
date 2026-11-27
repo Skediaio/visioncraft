@@ -5433,16 +5433,17 @@ impl Renderer {
         for (i, n) in Calls::new(draws, self.multi_draw) {
             let d = &draws[i];
             let bound = bind(pass, d);
+            // A run that could not bind (an arena that is gone) is not drawn, so not counted.
             if n > 1 {
                 if bound {
                     pass.multi_draw_indexed_indirect(&self.indirect, next_args, n as u32);
+                    for d in &draws[i..i + n] {
+                        self.counters
+                            .add(d.triangles, d.instances.len() as u32, d.view);
+                    }
+                    self.counters.call();
                 }
                 next_args += u64::from(n as u32) * u64::from(INDIRECT_ARGS);
-                for d in &draws[i..i + n] {
-                    self.counters
-                        .add(d.triangles, d.instances.len() as u32, d.view);
-                }
-                self.counters.call();
             } else if bound {
                 self.counters
                     .add(d.triangles, d.instances.len() as u32, d.view);
