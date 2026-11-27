@@ -14,8 +14,10 @@
 //!    A moving sun (`set_sun`) keeps every cascade's map and matrix and marks them stale: the
 //!    near one still draws every frame, the far cached one every 4th, the middle ones on their
 //!    alternate frames, and the frame after the sun stops all stale ones draw, so a settled
-//!    picture is exact (`cascade_refresh`, `refresh_shadows`). Only a scene change, a resize or
-//!    a quality or distance change drops the caches (`invalidate_shadows`)
+//!    picture is exact (`cascade_refresh`, `refresh_shadows`). Instances that moved (a clip
+//!    playing) make stale only the maps their old or new shadow can be sampled in and the snow
+//!    cover map over them (`stale_moved`). Only a scene change, a resize or a quality or
+//!    distance change drops the caches (`invalidate_shadows`)
 //! 2. depth pre-pass, `Depth32Float` (4x MSAA when enabled); cutout
 //!    materials write their coverage through the sample mask
 //! 3. depth resolve: sample 0 -> linear view depth, `R32Float`
@@ -145,6 +147,12 @@ const SUN_GLARE: [f32; 4] = [0.03, 0.025, 0.14, 0.35];
 
 /// How often the camera-centred far cascade is redrawn while the sun moves (frames).
 const FAR_SUN_PERIOD: u64 = 4;
+/// The share of a cascade's view-depth range over which scene.wgsl `cascades_shadow` blends
+/// into the next cascade (which it samples over that band too: `Renderer::shades_from`).
+const CASCADE_BLEND: f32 = 0.15;
+/// Below this sine of the sun's elevation a shadow is taken to run over the whole scene
+/// (`shadow_reach`): at 2 degrees a 2 m post casts 57 m.
+const LOW_SUN: f32 = 0.035;
 
 /// Whether cascade `c` of `count` is drawn this frame. The near cascade every frame; the middle
 /// ones on alternate frames; the cached far one (`cached_far`) only when it is not `reuse`d (the
@@ -1370,6 +1378,7 @@ const FADE_FRAMES: u8 = 16;
 /// switch without one.
 const FADE_SLOTS: usize = 1024;
 
+#[derive(Clone, Copy)]
 struct FarCache {
     eye: Vec3,
     proj: Mat4,
@@ -1918,9 +1927,14 @@ pub struct Renderer {
     textures: Vec<Option<texture::GpuTexture>>,
     items: Vec<Option<Item>>,
     bounds_dirty: bool,
-    /// Items an instance of which `set_instance` moved since the last frame: their bounds, the
-    /// scene's and the shadows are made again once, when the frame is drawn.
+    /// Items an instance of which `set_instance` moved since the last frame: their bounds and
+    /// the scene's are made again once, when the frame is drawn, and the shadow maps they reach
+    /// are made stale (`stale_moved`).
     moved: Vec<u32>,
+    /// What `update_moved` found of the moved items, until the frame's cascades are known:
+    /// each one's bounds before and after, and the first cascade it casts into. Taken by
+    /// `stale_moved`, which gives it back empty; kept, so nothing is allocated while parts move.
+    reached: Vec<(Option<Bounds>, Option<Bounds>, u8)>,
     /// How often the shadow caches were thrown away (for tests that posing does not do it per
     /// instance).
     #[cfg(test)]
@@ -2344,6 +2358,7 @@ impl Renderer {
             lod_skip: true,
             bounds_dirty: false,
             moved: Vec::new(),
+            reached: Vec::new(),
             #[cfg(test)]
             shadow_invalidations: 0,
             scene_bounds: None,
@@ -4258,10 +4273,11 @@ impl Renderer {
     }
 
     /// Replaces instance `index` of an item (numbered as [`Self::instance_order`] counts them)
-    /// where it is: the same range in the pool, the same cluster. Its bounds, the scene's and
-    /// the shadows are made again once when the frame is drawn, however many instances moved.
-    /// For the few instances that move every frame (the parts of a model whose clip plays):
-    /// nothing is sorted or allocated.
+    /// where it is: the same range in the pool, the same cluster. Its bounds and the scene's
+    /// are made again once when the frame is drawn, however many instances moved, and the
+    /// shadow maps its old or new shadow can be sampled in are made stale (`stale_moved`): the
+    /// others keep their caches. For the few instances that move every frame (the parts of a
+    /// model whose clip plays): nothing is sorted or allocated.
     pub fn set_instance(&mut self, id: ItemId, index: usize, model_to_world: Mat4) {
         // As `set_instances`: the last row but the wind's frequency (x's w) stays spare, a
         // gathered instance carries its material and mesh there (`Gather`).
@@ -4318,7 +4334,9 @@ impl Renderer {
             // The clusters', the blocks' and the item's: a moved instance may have left its
             // cluster's old bounds, and a block that kept them would step over clusters that
             // should draw (`update_lods`).
+            let before = item.bounds;
             item_bounds(&mut item, mesh_bounds);
+            self.reached.push((before, item.bounds, item.shadow_from));
             item.moved = false;
             self.items[i as usize] = Some(item);
         }
@@ -4566,9 +4584,9 @@ impl Renderer {
         }
         self.counters = Counters::default();
         self.frame += 1;
-        // The scene changed (or instances moved where they are): the cached cascades no
-        // longer cover it.
-        if self.bounds_dirty || !self.moved.is_empty() {
+        // The scene changed: the cached cascades no longer cover it. (Instances that moved are
+        // narrower: `stale_moved`, once the frame's cascades are known.)
+        if self.bounds_dirty {
             self.invalidate_shadows();
         }
         self.update_moved();
@@ -4580,15 +4598,8 @@ impl Renderer {
         {
             lods_ms = stage.elapsed().as_secs_f64() * 1000.0;
         }
-        let mut cascades = shadow::compute(
-            self.view,
-            self.proj,
-            (self.sun.direction + self.shadow_jitter).normalize(),
-            self.quality.cascades as usize,
-            self.quality.shadow_resolution,
-            self.shadow_distance,
-            self.scene_bounds,
-        );
+        let mut cascades = self.cascades();
+        self.stale_moved(&cascades);
         // Reuse the camera-centred last cascade while it still covers us.
         let last = cascades.count - 1;
         let cached = cascades.margin > 0.0;
@@ -6387,6 +6398,123 @@ impl Renderer {
         self.sky_view_dirty = true;
     }
 
+    /// The frame's shadow cascades (`render_part`): for the sun of the frame (a photo's sample
+    /// moves it within the sun's disc), the quality and the scene's bounds.
+    fn cascades(&self) -> shadow::Cascades {
+        shadow::compute(
+            self.view,
+            self.proj,
+            (self.sun.direction + self.shadow_jitter).normalize(),
+            self.quality.cascades as usize,
+            self.quality.shadow_resolution,
+            self.shadow_distance,
+            self.scene_bounds,
+        )
+    }
+
+    /// Makes stale the shadow maps the moved items reach (`reached`, which this takes and
+    /// gives back empty): the
+    /// scene changed where they were and where they are, the rest of it did not. For each item,
+    ///
+    /// * a cascade whose map as drawn (`cascade_rendered`; the cached far one) has the item in
+    ///   its light-space bounds, before or after the move, and whose part of the view the item's
+    ///   shadow can be sampled in (`shades_from`), is marked `cascade_stale`: still sampled with
+    ///   its own matrix, redrawn by `cascade_refresh`. The cascades before the first one it casts
+    ///   into (`set_item_shadow_cascades`) never held it;
+    /// * the snow cover map (`snow_drawn`) when the item lies over its square, before or after.
+    ///
+    /// A map nothing of the frame can show a difference in keeps its cache: a model whose clip
+    /// plays near the eye leaves the cached far cascade alone, where every map used to be thrown
+    /// away each frame. The scene changing for another reason drops them all beforehand
+    /// (`invalidate_shadows`).
+    fn stale_moved(&mut self, cascades: &shadow::Cascades) {
+        if self.reached.is_empty() {
+            return;
+        }
+        let view_proj = self.proj * self.view;
+        let light = (self.sun.direction + self.shadow_jitter).normalize();
+        // The lowest ground a shadow can fall on: the scene's bottom, or the endless ground's.
+        let floor = self
+            .scene_bounds
+            .map_or(f32::INFINITY, |b| b.0.y)
+            .min(self.ground.map_or(f32::INFINITY, |g| g.height));
+        let mut reached = std::mem::take(&mut self.reached);
+        for &(before, after, from) in &reached {
+            let Some(was) = before.zip(after).map(|(a, b)| union(a, b)) else {
+                continue;
+            };
+            let shadow = shadow_reach(was, light, floor.min(was.0.y), self.scene_bounds);
+            for c in from as usize..cascades.count {
+                let Some(m) = self.cascade_rendered[c] else {
+                    continue;
+                };
+                let in_map = |b: Option<Bounds>| b.is_some_and(|b| !outside(m, b, false));
+                if (in_map(before) || in_map(after))
+                    && self.shades_from(shadow, c, cascades, view_proj)
+                {
+                    self.cascade_stale[c] = true;
+                }
+            }
+            if self.snow_drawn.is_some_and(|m| !outside(m, was, false)) {
+                self.snow_drawn = None;
+            }
+        }
+        // Kept for the next frame: nothing is allocated while parts move.
+        reached.clear();
+        self.reached = reached;
+    }
+
+    /// Whether the view shades from cascade `c` anywhere in `b` (a moved item's shadow, the
+    /// ground it can fall on): the cascade is sampled where the view depth lies from the end of
+    /// the cascade before, less their blend band (`CASCADE_BLEND`; from the eye for the first,
+    /// and from the eye too when the one before does not cover its whole slice, since a point
+    /// it misses falls through to this one), up to the cascade's own split (scene.wgsl
+    /// `cascades_shadow`); and only inside the view.
+    fn shades_from(
+        &self,
+        b: Bounds,
+        c: usize,
+        cascades: &shadow::Cascades,
+        view_proj: Mat4,
+    ) -> bool {
+        let split = cascades.splits[c];
+        let from_eye = c == 0 || !self.covers_slice(c - 1, cascades);
+        let lo = if from_eye {
+            0.0
+        } else {
+            let start = if c > 1 { cascades.splits[c - 2] } else { 0.0 };
+            (cascades.splits[c - 1] - CASCADE_BLEND * (cascades.splits[c - 1] - start)).max(0.0)
+        };
+        if outside(view_proj, b, false) {
+            return false;
+        }
+        let (near, far) = depth_range(self.view, b);
+        far >= lo && near <= split
+    }
+
+    /// Whether cascade `c`'s map covers the whole slice of the view it shades (the slice lies
+    /// in a sphere, `shadow::slice_sphere_world`; the map is that sphere's box in light space,
+    /// snapped to whole texels): nothing of the slice then falls through to the next cascade.
+    /// The first cascade is drawn every frame with the view of the frame, and one never drawn
+    /// (or dropped this frame) is drawn this frame with it: both cover.
+    fn covers_slice(&self, c: usize, cascades: &shadow::Cascades) -> bool {
+        if c == 0 {
+            return true;
+        }
+        let Some(m) = self.cascade_rendered[c] else {
+            return true;
+        };
+        let (centre, r) = shadow::slice_sphere_world(self.view, self.proj, &cascades.splits, c);
+        let p = m.transform_point3(centre);
+        let rows = m.transpose();
+        // Two texels of slack: the centre snapped to a whole texel moves the box by up to half.
+        let slack = 4.0 / self.quality.shadow_resolution.max(1) as f32;
+        p.x.abs() + r * rows.x_axis.truncate().length() <= 1.0 + slack
+            && p.y.abs() + r * rows.y_axis.truncate().length() <= 1.0 + slack
+    }
+
+    /// Drops every shadow cache: the scene changed, the window was resized, the quality or the
+    /// shadow distance did. Instances that moved do not come here (`stale_moved`).
     fn invalidate_shadows(&mut self) {
         #[cfg(test)]
         {
@@ -6910,6 +7038,33 @@ fn transform_bounds(m: Mat4, b: Bounds) -> Bounds {
         .map(|p| (p, p))
         .reduce(union)
         .unwrap_or(b)
+}
+
+/// Where the shadow of what lies in `b` can be sampled: `b`, and the paths of its corners away
+/// from the sun (`light` points to it) down to `floor`, the lowest ground: every point a
+/// corner can shade lies in there, and no receiver outside it is in `b`'s shadow. A sun on the
+/// horizon (`LOW_SUN`) throws shadows over the whole scene (`scene`: none, the item is the
+/// scene): its bounds.
+fn shadow_reach(b: Bounds, light: Vec3, floor: f32, scene: Option<Bounds>) -> Bounds {
+    let Some(scene) = scene else {
+        return b;
+    };
+    if light.y < LOW_SUN {
+        return union(scene, b);
+    }
+    corners(b).into_iter().fold(b, |out, c| {
+        let p = c - light * ((c.y - floor) / light.y).max(0.0);
+        union(out, (p, p))
+    })
+}
+
+/// The nearest and the farthest view depth of a box: metres along the view axis, what the
+/// cascade splits are in (shadow.rs `Cascades::splits`).
+fn depth_range(view: Mat4, b: Bounds) -> (f32, f32) {
+    let (c, e) = ((b.0 + b.1) * 0.5, (b.1 - b.0) * 0.5);
+    let mid = -(view.z_axis.truncate().dot(c) + view.w_axis.z);
+    let ext = view.z_axis.truncate().abs().dot(e);
+    (mid - ext, mid + ext)
 }
 
 /// True when the box is entirely outside one clip plane of `view_proj`.
@@ -9149,10 +9304,75 @@ mod tests {
         assert_eq!((b.1.x, b.1.y), (17.0, 1.0), "and back");
     }
 
-    /// Posing moves a few instances every frame: however many move, the shadow caches are
-    /// thrown away once, when the frame is drawn, not once per instance.
+    /// A frame of `r`, submitted and waited for.
+    fn frame(device: &wgpu::Device, queue: &wgpu::Queue, r: &mut Renderer) {
+        let mut e = device.create_command_encoder(&Default::default());
+        r.render(&mut e);
+        queue.submit([e.finish()]);
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("poll");
+    }
+
+    fn at_box(x: f32, z: f32) -> Mat4 {
+        Mat4::from_translation(Vec3::new(x, 0.0, z))
+    }
+
+    /// A scene for the moved items' shadow maps: the endless ground, snow (the snow cover map
+    /// is drawn), eight boxes ahead of a level eye at the origin looking down +z (cascades as
+    /// asked, MEDIUM otherwise: with two, the near one to 21.4 m; with four, to 4.4 m, then
+    /// 10.3 and 24 m; the last one cached round the eye), and the mover: one box of `height`
+    /// metres, 2 m ahead of the eye, its item's only instance. The sun at 45 degrees from
+    /// azimuth 200, in front of the eye: shadows fall towards it.
+    fn mover_scene(height: f32, cascades: u32) -> (wgpu::Device, wgpu::Queue, Renderer, ItemId) {
+        let (device, queue) = pollster::block_on(headless_device()).expect("device");
+        let mut r = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        r.resize(64, 36);
+        r.set_quality(Quality {
+            cascades,
+            ..Quality::MEDIUM
+        });
+        r.set_ground(Some(Ground::default()));
+        r.set_snow(0.5);
+        r.set_sun(&Sun::from_angles(200.0, 45.0));
+        let material = r.add_material(&Material::default());
+        let mut m = demo::MeshData::default();
+        m.add_box(Vec3::ZERO, Vec3::new(2.0, 2.0, 2.0));
+        let still = r.add_mesh(&m.mesh()).expect("mesh");
+        let at: Vec<Mat4> = (0..8)
+            .map(|i| {
+                Mat4::from_translation(Vec3::new(
+                    -10.5 + 3.0 * i as f32,
+                    0.0,
+                    6.0 + 2.0 * (i % 3) as f32,
+                ))
+            })
+            .collect();
+        r.add_item(still, material, &at);
+        let mut m = demo::MeshData::default();
+        m.add_box(Vec3::ZERO, Vec3::new(1.0, height, 1.0));
+        let mesh = r.add_mesh(&m.mesh()).expect("mesh");
+        let mover = r.add_item(mesh, material, &[at_box(0.0, 2.0)]);
+        let eye = Vec3::new(0.0, 1.7, 0.0);
+        let (view, proj, _) = demo::camera(eye, eye + Vec3::Z, 16.0 / 9.0);
+        r.set_camera(view, proj, eye);
+        (device, queue, r, mover)
+    }
+
+    /// What a frame does with the moved items' bounds (`update_moved`, then `stale_moved` on the
+    /// frame's cascades), without rendering: the stale marks it leaves.
+    fn stale_after(r: &mut Renderer) -> [bool; shadow::MAX_CASCADES] {
+        r.update_moved();
+        let cascades = r.cascades();
+        r.stale_moved(&cascades);
+        r.cascade_stale
+    }
+
+    /// Posing moves a few instances every frame: however many move, the shadow caches are kept
+    /// (the maps they reach are made stale, `stale_moved`), and a scene change drops them once,
+    /// when the frame is drawn.
     #[test]
-    fn moved_instances_invalidate_the_shadows_once_a_frame() {
+    fn moved_instances_keep_the_caches_a_scene_change_drops_them_once() {
         let (device, queue) = pollster::block_on(headless_device()).expect("device");
         let mut r = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
         r.resize(64, 36);
@@ -9168,29 +9388,181 @@ mod tests {
         let mat = r.add_material(&Material::default());
         let at = |x: f32| Mat4::from_translation(Vec3::new(x, 0.0, 0.0));
         let item = r.add_item(mesh, mat, &[at(0.0), at(8.0)]);
-        let frame = |r: &mut Renderer| {
-            let mut e = device.create_command_encoder(&Default::default());
-            r.render(&mut e);
-            queue.submit([e.finish()]);
-            device
-                .poll(wgpu::PollType::wait_indefinitely())
-                .expect("poll");
-        };
-        frame(&mut r);
+        frame(&device, &queue, &mut r);
+        assert!(r.far_cache.is_some(), "a frame caches the far cascade");
         let before = r.shadow_invalidations;
         r.set_instance(item, 0, at(1.0));
         r.set_instance(item, 1, at(9.0));
-        frame(&mut r);
-        assert_eq!(r.shadow_invalidations - before, 1, "once for the frame");
+        frame(&device, &queue, &mut r);
+        assert_eq!(r.shadow_invalidations, before, "a move drops nothing");
+        assert!(
+            r.far_cache.is_some() && r.cascade_rendered[..2].iter().all(Option::is_some),
+            "the caches are kept (a reached map is redrawn into its place)"
+        );
         assert_eq!(
             r.scene_bounds.unwrap().1.x,
             10.0,
             "the scene's bounds follow"
         );
         // A frame in which nothing moved keeps them.
-        let before = r.shadow_invalidations;
-        frame(&mut r);
+        frame(&device, &queue, &mut r);
         assert_eq!(r.shadow_invalidations, before);
+        // The scene changing (the instances given again): dropped once.
+        r.set_instances(item, &[at(0.0), at(8.0)]);
+        frame(&device, &queue, &mut r);
+        assert_eq!(
+            r.shadow_invalidations,
+            before + 1,
+            "once for the scene change"
+        );
+    }
+
+    /// A moved item makes stale the cascades it is in whose shaded part of the view its shadow
+    /// can be sampled in, and the snow cover map only when it lies over its square: a box by
+    /// the eye (its shadow 1.5 m long; the cached far cascade is first sampled 18 m away)
+    /// marks the near cascade alone and the cover map; the same box moving 500 m away, outside
+    /// them all, marks nothing.
+    #[test]
+    fn a_mover_marks_stale_only_the_maps_its_shadow_can_be_sampled_in() {
+        let (device, queue, mut r, mover) = mover_scene(1.5, 2);
+        frame(&device, &queue, &mut r);
+        assert!(
+            r.far_cache.is_some() && r.cascade_rendered[..2].iter().all(Option::is_some),
+            "every cascade drawn, the far one cached"
+        );
+        assert_eq!(r.snow_drawn, r.snow_cover, "the cover map is drawn");
+        r.set_instance(mover, 0, at_box(0.3, 2.0));
+        assert_eq!(stale_after(&mut r), [true, false, false, false]);
+        assert!(
+            r.snow_drawn.is_none(),
+            "the cover map lies over the mover: drawn again"
+        );
+        frame(&device, &queue, &mut r);
+        assert_eq!(r.cascade_stale, [false; shadow::MAX_CASCADES]);
+        assert_eq!(r.snow_drawn, r.snow_cover);
+        // 500 m away: its old shadow goes (the frame after the jump draws it out of the maps
+        // it was in), and moving on there reaches no map and no cover.
+        r.set_instance(mover, 0, at_box(500.0, 0.0));
+        frame(&device, &queue, &mut r);
+        assert!(r.far_cache.is_some(), "cached again");
+        r.set_instance(mover, 0, at_box(500.5, 0.0));
+        assert_eq!(stale_after(&mut r), [false; shadow::MAX_CASCADES]);
+        assert_eq!(
+            r.snow_drawn, r.snow_cover,
+            "outside the cover map's square: not drawn again"
+        );
+    }
+
+    /// A shadow long enough to reach past the near cascade's range (a 2 m box 19 m away; the
+    /// far cascade is first sampled 18 m away) marks the cached far cascade too.
+    #[test]
+    fn a_shadow_that_reaches_past_the_near_cascade_marks_the_far_one() {
+        let (device, queue, mut r, mover) = mover_scene(2.0, 2);
+        r.set_instance(mover, 0, at_box(0.0, 19.0));
+        frame(&device, &queue, &mut r);
+        r.set_instance(mover, 0, at_box(0.2, 19.0));
+        assert_eq!(
+            stale_after(&mut r),
+            [true, true, false, false],
+            "in both maps, sampled in both"
+        );
+    }
+
+    /// The lower bound of a cascade's sampled range holds only while the cascade before covers
+    /// its whole slice: a point that one misses falls through to it, at any depth. With the
+    /// camera still, a box 2 m ahead with a 0.6 m shadow marks the near cascade alone (four
+    /// cascades; the second is first sampled 3.8 m away). After the camera jumps 6 m sideways,
+    /// the middle maps were drawn for the eye before and cover their new slices no more: the
+    /// box's shadow can be sampled from the third and the far one through the gaps, and both
+    /// are marked; the second still cannot be (the near cascade covers its slice).
+    #[test]
+    fn a_camera_jump_drops_the_lower_bound_of_the_cascades_after_a_gap() {
+        let (device, queue, mut r, mover) = mover_scene(1.0, 4);
+        r.set_sun(&Sun::from_angles(200.0, 60.0));
+        r.set_instance(mover, 0, at_box(0.0, 2.0));
+        frame(&device, &queue, &mut r);
+        r.set_instance(mover, 0, at_box(0.2, 2.0));
+        assert_eq!(stale_after(&mut r), [true, false, false, false]);
+        frame(&device, &queue, &mut r);
+        let eye = Vec3::new(6.0, 1.7, 0.0);
+        let (view, proj, _) = demo::camera(eye, eye + Vec3::Z, 16.0 / 9.0);
+        r.set_camera(view, proj, eye);
+        r.set_instance(mover, 0, at_box(6.2, 2.0));
+        assert_eq!(stale_after(&mut r), [true, false, true, true]);
+    }
+
+    /// Through `render`: a mover the cached far cascade does not shade from leaves its cache
+    /// alone (the camera moved within the margin: a redraw would have moved the matrix), and
+    /// one whose shadow reaches it redraws it that frame.
+    #[test]
+    fn a_frame_redraws_the_far_cascade_only_for_a_shadow_that_reaches_it() {
+        let (device, queue, mut r, mover) = mover_scene(2.0, 2);
+        frame(&device, &queue, &mut r);
+        let (first, drawn) = (r.far_cache.unwrap(), r.cascade_rendered[1]);
+        let eye = Vec3::new(0.5, 1.7, 0.0);
+        let (view, proj, _) = demo::camera(eye, eye + Vec3::Z, 16.0 / 9.0);
+        r.set_camera(view, proj, eye);
+        r.set_instance(mover, 0, at_box(0.3, 2.0));
+        frame(&device, &queue, &mut r);
+        assert_eq!(
+            r.far_cache.map(|f| f.matrix),
+            Some(first.matrix),
+            "not redrawn: the cache stays"
+        );
+        assert_eq!(r.cascade_rendered[1], drawn);
+        // Now where its 2 m shadow reaches past the near cascade.
+        let eye = Vec3::new(1.0, 1.7, 0.0);
+        let (view, proj, _) = demo::camera(eye, eye + Vec3::Z, 16.0 / 9.0);
+        r.set_camera(view, proj, eye);
+        r.set_instance(mover, 0, at_box(0.0, 19.0));
+        frame(&device, &queue, &mut r);
+        let redrawn = r.far_cache.unwrap();
+        assert_eq!(redrawn.eye, eye, "drawn again for this eye");
+        assert_ne!(redrawn.matrix, first.matrix);
+        assert_ne!(r.cascade_rendered[1], drawn);
+    }
+
+    /// The blend band the renderer assumes between two cascades is the shader's.
+    #[test]
+    fn the_cascade_blend_band_is_the_shader_s() {
+        assert_eq!(format!("{CASCADE_BLEND}"), "0.15");
+        assert!(
+            include_str!("scene.wgsl").contains("let band = 0.15 * (g.splits[c] - start);"),
+            "scene.wgsl `cascades_shadow` changed its blend band"
+        );
+    }
+
+    /// The shadow of a box reaches where its corners' paths away from the sun meet the ground:
+    /// `shadow_reach` is that box, and a sun low on the horizon throws it over the scene.
+    #[test]
+    fn a_shadow_reaches_the_ground_away_from_the_sun() {
+        let b = (Vec3::new(-1.0, 1.0, -1.0), Vec3::new(1.0, 3.0, 1.0));
+        // Straight down: the box, down to the floor under it.
+        let down = (Vec3::new(-1.0, 0.0, -1.0), Vec3::new(1.0, 3.0, 1.0));
+        assert_eq!(shadow_reach(b, Vec3::Y, 0.0, Some(b)), down);
+        // 45 degrees, the sun towards +z: the top corners land 3 m towards -z, on the floor.
+        let light = Vec3::new(0.0, 1.0, 1.0).normalize();
+        let reach = shadow_reach(b, light, 0.0, Some(b));
+        assert!(reach.0.y.abs() < 1e-5, "down to the floor: {:?}", reach.0);
+        assert!((reach.0.z + 4.0).abs() < 1e-5, "{reach:?}");
+        assert_eq!((reach.1.x, reach.1.y, reach.1.z), (1.0, 3.0, 1.0));
+        // A floor 10 m lower: the paths are longer.
+        let reach = shadow_reach(b, light, -10.0, Some(b));
+        assert!((reach.0.z + 14.0).abs() < 1e-5, "{reach:?}");
+        // A sun on the horizon: the whole scene.
+        let scene = (Vec3::new(-50.0, 0.0, -50.0), Vec3::new(50.0, 9.0, 50.0));
+        let low = Vec3::new(0.0, 0.01, 1.0).normalize();
+        assert_eq!(shadow_reach(b, low, 0.0, Some(scene)), scene);
+        assert_eq!(shadow_reach(b, Vec3::Y, 0.0, None), b, "no scene: the box");
+    }
+
+    /// The nearest and farthest view depth of a box, along the view axis.
+    #[test]
+    fn depth_range_is_along_the_view_axis() {
+        let view = Mat4::look_at_rh(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO, Vec3::Y);
+        let b = (Vec3::new(-1.0, -1.0, -1.0), Vec3::new(1.0, 1.0, 1.0));
+        assert_eq!(depth_range(view, b), (4.0, 6.0));
+        assert_eq!(depth_range(Mat4::IDENTITY, b), (-1.0, 1.0));
     }
 
     /// A still taken right after instances moved: the window's own shadow caches (swapped out

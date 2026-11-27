@@ -171,6 +171,26 @@ fn compute_orthographic(
     out
 }
 
+/// Centre (world space) and radius of the sphere around the slice of the view between the
+/// camera's near plane and cascade `c`'s split (`slice_sphere`), for a perspective camera: what
+/// the cascade's map is fitted to, except the last one of two or more, which is camera-centred
+/// (`compute`). Asked of a map that is not redrawn this frame too, to tell whether it still
+/// covers its slice (the renderer's `covers_slice`).
+pub fn slice_sphere_world(
+    view: Mat4,
+    proj: Mat4,
+    splits: &[f32; MAX_CASCADES],
+    c: usize,
+) -> (Vec3, f32) {
+    let (near, _) = near_far(proj);
+    let start = if c == 0 { near } else { splits[c - 1] };
+    let tan_x = 1.0 / proj.x_axis.x;
+    let tan_y = 1.0 / proj.y_axis.y;
+    let k2 = tan_x * tan_x + tan_y * tan_y;
+    let (d, r) = slice_sphere(start, splits[c], k2);
+    (view.inverse().transform_point3(Vec3::new(0.0, 0.0, -d)), r)
+}
+
 pub fn compute(
     view: Mat4,
     proj: Mat4,
@@ -186,9 +206,6 @@ pub fn compute(
     let count = count.clamp(1, MAX_CASCADES);
     let (near, far) = near_far(proj);
     let far = far.min(distance).max(near * 2.0);
-    let tan_x = 1.0 / proj.x_axis.x;
-    let tan_y = 1.0 / proj.y_axis.y;
-    let k2 = tan_x * tan_x + tan_y * tan_y;
     let inv_view = view.inverse();
     let rot = light_rotation(sun_dir);
     let splits = split_distances(near, far, count);
@@ -198,18 +215,15 @@ pub fn compute(
         count,
         ..Default::default()
     };
-    let mut start = near;
     let eye = inv_view.w_axis.xyz();
-    for (i, &split) in splits.iter().enumerate().take(count) {
+    for i in 0..count {
         let cached = count > 1 && i == count - 1;
         let (center, r) = if cached {
             out.margin = 0.15 * far;
             (eye, far + out.margin)
         } else {
-            let (c, r) = slice_sphere(start, split, k2);
-            ((inv_view * glam::Vec4::new(0.0, 0.0, -c, 1.0)).xyz(), r)
+            slice_sphere_world(view, proj, &splits, i)
         };
-        start = split;
         let (matrix, texel) = fit(rot, center, r, resolution, corners.as_ref());
         out.view_proj[i] = matrix;
         out.texel[i] = texel;
