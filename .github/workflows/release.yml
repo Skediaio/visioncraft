@@ -5,6 +5,9 @@ name: release
 # is published and the artefacts stay as workflow artifacts.
 #
 # No checkout keeps the token: it is used by the `publish` job alone, through `gh`.
+#
+# The build jobs restore no cache: release binaries are built from scratch, never from a
+# cache the default branch wrote. The gate (ci.yml) and the notes job keep theirs.
 
 on:
   push:
@@ -93,7 +96,6 @@ jobs:
         with:
           toolchain: stable
           targets: x86_64-unknown-linux-gnu
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Native system libraries (eframe, rfd, wgpu)
         run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev libxcb1-dev libgtk-3-dev libudev-dev
       - name: Build
@@ -124,7 +126,6 @@ jobs:
         with:
           toolchain: stable
           targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Install Trunk
         run: cargo install trunk --locked --version 0.22.1
       # A real build for the browser: CI only checks that the wasm target compiles.
