@@ -45,6 +45,7 @@ Dependencies point downwards only.
 | `crates/visioncraft-flora` | Procedural, deterministic plant meshes and textures. |
 | `crates/visioncraft-automation` | Command execution, JSON-lines and MCP protocols, control channel to a running window. |
 | `tools/visioncraft-assets` | Offline tool that builds the asset library. |
+| `tools/release` | The release pipeline's helpers: the tag checks and the release notes. |
 | `assets/` | The asset library (not in git, see below) and its [attribution](assets/ATTRIBUTION.md). |
 
 Rules are in [AGENTS.md](AGENTS.md). Code attribution is in [ATTRIBUTION.md](ATTRIBUTION.md).
@@ -133,7 +134,8 @@ cargo check --target wasm32-unknown-unknown -p visioncraft-core -p visioncraft-r
 cargo deny check
 ```
 
-CI runs the same ([.github/workflows/ci.yml](.github/workflows/ci.yml)).
+CI runs the same ([.github/workflows/ci.yml](.github/workflows/ci.yml)). Releases are cut from
+git tags: [docs/releasing.md](docs/releasing.md).
 
 In the browser, after `trunk build --release` in `apps/visioncraft` (needs Node 22 or later and
 a Chromium with WebGPU; on Linux the flags above are passed for you):
