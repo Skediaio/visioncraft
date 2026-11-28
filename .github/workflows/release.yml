@@ -71,7 +71,8 @@ jobs:
         id: ref
         env:
           INPUT_TAG: ${{ inputs.tag }}
-          DRY_RUN: ${{ inputs.dry_run != false }}
+          # False on a tag push, where there is no input: a pushed tag publishes.
+          DRY_RUN: ${{ inputs.dry_run == true }}
         run: |
           tag="$INPUT_TAG"
           # Started without a tag: on a pushed tag, or dispatched from one, that is the tag.
