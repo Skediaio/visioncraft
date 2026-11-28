@@ -85,7 +85,15 @@ pub const LEAF_SHAPES: &[&str] = &[
     "flabellate",
 ];
 pub const BARK_PATTERNS: &[&str] = &[
-    "smooth", "birch", "furrowed", "flaky", "fluted", "fibrous", "stem", "scaly",
+    "smooth",
+    "birch",
+    "furrowed",
+    "flaky",
+    "fluted",
+    "fibrous",
+    "stem",
+    "scaly",
+    "leaf bases",
 ];
 pub const FLOWER_SHAPES: &[&str] = &[
     "daisy",
@@ -103,6 +111,7 @@ pub const FLOWER_SHAPES: &[&str] = &[
     "fruit",
     "raceme",
     "trumpet",
+    "bunch",
 ];
 pub const CLIP_SHAPES: &[&str] = &["ball", "cone", "column", "flame", "hedge segment"];
 const LEAF_HABIT: &[&str] = &["evergreen", "deciduous"];
@@ -472,6 +481,46 @@ const PALM: &[ParamInfo] = &[
         0.05,
         "Petiole length in metres.",
     ),
+    num(
+        "palm.trunk_top_ratio",
+        "Trunk, top width",
+        0.5,
+        2.0,
+        0.05,
+        "Trunk width under the crown relative to its foot: 1.25 where old leaf bases cling, 1 an even column.",
+    ),
+    num(
+        "palm.elev_young_deg",
+        "Young fronds",
+        0.0,
+        89.0,
+        1.0,
+        "Angle of the youngest fronds above horizontal, in degrees.",
+    ),
+    num(
+        "palm.elev_old_deg",
+        "Old fronds",
+        -89.0,
+        0.0,
+        1.0,
+        "Angle of the oldest fronds below horizontal, in degrees.",
+    ),
+    num(
+        "palm.arch_deg",
+        "Frond arch",
+        0.0,
+        120.0,
+        1.0,
+        "How much more the oldest frond's blade bends downwards than the youngest's.",
+    ),
+    num(
+        "palm.suckers",
+        "Offshoots",
+        0.0,
+        12.0,
+        1.0,
+        "Young palms standing round the foot (date palm).",
+    ),
 ];
 const CLIPPED: &[ParamInfo] = &[
     choice(
@@ -733,6 +782,11 @@ fn slot<'a>(p: &'a mut PlantParams, path: &str) -> Option<Slot<'a>> {
             "dead_fronds" => Some(Slot::U16(&mut c.dead_fronds)),
             "blade_m" => Some(Slot::F(&mut c.blade_m)),
             "petiole_m" => Some(Slot::F(&mut c.petiole_m)),
+            "trunk_top_ratio" => Some(Slot::F(&mut c.trunk_top_ratio)),
+            "elev_young_deg" => Some(Slot::F(&mut c.elev_young_deg)),
+            "elev_old_deg" => Some(Slot::F(&mut c.elev_old_deg)),
+            "arch_deg" => Some(Slot::F(&mut c.arch_deg)),
+            "suckers" => Some(Slot::U16(&mut c.suckers)),
             _ => None,
         },
         (Form::Clipped(c), "clipped", f) => match f {
@@ -829,7 +883,7 @@ fn leaf_shape_of(i: usize) -> Option<LeafShape> {
     })
 }
 
-const FLOWERS: [FlowerShape; 15] = [
+const FLOWERS: [FlowerShape; 16] = [
     FlowerShape::Daisy { droop: false },
     FlowerShape::Blossom,
     FlowerShape::Mophead,
@@ -845,6 +899,7 @@ const FLOWERS: [FlowerShape; 15] = [
     FlowerShape::Fruit,
     FlowerShape::Raceme,
     FlowerShape::Trumpet,
+    FlowerShape::Bunch,
 ];
 const CROWNS: [CrownShape; 8] = [
     CrownShape::Conical,
@@ -856,7 +911,7 @@ const CROWNS: [CrownShape; 8] = [
     CrownShape::InverseConical,
     CrownShape::TendFlame,
 ];
-const BARKS: [BarkPattern; 8] = [
+const BARKS: [BarkPattern; 9] = [
     BarkPattern::Smooth,
     BarkPattern::Birch,
     BarkPattern::Furrowed,
@@ -865,6 +920,7 @@ const BARKS: [BarkPattern; 8] = [
     BarkPattern::Fibrous,
     BarkPattern::Stem,
     BarkPattern::Scaly,
+    BarkPattern::LeafBases,
 ];
 
 fn index_of<T: PartialEq>(list: &[T], v: &T) -> Option<usize> {

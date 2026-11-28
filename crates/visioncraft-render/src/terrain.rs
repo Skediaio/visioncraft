@@ -3,7 +3,8 @@
 //! eight u8 layer weights; they go through the depth pre-pass, shadows and
 //! culling like any opaque mesh and only the forward and reflection passes
 //! use the terrain pipelines. The layers' maps are copied (resampled on the
-//! GPU) into three 512^2 x 8 2D-array textures.
+//! GPU) into three 512^2 x 8 2D-array textures, their detail textures into
+//! two more.
 
 use crate::texture::{Mipmapper, TextureId, mip_count};
 use crate::{Bytes, Layouts, PipelineDesc, depth_state, module, pipeline, vertex_layouts};
@@ -15,7 +16,23 @@ pub const LAYER_SIZE: u32 = 512;
 /// Width of the band at the terrain's outer edge that blends into the
 /// infinite ground (metres), when a ground is set.
 pub const EDGE_BAND_M: f32 = 8.0;
-pub(crate) const UNIFORM_SIZE: u64 = (MAX_LAYERS as u64) * 48 + 32;
+pub(crate) const UNIFORM_SIZE: u64 = (MAX_LAYERS as u64) * 64 + 48;
+
+/// A layer's detail texture (the core's `LayerDetail`): a finer map over the
+/// layer's own near the eye, faded out with distance (terrain.wgsl).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TerrainDetail {
+    /// sRGB colour map (absent: white, which changes nothing).
+    pub base_color_map: Option<TextureId>,
+    /// Tangent-space normal map, OpenGL convention (absent: flat).
+    pub normal_map: Option<TextureId>,
+    /// One texture repeat in metres.
+    pub tile_m: f32,
+    /// 0..1: how strongly the detail modulates the layer.
+    pub strength: f32,
+    /// The detail has faded out at this distance to the eye (metres).
+    pub fade_m: f32,
+}
 
 /// One terrain chunk: per vertex position, normal and the weights of up to
 /// eight layers (u8, summing to 255), indices as triangles.
@@ -54,6 +71,8 @@ pub struct TerrainLayer {
     pub puddles: bool,
     /// Hex tiling of the maps seen from above (terrain.wgsl), against visible repetition.
     pub hex: bool,
+    /// A second, finer texture over the layer's maps near the eye (absent: none).
+    pub detail: Option<TerrainDetail>,
 }
 
 impl Default for TerrainLayer {
@@ -71,6 +90,7 @@ impl Default for TerrainLayer {
             roughness_offset: 0.0,
             puddles: true,
             hex: false,
+            detail: None,
         }
     }
 }
@@ -117,11 +137,13 @@ fn array_texture(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn bind(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
     buffer: &wgpu::Buffer,
     arrays: [&wgpu::TextureView; 3],
+    detail: [&wgpu::TextureView; 2],
     sampler: &wgpu::Sampler,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -147,6 +169,14 @@ fn bind(
             wgpu::BindGroupEntry {
                 binding: 17,
                 resource: wgpu::BindingResource::Sampler(sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 18,
+                resource: wgpu::BindingResource::TextureView(detail[0]),
+            },
+            wgpu::BindGroupEntry {
+                binding: 19,
+                resource: wgpu::BindingResource::TextureView(detail[1]),
             },
         ],
     })
@@ -209,7 +239,14 @@ impl TerrainGpu {
                 ..Default::default()
             })
         });
-        let bind = bind(device, layout, &buffer, arrays.each_ref(), &sampler);
+        let bind = bind(
+            device,
+            layout,
+            &buffer,
+            arrays.each_ref(),
+            [&arrays[0], &arrays[1]],
+            &sampler,
+        );
         Self {
             buffer,
             bind,
@@ -241,6 +278,18 @@ impl TerrainGpu {
         let count = layers.len() as u32;
         let textures: [wgpu::Texture; 3] =
             std::array::from_fn(|i| array_texture(device, LAYER_SIZE, count, ARRAY_FORMATS[i]));
+        // The layers' detail maps: white and flat for a layer without a detail, so a lookup
+        // there would change nothing (the shader skips it anyway). With no detail on any
+        // layer they are 1x1, so a terrain without detail costs no extra memory.
+        let detail_size = if layers.iter().any(|l| l.detail.is_some()) {
+            LAYER_SIZE
+        } else {
+            1
+        };
+        let detail: [wgpu::Texture; 2] = [
+            array_texture(device, detail_size, count, ARRAY_FORMATS[0]),
+            array_texture(device, detail_size, count, ARRAY_FORMATS[1]),
+        ];
         let mut encoder = device.create_command_encoder(&Default::default());
         for (k, layer) in layers.iter().enumerate() {
             let maps = [layer.base_color_map, layer.normal_map, layer.orm_map];
@@ -257,23 +306,49 @@ impl TerrainGpu {
                     alpha,
                 );
             }
+            let d = layer.detail;
+            let base = source(d.and_then(|d| d.base_color_map)).unwrap_or(&self.defaults[0]);
+            let normal = source(d.and_then(|d| d.normal_map)).unwrap_or(&self.defaults[1]);
+            mipmapper.blit_into_layer(
+                device,
+                &mut encoder,
+                base,
+                &detail[0],
+                k as u32,
+                false,
+                None,
+            );
+            mipmapper.blit_into_layer(
+                device,
+                &mut encoder,
+                normal,
+                &detail[1],
+                k as u32,
+                true,
+                None,
+            );
         }
         queue.submit([encoder.finish()]);
         let arrays = textures.each_ref().map(array_view);
+        let detail_views = detail.each_ref().map(array_view);
         self.bind = bind(
             device,
             layout,
             &self.buffer,
             arrays.each_ref(),
+            [&detail_views[0], &detail_views[1]],
             &self.sampler,
         );
         self.layers = layers.to_vec();
-        self.bytes = 3 * crate::texture::mip_bytes(LAYER_SIZE, LAYER_SIZE, 4) * count as u64;
+        self.bytes = (3 * crate::texture::mip_bytes(LAYER_SIZE, LAYER_SIZE, 4)
+            + 2 * crate::texture::mip_bytes(detail_size, detail_size, 4))
+            * count as u64;
         Ok(())
     }
 
-    /// The uniform: layer factors, the chunks' rectangle and the ground
-    /// blend (`ground`: albedo when an infinite ground is set).
+    /// The uniform: layer factors, the chunks' rectangle, the ground blend
+    /// (`ground`: albedo when an infinite ground is set) and whether any layer
+    /// has a detail texture (`detail`: on, and the farthest fade distance).
     pub fn write(&self, queue: &wgpu::Queue, ground: Option<[f32; 3]>) {
         let mut b = Bytes::default();
         for i in 0..MAX_LAYERS {
@@ -287,10 +362,26 @@ impl TerrainGpu {
                 l.relief.clamp(0.0, 2.0),
             ]);
             b.floats(&[l.puddles as u32 as f32, l.hex as u32 as f32, 0.0, 0.0]);
+            // x 1 / tile, y strength, z fade distance, w flags (1 a detail, 2 a normal map).
+            let d = l.detail;
+            b.floats(&[
+                d.map_or(0.0, |d| 1.0 / d.tile_m.max(1e-3)),
+                d.map_or(0.0, |d| d.strength.clamp(0.0, 1.0)),
+                d.map_or(0.0, |d| d.fade_m.max(0.1)),
+                d.map_or(0.0, |d| 1.0 + d.normal_map.is_some() as u32 as f32),
+            ]);
         }
         b.floats(&self.edge);
         let (rgb, band) = ground.map_or(([0.0; 3], 0.0), |c| (c, EDGE_BAND_M));
         b.floats(&[rgb[0], rgb[1], rgb[2], band]);
+        let (any, far) = self
+            .layers
+            .iter()
+            .filter_map(|l| l.detail)
+            .fold((0.0f32, 0.0f32), |(_, far), d| {
+                (1.0, far.max(d.fade_m.max(0.1)))
+            });
+        b.floats(&[any, far, 0.0, 0.0]);
         debug_assert_eq!(b.0.len() as u64, UNIFORM_SIZE);
         queue.write_buffer(&self.buffer, 0, &b.0);
     }
@@ -315,6 +406,8 @@ pub(crate) fn layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
             array(15),
             array(16),
             crate::sampler_entry(17, wgpu::SamplerBindingType::Filtering),
+            array(18),
+            array(19),
         ],
     })
 }

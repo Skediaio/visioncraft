@@ -11,6 +11,12 @@ pub struct RenderStats {
     /// `draw_calls` per pass group: shadow (all cascades), depth,
     /// reflection, forward (with sky and transparent), post.
     pub pass_draws: Vec<(&'static str, u32)>,
+    /// Draw calls issued per pass group, as `pass_draws`: one per direct draw and one per
+    /// indirect multi-draw, whose sub-draws `pass_draws` counts one each. Compute dispatches
+    /// are not draws. Without the device's `INDIRECT_FIRST_INSTANCE` every planned draw is its
+    /// own call; the calls also count the draws `record` does not plan (the sky, the ground,
+    /// grass, the sea), which `pass_draws` leaves out.
+    pub pass_calls: Vec<(&'static str, u32)>,
     /// Triangles submitted per pass group, as `pass_draws`.
     pub pass_triangles: Vec<(&'static str, u64)>,
     /// Triangles submitted in all passes.
@@ -35,6 +41,31 @@ pub struct RenderStats {
     pub gpu_ms: Option<f32>,
     /// The scene's resolution after `render_scale`.
     pub render_size: (u32, u32),
+    /// The water surfaces of the frame and how each was reflected (`water.rs`): by plane, so
+    /// two areas at one level follow each other and share a tier. Empty while the planar
+    /// reflection is off (`Quality::water_reflection` 0) or no water is in view.
+    pub water: Vec<WaterSurface>,
+}
+
+/// A water surface of a frame and how it was reflected.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WaterSurface {
+    /// What draws it; `None` for the sea.
+    pub item: Option<WaterItem>,
+    /// The height of the surface (m).
+    pub level_m: f32,
+    pub tier: crate::WaterTier,
+}
+
+/// The item a water surface belongs to: numbers a host can match with `ItemId::index` and
+/// `MaterialId::index`. The renderer knows no names for them: a host that wants an object id
+/// in its stats keeps its own table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WaterItem {
+    pub item: u32,
+    /// The item's part (its index in the item's parts).
+    pub part: u32,
+    pub material: u32,
 }
 
 /// Frame-time budget the automatic choice aims for (30 fps).

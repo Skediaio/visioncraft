@@ -10,7 +10,7 @@ use visioncraft_core::Project;
 use visioncraft_core::terrain::{
     CHUNK_CELLS, DirtyRect, Terrain, terrain_chunk_mesh_holes, terrain_chunks,
 };
-use visioncraft_render::{ItemId, Renderer, TerrainChunk, TerrainLayer};
+use visioncraft_render::{ItemId, Renderer, TerrainChunk, TerrainDetail, TerrainLayer};
 
 /// Vertex steps of the three levels, and how far each is drawn (metres).
 const LEVELS: [(u32, f32); 3] = [(1, 70.0), (2, 180.0), (4, f32::INFINITY)];
@@ -218,21 +218,32 @@ impl TerrainGpu {
                 let Some(m) = project.materials.iter().find(|m| m.id == l.material) else {
                     return TerrainLayer::default();
                 };
-                let look = look(m, lib);
-                let (base, normal, orm, height) = lib.layer_textures(look.tex as usize);
+                let detail = l.detail.as_ref().map(|d| {
+                    let (base, normal) = detail_textures(project, &d.texture, lib, look);
+                    TerrainDetail {
+                        base_color_map: base,
+                        normal_map: normal,
+                        tile_m: d.tile_m.max(0.01),
+                        strength: d.strength.clamp(0.0, 1.0),
+                        fade_m: d.fade_m.max(0.1),
+                    }
+                });
+                let its = look(m, lib);
+                let (base, normal, orm, height) = lib.layer_textures(its.tex as usize);
                 TerrainLayer {
                     base_color_map: base,
                     normal_map: normal,
                     orm_map: orm,
                     height_map: height,
-                    scale_m: look.scale_m.max(0.1),
-                    base_color: look.color,
-                    roughness: look.roughness,
-                    variation: look.variation,
-                    relief: look.relief,
-                    roughness_offset: -look.gloss,
-                    puddles: look.puddles,
+                    scale_m: its.scale_m.max(0.1),
+                    base_color: its.color,
+                    roughness: its.roughness,
+                    variation: its.variation,
+                    relief: its.relief,
+                    roughness_offset: -its.gloss,
+                    puddles: its.puddles,
                     hex: t.hex_tiling,
+                    detail,
                 }
             })
             .collect();
@@ -240,6 +251,33 @@ impl TerrainGpu {
             self.layers = layers;
         }
     }
+}
+
+/// The colour and normal maps of a layer's detail texture id (`terrain.set_layer_detail`): a
+/// project material's, through its look as the layer's own, else a library material's by id.
+/// Neither asks for anything until `layer_textures` does; an id the library does not know
+/// gives no maps, so the detail changes nothing.
+fn detail_textures(
+    project: &Project,
+    id: &str,
+    lib: &mut Library,
+    look: &mut dyn FnMut(&visioncraft_core::Material, &mut Library) -> Look,
+) -> (
+    Option<visioncraft_render::TextureId>,
+    Option<visioncraft_render::TextureId>,
+) {
+    if let Some(m) = project.materials.iter().find(|m| m.id == id) {
+        let l = look(m, lib);
+        let (base, normal, _, _) = lib.layer_textures(l.tex as usize);
+        return (base, normal);
+    }
+    let spec = match lib.materials.iter().find(|e| e.id == id) {
+        Some(e) => crate::material_library::spec_of_entry(e),
+        None => return (None, None),
+    };
+    let index = lib.intern(spec);
+    let (base, normal, _, _) = lib.layer_textures(index);
+    (base, normal)
 }
 
 impl Library {

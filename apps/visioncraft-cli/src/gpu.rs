@@ -111,8 +111,12 @@ impl Pictures for GpuPictures {
             // A photo is taken at ULTRA; an unknown name renders on HIGH (ULTRA is for fast
             // desktop GPUs).
             .unwrap_or(if request.photo.is_some() { 3 } else { 2 });
+        s.set_shadow_filter(request.shadow_filter, request.shadow_radius_m);
         s.resize(request.width, request.height);
         s.clock = request.animation_s;
+        // What plays, at the picture's clock: the clips on the scene and the flashes.
+        s.playback.clone_from(&request.playback);
+        s.playback.clock = request.animation_s;
         // What only this picture changes: the lamps' level, the exposure compensation and the
         // grade mixed in (set for every picture, the studio is kept for the next).
         s.lamp_level = request.lamp_level;
@@ -189,9 +193,12 @@ impl Pictures for GpuPictures {
                 "stats": {
                     "triangles": stats.triangles,
                     "draws": stats.draw_calls,
+                    "pass_calls": stats.pass_calls,
                     "instances": stats.instances,
                     "gpu_ms": stats.gpu_ms,
                     "gpu_passes": stats.gpu_passes,
+                    // The frame's water surfaces and how each was reflected (`ui.get`).
+                    "water": visioncraft::agents::water_json(&stats.water),
                 },
             }),
         })

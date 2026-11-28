@@ -98,11 +98,56 @@ Recipe, a time-of-day drag:
 - **One instance pool, batched draws** (`batch.rs`). Every item's instances live in one buffer.
   A frame plans all its passes before recording any (`plan_items`): per pass each cluster's
   level is found once and an item's runs once per level, then the visible runs of every item that
-  shares a pipeline, a material and a mesh (the same species in several plantings, the same rock
-  or chair placed many times, all impostors of one atlas) become one draw. Their pool indices go
-  into one list that a compute dispatch copies into a frame buffer before the first pass, nearest
-  first. Dissolving clusters and terrain chunks draw straight from the pool. Nothing in the
-  shaders changed: the gather copies the instance bits.
+  shares a pipeline, a texture set and a mesh (the same species in several plantings, the same
+  rock or chair placed many times, all impostors of one atlas) become one draw. Their pool
+  indices go into one list that a compute dispatch copies into a frame buffer before the first
+  pass, nearest first, in blocks of 64 instances a batch. Dissolving clusters, terrain chunks
+  and transparents draw straight from the pool.
+- **Culling without allocation, in 128 m blocks.** Each pass's cluster visibility is written
+  into one flat list of flags the renderer keeps (an item's at its range, remade only when items
+  change); every cluster keeps its own test, 4 ns on a town: a test of its 128 m block first
+  cost more than it saved there (a lookup through the block is more than a test, and a wide view
+  keeps most blocks in view). The instances stay sorted by their 8 m cell (the order the pictures
+  were made in: it decides which of two equally distant leaves shows); each cluster knows its
+  block of the ground grid (`Item::block_of`), and a block has the bounds of its clusters, which
+  `update_lods` uses: beyond the item's last level (hysteresis included), a block whose clusters
+  are all culled by distance and none dissolving is left out, which halves that stage on the
+  town. An item with an impostor draws those clusters as impostors, so there they still get
+  their sort keys (a distance and a dot product) and nothing else.
+- **One vertex buffer and one index buffer** for the static meshes (`batch.rs` `MeshRanges`): a
+  mesh holds a range of each, a draw names its index range and its base vertex, and a pass binds
+  the two buffers once (again only when a mesh of another arena follows). A mesh replaced by as
+  much or less data stays where it is; more takes a new range and the old one is freed (freed
+  ranges join their neighbours). An arena that is full grows, and its meshes keep their place,
+  until it is at the device's largest buffer; then a second one starts. Terrain chunks are in
+  the arenas too; only their layer weights (vertex slot 2) keep a buffer each.
+- **One material table** (a read-only storage buffer, group 1 binding 0): every material's
+  parameters by row, the endless ground's own being row 0. Group 1 is a material's *texture
+  set*, one bind group per set of six maps, shared by every material with those maps: all
+  untextured colours share one. So a batch may span materials: the gather writes each copied
+  instance its material's row and its mesh id into the spare components of its matrix's last
+  row (`m1.w`, `m2.w`; `m0.w` is the wind's frequency) and the shaders rebuild the matrix;
+  draws straight from the pool (dissolving clusters, terrain, transparents) name both in their
+  draw slot. Material values are therefore not uniform in a fragment stage, so no derivative
+  may be taken after a branch on one: each fragment stage that shades takes its screen
+  derivatives first, in uniform control flow (`scene.wgsl` `Derivs`), and hands them to `shade`
+  and `surface`. Chrome's shader compiler rejects a derivative taken later ("must only be
+  called from uniform control flow"); naga accepts one, so a unit test lists the functions that
+  take any. Per stage the scene pipelines bind at most three read-only storage buffers in the
+  fragment stage (the lights, their grid, the materials) and none in the vertex stage.
+- **One indirect buffer per frame** (`write_indirect`, `record`). A run of two or more batched
+  draws with the same pipeline, texture set and draw slot is one `multi_draw_indexed_indirect`
+  call: their `first_instance` points into the gathered buffer, which needs
+  `INDIRECT_FIRST_INSTANCE` (asked for where the adapter has it); without it every draw is a
+  direct call of the same arguments and the picture is the same. In the browser, wgpu's WebGPU
+  backend runs a multi-draw as a loop of indirect draws with no binds between them (one
+  JavaScript call a sub-draw). wgpu checks every indirect call on the CPU (the buffer's usage,
+  the offset's alignment, the arguments lying within the buffer); its GPU-side validation of
+  indirect arguments exists only behind `InstanceFlags::VALIDATION_INDIRECT_CALL`, which the
+  renderer does not set.
+  Dissolving clusters, impostor quads and transparents stay direct. `pass_draws` keeps counting
+  sub-draws; `pass_calls` (`view.render`'s stats, `window.__vcFrame`) counts the calls issued
+  per pass, a multi-draw being one.
 - **Shadows**: the near cascade every frame, the middle ones on alternate frames, the last one
   cached while the camera stays within its margin, each culled by its own cascade. The snow
   cover map (on a coast also the sea's bed) follows the eye in steps of eight texels and is
@@ -115,10 +160,83 @@ Recipe, a time-of-day drag:
   sun stops, every stale cascade draws, so the resting picture is the same as before.
   `finish_environment` (a picture of the live view) forces that refresh too; the offscreen
   stills start without any cache. The rule is `cascade_refresh` in `visioncraft-render`.
-- **The water reflection** is drawn only when the view frames water: the sea counts when a grid
-  of rays through the view lands on its side of the coast (`sea::sea_in_view`), a pond when its
-  clusters are in view. It draws the coarser levels, and leaves out what would be under 1.5
-  pixels of radius in its image (`MIN_REFLECTED_PX`): far herbs, stones and chairs.
+  **While instances move** (a clip playing: the posed parts of a model) `set_instance` no
+  longer drops the caches either. An item that moved makes stale only the cascades that hold
+  it (its bounds before or after the move, within the light-space bounds of the map as drawn)
+  and that shade a part of the view its shadow can be sampled in: the view depths from the end
+  of the cascade before, less their blend band, up to its own split (a door by the eye never
+  reaches the cached far cascade; the band's lower end is dropped when the cascade before no
+  longer covers its slice, after a jump of the camera), and the snow cover map only when the
+  item lies over its square. The near cascade draws every frame as ever. `set_item_shadow_cascades`
+  marks the cascades an item leaves. The rule is `Renderer::stale_moved` in `visioncraft-render`.
+  A mover the far cascade is spared for (no view samples its shadow from it) is not lost: the
+  reach of its shadow is kept (`far_dirty`) until the far map is drawn again, and every frame's
+  views test it, the camera's and the planar reflections' (a mirrored camera shades the same
+  shadow at another view depth), so the frame one samples it in draws the far map. **While the
+  sun moves** a mover's shadow in a middle or the far cascade refreshes at the sun's cadence
+  (`FAR_SUN_PERIOD`: the far one every fourth frame, the middle ones on their alternate
+  frames), like the sun's own; the frame after the sun stops is exact.
+- **The water reflections** are drawn only for water the view frames: the sea counts when a
+  grid of rays through the view lands on its side of the coast (`sea::sea_sight`), a pond when
+  its clusters are in view. They draw the coarser levels, and leave out what would be under
+  1.5 pixels of radius in their image (`MIN_REFLECTED_PX`): far herbs, stones and chairs. How
+  many planes get a pass is below.
+
+### Water: several planes, budgeted reflections (November 2026)
+
+Every visible water surface reflects its surroundings at a bounded cost (`water.rs`; asked for
+by scenes with a river, ponds and canals at different heights, two to five in view):
+
+- **Planes.** The visible water surfaces (the parts with a water material, the sea) are grouped
+  into planes by height (within 4 cm: two areas at one level share one) and scored by the
+  share of the render target they cover times 1 + the nearness of the nearest of them. A pond
+  reaching behind the eye counts the part of the view its box reaches into in front of the
+  eye. A plane lies at its largest surface's height when it first shows and keeps that height
+  while it still lies among its surfaces and the water within 5 cm of it covers at least
+  1 / 1.3 of what lies within 5 cm of the largest surface, so the mirror does not jump when two
+  areas trade size, and a plane of merged ponds moves to the one that comes to fill the view.
+  The shaders give water the layer of the nearest plane within 5 cm, so neighbouring planes
+  merge until they are 10 cm apart and no surface of one lies within 5 cm of the other: no
+  water samples another plane's layer (black outside that layer's scissor). The CPU
+  side is one pass over the water parts (tens at most) into buffers that are reused: a steady
+  frame allocates nothing for it.
+- **The sea competes.** The sea no longer always takes the planar pass, as it did before the
+  ranking (commit 59022aa changed this; GameCraft, the consumer, accepted it): it is one of
+  the planes, preferred over a pond unless the pond scores 1.3 times the sea's score, so a
+  garden pond next to the eye on a coast plot does not take Medium's one pass from the sea.
+- **Planar passes.** The best `Quality::water_planes` planes each draw the scene mirrored about
+  their height, coarser levels and nothing tiny: one pass per plane, into its own layer of one
+  array texture. Each pass is scissored to where its plane shows on screen (padded for the
+  ripples' lookup offset), so a pond over a fifth of the screen costs a fifth of the fill of
+  the old full-frame pass; its draw calls are the scene's, as before. The GPU time of all of
+  them together is the `reflection` entry of `stats.gpu_passes` (passes of one label are
+  summed), their draws that of `pass_draws`.
+- **The rest.** A pond whose plane got no pass marches the opaque scene of the frame along
+  its reflected ray when screen-space reflections are on (the glass march at half its reach
+  and half its steps), else takes the environment cube, darkened towards the horizon, as every
+  pond but one did before. The sea has no screen-space path: without a pass it falls back to
+  the sky (`environment`), whatever the screen-space setting.
+- **No flicker.** A plane keeps its pass until a challenger scores 1.3 times its own for 10
+  consecutive frames. These are the plain scores, the sea's included: its preference is that
+  same 1.3 already, so a pond takes the sea's held pass at 1.3 times the sea's score (not
+  1.3 squared), and the sea a pond's at 1.3 times the pond's.
+- **Stats.** `RenderStats::water` lists each visible surface with its height and its tier
+  (`planar`, `screen_space` or `environment`); over the control channel it is `water` in
+  `ui.get` and in a render's `stats` (`view.render`, `visioncraft-cli render`).
+
+| Preset | Planar reflection | Planes with a pass per frame | Screen-space reflections (glass, mirrors and the other water) |
+| --- | --- | --- | --- |
+| low | off: the environment cube | 0 | off |
+| medium | quarter size | 1 | on, a 2-pixel step |
+| high | half size | 2 | on, a 1-pixel step |
+| ultra | full size | 3 | on, a 1-pixel step |
+
+With one pond in view and one plane a frame, the pond's reflection is the one before, its pass
+scissored to the pond: what lies outside the pond's padded rectangle is black in the layer now,
+which no pixel of the pond reads as long as the ripples' shift stays within the padding (the
+wind's waves and rain's rings at their most tilt, over the pond's nearest view depth). With the
+sea in view as well, the pond and the sea now compete for that one pass (above). The frame times with 1, 3 and 5 ponds on a hardware GPU, before and after, are
+not measured yet: the build server's software adapter has none worth noting.
 
 ## Measured (November 2026)
 

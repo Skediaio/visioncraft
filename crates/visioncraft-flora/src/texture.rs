@@ -582,6 +582,8 @@ fn draw_unit(
                 draw_leaf(cv, c, a, l, seg, jitter(col, 0.12, rng));
             }
         }
+        // `aspect` (1 the standard drawing) scales the leaflets' angle and length: under 1 a
+        // narrower frond of stiffer-looking leaflets (a date palm's).
         LeafShape::FeatherFrond => {
             cv.line(base, at(0.98), len * 0.015, 0.5, mul(col, 0.75));
             for k in 0..30 {
@@ -596,8 +598,8 @@ fn draw_unit(
                     draw_leaf(
                         cv,
                         at(t),
-                        ang + s * 0.9,
-                        len * 0.32 * (1.0 - 0.6 * t),
+                        ang + s * (0.9 * aspect),
+                        len * (0.32 * aspect) * (1.0 - 0.6 * t),
                         seg,
                         jitter(col, 0.1, rng),
                     );
@@ -1519,8 +1521,58 @@ fn draw_flower(cv: &mut Canvas, p: &PlantParams, cell_var: u32, rng: &mut Rng) {
             cv.disc(c, full * 0.36, f.centre);
             cv.disc(c, full * 0.14, mul(f.centre, 0.6));
         }
+        FlowerShape::Bunch => bunch(cv, f, c, full, rng),
         FlowerShape::Plume | FlowerShape::Bottlebrush => {
             plume(cv, p, (c.0, c.1 + full), (c.0, c.1 - full), rng, f.shape);
+        }
+    }
+}
+
+/// A bunch of dates (FlowerShape::Bunch): from the stalk at the bottom centre of the cell
+/// (where the card attaches) fourteen strands spread a little and hang, each strung with oval
+/// fruits, greenish near the stalk and ripening to the fruit colour and the stalk colour's
+/// brown away from it. A date is 3-7 cm long and 2-3 cm wide (Wikipedia, "Phoenix dactylifera").
+fn bunch(cv: &mut Canvas, f: &crate::FlowerParams, c: (f32, f32), full: f32, rng: &mut Rng) {
+    let (cx, by) = (c.0, c.1 + full);
+    cv.line((cx - 2.0, by), (cx, by - 10.0), 1.8, 2.6, f.centre);
+    let fruit = LeafStyle {
+        shape: LeafShape::Elliptic,
+        aspect: 0.5,
+        serration: 0.0,
+        veins: false,
+    };
+    let green = mix(f.colour, [0.55, 0.58, 0.3], 0.6);
+    let strands = 14;
+    for k in 0..strands {
+        let x = (k as f32 + 0.5) / strands as f32 - 0.5;
+        let top = (cx + x * 6.0, by - 9.0);
+        let spread = x * full * 0.9;
+        let reach = full * (1.75 - 0.5 * x.abs()) * rng.range(0.8, 1.0);
+        cv.line(
+            top,
+            (top.0 + spread, top.1 - reach),
+            0.6,
+            0.4,
+            mul(f.centre, 0.85),
+        );
+        let n = 7 + rng.below(4);
+        for i in 0..n {
+            let t = i as f32 / n as f32;
+            let px = top.0 + spread * t + 2.5 * rng.sym();
+            let py = top.1 - reach * t;
+            let l = full * 0.16 * rng.range(0.85, 1.1);
+            let fc = mix(green, jitter(f.colour, 0.08, rng), smoothstep(0.0, 0.45, t));
+            let fc = mix(
+                fc,
+                f.centre,
+                0.55 * smoothstep(0.55, 1.0, t + 0.3 * rng.f()),
+            );
+            draw_leaf(cv, (px, py + l * 0.5), 0.25 * rng.sym(), l, fruit, fc);
+            cv.disc(
+                (px - l * 0.08, py - l * 0.1),
+                l * 0.1,
+                mix(fc, [1.0; 3], 0.45),
+            );
         }
     }
 }
@@ -2234,6 +2286,29 @@ fn bark(p: &PlantParams, n: usize) -> (Image, Image) {
                     let t = tile_fbm(u - v, v, 24, 6, 3, 62);
                     let h = (s * 0.6 + t * 0.6).min(1.0);
                     (h, mix(b.accent, b.colour, h))
+                }
+                BarkPattern::LeafBases => {
+                    // Diamond-shaped studs of persistent leaf bases in spiral rows (a date
+                    // palm's trunk: covered "with the bases of the old dry fronds, making it
+                    // rough", FAO, "Date Palm Cultivation", ch. 3), the seams between them
+                    // dark. Rows alternate by half a stud; an odd row count keeps that up
+                    // across the tile's wrap.
+                    let studs = per(0.12, 6, 24);
+                    let rows = per(0.2, 4, 16) | 1;
+                    let y = v * rows as f32;
+                    let x = u * studs as f32 + 0.5 * (y.floor() % 2.0);
+                    let dx = x.fract() * 2.0 - 1.0;
+                    let dy = y.fract() * 2.0 - 1.0;
+                    let d = dx.abs() + dy.abs() + 0.2 * (fine - 0.5);
+                    let stud = 1.0 - smoothstep(0.6, 1.1, d);
+                    (
+                        stud * (0.75 + 0.25 * fine) + 0.1 * fine,
+                        mix(
+                            mul(b.accent, 0.85 + 0.15 * fine),
+                            mul(b.colour, 0.9 + 0.2 * fine),
+                            stud,
+                        ),
+                    )
                 }
                 BarkPattern::Stem => {
                     let lines = 0.5 + 0.5 * sin(TAU * u * 24.0);

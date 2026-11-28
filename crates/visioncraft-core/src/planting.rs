@@ -28,6 +28,36 @@ pub struct Placement {
     pub layer: Option<u32>,
 }
 
+impl Placement {
+    /// The matrix a plant is drawn with: it scales, then rotates about +Y, then translates
+    /// (column-major, 16 numbers). The window's instance matrix (`plant_scene::group_numbered`),
+    /// before the years shown scale it; a moving part's world matrix is this times its
+    /// model-space matrix.
+    pub fn matrix(&self) -> crate::keyframes::Matrix {
+        let (s, c) = self.rotation_y_deg.to_radians().sin_cos();
+        let k = self.scale;
+        let [x, y, z] = self.position;
+        [
+            c * k,
+            0.0,
+            -s * k,
+            0.0,
+            0.0,
+            k,
+            0.0,
+            0.0,
+            s * k,
+            0.0,
+            c * k,
+            0.0,
+            x,
+            y,
+            z,
+            1.0,
+        ]
+    }
+}
+
 /// What is changed about one plant of a generator (see [`Generator::overrides`]).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1178,9 +1208,6 @@ fn run_tiers<'a>(
     }
 }
 
-/// Turns a generator into placements. `ground(x, z)` is the terrain height; a point with no
-/// ground goes to y = 0. A [`SurfaceFill`] needs its owner's mesh and gives nothing here: use
-/// [`evaluate_surface_fill`].
 /// [`evaluate`] with the rule of `avoid_buildings`: placements for which `blocked` is true are
 /// left out (the app and the automation give [`blocked_by_buildings`] the plant's size and their
 /// models). Generators without the switch evaluate as before.
@@ -1189,7 +1216,23 @@ pub fn evaluate_avoiding(
     ground: &dyn Fn(f32, f32) -> Option<f32>,
     blocked: &dyn Fn(&Placement) -> bool,
 ) -> Evaluation {
-    let mut e = evaluate(generator, ground);
+    let (list, truncated) = evaluate_avoiding_numbered(generator, ground, blocked);
+    Evaluation {
+        placements: list.into_iter().map(|(_, p)| p).collect(),
+        truncated,
+    }
+}
+
+/// [`evaluate_avoiding`] with each plant's number, the one `planting.replace_placement` and
+/// `planting.remove_placement` count by ([`evaluate_numbered`]): those the rule leaves out are
+/// missing, the others keep their numbers.
+pub fn evaluate_avoiding_numbered(
+    generator: &Generator,
+    ground: &dyn Fn(f32, f32) -> Option<f32>,
+    blocked: &dyn Fn(&Placement) -> bool,
+) -> (Vec<(usize, Placement)>, bool) {
+    let e = evaluate_raw(generator, ground);
+    let mut list = numbered(generator, e.placements);
     let avoid = match generator {
         Generator::SplineMass(g) => g.avoid_buildings,
         Generator::AreaScatter(g) => g.avoid_buildings,
@@ -1197,11 +1240,10 @@ pub fn evaluate_avoiding(
         _ => false,
     };
     if avoid {
-        e.placements.retain(|p| !blocked(p));
+        list.retain(|(_, p)| !blocked(p));
     }
-    e
+    (list, e.truncated)
 }
-
 /// Whether a plant `height` tall with a crown `radius` at `place` would stand on or in a
 /// building: its ground point is more than 30 cm above `open_ground` (the terrain and areas
 /// there: it stands on a roof, a canopy or a slab), or anything is above it lower than its top,
@@ -1290,6 +1332,9 @@ fn spread_variants(ps: &mut [Placement]) {
     }
 }
 
+/// Turns a generator into placements. `ground(x, z)` is the terrain height; a point with no
+/// ground goes to y = 0. A [`SurfaceFill`] needs its owner's mesh and gives nothing here: use
+/// [`evaluate_surface_fill`].
 pub fn evaluate(generator: &Generator, ground: &dyn Fn(f32, f32) -> Option<f32>) -> Evaluation {
     let mut e = evaluate_raw(generator, ground);
     if generator.overrides().is_some_and(|o| !o.is_empty()) {
@@ -2078,6 +2123,34 @@ mod tests {
         None
     }
 
+    #[test]
+    fn a_placement_matrix_scales_rotates_then_moves() {
+        let p = Placement {
+            asset: "oak".into(),
+            position: [3.0, 0.2, -1.5],
+            rotation_y_deg: 90.0,
+            scale: 2.0,
+            variant: 0,
+            layer: None,
+        };
+        let m = p.matrix();
+        let at = |v: [f32; 3]| {
+            std::array::from_fn(|r| (0..3).map(|k| m[k * 4 + r] * v[k]).sum::<f32>() + m[12 + r])
+        };
+        let near = |a: [f32; 3], b: [f32; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-6);
+        // A quarter turn counter-clockwise seen from above (+x goes to -z, +z to +x), twice as
+        // big, then moved.
+        for (v, want) in [
+            ([1.0, 0.0, 0.0], [3.0, 0.2, -3.5]),
+            ([0.0, 0.0, 1.0], [5.0, 0.2, -1.5]),
+            ([0.0, 1.0, 0.0], [3.0, 2.2, -1.5]),
+            ([0.0, 0.0, 0.0], [3.0, 0.2, -1.5]),
+        ] {
+            assert!(near(at(v), want), "{v:?} goes to {:?}", at(v));
+        }
+        assert_eq!((m[3], m[7], m[11], m[15]), (0.0, 0.0, 0.0, 1.0));
+    }
+
     fn area(outline: Vec<[f32; 2]>, density: f32) -> AreaScatter {
         AreaScatter {
             overrides: Default::default(),
@@ -2290,6 +2363,61 @@ mod tests {
         g.avoid_buildings = true;
         let none = evaluate_avoiding(&Generator::SplineMass(g), &flat, &|_| true);
         assert!(none.placements.is_empty());
+    }
+
+    #[test]
+    fn the_building_rule_keeps_the_plants_numbers() {
+        // An open line of five, 5 m apart, with the building rule on; the plants past 12 m east
+        // stand in a building.
+        let mut g = spline(false, Spacing::Count(5));
+        g.points = vec![[0.0, 0.0], [20.0, 0.0]];
+        g.spacing_jitter = 0.0;
+        g.avoid_buildings = true;
+        let generator = Generator::SplineMass(g);
+        let flat = |_, _| Some(0.0);
+        let in_building = |p: &Placement| p.position[0] > 12.0;
+        let (kept, truncated) = evaluate_avoiding_numbered(&generator, &flat, &in_building);
+        assert!(!truncated);
+        // The same placements as without numbers, in the same order.
+        let plain = evaluate_avoiding(&generator, &flat, &in_building).placements;
+        let theirs: Vec<Placement> = kept.iter().map(|(_, p)| p.clone()).collect();
+        assert_eq!(theirs, plain);
+        assert_eq!(plain.len(), 3, "{plain:?}");
+        // Each keeps the number it had before the rule: 0, 1 and 2 of 0 to 4, not 0 to 2.
+        assert_eq!(
+            kept.iter().map(|(n, _)| *n).collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
+        assert!(kept.iter().all(|(_, p)| p.position[0] <= 12.0));
+        // Nothing blocked: every number, in order; with an edit too, plant 1 keeps its number.
+        let (all, _) = evaluate_avoiding_numbered(&generator, &flat, &|_| false);
+        assert_eq!(
+            all.iter().map(|(n, _)| *n).collect::<Vec<_>>(),
+            vec![0, 1, 2, 3, 4]
+        );
+        let mut edited = generator.clone();
+        if let Generator::SplineMass(s) = &mut edited {
+            s.overrides.insert(
+                1,
+                PlacementOverride {
+                    asset: Some("flora:other".into()),
+                    ..Default::default()
+                },
+            );
+            s.overrides.insert(
+                3,
+                PlacementOverride {
+                    removed: true,
+                    ..Default::default()
+                },
+            );
+        }
+        let (all, _) = evaluate_avoiding_numbered(&edited, &flat, &|_| false);
+        assert_eq!(
+            all.iter().map(|(n, _)| *n).collect::<Vec<_>>(),
+            vec![0, 1, 2, 4]
+        );
+        assert_eq!(all[1].1.asset, "flora:other");
     }
 
     #[test]

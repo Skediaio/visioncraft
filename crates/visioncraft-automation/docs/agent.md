@@ -45,6 +45,18 @@ same over MCP (`visioncraft-cli mcp`), JSON lines (`visioncraft-cli serve`) and 
   frame reached the screen, when plants, library files and the sky bakes were done, the stages
   by time, and per placed catalogue asset which level of detail it shows and why (`lods`). Read
   it when the person says loading is slow or a model looks coarse up close.
+- **Water.** Every water surface reflects its surroundings within the quality's budget
+  (docs/performance.md): at Medium one water plane a frame gets a planar mirrored pass (two at
+  High, three at Ultra), the others reflect what is on screen (`screen_space`), or the sky cube
+  (`environment`) when screen-space reflections are off; the sea without a pass always takes
+  the sky. Surfaces at one height share a plane; the sea competes with the ponds for the
+  passes, ahead of a pond unless the pond scores 1.3 times its score; whichever holds a pass
+  keeps it until the other scores 1.3 times its own for 10 frames.
+  `ui.get` → `water` lists the last frame's visible surfaces in order of height, each
+  `{item, part, material, level_m, tier}` (the renderer's numbers: `ItemId::index`,
+  `MaterialId::index`; the sea is `{"surface": "sea", ...}`), and `quality.waterPlanes` is the
+  budget. Read it to tell which ponds mirror their surroundings in a picture; a render's `stats`
+  carries the same list under `water`.
 - **Editing one plant.** `planting.replace_placement {planting, index, asset?, scale?, offset?}`
   swaps, resizes or moves one plant; `planting.remove_placement {planting, index}` takes it out;
   `planting.reset_placements {planting, index?}` restores one or all. The planting stays one
@@ -72,7 +84,7 @@ same over MCP (`visioncraft-cli mcp`), JSON lines (`visioncraft-cli serve`) and 
 4. **Render.** `doc_render_preview {"viewpoint": ...}`: a PNG and what was drawn (camera, sun,
    `plantsPending`: 0 means every plant is drawn). Its `time` changes the picture only.
 5. **Verify** against the plan: `doc_inspect` (`area_m2`, `footprint_m2`, plant `count`),
-   `query.measure`, `query.plants_for_light {point | outline | hours}` (species ranked by the light a spot gets), `query.light_check` (every placed plant against its light range), `query.quantities {ids?, layer?}` (areas, lengths, volumes and plant counts per object, per material and per asset; linked models too, per body with surface and volume (closed bodies), scale applied, in `models`; plants are counted with the renderer's building rule, `counted_with: "scene"`), `query.raycast`, `query.sun_hours {point | outline, season | date, cell_m?, years?, plants?}` (hours of direct sun at a spot or as a grid over an area, with shadow from models, shapes, terrain and plant crowns; `view.set_sun_map` draws the same grid on the ground, recipe 26), `query.sky_view {point, normal?, years?}` (how open a spot is: the sky view factor 0..1, crowns letting sky through by their leaf density; recipe 43), `query.ground_height`, `query.ground_length`, `query.sun`. A film of camera moves is `film.*` (recipe 27); `film.preview` reads it without drawing.
+   `query.measure`, `query.plants_for_light {point | outline | hours}` (species ranked by the light a spot gets), `query.light_check` (every placed plant against its light range), `query.quantities {ids?, layer?}` (areas, lengths, volumes and plant counts per object, per material and per asset; linked models too, per body with surface and volume (closed bodies), scale applied, in `models`; plants are counted with the renderer's building rule, `counted_with: "scene"`), `query.raycast`, `query.sun_hours {point | outline, season | date, cell_m?, years?, plants?}` (hours of direct sun at a spot or as a grid over an area, with shadow from models, shapes, terrain and plant crowns; `view.set_sun_map` draws the same grid on the ground, recipe 26), `query.sky_view {point, normal?, years?}` (how open a spot is: the sky view factor 0..1, crowns letting sky through by their leaf density; recipe 43), `query.ground_height`, `query.ground_length`, `query.sun`, and `query.clips {model}` (the animation clips of a model that moves in parts: name, length and channel count; recipe 14, which also plays them with `model.play_clip`). A film of camera moves is `film.*` (recipe 27); `film.preview` reads it without drawing.
    Save with `command_run file.save {"path": ...}`.
 
 ## Recipes
@@ -184,7 +196,10 @@ dithers into whatever lies under it instead of ending on a line, and a lawn's gr
 into the band, thinning towards the area's inside. `planting.add_floor` sets 1.5 m by default
 (`edge_blend_m` there too; 0 gives the hard edge back). Only the band's triangles are drawn as
 cutouts. A render's result (`view.render`, `visioncraft-cli render`) carries `stats`: the frame's
-`triangles`, `draws` and `gpu_ms` (null without GPU timestamp queries).
+`triangles`, `draws`, `pass_calls` (the draw calls issued per pass group: shadow, depth,
+reflection, forward, post; `draws` counts every sub-draw of an indirect multi-draw, a multi-draw
+is one call), `gpu_ms` (null without GPU timestamp queries) and `water` (each visible water
+surface with its height and how it was reflected: see Water above).
 
 ### 8. Lamps, and the garden at dusk
 
@@ -304,9 +319,21 @@ default at cover 0.35) or `overcast` (soft shadows, little direct sun); they dri
 and show in reflections and in the ambient light. The rendering quality and
 the texture resolution belong to the window, not the project: set them over the control channel
 with `ui.set {"quality": "auto" | "low" | "medium" | "high" | "ultra", "textures": "auto" | "1k"
-| "2k" | "4k"}`; `view.render` takes its own `quality`. For a final picture use `view.render
+| "2k" | "4k"}`; `view.render` takes its own `quality`. The presets also set how many water
+planes a frame mirrors (Low none, Medium 1, High 2, Ultra 3: the Water bullet above). For a final picture use `view.render
 {"quality": "photo"}`: many frames averaged at ULTRA give soft shadows with real penumbrae,
 smooth edges and leaves without shimmer (seconds to minutes); recipe 41 has the lens.
+`view.render` also takes `shadow_filter` (`hard`, `pcf4`, `pcf9`, `pcf16` or `pcss`) and
+`shadow_radius_m` (0 to 1) to filter the sun's shadows of that one picture over the preset's: hard
+is the sharp edge, pcf4 and pcf9 fixed grids a few shadow texels wide, pcf16 16 taps spread over
+the radius in metres in the world, the same penumbra in every cascade, and pcss (percentage-closer
+soft shadows) the same 16 taps over a penumbra that grows with the distance to the occluder: sharp
+where a caster meets its shadow (never narrower than half a shadow texel), at most the radius (0.15
+unless given), about twice as wide as a real sun's (the sun's disc as drawn is twice the real
+one's angular radius). The pcf16 disk never gets narrower than 1.5 shadow texels, so with it a
+radius of 0 is not a hard edge (`hard` is). Give `shadow_radius_m` with pcf16 or pcss, or alone at
+quality ultra or photo (with hard, pcf4 or pcf9, or alone at another quality: an error); pcf9,
+pcf16 and pcss run as pcf4 at quality low and medium.
 
 Lamps and lit rooms follow the sun: on after sunset at the time shown, off before. `view.set
 {"lights": true}` or `false` fixes them for the project (the window's Lights button does the same),
@@ -342,6 +369,57 @@ project, `true` back on.
 
 `object.add` records the file (relative to the project) and its size; it is placed like any
 catalogue asset as `user:<id>`. `object.remove` is refused while a planting uses it.
+
+A model with animations (glTF node animation: parts that turn, slide or tilt on keyframes) lists
+its clips with `query.clips {"model": "user:uo1"}`: `{clips: [{name, duration_s, channels}],
+warnings}`, the channel count of each and what was left out of the file's animations and why (a
+malformed channel: the model still loads); a model that stands still answers `{"clips": [],
+"warnings": []}`. A catalogue asset is asked by its id, and its clips are those of its first
+level of detail. That level also poses every level of the asset, so `warnings` has a line for
+each other level whose file is at hand and differs from the first: a node the first level has no
+bone for (that part is drawn at rest), a clip that is missing there or lasts another length (the
+first level's plays). The moving parts of a level are matched to the first level's bones by node
+name without a trailing `_LOD<n>` (`door_LOD1` is `door`); only where a name is missing or appears
+twice in a level is the node's index matched instead, and the warning says so. On the command line
+the file is read from the project's folder or the library folder (`--assets`); in a window a library
+model's clips are known once it is loaded.
+
+A clip plays on the placed objects, not on the model: `model.play_clip {"object": "g4", "clip":
+"fire", "start_s": 12.5}` (or `"loop": true`). `object` is a planting (`g4`: every object it
+places) or one of its objects (`g4#12`, counted from 0 as `planting.replace_placement` counts
+them); only the objects the window draws are reached: one the building rule, the sea or a hidden
+layer leaves out is an error that says why. `clip` is a clip's name or its index from 0 (an exact name
+first; of two clips with the same name the lowest index; a name that is not there is an error
+that lists them). The clip is
+sampled at the session's clock from `start_s` (the clock now: a window's frame time, a film's
+time in `film.render`, the `animation_s` of the last picture on the command line), so the same
+time always gives the same pose. The same clip on the same object starts again; several clips
+may play at once, and where two move the same property the one started later wins; a clip that
+ends holds its last pose until `model.stop_clip {"object": "g4", "clip"?: ...}` (every clip
+without `clip`; a planting stops the clips on each of its objects too, an object that
+is not drawn any more is stopped too, and one object of a
+planting that plays as a whole cannot be stopped alone: stop the planting). `query.part_pose {"object": "g4", "t"?: ..., "space"?: ...}` reads the pose back: per object the matrix (column-major, 16 numbers) of every moving part at time `t`, the
+clips on it composed as they are drawn. Only the objects the window draws are reached: one the
+building rule, the sea or a hidden layer leaves out is missing, and naming it (`g4#7`) is an
+error that says why (it stands inside a building, it is under the sea, its layer is hidden). By default (`"space": "world"`) each
+matrix is the one the window draws the part with: the plant's `placement` (also in the answer:
+scale, then Y rotation, then translation, grown for the years shown, an imported object raised
+to its lowest point as the window draws it) times the part's matrix in model space. With `"space": "model"` it is that matrix on its own, whatever the plant's
+placement. `effect.flash {"position": [x, y, z], "color": [r, g,
+b], "intensity": 2000, "range_m": 4, "size_m"?: 0.15, "frames"?: 2, "seconds"?, "start_s"?}` is a
+short-lived flash there: a point light (lumens, as a lamp's) and a glowing quad facing the
+camera, for `frames` frames of the rate in force (a film's fps, so the same frames show it every
+time; 60 a second in a still) or for `seconds`, from `start_s` (the clock now); at most 16 flash
+at once (whose times overlap the new one's; `frames` are counted at 60 a second, or the rate
+in force if faster), and over it the oldest of those is dropped:
+flashes one after another are not counted together. Flashes with `start_s` are kept, at most 256:
+over it the one that ends first is dropped, and the answer's `note` says so. A flash without `start_s` starts at the clock now and is
+forgotten once over; one with `start_s` is kept, so every render of a film shows it. In a
+window the clock is the window's own frame time (seconds since it opened), not a film's: a clip
+or a flash meant for `film.render` takes its `start_s` on the film's time explicitly (`"start_s":
+1.5` is 1.5 s into the film), or it plays at the window's clock and the film does not see it.
+Playing and flashing are session state: not saved with the project, not an undo step, and
+gone with it: `file.new` and `file.open` start with nothing playing and no flash.
 
 ### 15. The example garden
 
@@ -1500,6 +1578,7 @@ dense crown at 0.3 is dark.
   {"id": "terrain.set_auto", "params": {}},
   {"id": "terrain.set_tiling", "params": {"hex": true}},
   {"id": "terrain.set_cover", "params": {}},
+  {"id": "terrain.set_layer_detail", "params": {"layer": 0, "texture": "lawn", "tile_m": 0.5, "strength": 0.6, "fade_m": 20}},
   {"id": "rock.scatter", "params": {"outline": [[0, 0], [80, 0], [80, 60], [0, 60]], "density_per_100m2": 2.5, "seed": 4}},
   {"id": "rock.add", "params": {"position": [36, 22], "size_m": 3.2, "shape": "outcrop", "yaw_deg": 20, "seed": 2}},
   {"id": "deadwood.scatter", "params": {"planting": "g1", "density_per_100m2": 1.5, "seed": 2}},
@@ -1524,6 +1603,15 @@ layers blend by their height maps, so rock pokes up through the grass where its 
 instead of fading in. `terrain.set_tiling {"hex": true}` hex-tiles every layer's maps seen from
 above, each hexagon shifted and turned at random, so no repeat of a tile shows over a field (three
 samples per layer instead of one).
+
+`terrain.set_layer_detail` gives one layer a second, finer detail texture over its own maps (as a
+landscape's detail textures do): `texture` is a texture or material id the library resolves (a
+project material, or a library material's id: its colour and normal maps), tiled once per `tile_m`
+metres, modulating the layer by `strength` (0..1) at full strength near the eye and faded out by
+`fade_m`, projected triplanar on steep ground so it does not stretch. The recipe above gives the
+lawn its own maps half a metre apart, so the grass near the camera shows blades rather than a
+blur; the detail keeps the layer's brightness (the texture is taken relative to its mean). Without
+`texture` the detail is removed; `document.inspect` lists each layer's under `terrain.detail`.
 
 `rock.add` places one rock (`boulder`, `slab`, `outcrop` or `cobble`, `size_m` its width, a
 `seed` for its variant), generated with fracture faces and a rough surface, or a CC0 scan with

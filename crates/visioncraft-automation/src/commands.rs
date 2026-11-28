@@ -5,7 +5,7 @@
 use crate::MAX_BATCH_STEPS;
 use crate::docs::{CommandDoc, ParamDoc, from_spec};
 use crate::fields::{Fields, describe, shorten};
-use crate::host::{Host, PhotoRequest, RenderRequest, missing_json};
+use crate::host::{Host, PhotoRequest, PictureShadowFilter, RenderRequest, missing_json};
 use crate::inspect::{self, Verbosity};
 use serde_json::{Map, Value, json};
 use std::path::{Path, PathBuf};
@@ -270,6 +270,216 @@ pub fn host_docs() -> Vec<CommandDoc> {
             ],
             "{hit, owner, kind: model|shape|terrain|plant, face, body, point, normal, distance; a plant: owner `g4#12` (planting and plant), part crown|trunk, planting, name, asset}",
             json!({"origin": [0, 20, 0], "direction": [0, -1, 0]}),
+            false,
+        ),
+        host_doc(
+            "query.clips",
+            "Animations",
+            "The animation clips of a model that moves in parts (glTF node animation): each clip's name, how long it lasts in seconds and how many channels it has. `model` is a catalogue asset id, or `user:<id>` for an imported object (`object.list`); a model that stands still answers an empty list. `warnings` says what was left out of the file's animations and why (a malformed channel; an animation that moves nothing here). A catalogue asset's clips are those of its first level of detail, which also poses every level of the asset; `warnings` then has a line for each other level whose file is at hand and differs from the first: a node the first level has no bone for (that part is drawn at rest), a clip that is missing there or lasts another length (the first level's plays). The moving parts of a level are matched to the first level's bones by node name without a trailing `_LOD<n>`; by node index only where a name is missing or appears twice in a level (which the warning says). The model's file has to be at hand: an imported object's always is, a library model's once it is loaded (in a window) or from the library folder (`visioncraft-cli`, `--assets`).",
+            vec![p(
+                "model",
+                "string",
+                None,
+                true,
+                None,
+                &[],
+                "A catalogue asset id, or `user:<id>` for an imported object",
+            )],
+            "{clips: [{name, duration_s, channels}], warnings: [string]}",
+            json!({"model": "user:uo1"}),
+            false,
+        ),
+        host_doc(
+            "model.play_clip",
+            "Play Clip",
+            "Plays an animation clip of a model on the objects a planting places (glTF node animation; `query.clips` lists a model's clips). `object` is a planting (`g4`: every object it places) or one of its objects (`g4#12`, counted from 0 as `planting.replace_placement` counts them). Only the objects the window draws are reached: one the building rule, the sea or a hidden layer leaves out is an error that says why. `clip` is a clip's name, or its index from 0: an exact name wins, then an index (a whole number, or a numeric string); a name that is not there is an error that lists the clips, and of two clips with the same name the one with the lowest index plays. The clip is sampled at the session's clock (a window's frame time, a film's time in film.render, the `animation_s` of a still) from `start_s` (the clock now; in a window that is its frame time, so a clip for film.render gives `start_s` on the film's time). The same clip on the same object starts again; several clips may play at once, and where two move the same property the one started later wins. A clip that ends holds its last pose until `model.stop_clip`, unless `loop` is set. Playing is session state: not saved and not an undo step. The model's file has to be at hand, as for `query.clips`; a model without clips is an error.",
+            vec![
+                p(
+                    "object",
+                    "string",
+                    None,
+                    true,
+                    None,
+                    &[],
+                    "A planting (`g4`) or one of its drawn objects (`g4#12`)",
+                ),
+                p(
+                    "clip",
+                    "string | integer",
+                    None,
+                    true,
+                    None,
+                    &[],
+                    "The clip's name, or its index from 0",
+                ),
+                p(
+                    "start_s",
+                    "number",
+                    Some("s"),
+                    false,
+                    Some("the session's clock"),
+                    &[],
+                    "When the clip starts, on the session's clock",
+                ),
+                p(
+                    "loop",
+                    "boolean",
+                    None,
+                    false,
+                    Some("false"),
+                    &[],
+                    "Start over at the clip's end",
+                ),
+            ],
+            "{object, planting, plant, plants, clip, start_s, loop, duration_s, restarted, playing}",
+            json!({"object": "g4", "clip": "fire", "start_s": 12.5}),
+            false,
+        ),
+        host_doc(
+            "model.stop_clip",
+            "Stop Clip",
+            "Stops the clips playing on the objects a planting places (`object` as `model.play_clip` takes it): of `clip` only, or every clip without it. A planting (`g4`) stops the clips on each of its objects (`g4#3`) too; one object of a planting a clip plays on as a whole cannot be stopped on its own (an error says to stop the planting). A plant that is not drawn any more (the building rule, the sea, a hidden layer) is stopped too. A stopped part is at rest again.",
+            vec![
+                p(
+                    "object",
+                    "string",
+                    None,
+                    true,
+                    None,
+                    &[],
+                    "A planting (`g4`) or one of its objects (`g4#12`), drawn or not",
+                ),
+                p(
+                    "clip",
+                    "string | integer",
+                    None,
+                    false,
+                    Some("every clip"),
+                    &[],
+                    "Only this clip (its name or index)",
+                ),
+            ],
+            "{object, stopped, playing}",
+            json!({"object": "g4"}),
+            false,
+        ),
+        host_doc(
+            "query.part_pose",
+            "Part Pose",
+            "For each object `object` names (a planting `g4`, or one of its objects `g4#12`) among the plants the window draws, the matrix of every moving part of its model at clock time `t` (the session's clock now): the clips playing on it composed as they are drawn (the one started later wins where they share a property), a part at rest without any. In `space` `world` (the default) as the window draws it: the plant's `placement` (scale, then Y rotation, then translation, grown for the years shown; an imported object is raised to its lowest point, as the window draws it) times the part's matrix in model space; in `model` that matrix on its own. Column-major, 16 numbers, as the renderer takes a matrix. A plant the building rule, the sea or a hidden layer leaves out is not reached: naming it is an error that says why. The model's file has to be at hand, as for `query.clips`.",
+            vec![
+                p(
+                    "object",
+                    "string",
+                    None,
+                    true,
+                    None,
+                    &[],
+                    "A planting (`g4`) or one of its drawn objects (`g4#12`)",
+                ),
+                p(
+                    "t",
+                    "number",
+                    Some("s"),
+                    false,
+                    Some("the session's clock"),
+                    &[],
+                    "The time on the session's clock",
+                ),
+                p(
+                    "space",
+                    "string",
+                    None,
+                    false,
+                    Some("world"),
+                    &["world", "model"],
+                    "`world`: as the window draws it, the plant's `placement` times the part's matrix in model space; `model`: the part's matrix on its own",
+                ),
+            ],
+            "{object, t, space, plants: [{plant, asset, placement, posed, clips, parts: [[16 numbers, column-major], ...]}]}",
+            json!({"object": "g4", "t": 12.75}),
+            false,
+        ),
+        host_doc(
+            "effect.flash",
+            "Flash",
+            "A short-lived flash at `position`: a point light of `color` (linear red, green, blue, 0..1), `intensity` in lumens and `range_m`, and when `size_m` is above 0 a glowing quad of that side facing the camera. It lasts `frames` frames (default 2) or `seconds`, not both, from `start_s` (the clock now), then goes. Without `start_s` it is forgotten once over; with it, it is on a film's time and kept for every render of the film. In a window the clock now is the window's frame time, so a flash for film.render gives `start_s` on the film's time. A frame is 1/fps of the rate in force where it is drawn: the film's in film.render, so the same frames show it every time; a window's own rate live; 60 a second in a still. Renderer-side and cheap: at most 16 flashes at once (whose times overlap the new one's, `frames` counted at 60 a second or the rate in force if faster), over it the oldest of those is dropped; flashes at other times are not counted, so a film may schedule as many as it likes one after another. A live flash (without `start_s`) that is over is forgotten when the next one comes; flashes with a `start_s` are kept, at most 256 of them: over it the one that ends first is dropped (the answer's `note` says so). Answers the flash's `id`. Session state: not saved and not an undo step.",
+            vec![
+                p(
+                    "position",
+                    "[x, y, z]",
+                    Some("m"),
+                    true,
+                    None,
+                    &[],
+                    "Where the flash is",
+                ),
+                p(
+                    "color",
+                    "[r, g, b]",
+                    None,
+                    true,
+                    None,
+                    &[],
+                    "Linear red, green and blue, each 0..1",
+                ),
+                p(
+                    "intensity",
+                    "number",
+                    Some("lm"),
+                    true,
+                    None,
+                    &[],
+                    "Luminous flux of its light, as a lamp's",
+                ),
+                p(
+                    "range_m",
+                    "number",
+                    Some("m"),
+                    true,
+                    None,
+                    &[],
+                    "Where its light has faded to zero",
+                ),
+                p(
+                    "size_m",
+                    "number",
+                    Some("m"),
+                    false,
+                    Some("0.15"),
+                    &[],
+                    "Side of the glowing quad; 0 for none",
+                ),
+                p(
+                    "frames",
+                    "integer",
+                    None,
+                    false,
+                    Some("2"),
+                    &[],
+                    "How many frames it lasts (not with `seconds`), 1..1000",
+                ),
+                p(
+                    "seconds",
+                    "number",
+                    Some("s"),
+                    false,
+                    None,
+                    &[],
+                    "How long it lasts (not with `frames`)",
+                ),
+                p(
+                    "start_s",
+                    "number",
+                    Some("s"),
+                    false,
+                    Some("the session's clock"),
+                    &[],
+                    "When it starts, on the session's clock",
+                ),
+            ],
+            "{id, start_s, frames | seconds, size_m, flashes, note?}",
+            json!({"position": [0, 1.5, 0], "color": [1, 0.8, 0.5], "intensity": 2000, "range_m": 4}),
             false,
         ),
         host_doc(
@@ -981,6 +1191,24 @@ pub fn host_docs() -> Vec<CommandDoc> {
                     "The renderer's quality preset; photo averages `samples` frames at ULTRA (soft shadows, smooth edges and occlusion, optional depth of field), taking every lens setting it is not given from view.set_photo",
                 ),
                 p(
+                    "shadow_filter",
+                    "string",
+                    None,
+                    false,
+                    Some("the preset's"),
+                    &["hard", "pcf4", "pcf9", "pcf16", "pcss"],
+                    "The sun's shadow filter for this picture, over the preset's: hard is one comparison tap (the sharpest edge); pcf4 and pcf9 are fixed 2x2 and 3x3 grids a few shadow texels wide; pcf16 spreads 16 taps (a disk, never narrower than 1.5 shadow texels) over `shadow_radius_m` metres in the world, the same penumbra in every cascade; pcss (percentage-closer soft shadows) spreads the same 16 taps over a penumbra that grows with the distance to the occluder: sharp where a caster meets its shadow (never narrower than half a shadow texel), at most `shadow_radius_m` metres (0.15 unless given), about twice as wide as a real sun's (the sun's disc as drawn is twice the real one's angular radius). At quality low and medium only the 1- and 4-tap filters are compiled: pcf9, pcf16 and pcss run as pcf4 there",
+                ),
+                p(
+                    "shadow_radius_m",
+                    "number",
+                    Some("m"),
+                    false,
+                    Some("0.03"),
+                    &[],
+                    "The penumbra's radius in the world for this picture, 0 to 1, over the preset's (pcss: its largest): only the 16-tap filters spread over it, so it needs one: `shadow_filter` pcf16 or pcss, or alone a preset that filters with 16 taps (ultra, photo); with anything else it is an error. The pcf16 disk never gets narrower than 1.5 shadow texels, so 0 is not a hard edge (that is `shadow_filter` hard), and beyond 6 texels of a cascade the penumbra stops growing there",
+                ),
+                p(
                     "samples",
                     "integer",
                     None,
@@ -1559,6 +1787,21 @@ pub fn execute(host: &mut dyn Host, id: &str, params: &Value) -> Result<Value, S
             inspect::light_check_json(session, state, &q)
         }
         "planting.add_border" => add_border_host(host, params),
+        "model.play_clip" => crate::playback::play_clip(host, id, params),
+        "model.stop_clip" => crate::playback::stop_clip(host, id, params),
+        "query.part_pose" => crate::playback::part_pose(host, id, params),
+        "effect.flash" => crate::playback::flash(host, id, params),
+        "query.clips" => {
+            Fields::new(id, "parameter", Some(params), &["model"])?;
+            let model: String = need(id, params, "model")?;
+            host.animation(&model)
+                .ok_or_else(|| {
+                    format!(
+                        "{id}: this session has no model files; the window, `visioncraft-cli` and the MCP server answer it"
+                    )
+                })?
+                .map(|animation| clips_json(&animation))
+        }
         "query.ground_length" => {
             Fields::new(id, "parameter", Some(params), &["path"])?;
             let path = need::<Vec<[f32; 2]>>(id, params, "path")?;
@@ -1849,6 +2092,9 @@ impl EditState {
     }
 }
 
+/// The frames a second of a still: what a flash's `frames` count in outside a film.
+const STILL_FPS: f64 = 60.0;
+
 fn file_new(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
     Fields::new("file.new", "parameter", Some(params), &[])?;
     let (session, state) = host.parts();
@@ -1857,6 +2103,10 @@ fn file_new(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
     state.models.clear();
     state.missing.clear();
     state.saved = Some(Project::default());
+    // What played, played on the project that went.
+    if let Some(p) = host.playback() {
+        p.stop_all();
+    }
     Ok(json!({"models": 0}))
 }
 
@@ -1878,12 +2128,18 @@ fn file_open(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
     state.missing.clear();
     state.saved = Some(project.clone());
     state.sync_models(&project);
+    let path = state.file.as_ref().map(|f| f.display().to_string());
+    let missing = missing_json(state, &project);
+    // What played, played on the project that went.
+    if let Some(p) = host.playback() {
+        p.stop_all();
+    }
     Ok(json!({
-        "path": state.file.as_ref().map(|f| f.display().to_string()),
+        "path": path,
         "models": project.models.len(), "shapes": project.shapes.len(),
         "generators": project.generators.len(), "lights": project.lights.len(),
         "viewpoints": project.viewpoints.len(), "films": project.films.len(),
-        "missingModels": missing_json(state, &project),
+        "missingModels": missing,
     }))
 }
 
@@ -1953,6 +2209,17 @@ fn file_save(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
     state.file = Some(target.clone());
     state.saved = Some(project);
     Ok(json!({"path": target.display().to_string(), "bytes": bytes.len()}))
+}
+
+/// `query.clips`'s answer: per clip its name, its length in seconds and its channel count, and
+/// what was left out of the file's animations and why.
+fn clips_json(animation: &visioncraft_core::Animation) -> Value {
+    let clips: Vec<Value> = animation
+        .clips
+        .iter()
+        .map(|c| json!({"name": c.name, "duration_s": c.duration, "channels": c.channels.len()}))
+        .collect();
+    json!({ "clips": clips, "warnings": animation.warnings })
 }
 
 fn catalog_search(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
@@ -2250,6 +2517,8 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
             "lights",
             "exposure_offset_ev",
             "quality",
+            "shadow_filter",
+            "shadow_radius_m",
             "years",
             "samples",
             "aperture",
@@ -2273,6 +2542,41 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
         return Err(format!(
             "{id}: `quality` must be low, medium, high, ultra or photo, got `{}`",
             shorten(quality)
+        ));
+    }
+    // The sun's shadow filter over the preset's, for this picture only.
+    let shadow_filter = match a.str("shadow_filter")? {
+        None => None,
+        Some(name) => Some(match name {
+            "hard" => PictureShadowFilter::Hard,
+            "pcf4" => PictureShadowFilter::Pcf4,
+            "pcf9" => PictureShadowFilter::Pcf9,
+            "pcf16" => PictureShadowFilter::Pcf16,
+            "pcss" => PictureShadowFilter::Pcss,
+            _ => {
+                return Err(format!(
+                    "{id}: `shadow_filter` must be hard, pcf4, pcf9, pcf16 or pcss, got `{}`",
+                    shorten(name)
+                ));
+            }
+        }),
+    };
+    let shadow_radius_m = a.number("shadow_radius_m")?;
+    if shadow_radius_m.is_some_and(|r| !(0.0..=1.0).contains(&r)) {
+        return Err(format!("{id}: `shadow_radius_m` must be from 0 to 1"));
+    }
+    // Only the 16-tap filters spread over a radius, so they need one: `shadow_filter` pcf16 or
+    // pcss, or alone the preset's own filter, which only ULTRA's is (and so photo's; a preset is
+    // `Quality` in visioncraft-render, which this crate does not see).
+    if shadow_radius_m.is_some()
+        && !match shadow_filter {
+            Some(PictureShadowFilter::Pcf16 | PictureShadowFilter::Pcss) => true,
+            Some(_) => false,
+            None => matches!(quality, "ultra" | "photo"),
+        }
+    {
+        return Err(format!(
+            "{id}: `shadow_radius_m` needs a 16-tap filter: quality ultra or photo, or shadow_filter pcf16 or pcss"
         ));
     }
     let mut project = host.session().project().clone();
@@ -2514,6 +2818,19 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
         ),
         None => None,
     };
+    // The session's clock is the picture's: a clip started without a time starts here. The
+    // playback is the host's own (a window's is its studio's, not its state's); the rate is a
+    // film's in film.render and 60 in a still, never the rate a window happens to draw at.
+    let fps = host.state().film_fps.unwrap_or(STILL_FPS);
+    let playback = match host.playback() {
+        Some(p) => {
+            p.clock = animation_s;
+            let mut playback = p.clone();
+            playback.fps = fps;
+            playback
+        }
+        None => Default::default(),
+    };
     let request = RenderRequest {
         width,
         height,
@@ -2521,9 +2838,13 @@ fn view_render(host: &mut dyn Host, params: &Value) -> Result<Value, String> {
         quality: quality.to_string(),
         photo,
         animation_s,
+        playback,
+        fps,
         lamp_level,
         exposure_offset_ev,
         grade_mix,
+        shadow_filter,
+        shadow_radius_m: shadow_radius_m.map(|r| r as f32),
         images: {
             let state = host.state();
             project

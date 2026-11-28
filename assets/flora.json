@@ -5004,6 +5004,11 @@
       "leaf_autumn": null,
       "bark": null
     },
+    "alhagi-maurorum": {
+      "leaf": null,
+      "leaf_autumn": null,
+      "bark": null
+    },
     "allium-purple-sensation": {
       "leaf": [
         "foliage005",
@@ -5573,6 +5578,11 @@
         "shape"
       ]
     },
+    "phoenix-dactylifera": {
+      "leaf": null,
+      "leaf_autumn": null,
+      "bark": null
+    },
     "photinia-hedge": {
       "leaf": [
         "leafset022",
@@ -5835,6 +5845,11 @@
         "leafset003",
         "shape"
       ],
+      "leaf_autumn": null,
+      "bark": null
+    },
+    "stipellula-capensis": {
+      "leaf": null,
       "leaf_autumn": null,
       "bark": null
     },

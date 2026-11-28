@@ -14,8 +14,8 @@ use visioncraft_core::sun_hours::{
 use visioncraft_core::wall_photo::face_frame;
 use visioncraft_core::{
     Generator, ImportedModel, Project, Season, Session, Shape, Target, Transform, area_lifts,
-    evaluate_in_scene, evaluate_surface_fill, measure, placed_shape_mesh, plant_size, raycast,
-    raycast_any, water_areas,
+    evaluate_in_scene_numbered, evaluate_surface_fill, measure, placed_shape_mesh, plant_size,
+    raycast, raycast_any, water_areas,
 };
 
 /// A model's placement: scale, then rotation about +Y, then translation.
@@ -214,41 +214,166 @@ fn placements(
             None => (Vec::new(), false),
         },
         _ => {
-            // The window's rule (`Scene::evaluate_generator`): no plants in or under buildings.
-            let up = |p: [f32; 3]| {
-                owners
-                    .iter()
-                    .filter(|o| !(o.ground && o.kind == "shape"))
-                    .filter_map(|o| {
-                        // The mesh alone: `cast` would also find the terrain under the plant.
-                        let (lo, ld) = match &o.xf {
-                            Some(t) => (to_local(t, p, true), to_local(t, [0.0, 1.0, 0.0], false)),
-                            None => (p, [0.0, 1.0, 0.0]),
-                        };
-                        // The local direction is the world's over the scale: distances agree.
-                        raycast(&o.mesh, lo, ld).map(|h| h.distance)
-                    })
-                    .reduce(f32::min)
-            };
-            let species = |id: &str| {
-                visioncraft_flora::Species::by_id(id)
-                    .map(|s| (s.mature_height_m, s.mature_width_m / 2.0))
-            };
-            let mut e = evaluate_in_scene(
-                g,
-                &|x, z| ground_at(project, owners, x, z, true),
-                &|x, z| ground_at(project, owners, x, z, false),
-                &up,
-                &|a| plant_size(project, assets, a, &species),
-            );
-            visioncraft_core::keep_dry(project.sea.as_ref(), &mut e, &|a| {
-                assets
-                    .iter()
-                    .any(|x| x.id == a && visioncraft_core::water::floats(x))
-            });
-            (e.placements, e.truncated)
+            let (list, truncated) = plants_drawn(project, owners, assets, g);
+            (list.into_iter().map(|(_, p)| p).collect(), truncated)
         }
     }
+}
+
+/// A built-in species' mature height and crown radius (the window's `plant_scene::species_size`).
+fn species_size(id: &str) -> Option<(f32, f32)> {
+    visioncraft_flora::Species::by_id(id).map(|s| (s.mature_height_m, s.mature_width_m / 2.0))
+}
+
+/// A planting on the ground after the building rule, each plant with its number: nothing in or
+/// under a building (the window's rule, `Scene::evaluate_numbered_raw`).
+fn clear_of_buildings(
+    project: &Project,
+    owners: &[Owner],
+    assets: &[visioncraft_core::Asset],
+    g: &Generator,
+) -> (Vec<(usize, visioncraft_core::Placement)>, bool) {
+    let up = |p: [f32; 3]| {
+        owners
+            .iter()
+            .filter(|o| !(o.ground && o.kind == "shape"))
+            .filter_map(|o| {
+                // The mesh alone: `cast` would also find the terrain under the plant.
+                let (lo, ld) = match &o.xf {
+                    Some(t) => (to_local(t, p, true), to_local(t, [0.0, 1.0, 0.0], false)),
+                    None => (p, [0.0, 1.0, 0.0]),
+                };
+                // The local direction is the world's over the scale: distances agree.
+                raycast(&o.mesh, lo, ld).map(|h| h.distance)
+            })
+            .reduce(f32::min)
+    };
+    evaluate_in_scene_numbered(
+        g,
+        &|x, z| ground_at(project, owners, x, z, true),
+        &|x, z| ground_at(project, owners, x, z, false),
+        &up,
+        &|a| plant_size(project, assets, a, &species_size),
+    )
+}
+
+/// The same after the sea too, as the window draws a planting on the ground
+/// (`Scene::evaluate_generator_numbered`), each plant with its number.
+fn plants_drawn(
+    project: &Project,
+    owners: &[Owner],
+    assets: &[visioncraft_core::Asset],
+    g: &Generator,
+) -> (Vec<(usize, visioncraft_core::Placement)>, bool) {
+    let (mut list, truncated) = clear_of_buildings(project, owners, assets, g);
+    visioncraft_core::keep_dry_numbered(project.sea.as_ref(), &mut list, &|a| {
+        assets
+            .iter()
+            .any(|x| x.id == a && visioncraft_core::water::floats(x))
+    });
+    (list, truncated)
+}
+
+/// The plants of a planting on the ground as the window draws them, each with its number (the
+/// one `planting.replace_placement` counts by). For playback: a command reaches the plants
+/// that are drawn, not the ones the building rule or the sea leaves out; a planting on a hidden
+/// layer draws nothing (`Scene::rebuild`). `query.quantities` goes by [`placements`], which counts
+/// a hidden layer's plants as before.
+pub(crate) fn plants_of(
+    session: &Session,
+    state: &HostState,
+    g: &Generator,
+) -> (Vec<(usize, visioncraft_core::Placement)>, bool) {
+    let project = session.project();
+    if !project.layer_visible(g.layer()) {
+        return (Vec::new(), false);
+    }
+    let owners = owners(project, &models_of(state));
+    plants_drawn(project, &owners, &state.catalog.assets, g)
+}
+
+/// A planting on the ground's plants by number on the way to what is drawn: before any rule
+/// (every plant its recipe places, edits applied: the numbering of `planting.replace_placement`)
+/// and after the building rule. What [`plants_of`] leaves out beyond these stands under the sea.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct Stages {
+    pub placed: Vec<usize>,
+    pub clear: Vec<usize>,
+}
+
+/// [`Stages`] of a planting on the ground: why a plant is not drawn.
+pub(crate) fn stages(session: &Session, state: &HostState, g: &Generator) -> Stages {
+    let project = session.project();
+    let owners = owners(project, &models_of(state));
+    let placed = visioncraft_core::planting::evaluate_numbered(g, &|x, z| {
+        ground_at(project, &owners, x, z, true)
+    })
+    .0;
+    let clear = clear_of_buildings(project, &owners, &state.catalog.assets, g).0;
+    Stages {
+        placed: placed.into_iter().map(|(n, _)| n).collect(),
+        clear: clear.into_iter().map(|(n, _)| n).collect(),
+    }
+}
+
+/// The matrix the window draws plant `p` of planting `g` with: its placement
+/// ([`visioncraft_core::Placement::matrix`]) under the growth scale of the years shown, before
+/// an imported object's lift to its lowest point (`part_pose` adds it). A moving part's world
+/// matrix is this times the part's matrix in model space.
+pub(crate) fn drawn_matrix(
+    project: &Project,
+    assets: &[visioncraft_core::Asset],
+    g: &Generator,
+    p: &visioncraft_core::Placement,
+) -> visioncraft_core::keyframes::Matrix {
+    let mut m = p.matrix();
+    let k = growth_scale(project, assets, g, &p.asset);
+    for v in &mut m[..12] {
+        *v *= k;
+    }
+    m
+}
+
+/// What the window sizes a plant or object at for its growth (`Scene::growth_stage`): a custom
+/// species by its base, a catalogue asset or an imported object by its size.
+fn growth_size(
+    project: &Project,
+    assets: &[visioncraft_core::Asset],
+    id: &str,
+) -> Option<(f32, f32)> {
+    if project.species.iter().any(|c| c.id == id) {
+        return Some(plant_size(project, assets, id, &species_size));
+    }
+    // (height, width) of a size [width, height, depth].
+    let size_of = |s: [f32; 3]| (s[1], s[0].max(s[2]));
+    assets
+        .iter()
+        .find(|a| a.id == id)
+        .map(|a| size_of(a.size_m))
+        .or_else(|| {
+            project
+                .objects
+                .iter()
+                .find(|o| o.asset_id() == id)
+                .map(|o| size_of(o.size_m))
+        })
+}
+
+/// The scale the window draws a model of planting `g` at while the project shows years after
+/// planting (`Scene::growth_stage`: a catalogue model only scales, to its height then as a
+/// fraction of its full one); 1 without years.
+fn growth_scale(
+    project: &Project,
+    assets: &[visioncraft_core::Asset],
+    g: &Generator,
+    asset: &str,
+) -> f32 {
+    let Some(years) = project.view.years else {
+        return 1.0;
+    };
+    let growth = visioncraft_core::growth::growth_of(asset, growth_size(project, assets, asset));
+    let planted = g.planted_age_years().unwrap_or(growth.planted_age_years);
+    growth.size(planted + years).height
 }
 
 fn generator_assets(g: &Generator) -> Vec<String> {
@@ -497,7 +622,12 @@ pub(crate) fn inspect(session: &Session, state: &HostState, v: &Verbosity) -> Va
         .collect();
     let terrain = p.terrain.as_ref().map(|t| {
         let e = t.extent();
-        json!({"extent": e, "vertices": t.vertex_count(), "cell_m": t.cell_m, "layers": t.layers.iter().map(|l| l.material.clone()).collect::<Vec<_>>(), "auto": t.auto, "hex_tiling": t.hex_tiling, "cover": t.cover})
+        let detail: Vec<Value> = t
+            .layers
+            .iter()
+            .map(|l| serde_json::to_value(&l.detail).expect("a layer's detail serialises"))
+            .collect();
+        json!({"extent": e, "vertices": t.vertex_count(), "cell_m": t.cell_m, "layers": t.layers.iter().map(|l| l.material.clone()).collect::<Vec<_>>(), "detail": detail, "auto": t.auto, "hex_tiling": t.hex_tiling, "cover": t.cover})
     });
     let mut out = Map::new();
     out.insert(

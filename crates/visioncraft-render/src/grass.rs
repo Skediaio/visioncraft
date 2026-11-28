@@ -635,8 +635,11 @@ impl GrassGpu {
         }
     }
 
-    fn each_list(&self, pass: &mut wgpu::RenderPass, pipelines: &[wgpu::RenderPipeline; 3]) {
-        let Some(lists) = &self.lists else { return };
+    /// The lists' draw calls issued.
+    fn each_list(&self, pass: &mut wgpu::RenderPass, pipelines: &[wgpu::RenderPipeline; 3]) -> u32 {
+        let Some(lists) = &self.lists else {
+            return 0;
+        };
         let s = settings(lists.level);
         let mut offset = 0u64;
         for (i, p) in pipelines.iter().enumerate() {
@@ -645,26 +648,27 @@ impl GrassGpu {
             pass.draw_indirect(&lists.args, i as u64 * 16);
             offset += u64::from(s.caps[i]);
         }
+        pipelines.len() as u32
     }
 
     /// The blades' depth, in the depth pre-pass (globals bound in group 0).
-    pub fn draw_depth(&self, pass: &mut wgpu::RenderPass) {
+    pub fn draw_depth(&self, pass: &mut wgpu::RenderPass) -> u32 {
         let (true, Some(d)) = (self.drawn, &self.draw) else {
-            return;
+            return 0;
         };
         pass.set_bind_group(1, &self.draw_bind, &[]);
-        self.each_list(pass, &d.depth);
+        self.each_list(pass, &d.depth)
     }
 
     /// The blades, lit, in the forward pass (globals and the forward group bound); `draw` and
     /// `slot` are a draw slot for group 2.
-    pub fn draw(&self, pass: &mut wgpu::RenderPass, draw: &wgpu::BindGroup, slot: u32) {
+    pub fn draw(&self, pass: &mut wgpu::RenderPass, draw: &wgpu::BindGroup, slot: u32) -> u32 {
         let (true, Some(d)) = (self.drawn, &self.draw) else {
-            return;
+            return 0;
         };
         pass.set_bind_group(1, &self.draw_bind, &[]);
         pass.set_bind_group(2, draw, &[slot]);
-        self.each_list(pass, &d.forward);
+        self.each_list(pass, &d.forward)
     }
 }
 

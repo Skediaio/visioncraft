@@ -1,6 +1,7 @@
 //! Offscreen stills: one frame at any size up to 3840x2160, always at
 //! `Quality::HIGH`, read back as RGBA8, without touching the live view's
-//! targets, quality, camera, cached shadow cascade or level-of-detail state.
+//! targets, quality, camera, cached shadow cascades, snow cover map or
+//! level-of-detail state.
 //!
 //! The frame is submitted at once; the pixels arrive asynchronously (on the
 //! web nothing can block), so `render_still` returns a [`Still`] to poll.
@@ -195,7 +196,7 @@ impl Renderer {
     /// Renders `part` of one frame into `targets` (and with the pipelines `sampled` where the live ones
     /// do not do, `offscreen_pipelines`) from `view`/`proj`/`eye`, copies the output
     /// into `buffer`, and puts the live state back. Returns the targets for another frame and
-    /// the encoder to submit.
+    /// the encoder to submit. `quality` is sanitized as in `set_quality` (`Quality::sanitized`).
     #[allow(clippy::too_many_arguments)]
     fn render_offscreen(
         &mut self,
@@ -207,14 +208,29 @@ impl Renderer {
         copy: Option<(&wgpu::Buffer, u32)>,
         part: FramePart,
     ) -> (Targets, Offscreen, wgpu::CommandEncoder) {
+        let quality = quality.sanitized();
+        // What changed since the window's last frame (moved instances, new bounds) the window's
+        // shadow caches no longer cover: they go now, since the still's frame below makes the
+        // bounds anew and takes the list of moved items, and the window's next frame would not
+        // see that anything changed.
+        if self.bounds_dirty || !self.moved.is_empty() {
+            self.invalidate_shadows();
+        }
         // Swap the live state out, render, swap it back.
         let live_targets = std::mem::replace(&mut self.targets, targets);
         let live_pipelines = sampled.0.map(|p| std::mem::replace(&mut self.pipelines, p));
         let live_sampled = sampled.1.map(|s| std::mem::replace(&mut self.sampled, s));
         let live = (self.size, self.quality, self.view, self.proj, self.eye);
         let live_cache = self.far_cache.take();
+        let live_far_dirty = self.far_dirty.take();
         let live_cascades = std::mem::take(&mut self.cascade_rendered);
         let live_stale = std::mem::take(&mut self.cascade_stale);
+        // The snow cover map too: these targets never drew one, and the next offscreen frame's
+        // must not count a map of targets gone since (every still makes new ones; a photo keeps
+        // its targets, but the live view's map may be the one remembered). Without this the
+        // second still in a row from one camera skipped the map, and read its empty layer as a
+        // cover over everything: with snow, rain or a sea on, it showed no snow on open ground.
+        let live_snow = self.snow_drawn.take();
         if let Some(t) = &self.timer {
             t.paused.set(true);
         }
@@ -256,8 +272,10 @@ impl Renderer {
         let used_sampled = live_sampled.map(|s| std::mem::replace(&mut self.sampled, s));
         (self.size, self.quality, self.view, self.proj, self.eye) = live;
         self.far_cache = live_cache;
+        self.far_dirty = live_far_dirty;
         self.cascade_rendered = live_cascades;
         self.cascade_stale = live_stale;
+        self.snow_drawn = live_snow;
         if let Some(t) = &self.timer {
             t.paused.set(false);
         }
@@ -543,7 +561,7 @@ impl Renderer {
         lens: Lens,
     ) -> Result<Photo, String> {
         quality.lod_distance_percent *= 2;
-        let quality = self.coverage.quality(quality);
+        let quality = self.coverage.quality(quality.sanitized());
         if width == 0 || height == 0 || width > MAX_STILL.0 || height > MAX_STILL.1 {
             return Err(format!(
                 "photo size {width}x{height} outside 1x1..={}x{}",

@@ -21,6 +21,51 @@ pub const CHUNK_CELLS: u32 = 64;
 pub struct TerrainLayer {
     /// A material id.
     pub material: String,
+    /// A second, finer texture over the layer's own maps near the camera
+    /// (`terrain.set_layer_detail`); absent in projects made before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<LayerDetail>,
+}
+
+/// A detail texture of a terrain layer: a finer map tiled over the layer's own near the eye and
+/// faded out with distance, projected triplanar on steep ground (terrain.wgsl), as Unreal's
+/// landscape detail textures and Unity's terrain detail maps do. A large field or a desert then
+/// neither blurs up close nor repeats from afar.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LayerDetail {
+    /// A texture or material id the library resolves: a project material, or a library
+    /// material's id (its colour and normal maps).
+    pub texture: String,
+    /// One repeat of the detail per this many metres.
+    pub tile_m: f32,
+    /// How strongly the detail modulates the layer (0..1).
+    pub strength: f32,
+    /// Distance to the eye at which the detail has faded out (it is at full strength up to
+    /// 0.6 of it).
+    pub fade_m: f32,
+}
+
+impl LayerDetail {
+    /// The ranges the renderer and the command rely on; errors name the field.
+    pub fn validate(&self) -> Result<(), TerrainError> {
+        if self.texture.trim().is_empty() {
+            return err("a detail's texture must name a texture or material id");
+        }
+        if !(self.tile_m.is_finite() && (0.01..=1000.0).contains(&self.tile_m)) {
+            return err(
+                "the detail's tile_m must be above zero and at most 1000 m (one repeat per that many metres)",
+            );
+        }
+        if !(self.strength.is_finite() && (0.0..=1.0).contains(&self.strength)) {
+            return err("the detail's strength must be in 0..1");
+        }
+        if !(self.fade_m.is_finite() && (0.1..=100_000.0).contains(&self.fade_m)) {
+            return err(
+                "the detail's fade_m must be above zero and at most 100000 m (the distance at which it has faded out)",
+            );
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -289,6 +334,7 @@ impl Terrain {
             heights: vec![0.0; n],
             layers: vec![TerrainLayer {
                 material: base_material.into(),
+                detail: None,
             }],
             weights: vec![255; n],
             auto: None,
@@ -322,6 +368,14 @@ impl Terrain {
             .any(|w| w.iter().map(|v| u32::from(*v)).sum::<u32>() != 255)
         {
             return err("terrain weights must sum to 255 at every vertex");
+        }
+        if let Some(e) = self
+            .layers
+            .iter()
+            .filter_map(|l| l.detail.as_ref())
+            .find_map(|d| d.validate().err())
+        {
+            return Err(e);
         }
         Ok(())
     }
@@ -362,7 +416,13 @@ impl Terrain {
                 }
             }
         }
-        let layers_changed = self.layers != old.layers || self.auto != old.auto;
+        // Only what the meshes are built from counts: a layer's detail texture is shaded, not meshed.
+        let layers_changed = self
+            .layers
+            .iter()
+            .map(|l| &l.material)
+            .ne(old.layers.iter().map(|l| &l.material))
+            || self.auto != old.auto;
         // Automatic materials look a few cells round each vertex (its slope and curvature).
         if self.auto.is_some() && !dirty.is_empty() {
             let r = crate::natural::AUTO_REACH;
@@ -1129,6 +1189,7 @@ impl Terrain {
         self.weights = weights;
         self.layers.push(TerrainLayer {
             material: material.into(),
+            detail: None,
         });
         Some(n)
     }
@@ -1877,6 +1938,25 @@ mod tests {
         assert!(!Arc::ptr_eq(&a, &b) && a != b);
     }
 
+    /// JSON values alike, numbers to within an f32 (a detail's fields are f32: 0.7 round-trips as
+    /// 0.699999988).
+    fn nearly(a: &serde_json::Value, b: &serde_json::Value) -> bool {
+        use serde_json::Value;
+        match (a, b) {
+            (Value::Number(x), Value::Number(y)) => {
+                (x.as_f64().unwrap_or(0.0) - y.as_f64().unwrap_or(0.0)).abs() < 1e-5
+            }
+            (Value::Object(x), Value::Object(y)) => {
+                x.len() == y.len()
+                    && x.iter()
+                        .all(|(k, v)| y.get(k).is_some_and(|w| nearly(v, w)))
+            }
+            (Value::String(x), Value::String(y)) => x == y,
+            (Value::Null, Value::Null) => true,
+            _ => false,
+        }
+    }
+
     #[test]
     fn json_round_trip_is_exact_and_compact() {
         let mut t = Terrain::flat([-10.0, 5.0], 128.0, 128.0, 0.5, "lawn").unwrap();
@@ -1910,6 +1990,56 @@ mod tests {
             serde_json::from_str::<Terrain>(&json.replace("\"width\":256", "\"width\":255"))
                 .is_err()
         );
+    }
+
+    /// A layer's detail texture (`terrain.set_layer_detail`) is saved with the layer and left out
+    /// while a layer has none, so a project made before it loads unchanged and round-trips as it
+    /// was. Out-of-range values are refused with the field named.
+    #[test]
+    fn a_layer_keeps_its_detail_and_old_files_stay_as_they_were() {
+        let t = Terrain::flat([0.0, 0.0], 4.0, 4.0, 1.0, "sand").unwrap();
+        let old = serde_json::to_value(&t).unwrap();
+        assert!(
+            old["layers"][0].get("detail").is_none(),
+            "written while absent: {old}"
+        );
+        assert_eq!(serde_json::from_value::<Terrain>(old.clone()).unwrap(), t);
+        let mut with_detail = old.clone();
+        with_detail["layers"][0]["detail"] = serde_json::json!({
+            "texture": "gravel", "tile_m": 0.4, "strength": 0.7, "fade_m": 18.0
+        });
+        let with: Terrain = serde_json::from_value(with_detail.clone()).unwrap();
+        let back = serde_json::to_value(&with).unwrap();
+        assert!(
+            nearly(
+                &back["layers"][0]["detail"],
+                &with_detail["layers"][0]["detail"]
+            ),
+            "{}",
+            back["layers"][0]["detail"]
+        );
+        assert_eq!(back["heights"], old["heights"]);
+        assert_eq!(back["weights"], old["weights"]);
+        // A detail alone changes nothing in the meshes: the chunks are not remeshed for it.
+        assert_eq!(with.changed_since(&t), None);
+        for (field, value, why) in [
+            ("tile_m", serde_json::json!(0.0), "above zero"),
+            ("tile_m", serde_json::json!(5000.0), "at most"),
+            ("strength", serde_json::json!(1.5), "0..1"),
+            ("strength", serde_json::json!(-0.1), "0..1"),
+            ("fade_m", serde_json::json!(0.0), "above zero"),
+        ] {
+            let mut bad = with_detail.clone();
+            bad["layers"][0]["detail"][field] = value.clone();
+            let e = serde_json::from_value::<Terrain>(bad)
+                .err()
+                .map(|e| e.to_string())
+                .unwrap_or_default();
+            assert!(e.contains(field) && e.contains(why), "{field}={value}: {e}");
+        }
+        let mut unnamed = with_detail.clone();
+        unnamed["layers"][0]["detail"]["texture"] = serde_json::json!("");
+        assert!(serde_json::from_value::<Terrain>(unnamed).is_err());
     }
 
     #[test]

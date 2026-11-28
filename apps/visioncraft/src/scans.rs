@@ -286,14 +286,16 @@ impl ScanLib {
                 .flatten()
                 .or_else(|| s.leaf.clone()),
             // A look-alike bark would lose what the drawn one keeps where that is the species'
-            // mark (a birch's white and black, a cherry's red-brown bands): those take only the
-            // genus' own. Every other look-alike photo beats the drawn plates and furrows.
+            // mark (a birch's white and black, a cherry's red-brown bands, a date palm's leaf
+            // bases): those take only the genus' own. Every other look-alike photo beats the
+            // drawn plates and furrows.
             bark: s.bark.clone().filter(|b| {
                 b.1 == "genus"
                     || !matches!(
                         params.bark.pattern,
                         visioncraft_flora::BarkPattern::Birch
                             | visioncraft_flora::BarkPattern::Stem
+                            | visioncraft_flora::BarkPattern::LeafBases
                     )
             }),
             listed,

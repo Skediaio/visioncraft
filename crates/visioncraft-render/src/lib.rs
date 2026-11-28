@@ -14,15 +14,24 @@
 //!    A moving sun (`set_sun`) keeps every cascade's map and matrix and marks them stale: the
 //!    near one still draws every frame, the far cached one every 4th, the middle ones on their
 //!    alternate frames, and the frame after the sun stops all stale ones draw, so a settled
-//!    picture is exact (`cascade_refresh`, `refresh_shadows`). Only a scene change, a resize or
-//!    a quality or distance change drops the caches (`invalidate_shadows`)
+//!    picture is exact (`cascade_refresh`, `refresh_shadows`). Instances that moved (a clip
+//!    playing) make stale only the maps their old or new shadow can be sampled in and the snow
+//!    cover map over them (`stale_moved`). Only a scene change, a resize or a quality or
+//!    distance change drops the caches (`invalidate_shadows`)
 //! 2. depth pre-pass, `Depth32Float` (4x MSAA when enabled); cutout
 //!    materials write their coverage through the sample mask
 //! 3. depth resolve: sample 0 -> linear view depth, `R32Float`
 //! 4. AO + contact shadows at half (ULTRA: full) render size, `Rg8Unorm`, depth-aware blur (H, V)
-//! 5. planar reflection of the largest visible water plane (when enabled):
-//!    the scene mirrored, coarser LODs, no screen-space effects,
-//!    `Rgba16Float` + `Depth32Float` at render size / divisor
+//! 5. planar reflections of water (when enabled): the visible water surfaces
+//!    are ranked every frame (`water.rs`: planes by height, scored by what
+//!    they cover of the screen and how near they are); the best
+//!    `Quality::water_planes` of them each draw the scene mirrored about
+//!    their height into one layer of an `Rgba16Float` array at render size /
+//!    divisor (coarser LODs, no screen-space effects, scissored to where the
+//!    plane shows), over one `Depth32Float` cleared per pass. Every other
+//!    water surface reflects the opaque scene of the frame along its
+//!    reflected ray when `screen_reflections` is on, else the environment
+//!    cube (step 6)
 //! 6. forward PBR, `Rgba16Float` (MSAA, resolved into a 1x target): opaque
 //!    and cutout geometry (cutout with an Equal depth test), the infinite
 //!    ground, the sky, then glass, water and alpha-blended materials sorted
@@ -52,6 +61,7 @@
 //! detail, 1920x1080, native offscreen, Intel UHD 620): see that example.
 
 use std::cell::Cell;
+use std::iter::once;
 use std::num::NonZeroU64;
 
 use glam::{Mat4, Vec2, Vec3, Vec4};
@@ -74,6 +84,8 @@ pub mod lod;
 mod sea;
 pub mod shadow;
 pub mod sky;
+#[cfg(not(target_arch = "wasm32"))]
+mod stage;
 mod stats;
 mod still;
 mod terrain;
@@ -81,6 +93,7 @@ mod texture;
 mod timing;
 pub mod tonemap;
 mod underlay;
+mod water;
 pub mod wind;
 
 pub use atmosphere::{
@@ -93,13 +106,14 @@ pub use impostor::{ImpostorId, atlas_layout, impostor_views};
 pub use lights::{Light, LightKind};
 pub use sea::Sea;
 pub use sky::Sun;
-pub use stats::{RenderStats, TARGET_MS, ULTRA_HEADROOM, suggest_quality};
+pub use stats::{RenderStats, TARGET_MS, ULTRA_HEADROOM, WaterItem, WaterSurface, suggest_quality};
 pub use still::Still;
 pub use still::{FOCUS_RANGE, Focus, Lens, Photo, lens_point, lens_view, pixel_jitter};
-pub use terrain::{TerrainChunk, TerrainLayer};
+pub use terrain::{TerrainChunk, TerrainDetail, TerrainLayer};
 pub use texture::{ColorSpace, TextureDesc, TextureId, mip_count};
 pub use tonemap::{ColorGrade, WhiteBalance};
 pub use underlay::UnderlayQuad;
+pub use water::WaterTier;
 pub use wind::Wind;
 
 const HDR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -133,6 +147,12 @@ const SUN_GLARE: [f32; 4] = [0.03, 0.025, 0.14, 0.35];
 
 /// How often the camera-centred far cascade is redrawn while the sun moves (frames).
 const FAR_SUN_PERIOD: u64 = 4;
+/// The share of a cascade's view-depth range over which scene.wgsl `cascades_shadow` blends
+/// into the next cascade (which it samples over that band too: `ShadeView::shades_from`).
+const CASCADE_BLEND: f32 = 0.15;
+/// The lowest sine of the sun's elevation `shadow_reach` sweeps along: a sun on the horizon
+/// throws a shadow a thousand times the caster's height.
+const HORIZON_SUN: f32 = 1e-3;
 
 /// Whether cascade `c` of `count` is drawn this frame. The near cascade every frame; the middle
 /// ones on alternate frames; the cached far one (`cached_far`) only when it is not `reuse`d (the
@@ -178,6 +198,42 @@ fn far_matrix(draws: bool, fresh: Mat4, cached: Option<Mat4>) -> (Mat4, bool) {
     }
 }
 
+/// A view that shades from the frame's cascades: the camera's, or a planar reflection's (the
+/// scene mirrored in a water plane, `mirror_matrix`). Made by `Renderer::shade_view`.
+#[derive(Clone, Copy)]
+struct ShadeView {
+    view: Mat4,
+    view_proj: Mat4,
+    /// Per cascade: every cascade before it covers the whole slice of this view it shades
+    /// (`Renderer::covers_slice`), so no point falls through to it from a view depth below its
+    /// own slice's range.
+    sealed: [bool; shadow::MAX_CASCADES],
+}
+
+impl ShadeView {
+    /// Whether the view shades from cascade `c` anywhere in `b` (a moved item's shadow, the
+    /// ground it can fall on): the cascade is sampled where the view depth lies from the end of
+    /// the cascade before, less their blend band (`CASCADE_BLEND`; from the eye for the first,
+    /// and from the eye too when any cascade before has a gap, i.e. does not cover its whole
+    /// slice with the map it was drawn with, since a point one misses falls through to the
+    /// next, which may miss it too), up to the cascade's own split (scene.wgsl
+    /// `cascades_shadow`); and only inside the view.
+    fn shades_from(self, b: Bounds, c: usize, splits: &[f32; shadow::MAX_CASCADES]) -> bool {
+        let split = splits[c];
+        let lo = if c == 0 || !self.sealed[c] {
+            0.0
+        } else {
+            let start = if c > 1 { splits[c - 2] } else { 0.0 };
+            (splits[c - 1] - CASCADE_BLEND * (splits[c - 1] - start)).max(0.0)
+        };
+        if outside(self.view_proj, b, false) {
+            return false;
+        }
+        let (near, far) = depth_range(self.view, b);
+        far >= lo && near <= split
+    }
+}
+
 /// What `Renderer::render_part` draws of a frame.
 #[derive(Clone, Copy)]
 pub(crate) enum FramePart<'a> {
@@ -210,10 +266,23 @@ const SUN_TOP_KLX: f32 = 128.0;
 /// shadow cascades and the camera can skip the ones they do not see, and
 /// levels of detail switch per cell.
 const CLUSTER_CELL: f32 = 8.0;
+/// The ground cell an instance's origin lies in. `set_instances` sorts an item's instances
+/// by it (stably) and groups the ones of a cell into a cluster, and `instance_order` gives
+/// that same order, so nothing can sort them two ways.
+fn cluster_cell(m: &Mat4) -> (i32, i32) {
+    (
+        (m.w_axis.x / CLUSTER_CELL).floor() as i32,
+        (m.w_axis.z / CLUSTER_CELL).floor() as i32,
+    )
+}
+
+/// Cluster cells a side of a block (`Block`): 128 m, the coarse level the culling tests first.
+const BLOCK_CELLS: i32 = 16;
 /// `set_time` wraps here (seconds) to keep f32 precision in the shaders.
 const TIME_WRAP: f64 = 4096.0;
-/// Byte offset of the SH in the globals (written by the GPU, see env.rs).
-const SH_OFFSET: u64 = 9 * 64 + 62 * 16;
+/// Byte offset of the SH in the globals (written by the GPU, see env.rs): 9 matrices and the
+/// vec4s before it.
+const SH_OFFSET: u64 = 9 * 64 + 67 * 16;
 /// The roughness up to which a metal is a mirror (`Material::mirror`, scene.wgsl `light`).
 const MIRROR_ROUGHNESS: f32 = 0.1;
 
@@ -450,6 +519,20 @@ pub struct MaterialId(u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ItemId(u32);
 
+impl MaterialId {
+    /// Its number, as `RenderStats::water` reports it.
+    pub const fn index(self) -> u32 {
+        self.0
+    }
+}
+
+impl ItemId {
+    /// Its number, as `RenderStats::water` reports it.
+    pub const fn index(self) -> u32 {
+        self.0
+    }
+}
+
 /// One end of an overlay segment. Consecutive pairs form segments; a pair
 /// with equal positions draws a round point.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -459,6 +542,106 @@ pub struct LineVertex {
     pub color: [u8; 4],
     /// Thickness in physical pixels.
     pub width: f32,
+}
+
+/// The penumbra radius of the presets' sun shadow filter, in metres in the world: the 16-tap
+/// disk's (scene.wgsl `cascade_shadow` spreads it over 1.5 to 6 texels of a cascade), the same
+/// in every cascade, so it does not change at a cascade split. The 4- and 9-tap grids keep their
+/// fixed texel size.
+pub const DEFAULT_SHADOW_RADIUS_M: f32 = 0.03;
+
+/// The largest penumbra of PCSS (`ShadowFilter::Pcss`) when its radius is not given: in metres
+/// in the world, measured across the light (so `r / sin(elevation)` over flat ground).
+pub const DEFAULT_PCSS_MAX_RADIUS_M: f32 = 0.15;
+
+/// How the sun's cascaded shadow maps are filtered (`Quality::shadow_filter`).
+///
+/// `#[non_exhaustive]`: another filter may be added later (another tap count, a softer mode),
+/// so outside this crate match it with a wildcard; the variants are constructed as ever.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum ShadowFilter {
+    /// One hardware comparison tap (2x2 bilinear): the sharpest edge.
+    Hard,
+    /// Percentage-closer filtering. `taps` 4 (2x2 grid at +-0.75 texel) and 9 (3x3 grid at
+    /// -1.5, 0, +1.5 texels) are fixed, texel-sized kernels: gap-free, as each hardware
+    /// comparison tap covers 2 texels, and they ignore `radius_m`. `taps` 16 is a Vogel disk,
+    /// turned by the noise of its place in the shadow map, spread over `radius_m` metres in the
+    /// world, the same in every cascade, and never narrower than 1.5 texels of a cascade (so a
+    /// radius of 0 is no hard edge: `Hard` is) nor wider than 6 (beyond that the penumbra stops
+    /// growing there). Each tap is compared against the receiver plane's own depth where it
+    /// lands. Under `Quality::fast_shading` only the 1- and 4-tap paths are compiled (register
+    /// pressure on integrated GPUs): 9 and 16 fall back to 4 there.
+    Pcf { taps: u32, radius_m: f32 },
+    /// Percentage-closer soft shadows (Fernando, "Percentage-Closer Soft Shadows", NVIDIA,
+    /// SIGGRAPH 2005 sketch): the 16-tap disk of `Pcf` with a penumbra that grows with the
+    /// distance between the receiver and its occluder. Sharp where a caster meets its shadow,
+    /// and at most `max_radius_m` metres in the world (a receiver `d` metres behind its
+    /// occluder, along the light, gets `d * tan(disc)`), never wider than 6 texels of a cascade
+    /// and never narrower than half a texel (where the sun's disc alone gives less, the disk
+    /// still rounds the edge's texel steps). The penumbra is about twice as wide as a real
+    /// sun's: the sun's disc as drawn (`sky::SUN_DISC_RADIUS`, 0.5 degrees) has about twice the
+    /// real sun's angular radius (0.267 degrees).
+    ///
+    /// The blocker search takes 16 point samples of the shadow map over up to 6 texels round
+    /// the receiver, so it can miss a caster one or two texels wide in the map (a pole, a
+    /// branch, a fence in a far cascade): such a pixel then reads fully lit. In a still that
+    /// shows as holes in a thin caster's shadow and penumbra, a known artefact of PCSS; a photo
+    /// (many frames averaged) evens it out.
+    ///
+    /// Falls back to the 4-tap grid under `Quality::fast_shading`, as `Pcf` with 16 taps does.
+    Pcss { max_radius_m: f32 },
+}
+
+impl ShadowFilter {
+    /// Comparison taps per pixel: 1, 4, 9 or 16.
+    pub fn taps(self) -> u32 {
+        match self {
+            ShadowFilter::Hard => 1,
+            ShadowFilter::Pcf { taps, .. } => taps,
+            ShadowFilter::Pcss { .. } => 16,
+        }
+    }
+
+    /// The penumbra's radius in the world (m), PCSS's largest; 0 for `Hard`.
+    pub fn radius_m(self) -> f32 {
+        match self {
+            ShadowFilter::Hard => 0.0,
+            ShadowFilter::Pcf { radius_m, .. } => radius_m,
+            ShadowFilter::Pcss { max_radius_m } => max_radius_m,
+        }
+    }
+
+    /// This filter as the renderer holds it: `taps` the nearest of 4, 9 or 16 and a radius
+    /// clamped to 0..=1 (NaN: the presets' radius, for PCSS its own default), so two filters
+    /// that shade the same compare equal (`Quality: Eq`).
+    pub fn sanitized(self) -> Self {
+        match self {
+            ShadowFilter::Hard => ShadowFilter::Hard,
+            ShadowFilter::Pcf { taps, radius_m } => ShadowFilter::Pcf {
+                // No ties: 4, 9 and 16 are an odd number apart.
+                taps: [4u32, 9, 16]
+                    .into_iter()
+                    .min_by_key(|&t| t.max(taps) - t.min(taps))
+                    .unwrap_or(4),
+                radius_m: sanitized_radius(radius_m, DEFAULT_SHADOW_RADIUS_M),
+            },
+            ShadowFilter::Pcss { max_radius_m } => ShadowFilter::Pcss {
+                max_radius_m: sanitized_radius(max_radius_m, DEFAULT_PCSS_MAX_RADIUS_M),
+            },
+        }
+    }
+}
+
+/// A penumbra radius as the renderer holds it: clamped to 0..=1, a NaN one `default`.
+fn sanitized_radius(radius_m: f32, default: f32) -> f32 {
+    let r = if radius_m.is_nan() {
+        default
+    } else {
+        radius_m.clamp(0.0, 1.0)
+    };
+    // One zero, not -0.0: they compare equal, but print apart.
+    if r == 0.0 { 0.0 } else { r }
 }
 
 /// Effect switches so the app can fall back on slow GPUs.
@@ -486,8 +669,14 @@ pub struct Quality {
     /// Planar reflection of water: resolution divisor of the render size (2
     /// half, 4 quarter); 0 = off (water reflects the environment cube).
     pub water_reflection: u32,
-    /// 3x3 PCF taps for sun shadows (otherwise 2x2: softer edges cost ~2x).
-    pub soft_shadows: bool,
+    /// The sun's shadow filter: the comparison taps, and for the 16-tap filters the penumbra's
+    /// radius in the world (the disk's, PCSS's largest), the same in every cascade.
+    pub shadow_filter: ShadowFilter,
+    /// Planar reflections of water per frame (0..=4): the visible water planes ranked by
+    /// what they cover on screen and how near they are each get a mirrored pass while the
+    /// budget lasts; the others reflect the opaque scene of the frame when `screen_reflections`
+    /// is on, else the environment cube (`water.rs`). 0: no planar pass.
+    pub water_planes: u32,
     /// Ambient occlusion and contact shadows at the full render size
     /// (otherwise half size, upsampled depth-aware).
     pub ao_full_resolution: bool,
@@ -498,9 +687,9 @@ pub struct Quality {
     /// estimate), else the ray's step in pixels (2: half resolution).
     pub screen_reflections: u32,
     /// The shaders compiled for this preset's own settings (common.wgsl `FAST_SHADING`): what
-    /// the slower presets use (the 3x3 shadow filter, the ground's 16-step parallax and its
-    /// self-shadow) is left out, so integrated GPUs keep their shading in registers. Changing it
-    /// compiles the scene's pipelines again.
+    /// the slower presets use (the 9- and 16-tap shadow filters, the ground's 16-step parallax
+    /// and its self-shadow) is left out, so integrated GPUs keep their shading in registers.
+    /// Changing it compiles the scene's pipelines again.
     pub fast_shading: bool,
     /// Volumetric clouds (clouds.wgsl, when `Clouds::volumetric` asks for them): the cloud
     /// image's divisor of the render size (2 half, 3 a third, 4 quarter), 0 for the flat cloud layer.
@@ -512,7 +701,8 @@ pub struct Quality {
 }
 
 // `render_scale` is clamped to 0.5..=1 everywhere it is used, never NaN, so
-// equality is total (presets are compared with `==`).
+// equality is total (presets are compared with `==`); `shadow_filter` is sanitized
+// (`Quality::sanitized`) wherever a quality enters the renderer.
 impl Eq for Quality {}
 
 impl Default for Quality {
@@ -533,7 +723,11 @@ impl Quality {
         fxaa: true,
         bloom: false,
         water_reflection: 0,
-        soft_shadows: false,
+        water_planes: 0,
+        shadow_filter: ShadowFilter::Pcf {
+            taps: 4,
+            radius_m: DEFAULT_SHADOW_RADIUS_M,
+        },
         ao_full_resolution: false,
         impostor_resolution: 256,
         screen_reflections: 0,
@@ -554,7 +748,11 @@ impl Quality {
         fxaa: true,
         bloom: true,
         water_reflection: 4,
-        soft_shadows: false,
+        water_planes: 1,
+        shadow_filter: ShadowFilter::Pcf {
+            taps: 4,
+            radius_m: DEFAULT_SHADOW_RADIUS_M,
+        },
         ao_full_resolution: false,
         impostor_resolution: 256,
         screen_reflections: 2,
@@ -573,7 +771,11 @@ impl Quality {
         fxaa: false,
         bloom: true,
         water_reflection: 2,
-        soft_shadows: true,
+        water_planes: 2,
+        shadow_filter: ShadowFilter::Pcf {
+            taps: 9,
+            radius_m: DEFAULT_SHADOW_RADIUS_M,
+        },
         ao_full_resolution: false,
         impostor_resolution: 256,
         screen_reflections: 1,
@@ -598,7 +800,11 @@ impl Quality {
         fxaa: false,
         bloom: true,
         water_reflection: 1,
-        soft_shadows: true,
+        water_planes: 3,
+        shadow_filter: ShadowFilter::Pcf {
+            taps: 16,
+            radius_m: DEFAULT_SHADOW_RADIUS_M,
+        },
         ao_full_resolution: true,
         impostor_resolution: 512,
         screen_reflections: 1,
@@ -615,6 +821,55 @@ impl Quality {
 
     fn samples(&self) -> u32 {
         if self.msaa { MSAA_SAMPLES } else { 1 }
+    }
+
+    /// The sun shadow's comparison taps the shaders run: under `fast_shading` only the 1- and
+    /// 4-tap paths are compiled, so 9 and 16 (and PCSS) fall back to 4.
+    fn shadow_taps(&self) -> u32 {
+        let taps = self.shadow_filter.taps();
+        if self.fast_shading && taps > 4 {
+            4
+        } else {
+            taps
+        }
+    }
+
+    /// `Globals.shadow_filter.xy` (common.wgsl): the penumbra's radius in the world, the
+    /// 16-tap disk's or PCSS's largest, and the mode the 16-tap branch of `cascade_shadow`
+    /// runs: 0 PCF, 1 PCSS. Under `fast_shading` always PCF: only the 1- and 4-tap paths are
+    /// compiled there.
+    fn shadow_filter_uniform(&self) -> [f32; 2] {
+        let pcss = matches!(self.shadow_filter, ShadowFilter::Pcss { .. }) && !self.fast_shading;
+        [self.shadow_filter.radius_m(), if pcss { 1.0 } else { 0.0 }]
+    }
+
+    /// This quality as the renderer holds it (`set_quality`, still.rs `render_offscreen` and
+    /// `photo_begin`): every field the renderer indexes, divides by or compares with `==` in
+    /// range, the shadow filter sanitized (`ShadowFilter::sanitized`). A preset is its own
+    /// sanitized self, so setting one again changes nothing.
+    fn sanitized(self) -> Quality {
+        Quality {
+            cascades: self.cascades.clamp(1, shadow::MAX_CASCADES as u32),
+            impostor_resolution: self.impostor_resolution.clamp(64, 1024),
+            render_scale: if self.render_scale.is_nan() {
+                1.0
+            } else {
+                self.render_scale.clamp(0.5, 1.0)
+            },
+            water_planes: self.water_planes.min(water::MAX_PLANES),
+            shadow_filter: self.shadow_filter.sanitized(),
+            ..self
+        }
+    }
+
+    /// The planar passes a frame may draw: `water_planes` (at most the globals' planes) while
+    /// the planar reflection is on, else none.
+    pub fn plane_budget(&self) -> u32 {
+        if self.water_reflection == 0 {
+            0
+        } else {
+            self.water_planes.min(water::MAX_PLANES)
+        }
     }
 
     /// The volumetric clouds' march steps through the layer and towards the sun.
@@ -703,14 +958,15 @@ pub fn water_transmittance(path_m: f32, turbidity: f32) -> f32 {
 type Bounds = (Vec3, Vec3);
 
 struct GpuMesh {
-    vertices: wgpu::Buffer,
-    indices: wgpu::Buffer,
+    /// Its vertices and indices in the arenas (`Renderer::arenas`).
+    place: batch::Placement,
+    /// Indices drawn: the range may be longer (a replacement that fitted kept it).
     index_count: u32,
     bounds: Option<Bounds>,
     /// Any vertex with a bend weight: bounds get padded for the sway.
     wind: bool,
-    /// Terrain chunks: eight u8 layer weights per vertex.
-    weights: Option<wgpu::Buffer>,
+    /// A terrain chunk: eight u8 layer weights per vertex, in its arena's weight buffer.
+    weights: bool,
 }
 
 /// One (mesh, material) of an item at one level of detail.
@@ -726,13 +982,18 @@ struct Item {
     parts: Vec<Part>,
     /// Max camera distance per level of detail, ascending.
     lods: Vec<f32>,
-    /// Sorted by `CLUSTER_CELL` so each cluster is a contiguous range.
+    /// Sorted by `CLUSTER_CELL`, so each cluster is a contiguous range.
     transforms: Vec<Mat4>,
     /// Its instances' range in the pool (`batch::InstancePool`): `cap` from `base`.
     base: u32,
     cap: u32,
     bounds: Option<Bounds>,
     clusters: Vec<Cluster>,
+    /// Its clusters in 128 m blocks of the ground grid, each with the bounds of its clusters
+    /// (`update_lods` steps over those of a block past the item's last level);
+    /// `block_of[ci]`: the block of cluster `ci`.
+    blocks: Vec<Block>,
+    block_of: Vec<u32>,
     /// The bounding radius of its largest instance (m, `update_bounds`): what the reflection
     /// leaves out when it would be under `MIN_REFLECTED_PX`.
     size: f32,
@@ -745,6 +1006,8 @@ struct Item {
     follows_reach: bool,
     /// Casts shadows with the level it is drawn with (`set_item_shadow_exact`).
     shadow_exact: bool,
+    /// Casts shadows into the cascades from this index on (`set_item_shadow_cascades`); 0: all.
+    shadow_from: u8,
     /// Casts shadows past its finest level with this mesh (a tree's few untextured blobs,
     /// dithered by the density in its UVs) instead of its impostor's cards.
     shadow_caster: Option<MeshId>,
@@ -752,6 +1015,8 @@ struct Item {
     conifer: bool,
     /// Lawn grass (`set_item_grass`): bends far more with the gusts.
     grass: bool,
+    /// Listed in `Renderer::moved` (an instance moved since the last frame).
+    moved: bool,
 }
 
 /// Instances in one ground cell: culled as a unit, drawn as one range, one
@@ -782,6 +1047,31 @@ struct Cluster {
     fade_slot: u32,
 }
 
+/// The item's clusters of one 128 m block of the ground grid (16 x 16 cells), with their
+/// bounds; which are its clusters says `Item::block_of`. `update_lods` leaves the clusters of
+/// a block beyond the item's last level out.
+#[derive(Default)]
+struct Block {
+    bounds: Option<Bounds>,
+    /// `update_lods`: past the item's last level with nothing dissolving, no level there can
+    /// change, and its clusters are left out (an item with an impostor draws them at that
+    /// level, so theirs get their sort keys only).
+    beyond: bool,
+}
+
+/// The ranges of consecutive elements of `items` that are `same` as the one before: a partition
+/// of `0..items.len()`, in order.
+fn same_ranges<T>(items: &[T], same: impl Fn(&T, &T) -> bool) -> Vec<std::ops::Range<u32>> {
+    let mut out: Vec<std::ops::Range<u32>> = Vec::new();
+    for i in 0..items.len() {
+        match out.last_mut() {
+            Some(r) if same(&items[i - 1], &items[i]) => r.end = i as u32 + 1,
+            _ => out.push(i as u32..i as u32 + 1),
+        }
+    }
+    out
+}
+
 impl Item {
     /// Instances `r` of the item, in the pool.
     fn pool_range(&self, r: &std::ops::Range<u32>) -> std::ops::Range<u32> {
@@ -810,7 +1100,9 @@ enum Pipe {
 /// What a planned draw binds as group 1.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Group1 {
-    Material(u32),
+    /// A texture set (`Renderer::texture_sets`): every material with these maps shares it, and
+    /// each instance names its own row of the material table.
+    Set(u32),
     Terrain,
     Impostor(u32),
 }
@@ -829,11 +1121,10 @@ struct Draw {
     g1: Option<Group1>,
     /// Group 2: from the fade slots or the draw slots, and the slot.
     g2: Option<(bool, u32)>,
-    /// The mesh drawn indexed (`vertices` its index count), or `None` for impostor quads.
-    mesh: Option<u32>,
+    /// The mesh drawn indexed, or `None` for impostor quads.
+    mesh: Option<DrawMesh>,
+    /// The mesh's indices (`DrawMesh::range`'s length) or the quads' vertices.
     vertices: u32,
-    /// The terrain chunk (a mesh id) whose layer weights go in vertex slot 2.
-    weights: Option<u32>,
     src: Src,
     instances: std::ops::Range<u32>,
     triangles: u64,
@@ -841,18 +1132,40 @@ struct Draw {
     view: bool,
 }
 
+/// A mesh a planned draw names (`Draw::mesh`): its id, its arena and its index range there, and
+/// its first vertex (the base vertex of `draw_indexed`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct DrawMesh {
+    id: u32,
+    arena: u32,
+    range: batch::Span,
+    base_vertex: i32,
+}
+
+impl GpuMesh {
+    /// What a draw of all its indices names.
+    fn draw(&self, id: MeshId) -> DrawMesh {
+        DrawMesh {
+            id: id.0,
+            arena: self.place.arena,
+            range: batch::Span::new(self.place.indices.first, self.index_count),
+            base_vertex: self.place.vertices.first as i32,
+        }
+    }
+}
+
 /// Draws that can share one: by `tag` (the category; impostors and shadow casters have their
 /// own), pipeline, group 1, mesh, and whether group 2 is bound (every part's draw slot holds
 /// just its mesh id, and every settled impostor's the same fade, so any of them serves).
-type BatchKey = (u8, Pipe, Option<Group1>, Option<u32>, u32, bool);
+type BatchKey = (u8, Pipe, Option<Group1>, Option<DrawMesh>, u32, bool);
 
 struct Batch {
     tag: u8,
     draw: Draw,
     /// The nearest run's sort key.
     first: f32,
-    /// Sort key, first pool instance and count of each run.
-    runs: Vec<(f32, u32, u32)>,
+    /// Sort key, first pool instance, count and material row of each run.
+    runs: Vec<(f32, u32, u32, u32)>,
 }
 
 #[derive(Default)]
@@ -920,8 +1233,16 @@ impl RunCache {
 }
 
 impl Batches {
-    /// Adds `item`'s `runs` (of its own instances, with sort keys) to the batch of `draw`.
-    fn add(&mut self, tag: u8, draw: Draw, item: &Item, runs: &[(f32, std::ops::Range<u32>)]) {
+    /// Adds `item`'s `runs` (of its own instances, with sort keys) of parts with material `row`
+    /// to the batch of `draw`.
+    fn add(
+        &mut self,
+        tag: u8,
+        draw: Draw,
+        item: &Item,
+        row: u32,
+        runs: &[(f32, std::ops::Range<u32>)],
+    ) {
         if runs.is_empty() {
             return;
         }
@@ -947,13 +1268,14 @@ impl Batches {
         for (k, r) in runs {
             let k = *k;
             b.first = b.first.min(k);
-            b.runs.push((k, item.base + r.start, r.len() as u32));
+            b.runs.push((k, item.base + r.start, r.len() as u32, row));
         }
     }
 
-    /// One draw per batch (by tag and pipeline, then front to back): a single run straight
-    /// from the pool, several gathered (their pool indices appended to `gather`, nearest first).
-    fn emit(&mut self, draws: &mut Vec<Draw>, gather: &mut Vec<u32>) {
+    /// One draw per batch (by tag and pipeline, then front to back), all gathered: each run's
+    /// pool indices go into `gather` with its material row, nearest first (a single run too: the
+    /// draw then needs no slot with a material, and every batch draws the same way).
+    fn emit(&mut self, draws: &mut Vec<Draw>, gather: &mut batch::GatherList) {
         self.index.clear();
         let mut list = std::mem::take(&mut self.list);
         list.sort_by(|a, b| {
@@ -962,18 +1284,17 @@ impl Batches {
                 .then(a.first.total_cmp(&b.first))
         });
         for mut b in list {
-            if let [(_, start, n)] = b.runs[..] {
-                b.draw.instances = start..start + n;
-                b.draw.src = Src::Pool;
-            } else {
-                b.runs.sort_by(|x, y| x.0.total_cmp(&y.0));
-                let at = gather.len() as u32;
-                for &(_, start, n) in &b.runs {
-                    gather.extend(start..start + n);
-                }
-                b.draw.instances = at..gather.len() as u32;
-                b.draw.src = Src::Gathered;
+            b.runs.sort_by(|x, y| x.0.total_cmp(&y.0));
+            let start = gather.indices.len() as u32;
+            for &(_, first, n, row) in &b.runs {
+                gather.indices.extend(first..first + n);
+                gather
+                    .materials
+                    .extend(std::iter::repeat_n(row, n as usize));
             }
+            let mesh = b.draw.mesh.map_or(FROM_INSTANCE, |m| m.id);
+            b.draw.instances = gather.batch(start, mesh);
+            b.draw.src = Src::Gathered;
             draws.push(b.draw);
         }
     }
@@ -985,9 +1306,97 @@ struct FramePlans {
     shadows: Vec<Vec<Draw>>,
     snow: Option<Vec<Draw>>,
     depth: Vec<Draw>,
-    reflection: Option<Vec<Draw>>,
+    /// Per layer of the planar reflection (empty: none): the scene mirrored about that
+    /// plane.
+    reflections: Vec<Vec<Draw>>,
     forward: Vec<Draw>,
     mirrors: Option<Vec<Draw>>,
+    /// Where each pass's indirect arguments start (`Renderer::write_indirect`): the shadow
+    /// layers, the snow cover map, the depth pre-pass, one slot per water plane whether it has
+    /// a pass this frame or not (`water::MAX_PLANES`), the forward pass, the mirrors.
+    args: Vec<u32>,
+}
+
+/// Bytes of one `DrawIndexedIndirectArgs` (five u32).
+const INDIRECT_ARGS: u32 = 20;
+
+/// A batched mesh draw can go through the indirect buffer (`Calls`).
+fn indirectable(d: &Draw) -> bool {
+    d.src == Src::Gathered && d.mesh.is_some()
+}
+
+/// Whether two draws share what one indirect call keeps: the pipeline, group 1 and group 2, and
+/// the arena, whose vertex and index buffers the pass binds for the run's first draw.
+fn same_bindings(a: &Draw, b: &Draw) -> bool {
+    a.pipe == b.pipe
+        && a.g1 == b.g1
+        && a.g2 == b.g2
+        && a.mesh.map(|m| m.arena) == b.mesh.map(|m| m.arena)
+}
+
+/// The indirect arguments of a batched mesh draw: what its direct `draw_indexed` names.
+fn draw_args(d: &Draw) -> [u32; 5] {
+    let m = d.mesh.expect("a mesh draw");
+    [
+        m.range.count,
+        d.instances.len() as u32,
+        m.range.first,
+        m.base_vertex as u32,
+        d.instances.start,
+    ]
+}
+
+/// How `record` issues planned draws, in their order: each on its own, or a run of two or more
+/// batched mesh draws with the same bindings as one indirect call (whose sub-draws are the
+/// run's draws). Yields (first draw, count).
+#[derive(Clone, Copy)]
+struct Calls<'a> {
+    draws: &'a [Draw],
+    at: usize,
+    /// Runs may be indirect calls (the device's `INDIRECT_FIRST_INSTANCE`).
+    indirect: bool,
+}
+
+impl<'a> Calls<'a> {
+    fn new(draws: &'a [Draw], indirect: bool) -> Self {
+        Self {
+            draws,
+            at: 0,
+            indirect,
+        }
+    }
+}
+
+impl Iterator for Calls<'_> {
+    type Item = (usize, usize);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let i = self.at;
+        let draws = self.draws;
+        let d = draws.get(i)?;
+        let mut n = 1;
+        if self.indirect && indirectable(d) {
+            while draws
+                .get(i + n)
+                .is_some_and(|next| indirectable(next) && same_bindings(d, next))
+            {
+                n += 1;
+            }
+        }
+        self.at = i + n;
+        Some((i, n))
+    }
+}
+
+/// Appends the arguments of every draw `record` sends through an indirect call.
+fn pack_args(out: &mut Vec<u8>, draws: &[Draw], indirect: bool) {
+    for (at, n) in Calls::new(draws, indirect) {
+        if n > 1 {
+            for d in &draws[at..at + n] {
+                out.extend_from_slice(&u32_bytes(&draw_args(d)));
+            }
+        }
+    }
 }
 
 const LOD_UNSET: u8 = u8::MAX;
@@ -1005,16 +1414,81 @@ const FADE_FRAMES: u8 = 16;
 /// switch without one.
 const FADE_SLOTS: usize = 1024;
 
+#[derive(Clone, Copy)]
 struct FarCache {
     eye: Vec3,
     proj: Mat4,
     matrix: Mat4,
 }
 
+/// The endless ground's own material: row 0 of the material table.
+const GROUND_ROW: u32 = 0;
+
+/// The mesh id, or material row, of a draw slot whose draw takes it from each instance instead
+/// (`Gather`; `scene.wgsl` `FROM_INSTANCE`).
+const FROM_INSTANCE: u32 = u32::MAX;
+
 struct GpuMaterial {
-    buffer: wgpu::Buffer,
-    bind: wgpu::BindGroup,
+    /// Its texture set: the bind group of group 1 (`Renderer::texture_sets`).
+    set: u32,
     cpu: Material,
+    /// Its base map is bound (the impostor bake picks its pipeline by it).
+    has_base: bool,
+    /// The identity instance the impostor bake draws its parts with, carrying the material's
+    /// row as a gathered instance does (`write_instances` leaves it out of the pool).
+    identity: wgpu::Buffer,
+}
+
+/// One bind group of group 1: a material table and six maps with their samplers.
+struct GpuTextureSet {
+    bind: wgpu::BindGroup,
+    /// The maps it binds, to make its bind group again when the table grows.
+    maps: [Option<TextureId>; 6],
+}
+
+/// The texture sets in use and how many materials use each (index 0, never given back, binds
+/// no map: every untextured material's).
+#[derive(Default)]
+struct TextureSets {
+    index:
+        std::collections::HashMap<[Option<TextureId>; 6], u32, std::hash::BuildHasherDefault<Fx>>,
+    users: Vec<usize>,
+    free: Vec<u32>,
+}
+
+impl TextureSets {
+    /// The set that binds `maps`, counted one user more: a new one (a freed index, or the next)
+    /// when none does.
+    fn acquire(&mut self, maps: [Option<TextureId>; 6]) -> (u32, bool) {
+        if let Some(&i) = self.index.get(&maps) {
+            self.users[i as usize] += 1;
+            return (i, false);
+        }
+        let i = self.free.pop().unwrap_or(self.users.len() as u32);
+        if i as usize == self.users.len() {
+            self.users.push(0);
+        }
+        self.users[i as usize] = 1;
+        self.index.insert(maps, i);
+        (i, true)
+    }
+
+    /// One user fewer of the set `set` of `maps`: whether it was the last (index 0 stays).
+    fn release(&mut self, maps: [Option<TextureId>; 6], set: u32) -> bool {
+        let users = &mut self.users[set as usize];
+        *users -= 1;
+        if *users > 0 || set == 0 {
+            return false;
+        }
+        self.index.remove(&maps);
+        self.free.push(set);
+        true
+    }
+}
+
+/// The row of material `id` in the material table.
+fn row(id: MaterialId) -> u32 {
+    id.0 + 1
 }
 
 struct Layouts {
@@ -1130,7 +1604,11 @@ struct Targets {
     /// follows.
     ldr: [wgpu::TextureView; 2],
     bloom: Vec<wgpu::TextureView>,
+    /// The planar reflection of the water planes (`Quality::water_planes` layers, at least
+    /// one: a 1x1 stand-in while it is off): the whole array, to sample.
     reflection: wgpu::TextureView,
+    /// Its layers, to draw into (one pass each).
+    reflection_layers: Vec<wgpu::TextureView>,
     reflection_depth: wgpu::TextureView,
     shadow_layers: Vec<wgpu::TextureView>,
     resolve_bind: wgpu::BindGroup,
@@ -1167,6 +1645,9 @@ enum Pass {
     Shadow {
         far: bool,
         coarse: bool,
+        /// The cascade, to leave out the items that cast into later ones only
+        /// (`set_item_shadow_cascades`); `usize::MAX` for the snow cover map, which takes all.
+        cascade: usize,
     },
     Depth,
     Forward,
@@ -1196,6 +1677,44 @@ enum SkySource {
     },
 }
 
+/// A water surface of the frame as it was gathered: what draws it, and what the ranking
+/// (`water.rs`) sees of it.
+struct Seen {
+    /// The item (its `ItemId`), its part, and the part's material; `None` for the sea.
+    item: Option<(u32, u32, MaterialId)>,
+    surface: water::Surface,
+}
+
+/// Which clusters the passes' culling keeps (`Renderer::visible_clusters`): one flag per
+/// cluster of every item, item `i`'s at `offsets[i]..offsets[i + 1]` (`None` slots get none).
+/// Kept between passes and frames; the offsets are remade after items or their clusters change
+/// (`dirty`).
+#[derive(Default)]
+struct Visibility {
+    seen: Vec<bool>,
+    offsets: Vec<u32>,
+    dirty: bool,
+}
+
+impl Visibility {
+    /// `offsets` over `items` and `seen` over all their clusters, after a change.
+    fn follow(&mut self, items: &[Option<Item>]) {
+        if !self.dirty {
+            return;
+        }
+        self.dirty = false;
+        self.offsets.clear();
+        self.offsets.push(0);
+        let mut n = 0u32;
+        for item in items {
+            n += item.as_ref().map_or(0, |i| i.clusters.len() as u32);
+            self.offsets.push(n);
+        }
+        self.seen.clear();
+        self.seen.resize(n as usize, false);
+    }
+}
+
 /// Per-frame counters for `stats` (`record` takes `&self`).
 #[derive(Default)]
 struct Counters {
@@ -1208,6 +1727,16 @@ struct Counters {
     /// Triangles per pass group, as `passes`.
     pass_triangles: std::cell::RefCell<Vec<(&'static str, u64)>>,
     triangle_mark: Cell<u64>,
+    /// CPU ms of the passes' planning (`plan_items`, all passes) and of the cluster visibility
+    /// tests inside it (`visible_clusters`): `StageLog`. Native only: the web has no clock.
+    #[cfg(not(target_arch = "wasm32"))]
+    plan_ms: Cell<f64>,
+    #[cfg(not(target_arch = "wasm32"))]
+    visible_ms: Cell<f64>,
+    /// Draw calls issued since the last split (`call`), per pass group as `passes`.
+    calls: Cell<u32>,
+    pass_calls: std::cell::RefCell<Vec<(&'static str, u32)>>,
+    call_mark: Cell<u32>,
 }
 
 impl Counters {
@@ -1218,6 +1747,16 @@ impl Counters {
         if view {
             self.instances.set(self.instances.get() + instances);
         }
+    }
+
+    /// `n` draw calls issued (`pass_calls`).
+    fn calls(&self, n: u32) {
+        self.calls.set(self.calls.get() + n);
+    }
+
+    /// One draw call issued (`pass_calls`).
+    fn call(&self) {
+        self.calls(1);
     }
 
     /// Attributes the draws since the last split to `label`.
@@ -1233,6 +1772,12 @@ impl Counters {
         match triangles.iter_mut().find(|(l, _)| *l == label) {
             Some(e) => e.1 += t,
             None => triangles.push((label, t)),
+        }
+        let c = self.calls.get() - self.call_mark.replace(self.calls.get());
+        let mut calls = self.pass_calls.borrow_mut();
+        match calls.iter_mut().find(|(l, _)| *l == label) {
+            Some(e) => e.1 += c,
+            None => calls.push((label, c)),
         }
     }
 }
@@ -1260,9 +1805,10 @@ pub struct Renderer {
 
     globals: wgpu::Buffer,
     globals_bind: wgpu::BindGroup,
-    /// The mirrored camera's globals for the reflection pass.
-    reflect_globals: wgpu::Buffer,
-    reflect_globals_bind: wgpu::BindGroup,
+    /// The mirrored camera's globals for the reflection passes: one per plane with a planar
+    /// reflection (layer `k` of the planar reflection draws with `reflect_globals[k]`).
+    reflect_globals: [wgpu::Buffer; water::MAX_PLANES as usize],
+    reflect_globals_bind: [wgpu::BindGroup; water::MAX_PLANES as usize],
     globals_only_bind: wgpu::BindGroup,
     /// Globals, sampler and sky source for the environment passes.
     sky_bind: wgpu::BindGroup,
@@ -1299,10 +1845,12 @@ pub struct Renderer {
     bounce_albedo: Option<Vec3>,
     atmosphere: Atmosphere,
     ground: Option<Ground>,
-    ground_material: GpuMaterial,
     /// A scene material the ground is drawn with (`set_ground_material`).
     ground_look: Option<MaterialId>,
     ground_slot: u32,
+    /// The draw slot of every gathered mesh batch: its mesh id and material row come from each
+    /// instance, so the slot stays bound over them all (`FROM_INSTANCE`).
+    batch_slot: u32,
     terrain: terrain::TerrainGpu,
     sea: sea::SeaGpu,
     /// GPU grass over the lawns and meadows (`set_grass`).
@@ -1386,12 +1934,53 @@ pub struct Renderer {
     /// Every item's instances (`batch.rs`), and the frame's batches gathered from them.
     pool: batch::InstancePool,
     gather: batch::Gather,
+    /// The frame's indirect draws (`write_indirect`): one buffer, rewritten every frame, a
+    /// range per pass; grown when needed, never shrunk.
+    indirect: wgpu::Buffer,
+    /// Arguments (`INDIRECT_ARGS` bytes each) it holds.
+    indirect_capacity: u32,
+    /// This frame's arguments, packed; kept between frames.
+    indirect_args: Vec<u8>,
+    /// Batched draws go through the indirect buffer (the device's `INDIRECT_FIRST_INSTANCE`):
+    /// else each is a direct draw of the same arguments (`record`). A test switches it off.
+    multi_draw: bool,
+    /// The static meshes' vertex and index buffers: one arena until it is full at the device's
+    /// `max_buffer_size`, then one more (`batch::MeshRanges` says which mesh lies where).
+    arenas: Vec<batch::MeshArena>,
+    mesh_ranges: batch::MeshRanges,
     meshes: Vec<Option<GpuMesh>>,
+    /// Every material's parameters (`scene.wgsl` `materials`): row 0 the endless ground's own,
+    /// row `id + 1` each material. Grown like the arenas (every texture set's bind group is made
+    /// again: all of them bind it); `material_bytes` is its CPU copy for that.
+    material_table: wgpu::Buffer,
+    material_capacity: u32,
+    material_bytes: Vec<u8>,
+    /// Group 1 by texture set: which maps, how many materials use them (`TextureSets`), and
+    /// the bind group of each index.
+    sets: TextureSets,
+    texture_sets: Vec<Option<GpuTextureSet>>,
     materials: Vec<Option<GpuMaterial>>,
     textures: Vec<Option<texture::GpuTexture>>,
     items: Vec<Option<Item>>,
     bounds_dirty: bool,
+    /// Items an instance of which `set_instance` moved since the last frame: their bounds and
+    /// the scene's are made again once, when the frame is drawn, and the shadow maps they reach
+    /// are made stale (`stale_moved`).
+    moved: Vec<u32>,
+    /// What `update_moved` found of the moved items, until the frame's cascades are known:
+    /// each one's bounds before and after, and the first cascade it casts into. Taken by
+    /// `stale_moved`, which gives it back empty; kept, so nothing is allocated while parts move.
+    reached: Vec<(Option<Bounds>, Option<Bounds>, u8)>,
+    /// How often the shadow caches were thrown away (for tests that posing does not do it per
+    /// instance).
+    #[cfg(test)]
+    shadow_invalidations: usize,
     scene_bounds: Option<Bounds>,
+    /// The passes' cluster visibility (`Visibility`), rewritten per pass.
+    visibility: Visibility,
+    /// `update_lods` skips blocks past the last level whose clusters are all culled (a test
+    /// switches it off).
+    lod_skip: bool,
 
     view: Mat4,
     proj: Mat4,
@@ -1423,6 +2012,13 @@ pub struct Renderer {
     /// Cascades whose map shows an earlier sun than `sun` (`set_sun` moved it, a picture asks for
     /// a fresh one): still sampled with their own matrix until `cascade_refresh` redraws them.
     cascade_stale: [bool; shadow::MAX_CASCADES],
+    /// Where the moved items the cached far cascade was spared for can shade (`stale_moved`):
+    /// the union of their shadows' reach, from the far map's last draw. Each frame's views test
+    /// it (`far_dirty_sampled`); the frame one shades from it draws the far map again.
+    far_dirty: Option<Bounds>,
+    /// How often the cached far cascade was drawn (for tests of what spares it).
+    #[cfg(test)]
+    far_draws: u32,
     /// `set_sun` moved the sun since the last frame: the sun is moving (a dragged time of day).
     sun_moving: bool,
     frame: u64,
@@ -1436,6 +2032,15 @@ pub struct Renderer {
     timer: Option<timing::Timer>,
     counters: Counters,
     last_stats: RenderStats,
+    /// The water surfaces of the frame, their planes and tiers (`water.rs`); the buffers are
+    /// reused every frame.
+    water: water::Ranking,
+    water_seen: Vec<Seen>,
+    water_surfaces: Vec<water::Surface>,
+    /// The CPU stage times of each frame, a line per frame (`StageLog`): when
+    /// `VISIONCRAFT_STAGE_TIMINGS` names a file (native tools: the bench).
+    #[cfg(not(target_arch = "wasm32"))]
+    stage_log: Option<Box<stage::StageLog>>,
 }
 
 impl Renderer {
@@ -1484,7 +2089,8 @@ impl Renderer {
             })
         };
         let globals = uniform("globals", globals_size());
-        let reflect_globals = uniform("reflection globals", globals_size());
+        let reflect_globals =
+            std::array::from_fn(|_| uniform("reflection globals", globals_size()));
         let env = env::Env::new(device, queue, module(&modules, "env"), &layouts.sky_source);
         let globals_only_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("globals only"),
@@ -1510,7 +2116,12 @@ impl Renderer {
             }],
         });
         let draw_capacity = 64;
-        let draw_buffer = uniform("draws", SLOT * draw_capacity as u64);
+        let draw_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("draws"),
+            size: SLOT * draw_capacity as u64,
+            usage: draw_slot_usage(),
+            mapped_at_creation: false,
+        });
         let draw_bind = draw_bind_group(device, &layouts.draw, &draw_buffer);
         let fade_buffer = uniform("fade draws", SLOT * FADE_SLOTS as u64);
         let fade_bind = draw_bind_group(device, &layouts.draw, &fade_buffer);
@@ -1614,17 +2225,19 @@ impl Renderer {
             &physical.sky_view,
             [&room_volume.1, &occupancy.1, &sky_occ.1],
         );
-        let reflect_globals_bind = globals_bind_group(
-            device,
-            &layouts.globals,
-            &reflect_globals,
-            &env.view,
-            &env_sampler,
-            &light_buffer,
-            &grid_buffer,
-            &physical.sky_view,
-            [&room_volume.1, &occupancy.1, &sky_occ.1],
-        );
+        let reflect_globals_bind = reflect_globals.each_ref().map(|buffer| {
+            globals_bind_group(
+                device,
+                &layouts.globals,
+                buffer,
+                &env.view,
+                &env_sampler,
+                &light_buffer,
+                &grid_buffer,
+                &physical.sky_view,
+                [&room_volume.1, &occupancy.1, &sky_occ.1],
+            )
+        });
         let sky_bind = sky_bind_group(
             device,
             &layouts.sky_source,
@@ -1645,29 +2258,21 @@ impl Renderer {
             false,
         );
         let mipmapper = texture::Mipmapper::new(device, module(&modules, "mip"));
-        let sun = Sun::from_angles(180.0, 45.0);
-        let sky = sky::Sky::new(sun.direction);
-        let ground_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("ground material"),
-            size: MATERIAL_SIZE,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        let indirect_capacity = 256u32;
+        let indirect = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("indirect draws"),
+            size: u64::from(indirect_capacity) * u64::from(INDIRECT_ARGS),
+            usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        // The ground's material has no maps: white textures, repeat sampler.
-        let ground_entries: Vec<_> = (0..13)
-            .map(|b| wgpu::BindGroupEntry {
-                binding: b,
-                resource: match b {
-                    0 => ground_buffer.as_entire_binding(),
-                    1..=6 => wgpu::BindingResource::TextureView(&white),
-                    _ => wgpu::BindingResource::Sampler(&repeat_sampler),
-                },
-            })
-            .collect();
-        let ground_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("ground material"),
-            layout: &layouts.material,
-            entries: &ground_entries,
+        let sun = Sun::from_angles(180.0, 45.0);
+        let sky = sky::Sky::new(sun.direction);
+        let material_capacity = 64u32;
+        let material_table = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("materials"),
+            size: u64::from(material_capacity) * MATERIAL_SIZE,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
         let cloud_volume = clouds::CloudVolume::new(device, queue, &layouts);
         let layouts_terrain = layouts.terrain.clone();
@@ -1725,12 +2330,8 @@ impl Renderer {
             atmosphere: Atmosphere::default(),
             ground: None,
             ground_look: None,
-            ground_material: GpuMaterial {
-                buffer: ground_buffer,
-                bind: ground_bind,
-                cpu: Material::default(),
-            },
             ground_slot: 0,
+            batch_slot: 0,
             terrain: terrain::TerrainGpu::new(device, queue, &layouts_terrain),
             sea: sea::SeaGpu::new(device, &layouts_sea),
             grass: grass::GrassGpu::new(device),
@@ -1776,11 +2377,33 @@ impl Renderer {
             upload_belt: wgpu::util::StagingBelt::new(device.clone(), UPLOAD_CHUNK),
             pool: batch::InstancePool::new(device, 4096),
             gather: batch::Gather::new(device),
+            indirect,
+            indirect_capacity,
+            indirect_args: Vec::new(),
+            multi_draw: device
+                .features()
+                .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE),
+            arenas: Vec::new(),
+            mesh_ranges: batch::MeshRanges::default(),
             meshes: Vec::new(),
+            material_table,
+            material_capacity,
+            material_bytes: vec![0; (material_capacity * MATERIAL_SIZE as u32) as usize],
+            sets: TextureSets::default(),
+            texture_sets: Vec::new(),
             materials: Vec::new(),
             textures: Vec::new(),
             items: Vec::new(),
+            visibility: Visibility {
+                dirty: true,
+                ..Visibility::default()
+            },
+            lod_skip: true,
             bounds_dirty: false,
+            moved: Vec::new(),
+            reached: Vec::new(),
+            #[cfg(test)]
+            shadow_invalidations: 0,
             scene_bounds: None,
             view: Mat4::look_at_rh(Vec3::new(0.0, 1.7, 10.0), Vec3::ZERO, Vec3::Y),
             proj: Mat4::perspective_rh(1.0, 1.0, 0.1, 1000.0),
@@ -1801,6 +2424,9 @@ impl Renderer {
             far_cache: None,
             cascade_rendered: [None; shadow::MAX_CASCADES],
             cascade_stale: [false; shadow::MAX_CASCADES],
+            far_dirty: None,
+            #[cfg(test)]
+            far_draws: 0,
             sun_moving: false,
             frame: 0,
             overlay_cpu: (Vec::new(), Vec::new()),
@@ -1811,8 +2437,20 @@ impl Renderer {
             timer: timing::Timer::new(device, queue),
             counters: Counters::default(),
             last_stats: RenderStats::default(),
+            water: water::Ranking::default(),
+            water_seen: Vec::new(),
+            water_surfaces: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            stage_log: stage::StageLog::from_env(),
         };
-        renderer.ground_slot = renderer.alloc_slot(MeshId(u32::MAX - 1));
+        // The set without maps (every untextured material's), the ground's row and the two
+        // slots that never change.
+        let (set, new) = renderer.sets.acquire([None; 6]);
+        assert!(new && set == 0);
+        renderer.put_set(set, [None; 6]);
+        renderer.write_row(GROUND_ROW, &material_bytes(&Material::default(), 0));
+        renderer.ground_slot = renderer.alloc_slot(MeshId(u32::MAX - 1), GROUND_ROW);
+        renderer.batch_slot = renderer.alloc_slot(MeshId(FROM_INSTANCE), FROM_INSTANCE);
         renderer.update_ambient(true);
         renderer
     }
@@ -1836,20 +2474,16 @@ impl Renderer {
 
     /// On a Vulkan device that cannot shade per sample, MSAA stays off (`coverage.rs`).
     pub fn set_quality(&mut self, quality: Quality) {
-        let quality = self.coverage.quality(quality);
-        let quality = Quality {
-            cascades: quality.cascades.clamp(1, shadow::MAX_CASCADES as u32),
-            impostor_resolution: quality.impostor_resolution.clamp(64, 1024),
-            render_scale: if quality.render_scale.is_nan() {
-                1.0
-            } else {
-                quality.render_scale.clamp(0.5, 1.0)
-            },
-            ..quality
-        };
+        let quality = self.coverage.quality(quality.sanitized());
         if quality == self.quality {
             return;
         }
+        // The shadow filter only reaches the globals: no pipeline, target or shadow map of
+        // the renderer depends on it, so a picture's own filter costs nothing to swap in.
+        let filter_only = Quality {
+            shadow_filter: quality.shadow_filter,
+            ..self.quality
+        } == quality;
         let (fast, samples) = (self.quality.fast_shading, self.quality.samples());
         if quality.fast_shading != fast {
             // Other shaders: every pipeline of the scene and the sky, made once per shading and
@@ -1893,7 +2527,9 @@ impl Renderer {
             self.other_sampled.push((fast, samples, old));
         }
         self.quality = quality;
-        self.rebuild_targets();
+        if !filter_only {
+            self.rebuild_targets();
+        }
     }
 
     /// What wgpu reports about this renderer's adapter and device
@@ -2185,12 +2821,7 @@ impl Renderer {
                 projection: Projection::Triplanar { scale_m: 1.0 },
                 ..Default::default()
             };
-            self.queue.write_buffer(
-                &self.ground_material.buffer,
-                0,
-                &material_bytes(&material, 0),
-            );
-            self.ground_material.cpu = material;
+            self.write_row(GROUND_ROW, &material_bytes(&material, 0));
         }
         if relight {
             self.update_ambient(true);
@@ -2200,7 +2831,36 @@ impl Renderer {
     /// Draws the endless ground with `material` (its maps, scale and variation) instead of the
     /// plain colour of `set_ground`, which still lights the environment below the horizon.
     pub fn set_ground_material(&mut self, material: Option<MaterialId>) {
+        if self.ground_look == material {
+            return;
+        }
         self.ground_look = material;
+        self.write_ground_slot();
+    }
+
+    /// The scene material the endless ground is drawn with (`set_ground_material`): `None`
+    /// without one, and once it was removed (the ground then takes its own look again).
+    fn ground_look_material(&self) -> Option<&GpuMaterial> {
+        self.materials.get(self.ground_look?.0 as usize)?.as_ref()
+    }
+
+    /// The row of the material table the endless ground is shaded with: its look's
+    /// (`set_ground_material`), else its own (`set_ground`, row 0). Its draw slot names it
+    /// (`write_ground_slot`).
+    fn ground_row(&self) -> u32 {
+        self.ground_look
+            .filter(|&id| matches!(self.materials.get(id.0 as usize), Some(Some(_))))
+            .map_or(GROUND_ROW, row)
+    }
+
+    /// The ground's draw slot, written for the material it is shaded with now (`ground_row`).
+    fn write_ground_slot(&mut self) {
+        let bytes = mesh_slot(MeshId(u32::MAX - 1), self.ground_row());
+        self.queue.write_buffer(
+            &self.draw_buffer,
+            u64::from(self.ground_slot) * SLOT,
+            &bytes,
+        );
     }
 
     /// The sky's source of light: the physical model (default), the
@@ -2587,10 +3247,11 @@ impl Renderer {
             SkySource::Physical => &self.physical.sky_view,
             SkySource::Preetham => &self.white,
         };
-        for (buffer, bind) in [
-            (&self.globals, &mut self.globals_bind),
-            (&self.reflect_globals, &mut self.reflect_globals_bind),
-        ] {
+        for (buffer, bind) in once((&self.globals, &mut self.globals_bind)).chain(
+            self.reflect_globals
+                .iter()
+                .zip(self.reflect_globals_bind.iter_mut()),
+        ) {
             *bind = globals_bind_group(
                 &self.device,
                 &self.layouts.globals,
@@ -2622,21 +3283,129 @@ impl Renderer {
     }
 
     pub fn add_mesh(&mut self, mesh: &Mesh) -> Result<MeshId, String> {
-        let gpu = self.upload_mesh(mesh)?;
+        let gpu = self.store_mesh(pack_mesh(mesh)?, None)?;
         self.meshes.push(Some(gpu));
         Ok(MeshId(self.meshes.len() as u32 - 1))
     }
 
-    /// Replaces a mesh in place: every item drawing it picks up the new data.
+    /// Replaces a mesh in place: every item drawing it picks up the new data. Data of the same
+    /// or a smaller size goes where the old was; more takes a new range of the arenas and the old
+    /// one is freed.
     pub fn replace_mesh(&mut self, id: MeshId, mesh: &Mesh) -> Result<(), String> {
-        let slot = self.meshes.get_mut(id.0 as usize).ok_or("unknown mesh")?;
-        if slot.is_none() {
-            return Err("mesh was removed".into());
-        }
-        let gpu = upload_mesh(&self.device, &self.queue, mesh)?;
+        self.replace_stored(id, pack_mesh(mesh)?, None)
+    }
+
+    /// Puts `packed` (and a terrain chunk's layer `weights`) where mesh `id`'s data was when
+    /// it fits, else in a new range of the arenas (the old one is freed).
+    fn replace_stored(
+        &mut self,
+        id: MeshId,
+        packed: PackedMesh,
+        weights: Option<Vec<u8>>,
+    ) -> Result<(), String> {
+        let old = match self.meshes.get(id.0 as usize) {
+            Some(Some(m)) => m.place,
+            Some(None) => return Err("mesh was removed".into()),
+            None => return Err("unknown mesh".into()),
+        };
+        let (vertices, indices) = (
+            packed.vertices.len() / VERTEX_STRIDE as usize,
+            packed.indices.len() / 4,
+        );
+        let gpu =
+            if vertices <= old.vertices.count as usize && indices <= old.indices.count as usize {
+                let arena = &self.arenas[old.arena as usize];
+                arena.write_vertices(&self.queue, old.vertices.first, &packed.vertices);
+                arena.write_indices(&self.queue, old.indices.first, &packed.indices);
+                if let Some(w) = &weights {
+                    arena.write_weights(&self.queue, old.vertices.first, w);
+                }
+                GpuMesh {
+                    place: old,
+                    index_count: indices as u32,
+                    bounds: packed.bounds,
+                    wind: packed.wind,
+                    weights: weights.is_some(),
+                }
+            } else {
+                let gpu = self.store_mesh(packed, weights)?;
+                self.mesh_ranges.release(&old);
+                gpu
+            };
         self.meshes[id.0 as usize] = Some(gpu);
         self.bounds_dirty = true;
         Ok(())
+    }
+
+    /// A mesh's packed data (and a terrain chunk's layer weights) into a range of the arenas.
+    fn store_mesh(
+        &mut self,
+        packed: PackedMesh,
+        weights: Option<Vec<u8>>,
+    ) -> Result<GpuMesh, String> {
+        let (vertices, indices) = (
+            packed.vertices.len() as u32 / VERTEX_STRIDE as u32,
+            packed.indices.len() as u32 / 4,
+        );
+        let place = self.place(vertices, indices)?;
+        let arena = &self.arenas[place.arena as usize];
+        arena.write_vertices(&self.queue, place.vertices.first, &packed.vertices);
+        arena.write_indices(&self.queue, place.indices.first, &packed.indices);
+        if let Some(w) = &weights {
+            arena.write_weights(&self.queue, place.vertices.first, w);
+        }
+        Ok(GpuMesh {
+            place,
+            index_count: indices,
+            bounds: packed.bounds,
+            wind: packed.wind,
+            weights: weights.is_some(),
+        })
+    }
+
+    /// Where a mesh of `vertices` vertices and `indices` indices goes: a free range of an arena;
+    /// else the last arena grows (its meshes keep their place: what it holds is copied in front
+    /// of the larger buffers, in an encoder submitted here, before any frame draws with it);
+    /// else a further arena, once that one is at the device's largest buffer.
+    fn place(&mut self, vertices: u32, indices: u32) -> Result<batch::Placement, String> {
+        if let Some(p) = self.mesh_ranges.alloc(vertices, indices) {
+            return Ok(p);
+        }
+        let max_buffer = self.device.limits().max_buffer_size;
+        let max = [(max_buffer / VERTEX_STRIDE) as u32, (max_buffer / 4) as u32];
+        let last = self.mesh_ranges.len().checked_sub(1);
+        let (arena, capacity) = match last.and_then(|i| {
+            self.mesh_ranges
+                .grow(i, vertices, indices, max)
+                .map(|c| (i, c))
+        }) {
+            Some(grown) => grown,
+            None => {
+                if vertices > max[0] || indices > max[1] {
+                    return Err(format!(
+                        "a mesh of {vertices} vertices and {indices} indices is larger than the device's largest buffer"
+                    ));
+                }
+                let i = self.mesh_ranges.push();
+                let capacity = self
+                    .mesh_ranges
+                    .grow(i, vertices, indices, max)
+                    .expect("a new arena takes the mesh");
+                (i, capacity)
+            }
+        };
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        if let Some(a) = self.arenas.get_mut(arena) {
+            a.grow(&self.device, &mut encoder, capacity);
+        } else {
+            self.arenas
+                .push(batch::MeshArena::new(&self.device, capacity, VERTEX_STRIDE));
+        }
+        self.mesh_ranges.set_capacity(arena, capacity.0, capacity.1);
+        self.queue.submit([encoder.finish()]);
+        self.mesh_ranges
+            .alloc(vertices, indices)
+            .ok_or_else(|| "no room in the arena that was just made for it".into())
     }
 
     /// A terrain chunk: a mesh (add it with `add_item` and any material,
@@ -2655,38 +3424,26 @@ impl Renderer {
         id: MeshId,
         chunk: &TerrainChunk,
     ) -> Result<(), String> {
-        match self.meshes.get(id.0 as usize) {
-            Some(Some(_)) => {}
-            Some(None) => return Err("mesh was removed".into()),
-            None => return Err("unknown mesh".into()),
-        }
-        let gpu = self.upload_terrain(chunk)?;
-        self.meshes[id.0 as usize] = Some(gpu);
-        self.bounds_dirty = true;
-        Ok(())
-    }
-
-    fn upload_terrain(&self, chunk: &TerrainChunk) -> Result<GpuMesh, String> {
-        let weights = terrain::weight_bytes(chunk)?;
-        let mut gpu = upload_mesh(
-            &self.device,
-            &self.queue,
-            &Mesh {
+        self.replace_stored(
+            id,
+            pack_mesh(&Mesh {
                 positions: chunk.positions,
                 normals: chunk.normals,
                 indices: chunk.indices,
                 ..Default::default()
-            },
-        )?;
-        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("terrain weights"),
-            size: (weights.len() as u64).max(8),
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        self.queue.write_buffer(&buffer, 0, &weights);
-        gpu.weights = Some(buffer);
-        Ok(gpu)
+            })?,
+            Some(terrain::weight_bytes(chunk)?),
+        )
+    }
+
+    fn upload_terrain(&mut self, chunk: &TerrainChunk) -> Result<GpuMesh, String> {
+        let packed = pack_mesh(&Mesh {
+            positions: chunk.positions,
+            normals: chunk.normals,
+            indices: chunk.indices,
+            ..Default::default()
+        })?;
+        self.store_mesh(packed, Some(terrain::weight_bytes(chunk)?))
     }
 
     /// The terrain's material layers (1..=8; weight k of a chunk vertex
@@ -2838,19 +3595,13 @@ impl Renderer {
         None
     }
 
-    /// The buffers and bind groups of `parts`, and the bounds to bake (given, else theirs).
-    #[allow(clippy::type_complexity)]
+    /// The arena buffers, index ranges and bind groups of `parts`, and the bounds to bake
+    /// (given, else theirs).
     fn bake_list(
         &self,
         parts: &[(MeshId, MaterialId)],
         bounds: Option<(Vec3, Vec3)>,
-    ) -> Result<
-        (
-            Vec<(&wgpu::Buffer, &wgpu::Buffer, u32, &wgpu::BindGroup)>,
-            (Vec3, Vec3),
-        ),
-        String,
-    > {
+    ) -> Result<(Vec<impostor::BakePart<'_>>, (Vec3, Vec3)), String> {
         let mut list = Vec::new();
         let mut union_bounds: Option<Bounds> = None;
         for &(mesh, material) in parts {
@@ -2867,7 +3618,21 @@ impl Renderer {
             if let Some(b) = m.bounds {
                 union_bounds = Some(union_bounds.map_or(b, |u| union(u, b)));
             }
-            list.push((&m.vertices, &m.indices, m.index_count, &mat.bind));
+            let dm = m.draw(mesh);
+            let arena = &self.arenas[dm.arena as usize];
+            let set = self
+                .texture_sets
+                .get(mat.set as usize)
+                .and_then(Option::as_ref)
+                .ok_or("material without a texture set")?;
+            list.push(impostor::BakePart {
+                vertices: &arena.vertices,
+                indices: &arena.indices,
+                mesh: dm,
+                material: &set.bind,
+                identity: &mat.identity,
+                has_base: mat.has_base,
+            });
         }
         let bounds = bounds.or(union_bounds).ok_or("nothing to bake")?;
         Ok((list, bounds))
@@ -2883,6 +3648,37 @@ impl Renderer {
     pub fn set_item_shadow_exact(&mut self, item: ItemId, exact: bool) {
         if let Some(Some(it)) = self.items.get_mut(item.0 as usize) {
             it.shadow_exact = exact;
+        }
+    }
+
+    /// The item casts shadows into the cascades from index `first` on only: 0 (the default)
+    /// all of them, a `first` past the last cascade none at all. For far cells of a large scene,
+    /// which need no shadow in the metres a near cascade covers. Which cascades a frame
+    /// refreshes does not depend on it; the snow cover map takes every item as before.
+    ///
+    /// A change makes stale the maps whose casters it changes, those of `min(old, new)` to
+    /// `max(old, new)` (the cached far one among them when it lies in that range): each still
+    /// shows the item as it was, and is sampled with its own matrix until `cascade_refresh`
+    /// redraws it, the next frame while the sun stands still (`cascade_stale`). The same value
+    /// again changes nothing.
+    pub fn set_item_shadow_cascades(&mut self, item: ItemId, first: u8) {
+        let count = self.quality.cascades.clamp(1, shadow::MAX_CASCADES as u32) as usize;
+        let Some(Some(it)) = self.items.get_mut(item.0 as usize) else {
+            return;
+        };
+        if it.shadow_from == first {
+            return;
+        }
+        let (from, to) = (
+            it.shadow_from.min(first) as usize,
+            it.shadow_from.max(first) as usize,
+        );
+        it.shadow_from = first;
+        for c in from..to.min(count) {
+            // A map never drawn is drawn next frame anyway; nothing else's casters changed.
+            if self.cascade_rendered[c].is_some() {
+                self.cascade_stale[c] = true;
+            }
         }
     }
 
@@ -2903,7 +3699,7 @@ impl Renderer {
         if !matches!(self.impostors.get(impostor.0 as usize), Some(Some(_))) {
             return Err("unknown or removed impostor".into());
         }
-        let slot = self.alloc_slot(MeshId(u32::MAX - 2));
+        let slot = self.alloc_slot(MeshId(u32::MAX - 2), FROM_INSTANCE);
         self.impostor_slots_dirty = true;
         let Some(Some(it)) = self.items.get_mut(item.0 as usize) else {
             self.free_slots.push(slot);
@@ -3124,14 +3920,12 @@ impl Renderer {
 
     /// Frees a mesh. Items still referring to it draw nothing.
     pub fn remove_mesh(&mut self, id: MeshId) {
-        if let Some(slot) = self.meshes.get_mut(id.0 as usize) {
-            *slot = None;
+        if let Some(slot) = self.meshes.get_mut(id.0 as usize)
+            && let Some(old) = slot.take()
+        {
+            self.mesh_ranges.release(&old.place);
             self.bounds_dirty = true;
         }
-    }
-
-    fn upload_mesh(&self, mesh: &Mesh) -> Result<GpuMesh, String> {
-        upload_mesh(&self.device, &self.queue, mesh)
     }
 
     /// Uploads an RGBA8 image and generates its full mip chain on the GPU.
@@ -3150,40 +3944,95 @@ impl Renderer {
     }
 
     pub fn add_material(&mut self, material: &Material) -> MaterialId {
-        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("material"),
-            size: MATERIAL_SIZE,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        let id = MaterialId(self.materials.len() as u32);
+        self.ensure_rows(row(id) + 1);
+        // Its set until `set_material` gives it the real one.
+        let (set, _) = self.sets.acquire([None; 6]);
+        // An instance that is the identity with the material's row in `m1.w`: what the bake
+        // draws the material's parts with (`write_instances` does the same for the pool).
+        let identity = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("material identity instance"),
+            size: batch::INSTANCE_BYTES,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let bind = self.material_bind(&buffer, material);
+        let mut instance = [0.0; 16];
+        for i in [0, 5, 10, 15] {
+            instance[i] = 1.0;
+        }
+        instance[7] = f32::from_bits(row(id));
+        self.queue.write_buffer(&identity, 0, &f32_bytes(&instance));
         self.materials.push(Some(GpuMaterial {
-            buffer,
-            bind,
+            set,
             cpu: *material,
+            has_base: false,
+            identity,
         }));
-        let id = MaterialId(self.materials.len() as u32 - 1);
         self.set_material(id, material);
         id
     }
 
-    fn material_bind(&self, buffer: &wgpu::Buffer, material: &Material) -> wgpu::BindGroup {
-        let maps = material.maps().map(|id| {
-            match id.and_then(|id| self.textures.get(id.0 as usize)?.as_ref()) {
-                Some(t) => (
-                    &t.view,
-                    if t.repeat {
-                        &self.repeat_sampler
-                    } else {
-                        &self.clamp_sampler
-                    },
-                ),
-                None => (&self.white, &self.repeat_sampler),
+    /// Room for `rows` rows of the material table: a larger buffer (twice this one, or just
+    /// enough) with every row copied in front, and every texture set's bind group made again.
+    fn ensure_rows(&mut self, rows: u32) {
+        if rows <= self.material_capacity {
+            return;
+        }
+        let size = table_size(
+            rows,
+            self.material_capacity,
+            self.device.limits().max_storage_buffer_binding_size,
+        );
+        let table = self.storage_buffer("materials", size);
+        self.queue.write_buffer(&table, 0, &self.material_bytes);
+        self.material_table = table;
+        self.material_capacity = u32::try_from(size / MATERIAL_SIZE).expect("rows fit a u32");
+        self.material_bytes
+            .resize((self.material_capacity * MATERIAL_SIZE as u32) as usize, 0);
+        let maps: Vec<_> = self
+            .texture_sets
+            .iter()
+            .map(|s| s.as_ref().map(|s| s.maps))
+            .collect();
+        let binds: Vec<_> = maps
+            .iter()
+            .map(|maps| maps.map(|maps| self.texture_set_bind(maps)))
+            .collect();
+        for (set, bind) in self.texture_sets.iter_mut().zip(binds) {
+            if let Some((set, bind)) = set.as_mut().zip(bind) {
+                set.bind = bind;
             }
-        });
+        }
+    }
+
+    /// Writes a row of the material table (and its CPU copy).
+    fn write_row(&mut self, row: u32, bytes: &[u8]) {
+        let at = row as usize * MATERIAL_SIZE as usize;
+        self.material_bytes[at..at + bytes.len()].copy_from_slice(bytes);
+        self.queue
+            .write_buffer(&self.material_table, at as u64, bytes);
+    }
+
+    /// Group 1 of the maps `maps`: the material table and the six maps with their samplers
+    /// (absent ones: the white texture, repeating).
+    fn texture_set_bind(&self, maps: [Option<TextureId>; 6]) -> wgpu::BindGroup {
+        let maps =
+            maps.map(
+                |id| match id.and_then(|id| self.textures.get(id.0 as usize)?.as_ref()) {
+                    Some(t) => (
+                        &t.view,
+                        if t.repeat {
+                            &self.repeat_sampler
+                        } else {
+                            &self.clamp_sampler
+                        },
+                    ),
+                    None => (&self.white, &self.repeat_sampler),
+                },
+            );
         let mut entries = vec![wgpu::BindGroupEntry {
             binding: 0,
-            resource: buffer.as_entire_binding(),
+            resource: self.material_table.as_entire_binding(),
         }];
         for (i, (view, sampler)) in maps.iter().enumerate() {
             entries.push(wgpu::BindGroupEntry {
@@ -3196,38 +4045,60 @@ impl Renderer {
             });
         }
         self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("material"),
+            label: Some("texture set"),
             layout: &self.layouts.material,
             entries: &entries,
         })
+    }
+
+    /// Makes the bind group of the texture set `set` (newly acquired) over `maps`.
+    fn put_set(&mut self, set: u32, maps: [Option<TextureId>; 6]) {
+        let bind = self.texture_set_bind(maps);
+        if set as usize == self.texture_sets.len() {
+            self.texture_sets.push(None);
+        }
+        self.texture_sets[set as usize] = Some(GpuTextureSet { bind, maps });
     }
 
     pub fn set_material(&mut self, id: MaterialId, material: &Material) {
         let Some(Some(m)) = self.materials.get(id.0 as usize) else {
             return;
         };
-        let bind = self.material_bind(&m.buffer, material);
+        let (old_set, old_maps) = (m.set, m.cpu.maps());
+        let maps = material.maps();
         let present = |t: Option<TextureId>| {
             t.and_then(|t| self.textures.get(t.0 as usize)?.as_ref())
                 .is_some()
         };
-        let bits = texture_bits(
-            material.maps().map(present),
-            material.occlusion_map.is_none(),
-        );
-        self.queue
-            .write_buffer(&m.buffer, 0, &material_bytes(material, bits));
-        if let Some(Some(m)) = self.materials.get_mut(id.0 as usize) {
-            m.bind = bind;
-            m.cpu = *material;
+        let bits = texture_bits(maps.map(present), material.occlusion_map.is_none());
+        let (set, new) = self.sets.acquire(maps);
+        if new {
+            self.put_set(set, maps);
         }
+        if self.sets.release(old_maps, old_set) {
+            self.texture_sets[old_set as usize] = None;
+        }
+        self.write_row(row(id), &material_bytes(material, bits));
+        let Some(Some(m)) = self.materials.get_mut(id.0 as usize) else {
+            return;
+        };
+        m.set = set;
+        m.cpu = *material;
+        m.has_base = (bits & 1) != 0;
     }
 
     /// Frees a material. Items still using it draw nothing; the id is not
-    /// reused.
+    /// reused. A ground drawn with it goes back to its own look.
     pub fn remove_material(&mut self, id: MaterialId) {
-        if let Some(slot) = self.materials.get_mut(id.0 as usize) {
-            *slot = None;
+        let look = self.ground_look == Some(id);
+        if let Some(slot) = self.materials.get_mut(id.0 as usize)
+            && let Some(m) = slot.take()
+            && self.sets.release(m.cpu.maps(), m.set)
+        {
+            self.texture_sets[m.set as usize] = None;
+        }
+        if look {
+            self.write_ground_slot();
         }
     }
 
@@ -3253,6 +4124,7 @@ impl Renderer {
         lods.sort_by(f32::total_cmp);
         lods.dedup();
         lods.truncate(LOD_UNSET as usize - 1);
+        let capacity = self.draw_capacity;
         let parts: Vec<Part> = parts
             .iter()
             .map(|&(mesh, material, distance)| Part {
@@ -3262,7 +4134,7 @@ impl Renderer {
                     .iter()
                     .position(|&d| d == distance.max(0.0))
                     .unwrap_or(lods.len() - 1) as u8,
-                slot: self.alloc_slot(mesh),
+                slot: self.alloc_slot(mesh, row(material)),
             })
             .collect();
         // Terrain chunks cast with the level they are drawn with: a coarser level lies above the
@@ -3272,9 +4144,10 @@ impl Renderer {
             self.meshes
                 .get(p.mesh.0 as usize)
                 .and_then(Option::as_ref)
-                .is_some_and(|m| m.weights.is_some())
+                .is_some_and(|m| m.weights)
         });
         let id = ItemId(self.items.len() as u32);
+        self.visibility.dirty = true;
         self.items.push(Some(Item {
             parts,
             lods,
@@ -3283,20 +4156,36 @@ impl Renderer {
             cap: 0,
             bounds: None,
             clusters: Vec::new(),
+            blocks: Vec::new(),
+            block_of: Vec::new(),
             size: 0.0,
             impostor: None,
             shadow_exact: terrain,
+            shadow_from: 0,
             shadow_caster: None,
             cull_fade: 0.0,
             follows_reach: false,
             conifer: false,
             grass: false,
+            moved: false,
         }));
+        // The slots again when a later part's `alloc_slot` regrew the draw-slot buffer: its
+        // rewrite covers the parts of the items there are, and this one was not among them yet,
+        // so its earlier parts read zero there (the ground's material, mesh 0) until it is.
+        if self.draw_capacity != capacity
+            && let Some(Some(item)) = self.items.get(id.0 as usize)
+        {
+            for p in &item.parts {
+                let bytes = mesh_slot(p.mesh, row(p.material));
+                self.queue
+                    .write_buffer(&self.draw_buffer, u64::from(p.slot) * SLOT, &bytes);
+            }
+        }
         self.set_instances(id, instances);
         id
     }
 
-    fn alloc_slot(&mut self, mesh: MeshId) -> u32 {
+    fn alloc_slot(&mut self, mesh: MeshId, material: u32) -> u32 {
         let slot = self.free_slots.pop().unwrap_or_else(|| {
             self.next_slot += 1;
             self.next_slot - 1
@@ -3306,28 +4195,35 @@ impl Renderer {
             self.draw_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("draws"),
                 size: SLOT * self.draw_capacity as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                usage: draw_slot_usage(),
                 mapped_at_creation: false,
             });
             self.draw_bind = draw_bind_group(&self.device, &self.layouts.draw, &self.draw_buffer);
             self.impostor_slots_dirty = true;
+            // The ground's slot: the row it is shaded with now (a look's, else its own).
+            self.write_ground_slot();
+            // The gathered batches' slot too: a new buffer starts at zero, and row 0 is the
+            // ground's material (every instance of a batch then shaded like the ground).
             self.queue.write_buffer(
                 &self.draw_buffer,
-                self.ground_slot as u64 * SLOT,
-                &mesh_slot(MeshId(u32::MAX - 1)),
+                self.batch_slot as u64 * SLOT,
+                &mesh_slot(MeshId(FROM_INSTANCE), FROM_INSTANCE),
             );
             for item in self.items.iter().flatten() {
                 for p in &item.parts {
                     self.queue.write_buffer(
                         &self.draw_buffer,
                         p.slot as u64 * SLOT,
-                        &mesh_slot(p.mesh),
+                        &mesh_slot(p.mesh, row(p.material)),
                     );
                 }
             }
         }
-        self.queue
-            .write_buffer(&self.draw_buffer, slot as u64 * SLOT, &mesh_slot(mesh));
+        self.queue.write_buffer(
+            &self.draw_buffer,
+            slot as u64 * SLOT,
+            &mesh_slot(mesh, material),
+        );
         slot
     }
 
@@ -3336,6 +4232,14 @@ impl Renderer {
         let Some(Some(item)) = self.items.get_mut(id.0 as usize) else {
             return;
         };
+        // The last row but the wind's frequency (x's w) is spare: gathered instances carry their
+        // material and mesh there (`Gather`).
+        assert!(
+            instances
+                .iter()
+                .all(|m| m.y_axis.w == 0.0 && m.z_axis.w == 0.0 && m.w_axis.w == 1.0),
+            "instance matrices must be affine (last row 0, 0, 0, 1)"
+        );
         // More than its range holds: a new range, or (none left) a larger pool.
         let mut repack = false;
         if n > item.cap {
@@ -3348,42 +4252,144 @@ impl Renderer {
                 }
             };
         }
-        // Group by ground cell. This reorders the instances on the GPU; fine
-        // while nothing reads `instance_index` (per-instance data later must
-        // be permuted the same way).
-        let cell = |m: &Mat4| {
-            (
-                (m.w_axis.x / CLUSTER_CELL).floor() as i32,
-                (m.w_axis.z / CLUSTER_CELL).floor() as i32,
-            )
-        };
-        let mut sorted = instances.to_vec();
-        sorted.sort_by_key(cell);
-        item.clusters.clear();
-        for (i, m) in sorted.iter().enumerate() {
-            match item.clusters.last_mut() {
-                Some(c) if cell(&sorted[c.range.start as usize]) == cell(m) => c.range.end += 1,
-                _ => item.clusters.push(Cluster {
-                    range: i as u32..i as u32 + 1,
-                    bounds: None,
-                    lod: LOD_UNSET,
-                    far: LOD_UNSET,
-                    target: LOD_UNSET,
-                    key: [0.0; 2],
-                    fade: 0,
-                    to_far: false,
-                    fading: false,
-                    fade_slot: 0,
-                }),
-            }
+        // Group by ground cell: sorted by (cell), each cluster is a contiguous range. This
+        // reorders the instances on the GPU; fine while nothing reads `instance_index`
+        // (per-instance data later must be permuted the same way, which `instance_order`
+        // gives: the same cell, the same stable sort). The cells keep this order, not one by
+        // 128 m block: it is the order the pictures were made in, and it decides which of two
+        // equally distant leaves shows and which dissolving clusters get a fade slot when
+        // more dissolve than there are slots.
+        let mut sorted: Vec<_> = instances.iter().map(|m| (cluster_cell(m), *m)).collect();
+        sorted.sort_by_key(|(p, _)| *p);
+        let places: Vec<_> = sorted.iter().map(|(p, _)| *p).collect();
+        item.clusters = same_ranges(&places, |a, b| *a == *b)
+            .into_iter()
+            .map(|range| Cluster {
+                range,
+                bounds: None,
+                lod: LOD_UNSET,
+                far: LOD_UNSET,
+                target: LOD_UNSET,
+                key: [0.0; 2],
+                fade: 0,
+                to_far: false,
+                fading: false,
+                fade_slot: 0,
+            })
+            .collect();
+        // The 128 m blocks over the cells, in order of first appearance; each cluster knows
+        // its block.
+        item.blocks.clear();
+        item.block_of.clear();
+        item.block_of.reserve(item.clusters.len());
+        let mut seen: std::collections::HashMap<
+            (i32, i32),
+            u32,
+            std::hash::BuildHasherDefault<Fx>,
+        > = Default::default();
+        for c in &item.clusters {
+            let p = places[c.range.start as usize];
+            let key = (p.0.div_euclid(BLOCK_CELLS), p.1.div_euclid(BLOCK_CELLS));
+            let next = item.blocks.len() as u32;
+            item.block_of.push(*seen.entry(key).or_insert_with(|| {
+                item.blocks.push(Block::default());
+                next
+            }));
         }
-        item.transforms = sorted;
+        item.transforms = sorted.into_iter().map(|(_, m)| m).collect();
         if repack {
             self.repack_pool();
         } else {
             self.write_instances(id);
         }
+        self.visibility.dirty = true;
         self.bounds_dirty = true;
+    }
+
+    /// Where `set_instances` puts each of `matrices`: instance `i` of the list becomes
+    /// instance `order[i]` of the item (its instances are sorted by ground cell, stably).
+    pub fn instance_order(matrices: &[Mat4]) -> Vec<u32> {
+        let mut order: Vec<u32> = (0..matrices.len() as u32).collect();
+        order.sort_by_key(|&i| cluster_cell(&matrices[i as usize]));
+        let mut at = vec![0u32; order.len()];
+        for (pos, &i) in order.iter().enumerate() {
+            at[i as usize] = pos as u32;
+        }
+        at
+    }
+
+    /// Replaces instance `index` of an item (numbered as [`Self::instance_order`] counts them)
+    /// where it is: the same range in the pool, the same cluster. Its bounds and the scene's
+    /// are made again once when the frame is drawn, however many instances moved, and the
+    /// shadow maps its old or new shadow can be sampled in are made stale (`stale_moved`): the
+    /// others keep their caches. For the few instances that move every frame (the parts of a
+    /// model whose clip plays): nothing is sorted or allocated.
+    pub fn set_instance(&mut self, id: ItemId, index: usize, model_to_world: Mat4) {
+        // As `set_instances`: the last row but the wind's frequency (x's w) stays spare, a
+        // gathered instance carries its material and mesh there (`Gather`).
+        assert!(
+            model_to_world.y_axis.w == 0.0
+                && model_to_world.z_axis.w == 0.0
+                && model_to_world.w_axis.w == 1.0,
+            "instance matrices must be affine (last row 0, 0, 0, 1)"
+        );
+        let Some(mut item) = self.items.get_mut(id.0 as usize).and_then(Option::take) else {
+            return;
+        };
+        if index >= item.transforms.len() {
+            self.items[id.0 as usize] = Some(item);
+            return;
+        }
+        item.transforms[index] = model_to_world;
+        let mut m = model_to_world;
+        if let Some(h) = self.wind_height(&item) {
+            let hz = wind::plant_hz(h * m.x_axis.truncate().length(), item.conifer);
+            m.x_axis.w = if item.grass { -hz } else { hz };
+        }
+        // The matrix as the pool takes it, on the stack: no buffer is allocated per frame.
+        let mut bytes = [0u8; batch::INSTANCE_BYTES as usize];
+        for (i, f) in m.to_cols_array().iter().enumerate() {
+            bytes[i * 4..i * 4 + 4].copy_from_slice(&f.to_le_bytes());
+        }
+        self.queue.write_buffer(
+            &self.pool.buffer,
+            u64::from(item.base + index as u32) * batch::INSTANCE_BYTES,
+            &bytes,
+        );
+        // Listed once until the frame takes the list, however many of its instances move.
+        if !item.moved {
+            item.moved = true;
+            self.moved.push(id.0);
+        }
+        self.items[id.0 as usize] = Some(item);
+    }
+
+    /// The bounds of the items `set_instance` moved, and the scene's, made again (once a frame).
+    fn update_moved(&mut self) {
+        if self.moved.is_empty() {
+            return;
+        }
+        let mut moved = std::mem::take(&mut self.moved);
+        moved.sort_unstable();
+        moved.dedup();
+        for &i in &moved {
+            let Some(mut item) = self.items.get_mut(i as usize).and_then(Option::take) else {
+                continue;
+            };
+            let mesh_bounds = self.item_mesh_bounds(&item);
+            // The clusters', the blocks' and the item's: a moved instance may have left its
+            // cluster's old bounds, and a block that kept them would step over clusters that
+            // should draw (`update_lods`).
+            let before = item.bounds;
+            item_bounds(&mut item, mesh_bounds);
+            self.reached.push((before, item.bounds, item.shadow_from));
+            item.moved = false;
+            self.items[i as usize] = Some(item);
+        }
+        // Reused next frame: nothing is allocated while parts move.
+        moved.clear();
+        self.moved = moved;
+        self.scene_bounds_of_all();
     }
 
     /// A larger pool for every item's instances, written again.
@@ -3405,6 +4411,19 @@ impl Renderer {
         }
     }
 
+    /// How tall the tallest wind-blown mesh an item draws is in its own space (`None` for an
+    /// item nothing of which sways): from it and the scale drawn, each instance's sway
+    /// frequency (`write_instances`).
+    fn wind_height(&self, item: &Item) -> Option<f32> {
+        item.parts
+            .iter()
+            .filter_map(|p| self.meshes.get(p.mesh.0 as usize).and_then(Option::as_ref))
+            .filter(|m| m.wind)
+            .filter_map(|m| m.bounds)
+            .map(|(_, hi)| hi.y)
+            .reduce(f32::max)
+    }
+
     /// Uploads an item's instance matrices. The spare w of each matrix's first column carries
     /// the plant's own sway frequency (Hz; `wind::plant_hz` of its height in the world), which
     /// the vertex shaders read in every pass: no extra attribute, no per-draw uniform (the depth
@@ -3413,14 +4432,7 @@ impl Renderer {
         let Some(Some(item)) = self.items.get(id.0 as usize) else {
             return;
         };
-        let height = item
-            .parts
-            .iter()
-            .filter_map(|p| self.meshes.get(p.mesh.0 as usize)?.as_ref())
-            .filter(|m| m.wind)
-            .filter_map(|m| m.bounds)
-            .map(|(_, hi)| hi.y)
-            .reduce(f32::max);
+        let height = self.wind_height(item);
         let mut b = Bytes::default();
         for m in &item.transforms {
             let mut m = *m;
@@ -3485,6 +4497,7 @@ impl Renderer {
                 self.pool.ranges.release(item.base, item.cap);
                 self.free_slots.extend(item.parts.iter().map(|p| p.slot));
                 self.free_slots.extend(item.impostor.map(|(_, slot)| slot));
+                self.visibility.dirty = true;
             }
             self.bounds_dirty = true;
         }
@@ -3606,29 +4619,55 @@ impl Renderer {
     fn render_part(&mut self, encoder: &mut wgpu::CommandEncoder, part: FramePart) {
         #[cfg(not(target_arch = "wasm32"))]
         let cpu_start = std::time::Instant::now();
+        #[cfg(not(target_arch = "wasm32"))]
+        let lods_ms: f64;
+        #[cfg(not(target_arch = "wasm32"))]
+        let gather_ms: f64;
+        #[cfg(not(target_arch = "wasm32"))]
+        let record_ms: f64;
         if let Some(t) = &mut self.timer {
             t.begin();
         }
         self.counters = Counters::default();
         self.frame += 1;
+        // The scene changed: the cached cascades no longer cover it. (Instances that moved are
+        // narrower: `stale_moved`, once the frame's cascades are known.)
         if self.bounds_dirty {
-            self.invalidate_shadows(); // the scene changed
+            self.invalidate_shadows();
         }
+        self.update_moved();
         self.update_bounds();
+        #[cfg(not(target_arch = "wasm32"))]
+        let stage = std::time::Instant::now();
         self.update_lods();
-        let mut cascades = shadow::compute(
-            self.view,
-            self.proj,
-            (self.sun.direction + self.shadow_jitter).normalize(),
-            self.quality.cascades as usize,
-            self.quality.shadow_resolution,
-            self.shadow_distance,
-            self.scene_bounds,
-        );
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            lods_ms = stage.elapsed().as_secs_f64() * 1000.0;
+        }
+        let mut cascades = self.cascades();
+        self.stale_moved(&cascades);
         // Reuse the camera-centred last cascade while it still covers us.
         let last = cascades.count - 1;
         let cached = cascades.margin > 0.0;
         let sun_lit = self.sun.illuminance > 0.0;
+        let view_proj = self.proj * self.view;
+        // The water planes of the frame, ranked (`rank_water`): those with a planar pass, in the
+        // order of the reflection's layers.
+        self.rank_water(view_proj);
+        let mut planar = [(0usize, 0.0f32); water::MAX_PLANES as usize];
+        let mut passes = 0usize;
+        for i in 0..self.water.planes.len() {
+            if let Some(layer) = self.water.layer_of(i) {
+                planar[layer as usize] = (i, self.water.planes[i].height);
+                passes = passes.max(layer as usize + 1);
+            }
+        }
+        // A view of this frame shades from the far cascade where the moved items left their
+        // shadows (`far_dirty`): the far map is drawn again this frame.
+        if cached && self.far_dirty.is_some() && self.far_dirty_sampled(&cascades, &planar, passes)
+        {
+            self.cascade_stale[last] = true;
+        }
         let reuse = match &self.far_cache {
             Some(c) => c.proj == self.proj && c.eye.distance(self.eye) < cascades.margin,
             None => false,
@@ -3677,6 +4716,14 @@ impl Renderer {
                 self.cascade_stale[c] = false;
             }
         }
+        if cached && refresh[last] {
+            // Drawn with everything that moved since its last draw.
+            self.far_dirty = None;
+            #[cfg(test)]
+            {
+                self.far_draws += 1;
+            }
+        }
         // The snow cover map: straight down over a square round the eye, in whole texels. The
         // sea reads it too, as the height of the bed and the beach under the water.
         self.snow_cover = (self.snow > 0.0
@@ -3685,33 +4732,37 @@ impl Renderer {
         .then_some(self.scene_bounds)
         .flatten()
         .map(|(lo, hi)| snow_cover_matrix(self.eye, lo, hi, self.quality.shadow_resolution));
-        let view_proj = self.proj * self.view;
-        // The sea, seen from above, takes the planar reflection over any pond.
-        let water = (self.quality.water_reflection > 0)
-            .then(|| {
-                self.sea_plane(view_proj)
-                    .or_else(|| self.water_plane(view_proj))
-            })
-            .flatten();
+        let planes: [(f32, u32); water::MAX_PLANES as usize] =
+            std::array::from_fn(|k| (planar[k].1, k as u32));
         self.write_sea();
+        // The physical sky's LUTs (its two fixed ones the first time) go before the globals are
+        // written: the air's aerial perspective is on only once they are drawn
+        // (`PhysicalSky::ready`), so a first frame written before them went without it, and its
+        // surfaces differed from every later frame's (shafts.wgsl `fs_composite`). The passes
+        // read the globals of this frame: their writes are staged before anything encoded runs.
+        if self.sky_view_dirty && matches!(self.sky_source, SkySource::Physical) {
+            self.physical
+                .update(encoder, &self.globals_only_bind, self.timer.as_ref());
+        }
+        self.sky_view_dirty = false;
         let t = &self.targets;
         self.write_globals(
             &self.globals,
             &cascades,
             (self.view, self.proj, self.eye),
             t.size,
-            water,
+            &planes[..passes],
             None,
         );
-        let mirror = water.map(mirror_matrix);
-        if let (Some(m), Some(h)) = (mirror, water) {
+        for (k, (_, h)) in planar.iter().enumerate().take(passes) {
+            let m = mirror_matrix(*h);
             self.write_globals(
-                &self.reflect_globals,
+                &self.reflect_globals[k],
                 &cascades,
                 (self.view * m, self.proj, m.transform_point3(self.eye)),
                 texture_size(&t.reflection),
-                water,
-                Some(h),
+                &[],
+                Some(*h),
             );
         }
         let mut slots = vec![0u8; SLOT as usize * (shadow::MAX_CASCADES + 1)];
@@ -3736,20 +4787,20 @@ impl Renderer {
                     self.queue.write_buffer(
                         &self.draw_buffer,
                         slot as u64 * SLOT,
-                        &fade_slot(MeshId(u32::MAX - 2), 1.0),
+                        &fade_slot(MeshId(u32::MAX - 2), FROM_INSTANCE, 1.0),
                     );
                 }
             }
         }
-        if self.sky_view_dirty && matches!(self.sky_source, SkySource::Physical) {
-            self.physical
-                .update(encoder, &self.globals_only_bind, self.timer.as_ref());
-        }
-        self.sky_view_dirty = false;
+        let globals_all: [&wgpu::Buffer; 1 + water::MAX_PLANES as usize] =
+            std::array::from_fn(|i| match i {
+                0 => &self.globals,
+                _ => &self.reflect_globals[i - 1],
+            });
         self.env.update(
             encoder,
             &self.sky_bind,
-            &[&self.globals, &self.reflect_globals],
+            &globals_all,
             SH_OFFSET,
             self.timer.as_ref(),
         );
@@ -3784,11 +4835,13 @@ impl Renderer {
         // are gathered on the GPU first (`batch.rs`).
         let layers = self.targets.shadow_layers.len();
         let ssr = self.quality.screen_reflections > 0;
-        let mut gather = Vec::new();
+        let mut gather = batch::GatherList::default();
+        self.visibility.follow(&self.items);
+        let mut visibility = std::mem::take(&mut self.visibility);
         let mut plan = |cull: Mat4, near_far: bool, kind: Pass, small: Option<(Vec3, f32)>| {
-            self.plan_items(cull, near_far, kind, small, &mut gather)
+            self.plan_items(cull, near_far, kind, small, &mut gather, &mut visibility)
         };
-        let plans = (!develop).then(|| {
+        let mut plans = (!develop).then(|| {
             let shadows: Vec<Vec<Draw>> = (0..layers)
                 .map(|c| {
                     // The last layer is the snow cover map, drawn after the cascades.
@@ -3799,7 +4852,11 @@ impl Renderer {
                     plan(
                         cascades.view_proj[c],
                         false,
-                        Pass::Shadow { far, coarse: c > 0 },
+                        Pass::Shadow {
+                            far,
+                            coarse: c > 0,
+                            cascade: c,
+                        },
                         None,
                     )
                 })
@@ -3817,6 +4874,7 @@ impl Renderer {
                     Pass::Shadow {
                         far: false,
                         coarse: false,
+                        cascade: usize::MAX,
                     },
                     None,
                 )
@@ -3827,29 +4885,51 @@ impl Renderer {
             let reflected_px =
                 self.proj.y_axis.y.abs() * texture_size(&self.targets.reflection).1 as f32 * 0.5;
             let perspective = !shadow::is_orthographic(self.proj);
-            let reflection = mirror.map(|m| {
-                let small = perspective.then(|| (m.transform_point3(self.eye), reflected_px));
-                plan(view_proj * m, true, Pass::Reflection { coarsest }, small)
-            });
+            // Each water plane with a pass: the scene mirrored about it (layer = its rank).
+            let reflections: Vec<Vec<Draw>> = planar
+                .iter()
+                .take(passes)
+                .map(|(_, h)| {
+                    let m = mirror_matrix(*h);
+                    let small = perspective.then(|| (m.transform_point3(self.eye), reflected_px));
+                    plan(view_proj * m, true, Pass::Reflection { coarsest }, small)
+                })
+                .collect();
             let forward = plan(view_proj, true, Pass::Forward, None);
             let mirrors = ssr.then(|| plan(view_proj, true, Pass::Mirrors, None));
             FramePlans {
                 shadows,
                 snow,
                 depth,
-                reflection,
+                reflections,
                 forward,
                 mirrors,
+                args: Vec::new(),
             }
         });
+        #[cfg(not(target_arch = "wasm32"))]
+        let stage = std::time::Instant::now();
         self.gather
             .run(&self.device, &self.queue, encoder, &self.pool, &gather);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            gather_ms = stage.elapsed().as_secs_f64() * 1000.0;
+        }
+        self.visibility = visibility;
+        if let Some(p) = plans.as_mut() {
+            self.write_indirect(p);
+        }
         if plans.as_ref().is_some_and(|p| p.snow.is_some()) {
             self.snow_drawn = self.snow_cover;
         }
 
         let t = &self.targets;
+        #[cfg(not(target_arch = "wasm32"))]
+        let stage = std::time::Instant::now();
         if let Some(plans) = &plans {
+            // Where the passes after the planar reflections find their arguments
+            // (`write_indirect`): a slot per water plane, also the ones without a pass.
+            let after_reflections = layers + 2 + water::MAX_PLANES as usize;
             for (c, layer) in t.shadow_layers.iter().enumerate() {
                 // The last layer is the snow cover map, drawn after the cascades.
                 if c >= refresh.len() || c + 1 == t.shadow_layers.len() || !refresh[c] {
@@ -3864,7 +4944,7 @@ impl Renderer {
                 );
                 pass.set_bind_group(0, &self.globals_bind, &[]);
                 pass.set_bind_group(2, &self.cascade_bind, &[(c as u64 * SLOT) as u32]);
-                self.record(&mut pass, &plans.shadows[c]);
+                self.record(&mut pass, &plans.shadows[c], plans.args[c]);
             }
             if let (Some(draws), Some(layer)) = (&plans.snow, t.shadow_layers.last()) {
                 let mut pass = depth_pass(encoder, "snow cover", layer, wgpu::StoreOp::Store, None);
@@ -3874,7 +4954,7 @@ impl Renderer {
                     &self.cascade_bind,
                     &[(shadow::MAX_CASCADES as u64 * SLOT) as u32],
                 );
-                self.record(&mut pass, draws);
+                self.record(&mut pass, draws, plans.args[layers]);
             }
             self.counters.split("shadow");
             {
@@ -3886,8 +4966,8 @@ impl Renderer {
                     self.ts("depth"),
                 );
                 pass.set_bind_group(0, &self.globals_bind, &[]);
-                self.record(&mut pass, &plans.depth);
-                self.grass.draw_depth(&mut pass);
+                self.record(&mut pass, &plans.depth, plans.args[layers + 1]);
+                self.counters.calls(self.grass.draw_depth(&mut pass));
             }
             self.counters.split("depth");
             {
@@ -3903,6 +4983,7 @@ impl Renderer {
                 pass.set_bind_group(0, &self.globals_bind, &[]);
                 pass.set_bind_group(1, &t.resolve_bind, &[]);
                 pass.draw(0..3, 0..1);
+                self.counters.call();
             }
             if self.quality.ao_samples > 0 || self.quality.contact_shadows {
                 let mut pass = color_pass(
@@ -3917,6 +4998,7 @@ impl Renderer {
                 pass.set_bind_group(0, &self.globals_bind, &[]);
                 pass.set_bind_group(1, &t.ssao_bind, &[]);
                 pass.draw(0..3, 0..1);
+                self.counters.call();
                 drop(pass);
                 for (i, pipeline) in [&self.pipelines.blur_h, &self.pipelines.blur_v]
                     .into_iter()
@@ -3934,6 +5016,7 @@ impl Renderer {
                     pass.set_bind_group(0, &self.globals_bind, &[]);
                     pass.set_bind_group(1, &t.blur_bind[i], &[]);
                     pass.draw(0..3, 0..1);
+                    self.counters.call();
                 }
             } else {
                 color_pass(
@@ -3969,17 +5052,36 @@ impl Renderer {
                     },
                     ts,
                 );
+                // One render pass, whatever it dispatches.
+                self.counters.call();
                 self.cloud_jump = false;
                 self.cloud_picture = false;
             } else {
                 self.cloud_volume.off();
             }
             self.counters.split("clouds");
-            if let Some(draws) = &plans.reflection {
+            // One pass per water plane with a planar reflection, into its layer of the array:
+            // scissored to where the plane shows on the render target (padded for the ripples
+            // in `rank_water`), so its fill is only where that water is.
+            let reflection_size = texture_size(&t.reflection);
+            for (k, draws) in plans.reflections.iter().enumerate() {
+                let (_, h) = planar[k];
+                let rect = self.water.planes[planar[k].0].rect;
+                let from = u64::from(t.size.0.max(1)).max(1);
+                let from_y = u64::from(t.size.1.max(1));
+                let scaled = |a: u32, b: u32, from: u64, to: u32| {
+                    // Outward, so the scissor never cuts into the plane's rectangle.
+                    let to = u64::from(to);
+                    let lo = (u64::from(a) * to / from).min(to - 1);
+                    let hi = (u64::from(a + b) * to).div_ceil(from).clamp(lo + 1, to);
+                    (lo as u32, hi as u32)
+                };
+                let (x0, x1) = scaled(rect.x, rect.w, from, reflection_size.0);
+                let (y0, y1) = scaled(rect.y, rect.h, from_y, reflection_size.1);
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("reflection"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &t.reflection,
+                        view: &t.reflection_layers[k],
                         depth_slice: None,
                         resolve_target: None,
                         ops: wgpu::Operations {
@@ -3999,21 +5101,20 @@ impl Renderer {
                     occlusion_query_set: None,
                     multiview_mask: None,
                 });
-                pass.set_bind_group(0, &self.reflect_globals_bind, &[]);
+                pass.set_scissor_rect(x0, y0, x1 - x0, y1 - y0);
+                pass.set_bind_group(0, &self.reflect_globals_bind[k], &[]);
                 pass.set_bind_group(3, &t.reflect_forward_bind, &[]);
-                self.record(&mut pass, draws);
+                self.record(&mut pass, draws, plans.args[layers + 2 + k]);
                 // The endless ground has no hole where the terrain is dug out:
                 // seen from water below its height (a pond in the lawn) it would
                 // cover the sky the water mirrors.
-                if self
-                    .ground
-                    .is_some_and(|g| water.is_some_and(|h| h >= g.height))
-                {
+                if self.ground.is_some_and(|g| h >= g.height) {
                     self.draw_ground(&mut pass, &[&self.pipelines.reflect_ground]);
                 }
                 pass.set_pipeline(&self.pipelines.reflect_sky);
                 pass.set_bind_group(2, self.cloud_volume.sky_bind(), &[]);
                 pass.draw(0..3, 0..1);
+                self.counters.call();
             }
             self.counters.split("reflection");
             {
@@ -4029,12 +5130,13 @@ impl Renderer {
                     forward_pass(encoder, "forward", targets, (true, ssr), self.ts("forward"));
                 pass.set_bind_group(0, &self.globals_bind, &[]);
                 pass.set_bind_group(3, &t.forward_bind, &[]);
-                self.record(&mut pass, &plans.forward);
-                self.grass.draw(
+                self.record(&mut pass, &plans.forward, plans.args[after_reflections]);
+                let grass = self.grass.draw(
                     &mut pass,
                     &self.draw_bind,
                     (self.ground_slot as u64 * SLOT) as u32,
                 );
+                self.counters.calls(grass);
                 if self.ground.is_some() {
                     // The cells near the sky volume only when there is one, and after the others:
                     // all ground lies at one depth, so of two cells over the same pixel the last
@@ -4051,7 +5153,9 @@ impl Renderer {
                 pass.set_pipeline(&self.sampled.sky);
                 pass.set_bind_group(2, self.cloud_volume.sky_bind(), &[]);
                 pass.draw(0..3, 0..1);
-                self.draw_sea(&mut pass);
+                self.counters.call();
+                let sea = self.draw_sea(&mut pass);
+                self.counters.calls(sea);
                 if ssr {
                     drop(pass);
                     encoder.copy_texture_to_texture(
@@ -4064,7 +5168,7 @@ impl Renderer {
                     pass.set_bind_group(0, &self.globals_bind, &[]);
                     pass.set_bind_group(3, &t.forward_bind, &[]);
                     if let Some(draws) = &plans.mirrors {
-                        self.record(&mut pass, draws);
+                        self.record(&mut pass, draws, plans.args[after_reflections + 1]);
                     }
                 }
                 self.draw_transparent(&mut pass, view_proj);
@@ -4073,10 +5177,25 @@ impl Renderer {
                     pass.set_bind_group(0, &self.globals_bind, &[]);
                     pass.set_bind_group(3, &t.forward_bind, &[]);
                     pass.draw(0..3, 0..1);
+                    self.counters.call();
                 }
             }
         }
         self.counters.split("forward");
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            record_ms = stage.elapsed().as_secs_f64() * 1000.0;
+            if let Some(log) = &mut self.stage_log {
+                log.frame(
+                    self.frame,
+                    lods_ms,
+                    self.counters.plan_ms.get(),
+                    self.counters.visible_ms.get(),
+                    gather_ms,
+                    record_ms,
+                );
+            }
+        }
         let post = |encoder: &mut wgpu::CommandEncoder,
                     label: &'static str,
                     target: &wgpu::TextureView,
@@ -4089,6 +5208,7 @@ impl Renderer {
             pass.set_bind_group(1, bind, &[]);
             pass.draw(0..3, 0..1);
             self.counters.add(1, 1, false);
+            self.counters.call();
         };
         // The air: light shafts, the sun's glare and the aerial perspective, onto the HDR image.
         // A photo's mean has them in already.
@@ -4216,6 +5336,7 @@ impl Renderer {
             for (i, bind) in self.underlays.binds.iter().enumerate() {
                 pass.set_bind_group(2, bind, &[]);
                 pass.draw(i as u32 * 6..i as u32 * 6 + 6, 0..1);
+                self.counters.call();
             }
         }
         if let (Some(buffer), true) = (&self.overlay, self.overlay_count > 0) {
@@ -4232,6 +5353,7 @@ impl Renderer {
             pass.set_bind_group(1, &t.overlay_bind, &[]);
             pass.set_vertex_buffer(0, buffer.slice(..));
             pass.draw(0..6, 0..self.overlay_count);
+            self.counters.call();
         }
         self.counters.split("post");
         if let Some(t) = &mut self.timer {
@@ -4308,9 +5430,30 @@ impl Renderer {
             let total: f32 = gpu_passes.iter().map(|p| p.1).sum();
             eprintln!("gpu ms: {} (sum {total:.2})", parts.join(", "));
         }
+        // The water surfaces of the frame and how each was reflected: by plane (height), and in
+        // the order they were gathered within one. The list is the last frame's, filled again.
+        let mut water = std::mem::take(&mut self.last_stats.water);
+        water.clear();
+        for (p, _) in self.water.planes.iter().enumerate() {
+            for (s, seen) in self.water_seen.iter().enumerate() {
+                if self.water.plane_of(s) != p {
+                    continue;
+                }
+                water.push(WaterSurface {
+                    item: seen.item.map(|(item, part, material)| WaterItem {
+                        item,
+                        part,
+                        material: material.0,
+                    }),
+                    level_m: seen.surface.height,
+                    tier: self.water.tier_of(s),
+                });
+            }
+        }
         self.last_stats = RenderStats {
             draw_calls: self.counters.draws.get(),
             pass_draws: self.counters.passes.take(),
+            pass_calls: self.counters.pass_calls.take(),
             pass_triangles: self.counters.pass_triangles.take(),
             triangles: self.counters.triangles.get(),
             instances: self.counters.instances.get(),
@@ -4321,6 +5464,7 @@ impl Renderer {
             gpu_ms: (!gpu_passes.is_empty()).then(|| gpu_passes.iter().map(|p| p.1).sum()),
             gpu_passes,
             render_size: self.targets.size,
+            water,
         };
     }
 
@@ -4330,12 +5474,13 @@ impl Renderer {
         const RINGS: u32 = 80;
         const SEGMENTS: u32 = 192;
         // A material of the scene (the terrain's base layer) when one is set: the ground then
-        // looks like it, texture, tiling phase and variation alike, so their border vanishes.
-        let bind = self
-            .ground_look
-            .and_then(|id| self.materials.get(id.0 as usize)?.as_ref())
-            .map_or(&self.ground_material.bind, |m| &m.bind);
-        pass.set_bind_group(1, bind, &[]);
+        // looks like it, texture, tiling phase and variation alike, so their border vanishes:
+        // its texture set here, and its row in the ground's draw slot (`ground_row`).
+        let set = self.ground_look_material().map_or(0, |m| m.set);
+        let Some(Some(texture_set)) = self.texture_sets.get(set as usize) else {
+            return;
+        };
+        pass.set_bind_group(1, &texture_set.bind, &[]);
         pass.set_bind_group(
             2,
             &self.draw_bind,
@@ -4345,24 +5490,63 @@ impl Renderer {
             pass.set_pipeline(pipeline);
             pass.draw(0..RINGS * SEGMENTS * 6, 0..1);
             self.counters.add((RINGS * SEGMENTS * 2) as u64, 1, false);
+            self.counters.call();
         }
     }
 
-    /// The height of the largest visible water surface (by the area of its
-    /// visible clusters' bounds), for the planar reflection.
-    fn water_plane(&self, cull: Mat4) -> Option<f32> {
-        let mut best: Option<(f32, f32)> = None;
-        for item in self.items.iter().flatten() {
+    /// Gathers the visible water surfaces of the frame and ranks their planes (`water.rs`):
+    /// the sea when the eye is above it, and the parts with a water material whose clusters are
+    /// in view, each where its visible clusters' bounds show on the render target. Nothing is
+    /// allocated once the buffers have grown.
+    fn rank_water(&mut self, cull: Mat4) {
+        // The planar reflection off: nothing to rank, as before this ranked at all.
+        let off = self.quality.water_reflection == 0;
+        self.water_seen.clear();
+        self.water_surfaces.clear();
+        if off {
+            self.water.rank(&[], 0, false);
+            return;
+        }
+        let size = self.targets.size;
+        // The ripples' most tilt: the wind's, more under rain's rings.
+        let tilt = if self.rain > 0.0 {
+            water::RAIN_TILT
+        } else {
+            water::WIND_TILT
+        };
+        // The sea when the eye is above it and some of it is in view.
+        let sea = self.sea_surface(cull, size, tilt);
+        let Self {
+            water,
+            water_seen,
+            water_surfaces,
+            items,
+            materials,
+            eye,
+            quality,
+            ..
+        } = self;
+        // Only surfaces that can be ranked (`water::Surface::usable`): a broken mesh or sea
+        // level must not take a planar pass.
+        if let Some(surface) = sea.filter(water::Surface::usable) {
+            water_seen.push(Seen {
+                item: None,
+                surface,
+            });
+        }
+        for (i, item) in items.iter().enumerate() {
+            let Some(item) = item else {
+                continue;
+            };
             if item.bounds.is_none_or(|b| outside(cull, b, true)) {
                 continue;
             }
-            for part in &item.parts {
-                let water = self
-                    .materials
+            for (p, part) in item.parts.iter().enumerate() {
+                let water_material = materials
                     .get(part.material.0 as usize)
                     .and_then(Option::as_ref)
                     .is_some_and(|m| m.cpu.surface == Surface::Water);
-                if !water {
+                if !water_material {
                     continue;
                 }
                 let visible = item
@@ -4372,15 +5556,39 @@ impl Renderer {
                     .filter_map(|c| c.bounds)
                     .filter(|b| !outside(cull, *b, true))
                     .reduce(union);
-                if let Some((lo, hi)) = visible {
-                    let area = (hi.x - lo.x) * (hi.z - lo.z);
-                    if best.is_none_or(|(a, _)| area > a) {
-                        best = Some((area, hi.y));
-                    }
+                let Some((lo, hi)) = visible else {
+                    continue;
+                };
+                let distance = eye.clamp(lo, hi).distance(*eye);
+                let rect = water::screen_rect(cull, (lo, hi), size);
+                let coverage = rect.area() as f32 / (u64::from(size.0) * u64::from(size.1)) as f32;
+                // The shift over the view-space depth, as the shader divides it.
+                let depth = water::view_depth(cull, (lo, hi));
+                let rect = rect.padded(
+                    water::ripple_pad(depth, water::POND_DISTORTION, tilt, size),
+                    size,
+                );
+                let surface = water::Surface {
+                    height: hi.y,
+                    rect,
+                    coverage,
+                    distance,
+                    sea: false,
+                };
+                if surface.usable() {
+                    water_seen.push(Seen {
+                        item: Some((i as u32, p as u32, part.material)),
+                        surface,
+                    });
                 }
             }
         }
-        best.map(|(_, h)| h)
+        water_surfaces.extend(water_seen.iter().map(|s| s.surface));
+        water.rank(
+            water_surfaces,
+            quality.plane_budget(),
+            quality.screen_reflections > 0,
+        );
     }
 
     /// The level of detail a cluster draws at in a pass (`None`: culled).
@@ -4407,6 +5615,7 @@ impl Renderer {
             | Pass::Shadow {
                 far: false,
                 coarse: false,
+                ..
             } => (cluster.lod + 1).min(levels - 1),
             // A tree at its finest level stands near the eye, and so does its shadow: its
             // impostor's two cards cast the side view's limbs metres long over the lawn there
@@ -4416,9 +5625,12 @@ impl Renderer {
         })
     }
 
-    /// Per item, which of its clusters `cull` keeps (empty: none, or the item is outside):
-    /// tested once a pass, and only clusters near enough to draw at all (`cluster_lod`). Testing
-    /// them per part, category and fade took a third of a coast frame's CPU time in the browser.
+    /// Per item, which of its clusters `cull` keeps, written into `seen` (`Visibility`): each
+    /// cluster's own test, in one pass and without an allocation (the flags are the renderer's).
+    /// Testing them per part, category and fade took a third of a coast frame's CPU time in the
+    /// browser, and a list a pass 15 % of a town's. The 128 m blocks are not tested here: on the
+    /// town that cost a sixth more than it saved (the cluster test is 4 ns, a lookup through the
+    /// block more, and a wide view keeps most blocks in view); they are `update_lods`'.
     ///
     /// `small`: an eye and pixels per unit of size over distance; clusters whose items'
     /// instances would be under `MIN_REFLECTED_PX` from there are left out (the reflection).
@@ -4427,50 +5639,41 @@ impl Renderer {
         cull: Mat4,
         near_far: bool,
         small: Option<(Vec3, f32)>,
-    ) -> Vec<Vec<bool>> {
-        self.items
-            .iter()
-            .map(|item| match item {
-                Some(item) if item.bounds.is_some_and(|b| !outside(cull, b, near_far)) => item
-                    .clusters
-                    .iter()
-                    .map(|c| {
-                        (c.lod as usize) < item.lods.len()
-                            && c.bounds.is_some_and(|b| {
-                                !outside(cull, b, near_far)
-                                    && small.is_none_or(|(eye, px)| {
-                                        let d = eye.clamp(b.0, b.1).distance(eye);
-                                        item.size * px >= MIN_REFLECTED_PX * d
-                                    })
+        visibility: &mut Visibility,
+    ) {
+        let Visibility { seen, offsets, .. } = visibility;
+        let (seen, offsets): (&mut [bool], &[u32]) = (seen.as_mut_slice(), offsets.as_slice());
+        for (i, item) in self.items.iter().enumerate() {
+            let seen = &mut seen[offsets[i] as usize..offsets[i + 1] as usize];
+            let Some(item) = item else {
+                seen.fill(false);
+                continue;
+            };
+            if item.bounds.is_none_or(|b| outside(cull, b, near_far)) {
+                seen.fill(false);
+                continue;
+            }
+            for (c, keep) in item.clusters.iter().zip(seen.iter_mut()) {
+                *keep = (c.lod as usize) < item.lods.len()
+                    && c.bounds.is_some_and(|b| {
+                        !outside(cull, b, near_far)
+                            && small.is_none_or(|(eye, px)| {
+                                let d = eye.clamp(b.0, b.1).distance(eye);
+                                item.size * px >= MIN_REFLECTED_PX * d
                             })
-                    })
-                    .collect(),
-                _ => Vec::new(),
-            })
-            .collect()
+                    });
+            }
+        }
     }
 
-    /// Plans every opaque and cutout part (and, into shadow maps and the water reflection, glass)
-    /// whose bounds overlap `cull` (a view-projection), and all impostor quads. `near_far` also
-    /// culls on depth.
-    ///
-    /// The visible instances of every item that shares a pipeline, a material and a mesh (the
-    /// same species in several plantings, the same rock or chair placed many times) become one
-    /// draw: their pool indices are appended to `gather`, which the GPU copies into one buffer
-    /// before the passes (`batch.rs`), front to back by their clusters. Dissolving clusters and
-    /// terrain chunks draw straight from the pool, before the batches; the batches go opaque,
-    /// cutout and impostors, glass, then trees' shadow casters.
-    ///
-    /// Each cluster's level is found once per pass, and the runs of a level once per item: a
-    /// plant has a dozen parts over a few levels, and testing every cluster per part (and per
-    /// category) was most of a coast frame's CPU time in the browser.
     fn plan_items(
         &self,
         cull: Mat4,
         near_far: bool,
         kind: Pass,
         small: Option<(Vec3, f32)>,
-        gather: &mut Vec<u32>,
+        gather: &mut batch::GatherList,
+        visibility: &mut Visibility,
     ) -> Vec<Draw> {
         let shadow = matches!(kind, Pass::Shadow { .. });
         let shaded = matches!(
@@ -4489,13 +5692,27 @@ impl Renderer {
             Pass::Mirrors => category == 3,
             _ => category < 2 + glass as usize,
         };
-        let visible = self.visible_clusters(cull, near_far, small);
+        #[cfg(not(target_arch = "wasm32"))]
+        let plan_start = std::time::Instant::now();
+        self.visible_clusters(cull, near_far, small, visibility);
+        let Visibility { seen, offsets, .. } = visibility;
+        let (seen, offsets): (&mut [bool], &[u32]) = (seen.as_mut_slice(), offsets.as_slice());
+        #[cfg(not(target_arch = "wasm32"))]
+        self.counters
+            .visible_ms
+            .set(self.counters.visible_ms.get() + stage::cpu_ms(plan_start));
         let mut draws = Vec::new();
         let mut batches = Batches::default();
         let mut levels: Vec<Option<u8>> = Vec::new();
-        for (item, seen) in self.items.iter().zip(&visible) {
+        for (i, item) in self.items.iter().enumerate() {
             let Some(item) = item else { continue };
-            if seen.is_empty() {
+            // Out of this cascade altogether (`set_item_shadow_cascades`): its clusters are
+            // not planned.
+            if matches!(kind, Pass::Shadow { cascade, .. } if cascade < item.shadow_from as usize) {
+                continue;
+            }
+            let seen = &seen[offsets[i] as usize..offsets[i + 1] as usize];
+            if !seen.iter().any(|&s| s) {
                 continue;
             }
             // This pass's level per cluster (`None`: not drawn), and whether any dissolves.
@@ -4537,7 +5754,7 @@ impl Renderer {
                 if !wanted(category) {
                     continue;
                 }
-                let weights = mesh.weights.is_some() && shaded;
+                let weights = mesh.weights && shaded;
                 // Opaque and cutout mesh levels dissolve in fading clusters (into each other,
                 // the impostor or nothing), through their own pipelines, one draw and fade slot
                 // per cluster; the settled clusters leave them out.
@@ -4545,7 +5762,7 @@ impl Renderer {
                 // their nearer level in every pass. Asked of the mesh, not of `weights` (none outside the
                 // shaded passes): a depth pre-pass that dithered both levels left the forward pass's level
                 // behind the coarser one, unshaded (black patches on the ground after a jump).
-                let can_fade = fades && category <= 1 && mesh.weights.is_none();
+                let can_fade = fades && category <= 1 && !mesh.weights;
                 let ds = m.double_sided as usize;
                 let pipe = match kind {
                     Pass::Shadow { .. } => Pipe::Shadow(category),
@@ -4558,24 +5775,25 @@ impl Renderer {
                 let g1 = if weights {
                     Some(Group1::Terrain)
                 } else if shaded || category == 1 {
-                    Some(Group1::Material(part.material.0))
+                    Some(Group1::Set(material.set))
                 } else {
                     None
                 };
-                let draw = |pipe, g1, g2, instances| Draw {
+                let draw = |pipe, g1, g2, mesh: DrawMesh, instances| Draw {
                     pipe,
                     g1,
                     g2,
-                    mesh: Some(part.mesh.0),
-                    vertices: mesh.index_count,
-                    weights: weights.then_some(part.mesh.0),
+                    vertices: mesh.range.count,
+                    mesh: Some(mesh),
                     src: Src::Pool,
                     instances,
-                    triangles: mesh.index_count as u64 / 3,
+                    triangles: mesh.range.count as u64 / 3,
                     view,
                 };
                 let g2 = shaded.then_some((false, part.slot));
                 let settled = runs.get(item, &levels, order, part.lod, can_fade && dissolving);
+                let draw =
+                    |pipe, g1, g2, instances| draw(pipe, g1, g2, mesh.draw(part.mesh), instances);
                 if weights {
                     // A terrain chunk is its own mesh: nothing to share a draw with.
                     draws.extend(
@@ -4584,14 +5802,22 @@ impl Renderer {
                             .map(|(_, r)| draw(pipe, g1, g2, item.pool_range(r))),
                     );
                 } else {
-                    batches.add(category as u8, draw(pipe, g1, g2, 0..0), item, settled);
+                    // A batch spans materials (one texture set): each instance names its row.
+                    let batched = shaded.then_some((false, self.batch_slot));
+                    batches.add(
+                        category as u8,
+                        draw(pipe, g1, batched, 0..0),
+                        item,
+                        row(part.material),
+                        settled,
+                    );
                 }
                 if can_fade && dissolving {
                     let pipe = match kind {
                         Pass::Depth => Pipe::DepthFade(ds),
                         _ => Pipe::Forward(2 + ds),
                     };
-                    let g1 = Some(Group1::Material(part.material.0));
+                    let g1 = Some(Group1::Set(material.set));
                     for (c, _) in item.clusters.iter().zip(&levels).filter(|(c, l)| {
                         l.is_some() && c.fading && (c.lod == part.lod || c.far == part.lod)
                     }) {
@@ -4617,23 +5843,27 @@ impl Renderer {
                 && let Some(id) = item.shadow_caster
                 && let Some(Some(mesh)) = self.meshes.get(id.0 as usize)
             {
+                let dm = mesh.draw(id);
                 let draw = Draw {
                     pipe: Pipe::Shadow(3),
                     g1: None,
                     g2: None,
-                    mesh: Some(id.0),
-                    vertices: mesh.index_count,
-                    weights: None,
+                    vertices: dm.range.count,
+                    mesh: Some(dm),
                     src: Src::Pool,
                     instances: 0..0,
-                    triangles: mesh.index_count as u64 / 3,
+                    triangles: dm.range.count as u64 / 3,
                     view: false,
                 };
                 let settled = runs.get(item, &levels, 1, SHADOW_CASTER_LEVEL, false);
-                batches.add(4, draw, item, settled);
+                batches.add(4, draw, item, FROM_INSTANCE, settled);
             }
         }
         batches.emit(&mut draws, gather);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.counters
+            .plan_ms
+            .set(self.counters.plan_ms.get() + stage::cpu_ms(plan_start));
         draws
     }
 
@@ -4671,7 +5901,6 @@ impl Renderer {
             mesh: None,
             // Shadows: two cards per plant (impostor.wgsl, `impostor_shadow_towards`).
             vertices: if shadow { 12 } else { 6 },
-            weights: None,
             src: Src::Pool,
             instances,
             triangles: 2,
@@ -4683,6 +5912,7 @@ impl Renderer {
             1,
             draw((!shadow).then_some((false, slot)), 0..0),
             item,
+            FROM_INSTANCE,
             settled,
         );
         // Dissolving clusters draw their impostor with their own fade slot when it is the far
@@ -4744,16 +5974,72 @@ impl Renderer {
         }
     }
 
+    /// Packs the frame's indirect draws: per pass, the arguments of every batched mesh draw
+    /// that `record` sends through the indirect buffer (runs of two or more with the same
+    /// bindings), in their record order, into one buffer; where each pass's start is, is
+    /// `plans.args`.
+    fn write_indirect(&mut self, plans: &mut FramePlans) {
+        self.indirect_args.clear();
+        let FramePlans {
+            shadows,
+            snow,
+            depth,
+            reflections,
+            forward,
+            mirrors,
+            args,
+        } = plans;
+        args.clear();
+        args.reserve(shadows.len() + 4 + water::MAX_PLANES as usize);
+        let mut base = |draws: &[Draw]| {
+            let base = self.indirect_args.len() as u32 / INDIRECT_ARGS;
+            pack_args(&mut self.indirect_args, draws, self.multi_draw);
+            base
+        };
+        for shadow in shadows {
+            args.push(base(shadow));
+        }
+        args.push(base(snow.as_deref().unwrap_or(&[])));
+        args.push(base(depth));
+        // A slot per water plane, also the ones without a pass this frame: a pass finds its
+        // arguments by index.
+        for k in 0..water::MAX_PLANES as usize {
+            args.push(base(reflections.get(k).map_or(&[], Vec::as_slice)));
+        }
+        args.push(base(forward));
+        args.push(base(mirrors.as_deref().unwrap_or(&[])));
+        let n = self.indirect_args.len() as u32 / INDIRECT_ARGS;
+        if n == 0 {
+            return;
+        }
+        if n > self.indirect_capacity {
+            self.indirect_capacity = n.next_power_of_two();
+            self.indirect = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("indirect draws"),
+                size: u64::from(self.indirect_capacity) * u64::from(INDIRECT_ARGS),
+                usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+        }
+        self.queue
+            .write_buffer(&self.indirect, 0, &self.indirect_args);
+    }
+
     /// Records planned draws (`plan_items`), setting only what changes from one to the next:
-    /// in the browser every set is a call into its WebGPU.
-    fn record(&self, pass: &mut wgpu::RenderPass, draws: &[Draw]) {
+    /// in the browser every set is a call into its WebGPU. A run of two or more batched mesh
+    /// draws with the same bindings is one indirect call (`Calls`; their arguments are at `args`
+    /// in the buffer `write_indirect` packed); without the device's `INDIRECT_FIRST_INSTANCE`
+    /// each is a direct draw of the same arguments. A draw whose bind group, mesh or arena went
+    /// away since the plan is left out.
+    fn record(&self, pass: &mut wgpu::RenderPass, draws: &[Draw], args: u32) {
         let mut pipe = None;
         let mut g1 = None;
         let mut g2 = None;
         let mut mesh = None;
+        let mut arena = None;
         let mut src = None;
-        let mut weights = None;
-        for d in draws {
+        // Binds what `d` needs and is not bound; false when something it needs is gone.
+        let mut bind = |pass: &mut wgpu::RenderPass, d: &Draw| -> bool {
             if pipe != Some(d.pipe) {
                 pass.set_pipeline(self.pipe(d.pipe));
                 pipe = Some(d.pipe);
@@ -4761,12 +6047,12 @@ impl Renderer {
             if let Some(g) = d.g1
                 && g1 != Some(g)
             {
-                let bind = match g {
-                    Group1::Material(id) => self
-                        .materials
-                        .get(id as usize)
+                let group = match g {
+                    Group1::Set(set) => self
+                        .texture_sets
+                        .get(set as usize)
                         .and_then(Option::as_ref)
-                        .map(|m| &m.bind),
+                        .map(|s| &s.bind),
                     Group1::Terrain => Some(&self.terrain.bind),
                     Group1::Impostor(id) => self
                         .impostors
@@ -4774,8 +6060,10 @@ impl Renderer {
                         .and_then(Option::as_ref)
                         .map(|i| &i.bind),
                 };
-                let Some(bind) = bind else { continue };
-                pass.set_bind_group(1, bind, &[]);
+                let Some(group) = group else {
+                    return false;
+                };
+                pass.set_bind_group(1, group, &[]);
                 g1 = Some(g);
             }
             if let Some(g) = d.g2
@@ -4790,28 +6078,21 @@ impl Renderer {
                 pass.set_bind_group(2, slots, &[(slot as u64 * SLOT) as u32]);
                 g2 = Some(g);
             }
-            if let Some(id) = d.mesh
-                && mesh != Some(id)
+            // The mesh's vertex, index and (terrain) weight buffers are the arena's: bound
+            // once per pass, and again only when another arena's mesh follows.
+            if let Some(m) = d.mesh
+                && mesh != Some(m)
             {
-                let Some(Some(m)) = self.meshes.get(id as usize) else {
-                    continue;
+                let Some(a) = self.arenas.get(m.arena as usize) else {
+                    return false;
                 };
-                pass.set_vertex_buffer(0, m.vertices.slice(..));
-                pass.set_index_buffer(m.indices.slice(..), wgpu::IndexFormat::Uint32);
-                mesh = Some(id);
-            }
-            if let Some(id) = d.weights
-                && weights != Some(id)
-            {
-                let Some(Some(w)) = self
-                    .meshes
-                    .get(id as usize)
-                    .map(|m| m.as_ref().and_then(|m| m.weights.as_ref()))
-                else {
-                    continue;
-                };
-                pass.set_vertex_buffer(2, w.slice(..));
-                weights = Some(id);
+                if arena != Some(m.arena) {
+                    pass.set_vertex_buffer(0, a.vertices.slice(..));
+                    pass.set_index_buffer(a.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.set_vertex_buffer(2, a.weights.slice(..));
+                    arena = Some(m.arena);
+                }
+                mesh = Some(m);
             }
             if src != Some(d.src) {
                 let buffer = match d.src {
@@ -4821,11 +6102,33 @@ impl Renderer {
                 pass.set_vertex_buffer(1, buffer.slice(..));
                 src = Some(d.src);
             }
-            self.counters
-                .add(d.triangles, d.instances.len() as u32, d.view);
-            match d.mesh {
-                Some(_) => pass.draw_indexed(0..d.vertices, 0, d.instances.clone()),
-                None => pass.draw(0..d.vertices, d.instances.clone()),
+            true
+        };
+        let mut next_args = u64::from(args) * u64::from(INDIRECT_ARGS);
+        for (i, n) in Calls::new(draws, self.multi_draw) {
+            let d = &draws[i];
+            let bound = bind(pass, d);
+            // A run that could not bind (an arena that is gone) is not drawn, so not counted.
+            if n > 1 {
+                if bound {
+                    pass.multi_draw_indexed_indirect(&self.indirect, next_args, n as u32);
+                    for d in &draws[i..i + n] {
+                        self.counters
+                            .add(d.triangles, d.instances.len() as u32, d.view);
+                    }
+                    self.counters.call();
+                }
+                next_args += u64::from(n as u32) * u64::from(INDIRECT_ARGS);
+            } else if bound {
+                self.counters
+                    .add(d.triangles, d.instances.len() as u32, d.view);
+                self.counters.call();
+                match d.mesh {
+                    Some(m) => {
+                        pass.draw_indexed(m.range.range(), m.base_vertex, d.instances.clone())
+                    }
+                    None => pass.draw(0..d.vertices, d.instances.clone()),
+                }
             }
         }
     }
@@ -4883,16 +6186,22 @@ impl Renderer {
             } else {
                 &[&self.sampled.transparent[sided]]
             };
-            pass.set_bind_group(1, &material.bind, &[]);
+            let dm = mesh.draw(part.mesh);
+            let arena = &self.arenas[dm.arena as usize];
+            let Some(Some(texture_set)) = self.texture_sets.get(material.set as usize) else {
+                continue;
+            };
+            pass.set_bind_group(1, &texture_set.bind, &[]);
             pass.set_bind_group(2, &self.draw_bind, &[(part.slot as u64 * SLOT) as u32]);
-            pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+            pass.set_vertex_buffer(0, arena.vertices.slice(..));
             pass.set_vertex_buffer(1, self.pool.buffer.slice(..));
-            pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+            pass.set_index_buffer(arena.indices.slice(..), wgpu::IndexFormat::Uint32);
             for p in pipelines {
                 pass.set_pipeline(p);
                 self.counters
                     .add(mesh.index_count as u64 / 3, range.len() as u32, true);
-                pass.draw_indexed(0..mesh.index_count, 0, item.pool_range(&range));
+                self.counters.call();
+                pass.draw_indexed(dm.range.range(), dm.base_vertex, item.pool_range(&range));
             }
         }
     }
@@ -4902,60 +6211,61 @@ impl Renderer {
             return;
         }
         self.bounds_dirty = false;
+        for i in 0..self.items.len() {
+            let Some(mut item) = self.items[i].take() else {
+                continue;
+            };
+            let mesh_bounds = self.item_mesh_bounds(&item);
+            item_bounds(&mut item, mesh_bounds);
+            self.items[i] = Some(item);
+        }
+        self.scene_bounds_of_all();
+    }
+
+    /// The bounds of an item's meshes with room for the wind's sway at any speed (the lean and
+    /// the detail both saturate).
+    fn item_mesh_bounds(&self, item: &Item) -> Option<Bounds> {
+        let mut mesh_bounds: Option<Bounds> = None;
+        let mut sways = false;
+        for p in &item.parts {
+            if let Some(Some(m)) = self.meshes.get(p.mesh.0 as usize) {
+                sways |= m.wind;
+                if let Some(b) = m.bounds {
+                    mesh_bounds = Some(mesh_bounds.map_or(b, |s| union(s, b)));
+                }
+            }
+        }
+        match (mesh_bounds, sways) {
+            (Some((lo, hi)), true) => {
+                let pad = Vec3::splat(wind::bounds_pad(
+                    (hi - lo).max_element(),
+                    self.wind.speed_mps,
+                    self.wind.gusts,
+                    item.grass,
+                ));
+                Some((lo - pad, hi + pad))
+            }
+            (b, _) => b,
+        }
+    }
+
+    /// The scene's bounds over every item's, and the terrain's edge over the terrain items'.
+    fn scene_bounds_of_all(&mut self) {
         let mut scene: Option<Bounds> = None;
         let mut terrain: Option<Bounds> = None;
-        for item in self.items.iter_mut().flatten() {
+        for item in self.items.iter().flatten() {
+            let Some(b) = item.bounds else {
+                continue;
+            };
+            scene = Some(scene.map_or(b, |s| union(s, b)));
             let is_terrain = item.parts.iter().any(|p| {
                 self.meshes
                     .get(p.mesh.0 as usize)
                     .and_then(Option::as_ref)
-                    .is_some_and(|m| m.weights.is_some())
+                    .is_some_and(|m| m.weights)
             });
-            let meshes: Vec<&GpuMesh> = item
-                .parts
-                .iter()
-                .filter_map(|p| self.meshes.get(p.mesh.0 as usize)?.as_ref())
-                .collect();
-            let mesh_bounds = meshes.iter().filter_map(|m| m.bounds).reduce(union);
-            // Room for the wind's sway at any speed (the lean and the detail both saturate).
-            let mesh_bounds = match (mesh_bounds, meshes.iter().any(|m| m.wind)) {
-                (Some((lo, hi)), true) => {
-                    let pad = Vec3::splat(wind::bounds_pad(
-                        (hi - lo).max_element(),
-                        self.wind.speed_mps,
-                        self.wind.gusts,
-                        item.grass,
-                    ));
-                    Some((lo - pad, hi + pad))
-                }
-                (b, _) => b,
-            };
-            for c in &mut item.clusters {
-                c.bounds = mesh_bounds.and_then(|b| {
-                    item.transforms[c.range.start as usize..c.range.end as usize]
-                        .iter()
-                        .map(|m| transform_bounds(*m, b))
-                        .reduce(union)
-                });
-            }
-            item.bounds = item.clusters.iter().filter_map(|c| c.bounds).reduce(union);
-            let scale = item
-                .transforms
-                .iter()
-                .map(|m| {
-                    m.x_axis
-                        .truncate()
-                        .length()
-                        .max(m.y_axis.truncate().length())
-                        .max(m.z_axis.truncate().length())
-                })
-                .fold(0.0, f32::max);
-            item.size = mesh_bounds.map_or(0.0, |(lo, hi)| (hi - lo).length() * 0.5 * scale);
-            if let Some(b) = item.bounds {
-                scene = Some(scene.map_or(b, |s| union(s, b)));
-                if is_terrain {
-                    terrain = Some(terrain.map_or(b, |s| union(s, b)));
-                }
+            if is_terrain {
+                terrain = Some(terrain.map_or(b, |s| union(s, b)));
             }
         }
         self.scene_bounds = scene;
@@ -4987,6 +6297,7 @@ impl Renderer {
             (2.0 / self.proj.y_axis.y.abs().max(1e-9), forward)
         });
         let reach = self.impostor_reach;
+        let skip = self.lod_skip;
         let mut fade_bytes: Vec<u8> = Vec::new();
         let mut fade_used = 0usize;
         for item in self.items.iter_mut().flatten() {
@@ -4999,7 +6310,38 @@ impl Renderer {
                 let mesh_end = item.lods[item.lods.len() - 2];
                 *last = (*last * reach).max(mesh_end + 1.0);
             }
-            for c in &mut item.clusters {
+            let levels = item.lods.len() as u8;
+            // Past the last level (its hysteresis included: the nearest cluster of the block
+            // could not come back), every cluster culled by distance and nothing dissolving:
+            // no level there changes, so the block's clusters are left out below.
+            for block in &mut item.blocks {
+                block.beyond = skip
+                    && ortho.is_none()
+                    && block.bounds.is_some_and(|(lo, hi)| {
+                        eye.clamp(lo, hi).distance(eye) / scale
+                            > lods.last().copied().unwrap_or(f32::INFINITY) - lod::HYSTERESIS_M
+                    });
+            }
+            if skip && ortho.is_none() {
+                // Any cluster of the block not past the last level, or dissolving: not beyond.
+                for (c, &b) in item.clusters.iter().zip(&item.block_of) {
+                    if !(c.target == levels && c.lod == levels && c.fade == 0 && !c.fading) {
+                        item.blocks[b as usize].beyond = false;
+                    }
+                }
+            }
+            // An item with an impostor draws the clusters at its last level, as impostors: they
+            // get their sort keys, as every cluster does each frame (the draws' order). The
+            // others there are culled by distance: nothing to do for them.
+            let impostor = item.impostor.is_some();
+            // In pool order, as without the blocks.
+            for (c, &block) in item.clusters.iter_mut().zip(&item.block_of) {
+                if item.blocks[block as usize].beyond {
+                    if impostor && let Some((lo, hi)) = c.bounds {
+                        c.key = [eye.clamp(lo, hi).distance(eye), -((lo + hi) * 0.5).dot(sun)];
+                    }
+                    continue;
+                }
                 let Some((lo, hi)) = c.bounds else {
                     continue;
                 };
@@ -5055,10 +6397,14 @@ impl Renderer {
                         // The far mesh level keeps the samples the near one gives
                         // up: a negative fade (impostor.wgsl `fade_keeps`).
                         let f = if p.lod == c.far { -fade } else { fade };
-                        fade_bytes.extend_from_slice(&fade_slot(p.mesh, f));
+                        fade_bytes.extend_from_slice(&fade_slot(p.mesh, row(p.material), f));
                         fade_bytes.resize(fade_bytes.len() + SLOT as usize - 16, 0);
                     }
-                    fade_bytes.extend_from_slice(&fade_slot(MeshId(u32::MAX - 2), fade));
+                    fade_bytes.extend_from_slice(&fade_slot(
+                        MeshId(u32::MAX - 2),
+                        FROM_INSTANCE,
+                        fade,
+                    ));
                     fade_bytes.resize(fade_bytes.len() + SLOT as usize - 16, 0);
                     fade_used += item.parts.len() + 1;
                     c.fading = true;
@@ -5117,23 +6463,173 @@ impl Renderer {
         self.sky_view_dirty = true;
     }
 
+    /// The frame's shadow cascades (`render_part`): for the sun of the frame (a photo's sample
+    /// moves it within the sun's disc), the quality and the scene's bounds.
+    fn cascades(&self) -> shadow::Cascades {
+        shadow::compute(
+            self.view,
+            self.proj,
+            (self.sun.direction + self.shadow_jitter).normalize(),
+            self.quality.cascades as usize,
+            self.quality.shadow_resolution,
+            self.shadow_distance,
+            self.scene_bounds,
+        )
+    }
+
+    /// Makes stale the shadow maps the moved items reach (`reached`, which this takes and
+    /// gives back empty): the scene changed where they were and where they are, the rest of it
+    /// did not. For each item,
+    ///
+    /// * a cascade whose map as drawn (`cascade_rendered`; the cached far one) has the item in
+    ///   its light-space bounds, before or after the move, and whose part of the view the item's
+    ///   shadow can be sampled in (`ShadeView::shades_from`), is marked `cascade_stale`: still
+    ///   sampled with its own matrix, redrawn by `cascade_refresh`. The cascades before the
+    ///   first one it casts into (`set_item_shadow_cascades`) never held it;
+    /// * the cached far cascade, when the view spares it: the shadow's reach goes into
+    ///   `far_dirty`, and the frame one of its views samples it in draws the far map
+    ///   (`far_dirty_sampled`), so a clip that played behind the camera leaves no ghost once
+    ///   the camera turns;
+    /// * the snow cover map (`snow_drawn`) when the item lies over its square, before or after.
+    ///
+    /// A map nothing of the frame can show a difference in keeps its cache: a model whose clip
+    /// plays near the eye leaves the cached far cascade alone, where every map used to be thrown
+    /// away each frame. The scene changing for another reason drops them all beforehand
+    /// (`invalidate_shadows`).
+    fn stale_moved(&mut self, cascades: &shadow::Cascades) {
+        if self.reached.is_empty() {
+            return;
+        }
+        let light = (self.sun.direction + self.shadow_jitter).normalize();
+        // The lowest ground a shadow can fall on: the scene's bottom, or the endless ground's.
+        let floor = self
+            .scene_bounds
+            .map_or(f32::INFINITY, |b| b.0.y)
+            .min(self.ground.map_or(f32::INFINITY, |g| g.height));
+        let last = cascades.count - 1;
+        let cached = cascades.margin > 0.0;
+        let view = self.shade_view(self.view, cascades);
+        let mut reached = std::mem::take(&mut self.reached);
+        for &(before, after, from) in &reached {
+            let Some(was) = before.zip(after).map(|(a, b)| union(a, b)) else {
+                continue;
+            };
+            let shadow = shadow_reach(was, light, floor.min(was.0.y));
+            for c in from as usize..cascades.count {
+                let Some(m) = self.cascade_rendered[c] else {
+                    continue;
+                };
+                let in_map = |b: Option<Bounds>| b.is_some_and(|b| !outside(m, b, false));
+                if !(in_map(before) || in_map(after)) {
+                    continue;
+                }
+                if cached && c == last {
+                    // The far map is not drawn again on its own while the eye stays within its
+                    // margin: what this view spares is kept for the views of the frames to
+                    // come (`far_dirty_sampled`), and goes when the map is drawn all the same.
+                    self.far_dirty = Some(self.far_dirty.map_or(shadow, |d| union(d, shadow)));
+                }
+                if view.shades_from(shadow, c, &cascades.splits) {
+                    self.cascade_stale[c] = true;
+                }
+            }
+            if self.snow_drawn.is_some_and(|m| !outside(m, was, false)) {
+                self.snow_drawn = None;
+            }
+        }
+        // Kept for the next frame: nothing is allocated while parts move.
+        reached.clear();
+        self.reached = reached;
+    }
+
+    /// The view `view` as one that shades from the frame's cascades: the camera's, or a planar
+    /// reflection's (the camera's mirrored in a water plane, `mirror_matrix`).
+    fn shade_view(&self, view: Mat4, cascades: &shadow::Cascades) -> ShadeView {
+        let mut sealed = [true; shadow::MAX_CASCADES];
+        // `covers_slice` takes a cascade drawn this frame (the first, or one without a map) as
+        // covering because it is drawn with the camera's view: that says nothing of a mirrored
+        // view's slices, so for any other view no cascade after the first is sealed (its
+        // sampled range reaches down to the eye).
+        let own = view == self.view;
+        for (k, s) in sealed.iter_mut().enumerate().take(cascades.count).skip(1) {
+            *s = own && (0..k).all(|j| self.covers_slice(j, cascades, view));
+        }
+        ShadeView {
+            view,
+            view_proj: self.proj * view,
+            sealed,
+        }
+    }
+
+    /// Whether cascade `c`'s map covers the whole slice of `view` it shades (the slice lies
+    /// in a sphere, `shadow::slice_sphere_world`; the map is that sphere's box in light space,
+    /// snapped to whole texels): nothing of the slice then falls through to the next cascade.
+    /// The first cascade is drawn every frame with the view of the frame, and one never drawn
+    /// (or dropped this frame) is drawn this frame with it: both cover.
+    fn covers_slice(&self, c: usize, cascades: &shadow::Cascades, view: Mat4) -> bool {
+        if c == 0 {
+            return true;
+        }
+        let Some(m) = self.cascade_rendered[c] else {
+            return true;
+        };
+        let (centre, r) = shadow::slice_sphere_world(view, self.proj, &cascades.splits, c);
+        let p = m.transform_point3(centre);
+        let rows = m.transpose();
+        // Two texels of slack: the centre snapped to a whole texel moves the box by up to half.
+        let slack = 4.0 / self.quality.shadow_resolution.max(1) as f32;
+        p.x.abs() + r * rows.x_axis.truncate().length() <= 1.0 + slack
+            && p.y.abs() + r * rows.y_axis.truncate().length() <= 1.0 + slack
+    }
+
+    /// Whether one of this frame's views shades from the far cascade anywhere in `far_dirty`:
+    /// the camera's view, or a planar reflection's (`planar[..passes]`: each its plane's
+    /// height; the scene mirrored in it is shaded from the same cascades, at other view
+    /// depths).
+    fn far_dirty_sampled(
+        &self,
+        cascades: &shadow::Cascades,
+        planar: &[(usize, f32)],
+        passes: usize,
+    ) -> bool {
+        let Some(dirty) = self.far_dirty else {
+            return false;
+        };
+        let last = cascades.count - 1;
+        let splits = &cascades.splits;
+        self.shade_view(self.view, cascades)
+            .shades_from(dirty, last, splits)
+            || planar[..passes].iter().any(|&(_, h)| {
+                self.shade_view(self.view * mirror_matrix(h), cascades)
+                    .shades_from(dirty, last, splits)
+            })
+    }
+
+    /// Drops every shadow cache: the scene changed, the window was resized, the quality or the
+    /// shadow distance did. Instances that moved do not come here (`stale_moved`).
     fn invalidate_shadows(&mut self) {
+        #[cfg(test)]
+        {
+            self.shadow_invalidations += 1;
+        }
         self.far_cache = None;
+        self.far_dirty = None;
         self.snow_drawn = None;
         self.cascade_rendered = [None; shadow::MAX_CASCADES];
         self.cascade_stale = [false; shadow::MAX_CASCADES];
     }
 
     /// One globals block (common.wgsl `Globals`) without the SH, which the
-    /// GPU writes: for the camera, or (`clip`: the water height) for the
-    /// mirrored camera of the planar reflection.
+    /// GPU writes: for the camera (`planes`: the water planes with a planar
+    /// reflection this frame, each its height and its layer), or (`clip`: the
+    /// water height, no planes) for the mirrored camera of one of them.
     fn write_globals(
         &self,
         buffer: &wgpu::Buffer,
         cascades: &shadow::Cascades,
         (view, proj, eye): (Mat4, Mat4, Vec3),
         (w, h): (u32, u32),
-        water: Option<f32>,
+        planes: &[(f32, u32)],
         clip: Option<f32>,
     ) {
         let exposure = self.exposure();
@@ -5156,6 +6652,8 @@ impl Renderer {
         b.floats(&cascades.texel);
         let res = q.shadow_resolution as f32;
         b.floats(&[cascades.count as f32, res, 1.0 / res, self.shadow_distance]);
+        let [shadow_radius_m, shadow_mode] = q.shadow_filter_uniform();
+        b.floats(&[shadow_radius_m, shadow_mode, 0.0, 0.0]);
         let (w, h) = (w as f32, h as f32);
         b.floats(&[w, h, 1.0 / w, 1.0 / h]);
         b.floats(&[
@@ -5232,21 +6730,23 @@ impl Renderer {
         );
         let bloom = if q.bloom { self.bloom_strength } else { 0.0 };
         b.floats(&[
-            if q.soft_shadows && !q.fast_shading {
-                9.0
-            } else {
-                4.0
-            },
+            q.shadow_taps() as f32,
             bloom,
             if q.ao_full_resolution { 1.0 } else { 2.0 },
             ground_height,
         ]);
         b.floats(&[
-            if water.is_some() { 1.0 } else { 0.0 },
-            water.unwrap_or(0.0),
+            0.0,
+            0.0,
             if clip.is_some() { 1.0 } else { 0.0 },
             clip.unwrap_or(0.0),
         ]);
+        for slot in 0..water::MAX_PLANES as usize {
+            let (height, layer, on) = planes
+                .get(slot)
+                .map_or((0.0, 0.0, 0.0), |&(h, l)| (h, l as f32, 1.0));
+            b.floats(&[height, layer, on, 0.0]);
+        }
         b.floats(&[
             self.grade.0,
             self.grade.1,
@@ -5493,7 +6993,18 @@ impl Renderer {
     }
 }
 
-fn upload_mesh(device: &wgpu::Device, queue: &wgpu::Queue, mesh: &Mesh) -> Result<GpuMesh, String> {
+/// A mesh's vertices and indices as the arenas hold them (`Renderer::store_mesh`).
+struct PackedMesh {
+    vertices: Vec<u8>,
+    indices: Vec<u8>,
+    bounds: Option<Bounds>,
+    /// Any vertex with a bend weight: bounds get padded for the sway.
+    wind: bool,
+}
+
+/// A mesh's data, packed as the vertex and index arenas hold it; Err (nothing is made) when its
+/// arrays disagree.
+fn pack_mesh(mesh: &Mesh) -> Result<PackedMesh, String> {
     let n = mesh.positions.len();
     if mesh.normals.len() != n {
         return Err(format!("{} normals for {n} positions", mesh.normals.len()));
@@ -5534,28 +7045,16 @@ fn upload_mesh(device: &wgpu::Device, queue: &wgpu::Queue, mesh: &Mesh) -> Resul
     for i in mesh.indices {
         ix.extend_from_slice(&i.to_le_bytes());
     }
-    let buffer = |label, bytes: &[u8], usage| {
-        let b = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some(label),
-            size: (bytes.len() as u64).max(4).next_multiple_of(4),
-            usage: usage | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&b, 0, bytes);
-        b
-    };
     let bounds = mesh
         .positions
         .iter()
         .map(|p| (Vec3::from(*p), Vec3::from(*p)))
         .reduce(union);
-    Ok(GpuMesh {
-        vertices: buffer("vertices", &v.0, wgpu::BufferUsages::VERTEX),
-        indices: buffer("indices", &ix, wgpu::BufferUsages::INDEX),
-        index_count: mesh.indices.len() as u32,
+    Ok(PackedMesh {
+        vertices: v.0,
+        indices: ix,
         bounds,
         wind,
-        weights: None,
     })
 }
 
@@ -5573,6 +7072,58 @@ fn corners((lo, hi): Bounds) -> [Vec3; 8] {
     })
 }
 
+/// The bounds of a cluster's instances: the item's mesh bounds under each of them.
+fn cluster_bounds(item: &Item, c: &Cluster, mesh_bounds: Option<Bounds>) -> Option<Bounds> {
+    mesh_bounds.and_then(|b| {
+        item.transforms[c.range.start as usize..c.range.end as usize]
+            .iter()
+            .map(|m| transform_bounds(*m, b))
+            .reduce(union)
+    })
+}
+
+/// An item's bounds from where its instances are: each cluster's (`cluster_bounds`), each
+/// 128 m block's over the clusters in it (`update_lods` steps over those), its own, and its
+/// size. For every item when the scene changed (`update_bounds`) and for an item an instance
+/// of which moved (`update_moved`): a block that kept the bounds of before the move would step
+/// over clusters that should draw.
+fn item_bounds(item: &mut Item, mesh_bounds: Option<Bounds>) {
+    for c in 0..item.clusters.len() {
+        item.clusters[c].bounds = cluster_bounds(&*item, &item.clusters[c], mesh_bounds);
+    }
+    for block in &mut item.blocks {
+        block.bounds = None;
+    }
+    for (c, &b) in item.clusters.iter().zip(&item.block_of) {
+        if let Some(cb) = c.bounds {
+            let block = &mut item.blocks[b as usize];
+            block.bounds = Some(match block.bounds {
+                Some(bb) => union(bb, cb),
+                None => cb,
+            });
+        }
+    }
+    item.bounds = item.clusters.iter().filter_map(|c| c.bounds).reduce(union);
+    item.size = item_size(item, mesh_bounds);
+}
+
+/// The bounding radius (m) of an item's largest instance: what the reflection leaves out when
+/// it would be under `MIN_REFLECTED_PX`.
+fn item_size(item: &Item, mesh_bounds: Option<Bounds>) -> f32 {
+    let scale = item
+        .transforms
+        .iter()
+        .map(|m| {
+            m.x_axis
+                .truncate()
+                .length()
+                .max(m.y_axis.truncate().length())
+                .max(m.z_axis.truncate().length())
+        })
+        .fold(0.0, f32::max);
+    mesh_bounds.map_or(0.0, |(lo, hi)| (hi - lo).length() * 0.5 * scale)
+}
+
 fn transform_bounds(m: Mat4, b: Bounds) -> Bounds {
     corners(b)
         .map(|c| m.transform_point3(c))
@@ -5580,6 +7131,34 @@ fn transform_bounds(m: Mat4, b: Bounds) -> Bounds {
         .map(|p| (p, p))
         .reduce(union)
         .unwrap_or(b)
+}
+
+/// Where the shadow of what lies in `b` can be sampled: `b`, and the paths of its corners away
+/// from the sun (`light` points to it) down to `floor`, the lowest ground: every point a
+/// corner can shade lies in there, and no receiver outside it is in `b`'s shadow. The ground
+/// goes on past the scene's bounds (the endless ground), so the paths are not cut at them: at
+/// 2 degrees a 5 m post casts 140 m. A sun lower than `HORIZON_SUN` is taken at it, so the
+/// paths end on the floor and stay finite.
+fn shadow_reach(b: Bounds, light: Vec3, floor: f32) -> Bounds {
+    let light = Vec3::new(light.x, light.y.max(HORIZON_SUN), light.z).normalize();
+    corners(b).into_iter().fold(b, |out, c| {
+        let p = c - light * ((c.y - floor) / light.y).max(0.0);
+        union(out, (p, p))
+    })
+}
+
+/// The nearest and the farthest view depth of a box: metres along the view axis, what the
+/// cascade splits are in (shadow.rs `Cascades::splits`). The axis is the view matrix's third
+/// row (as `outside` reads rows); its third column is the axis only for a camera that looks
+/// along a world axis, and a camera looking diagonally read its depths along another line. A
+/// mirrored view (`mirror_matrix`) gives the depth of the box's mirror image, as a planar
+/// reflection pass shades it.
+fn depth_range(view: Mat4, b: Bounds) -> (f32, f32) {
+    let (c, e) = ((b.0 + b.1) * 0.5, (b.1 - b.0) * 0.5);
+    let z = view.row(2);
+    let mid = -(z.truncate().dot(c) + z.w);
+    let ext = z.truncate().abs().dot(e);
+    (mid - ext, mid + ext)
 }
 
 /// True when the box is entirely outside one clip plane of `view_proj`.
@@ -5610,6 +7189,25 @@ impl Bytes {
             self.0.extend_from_slice(&x.to_le_bytes());
         }
     }
+}
+
+/// The material table's size in bytes for `rows` rows, from `capacity` rows before: twice the
+/// old capacity, or just enough when that is more, at most what one binding holds (`limit`:
+/// the device's largest storage buffer binding, `limit / MATERIAL_SIZE` rows). A power of two
+/// (`storage_buffer` rounds up to one) that never passes the limit, where the rounding up of
+/// the clamped size could.
+fn table_size(rows: u32, capacity: u32, limit: u64) -> u64 {
+    let max = limit / MATERIAL_SIZE;
+    assert!(
+        u64::from(rows) <= max,
+        "{rows} materials: more than the device's largest buffer holds"
+    );
+    let wanted = rows
+        .max(capacity.saturating_mul(2))
+        .min(u32::try_from(max).unwrap_or(u32::MAX));
+    (u64::from(wanted) * MATERIAL_SIZE)
+        .next_power_of_two()
+        .min(limit)
 }
 
 /// scene.wgsl's texture bits of the six map slots; a slot 6 filled while the material has no
@@ -5706,7 +7304,7 @@ fn snow_cover_matrix(eye: Vec3, lo: Vec3, hi: Vec3, resolution: u32) -> Mat4 {
 const SNOW_COVER_M: f32 = 160.0;
 
 fn globals_size() -> u64 {
-    // 9 matrices, 62 vec4s, the 9 SH vec4s last; see common.wgsl.
+    // 9 matrices, 67 vec4s, the 9 SH vec4s last; see common.wgsl.
     SH_OFFSET + 9 * 16
 }
 
@@ -5798,15 +7396,30 @@ fn texture_size(view: &wgpu::TextureView) -> (u32, u32) {
 
 /// A draw slot that also carries a dissolve's progress, 0 the last mesh
 /// level .. 1 the impostor or nothing (impostor.wgsl `lod_fade`).
-fn fade_slot(mesh: MeshId, fade: f32) -> [u8; 16] {
-    let mut out = mesh_slot(mesh);
+fn fade_slot(mesh: MeshId, material: u32, fade: f32) -> [u8; 16] {
+    let mut out = mesh_slot(mesh, material);
     out[8..12].copy_from_slice(&fade.to_le_bytes());
     out
 }
 
-fn mesh_slot(mesh: MeshId) -> [u8; 16] {
+/// What the draw-slot buffer is for: a uniform the queue writes; in a test also one to copy
+/// from, to read a slot back (`tests::slots`).
+fn draw_slot_usage() -> wgpu::BufferUsages {
+    #[cfg(not(test))]
+    let usage = wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST;
+    // In a test the buffer is copied out for `tests::slots`.
+    #[cfg(test)]
+    let usage =
+        wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC;
+    usage
+}
+
+/// A draw slot (`scene.wgsl` `Draw`): x the mesh id for the face highlight, y the material's
+/// row; `FROM_INSTANCE` where a gathered instance carries it.
+fn mesh_slot(mesh: MeshId, material: u32) -> [u8; 16] {
     let mut out = [0u8; 16];
     out[..4].copy_from_slice(&mesh.0.to_le_bytes());
+    out[4..8].copy_from_slice(&material.to_le_bytes());
     out
 }
 
@@ -6219,7 +7832,17 @@ impl Layouts {
         let filterable = S::Float { filterable: true };
         let fs = wgpu::ShaderStages::FRAGMENT;
         let vfs = wgpu::ShaderStages::VERTEX_FRAGMENT;
-        let mut material = vec![uniform_entry(0, fs, None)];
+        // Binding 0: every material's parameters (scene.wgsl `materials`), read-only storage.
+        let mut material = vec![wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: fs,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        }];
         material.extend((1..=6).map(|b| texture_entry(b, filterable, D::D2, false)));
         material.extend((7..=12).map(|b| sampler_entry(b, B::Filtering)));
         Self {
@@ -6278,7 +7901,8 @@ impl Layouts {
                     sampler_entry(1, B::Comparison),
                     texture_entry(2, unfilterable, D::D2, false),
                     texture_entry(3, unfilterable, D::D2, false),
-                    texture_entry(4, filterable, D::D2, false),
+                    // The planar reflection: one layer per water plane with a pass.
+                    texture_entry(4, filterable, D::D2Array, false),
                     texture_entry(5, unfilterable, D::D2, false),
                 ],
             ),
@@ -7389,13 +9013,66 @@ impl Targets {
             .checked_div(divisor)
             .zip(height.checked_div(divisor))
             .map_or((1, 1), |(w, h)| (w.max(1), h.max(1)));
-        let reflection = view(texture_sized(
-            "reflection",
-            HDR,
-            1,
-            sampled,
-            reflection_size,
-        ));
+        // A one-layer array standing in for the planar reflection in the reflection passes' own
+        // bind group (group 3 binding 4 is an array there too, and is not read).
+        let white_array = device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("reflection stand-in"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&wgpu::TextureViewDescriptor {
+                dimension: Some(wgpu::TextureViewDimension::D2Array),
+                ..Default::default()
+            });
+        // One layer per planar water pass (a single 1x1 layer while the reflection is off).
+        let reflection_layers = quality.plane_budget().max(1);
+        let reflection_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("reflection"),
+            size: wgpu::Extent3d {
+                width: reflection_size.0,
+                height: reflection_size.1,
+                depth_or_array_layers: reflection_layers,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: HDR,
+            usage: sampled,
+            view_formats: &[],
+        });
+        let reflection = reflection_texture.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("reflection array"),
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            ..Default::default()
+        });
+        let reflection_layer_views: Vec<_> = (0..reflection_layers)
+            .map(|i| {
+                reflection_texture.create_view(&wgpu::TextureViewDescriptor {
+                    label: Some("reflection layer"),
+                    dimension: Some(wgpu::TextureViewDimension::D2),
+                    base_array_layer: i,
+                    array_layer_count: Some(1),
+                    ..Default::default()
+                })
+            })
+            .collect();
+        bytes.set(
+            bytes.get()
+                + u64::from(reflection_size.0)
+                    * u64::from(reflection_size.1)
+                    * 8
+                    * u64::from(reflection_layers),
+        );
         let reflection_depth = view(texture_sized(
             "reflection depth",
             DEPTH,
@@ -7561,7 +9238,7 @@ impl Targets {
             upscale_bind: [post(&ldr[0], white), post(&ldr[1], white)],
             overlay_bind: bind("overlay", &l.texture, &[(0, tv(&linear_depth))]),
             forward_bind: forward(&occlusion[0], &linear_depth, &reflection, &prev_view),
-            reflect_forward_bind: forward(white, white, white, white),
+            reflect_forward_bind: forward(white, white, &white_array, white),
             resolve_bind,
             depth,
             hdr_msaa,
@@ -7578,6 +9255,7 @@ impl Targets {
             ldr,
             bloom,
             reflection,
+            reflection_layers: reflection_layer_views,
             reflection_depth,
             shadow_layers,
             shafts,
@@ -7609,8 +9287,12 @@ pub async fn headless_device() -> Result<(wgpu::Device, wgpu::Queue), String> {
     eprintln!("adapter: {:?}", adapter.get_info());
     // Timestamp queries when the adapter has them (headless only: tools and
     // benches), so `stats()` reports GPU time per pass.
+    // Indirect first instance: batched draws go through one indirect buffer per frame
+    // (`record`); without it every draw is direct.
     let required_features = adapter.features()
-        & (wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TEXTURE_COMPRESSION_BC);
+        & (wgpu::Features::TIMESTAMP_QUERY
+            | wgpu::Features::TEXTURE_COMPRESSION_BC
+            | wgpu::Features::INDIRECT_FIRST_INSTANCE);
     adapter
         .request_device(&wgpu::DeviceDescriptor {
             required_features,
@@ -7649,6 +9331,748 @@ mod tests {
                 "row {r}"
             );
         }
+    }
+
+    /// `instance_order` says where each given instance lands (sorted by ground cell), and
+    /// `set_instance` moves one in place: its bounds and the scene's follow once the frame is
+    /// drawn, the other instances stay where they are, and nothing else is made dirty.
+    #[test]
+    fn an_instance_moves_in_place() {
+        let (device, queue) = pollster::block_on(headless_device()).expect("device");
+        let mut r = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let at = |x: f32, y: f32| Mat4::from_translation(Vec3::new(x, y, 0.0));
+        let p = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        let mesh = r
+            .add_mesh(&Mesh {
+                positions: &p,
+                normals: &[[0.0, 0.0, 1.0]; 3],
+                indices: &[0, 1, 2],
+                ..Default::default()
+            })
+            .unwrap();
+        let mat = r.add_material(&Material::default());
+        // Three cells apart, given from east to west: sorted west to east.
+        let given = [at(16.0, 0.0), at(0.0, 0.0), at(8.0, 0.0)];
+        let item = r.add_item(mesh, mat, &given);
+        let order = Renderer::instance_order(&given);
+        assert_eq!(order, vec![2, 0, 1], "the first given lands last");
+        fn of(r: &Renderer, id: ItemId) -> &Item {
+            r.items[id.0 as usize].as_ref().unwrap()
+        }
+        assert_eq!(
+            of(&r, item)
+                .transforms
+                .iter()
+                .map(|m| m.w_axis.x)
+                .collect::<Vec<_>>(),
+            vec![0.0, 8.0, 16.0]
+        );
+        r.update_bounds();
+        assert!(!r.bounds_dirty);
+        let b = of(&r, item).bounds.unwrap();
+        assert_eq!((b.0.x, b.1.x, b.1.y), (0.0, 17.0, 1.0));
+        // The first given instance, the one furthest east, jumps up and away.
+        let m = at(100.0, 50.0);
+        r.set_instance(item, order[0] as usize, m);
+        assert_eq!(of(&r, item).transforms[order[0] as usize], m);
+        assert_eq!(of(&r, item).transforms[order[1] as usize], given[1]);
+        assert_eq!(of(&r, item).transforms[order[2] as usize], given[2]);
+        assert!(!r.bounds_dirty, "nothing else is made again");
+        // Its bounds and the scene's are made again when the frame is drawn.
+        r.update_moved();
+        let b = of(&r, item).bounds.unwrap();
+        assert_eq!((b.0.x, b.1.x, b.1.y), (0.0, 101.0, 51.0));
+        assert_eq!(r.scene_bounds.unwrap().1.x, 101.0);
+        assert_eq!(
+            of(&r, item).clusters.len(),
+            3,
+            "still one instance per cell"
+        );
+        // Out of range, or a removed item: nothing happens.
+        r.set_instance(item, 9, m);
+        assert_eq!(of(&r, item).transforms.len(), 3);
+        r.set_instance(ItemId(item.0 + 1), 0, m);
+        r.set_instance(item, order[0] as usize, given[0]);
+        r.update_moved();
+        let b = of(&r, item).bounds.unwrap();
+        assert_eq!((b.1.x, b.1.y), (17.0, 1.0), "and back");
+    }
+
+    /// A frame of `r`, submitted and waited for.
+    fn frame(device: &wgpu::Device, queue: &wgpu::Queue, r: &mut Renderer) {
+        let mut e = device.create_command_encoder(&Default::default());
+        r.render(&mut e);
+        queue.submit([e.finish()]);
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("poll");
+    }
+
+    fn at_box(x: f32, z: f32) -> Mat4 {
+        Mat4::from_translation(Vec3::new(x, 0.0, z))
+    }
+
+    /// A scene for the moved items' shadow maps: the endless ground, snow (the snow cover map
+    /// is drawn), eight boxes ahead of a level eye at the origin looking down +z (cascades as
+    /// asked, MEDIUM otherwise: with two, the near one to 21.4 m; with four, to 4.4 m, then
+    /// 10.3 and 24 m; the last one cached round the eye), and the mover: one box of `height`
+    /// metres, 2 m ahead of the eye, its item's only instance. The sun at 45 degrees from
+    /// azimuth 200, in front of the eye: shadows fall towards it.
+    fn mover_scene(height: f32, cascades: u32) -> (wgpu::Device, wgpu::Queue, Renderer, ItemId) {
+        let (device, queue) = pollster::block_on(headless_device()).expect("device");
+        let mut r = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        r.resize(64, 36);
+        r.set_quality(Quality {
+            cascades,
+            ..Quality::MEDIUM
+        });
+        r.set_ground(Some(Ground::default()));
+        r.set_snow(0.5);
+        r.set_sun(&Sun::from_angles(200.0, 45.0));
+        let material = r.add_material(&Material::default());
+        let mut m = demo::MeshData::default();
+        m.add_box(Vec3::ZERO, Vec3::new(2.0, 2.0, 2.0));
+        let still = r.add_mesh(&m.mesh()).expect("mesh");
+        let at: Vec<Mat4> = (0..8)
+            .map(|i| {
+                Mat4::from_translation(Vec3::new(
+                    -10.5 + 3.0 * i as f32,
+                    0.0,
+                    6.0 + 2.0 * (i % 3) as f32,
+                ))
+            })
+            .collect();
+        r.add_item(still, material, &at);
+        let mut m = demo::MeshData::default();
+        m.add_box(Vec3::ZERO, Vec3::new(1.0, height, 1.0));
+        let mesh = r.add_mesh(&m.mesh()).expect("mesh");
+        let mover = r.add_item(mesh, material, &[at_box(0.0, 2.0)]);
+        let eye = Vec3::new(0.0, 1.7, 0.0);
+        let (view, proj, _) = demo::camera(eye, eye + Vec3::Z, 16.0 / 9.0);
+        r.set_camera(view, proj, eye);
+        (device, queue, r, mover)
+    }
+
+    /// What a frame does with the moved items' bounds (`update_moved`, then `stale_moved` on the
+    /// frame's cascades), without rendering: the stale marks it leaves.
+    fn stale_after(r: &mut Renderer) -> [bool; shadow::MAX_CASCADES] {
+        r.update_moved();
+        let cascades = r.cascades();
+        r.stale_moved(&cascades);
+        r.cascade_stale
+    }
+
+    /// Posing moves a few instances every frame: however many move, the shadow caches are kept
+    /// (the maps they reach are made stale, `stale_moved`), and a scene change drops them once,
+    /// when the frame is drawn.
+    #[test]
+    fn moved_instances_keep_the_caches_a_scene_change_drops_them_once() {
+        let (device, queue) = pollster::block_on(headless_device()).expect("device");
+        let mut r = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        r.resize(64, 36);
+        let p = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        let mesh = r
+            .add_mesh(&Mesh {
+                positions: &p,
+                normals: &[[0.0, 0.0, 1.0]; 3],
+                indices: &[0, 1, 2],
+                ..Default::default()
+            })
+            .unwrap();
+        let mat = r.add_material(&Material::default());
+        let at = |x: f32| Mat4::from_translation(Vec3::new(x, 0.0, 0.0));
+        let item = r.add_item(mesh, mat, &[at(0.0), at(8.0)]);
+        frame(&device, &queue, &mut r);
+        assert!(r.far_cache.is_some(), "a frame caches the far cascade");
+        let before = r.shadow_invalidations;
+        r.set_instance(item, 0, at(1.0));
+        r.set_instance(item, 1, at(9.0));
+        frame(&device, &queue, &mut r);
+        assert_eq!(r.shadow_invalidations, before, "a move drops nothing");
+        assert!(
+            r.far_cache.is_some() && r.cascade_rendered[..2].iter().all(Option::is_some),
+            "the caches are kept (a reached map is redrawn into its place)"
+        );
+        assert_eq!(
+            r.scene_bounds.unwrap().1.x,
+            10.0,
+            "the scene's bounds follow"
+        );
+        // A frame in which nothing moved keeps them.
+        frame(&device, &queue, &mut r);
+        assert_eq!(r.shadow_invalidations, before);
+        // The scene changing (the instances given again): dropped once.
+        r.set_instances(item, &[at(0.0), at(8.0)]);
+        frame(&device, &queue, &mut r);
+        assert_eq!(
+            r.shadow_invalidations,
+            before + 1,
+            "once for the scene change"
+        );
+    }
+
+    /// A moved item makes stale the cascades it is in whose shaded part of the view its shadow
+    /// can be sampled in, and the snow cover map only when it lies over its square: a box by
+    /// the eye (its shadow 1.5 m long; the cached far cascade is first sampled 18 m away)
+    /// marks the near cascade alone and the cover map; the same box moving 500 m away, outside
+    /// them all, marks nothing.
+    #[test]
+    fn a_mover_marks_stale_only_the_maps_its_shadow_can_be_sampled_in() {
+        let (device, queue, mut r, mover) = mover_scene(1.5, 2);
+        frame(&device, &queue, &mut r);
+        assert!(
+            r.far_cache.is_some() && r.cascade_rendered[..2].iter().all(Option::is_some),
+            "every cascade drawn, the far one cached"
+        );
+        assert_eq!(r.snow_drawn, r.snow_cover, "the cover map is drawn");
+        r.set_instance(mover, 0, at_box(0.3, 2.0));
+        assert_eq!(stale_after(&mut r), [true, false, false, false]);
+        assert!(
+            r.snow_drawn.is_none(),
+            "the cover map lies over the mover: drawn again"
+        );
+        frame(&device, &queue, &mut r);
+        assert_eq!(r.cascade_stale, [false; shadow::MAX_CASCADES]);
+        assert_eq!(r.snow_drawn, r.snow_cover);
+        // 500 m away: its old shadow goes (the frame after the jump draws it out of the maps
+        // it was in), and moving on there reaches no map and no cover.
+        r.set_instance(mover, 0, at_box(500.0, 0.0));
+        frame(&device, &queue, &mut r);
+        assert!(r.far_cache.is_some(), "cached again");
+        r.set_instance(mover, 0, at_box(500.5, 0.0));
+        assert_eq!(stale_after(&mut r), [false; shadow::MAX_CASCADES]);
+        assert_eq!(
+            r.snow_drawn, r.snow_cover,
+            "outside the cover map's square: not drawn again"
+        );
+    }
+
+    /// A shadow long enough to reach past the near cascade's range (a 2 m box 19 m away; the
+    /// far cascade is first sampled 18 m away) marks the cached far cascade too.
+    #[test]
+    fn a_shadow_that_reaches_past_the_near_cascade_marks_the_far_one() {
+        let (device, queue, mut r, mover) = mover_scene(2.0, 2);
+        r.set_instance(mover, 0, at_box(0.0, 19.0));
+        frame(&device, &queue, &mut r);
+        r.set_instance(mover, 0, at_box(0.2, 19.0));
+        assert_eq!(
+            stale_after(&mut r),
+            [true, true, false, false],
+            "in both maps, sampled in both"
+        );
+    }
+
+    /// The lower bound of a cascade's sampled range holds only while the cascade before covers
+    /// its whole slice: a point that one misses falls through to it, at any depth. With the
+    /// camera still, a box 2 m ahead with a 0.6 m shadow marks the near cascade alone (four
+    /// cascades; the second is first sampled 3.8 m away). After the camera jumps 6 m sideways,
+    /// the middle maps were drawn for the eye before and cover their new slices no more: the
+    /// box's shadow can be sampled from the third and the far one through the gaps, and both
+    /// are marked; the second still cannot be (the near cascade covers its slice).
+    #[test]
+    fn a_camera_jump_drops_the_lower_bound_of_the_cascades_after_a_gap() {
+        let (device, queue, mut r, mover) = mover_scene(1.0, 4);
+        r.set_sun(&Sun::from_angles(200.0, 60.0));
+        r.set_instance(mover, 0, at_box(0.0, 2.0));
+        frame(&device, &queue, &mut r);
+        r.set_instance(mover, 0, at_box(0.2, 2.0));
+        assert_eq!(stale_after(&mut r), [true, false, false, false]);
+        frame(&device, &queue, &mut r);
+        let eye = Vec3::new(6.0, 1.7, 0.0);
+        let (view, proj, _) = demo::camera(eye, eye + Vec3::Z, 16.0 / 9.0);
+        r.set_camera(view, proj, eye);
+        r.set_instance(mover, 0, at_box(6.2, 2.0));
+        assert_eq!(stale_after(&mut r), [true, false, true, true]);
+    }
+
+    /// The lower bound of a cascade's sampled range drops to the eye when any cascade before it
+    /// has a gap, not only the one just before: a point one map misses falls through to the
+    /// next, which may miss it too. Four cascades, a box 7 m ahead (in the second cascade's
+    /// slice). The eye moves half a metre: the frame draws the near cascade and the third, and
+    /// the second keeps the map of the eye before (a gap). The box's shadow is sampled from the
+    /// second and the third cascade, and from the far one through the gap; the near map does
+    /// not hold the box.
+    #[test]
+    fn a_gap_in_any_earlier_cascade_drops_the_lower_bound_to_the_eye() {
+        let (device, queue, mut r, mover) = mover_scene(1.0, 4);
+        r.set_instance(mover, 0, at_box(0.0, 7.0));
+        frame(&device, &queue, &mut r);
+        let eye = Vec3::new(0.5, 1.7, 0.0);
+        let (view, proj, _) = demo::camera(eye, eye + Vec3::Z, 16.0 / 9.0);
+        r.set_camera(view, proj, eye);
+        frame(&device, &queue, &mut r);
+        let cascades = r.cascades();
+        assert!(
+            !r.covers_slice(1, &cascades, view) && r.covers_slice(2, &cascades, view),
+            "the second map has a gap, the third covers its slice"
+        );
+        r.set_instance(mover, 0, at_box(0.2, 7.0));
+        assert_eq!(stale_after(&mut r), [false, true, true, true]);
+    }
+
+    /// Through `render`: a mover the cached far cascade does not shade from leaves its cache
+    /// alone (the camera moved within the margin: a redraw would have moved the matrix), and
+    /// one whose shadow reaches it redraws it that frame.
+    #[test]
+    fn a_frame_redraws_the_far_cascade_only_for_a_shadow_that_reaches_it() {
+        let (device, queue, mut r, mover) = mover_scene(2.0, 2);
+        frame(&device, &queue, &mut r);
+        let (first, drawn) = (r.far_cache.unwrap(), r.cascade_rendered[1]);
+        let eye = Vec3::new(0.5, 1.7, 0.0);
+        let (view, proj, _) = demo::camera(eye, eye + Vec3::Z, 16.0 / 9.0);
+        r.set_camera(view, proj, eye);
+        r.set_instance(mover, 0, at_box(0.3, 2.0));
+        frame(&device, &queue, &mut r);
+        assert_eq!(
+            r.far_cache.map(|f| f.matrix),
+            Some(first.matrix),
+            "not redrawn: the cache stays"
+        );
+        assert_eq!(r.cascade_rendered[1], drawn);
+        // Now where its 2 m shadow reaches past the near cascade.
+        let eye = Vec3::new(1.0, 1.7, 0.0);
+        let (view, proj, _) = demo::camera(eye, eye + Vec3::Z, 16.0 / 9.0);
+        r.set_camera(view, proj, eye);
+        r.set_instance(mover, 0, at_box(0.0, 19.0));
+        frame(&device, &queue, &mut r);
+        let redrawn = r.far_cache.unwrap();
+        assert_eq!(redrawn.eye, eye, "drawn again for this eye");
+        assert_ne!(redrawn.matrix, first.matrix);
+        assert_ne!(r.cascade_rendered[1], drawn);
+    }
+
+    /// A mover the far map is spared for, because no view of the frame samples its shadow
+    /// from the far cascade, is not lost: its reach is kept (`far_dirty`) and the frame a view
+    /// samples it in draws the far map again. A door's clip playing 30 m behind the camera (in
+    /// the far map's square; its shadow is sampled from the far cascade once it is 18 m or
+    /// farther ahead) marks nothing; the clip stops; the camera turns round without moving:
+    /// that frame draws the far map, and the next is quiet again.
+    #[test]
+    fn the_far_map_follows_a_mover_it_was_spared_for_once_looked_at() {
+        let (device, queue, mut r, mover) = mover_scene(2.0, 2);
+        r.set_instance(mover, 0, at_box(0.0, -30.0));
+        frame(&device, &queue, &mut r);
+        let (first, drawn) = (r.far_cache.unwrap(), r.cascade_rendered[1]);
+        let far_draws = r.far_draws;
+        // 1. The clip plays behind the camera: no map is marked and the far map is not drawn;
+        //    the shadow is kept for the views to come.
+        r.set_instance(mover, 0, at_box(0.3, -30.0));
+        assert_eq!(stale_after(&mut r), [false; shadow::MAX_CASCADES]);
+        assert!(r.far_dirty.is_some(), "kept for the views to come");
+        frame(&device, &queue, &mut r);
+        assert_eq!(r.far_draws, far_draws, "not drawn");
+        assert_eq!(
+            r.far_cache.map(|f| f.matrix),
+            Some(first.matrix),
+            "the cache stays"
+        );
+        assert_eq!(r.cascade_rendered[1], drawn);
+        assert!(r.far_dirty.is_some());
+        // 2. The clip stops: a quiet frame, nothing looking at the shadow yet.
+        frame(&device, &queue, &mut r);
+        assert_eq!(r.far_draws, far_draws);
+        assert!(r.far_dirty.is_some());
+        // 3. The camera turns round without moving: the far map is drawn that frame.
+        let (view, proj, _) = demo::camera(r.eye, r.eye + Vec3::NEG_Z, 16.0 / 9.0);
+        r.set_camera(view, proj, r.eye);
+        frame(&device, &queue, &mut r);
+        assert_eq!(
+            r.far_draws,
+            far_draws + 1,
+            "the far map is drawn the frame the view samples its shadow"
+        );
+        assert!(r.far_dirty.is_none());
+        assert_eq!(
+            r.far_cache.map(|f| f.matrix),
+            Some(first.matrix),
+            "the same eye: the same matrix"
+        );
+        // Fresh: the frame after does without.
+        frame(&device, &queue, &mut r);
+        assert_eq!(r.far_draws, far_draws + 1);
+    }
+
+    /// A scene for a planar reflection: no ground and no other item, so the scene's bottom is
+    /// the mover's own base and its shadow's reach stays compact. The mover (a 2 m box) floats
+    /// with its base 10 m up, 14 m ahead of an eye 15 m up that looks 38.8 degrees down: the
+    /// mover and its mirror image in the water at y = 0 are both within the view. Two cascades
+    /// (the far one is first sampled 18 m away); the sun at 45 degrees from azimuth 200.
+    fn floating_mover_scene() -> (wgpu::Device, wgpu::Queue, Renderer, ItemId) {
+        let (device, queue) = pollster::block_on(headless_device()).expect("device");
+        let mut r = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        r.resize(64, 36);
+        r.set_quality(Quality {
+            cascades: 2,
+            ..Quality::MEDIUM
+        });
+        r.set_sun(&Sun::from_angles(200.0, 45.0));
+        let material = r.add_material(&Material::default());
+        let mut m = demo::MeshData::default();
+        m.add_box(Vec3::ZERO, Vec3::new(1.0, 2.0, 1.0));
+        let mesh = r.add_mesh(&m.mesh()).expect("mesh");
+        let mover = r.add_item(mesh, material, &[at_float(0.0)]);
+        let axis = Vec3::new(0.0, -0.627, 0.779).normalize();
+        let eye = Vec3::new(0.0, 15.0, 0.0);
+        let (view, proj, _) = demo::camera(eye, eye + axis * 10.0, 16.0 / 9.0);
+        r.set_camera(view, proj, eye);
+        (device, queue, r, mover)
+    }
+
+    /// The floating mover's instance, `x` metres to the side.
+    fn at_float(x: f32) -> Mat4 {
+        Mat4::from_translation(Vec3::new(x, 10.0, 14.0))
+    }
+
+    /// The view spares the far map for a mover whose shadow it samples from the near cascade
+    /// only, but the planar reflection in the water below samples the same shadow from the far
+    /// cascade: its mirrored camera looks at the mirror image, which lies at another view
+    /// depth. `far_dirty_sampled` is false for the view alone and true with the plane.
+    #[test]
+    fn a_spared_mover_can_be_sampled_from_the_far_cascade_in_a_planar_reflection() {
+        let (device, queue, mut r, mover) = floating_mover_scene();
+        frame(&device, &queue, &mut r);
+        r.set_instance(mover, 0, at_float(0.2));
+        assert_eq!(
+            stale_after(&mut r),
+            [true, false, false, false],
+            "the view: the near cascade alone"
+        );
+        let cascades = r.cascades();
+        assert!(
+            !r.far_dirty_sampled(&cascades, &[], 0),
+            "no planar reflection: the view alone spares the far map"
+        );
+        assert!(
+            r.far_dirty_sampled(&cascades, &[(0, 0.0)], 1),
+            "the reflection in the water at y = 0 shades the far cascade there"
+        );
+    }
+
+    /// A mirrored view seals no cascade after the first: the cascades drawn this frame are
+    /// drawn for the camera's slices, not the reflection's, so its points may fall through to
+    /// the far map at any depth.
+    #[test]
+    fn a_reflection_view_seals_no_cascade_after_the_first() {
+        let (device, queue, mut r, _mover) = floating_mover_scene();
+        frame(&device, &queue, &mut r);
+        let cascades = r.cascades();
+        let own = r.shade_view(r.view, &cascades);
+        let mirrored = r.shade_view(r.view * mirror_matrix(0.0), &cascades);
+        assert!(own.sealed[0] && mirrored.sealed[0]);
+        for (c, sealed) in mirrored
+            .sealed
+            .iter()
+            .enumerate()
+            .take(cascades.count)
+            .skip(1)
+        {
+            assert!(!sealed, "cascade {c} sealed for the mirrored view");
+        }
+    }
+
+    /// Through a frame, with the sea below the floating mover: its planar reflection shades the
+    /// mover's shadow from the far cascade, so the frame the mover moves in draws the far map
+    /// again, where the view alone would have spared it.
+    #[test]
+    fn the_sea_s_reflection_has_the_far_map_follow_a_mover_the_view_spares() {
+        let (device, queue, mut r, mover) = floating_mover_scene();
+        r.set_sea(Some(Sea {
+            level: 0.0,
+            wave_height_m: 0.2,
+            peak_wavelength_m: 4.0,
+            direction: [0.0, 1.0],
+            color: [0.02, 0.05, 0.08],
+            turbidity: 0.5,
+            flow: [0.0, 0.0],
+            foam: 0.1,
+            freezes: false,
+            outline: Vec::new(),
+            coast: Vec::new(),
+        }));
+        frame(&device, &queue, &mut r);
+        assert!(
+            r.stats()
+                .water
+                .iter()
+                .any(|w| w.item.is_none() && w.tier == WaterTier::Planar),
+            "the sea has a planar pass: {:?}",
+            r.stats().water
+        );
+        let far_draws = r.far_draws;
+        // The mover moves: the view alone spares the far map (its shadow is near); the
+        // reflection shades it from the far cascade, so the far map is drawn this frame.
+        r.set_instance(mover, 0, at_float(0.2));
+        frame(&device, &queue, &mut r);
+        assert_eq!(
+            r.far_draws,
+            far_draws + 1,
+            "the far map is drawn the frame the reflection shades from it"
+        );
+        assert!(r.far_dirty.is_none());
+        // Fresh: a quiet frame does without.
+        frame(&device, &queue, &mut r);
+        assert_eq!(r.far_draws, far_draws + 1);
+    }
+
+    /// A low sun throws a mover's shadow over the endless ground past the scene's bounds: a 5 m
+    /// box in a scene that ends 12 m ahead, with the sun 2 degrees up behind the eye, throws its
+    /// shadow 135 m ahead, and the far cascade (first sampled 18 m away) is marked for it. The
+    /// reach used to be the scene's bounds for a sun that low: 12 m deep here, no far cascade.
+    #[test]
+    fn a_low_sun_throws_a_mover_s_shadow_onto_the_ground_past_the_scene() {
+        let (device, queue, mut r, mover) = mover_scene(5.0, 2);
+        // The sun 2 degrees up, from behind the eye: the shadows fall ahead of it.
+        r.set_sun(&Sun::from_angles(20.0, 2.0));
+        frame(&device, &queue, &mut r);
+        assert!(r.scene_bounds.unwrap().1.z < 12.1, "{:?}", r.scene_bounds);
+        r.set_instance(mover, 0, at_box(0.3, 2.0));
+        assert_eq!(
+            stale_after(&mut r),
+            [true, true, false, false],
+            "the near cascade and the far one: the shadow runs into its range"
+        );
+    }
+
+    /// The blend band the renderer assumes between two cascades is the shader's.
+    #[test]
+    fn the_cascade_blend_band_is_the_shader_s() {
+        assert_eq!(format!("{CASCADE_BLEND}"), "0.15");
+        assert!(
+            include_str!("scene.wgsl").contains("let band = 0.15 * (g.splits[c] - start);"),
+            "scene.wgsl `cascades_shadow` changed its blend band"
+        );
+    }
+
+    /// The shadow of a box reaches where its corners' paths away from the sun meet the ground:
+    /// `shadow_reach` is that box, down to the floor under it, and a sun low on the horizon
+    /// throws it as far as the geometry says (3 m at 0.57 degrees: 300 m; at 2 degrees a 5 m box
+    /// casts 140 m), never cut at a scene's bounds. On the horizon the paths stay finite.
+    #[test]
+    fn a_shadow_reaches_the_ground_away_from_the_sun() {
+        let b = (Vec3::new(-1.0, 1.0, -1.0), Vec3::new(1.0, 3.0, 1.0));
+        // Straight down: the box, down to the floor under it.
+        let down = (Vec3::new(-1.0, 0.0, -1.0), Vec3::new(1.0, 3.0, 1.0));
+        assert_eq!(shadow_reach(b, Vec3::Y, 0.0), down);
+        // 45 degrees, the sun towards +z: the top corners land 3 m towards -z, on the floor.
+        let light = Vec3::new(0.0, 1.0, 1.0).normalize();
+        let reach = shadow_reach(b, light, 0.0);
+        assert!(reach.0.y.abs() < 1e-5, "down to the floor: {:?}", reach.0);
+        assert!((reach.0.z + 4.0).abs() < 1e-5, "{reach:?}");
+        assert_eq!((reach.1.x, reach.1.y, reach.1.z), (1.0, 3.0, 1.0));
+        // A floor 10 m lower: the paths are longer.
+        let reach = shadow_reach(b, light, -10.0);
+        assert!((reach.0.z + 14.0).abs() < 1e-5, "{reach:?}");
+        // A sun 0.57 degrees up: the top corners land 300 m away, on the floor.
+        let low = Vec3::new(0.0, 0.01, 1.0).normalize();
+        let reach = shadow_reach(b, low, 0.0);
+        assert!((reach.0.z + 301.0).abs() < 0.5, "{reach:?}");
+        assert!(reach.0.y.abs() < 1e-3, "on the floor: {:?}", reach.0);
+        assert_eq!(reach.1, b.1);
+        // On the horizon: never infinite, a thousand times the height (`HORIZON_SUN`).
+        let reach = shadow_reach(b, Vec3::new(0.3, 0.0, 1.0), 0.0);
+        assert!(reach.0.z.is_finite() && reach.0.z < -2800.0, "{reach:?}");
+        assert!(reach.0.y.abs() < 1e-3, "on the floor: {:?}", reach.0);
+    }
+
+    /// The nearest and farthest view depth of a box, along the view axis: the view matrix's
+    /// third row, whichever way the camera points. A mirrored view (`mirror_matrix`: the
+    /// reflection in a water plane) gives the depth of the box's mirror image, as the planar
+    /// reflection pass shades it.
+    #[test]
+    fn depth_range_is_along_the_view_axis() {
+        let view = Mat4::look_at_rh(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO, Vec3::Y);
+        let b = (Vec3::new(-1.0, -1.0, -1.0), Vec3::new(1.0, 1.0, 1.0));
+        assert_eq!(depth_range(view, b), (4.0, 6.0));
+        assert_eq!(depth_range(Mat4::IDENTITY, b), (-1.0, 1.0));
+        // A camera looking diagonally: a box centred on its axis is at the eye's distance from
+        // it, along that axis. (The matrix's third column is not the axis: it read 1.08 here.)
+        let (eye, target) = (Vec3::new(0.0, 3.0, 5.0), Vec3::new(4.0, 0.0, 1.0));
+        let view = Mat4::look_at_rh(eye, target, Vec3::Y);
+        let half = Vec3::splat(0.5);
+        let (near, far) = depth_range(view, (target - half, target + half));
+        let axis = (target - eye).normalize();
+        assert!(
+            ((near + far) * 0.5 - (target - eye).length()).abs() < 1e-4,
+            "{near} {far}"
+        );
+        assert!(
+            (far - near - (axis.x.abs() + axis.y.abs() + axis.z.abs())).abs() < 1e-4,
+            "{near} {far}"
+        );
+        // Mirrored about y = 2: the depth of the mirror image.
+        let m = mirror_matrix(2.0);
+        let (near, far) = depth_range(view * m, b);
+        let (image_near, image_far) = depth_range(view, transform_bounds(m, b));
+        assert!((near - image_near).abs() < 1e-4, "{near} {image_near}");
+        assert!((far - image_far).abs() < 1e-4, "{far} {image_far}");
+    }
+
+    /// A still taken right after instances moved: the window's own shadow caches (swapped out
+    /// for the still) are thrown away too, not only the still's.
+    #[test]
+    fn a_still_after_moved_instances_invalidates_the_window_s_shadows() {
+        let (device, queue) = pollster::block_on(headless_device()).expect("device");
+        let mut r = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        r.resize(64, 36);
+        let p = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        let mesh = r
+            .add_mesh(&Mesh {
+                positions: &p,
+                normals: &[[0.0, 0.0, 1.0]; 3],
+                indices: &[0, 1, 2],
+                ..Default::default()
+            })
+            .unwrap();
+        let mat = r.add_material(&Material::default());
+        let at = |x: f32| Mat4::from_translation(Vec3::new(x, 0.0, 0.0));
+        let item = r.add_item(mesh, mat, &[at(0.0), at(8.0)]);
+        let mut e = device.create_command_encoder(&Default::default());
+        r.render(&mut e);
+        queue.submit([e.finish()]);
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("poll");
+        assert!(
+            r.cascade_rendered.iter().any(Option::is_some),
+            "a frame caches its cascades"
+        );
+        r.set_instance(item, 0, at(1.0));
+        let (view, proj, eye) = (r.view, r.proj, r.eye);
+        r.render_still(32, 18, view, proj, eye).expect("a still");
+        assert!(
+            r.cascade_rendered.iter().all(Option::is_none) && r.far_cache.is_none(),
+            "the window's cascades no longer cover the scene"
+        );
+    }
+
+    /// `instance_order` is the order the item keeps its instances in: instance `i` as given is
+    /// instance `order[i]` once kept, those of one cell in the order they were given.
+    #[test]
+    fn instance_order_is_the_order_the_item_keeps() {
+        let (device, queue) = pollster::block_on(headless_device()).expect("device");
+        let mut r = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let p = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        let mesh = r
+            .add_mesh(&Mesh {
+                positions: &p,
+                normals: &[[0.0, 0.0, 1.0]; 3],
+                indices: &[0, 1, 2],
+                ..Default::default()
+            })
+            .unwrap();
+        let mat = r.add_material(&Material::default());
+        let at = |x: f32| Mat4::from_translation(Vec3::new(x, 0.0, 0.0));
+        // Given east to west, two to a cell and one west of them all.
+        let given = [at(8.5), at(0.5), at(8.0), at(0.0), at(-8.0)];
+        let order = Renderer::instance_order(&given);
+        assert_eq!(order, [3, 1, 4, 2, 0], "west to east, ties as given");
+        let item = r.add_item(mesh, mat, &given);
+        let kept = &r.items[item.0 as usize].as_ref().unwrap().transforms;
+        for (i, &pos) in order.iter().enumerate() {
+            assert_eq!(
+                kept[pos as usize], given[i],
+                "instance {i} as given is kept at {pos}"
+            );
+        }
+    }
+
+    /// Every 128 m block holds the bounds of its clusters, also once an instance moved: a moved
+    /// instance stays in its cluster and so in its block, and the block's bounds follow it.
+    /// `update_lods` steps over the clusters of a block past the item's last level when the
+    /// block is culled, so a block that kept the bounds of before the move would step over
+    /// clusters that should draw.
+    #[test]
+    fn the_blocks_follow_a_moved_instance() {
+        let (device, queue) = pollster::block_on(headless_device()).expect("device");
+        let mut r = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let p = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        let mesh = r
+            .add_mesh(&Mesh {
+                positions: &p,
+                normals: &[[0.0, 0.0, 1.0]; 3],
+                indices: &[0, 1, 2],
+                ..Default::default()
+            })
+            .unwrap();
+        let mat = r.add_material(&Material::default());
+        let at = |x: f32| Mat4::from_translation(Vec3::new(x, 0.0, 0.0));
+        // Two cells 300 m apart (two blocks), given east first.
+        let given = [at(300.0), at(0.0)];
+        let order = Renderer::instance_order(&given);
+        let item = r.add_item(mesh, mat, &given);
+        r.update_bounds();
+        let blocks_hold = |r: &Renderer| {
+            let item = r.items[item.0 as usize].as_ref().unwrap();
+            assert_eq!(item.block_of.len(), item.clusters.len());
+            for (b, block) in item.blocks.iter().enumerate() {
+                let clusters = item
+                    .clusters
+                    .iter()
+                    .zip(&item.block_of)
+                    .filter(|(_, in_b)| **in_b == b as u32)
+                    .filter_map(|(c, _)| c.bounds)
+                    .reduce(union);
+                assert_eq!(block.bounds, clusters, "block {b}");
+            }
+        };
+        blocks_hold(&r);
+        let x_of = |r: &Renderer, cluster: usize| {
+            let item = r.items[item.0 as usize].as_ref().unwrap();
+            item.blocks[item.block_of[cluster] as usize].bounds.unwrap()
+        };
+        let (lo, hi) = (x_of(&r, 0).0.x, x_of(&r, 1).0.x);
+        assert_eq!((lo, hi), (0.0, 300.0), "a block a cluster, where they are");
+        // The western instance jumps 300 m further west.
+        r.set_instance(item, order[1] as usize, at(-300.0));
+        r.update_moved();
+        blocks_hold(&r);
+        let item = r.items[item.0 as usize].as_ref().unwrap();
+        assert_eq!(
+            (item.blocks.len(), item.clusters.len()),
+            (2, 2),
+            "a move keeps the clusters and the blocks"
+        );
+        let b = item.bounds.unwrap();
+        assert_eq!((b.0.x, b.1.x), (-300.0, 301.0));
+        assert_eq!(r.scene_bounds.unwrap().0.x, -300.0);
+        let (lo, hi) = (x_of(&r, 0).0.x, x_of(&r, 1).0.x);
+        assert_eq!(
+            (lo, hi),
+            (-300.0, 300.0),
+            "its block's bounds are where it is now, not where it was"
+        );
+    }
+
+    /// Each moved item is listed once until the frame takes the list, however its moves
+    /// interleave with other items' (a host that prepares without drawing keeps it short).
+    #[test]
+    fn a_moved_item_is_listed_once() {
+        let (device, queue) = pollster::block_on(headless_device()).expect("device");
+        let mut r = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let p = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        let mesh = r
+            .add_mesh(&Mesh {
+                positions: &p,
+                normals: &[[0.0, 0.0, 1.0]; 3],
+                indices: &[0, 1, 2],
+                ..Default::default()
+            })
+            .unwrap();
+        let mat = r.add_material(&Material::default());
+        let at = |x: f32| Mat4::from_translation(Vec3::new(x, 0.0, 0.0));
+        let (a, b) = (
+            r.add_item(mesh, mat, &[at(0.0)]),
+            r.add_item(mesh, mat, &[at(8.0)]),
+        );
+        for k in 0..50 {
+            r.set_instance(a, 0, at(k as f32));
+            r.set_instance(b, 0, at(8.0 + k as f32));
+        }
+        assert_eq!(r.moved.len(), 2);
+        r.update_moved();
+        assert!(r.moved.is_empty());
+        r.set_instance(a, 0, at(0.0));
+        assert_eq!(r.moved.len(), 1, "listed again after the frame");
     }
 
     /// `set_sky_volume_light` needs the volume it changes the light of.
@@ -8225,6 +10649,62 @@ mod tests {
         }
     }
 
+    /// The scene module's functions that take a screen derivative or sample a texture by implicit
+    /// derivatives. Each does so in uniform control flow, at the top of its fragment stage and
+    /// before any branch on the material: a material's values are not uniform (the material table:
+    /// a batch spans materials), and Chrome's shader compiler rejects a derivative taken after a
+    /// branch on one ("must only be called from uniform control flow") where naga accepts it, so
+    /// the gates on the build server cannot see it. A function not listed here takes none.
+    #[test]
+    fn derivatives_are_taken_only_where_the_flow_is_uniform() {
+        let allowed: std::collections::BTreeSet<&str> = [
+            "alpha_samples",
+            "cutout_alpha",
+            "depth_fade_mask",
+            "derivs",
+            "edge_fade",
+            "fs_bake",
+            "fs_glass_transmit",
+            "fs_sea",
+            "impostor_alpha",
+            "impostor_sample",
+            "terrain_surface",
+        ]
+        .into_iter()
+        .collect();
+        let takes_derivatives = |function: &naga::Function| {
+            function.expressions.iter().any(|(_, e)| {
+                matches!(e, naga::Expression::Derivative { .. })
+                    || matches!(
+                        e,
+                        naga::Expression::ImageSample {
+                            level: naga::SampleLevel::Auto,
+                            ..
+                        }
+                    )
+            })
+        };
+        let (_, parts) = SHADERS.iter().find(|(name, _)| *name == "scene").unwrap();
+        for fast in [false, true] {
+            let source = module_source("scene", parts, fast, coverage::Coverage::Masked);
+            let module = naga::front::wgsl::parse_str(&source).expect("parses");
+            let mut names: std::collections::BTreeSet<&str> = module
+                .functions
+                .iter()
+                .filter(|&(_, f)| takes_derivatives(f))
+                .filter_map(|(_, f)| f.name.as_deref())
+                .collect();
+            names.extend(
+                module
+                    .entry_points
+                    .iter()
+                    .filter(|ep| takes_derivatives(&ep.function))
+                    .map(|ep| ep.name.as_str()),
+            );
+            assert_eq!(names, allowed, "fast shading {fast}");
+        }
+    }
+
     #[test]
     fn photo_shader_validates() {
         let source = include_str!("photo.wgsl");
@@ -8268,6 +10748,835 @@ mod tests {
                     panic!("{name} {} (fast {fast}): {detail}", ep.name);
                 }
             }
+        }
+    }
+
+    /// Materials with the same maps share a texture set; a set no material uses is freed, and
+    /// its index used again; the set without maps (index 0) never is.
+    #[test]
+    fn texture_sets_are_shared_and_freed() {
+        let mut sets = TextureSets::default();
+        let (a, new) = sets.acquire([None; 6]);
+        assert!(new && a == 0);
+        assert_eq!(
+            sets.acquire([None; 6]).0,
+            0,
+            "untextured materials share set 0"
+        );
+        let tex = TextureId(3);
+        let maps = [Some(tex), None, None, None, None, None];
+        let (b, new) = sets.acquire(maps);
+        assert!(new && b == 1);
+        assert_eq!(sets.acquire(maps), (1, false));
+        assert!(!sets.release(maps, 1), "one user is left");
+        assert!(sets.release(maps, 1), "the last user frees it");
+        let other = [None, None, None, None, None, Some(tex)];
+        assert_eq!(sets.acquire(other), (1, true), "the freed index again");
+        assert!(!sets.release([None; 6], 0));
+        assert!(!sets.release([None; 6], 0), "set 0 is never given back");
+        assert_eq!(sets.acquire([None; 6]), (0, false), "set 0 stays");
+    }
+
+    /// What the GPU's draw-slot buffer holds once the queue's writes are in (the test's copy
+    /// of it, read back): the first 16 bytes of every slot of `SLOT` bytes.
+    fn slots(r: &Renderer, device: &wgpu::Device, queue: &wgpu::Queue) -> Vec<[u8; 16]> {
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let size = SLOT * r.draw_capacity as u64;
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        encoder.copy_buffer_to_buffer(&r.draw_buffer, 0, &buffer, 0, size);
+        queue.submit([encoder.finish()]);
+        buffer
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, |res| res.expect("map"));
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("poll");
+        let bytes = buffer
+            .slice(..)
+            .get_mapped_range()
+            .expect("mapped")
+            .to_vec();
+        let (slots, rest) = bytes.as_chunks::<{ SLOT as usize }>();
+        assert!(rest.is_empty(), "a whole number of slots");
+        slots
+            .iter()
+            .map(|s| s[..16].try_into().expect("a slot"))
+            .collect()
+    }
+
+    /// A draw slot's mesh id and material row (`mesh_slot`).
+    fn slot_words(bytes: [u8; 16]) -> (u32, u32) {
+        let word = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().expect("word"));
+        (word(0), word(4))
+    }
+
+    /// One box on the ground, as a mesh (`tests`).
+    fn box_mesh(r: &mut Renderer) -> MeshId {
+        let mut m = demo::MeshData::default();
+        m.add_box(Vec3::new(-0.5, 0.0, -0.5), Vec3::new(0.5, 1.0, 0.5));
+        r.add_mesh(&m.mesh()).expect("mesh")
+    }
+
+    /// Draw slots in use (the ground's and the batches' included).
+    fn live_slots(r: &Renderer) -> usize {
+        r.next_slot as usize - r.free_slots.len()
+    }
+
+    /// The ground's draw slot in a renderer read back: its mesh id and material row.
+    fn ground_words(r: &Renderer, device: &wgpu::Device, queue: &wgpu::Queue) -> (u32, u32) {
+        slot_words(slots(r, device, queue)[r.ground_slot as usize])
+    }
+
+    /// The endless ground with a look (`set_ground_material`) names the look's row in its
+    /// draw slot, a row whose bits say the maps are there, so the ground is shaded with the
+    /// material's parameters under its texture set and the terrain's edge vanishes; without a
+    /// look, and once the look is removed, the slot names the ground's own row; a draw-slot
+    /// buffer that regrew writes whichever holds.
+    #[test]
+    fn the_ground_with_a_look_material_names_its_row() {
+        let (device, queue) = pollster::block_on(headless_device()).expect("device");
+        let mut r = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        r.set_ground(Some(Ground::default()));
+        let grass = r
+            .add_texture(&TextureDesc {
+                width: 16,
+                height: 16,
+                rgba8: &[96; 16 * 16 * 4],
+                color_space: ColorSpace::Srgb,
+                repeat: true,
+            })
+            .expect("texture");
+        let lawn = r.add_material(&Material {
+            base_color_map: Some(grass),
+            projection: Projection::Triplanar { scale_m: 2.0 },
+            variation: 0.5,
+            ..Default::default()
+        });
+        assert_eq!(
+            ground_words(&r, &device, &queue),
+            (u32::MAX - 1, GROUND_ROW),
+            "no look: the ground's own row"
+        );
+        r.set_ground_material(Some(lawn));
+        assert_eq!(
+            ground_words(&r, &device, &queue),
+            (u32::MAX - 1, row(lawn)),
+            "the slot names the look's row"
+        );
+        // The look's row (the CPU copy, what was written): its texture bits (scene.wgsl
+        // `Material.flags.x`) say the base map is bound, where the ground's own say none.
+        let bits = |of: u32| {
+            let at = of as usize * MATERIAL_SIZE as usize + 64;
+            u32::from_le_bytes(r.material_bytes[at..at + 4].try_into().expect("bits"))
+        };
+        assert_eq!(bits(row(lawn)) & 1, 1, "the look's row is textured");
+        assert_eq!(bits(GROUND_ROW), 0, "the ground's own row has no map");
+        // Items until the draw-slot buffer regrows: the rewrite keeps the look's row.
+        let (mesh, material) = (box_mesh(&mut r), r.add_material(&Material::default()));
+        let one = [Mat4::from_translation(Vec3::X)];
+        let capacity = r.draw_capacity;
+        while r.draw_capacity == capacity {
+            r.add_item(mesh, material, &one);
+        }
+        assert_eq!(
+            ground_words(&r, &device, &queue),
+            (u32::MAX - 1, row(lawn)),
+            "a regrown buffer keeps the look's row"
+        );
+        r.set_ground_material(None);
+        assert_eq!(
+            ground_words(&r, &device, &queue),
+            (u32::MAX - 1, GROUND_ROW),
+            "no look again: the ground's own row"
+        );
+        r.set_ground_material(Some(lawn));
+        r.remove_material(lawn);
+        assert_eq!(
+            ground_words(&r, &device, &queue),
+            (u32::MAX - 1, GROUND_ROW),
+            "the look removed: the ground's own row"
+        );
+    }
+
+    /// An item whose later part makes the draw-slot buffer regrow keeps every part's slot: the
+    /// rewrite after a regrow covers the items there are, and the item being added was not one
+    /// yet, so its earlier parts read zero (the ground's material, mesh 0) and a glass part was
+    /// shaded as ground.
+    #[test]
+    fn an_item_added_as_the_slot_buffer_regrows_keeps_its_slots() {
+        let (device, queue) = pollster::block_on(headless_device()).expect("device");
+        let mut r = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let plain = r.add_material(&Material::default());
+        let glass = r.add_material(&Material {
+            surface: Surface::Glass,
+            ..Default::default()
+        });
+        // Mesh 0 is what a zero slot names: a spare mesh first, so the parts use later ones.
+        let spare = box_mesh(&mut r);
+        let (bark, leaves) = (box_mesh(&mut r), box_mesh(&mut r));
+        assert_ne!(bark.0, 0);
+        assert_ne!(leaves.0, 0);
+        let one = [Mat4::from_translation(Vec3::X)];
+        let capacity = r.draw_capacity;
+        while live_slots(&r) < capacity - 1 {
+            r.add_item(spare, plain, &one);
+        }
+        assert_eq!(
+            live_slots(&r),
+            capacity - 1,
+            "one slot left before the buffer doubles"
+        );
+        let item = r.add_lod_item(
+            &[(bark, plain, f32::INFINITY), (leaves, glass, f32::INFINITY)],
+            &one,
+        );
+        assert_eq!(r.draw_capacity, capacity * 2, "the second part regrew it");
+        let parts = &r.items[item.0 as usize].as_ref().expect("item").parts;
+        assert_eq!(parts.len(), 2);
+        let all = slots(&r, &device, &queue);
+        for p in parts {
+            assert_eq!(
+                slot_words(all[p.slot as usize]),
+                (p.mesh.0, row(p.material)),
+                "the slot of mesh {} keeps its mesh and row",
+                p.mesh.0
+            );
+        }
+    }
+
+    /// The material table's size: twice the old capacity or just enough when that is more,
+    /// always room for the rows; a power of two; and never past the largest storage binding,
+    /// where a limit that is no power of two of bytes used to be passed by the rounding up.
+    #[test]
+    fn the_material_table_stays_within_one_binding() {
+        let mib = 1 << 20;
+        assert_eq!(
+            table_size(65, 64, 128 * mib),
+            16384,
+            "65 rows from 64: twice"
+        );
+        assert_eq!(table_size(1, 0, 128 * mib), 128, "one row, rounded up");
+        assert_eq!(
+            table_size(1, 64, 128 * mib),
+            16384,
+            "twice the old capacity, rounded up"
+        );
+        // A limit of 2^31 - 1 bytes holds 19 173 952 rows; their bytes rounded up are 2^31.
+        assert_eq!(
+            table_size(19_173_952, 64, (1u64 << 31) - 1),
+            (1u64 << 31) - 1,
+            "the rounding up stays under the limit"
+        );
+        for limit in [
+            112 * 1000 + 7,
+            1 << 27,
+            (1u64 << 31) - 1,
+            112 * 4096,
+            112u64 * 3000 - 1,
+        ] {
+            let last = (limit / MATERIAL_SIZE) as u32;
+            let mut samples = vec![1, 2, 63, 64, 65, 100, 146, 147, 999, 1000];
+            samples.extend([last / 2, last.saturating_sub(1), last]);
+            for capacity in [0u32, 1, 64, 146, 1000] {
+                for rows in samples.iter().copied().filter(|&r| r <= last) {
+                    let size = table_size(rows, capacity, limit);
+                    assert!(
+                        size <= limit,
+                        "{rows} rows from {capacity} under {limit}: {size}"
+                    );
+                    assert!(
+                        size / MATERIAL_SIZE >= u64::from(rows),
+                        "{rows} rows from {capacity} under {limit}: {size}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A row of boxes, each its own untextured material (the material table grows on the way):
+    /// one batch draws them all, each shaded with its own row.
+    #[test]
+    fn many_materials_draw_their_own_colour_in_one_batch() {
+        let (device, queue) = pollster::block_on(headless_device()).expect("device");
+        let (w, h) = (320u32, 60u32);
+        let n = 150u32;
+        let scene = |own: bool| {
+            let mut r = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+            let mut m = demo::MeshData::default();
+            m.add_box(Vec3::new(-1.0, 0.0, -1.0), Vec3::new(1.0, 2.0, 1.0));
+            let mesh = r.add_mesh(&m.mesh()).expect("mesh");
+            let first = r.add_material(&Material {
+                base_color: [1.0, 0.2, 0.0, 1.0],
+                roughness: 0.9,
+                ..Default::default()
+            });
+            for k in 0..n {
+                let t = k as f32 / n as f32;
+                let material = if own {
+                    r.add_material(&Material {
+                        base_color: [1.0 - t, 0.2, t, 1.0],
+                        roughness: 0.9,
+                        ..Default::default()
+                    })
+                } else {
+                    first
+                };
+                r.add_item(
+                    mesh,
+                    material,
+                    &[Mat4::from_translation(Vec3::new(2.5 * k as f32, 0.0, 0.0))],
+                );
+            }
+            r.resize(w, h);
+            r.set_quality(Quality::LOW);
+            let (half, eye) = (
+                2.5 * n as f32 * 0.5,
+                Vec3::new(2.5 * n as f32 * 0.5 - 1.25, 1.0, 20.0),
+            );
+            let view = Mat4::look_at_rh(eye, Vec3::new(eye.x, 1.0, 0.0), Vec3::Y);
+            let proj = Mat4::orthographic_rh(-half, half, -1.5, 1.5, 0.1, 100.0);
+            r.set_camera(view, proj, eye);
+            r
+        };
+        let forward = |r: &Renderer| {
+            r.stats()
+                .pass_draws
+                .iter()
+                .find(|(l, _)| *l == "forward")
+                .map(|(_, n)| *n)
+                .expect("a forward pass")
+        };
+        let mut one = scene(false);
+        pixels(&mut one, &device, &queue, w, h);
+        let (one_px, one_forward) = (pixels(&mut one, &device, &queue, w, h), forward(&one));
+        assert!(one_forward <= 3, "{one_forward} forward draws");
+        let mut own = scene(true);
+        pixels(&mut own, &device, &queue, w, h);
+        let own_px = pixels(&mut own, &device, &queue, w, h);
+        assert_eq!(
+            forward(&own),
+            one_forward,
+            "colour alone does not split draws"
+        );
+        assert_ne!(own_px, one_px, "the colours differ");
+        // Red minus blue, averaged over the middle row's left and right quarter (at LOW the
+        // boxes are under two pixels wide and upscaled, so one pixel mixes its neighbours): the
+        // row's left stays red, as with one material, and its right turns blue, with the
+        // materials past the table's growth from 64 rows (boxes 113 on use rows 115 on). The
+        // light is the sky's, blue: a material with less than about three times more red than
+        // blue (box 40 on) reads blue itself, so the left quarter is the red one.
+        let quarter = |px: &[u8], from: usize| {
+            let mut sum = [0i64; 3];
+            for x in from..from + w as usize / 4 {
+                let i = ((h as usize / 2) * w as usize + x) * 4;
+                for (c, s) in sum.iter_mut().enumerate() {
+                    *s += i64::from(px[i + c]);
+                }
+            }
+            let n = (w / 4) as f32;
+            (sum[0] as f32 / n, sum[2] as f32 / n)
+        };
+        let (right_from, left_from) = (w as usize / 4 * 3, 0);
+        let (one_left, one_right) = (quarter(&one_px, left_from), quarter(&one_px, right_from));
+        let (own_left, own_right) = (quarter(&own_px, left_from), quarter(&own_px, right_from));
+        let red = |q: (f32, f32)| q.0 - q.1;
+        assert!(
+            red(one_left) > 40.0 && red(one_right) > 40.0,
+            "one red material, both quarters red: {one_left:?} {one_right:?}"
+        );
+        assert!(
+            red(own_left) > 40.0,
+            "the left quarter stays red: {own_left:?}"
+        );
+        assert!(
+            red(own_right) < -10.0,
+            "the right quarter is blue: {own_right:?}"
+        );
+        assert!(
+            red(own_right) < red(one_right) - 40.0,
+            "the right quarter differs from one material's: {own_right:?} against {one_right:?}"
+        );
+    }
+
+    /// How planned draws are issued: batched mesh draws with the same bindings run as one
+    /// indirect call, everything between them one draw each; the arguments packed are those of
+    /// the runs' draws, and are what their direct draws name.
+    #[test]
+    fn runs_of_batched_draws_with_the_same_bindings_share_a_call() {
+        let mesh = |first: u32, id: u32| DrawMesh {
+            id,
+            arena: 0,
+            range: batch::Span::new(first, 12),
+            base_vertex: 0,
+        };
+        let draw = |mesh, g1, src| Draw {
+            pipe: Pipe::Depth(0),
+            g1,
+            g2: None,
+            mesh,
+            vertices: 12,
+            src,
+            instances: 0..3,
+            triangles: 4,
+            view: false,
+        };
+        let set = Some(Group1::Set(0));
+        let elsewhere = |first: u32, id: u32| DrawMesh {
+            arena: 1,
+            ..mesh(first, id)
+        };
+        let draws = vec![
+            draw(Some(mesh(0, 0)), set, Src::Gathered),
+            draw(Some(mesh(12, 1)), set, Src::Gathered),
+            draw(None, set, Src::Gathered),
+            draw(Some(mesh(24, 2)), set, Src::Gathered),
+            draw(Some(mesh(36, 3)), None, Src::Gathered),
+            draw(Some(mesh(48, 4)), None, Src::Gathered),
+            draw(Some(mesh(60, 5)), None, Src::Pool),
+            draw(Some(elsewhere(72, 6)), None, Src::Gathered),
+            draw(Some(elsewhere(84, 7)), None, Src::Gathered),
+            draw(Some(mesh(96, 8)), None, Src::Gathered),
+        ];
+        let calls = |indirect: bool| Calls::new(&draws, indirect).collect::<Vec<_>>();
+        assert_eq!(
+            calls(true),
+            vec![(0, 2), (2, 1), (3, 1), (4, 2), (6, 1), (7, 2), (9, 1)],
+            "a run stays in one arena"
+        );
+        assert_eq!(
+            calls(false),
+            (0..draws.len()).map(|i| (i, 1)).collect::<Vec<_>>()
+        );
+        let mut args = Vec::new();
+        pack_args(&mut args, &draws, true);
+        assert_eq!(args.len(), INDIRECT_ARGS as usize * 6, "three runs of two");
+        assert_eq!(&args[..20], &u32_bytes(&[12, 3, 0, 0, 0]));
+        assert_eq!(&args[20..40], &u32_bytes(&[12, 3, 12, 0, 0]));
+        assert_eq!(&args[40..60], &u32_bytes(&[12, 3, 36, 0, 0]));
+        assert_eq!(&args[60..80], &u32_bytes(&[12, 3, 48, 0, 0]));
+        assert_eq!(&args[80..100], &u32_bytes(&[12, 3, 72, 0, 0]));
+        assert_eq!(&args[100..120], &u32_bytes(&[12, 3, 84, 0, 0]));
+        args.clear();
+        pack_args(&mut args, &draws, false);
+        assert!(args.is_empty(), "every draw direct");
+    }
+
+    /// Forty meshes of one texture set: the forward pass issues one call for them all (a run
+    /// through the indirect buffer), so `pass_calls` is below `pass_draws`; with the direct
+    /// fallback every draw is a call, and the picture is the same.
+    #[test]
+    fn many_meshes_draw_in_one_indirect_call_and_the_fallback_draws_the_same() {
+        let (device, queue) = pollster::block_on(headless_device()).expect("device");
+        let (w, h) = (320u32, 60u32);
+        let scene = || {
+            let mut r = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+            let material = r.add_material(&Material::default());
+            let mut rng = demo::Rng::new(5);
+            for k in 0..40 {
+                let mut m = demo::MeshData::default();
+                let a = 0.4 + rng.unit() * 0.5;
+                let b = 0.6 + rng.unit() * 1.5;
+                m.add_box(Vec3::new(-a, 0.0, -a), Vec3::new(a, b, a));
+                let mesh = r.add_mesh(&m.mesh()).expect("mesh");
+                r.add_item(
+                    mesh,
+                    material,
+                    &[Mat4::from_translation(Vec3::new(2.5 * k as f32, 0.0, 0.0))],
+                );
+            }
+            r.resize(w, h);
+            r.set_quality(Quality::LOW);
+            let (half, eye) = (50.0f32, Vec3::new(48.75, 1.0, 20.0));
+            let view = Mat4::look_at_rh(eye, Vec3::new(eye.x, 1.0, 0.0), Vec3::Y);
+            let proj = Mat4::orthographic_rh(-half, half, -1.5, 1.5, 0.1, 100.0);
+            r.set_camera(view, proj, eye);
+            r
+        };
+        // The calls of one pass group (the forward pass's: the batches' and the sky's).
+        let calls_of = |r: &Renderer, key: &str| -> u32 {
+            r.stats()
+                .pass_calls
+                .iter()
+                .filter(|(l, _)| *l == key)
+                .map(|(_, n)| *n)
+                .sum()
+        };
+        let draw_count = |r: &Renderer, key: &str| -> u32 {
+            r.stats()
+                .pass_draws
+                .iter()
+                .find(|(l, _)| *l == key)
+                .map(|(_, n)| *n)
+                .expect("the pass")
+        };
+        let mut indirect = scene();
+        let with_feature = indirect.multi_draw;
+        pixels(&mut indirect, &device, &queue, w, h);
+        let indirect_px = pixels(&mut indirect, &device, &queue, w, h);
+        let (draws, calls) = (
+            draw_count(&indirect, "forward"),
+            calls_of(&indirect, "forward"),
+        );
+        let mut direct = scene();
+        direct.multi_draw = false;
+        pixels(&mut direct, &device, &queue, w, h);
+        let direct_px = pixels(&mut direct, &device, &queue, w, h);
+        assert_eq!(indirect_px, direct_px, "the same picture either way");
+        let direct_calls = calls_of(&direct, "forward");
+        // A call per draw, and the sky's, which `pass_draws` does not count.
+        assert_eq!(
+            direct_calls,
+            draw_count(&direct, "forward") + 1,
+            "a call per draw"
+        );
+        if with_feature {
+            assert!(calls < draws, "{calls} calls for {draws} draws");
+        } else {
+            eprintln!(
+                "the adapter has no INDIRECT_FIRST_INSTANCE: {calls} calls for {draws} draws"
+            );
+            assert_eq!(calls, direct_calls);
+        }
+    }
+
+    /// An item's clusters partition its instances (by 8 m cell), and its blocks its clusters
+    /// (by 128 m block of the ground grid: each cluster in exactly one), wherever the instances
+    /// stand.
+    #[test]
+    fn blocks_partition_the_clusters_and_the_clusters_the_instances() {
+        let (device, queue) = pollster::block_on(headless_device()).expect("device");
+        let mut r = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let mut m = demo::MeshData::default();
+        m.add_box(Vec3::new(-0.5, 0.0, -0.5), Vec3::new(0.5, 1.0, 0.5));
+        let mesh = r.add_mesh(&m.mesh()).expect("mesh");
+        let material = r.add_material(&Material::default());
+        let mut rng = demo::Rng::new(3);
+        let at: Vec<Mat4> = (0..5000)
+            .map(|_| {
+                Mat4::from_translation(Vec3::new(
+                    rng.unit() * 600.0 - 300.0,
+                    0.0,
+                    rng.unit() * 600.0 - 300.0,
+                ))
+            })
+            .collect();
+        let item = r.add_lod_item(&[(mesh, material, f32::INFINITY)], &at);
+        let item = r.items[item.0 as usize].as_ref().expect("item");
+        let cell = |m: &Mat4| {
+            (
+                (m.w_axis.x / CLUSTER_CELL).floor() as i32,
+                (m.w_axis.z / CLUSTER_CELL).floor() as i32,
+            )
+        };
+        let cells = same_ranges(&item.transforms, |a, b| cell(a) == cell(b));
+        assert_eq!(
+            cells,
+            item.clusters
+                .iter()
+                .map(|c| c.range.clone())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(item.clusters.last().map(|c| c.range.end), Some(5000));
+        let block = |c: &Cluster| {
+            let m = &item.transforms[c.range.start as usize];
+            (
+                (m.w_axis.x / 128.0).floor() as i32,
+                (m.w_axis.z / 128.0).floor() as i32,
+            )
+        };
+        assert_eq!(item.block_of.len(), item.clusters.len());
+        let mut first: Vec<Option<(i32, i32)>> = vec![None; item.blocks.len()];
+        for (ci, &b) in item.block_of.iter().enumerate() {
+            let k = block(&item.clusters[ci]);
+            match &mut first[b as usize] {
+                Some(f) => assert_eq!(*f, k, "cluster {ci}"),
+                None => first[b as usize] = Some(k),
+            }
+        }
+        assert!(first.iter().all(Option::is_some), "no empty block");
+        assert!(item.blocks.len() > 20, "{} blocks", item.blocks.len());
+    }
+
+    /// Every block's bounds hold those of each of its clusters (so a block outside a view has
+    /// no cluster inside it), over many items with and without levels, some removed.
+    #[test]
+    fn a_block_holds_its_clusters() {
+        let (device, queue) = pollster::block_on(headless_device()).expect("device");
+        let mut r = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        r.resize(64, 36);
+        let mut rng = demo::Rng::new(9);
+        for k in 0..40 {
+            let s = 0.5 + rng.unit();
+            let mut m = demo::MeshData::default();
+            m.add_box(Vec3::new(-s, 0.0, -s), Vec3::new(s, 2.0 * s, s));
+            let mesh = r.add_mesh(&m.mesh()).expect("mesh");
+            let material = r.add_material(&Material::default());
+            let n = 1 + (rng.unit() * 300.0) as usize;
+            let at: Vec<Mat4> = (0..n)
+                .map(|_| {
+                    Mat4::from_translation(Vec3::new(
+                        rng.unit() * 800.0 - 400.0,
+                        0.0,
+                        rng.unit() * 800.0 - 400.0,
+                    ))
+                })
+                .collect();
+            let item = if k % 3 == 0 {
+                r.add_lod_item(&[(mesh, material, 120.0)], &at)
+            } else {
+                r.add_item(mesh, material, &at)
+            };
+            if k % 5 == 0 {
+                r.remove_item(item);
+            }
+        }
+        r.update_bounds();
+        let mut checked = 0usize;
+        for item in r.items.iter().flatten() {
+            for (c, &b) in item.clusters.iter().zip(&item.block_of) {
+                let (Some(cb), Some(bb)) = (c.bounds, item.blocks[b as usize].bounds) else {
+                    continue;
+                };
+                for axis in 0..3 {
+                    assert!(
+                        bb.0[axis] <= cb.0[axis] && bb.1[axis] >= cb.1[axis],
+                        "block {b} of a cluster: {bb:?} against {cb:?}"
+                    );
+                }
+                checked += 1;
+            }
+        }
+        assert!(checked > 5_000, "{checked}");
+    }
+
+    /// Over a camera path of 300 frames, skipping the blocks past the last level leaves every
+    /// cluster's level, target and dissolve as visiting them all does, while hand-overs do
+    /// dissolve on the way.
+    #[test]
+    fn skipped_blocks_leave_the_levels_unchanged() {
+        let (device, queue) = pollster::block_on(headless_device()).expect("device");
+        let scene = |skip: bool| {
+            let mut r = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+            r.resize(64, 36);
+            r.lod_skip = skip;
+            let mut rng = demo::Rng::new(21);
+            for k in 0..12 {
+                let mut m = demo::MeshData::default();
+                m.add_box(Vec3::new(-0.5, 0.0, -0.5), Vec3::new(0.5, 1.5, 0.5));
+                let mesh = r.add_mesh(&m.mesh()).expect("mesh");
+                let material = r.add_material(&Material::default());
+                let at: Vec<Mat4> = (0..400)
+                    .map(|_| {
+                        Mat4::from_translation(Vec3::new(
+                            rng.unit() * 600.0 - 300.0,
+                            0.0,
+                            rng.unit() * 600.0 - 300.0,
+                        ))
+                    })
+                    .collect();
+                let item = r.add_lod_item(
+                    &[
+                        (mesh, material, 25.0),
+                        (mesh, material, 70.0),
+                        (mesh, material, 160.0),
+                    ],
+                    &at,
+                );
+                if k % 4 == 0 {
+                    r.set_item_cull_fade(item, 8.0);
+                }
+            }
+            r
+        };
+        let (mut full, mut skip) = (scene(false), scene(true));
+        let mut dissolving = 0usize;
+        let mut skipped = 0usize;
+        for f in 0..300 {
+            let t = f as f32 / 10.0;
+            let eye = Vec3::new(
+                t * 3.0 - 40.0,
+                1.7 + (t * 0.2).sin() * 2.0,
+                (t * 0.7).cos() * 120.0,
+            );
+            let target = eye + Vec3::new((t * 0.3).sin(), -0.1, 1.0);
+            for r in [&mut full, &mut skip] {
+                let (view, proj, eye) = demo::camera(eye, target, 16.0 / 9.0);
+                r.set_camera(view, proj, eye);
+                r.update_bounds();
+                r.update_lods();
+            }
+            for (a, b) in full.items.iter().zip(&skip.items) {
+                let (Some(a), Some(b)) = (a, b) else {
+                    continue;
+                };
+                for (ca, cb) in a.clusters.iter().zip(&b.clusters) {
+                    assert_eq!(
+                        (ca.lod, ca.target, ca.fade, ca.fading, ca.far, ca.to_far),
+                        (cb.lod, cb.target, cb.fade, cb.fading, cb.far, cb.to_far),
+                        "frame {f}"
+                    );
+                    dissolving += ca.fading as usize;
+                    skipped += (ca.target == a.lods.len() as u8) as usize;
+                }
+            }
+        }
+        assert!(
+            dissolving > 100,
+            "hand-overs dissolved on the way: {dissolving}"
+        );
+        assert!(skipped > 1000, "clusters past the last level: {skipped}");
+    }
+
+    /// An item that casts from cascade 1 on adds no draw to cascade 0 and the same draws as
+    /// before to the later ones; an item without the setting is as it was.
+    #[test]
+    fn an_item_can_stay_out_of_the_near_cascades() {
+        let (device, queue) = pollster::block_on(headless_device()).expect("device");
+        let mut r = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        r.resize(64, 36);
+        let mut m = demo::MeshData::default();
+        m.add_box(Vec3::new(-0.5, 0.0, -0.5), Vec3::new(0.5, 1.5, 0.5));
+        let mesh = r.add_mesh(&m.mesh()).expect("mesh");
+        let material = r.add_material(&Material::default());
+        let at: Vec<Mat4> = (0..40)
+            .map(|i| Mat4::from_translation(Vec3::new(3.0 * i as f32, 0.0, 0.0)))
+            .collect();
+        let plain = r.add_item(mesh, material, &at);
+        let late = r.add_item(mesh, material, &at);
+        r.set_item_shadow_cascades(late, 1);
+        // Among the boxes, so the near cascade has them in view.
+        let (view, proj, eye) =
+            demo::camera(Vec3::new(60.0, 3.0, 4.0), Vec3::new(60.0, 0.5, 0.0), 1.0);
+        r.set_camera(view, proj, eye);
+        r.update_bounds();
+        r.update_lods();
+        let draws = |r: &mut Renderer, cascade: usize| {
+            r.visibility.follow(&r.items);
+            let mut visibility = std::mem::take(&mut r.visibility);
+            let n = r
+                .plan_items(
+                    proj * view,
+                    false,
+                    Pass::Shadow {
+                        far: false,
+                        coarse: cascade > 0,
+                        cascade,
+                    },
+                    None,
+                    &mut batch::GatherList::default(),
+                    &mut visibility,
+                )
+                .len();
+            r.visibility = visibility;
+            n
+        };
+        let (far0, far1) = (draws(&mut r, 0), draws(&mut r, 1));
+        assert_eq!(
+            draws(&mut r, 2),
+            far1,
+            "the setting changes no later cascade"
+        );
+        // Both items share mesh and texture set: one batch per cascade.
+        assert_eq!((far0, far1), (1, 1));
+        r.remove_item(plain);
+        let (late0, late1) = (draws(&mut r, 0), draws(&mut r, 1));
+        assert_eq!(late0, 0, "nothing in cascade 0");
+        assert_eq!(late1, far1, "the later cascades as before");
+        r.set_item_shadow_cascades(late, u8::MAX);
+        assert_eq!(
+            draws(&mut r, 1),
+            0,
+            "past the last cascade: no shadow at all"
+        );
+    }
+
+    /// An item that changes the cascades it casts into makes stale the maps whose casters change
+    /// (`min(old, new)..max(old, new)`, the cached far one when it is in that range), and no
+    /// other; the next frame redraws them and plans the item in none it left.
+    #[test]
+    fn changing_an_item_s_cascades_refreshes_the_maps_it_leaves() {
+        let (device, queue) = pollster::block_on(headless_device()).expect("device");
+        let mut r = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        r.resize(64, 36);
+        r.set_quality(Quality {
+            cascades: 4,
+            ..Quality::MEDIUM
+        });
+        let mut m = demo::MeshData::default();
+        m.add_box(Vec3::new(-0.5, 0.0, -0.5), Vec3::new(0.5, 1.5, 0.5));
+        let mesh = r.add_mesh(&m.mesh()).expect("mesh");
+        let material = r.add_material(&Material::default());
+        let at: Vec<Mat4> = (0..40)
+            .map(|i| Mat4::from_translation(Vec3::new(3.0 * i as f32, 0.0, 0.0)))
+            .collect();
+        let plain = r.add_item(mesh, material, &at);
+        let late = r.add_item(mesh, material, &at);
+        let (view, proj, eye) =
+            demo::camera(Vec3::new(60.0, 3.0, 4.0), Vec3::new(60.0, 0.5, 0.0), 1.0);
+        r.set_camera(view, proj, eye);
+        let frame = |r: &mut Renderer| {
+            let mut e = device.create_command_encoder(&Default::default());
+            r.render(&mut e);
+            queue.submit([e.finish()]);
+            device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .expect("poll");
+        };
+        let shadow_draws = |r: &Renderer| {
+            r.stats()
+                .pass_draws
+                .iter()
+                .find(|(l, _)| *l == "shadow")
+                .map_or(0, |(_, n)| *n)
+        };
+        frame(&mut r);
+        assert!(
+            r.cascade_rendered.iter().all(Option::is_some) && r.far_cache.is_some(),
+            "the first frame draws every cascade and caches the far one"
+        );
+        assert_eq!(r.cascade_stale, [false; shadow::MAX_CASCADES]);
+        // The same value: nothing is made stale.
+        r.set_item_shadow_cascades(late, 0);
+        assert_eq!(r.cascade_stale, [false; shadow::MAX_CASCADES]);
+        // Out of the near three, still in the far one: those three no longer show the item.
+        r.set_item_shadow_cascades(late, 3);
+        assert_eq!(r.cascade_stale, [true, true, true, false]);
+        // Out of the far one too: its cached map no longer shows the item either.
+        r.set_item_shadow_cascades(late, 4);
+        assert_eq!(r.cascade_stale, [true; shadow::MAX_CASCADES]);
+        // The next frame (the sun stands still) redraws the four; without the stale marks
+        // only the first and the third drew (the middle ones alternate frames, the far one is
+        // reused). One batch per cascade: both items share mesh and texture set.
+        frame(&mut r);
+        assert_eq!(r.cascade_stale, [false; shadow::MAX_CASCADES]);
+        assert_eq!(shadow_draws(&r), 4, "every cascade drawn");
+        assert!(r.far_cache.is_some(), "drawn, and cached again");
+        // And the item is in none of them.
+        r.remove_item(plain);
+        for cascade in 0..4 {
+            r.visibility.follow(&r.items);
+            let mut visibility = std::mem::take(&mut r.visibility);
+            let n = r
+                .plan_items(
+                    proj * view,
+                    false,
+                    Pass::Shadow {
+                        far: cascade == 3,
+                        coarse: cascade > 0,
+                        cascade,
+                    },
+                    None,
+                    &mut batch::GatherList::default(),
+                    &mut visibility,
+                )
+                .len();
+            r.visibility = visibility;
+            assert_eq!(n, 0, "cascade {cascade}: nothing to draw");
         }
     }
 
@@ -8336,6 +11645,7 @@ mod tests {
                 r.materials.iter().flatten().count(),
                 r.items.iter().flatten().count(),
                 r.next_slot as usize - r.free_slots.len(),
+                r.mesh_ranges.used(),
             )
         };
         let baseline = live(&r);
@@ -8412,11 +11722,195 @@ mod tests {
         assert_eq!(
             live(&r),
             baseline,
-            "(bytes, meshes, textures, materials, items, slots)"
+            "(bytes, meshes, textures, materials, items, slots, arena elements)"
         );
         // Guards against a runaway frame, not speed: a software rasteriser on a shared
         // machine has taken 2.1 s here.
         assert!(worst.get() < 6.0, "a frame took {:.2} s", worst.get());
+    }
+
+    /// The presets budget 0, 1, 2 and 3 planar passes; the globals hold four planes at most.
+    #[test]
+    fn the_presets_budget_their_planar_water_passes() {
+        let budgets: Vec<u32> = Quality::PRESETS
+            .iter()
+            .map(|(_, q)| q.plane_budget())
+            .collect();
+        assert_eq!(budgets, [0, 1, 2, 3]);
+        assert_eq!(Quality::LOW.water_reflection, 0);
+        // The planar reflection off: no budget, whatever the setting.
+        assert_eq!(
+            (Quality {
+                water_reflection: 0,
+                water_planes: 4,
+                ..Quality::ULTRA
+            })
+            .plane_budget(),
+            0
+        );
+        assert_eq!(
+            (Quality {
+                water_planes: 9,
+                ..Quality::ULTRA
+            })
+            .plane_budget(),
+            water::MAX_PLANES
+        );
+    }
+
+    /// Renders one frame and reads the output back as tightly packed RGBA8.
+    fn pixels(
+        r: &mut Renderer,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        w: u32,
+        h: u32,
+    ) -> Vec<u8> {
+        let mut encoder = device.create_command_encoder(&Default::default());
+        r.render(&mut encoder);
+        let stride = (w * 4).next_multiple_of(256);
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: (stride * h) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        encoder.copy_texture_to_buffer(
+            r.output_texture().as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(stride),
+                    rows_per_image: Some(h),
+                },
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit([encoder.finish()]);
+        buffer
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, |res| res.expect("map"));
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("poll");
+        let padded = buffer
+            .slice(..)
+            .get_mapped_range()
+            .expect("mapped")
+            .to_vec();
+        padded
+            .chunks(stride as usize)
+            .flat_map(|row| &row[..(w * 4) as usize])
+            .copied()
+            .collect()
+    }
+
+    /// The meshes of `replaced_and_removed_meshes_draw_the_same_as_fresh_ones`: a row of boxes,
+    /// the third of three before or after (more data), the sixth of two before and one after
+    /// (less), the eighth removed, two more after it. `end`: as they end up.
+    fn boxes(end: bool) -> Vec<demo::MeshData> {
+        (0..12)
+            .map(|i| {
+                let mut m = demo::MeshData::default();
+                let count = match (end, i) {
+                    (true, 3) => 3,
+                    (false, 5) => 2,
+                    _ => 1,
+                };
+                for k in 0..count {
+                    let x = 0.9 * k as f32;
+                    m.add_box(Vec3::new(x - 0.3, 0.0, -0.3), Vec3::new(x + 0.3, 0.5, 0.3));
+                }
+                m
+            })
+            .collect()
+    }
+
+    /// Ten meshes in the arenas, then one replaced by more data (a new range, the old one
+    /// freed), one by less (in place), one removed (its range freed) and two more added: the
+    /// picture is the one of the same final meshes uploaded fresh, pixel for pixel.
+    #[test]
+    fn replaced_and_removed_meshes_draw_the_same_as_fresh_ones() {
+        let (device, queue) = pollster::block_on(headless_device()).expect("device");
+        let (w, h) = (96, 54);
+        let (before, boxes) = (boxes(false), boxes(true));
+        let at = |i: usize| Mat4::from_translation(Vec3::new(2.5 * i as f32, 0.0, 0.0));
+        let look = |r: &mut Renderer| {
+            let aspect = w as f32 / h as f32;
+            let (view, proj, eye) = demo::camera(
+                Vec3::new(13.0, 9.0, 26.0),
+                Vec3::new(13.0, 0.5, 0.0),
+                aspect,
+            );
+            r.resize(w, h);
+            r.set_quality(Quality::MEDIUM);
+            r.set_camera(view, proj, eye);
+        };
+        // Edited: the first ten, then the edits, then two more.
+        let mut a = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let mut ids: Vec<MeshId> = before[..10]
+            .iter()
+            .map(|m| a.add_mesh(&m.mesh()).expect("mesh"))
+            .collect();
+        let material = a.add_material(&Material::default());
+        let items: Vec<ItemId> = ids
+            .iter()
+            .enumerate()
+            .map(|(i, &m)| a.add_item(m, material, &[at(i)]))
+            .collect();
+        look(&mut a);
+        pixels(&mut a, &device, &queue, w, h);
+        let (before3, before5) = (
+            a.meshes[3].as_ref().expect("3").place,
+            a.meshes[5].as_ref().expect("5").place,
+        );
+        a.replace_mesh(ids[3], &boxes[3].mesh())
+            .expect("replace, more data");
+        a.replace_mesh(ids[5], &boxes[5].mesh())
+            .expect("replace, less data");
+        a.remove_mesh(ids[7]);
+        a.remove_item(items[7]);
+        ids.extend(
+            boxes[10..]
+                .iter()
+                .map(|m| a.add_mesh(&m.mesh()).expect("mesh")),
+        );
+        for (i, &m) in ids[10..].iter().enumerate() {
+            a.add_item(m, material, &[at(10 + i)]);
+        }
+        let after = (
+            a.meshes[3].as_ref().expect("3").place,
+            a.meshes[5].as_ref().expect("5").place,
+        );
+        assert_ne!(after.0, before3, "more data: a new range");
+        assert_eq!(after.1, before5, "less data: in place");
+        assert!(a.meshes[7].is_none());
+        // Fresh: the same final meshes, in one go.
+        let mut b = Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let material = b.add_material(&Material::default());
+        for (i, m) in boxes.iter().enumerate() {
+            if i == 7 {
+                continue;
+            }
+            let mesh = b.add_mesh(&m.mesh()).expect("mesh");
+            b.add_item(mesh, material, &[at(i)]);
+        }
+        look(&mut b);
+        pixels(&mut b, &device, &queue, w, h);
+        let (pa, pb) = (
+            pixels(&mut a, &device, &queue, w, h),
+            pixels(&mut b, &device, &queue, w, h),
+        );
+        assert_eq!(pa, pb, "the edited scene draws what the fresh one does");
+        assert!(
+            pa.chunks(4).any(|p| p[0] != p[1] || p[1] != p[2]),
+            "something is drawn"
+        );
     }
 
     #[test]
@@ -8454,6 +11948,588 @@ mod tests {
         );
         assert_eq!(bloom_sizes((3, 1)), [(1, 1); 4]);
         assert_eq!(bloom_sizes((1921, 1081))[0], (960, 540));
+    }
+
+    /// `ShadowFilter::sanitized` keeps `Quality: Eq` total: taps become the nearest of 4, 9 and
+    /// 16, a NaN radius the presets' (PCSS: its own default), and a radius stays within 0..=1.
+    #[test]
+    fn shadow_filter_sanitizes_taps_and_radius() {
+        let pcf = |taps, radius_m| ShadowFilter::Pcf { taps, radius_m };
+        let pcss = |max_radius_m| ShadowFilter::Pcss { max_radius_m };
+        assert_eq!(pcf(7, 0.05).sanitized(), pcf(9, 0.05));
+        assert_eq!(pcf(1, 0.05).sanitized(), pcf(4, 0.05));
+        assert_eq!(pcf(12, 0.05).sanitized(), pcf(9, 0.05));
+        assert_eq!(pcf(13, 0.05).sanitized(), pcf(16, 0.05));
+        assert_eq!(
+            pcf(9, f32::NAN).sanitized(),
+            pcf(9, DEFAULT_SHADOW_RADIUS_M)
+        );
+        assert_eq!(pcf(9, 5.0).sanitized(), pcf(9, 1.0));
+        assert_eq!(pcf(9, -1.0).sanitized(), pcf(9, 0.0));
+        assert_eq!(pcf(9, -0.0).sanitized(), pcf(9, 0.0));
+        assert_eq!(pcf(9, f32::INFINITY).sanitized(), pcf(9, 1.0));
+        assert_eq!(ShadowFilter::Hard.sanitized(), ShadowFilter::Hard);
+        assert_eq!(pcss(f32::NAN).sanitized(), pcss(DEFAULT_PCSS_MAX_RADIUS_M));
+        assert_eq!(pcss(5.0).sanitized(), pcss(1.0));
+        assert_eq!(pcss(-1.0).sanitized(), pcss(0.0));
+        assert_eq!(pcss(-0.0).sanitized(), pcss(0.0));
+        assert_eq!(pcss(f32::INFINITY).sanitized(), pcss(1.0));
+        assert_eq!(pcss(0.15).sanitized(), pcss(0.15));
+        // Idempotent, so a preset equals its own sanitized self (the renderer compares).
+        for f in [
+            pcf(9, 0.05),
+            pcf(16, 0.2),
+            pcss(0.2),
+            pcss(f32::NAN),
+            ShadowFilter::Hard,
+        ] {
+            assert_eq!(f.sanitized().sanitized(), f.sanitized());
+        }
+        // A NaN radius would break `==` (and so `Eq`): sanitized, a filter equals itself.
+        let f = pcf(9, f32::NAN).sanitized();
+        assert_eq!(f, f);
+        let f = pcss(f32::NAN).sanitized();
+        assert_eq!(f, f);
+    }
+
+    /// Every preset filters the sun's shadows with PCF at today's tap counts (LOW and MEDIUM
+    /// 4, HIGH 9, ULTRA 16); the radius is the 16-tap disk's alone, and under `fast_shading` the
+    /// shaders run 4 taps at most, PCSS included.
+    #[test]
+    fn every_preset_filters_shadows_with_pcf() {
+        for (name, q) in Quality::PRESETS {
+            assert!(
+                matches!(q.shadow_filter, ShadowFilter::Pcf { .. }),
+                "{name}"
+            );
+            assert_eq!(
+                q.shadow_filter.radius_m(),
+                DEFAULT_SHADOW_RADIUS_M,
+                "{name}"
+            );
+            assert_eq!(q.shadow_filter, q.shadow_filter.sanitized(), "{name}");
+        }
+        assert_eq!(Quality::LOW.shadow_filter.taps(), 4);
+        assert_eq!(Quality::MEDIUM.shadow_filter.taps(), 4);
+        assert_eq!(Quality::HIGH.shadow_filter.taps(), 9);
+        assert_eq!(Quality::ULTRA.shadow_filter.taps(), 16);
+        assert_eq!(Quality::MEDIUM.shadow_taps(), 4);
+        assert_eq!(Quality::HIGH.shadow_taps(), 9);
+        assert_eq!(Quality::ULTRA.shadow_taps(), 16);
+        assert_eq!(
+            Quality {
+                shadow_filter: ShadowFilter::Hard,
+                ..Quality::MEDIUM
+            }
+            .shadow_taps(),
+            1
+        );
+        // PCSS is the 16-tap disk: 16 taps, and 4 under fast shading, as pcf16.
+        let pcss = ShadowFilter::Pcss {
+            max_radius_m: DEFAULT_PCSS_MAX_RADIUS_M,
+        };
+        assert_eq!(pcss.taps(), 16);
+        assert_eq!(pcss.radius_m(), DEFAULT_PCSS_MAX_RADIUS_M);
+        assert_eq!(
+            Quality {
+                shadow_filter: pcss,
+                ..Quality::HIGH
+            }
+            .shadow_taps(),
+            16
+        );
+        assert_eq!(
+            Quality {
+                shadow_filter: pcss,
+                ..Quality::MEDIUM
+            }
+            .shadow_taps(),
+            4
+        );
+    }
+
+    /// `Globals.shadow_filter` carries the penumbra's radius and the 16-tap branch's mode: PCSS
+    /// (1) for `ShadowFilter::Pcss`, PCF (0) for every other filter and under `fast_shading`,
+    /// where the branch is not compiled.
+    #[test]
+    fn the_shadow_filter_uniform_switches_to_pcss() {
+        assert_eq!(
+            Quality::ULTRA.shadow_filter_uniform(),
+            [DEFAULT_SHADOW_RADIUS_M, 0.0]
+        );
+        assert_eq!(
+            Quality {
+                shadow_filter: ShadowFilter::Hard,
+                ..Quality::HIGH
+            }
+            .shadow_filter_uniform(),
+            [0.0, 0.0]
+        );
+        let pcss = Quality {
+            shadow_filter: ShadowFilter::Pcss { max_radius_m: 0.15 },
+            ..Quality::HIGH
+        };
+        assert_eq!(pcss.shadow_filter_uniform(), [0.15, 1.0]);
+        // A 16-tap disk is PCF at any radius.
+        assert_eq!(
+            Quality {
+                shadow_filter: ShadowFilter::Pcf {
+                    taps: 16,
+                    radius_m: 0.2,
+                },
+                ..Quality::ULTRA
+            }
+            .shadow_filter_uniform(),
+            [0.2, 0.0]
+        );
+        // Under fast shading the 16-tap branch is not compiled: PCSS runs as the 4-tap grid.
+        assert_eq!(
+            Quality {
+                shadow_filter: pcss.shadow_filter,
+                ..Quality::MEDIUM
+            }
+            .shadow_filter_uniform(),
+            [0.15, 0.0]
+        );
+    }
+
+    /// The 4- and 9-tap filters are the fixed texel-sized grids of before (scene.wgsl
+    /// `cascade_shadow`: the offsets `g.shadow.z * 1.5`), so LOW, MEDIUM and HIGH shade as they
+    /// did: they never read the penumbra's radius, which only the 16-tap disk spreads over.
+    #[test]
+    fn the_grid_filters_ignore_the_radius_and_stay_texel_sized() {
+        let src = include_str!("scene.wgsl");
+        let body = &src[src.find("fn cascade_shadow(").unwrap()..];
+        let body = &body[..body.find("\n}\n").unwrap()];
+        let (disk, grids) = body.split_once("taps > 8.5").expect("the 9-tap branch");
+        assert!(
+            disk.contains("g.shadow_filter.x"),
+            "the 16-tap disk spreads over the radius:\n{disk}"
+        );
+        // From the 9-tap branch on: the 9- and 4-tap paths.
+        assert!(
+            !grids.contains("g.shadow_filter") && !grids.contains("spread"),
+            "the grids take no radius:\n{grids}"
+        );
+        for offsets in [
+            "let o = vec2<f32>(f32(x), f32(y)) * g.shadow.z * 1.5;",
+            "let o = (vec2<f32>(f32(i & 1), f32(i >> 1u)) - 0.5) * g.shadow.z * 1.5;",
+        ] {
+            assert!(grids.contains(offsets), "a texel-sized grid: {offsets}");
+        }
+    }
+
+    /// The 16-tap disk takes its turn from the noise of its place in the shadow map (two cells
+    /// per texel), not from the fragment's pixel: a pattern locked to the screen swims over the
+    /// ground in a walkthrough (there is no temporal antialiasing to average it away), one
+    /// locked to the map stays on it. So no `sun_shadow` caller passes a pixel, as on main. And
+    /// the disk compares each tap against the receiver plane's own depth where the tap lands, a
+    /// quarter texel less: not against the receiver's depth `p.z` (the taps of a slope towards
+    /// the light then shade the surface), nor that slackened by the worst-case slope `r * tan`
+    /// for every tap (the taps away from the light then lift real shadows off the ground). The
+    /// loop itself is `shadow_disk`, the one disk both the PCF and the PCSS modes filter with.
+    #[test]
+    fn the_disk_is_turned_by_the_map_and_follows_the_receiver_plane() {
+        let scene = include_str!("scene.wgsl");
+        let branch = wgsl_fn(scene, "fn cascade_shadow(");
+        let (disk, _) = branch.split_once("taps > 8.5").expect("the 9-tap branch");
+        assert!(
+            disk.contains("ign_sampled(uv * g.shadow.y * 2.0)"),
+            "the turn comes from the place in the map:\n{disk}"
+        );
+        assert!(
+            disk.contains("let small = 0.25 * g.texel[c] * dz_per_m;"),
+            "a quarter texel of depth:\n{disk}"
+        );
+        let filter = wgsl_fn(scene, "fn shadow_disk(");
+        assert!(
+            filter.contains("z + dz - small"),
+            "a tap is compared against the receiver plane's depth:\n{filter}"
+        );
+        assert!(
+            filter.contains("for (var i = 0u; i < 16u; i++)"),
+            "16 taps:\n{filter}"
+        );
+        assert!(
+            !disk.contains("tan_theta") && !filter.contains("tan_theta"),
+            "no worst-case slope bias:\n{disk}\n{filter}"
+        );
+        // The plane maths `receiver_plane` mirrors (the uv's y runs against the clip's y).
+        for line in [
+            "let slope_max = 4.0 * dz_per_m / length(a0);",
+            "let plane_z = -select(1.0, max(-plane_n.z, length(plane_n.xy) / slope_max), facing);",
+            "let k = select(vec2<f32>(0.0), -plane_n.xy / plane_z, facing);",
+        ] {
+            assert!(
+                disk.contains(line),
+                "the receiver plane as mirrored: {line}"
+            );
+        }
+        // Each tap's depth on that plane, by the one line both loops share (the uv's y runs
+        // against the clip's y).
+        assert!(
+            wgsl_fn(scene, "fn plane_dz(").contains("dot(k, vec2<f32>(2.0 * o.x, -2.0 * o.y))"),
+            "the plane's depth change at a tap"
+        );
+        for helper in ["fn shadow_disk(", "fn shadow_blockers("] {
+            assert!(
+                wgsl_fn(scene, helper).contains("let dz = plane_dz(o, k);"),
+                "{helper} compares against the receiver plane"
+            );
+        }
+        for (name, src) in [
+            ("scene", scene),
+            ("grass", include_str!("grass.wgsl")),
+            ("sea", include_str!("sea.wgsl")),
+        ] {
+            for line in src
+                .lines()
+                .filter(|l| l.contains("sun_shadow(") || l.contains("cascade_shadow("))
+            {
+                assert!(
+                    !line.contains("frag") && !line.contains("clip"),
+                    "{name}.wgsl passes no pixel to the shadow:\n{line}"
+                );
+            }
+        }
+    }
+
+    /// The text of the WGSL function that starts at `signature`, to its closing brace.
+    fn wgsl_fn<'a>(src: &'a str, signature: &str) -> &'a str {
+        let start = src
+            .find(signature)
+            .unwrap_or_else(|| panic!("{signature} not in the shader"));
+        let body = &src[start..];
+        &body[..body.find("\n}\n").expect("the function's end")]
+    }
+
+    /// PCSS (`ShadowFilter::Pcss`; Fernando, "Percentage-Closer Soft Shadows", NVIDIA,
+    /// SIGGRAPH 2005 sketch) runs in the 16-tap branch of `cascade_shadow` when
+    /// `g.shadow_filter.y` is 1, and changes nothing else: a blocker search over the same turned
+    /// Vogel disk as the filter, reading raw depths and taking a tap for a blocker when it lies
+    /// before the receiver plane where the tap lands (as the filter's taps are compared, a
+    /// quarter texel less, so a sloped receiver is not its own occluder); lit at once without a
+    /// blocker; a penumbra of the receiver's distance to the blockers along the light, times the
+    /// tangent of the sun's disc (`g.sun_light.w`: its cosine), no more than the filter's
+    /// radius; then the one disk, `shadow_disk`, at that spread, in texels and no wider than
+    /// 6, as the plain disk, and never narrower than half a texel (its floor is 1.5: at the
+    /// contact that one is the plain disk's softness). The plain disk keeps its floor of 1.5
+    /// texels.
+    #[test]
+    fn pcss_searches_blockers_on_the_disk_and_widens_with_their_distance() {
+        let scene = include_str!("scene.wgsl");
+        let branch = wgsl_fn(scene, "fn cascade_shadow(");
+        let (disk, _) = branch.split_once("taps > 8.5").expect("the 9-tap branch");
+        assert!(
+            disk.contains("if g.shadow_filter.y > 0.5 {"),
+            "PCSS only in mode 1:\n{disk}"
+        );
+        for line in [
+            "let search = clamp(g.shadow_filter.x / g.texel[c], 1.5, 6.0);",
+            "let blocker = shadow_blockers(c, uv, p.z, k, small, search, turn);",
+            "if blocker < 0.0 {",
+            "return 1.0;",
+            "let tan_sun = sqrt(max(1.0 - g.sun_light.w * g.sun_light.w, 0.0)) / g.sun_light.w;",
+            "let w = clamp((p.z - blocker) / dz_per_m * tan_sun, 0.0, g.shadow_filter.x);",
+            "return shadow_disk(c, uv, p.z, k, small, clamp(w / g.texel[c], 0.5, 6.0), turn);",
+            "let spread = clamp(g.shadow_filter.x / g.texel[c], 1.5, 6.0);",
+            "return shadow_disk(c, uv, p.z, k, small, spread, turn);",
+        ] {
+            assert!(
+                disk.contains(line),
+                "the PCSS branch as written:\n{line}\n{disk}"
+            );
+        }
+        assert_eq!(
+            disk.matches("return shadow_disk(").count(),
+            2,
+            "one disk, for PCSS and for PCF:\n{disk}"
+        );
+        let search = wgsl_fn(scene, "fn shadow_blockers(");
+        for line in [
+            "for (var i = 0u; i < 16u; i++)",
+            "let o = disk_offset(i, search, turn);",
+            "let dz = plane_dz(o, k);",
+            "let t = clamp(vec2<i32>((uv + o) * vec2<f32>(dims)), vec2<i32>(0), vec2<i32>(dims) - 1);",
+            "let stored = textureLoad(shadow_map, t, i32(c), 0);",
+            "if stored < z + dz - small {",
+        ] {
+            assert!(
+                search.contains(line),
+                "the blocker search as written:\n{line}\n{search}"
+            );
+        }
+        // The filter walks the same disk.
+        let filter = wgsl_fn(scene, "fn shadow_disk(");
+        assert!(
+            filter.contains("let o = disk_offset(i, spread, turn);"),
+            "the filter's taps:\n{filter}"
+        );
+        let offset = wgsl_fn(scene, "fn disk_offset(");
+        assert!(
+            offset.contains("let r_texels = sqrt((f32(i) + 0.5) / 16.0) * spread;"),
+            "the Vogel disk:\n{offset}"
+        );
+        assert!(
+            offset.contains("let a = f32(i) * 2.399963 + turn;"),
+            "turned:\n{offset}"
+        );
+        assert_eq!(
+            scene.matches("disk_offset(").count(),
+            3,
+            "the disk's offset is defined once and walked by the search and the filter"
+        );
+    }
+
+    /// Scene.wgsl `cascade_shadow`'s PCSS penumbra, mirrored: a receiver `d` metres behind its
+    /// blockers along the light gets `d * tan(sun disc)` (the disc as drawn,
+    /// `sky::SUN_DISC_RADIUS`), between 0 and the filter's radius.
+    fn pcss_penumbra_m(receiver: f32, blocker: f32, dz_per_m: f32, max_radius_m: f32) -> f32 {
+        let cos_sun = sky::SUN_DISC_RADIUS.cos();
+        let tan_sun = (1.0 - cos_sun * cos_sun).max(0.0).sqrt() / cos_sun;
+        ((receiver - blocker) / dz_per_m * tan_sun).clamp(0.0, max_radius_m)
+    }
+
+    /// The blocker search's depths are the shadow map's: a receiver's depth minus its blocker's,
+    /// over `dz_per_m`, is the distance between the two along the light, whatever cascade is
+    /// read. A pole's shadow: the receiver on the ground `s` metres from the foot and the pole
+    /// at height `s * tan(elevation)` lie on one light ray (the same place in every cascade's
+    /// map), `s / cos(elevation)` apart. So PCSS's penumbra there is millimetres at the foot
+    /// (sharp: the contact, where the filter pass's disk is floored at half a texel) and
+    /// centimetres further on, capped by the filter's radius.
+    #[test]
+    fn a_blockers_depth_is_its_distance_along_the_light() {
+        let view = Mat4::look_at_rh(
+            Vec3::new(0.0, 7.5, -3.25),
+            Vec3::new(0.0, 0.0, -3.25),
+            Vec3::Z,
+        );
+        let proj = Mat4::perspective_rh(50f32.to_radians(), 16.0 / 9.0, 0.1, 1000.0);
+        let elevation = 30.0f32;
+        let sun = Sun::from_angles(180.0, elevation).direction;
+        let cascades = shadow::compute(view, proj, sun, 4, 2048, 80.0, None);
+        let angle = elevation.to_radians();
+        let (tan, cos) = (angle.tan(), angle.cos());
+        let cos_sun = sky::SUN_DISC_RADIUS.cos();
+        let tan_sun = (1.0 - cos_sun * cos_sun).sqrt() / cos_sun;
+        for (c, m) in cascades
+            .view_proj
+            .iter()
+            .copied()
+            .enumerate()
+            .take(cascades.count)
+        {
+            let depth = |x: Vec3| (m * x.extend(1.0)).z;
+            let uv = |x: Vec3| {
+                let p = m * x.extend(1.0);
+                Vec2::new(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5)
+            };
+            // The depth row (`a2` in the shader): a metre along the light, in depth.
+            let dz_per_m = Vec3::new(m.col(0).z, m.col(1).z, m.col(2).z).length();
+            // Metres from the pole's foot: at the contact, mid-shadow, and far enough for the
+            // cap (0.15 m is reached 17 m along the light).
+            let cap = 0.15;
+            for s in [0.5f32, 6.0, 20.0] {
+                let receiver = Vec3::new(0.0, 0.0, -s);
+                let blocker = Vec3::new(0.0, s * tan, 0.0);
+                assert!(
+                    (uv(receiver) - uv(blocker)).length() * 2048.0 < 0.01,
+                    "cascade {c}, {s} m: the blocker is over its shadow in the map"
+                );
+                let along = (depth(receiver) - depth(blocker)) / dz_per_m;
+                assert!(
+                    (along - s / cos).abs() < 1e-3 * s,
+                    "cascade {c}, {s} m: depth over dz_per_m is {along}, the distance {}",
+                    s / cos
+                );
+                let w = pcss_penumbra_m(depth(receiver), depth(blocker), dz_per_m, cap);
+                assert!(
+                    (w - (s / cos * tan_sun).min(cap)).abs() < 1e-5,
+                    "cascade {c}, {s} m: penumbra {w}"
+                );
+            }
+        }
+    }
+
+    /// Scene.wgsl `cascade_shadow`'s receiver plane for the 16-tap disk, step by step as the
+    /// shader has it: `k`, the depth change of the receiver's plane per unit of clip x and y
+    /// (zero: no plane, for a receiver facing away from the light), and `dz_per_m`, a metre
+    /// along the light in depth.
+    fn receiver_plane(cascade: Mat4, n: Vec3) -> (Vec2, f32) {
+        // The rows of the linear part: `vec3<f32>(m[0].x, m[1].x, m[2].x)` and so on in WGSL.
+        let row = |i: usize| Vec3::new(cascade.col(0)[i], cascade.col(1)[i], cascade.col(2)[i]);
+        let (a0, a1, a2) = (row(0), row(1), row(2));
+        let dz_per_m = a2.length();
+        let plane_n = Vec3::new(
+            a0.dot(n) / a0.dot(a0),
+            a1.dot(n) / a1.dot(a1),
+            a2.dot(n) / a2.dot(a2),
+        );
+        let slope_max = 4.0 * dz_per_m / a0.length();
+        let facing = plane_n.z < 0.0;
+        let plane_z = -if facing {
+            (-plane_n.z).max(Vec2::new(plane_n.x, plane_n.y).length() / slope_max)
+        } else {
+            1.0
+        };
+        let k = if facing {
+            -Vec2::new(plane_n.x, plane_n.y) / plane_z
+        } else {
+            Vec2::ZERO
+        };
+        (k, dz_per_m)
+    }
+
+    /// The 16-tap disk compares each tap against the depth of the receiver's own plane where
+    /// the tap lands (scene.wgsl `cascade_shadow`: Isidoro, "Shadow Mapping: GPU-based Tips
+    /// and Techniques", GDC 2006), with the maths mirrored in `receiver_plane`. The plane point
+    /// itself is found here along the light ray through the tap, with the cascade matrix's
+    /// inverse: for every cascade of a garden view, banks at several slopes, suns high and low
+    /// and taps out to 6 texels in eight directions, `p.z + dz` is the depth of the point of the
+    /// plane that projects to `uv + o`. A receiver that faces away from the light gets no plane,
+    /// and one the light grazes is clamped to the old worst-case bias: 4 m of depth per metre
+    /// in the light's plane.
+    #[test]
+    fn a_tap_is_compared_against_the_receiver_plane() {
+        let view = Mat4::look_at_rh(Vec3::new(0.0, 1.7, 0.0), Vec3::new(0.0, 1.0, 40.0), Vec3::Y);
+        let proj = Mat4::perspective_rh(50f32.to_radians(), 16.0 / 9.0, 0.1, 1000.0);
+        let map = 2048.0;
+        let (mut exact, mut clamped, mut back) = (0, 0, 0);
+        for elevation in [60.0f32, 15.0] {
+            let sun = Sun::from_angles(180.0, elevation).direction;
+            let cascades = shadow::compute(view, proj, sun, 4, map as u32, 80.0, None);
+            for c in 0..cascades.count {
+                let m = cascades.view_proj[c];
+                let inv = m.inverse();
+                // A bank through this point, tilted `tilt` degrees towards the sun (+Z).
+                let x0 = Vec3::new(-2.0, 0.5, 35.0);
+                let p = m * x0.extend(1.0);
+                let uv = Vec2::new(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);
+                for tilt in [-13.0f32, -20.0, 0.0, 30.0, 70.0] {
+                    let (sin, cos) = tilt.to_radians().sin_cos();
+                    let n = Vec3::new(0.0, cos, sin);
+                    let (k, dz_per_m) = receiver_plane(m, n);
+                    // `tilt + elevation` is how far the light is from perpendicular to the bank:
+                    // its sine is `n . sun` (not positive: the bank faces away), its cosine the sine
+                    // of the angle between the normal and the light, whose tangent must stay under
+                    // 4 for the plane to be taken unclamped.
+                    let (to_sun, sine) = (tilt + elevation).to_radians().sin_cos();
+                    if to_sun <= 0.0 {
+                        assert_eq!(k, Vec2::ZERO, "cascade {c}, tilt {tilt}: no plane");
+                        back += 1;
+                        continue;
+                    }
+                    for steps in 0..8 {
+                        let angle = steps as f32 * std::f32::consts::FRAC_PI_4;
+                        for r_texels in [1.5, 3.0, 6.0] {
+                            let dir = Vec2::new(angle.cos(), angle.sin());
+                            let o = dir * (r_texels / map);
+                            let dz = k.dot(Vec2::new(2.0 * o.x, -2.0 * o.y));
+                            if sine / to_sun < 3.9 {
+                                // The point of the plane on the light ray through `uv + o`, by
+                                // depth t: x(t) = inv * (q.x, q.y, t, 1) = x(0) + t * w.
+                                let q = Vec4::new(
+                                    2.0 * (uv.x + o.x) - 1.0,
+                                    1.0 - 2.0 * (uv.y + o.y),
+                                    0.0,
+                                    1.0,
+                                );
+                                let at = (inv * q).truncate();
+                                let w = (inv * Vec4::new(0.0, 0.0, 1.0, 0.0)).truncate();
+                                let t = n.dot(x0 - at) / n.dot(w);
+                                let depth = (m * (at + w * t).extend(1.0)).z;
+                                assert!(
+                                    (depth - t).abs() < 1e-6,
+                                    "clip z is the depth: {depth} vs {t}"
+                                );
+                                assert!(
+                                    (p.z + dz - t).abs() < 1e-5,
+                                    "cascade {c}, sun {elevation}, tilt {tilt}, tap \
+                                     {r_texels} texels at {angle:.2}: p.z + dz {} vs the plane's {t}",
+                                    p.z + dz
+                                );
+                                exact += 1;
+                            } else {
+                                // Clamped as the worst-case bias was: at most 4 m of depth per
+                                // metre in the light's plane, so `4 * r * dz_per_m` at r metres,
+                                // and no less straight down the slope.
+                                let bound = 4.0 * (r_texels * cascades.texel[c]) * dz_per_m;
+                                assert!(
+                                    dz.abs() <= bound * (1.0 + 1e-4),
+                                    "cascade {c}, sun {elevation}, tilt {tilt}: dz {dz} over {bound}"
+                                );
+                                if dir.x.abs() < 0.5 {
+                                    assert!(
+                                        (dz.abs() - bound).abs() <= 1e-4 * bound,
+                                        "cascade {c}, sun {elevation}, tilt {tilt}: the clamp is \
+                                         reached straight down the slope: {dz} vs {bound}"
+                                    );
+                                }
+                                clamped += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // 2 suns x 4 cascades x 5 banks x 8 directions x 3 radii: 864 taps checked, 768 within
+        // the clamp (exact) and 96 on the bank the low sun grazes (clamped); `back` counts the
+        // 4 (sun, cascade, bank) cases facing away from the light (no plane), whose taps are
+        // skipped.
+        assert_eq!((exact, clamped, back), (768, 96, 4));
+    }
+
+    /// `Quality::sanitized` is how any quality enters the renderer (`set_quality`, still.rs
+    /// `render_offscreen` and `photo_begin`): the fields it indexes or divides by in range, the
+    /// shadow filter sanitized, and a preset its own sanitized self.
+    #[test]
+    fn a_quality_is_sanitized_whenever_it_enters_the_renderer() {
+        let out_of_range = Quality {
+            cascades: 0,
+            impostor_resolution: 1,
+            render_scale: f32::NAN,
+            shadow_filter: ShadowFilter::Pcf {
+                taps: 7,
+                radius_m: f32::NAN,
+            },
+            ..Quality::HIGH
+        };
+        let clean = out_of_range.sanitized();
+        assert_eq!(
+            (
+                clean.cascades,
+                clean.impostor_resolution,
+                clean.render_scale
+            ),
+            (1, 64, 1.0)
+        );
+        assert_eq!(
+            clean.shadow_filter,
+            ShadowFilter::Pcf {
+                taps: 9,
+                radius_m: DEFAULT_SHADOW_RADIUS_M
+            }
+        );
+        assert_eq!(
+            Quality {
+                cascades: 4,
+                impostor_resolution: 1024,
+                render_scale: 1.0,
+                ..Quality::LOW
+            },
+            Quality {
+                cascades: 99,
+                impostor_resolution: 9999,
+                render_scale: 3.0,
+                ..Quality::LOW
+            }
+            .sanitized()
+        );
+        // Idempotent, and a preset is its own sanitized self: set again, it changes nothing.
+        assert_eq!(clean.sanitized(), clean);
+        for (name, q) in Quality::PRESETS {
+            assert_eq!(q.sanitized(), q, "{name}");
+        }
     }
 
     #[test]

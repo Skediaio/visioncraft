@@ -227,6 +227,258 @@ fn serve_speaks_json_lines() {
     assert!(d.join("s.visioncraft").exists());
 }
 
+/// `query.clips` through the built program: listed with its parameter, answered for a garden
+/// light (the program makes its file itself, so it is always at hand), refused for a model that
+/// does not exist, and answered by `serve` too. A model that moves has its clips read in the
+/// app's own tests (`model_animation`), through the same host as here.
+#[test]
+fn the_cli_lists_the_clips_of_a_model() {
+    let d = dir("clips");
+    let lamp = visioncraft::fixtures::assets()[0].id.clone();
+    let listed = cli(&["commands", "--filter", "query.clips"], &d);
+    assert!(
+        listed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&listed.stderr)
+    );
+    let text = String::from_utf8_lossy(&listed.stdout);
+    assert!(
+        text.contains("query.clips") && text.contains("\"model\": string"),
+        "{text}"
+    );
+
+    let params = format!("{{\"model\": \"{lamp}\"}}");
+    let out = cli(
+        &[
+            "run",
+            "--new",
+            "{}",
+            "--cmd",
+            "query.clips",
+            "--params",
+            &params,
+        ],
+        &d,
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(lines(&out), vec![json!({"clips": [], "warnings": []})]);
+
+    let out = cli(
+        &[
+            "run",
+            "--new",
+            "{}",
+            "--cmd",
+            "query.clips",
+            "--params",
+            r#"{"model": "user:uo9"}"#,
+            "--keep-going",
+        ],
+        &d,
+    );
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(
+        lines(&out),
+        vec![json!({
+            "failed": "query.clips",
+            "step": 0,
+            "error": "no imported object `uo9`: object.list names them",
+        })]
+    );
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_visioncraft-cli"))
+        .args(["serve", "--automation-write-root", "."])
+        .current_dir(&d)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    use std::io::Write;
+    let mut stdin = child.stdin.take().unwrap();
+    writeln!(
+        stdin,
+        r#"{{"id": 1, "method": "engine.execute", "params": {{"command": "query.clips", "params": {{"model": "{lamp}"}}}}}}"#
+    )
+    .unwrap();
+    drop(stdin);
+    let out = child.wait_with_output().unwrap();
+    let replies = lines(&out);
+    assert_eq!(replies.len(), 1, "{replies:?}");
+    // The reply also carries the wall-clock `ms`.
+    assert_eq!(
+        (
+            replies[0]["id"].clone(),
+            replies[0]["ok"].clone(),
+            replies[0]["result"].clone()
+        ),
+        (json!(1), json!(true), json!({"clips": [], "warnings": []}))
+    );
+}
+
+/// A hinge as a GLB: a body (node 0) with a lid 1 m east (node 1) that swings a quarter about Z
+/// in a second, in one clip named `swing`.
+fn hinge_glb() -> Vec<u8> {
+    let q = std::f32::consts::FRAC_1_SQRT_2;
+    let mut bin = Vec::new();
+    let mut views = Vec::new();
+    for v in [
+        vec![0.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+        vec![2.0f32, 0.0, 0.0, 3.0, 0.0, 0.0, 2.0, 1.0, 0.0],
+        vec![0.0f32, 1.0],
+        vec![0.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, q, q],
+    ] {
+        while !bin.len().is_multiple_of(4) {
+            bin.push(0);
+        }
+        let at = bin.len();
+        bin.extend(v.iter().flat_map(|f| f.to_le_bytes()));
+        views.push(json!({"buffer": 0, "byteOffset": at, "byteLength": v.len() * 4}));
+    }
+    let doc = json!({
+        "asset": {"version": "2.0"}, "scene": 0, "scenes": [{"nodes": [0]}],
+        "nodes": [{"mesh": 0, "children": [1]}, {"mesh": 1, "translation": [1.0, 0.0, 0.0]}],
+        "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]},
+                   {"primitives": [{"attributes": {"POSITION": 1}}]}],
+        "materials": [{"name": "steel"}],
+        "accessors": [
+            {"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0, 0, 0], "max": [1, 1, 0]},
+            {"bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC3", "min": [2, 0, 0], "max": [3, 1, 0]},
+            {"bufferView": 2, "componentType": 5126, "count": 2, "type": "SCALAR", "min": [0], "max": [1]},
+            {"bufferView": 3, "componentType": 5126, "count": 2, "type": "VEC4", "min": [0, 0, 0, 0.7], "max": [0, 0, 0.71, 1]},
+        ],
+        "bufferViews": views,
+        "buffers": [{"byteLength": bin.len()}],
+        "animations": [{
+            "name": "swing",
+            "samplers": [{"input": 2, "interpolation": "LINEAR", "output": 3}],
+            "channels": [{"sampler": 0, "target": {"node": 1, "path": "rotation"}}],
+        }],
+    });
+    let mut j = serde_json::to_vec(&doc).unwrap();
+    while !j.len().is_multiple_of(4) {
+        j.push(b' ');
+    }
+    let total = 12 + 8 + j.len() + 8 + bin.len();
+    let mut out = Vec::with_capacity(total);
+    out.extend(b"glTF");
+    out.extend(2u32.to_le_bytes());
+    out.extend((total as u32).to_le_bytes());
+    out.extend((j.len() as u32).to_le_bytes());
+    out.extend(b"JSON");
+    out.extend(&j);
+    out.extend((bin.len() as u32).to_le_bytes());
+    out.extend(b"BIN\0");
+    out.extend(&bin);
+    out
+}
+
+/// The clip commands through the built program: listed, and run one after the other on a
+/// script's own imported hinge (its file in the project's folder): the clip plays from its
+/// start, the pose comes back half a second in, a flash is added. None of it is saved.
+#[test]
+fn the_cli_plays_a_clip_and_reads_the_pose_back() {
+    let d = dir("playback");
+    std::fs::create_dir_all(d.join("objects")).unwrap();
+    std::fs::write(d.join("objects/hinge.glb"), hinge_glb()).unwrap();
+    let listed = cli(&["commands", "--filter", "model."], &d);
+    assert!(
+        listed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&listed.stderr)
+    );
+    let text = String::from_utf8_lossy(&listed.stdout);
+    for id in ["model.play_clip", "model.stop_clip"] {
+        assert!(text.contains(id), "{id}: {text}");
+    }
+    assert!(text.contains("\"object\": string") && text.contains("\"clip\": string | integer"));
+    let listed = cli(&["commands", "--filter", "effect."], &d);
+    let text = String::from_utf8_lossy(&listed.stdout);
+    assert!(
+        text.contains("effect.flash") && text.contains("\"intensity\""),
+        "{text}"
+    );
+    let listed = cli(&["commands", "--filter", "query.part"], &d);
+    assert!(
+        String::from_utf8_lossy(&listed.stdout).contains("query.part_pose"),
+        "{listed:?}"
+    );
+
+    let out = cli(
+        &[
+            "run",
+            "--new",
+            "{}",
+            "--cmd",
+            "object.add",
+            "--params",
+            r#"{"name": "Hinge", "file": "objects/hinge.glb", "size_m": [3, 1, 0.1]}"#,
+            "--cmd",
+            "planting.add_single",
+            "--params",
+            r#"{"name": "Hinge", "asset": "user:uo1", "position": [0, 0, 0]}"#,
+            "--cmd",
+            "model.play_clip",
+            "--params",
+            r#"{"object": "g1", "clip": "swing", "start_s": 0}"#,
+            "--cmd",
+            "query.part_pose",
+            "--params",
+            r#"{"object": "g1", "t": 0.5}"#,
+            "--cmd",
+            "effect.flash",
+            "--params",
+            r#"{"position": [0, 1, 0], "color": [1, 0.8, 0.5], "intensity": 2000, "range_m": 4}"#,
+            "--cmd",
+            "model.stop_clip",
+            "--params",
+            r#"{"object": "g1"}"#,
+            "--cmd",
+            "query.part_pose",
+            "--params",
+            r#"{"object": "g1", "t": 0.5}"#,
+        ],
+        &d,
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let r = lines(&out);
+    assert_eq!(r.len(), 7, "{r:?}");
+    assert_eq!(r[2]["clip"], json!("swing"));
+    assert_eq!(
+        (r[2]["start_s"].clone(), r[2]["restarted"].clone()),
+        (json!(0.0), json!(false))
+    );
+    // Half way the lid has turned 45 degrees about Z, 1 m east of the body.
+    let m: Vec<f32> = serde_json::from_value(r[3]["plants"][0]["parts"][0].clone()).unwrap();
+    let q = std::f32::consts::FRAC_1_SQRT_2;
+    for (got, want) in m.iter().zip([
+        q, q, 0.0, 0.0, -q, q, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0,
+    ]) {
+        assert!((got - want).abs() < 1e-5, "{m:?}");
+    }
+    assert_eq!(
+        (
+            r[3]["plants"][0]["posed"].clone(),
+            r[3]["plants"][0]["clips"].clone()
+        ),
+        (json!(true), json!(["swing"]))
+    );
+    assert_eq!(r[4]["id"], json!(1));
+    assert_eq!(r[4]["frames"], json!(2));
+    assert_eq!(r[5]["stopped"], json!(1));
+    // Stopped: at rest, where the file has the lid (a quarter open).
+    let m: Vec<f32> = serde_json::from_value(r[6]["plants"][0]["parts"][0].clone()).unwrap();
+    assert!((m[0] - 1.0).abs() < 1e-5 && m[1].abs() < 1e-5, "{m:?}");
+    assert_eq!(r[6]["plants"][0]["posed"], json!(false));
+}
+
 /// Needs a GPU: `cargo test -p visioncraft-cli -- --ignored`. Writes the picture to
 /// `$VISIONCRAFT_RENDER_OUT` too when set, to look at.
 #[test]

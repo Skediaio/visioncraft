@@ -251,7 +251,8 @@ impl PhysicalSky {
         }
     }
 
-    /// Whether the fixed LUTs the aerial perspective reads are drawn.
+    /// Whether the fixed LUTs the aerial perspective reads are drawn. `Renderer::render_part`
+    /// draws them before it writes a frame's globals, which turn the perspective on by this.
     pub fn ready(&self) -> bool {
         self.luts_done
     }

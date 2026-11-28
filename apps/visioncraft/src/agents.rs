@@ -302,6 +302,28 @@ pub(crate) fn mode_of(s: &str, extensions: &[(&'static str, &'static str)]) -> O
         .find(|m| mode_id(*m) == s)
 }
 
+/// The last frame's water surfaces and how each was reflected (`RenderStats::water`), as
+/// `ui.get` and `view.render` report them: per surface `{item, part, material, level_m, tier}`
+/// (the numbers `ItemId::index` and `MaterialId::index` give; the sea is `{"surface": "sea"}`).
+pub fn water_json(water: &[visioncraft_render::WaterSurface]) -> Value {
+    water
+        .iter()
+        .map(|w| {
+            let mut o = match w.item {
+                Some(i) => json!({
+                    "item": i.item,
+                    "part": i.part,
+                    "material": i.material,
+                }),
+                None => json!({"surface": "sea"}),
+            };
+            o["level_m"] = json!(w.level_m);
+            o["tier"] = json!(w.tier.name());
+            o
+        })
+        .collect()
+}
+
 fn vec3(v: &Value) -> Option<glam::Vec3> {
     let a = v.as_array()?;
     Some(glam::Vec3::new(
@@ -315,7 +337,7 @@ const UI_METHODS: &[Method] = &[
     Method {
         name: "ui.get",
         params: "{}",
-        summary: "What the window shows: mode, ui (tabs, file_bar, view_bar, mode_panel_frame: which built-in bars are drawn), camera (view, position, target, fov_y_deg), the selection, lights on, size, and what is still on its way (pending: plants to generate, library downloads, the sky volume). `selection` is what the person has picked, in any mode: {items: [{kind: shape|placement|planting|model|lamp|underlay, id, name, summary (one line: what it is, size, material or species, position), sub?: {edge?, vertex?, index?}}], point?: [x, y, z] (the last ground or surface point the person clicked, metres), revision (bumps on every change)}. A tree picked in a planting is kind `placement`: id is its planting, sub.index its plant number (for planting.replace_placement and planting.remove_placement). `selected` ({planting, model}) is the older form of the same. Poll it and compare `revision` to notice a new selection.",
+        summary: "What the window shows: mode, ui (tabs, file_bar, view_bar, mode_panel_frame: which built-in bars are drawn), camera (view, position, target, fov_y_deg), the selection, lights on, size, water (the last frame's visible water surfaces in order of height, each {item, part, material, level_m, tier: planar|screen_space|environment}; the sea as {surface: \"sea\"}; quality.waterPlanes is how many water planes a frame gets a mirrored pass), and what is still on its way (pending: plants to generate, library downloads, the sky volume). `selection` is what the person has picked, in any mode: {items: [{kind: shape|placement|planting|model|lamp|underlay, id, name, summary (one line: what it is, size, material or species, position), sub?: {edge?, vertex?, index?}}], point?: [x, y, z] (the last ground or surface point the person clicked, metres), revision (bumps on every change)}. A tree picked in a planting is kind `placement`: id is its planting, sub.index its plant number (for planting.replace_placement and planting.remove_placement). `selected` ({planting, model}) is the older form of the same. Poll it and compare `revision` to notice a new selection.",
     },
     Method {
         name: "ui.load",
@@ -354,6 +376,13 @@ impl Host for Bound<'_, '_> {
         (&mut self.host.studio.session, self.state)
     }
 
+    /// What plays is the window's: the scene poses the parts from the studio's own state, and
+    /// the clock is the window's.
+    fn playback(&mut self) -> Option<&mut visioncraft_core::Playback> {
+        self.host.studio.playback.clock = self.host.now;
+        Some(&mut self.host.studio.playback)
+    }
+
     fn extra_assets(&self) -> Vec<String> {
         let s = &self.host.studio;
         let library = s.scene.library.catalog.iter().flat_map(|c| c.assets.iter());
@@ -386,6 +415,18 @@ impl Host for Bound<'_, '_> {
         // the request) goes through a draft-free copy and back.
         let saved = (h.studio.project() != project)
             .then(|| std::mem::replace(&mut h.studio.session, Session::new(project.clone())));
+        // A picture is taken at the clock it asks for (a film's time), so it is the same every
+        // time, and from the request's copy of what plays (as the command line takes it): the
+        // window's own playback is neither moved on nor pruned by it, and comes back afterwards
+        // with the window's clock.
+        let mut playback = request.playback.clone();
+        playback.clock = request.animation_s;
+        playback.fps = request.fps;
+        let live = (
+            h.studio.clock,
+            std::mem::replace(&mut h.studio.playback, playback),
+        );
+        h.studio.clock = request.animation_s;
         if saved.is_some() {
             h.studio.growth_conflicts = Default::default();
         }
@@ -396,6 +437,7 @@ impl Host for Bound<'_, '_> {
         }
         let camera = h.studio.camera.clone();
         let (quality, auto) = (h.studio.quality, h.studio.quality_auto);
+        let shadow_filter = h.studio.shadow_filter;
         if let Some((p, t, fov)) = request.camera {
             h.studio.camera = crate::camera::Camera::default();
             h.studio.camera.fov_y = fov.to_radians();
@@ -410,6 +452,8 @@ impl Host for Bound<'_, '_> {
             .iter()
             .position(|(n, _)| n.eq_ignore_ascii_case(&request.quality))
             .unwrap_or(if request.photo.is_some() { 3 } else { 2 });
+        h.studio
+            .set_shadow_filter(request.shadow_filter, request.shadow_radius_m);
         let before = h.studio.problems.len();
         let png = match &request.photo {
             Some(p) => {
@@ -430,6 +474,9 @@ impl Host for Bound<'_, '_> {
         );
         h.studio.camera = camera;
         (h.studio.quality, h.studio.quality_auto) = (quality, auto);
+        h.studio.shadow_filter = shadow_filter;
+        h.studio.clock = live.0;
+        h.studio.playback = live.1;
         if let Some(own) = saved {
             // The window's own session, with its history, comes back; the scene follows it.
             h.studio.session = own;
@@ -454,6 +501,52 @@ impl Host for Bound<'_, '_> {
         })
     }
 
+    /// `query.clips` and playback: an imported object's file is in the window's files, a
+    /// library model's animation was kept when it was loaded (all a browser has), or its file
+    /// is on disk.
+    fn animation(&mut self, model: &str) -> Option<Result<visioncraft_core::Animation, String>> {
+        use crate::model_animation::Held;
+        // A catalogue asset is posed by its first level, whatever level is resident: ask for
+        // that level's file when it was never read, so that a clip about to play moves it.
+        self.host.studio.scene.library.want_animation(model);
+        let s = &self.host.studio;
+        let assets: Vec<&visioncraft_core::catalog::Asset> = s
+            .scene
+            .library
+            .catalog
+            .iter()
+            .flat_map(|c| c.assets.iter())
+            .chain(&s.assets)
+            .collect();
+        let store = &s.scene.library.store;
+        let library = &s.scene.library;
+        let object = |file: &str| {
+            store
+                .provided(file)
+                .map(Held::Bytes)
+                .ok_or_else(|| format!("`{file}` is not among the window's files"))
+        };
+        let files = |file: &str| {
+            if let Some(kept) = library.kept(file) {
+                return Ok(Held::Loaded(kept.anim.clone(), kept.nodes.clone()));
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(bytes) = store.library_file(file) {
+                return Ok(Held::Bytes(Arc::from(bytes)));
+            }
+            Err(format!(
+                "`{file}` is not loaded here: place the model, or ask `visioncraft-cli`, which reads the library folder"
+            ))
+        };
+        Some(crate::model_animation::animation_of(
+            s.project(),
+            &assets,
+            &object,
+            &files,
+            model,
+        ))
+    }
+
     fn methods(&self) -> &[Method] {
         UI_METHODS
     }
@@ -461,7 +554,9 @@ impl Host for Bound<'_, '_> {
     fn call(&mut self, method: &str, params: &Value) -> Option<Result<Value, String>> {
         let h = &mut *self.host;
         Some(match method {
-            "ui.get" => Ok(json!({
+            "ui.get" => {
+                let water = water_json(&h.studio.renderer.stats().water);
+                let value = json!({
                 "mode": h.mode_name(),
                 "ui": h.host_ui.to_json(),
                 "camera": {
@@ -481,6 +576,8 @@ impl Host for Bound<'_, '_> {
                     "auto": h.studio.quality_auto,
                     "preset": crate::studio::preset_name(&h.studio.current_quality()),
                     "renderScale": h.studio.current_quality().render_scale,
+                    // The planar water passes a frame may draw (`Quality::water_planes`), 0 when the planar reflection is off.
+                    "waterPlanes": h.studio.current_quality().plane_budget(),
                 },
                 "pending": {
                     "plants": h.studio.plants_pending(),
@@ -490,7 +587,11 @@ impl Host for Bound<'_, '_> {
                     "skyVisibility": h.studio.sky_visibility_pending(),
                     "sunMap": h.studio.sun_map_pending(),
                 },
-            })),
+                // The last frame's water surfaces and how each was reflected.
+                "water": water,
+                });
+                Ok(value)
+            }
             "ui.load" => {
                 let s = &h.studio;
                 let lib = &s.scene.library;
@@ -875,6 +976,408 @@ mod tests {
                     .is_err()
             );
         });
+    }
+
+    #[test]
+    fn the_window_answers_the_clips_of_an_imported_model() {
+        use super::Host;
+        with_host(Project::default(), |h| {
+            let id = h
+                .host
+                .studio
+                .import_object("Hinge", crate::gltf_load::tests::hinge().finish())
+                .unwrap();
+            assert_eq!(id, "user:uo1");
+            let animation = h
+                .animation("user:uo1")
+                .expect("the window answers")
+                .expect("the hinge's file is among its files");
+            assert_eq!(animation.clips.len(), 1);
+            assert_eq!(
+                (
+                    animation.clips[0].name.as_str(),
+                    animation.clips[0].duration,
+                    animation.clips[0].channels.len()
+                ),
+                ("swing", 1.0, 1)
+            );
+            assert_eq!(animation.rig.as_ref().map(|r| r.rest.len()), Some(1));
+            assert!(animation.warnings.is_empty());
+            assert_eq!(h.animation("user:uo1").unwrap().unwrap(), animation);
+            let e = h.animation("nope").unwrap().unwrap_err();
+            assert!(e.contains("no model `nope`"), "{e}");
+        });
+    }
+
+    /// The window's control channel and model files answer `query.clips` for a library model
+    /// that is loaded and stands still: `{clips: []}`, where the browser has no file to fall
+    /// back on (it only has what the library kept when it loaded the model).
+    #[test]
+    fn a_loaded_library_model_without_clips_answers_an_empty_list() {
+        let Ok((device, queue)) = pollster::block_on(visioncraft_render::headless_device()) else {
+            eprintln!("no GPU adapter: skipped");
+            return;
+        };
+        let renderer =
+            visioncraft_render::Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let mut studio = super::Studio::new(renderer, Project::default());
+        {
+            let s = &mut studio;
+            // The catalogue with the fixtures in it (a window gets it from catalog.json).
+            s.scene.library.merge_user_assets();
+            s.scene
+                .library
+                .note("g", "vc-bollard", &[glam::Mat4::IDENTITY]);
+            for _ in 0..500 {
+                let (lib, r) = (&mut s.scene.library, &mut s.renderer);
+                lib.pump(r, glam::Vec3::ZERO);
+                if lib.resident_models() == 1 && lib.idle() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            assert_eq!(
+                s.scene.library.resident_models(),
+                1,
+                "the bollard is loaded"
+            );
+        }
+        let (mut mode, mut selection) = (None, crate::selection::SelectionState::default());
+        let mut host_ui = crate::host_ui::HostUi::default();
+        let mut host = super::WindowHost {
+            studio: &mut studio,
+            device: &device,
+            queue: &queue,
+            mode: &mut mode,
+            selection: &mut selection,
+            extension_modes: &[],
+            host_ui: &mut host_ui,
+            now: 0.0,
+        };
+        let mut state = super::HostState::new(visioncraft_automation::Access::any());
+        let mut bound = super::Bound {
+            host: &mut host,
+            state: &mut state,
+        };
+        let r = visioncraft_automation::commands::execute(
+            &mut bound,
+            "query.clips",
+            &json!({"model": "vc-bollard"}),
+        )
+        .unwrap_or_else(|e| panic!("query.clips: {e}"));
+        assert_eq!(r, json!({"clips": [], "warnings": []}));
+    }
+
+    /// A catalogue asset's levels in a window (a browser has no file to read them again from):
+    /// while the first level was never loaded `query.clips` cannot answer and asks for that
+    /// level; once both are loaded, what the window kept of them gives the same warning as the
+    /// files do on the command line.
+    #[test]
+    fn the_window_compares_the_levels_of_an_asset_from_what_it_kept() {
+        use std::sync::Arc;
+        let Ok((device, queue)) = pollster::block_on(visioncraft_render::headless_device()) else {
+            eprintln!("no GPU adapter: skipped");
+            return;
+        };
+        let renderer =
+            visioncraft_render::Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let mut studio = super::Studio::new(renderer, Project::default());
+        let (lod0, lod1) = (
+            "models/chest/lod0.glb".to_string(),
+            "models/chest/lod1.glb".to_string(),
+        );
+        // Far from the chest: only the coarsest level is asked for.
+        let far = glam::Vec3::new(0.0, 0.0, 50.0);
+        {
+            let s = &mut studio;
+            s.scene.library.merge_user_assets();
+            for (path, bytes) in [
+                (&lod0, crate::gltf_load::tests::chest_lod0().finish()),
+                (&lod1, crate::gltf_load::tests::chest_lod1().finish()),
+            ] {
+                s.scene.library.store.provide(path, Arc::from(bytes));
+            }
+            let mut catalog = s
+                .scene
+                .library
+                .catalog
+                .as_deref()
+                .cloned()
+                .unwrap_or_default();
+            catalog.assets.push(visioncraft_core::catalog::Asset {
+                id: "chest".into(),
+                name: "Chest".into(),
+                category: visioncraft_core::catalog::Category::Other,
+                tags: Vec::new(),
+                license: "CC0-1.0".into(),
+                origin: visioncraft_core::catalog::Origin::BuiltIn,
+                author: String::new(),
+                source_url: String::new(),
+                size_m: [1.0; 3],
+                lods: vec![
+                    visioncraft_core::catalog::Lod {
+                        file: lod0.clone(),
+                        max_distance_m: 6.0,
+                    },
+                    visioncraft_core::catalog::Lod {
+                        file: lod1.clone(),
+                        max_distance_m: f32::INFINITY,
+                    },
+                ],
+                thumbnail: String::new(),
+                plant: None,
+                light: None,
+            });
+            s.scene.library.catalog = Some(Arc::new(catalog));
+            s.scene.library.note("g", "chest", &[glam::Mat4::IDENTITY]);
+            for _ in 0..500 {
+                let (lib, r) = (&mut s.scene.library, &mut s.renderer);
+                lib.pump(r, far);
+                if lib.resident_models() == 1 && lib.idle() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            assert_eq!(
+                s.scene.library.resident_models(),
+                1,
+                "only level 1 is loaded from far"
+            );
+        }
+        let (mut mode, mut selection) = (None, crate::selection::SelectionState::default());
+        let mut host_ui = crate::host_ui::HostUi::default();
+        let mut host = super::WindowHost {
+            studio: &mut studio,
+            device: &device,
+            queue: &queue,
+            mode: &mut mode,
+            selection: &mut selection,
+            extension_modes: &[],
+            host_ui: &mut host_ui,
+            now: 0.0,
+        };
+        let mut state = super::HostState::new(visioncraft_automation::Access::any());
+        let mut bound = super::Bound {
+            host: &mut host,
+            state: &mut state,
+        };
+        let ask = visioncraft_automation::commands::execute(
+            &mut bound,
+            "query.clips",
+            &json!({"model": "chest"}),
+        )
+        .unwrap_err();
+        assert!(ask.contains("not loaded here"), "{ask}");
+        {
+            let s = &mut bound.host.studio;
+            for _ in 0..500 {
+                let (lib, r) = (&mut s.scene.library, &mut s.renderer);
+                lib.pump(r, far);
+                if lib.resident_models() == 2 && lib.idle() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            assert_eq!(
+                s.scene.library.resident_models(),
+                2,
+                "the first level was asked for"
+            );
+        }
+        let r = visioncraft_automation::commands::execute(
+            &mut bound,
+            "query.clips",
+            &json!({"model": "chest"}),
+        )
+        .unwrap_or_else(|e| panic!("query.clips: {e}"));
+        assert_eq!(
+            r["clips"],
+            json!([
+                {"name": "open", "duration_s": 1.0, "channels": 1},
+                {"name": "shake", "duration_s": 1.0, "channels": 1},
+            ])
+        );
+        assert_eq!(
+            r["warnings"],
+            json!([
+                "level 1 (`models/chest/lod1.glb`): node `lid2` (2) is not in the first level by name, drawn at rest; clip `open` lasts 2 s here, 1 s in the first level; the first level's plays; clip `shake` is missing; this level is posed by the first level's clip"
+            ])
+        );
+    }
+
+    /// Through the window's host, as an agent or the page's scripts reach it: a placed hinge
+    /// plays its clip from `start_s`, the pose query reads the sampler's matrix back, and the
+    /// window's clock (not a file) is what a start without a time takes.
+    #[test]
+    fn the_window_host_plays_a_clip_and_reads_the_pose_back() {
+        let Ok((device, queue)) = pollster::block_on(visioncraft_render::headless_device()) else {
+            eprintln!("no GPU adapter: skipped");
+            return;
+        };
+        let bytes = crate::gltf_load::tests::hinge().finish();
+        let renderer =
+            visioncraft_render::Renderer::new(&device, &queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let mut studio = super::Studio::new(renderer, Project::default());
+        let id = studio.import_object("Hinge", bytes.clone()).unwrap();
+        assert_eq!(id, "user:uo1");
+        studio
+            .session
+            .run(
+                "planting.add_single",
+                json!({"name": "Hinge", "asset": "user:uo1", "position": [0, 0, 0]}),
+            )
+            .unwrap();
+        let (mut mode, mut selection) = (None, crate::selection::SelectionState::default());
+        let mut host_ui = crate::host_ui::HostUi::default();
+        let mut host = super::WindowHost {
+            studio: &mut studio,
+            device: &device,
+            queue: &queue,
+            mode: &mut mode,
+            selection: &mut selection,
+            extension_modes: &[],
+            host_ui: &mut host_ui,
+            now: 41.5,
+        };
+        let mut state = super::HostState::new(visioncraft_automation::Access::any());
+        let mut h = super::Bound {
+            host: &mut host,
+            state: &mut state,
+        };
+        let play = |h: &mut super::Bound, params: Value| {
+            visioncraft_automation::commands::execute(h, "model.play_clip", &params)
+        };
+        // Without a start the window's clock is taken.
+        let r = play(&mut h, json!({"object": "g1", "clip": "swing"})).unwrap();
+        assert_eq!(r["start_s"], json!(41.5));
+        assert_eq!(r["playing"], json!(1));
+        assert!(h.host.studio.playback.animating(), "it moves from now on");
+        let r = play(
+            &mut h,
+            json!({"object": "g1", "clip": "swing", "start_s": 40.0}),
+        )
+        .unwrap();
+        assert_eq!(r["restarted"], json!(true));
+        // A second long, started 1.5 s ago: over, and holding its pose (nothing moves).
+        assert!(!h.host.studio.playback.animating());
+        assert!(!h.host.studio.playback.is_empty());
+        // The pose at 40.5 s is half the swing, as the sampler has it over the file's rig.
+        let r = visioncraft_automation::commands::execute(
+            &mut h,
+            "query.part_pose",
+            &json!({"object": "g1", "t": 40.5, "space": "model"}),
+        )
+        .unwrap();
+        let rig = crate::gltf_load::parse(&bytes).unwrap().rig().unwrap();
+        let local = visioncraft_core::keyframes::sample(&rig.clips[0], 0.5, false, &rig.rest);
+        let want = visioncraft_core::keyframes::model_space(&rig.parents, &local)[0];
+        let got: Vec<f32> = serde_json::from_value(r["plants"][0]["parts"][0].clone()).unwrap();
+        for (a, b) in got.iter().zip(want) {
+            assert!((a - b).abs() < 1e-6, "{got:?} vs {want:?}");
+        }
+        // The studio poses the scene from its own playback.
+        let r = visioncraft_automation::commands::execute(
+            &mut h,
+            "model.stop_clip",
+            &json!({"object": "g1"}),
+        )
+        .unwrap();
+        assert_eq!(r["stopped"], json!(1));
+        assert!(h.host.studio.playback.is_empty());
+        let r = visioncraft_automation::commands::execute(
+            &mut h,
+            "effect.flash",
+            &json!({"position": [0, 1, 0], "color": [1, 1, 1], "intensity": 100, "range_m": 2}),
+        )
+        .unwrap();
+        assert_eq!(r["id"], json!(1));
+        assert_eq!(h.host.studio.playback.flashes().len(), 1);
+        // And nothing of it is an edit.
+        // (The object and its planting are the only two edits.)
+        assert_eq!(h.host.studio.session.revision(), 2);
+    }
+
+    /// A flash scheduled on a film's time through the window's host: a live frame later on
+    /// does not forget it, and two renders of the film show it on the same frames.
+    #[test]
+    fn a_film_time_flash_outlives_the_live_clock_and_shows_in_every_film() {
+        let mut s = Session::new(Project::default());
+        // Night, lamps off: the ground is dark, so a flash shows.
+        s.run("time.set", json!({"hour": 23.0})).unwrap();
+        s.run("film.add", json!({"name": "F", "fps": 10})).unwrap();
+        s.run(
+            "film.add_shot",
+            json!({"id": "f1", "shot": {"kind": "hold", "eye": [0, 1.5, 6], "target": [0, 0.5, 0], "duration_s": 1.0}}),
+        )
+        .unwrap();
+        let project = s.project().clone();
+        let out =
+            std::env::temp_dir().join(format!("visioncraft-window-film-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&out);
+        let mut ran = false;
+        with_host(project, |h| {
+            ran = true;
+            h.host.now = 50.0;
+            let r = visioncraft_automation::commands::execute(
+                h,
+                "effect.flash",
+                &json!({"position": [0, 0.8, 0], "color": [1, 0.8, 0.5], "intensity": 4000,
+                        "range_m": 5, "frames": 2, "start_s": 0.5}),
+            )
+            .unwrap();
+            assert_eq!(r["start_s"], json!(0.5));
+            // A live frame, ten seconds on: the flash belongs to the film, not to now.
+            h.host.studio.clock = 60.0;
+            h.host.studio.prepare();
+            assert_eq!(h.host.studio.playback.flashes().len(), 1, "kept");
+            let light = |dir: &std::path::Path, n: usize| -> f32 {
+                let bytes = std::fs::read(dir.join(format!("frame_{n:05}.png"))).unwrap();
+                let img = image::load_from_memory(&bytes).unwrap().to_rgba8();
+                let (w, hh) = img.dimensions();
+                let (mut sum, mut count) = (0.0, 0);
+                for y in hh / 4..hh * 3 / 4 {
+                    for x in w / 4..w * 3 / 4 {
+                        let p = img.get_pixel(x, y);
+                        sum += 0.2126 * f32::from(p[0])
+                            + 0.7152 * f32::from(p[1])
+                            + 0.0722 * f32::from(p[2]);
+                        count += 1;
+                    }
+                }
+                sum / (count * 255) as f32
+            };
+            let mut films = Vec::new();
+            for name in ["a", "b"] {
+                let dir = out.join(name);
+                let r = visioncraft_automation::commands::execute(
+                    h,
+                    "film.render",
+                    &json!({"id": "f1", "dir": dir, "width": 160, "height": 90}),
+                )
+                .unwrap_or_else(|e| panic!("film.render: {e}"));
+                assert_eq!(r["frames"], json!(10), "{r}");
+                films.push((0..10).map(|n| light(&dir, n)).collect::<Vec<f32>>());
+                assert_eq!(
+                    h.host.studio.playback.flashes().len(),
+                    1,
+                    "a film leaves the window's flashes alone"
+                );
+            }
+            for film in &films {
+                let dark = [0, 4, 7, 9]
+                    .map(|n| film[n])
+                    .into_iter()
+                    .fold(0.0, f32::max);
+                assert!(
+                    film[5] > dark + 0.01 && film[6] > dark + 0.01,
+                    "frames 5 and 6 (0.5 s and 0.6 s) show the flash: {films:?}"
+                );
+            }
+        });
+        let _ = std::fs::remove_dir_all(&out);
+        if !ran {
+            eprintln!("no GPU adapter: skipped");
+        }
     }
 
     #[test]

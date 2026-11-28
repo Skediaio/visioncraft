@@ -1,17 +1,20 @@
 //! Everything that is not a window: the session, the loaded geometry, the scene and the camera
 //! over a renderer. The egui app and the headless smoke mode both drive this.
 
-use glam::{Mat4, Vec3};
+use glam::{Mat3, Mat4, Vec2, Vec3};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use visioncraft_automation::PhotoRequest;
+use visioncraft_automation::{PhotoRequest, PictureShadowFilter};
 use visioncraft_core::{
-    Asset, Generator, ImportedModel, Material, ModelKind, Project, Session, Shape, Site, SunTime,
-    catalog::Category, import_3dcraft, import_obj, sun::sun_position,
+    Asset, Generator, ImportedModel, Material, ModelKind, Playback, Project, Session, Shape, Site,
+    SunTime, catalog::Category, import_3dcraft, import_obj, sun::sun_position,
 };
-use visioncraft_render::{LineVertex, Quality, Renderer, Sun};
+use visioncraft_render::{
+    AlphaMode, DEFAULT_PCSS_MAX_RADIUS_M, ItemId, Light, LightKind, LineVertex, MaterialId, MeshId,
+    Quality, Renderer, ShadowFilter, Sun, TextureId,
+};
 
 use crate::camera::{Camera, View, ray_through};
 use crate::scene::{Loaded, Pick, Scene, box_outline, light_markers, model_matrix};
@@ -102,6 +105,28 @@ impl GrowthConflicts {
     }
 }
 
+/// A flash on screen: its glowing quad's item and material, removed when it is over.
+struct FlashDraw {
+    id: u64,
+    item: ItemId,
+    material: MaterialId,
+    /// Where its quad was last written: written again only when the camera turned.
+    at: Mat4,
+}
+
+/// The luminance (cd/m2) of a flash's quad: its flux over the quad's area, Lambertian, as a
+/// lamp's emitter is (`library::emitter_luminance`).
+fn flash_luminance(intensity: f32, size_m: f32) -> f32 {
+    (intensity / (std::f32::consts::PI * size_m * size_m)).clamp(1.0, 1e6)
+}
+
+/// Where a flash's quad is drawn: at its position, turned to face the camera `view` looks
+/// from, a square of side `size_m`.
+fn flash_quad(view: Mat4, position: [f32; 3], size_m: f32) -> Mat4 {
+    let turn = Mat4::from_mat3(Mat3::from_mat4(view.inverse()));
+    Mat4::from_translation(Vec3::from(position)) * turn * Mat4::from_scale(Vec3::splat(size_m))
+}
+
 pub struct Studio {
     pub session: Session,
     /// Cached growth conflicts; `set_session` and a swapped-in session clear it.
@@ -118,6 +143,11 @@ pub struct Studio {
     /// Follow `suggest_quality` instead of the preset in `quality`.
     pub quality_auto: bool,
     pub auto_quality: Quality,
+    /// The sun's shadow filter over the preset's for the pictures taken from now on
+    /// (`view.render`'s `shadow_filter` and `shadow_radius_m`, see `set_shadow_filter`):
+    /// `None`, the preset's. The CLI sets it for each picture; the window's host sets it for
+    /// one picture and clears it after, so the window keeps its preset.
+    pub shadow_filter: Option<ShadowFilter>,
     pub frame_ms: Vec<f32>,
     /// Auto does not step up before this `clock` (seconds): it just stepped down.
     pub auto_hold_until: f64,
@@ -176,6 +206,19 @@ pub struct Studio {
     pub double_click_captured: bool,
     /// Seconds since start, for the wind animation.
     pub clock: f64,
+    /// What plays beside the project: the clips on placed objects and the flashes
+    /// (`model.play_clip`, `effect.flash`). Like the clock, session state: not saved and not an
+    /// undo step. Everything in it is sampled at `clock`, which hosts keep current in it.
+    pub playback: Playback,
+    /// The flashes on screen, and what their quads share (the unit quad and its soft disc).
+    flashes: Vec<FlashDraw>,
+    flash_mesh: Option<(MeshId, TextureId)>,
+    /// The lights of the flashes on screen as last sent with the lamps (`last_lights` are the
+    /// lamps alone).
+    last_flashes: Vec<Light>,
+    /// Scratch: the flashes on screen this frame, and their lights.
+    flash_now: Vec<usize>,
+    flash_lights: Vec<Light>,
     /// A 1.8 m figure for scale (positions on the ground).
     pub people: Vec<Vec3>,
     pub show_people: bool,
@@ -407,6 +450,65 @@ pub fn auto_ev(elevation_deg: f32, moon_lux: f32, lamps: bool) -> f32 {
     (metered + darker + lamp).max(-2.5)
 }
 
+/// `view.render`'s shadow filter over the preset's for one picture: `filter` and `radius_m` as
+/// the command gives them (`None`: not given) and `preset` the preset's filter. `None`: the
+/// preset's own again. A filter given is mapped to the renderer's (`PictureShadowFilter` is
+/// this workspace's automation crate's, which does not see `ShadowFilter`): every tap choice is
+/// one variant, so there is no count a host could get wrong. The 16-tap disk takes the picture's
+/// radius, else the preset's; PCSS takes the picture's radius as its largest penumbra, else its
+/// own default, `DEFAULT_PCSS_MAX_RADIUS_M`; `Hard` and the grids have no radius (one given
+/// with them is kept in the filter, where their shaders ignore it: the command refuses the two
+/// together before this). A radius alone goes with the preset's filter: the 16-tap disk's
+/// radius, PCSS's largest; a filter added to the renderer since (`ShadowFilter` is
+/// non-exhaustive) stays as the preset's. Whatever comes out is sanitized, as a preset is.
+fn picture_shadow_filter(
+    filter: Option<PictureShadowFilter>,
+    radius_m: Option<f32>,
+    preset: ShadowFilter,
+) -> Option<ShadowFilter> {
+    match (filter, radius_m) {
+        (None, None) => None,
+        (None, Some(radius_m)) => Some(
+            match preset {
+                ShadowFilter::Hard => ShadowFilter::Hard,
+                ShadowFilter::Pcf { taps, .. } => ShadowFilter::Pcf { taps, radius_m },
+                ShadowFilter::Pcss { .. } => ShadowFilter::Pcss {
+                    max_radius_m: radius_m,
+                },
+                // A filter added since (`ShadowFilter` is non-exhaustive): the preset's, as it
+                // is; the radius is not forced on a filter this crate does not know.
+                _ => preset,
+            }
+            .sanitized(),
+        ),
+        (Some(filter), radius_m) => {
+            // The disk's radius: the picture's, else the preset's.
+            let disk = radius_m.unwrap_or_else(|| preset.radius_m());
+            Some(
+                match filter {
+                    PictureShadowFilter::Hard => ShadowFilter::Hard,
+                    PictureShadowFilter::Pcf4 => ShadowFilter::Pcf {
+                        taps: 4,
+                        radius_m: disk,
+                    },
+                    PictureShadowFilter::Pcf9 => ShadowFilter::Pcf {
+                        taps: 9,
+                        radius_m: disk,
+                    },
+                    PictureShadowFilter::Pcf16 => ShadowFilter::Pcf {
+                        taps: 16,
+                        radius_m: disk,
+                    },
+                    PictureShadowFilter::Pcss => ShadowFilter::Pcss {
+                        max_radius_m: radius_m.unwrap_or(DEFAULT_PCSS_MAX_RADIUS_M),
+                    },
+                }
+                .sanitized(),
+            )
+        }
+    }
+}
+
 impl Studio {
     pub fn new(mut renderer: Renderer, project: Project) -> Self {
         let quality = 1;
@@ -424,6 +526,7 @@ impl Studio {
             quality,
             quality_auto: true,
             auto_quality: Quality::MEDIUM,
+            shadow_filter: None,
             frame_ms: Vec::new(),
             auto_hold_until: 0.0,
             auto_loading_since: None,
@@ -454,6 +557,12 @@ impl Studio {
             requests: Vec::new(),
             double_click_captured: false,
             clock: 0.0,
+            playback: Playback::default(),
+            flashes: Vec::new(),
+            flash_mesh: None,
+            last_flashes: Vec::new(),
+            flash_now: Vec::new(),
+            flash_lights: Vec::new(),
             people: Vec::new(),
             show_people: true,
             placing_person: false,
@@ -608,6 +717,8 @@ impl Studio {
     /// another project state); its lamps get their lights at the next reconcile.
     pub fn set_session(&mut self, session: Session) {
         self.session = session;
+        // What played, played on the session that went.
+        self.playback.stop_all();
         self.growth_conflicts = GrowthConflicts::default();
         self.drop_sun_map();
         self.lamps_reconciled = (u64::MAX, false);
@@ -628,6 +739,7 @@ impl Studio {
     /// Replaces the whole project (open, restore): clears history and the scene.
     pub fn replace_project(&mut self, project: Project) {
         self.session.replace_project(project);
+        self.playback.stop_all();
         self.drop_sun_map();
         self.scene.clear(&mut self.renderer);
         self.scene.flora.sweep();
@@ -1825,8 +1937,33 @@ impl Studio {
         for l in &mut lights {
             l.intensity *= self.lamp_level;
         }
-        if lights != self.last_lights {
-            self.dropped_lights = self.renderer.set_lights(&lights);
+        // The flashes' lights go in the same grid; only the lamps relight the rooms.
+        self.flash_lights.clear();
+        self.flash_lights.extend(
+            self.playback
+                .flashes()
+                .iter()
+                .filter(|f| f.shows_at(self.clock, self.playback.fps) && f.intensity > 0.0)
+                .map(|f| Light {
+                    position: Vec3::from(f.position),
+                    kind: LightKind::Point,
+                    color: Vec3::from(f.color),
+                    intensity: f.intensity,
+                    range_m: f.range_m.max(0.01),
+                }),
+        );
+        let lamps_changed = lights != self.last_lights;
+        if lamps_changed || self.flash_lights != self.last_flashes {
+            self.dropped_lights = self.renderer.set_lights(
+                &lights
+                    .iter()
+                    .chain(&self.flash_lights)
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            );
+            self.last_flashes.clone_from(&self.flash_lights);
+        }
+        if lamps_changed {
             self.last_lights = lights;
             self.lamp_key += 1;
             // The old lamp bounce stays on screen until the new one comes.
@@ -1879,11 +2016,38 @@ impl Studio {
 
     /// Whether anything on screen moves by itself (wind with plants in view).
     pub fn current_quality(&self) -> Quality {
-        if self.quality_auto {
+        let preset = if self.quality_auto {
             self.auto_quality
         } else {
             Quality::PRESETS[self.quality].1
+        };
+        match self.shadow_filter {
+            Some(filter) => Quality {
+                shadow_filter: filter,
+                ..preset
+            },
+            None => preset,
         }
+    }
+
+    /// `view.render`'s shadow filter over the preset's (`None`: the preset's again) for the
+    /// pictures taken from now on: `filter` is the command's (`PictureShadowFilter`, mapped
+    /// here to the renderer's `ShadowFilter`) and `radius_m` the penumbra's radius in the world
+    /// (`None`: the preset's radius; PCSS without one takes its own default,
+    /// `DEFAULT_PCSS_MAX_RADIUS_M`). A radius alone goes with the preset's filter: the 16-tap
+    /// disk's radius, PCSS's largest. Only those two spread over the radius; `Hard` and the
+    /// grids have none.
+    pub fn set_shadow_filter(
+        &mut self,
+        filter: Option<PictureShadowFilter>,
+        radius_m: Option<f32>,
+    ) {
+        let preset = if self.quality_auto {
+            self.auto_quality
+        } else {
+            Quality::PRESETS[self.quality].1
+        };
+        self.shadow_filter = picture_shadow_filter(filter, radius_m, preset.shadow_filter);
     }
 
     /// Feeds one frame time (ms); Auto may change the quality. Down as soon as 30 frames show
@@ -1980,6 +2144,122 @@ impl Studio {
             || p.sea.is_some()
             || p.view.rain > 0.0
             || self.weather_easing()
+            || self.playback.animating()
+    }
+
+    /// Brings the flashes' glowing quads in line with the flashes on screen this frame: a new
+    /// one gets an item (a soft disc facing the camera, as bright as its flux over its area),
+    /// one not on screen loses it (over, or not yet: a flash on a film's time is kept after it
+    /// ends), and each one on screen turns to the camera.
+    fn draw_flashes(&mut self) {
+        let (t, fps) = (self.playback.clock, self.playback.fps);
+        self.flash_now.clear();
+        self.flash_now.extend(
+            self.playback
+                .flashes()
+                .iter()
+                .enumerate()
+                .filter(|(_, f)| f.size_m > 0.0 && f.shows_at(t, fps))
+                .map(|(i, _)| i),
+        );
+        let (flashes, now) = (self.playback.flashes(), &self.flash_now);
+        self.flashes.retain(|d| {
+            let keep = now.iter().any(|&i| flashes[i].id == d.id);
+            if !keep {
+                self.renderer.remove_item(d.item);
+                self.renderer.remove_material(d.material);
+            }
+            keep
+        });
+        if self.flash_now.is_empty() {
+            return;
+        }
+        let (mesh, disc) = match self.flash_mesh {
+            Some(ids) => ids,
+            None => {
+                let ids = Self::make_flash_mesh(&mut self.renderer);
+                self.flash_mesh = Some(ids);
+                ids
+            }
+        };
+        // Facing the camera: its rotation, at the flash's position, a square of its side.
+        let (_, view, _) = self.camera.matrices(self.aspect());
+        for &i in &self.flash_now {
+            let f = &flashes[i];
+            let at = flash_quad(view, f.position, f.size_m);
+            match self.flashes.iter_mut().find(|d| d.id == f.id) {
+                Some(d) if d.at == at => {}
+                Some(d) => {
+                    self.renderer.set_instance(d.item, 0, at);
+                    d.at = at;
+                }
+                None => {
+                    let material = self.renderer.add_material(&visioncraft_render::Material {
+                        base_color: [0.0, 0.0, 0.0, 1.0],
+                        base_color_map: Some(disc),
+                        metallic: 0.0,
+                        roughness: 1.0,
+                        emissive: f.color,
+                        emissive_strength: flash_luminance(f.intensity, f.size_m),
+                        alpha_mode: AlphaMode::Blend,
+                        double_sided: true,
+                        ..Default::default()
+                    });
+                    let item = self.renderer.add_item(mesh, material, &[at]);
+                    self.flashes.push(FlashDraw {
+                        id: f.id,
+                        item,
+                        material,
+                        at,
+                    });
+                }
+            }
+        }
+    }
+
+    /// The unit quad of a flash's glow (a square of side 1 facing +Z) and its soft disc.
+    fn make_flash_mesh(r: &mut Renderer) -> (MeshId, TextureId) {
+        let positions = [
+            [-0.5, -0.5, 0.0],
+            [0.5, -0.5, 0.0],
+            [0.5, 0.5, 0.0],
+            [-0.5, 0.5, 0.0],
+        ];
+        let mesh = r
+            .add_mesh(&visioncraft_render::Mesh {
+                positions: &positions,
+                normals: &[[0.0, 0.0, 1.0]; 4],
+                indices: &[0, 1, 2, 0, 2, 3],
+                uvs: Some(&[[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]]),
+                ..Default::default()
+            })
+            .expect("a quad of four vertices fits the GPU");
+        // A soft disc: white, fading out from the middle to the edge.
+        const N: u32 = 32;
+        let mut px = Vec::with_capacity((N * N * 4) as usize);
+        for y in 0..N {
+            for x in 0..N {
+                let d = Vec2::new(
+                    (x as f32 + 0.5) / N as f32 - 0.5,
+                    (y as f32 + 0.5) / N as f32 - 0.5,
+                )
+                .length()
+                    * 2.0;
+                let a = (1.0 - d * d).clamp(0.0, 1.0);
+                let a = a * a;
+                px.extend([255, 255, 255, (a * 255.0).round() as u8]);
+            }
+        }
+        let disc = r
+            .add_texture(&visioncraft_render::TextureDesc {
+                width: N,
+                height: N,
+                rgba8: &px,
+                color_space: visioncraft_render::ColorSpace::Srgb,
+                repeat: false,
+            })
+            .expect("a 32-pixel disc fits the GPU");
+        (mesh, disc)
     }
 
     /// Lowest point of a model in its own space, and its local bounds.
@@ -2019,6 +2299,7 @@ impl Studio {
     }
 
     fn prepare_now(&mut self) {
+        self.playback.clock = self.clock;
         self.scene.library.lamps_on = self.lights_on();
         let eye = self.camera.eye();
         let h = self.still_textures.unwrap_or(self.size[1]).max(1) as f32;
@@ -2050,6 +2331,10 @@ impl Studio {
             self.draft_serial += 1;
         }
         self.sync();
+        // Live, only what has ended on the live clock: a flash on a film's time stays for it.
+        self.playback.prune_live(self.clock);
+        self.scene.animate(&mut self.renderer, &self.playback);
+        self.draw_flashes();
         self.poll_sky_volume();
         self.poll_incoming();
         self.poll_relight();
@@ -2688,13 +2973,14 @@ fn auto_step(frames: &[f32], current: Quality, can_rise: bool) -> AutoStep {
     AutoStep::To(next, p75 > budget)
 }
 
-/// The preset a quality is (at any render scale), for messages.
+/// The preset a quality is (at any render scale and sun shadow filter), for messages.
 pub fn preset_name(q: &Quality) -> &'static str {
     Quality::PRESETS
         .iter()
         .find(|(_, p)| {
             *p == Quality {
                 render_scale: p.render_scale,
+                shadow_filter: p.shadow_filter,
                 ..*q
             }
         })
@@ -2788,6 +3074,28 @@ mod tests {
     use super::auto_ev;
 
     #[test]
+    fn a_flash_quad_stands_at_its_flash_whichever_way_the_camera_looks() {
+        use glam::{Mat4, Vec3};
+        let position = [3.0, 1.2, -2.0];
+        let view = Mat4::look_at_rh(
+            Vec3::new(-4.0, 1.6, 5.0),
+            Vec3::new(2.0, 0.5, -1.0),
+            Vec3::Y,
+        );
+        let at = super::flash_quad(view, position, 0.25);
+        let origin = at.transform_point3(Vec3::ZERO);
+        assert!(
+            origin.abs_diff_eq(Vec3::from(position), 1e-5),
+            "{origin} is not {position:?}"
+        );
+        // It faces the camera: its +Z points back along the view's forward axis.
+        let normal = at.transform_vector3(Vec3::Z).normalize();
+        let back = view.inverse().transform_vector3(Vec3::Z).normalize();
+        assert!(normal.abs_diff_eq(back, 1e-5), "{normal} {back}");
+        assert!((at.transform_vector3(Vec3::X).length() - 0.25).abs() < 1e-5);
+    }
+
+    #[test]
     fn growth_conflicts_run_again_only_for_a_new_revision_or_years() {
         use visioncraft_core::{Project, Session};
         let mut s = Session::new(Project::default());
@@ -2870,6 +3178,84 @@ mod tests {
         assert!(
             moonless < moonlit && moonless > moonlit - (0.358f32 / 0.058).log2(),
             "{moonless}"
+        );
+    }
+
+    /// `view.render`'s shadow filter over the preset's maps to the renderer's, `set_shadow_filter`:
+    /// each of the closed tap choices and PCSS is one variant of the renderer's (there is no tap
+    /// count to round), the disk and PCSS take the picture's radius, else the preset's and
+    /// PCSS's own default, a radius alone goes with the preset's filter, and all of it comes out
+    /// sanitized, as a preset is.
+    #[test]
+    fn a_pictures_shadow_filter_maps_to_the_renderers() {
+        use super::{PictureShadowFilter::*, picture_shadow_filter};
+        use visioncraft_render::{
+            DEFAULT_PCSS_MAX_RADIUS_M, DEFAULT_SHADOW_RADIUS_M, Quality, ShadowFilter,
+        };
+        let pcf = |taps, radius_m| ShadowFilter::Pcf { taps, radius_m };
+        let pcss = |max_radius_m| ShadowFilter::Pcss { max_radius_m };
+        let high = Quality::HIGH.shadow_filter;
+        // Nothing given: the preset's.
+        assert_eq!(picture_shadow_filter(None, None, high), None);
+        // Every choice, without a radius: at the preset's radius (HIGH: 0.03), PCSS at its own.
+        let bare = [
+            (Hard, ShadowFilter::Hard),
+            (Pcf4, pcf(4, DEFAULT_SHADOW_RADIUS_M)),
+            (Pcf9, pcf(9, DEFAULT_SHADOW_RADIUS_M)),
+            (Pcf16, pcf(16, DEFAULT_SHADOW_RADIUS_M)),
+            (Pcss, pcss(DEFAULT_PCSS_MAX_RADIUS_M)),
+        ];
+        for (given, mapped) in bare {
+            assert_eq!(picture_shadow_filter(Some(given), None, high), Some(mapped));
+        }
+        // With a radius: the disk's and PCSS's (as its largest).
+        assert_eq!(
+            picture_shadow_filter(Some(Pcf16), Some(0.2), high),
+            Some(pcf(16, 0.2))
+        );
+        assert_eq!(
+            picture_shadow_filter(Some(Pcss), Some(0.2), high),
+            Some(pcss(0.2))
+        );
+        assert_eq!(
+            picture_shadow_filter(Some(Pcss), Some(0.0), high),
+            Some(pcss(0.0))
+        );
+        // The 16-tap disk of a preset with another radius keeps that one.
+        assert_eq!(
+            picture_shadow_filter(Some(Pcf16), None, pcf(16, 0.07)),
+            Some(pcf(16, 0.07))
+        );
+        // A radius alone goes with the preset's filter: the disk's radius, PCSS's largest, and
+        // nothing to take it for `Hard`.
+        assert_eq!(
+            picture_shadow_filter(None, Some(0.2), high),
+            Some(pcf(9, 0.2))
+        );
+        assert_eq!(
+            picture_shadow_filter(None, Some(0.2), pcf(16, 0.03)),
+            Some(pcf(16, 0.2))
+        );
+        assert_eq!(
+            picture_shadow_filter(None, Some(0.2), pcss(0.1)),
+            Some(pcss(0.2))
+        );
+        assert_eq!(
+            picture_shadow_filter(None, Some(0.2), ShadowFilter::Hard),
+            Some(ShadowFilter::Hard)
+        );
+        // Sanitized, as a preset is: a radius out of range clamped, a NaN one the default.
+        assert_eq!(
+            picture_shadow_filter(None, Some(5.0), high),
+            Some(pcf(9, 1.0))
+        );
+        assert_eq!(
+            picture_shadow_filter(Some(Pcf16), Some(-1.0), high),
+            Some(pcf(16, 0.0))
+        );
+        assert_eq!(
+            picture_shadow_filter(Some(Pcss), Some(f32::NAN), high),
+            Some(pcss(DEFAULT_PCSS_MAX_RADIUS_M))
         );
     }
 }

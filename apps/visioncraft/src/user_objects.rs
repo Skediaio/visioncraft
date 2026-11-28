@@ -33,7 +33,9 @@ pub fn check_glb(bytes: &[u8]) -> Result<Checked, String> {
     let glb = gltf_load::parse(bytes)?;
     let mut lo = Vec3::splat(f32::INFINITY);
     let mut hi = Vec3::splat(f32::NEG_INFINITY);
-    for p in glb.prims.iter().flat_map(|p| &p.positions) {
+    // The whole model at its rest pose: an animated part is where the file has it.
+    let whole = glb.rest_prims();
+    for p in whole.iter().flat_map(|p| &p.positions) {
         let v = Vec3::from(*p);
         if v.is_finite() {
             lo = lo.min(v);
@@ -83,7 +85,7 @@ pub fn render_thumbnail(glb: &gltf_load::Glb, lo: Vec3, hi: Vec3) -> Option<Vec<
     let light = Vec3::new(-0.4, 0.8, 0.45).normalize();
     let mut depth = vec![f32::NEG_INFINITY; n * n];
     let mut px = vec![0u8; n * n * 4];
-    for p in &glb.prims {
+    for p in glb.rest_prims().iter() {
         let base = glb
             .materials
             .get(p.material)

@@ -19,6 +19,7 @@ pub mod grass;
 pub mod growth;
 pub mod house;
 mod import;
+pub mod keyframes;
 pub mod light;
 pub mod material;
 pub mod measure;
@@ -29,6 +30,7 @@ pub mod photo;
 pub mod plant_ground;
 pub mod plant_light;
 pub mod planting;
+pub mod playback;
 pub mod presets;
 pub mod project;
 pub mod quantities;
@@ -61,6 +63,7 @@ pub use commands::examples::{EXAMPLES, example, example_file, is_example_source}
 pub use export::export_presets;
 pub use film::{Film, Shot};
 pub use import::{import_3dcraft, import_obj};
+pub use keyframes::{Channel, Clip, Interpolation, Played, Rig, Sampler, Trs};
 pub use light::{
     Light, LightKind, LightSpec, kelvin_to_linear_rgb, lights_for_placement, lights_for_placements,
 };
@@ -72,12 +75,17 @@ pub use model::{Body, Face, ImportError, ImportedModel, ModelCodecError};
 pub use object::UserObject;
 pub use photo::PhotoSettings;
 pub use plant_ground::{
-    evaluate_in_scene, over_ids, placed_shape, placed_shape_mesh, plant_size, water_areas,
+    evaluate_in_scene, evaluate_in_scene_numbered, over_ids, placed_shape, placed_shape_mesh,
+    plant_size, water_areas,
 };
 pub use planting::{
     Evaluation, Generator, LawnWindow, Placement, PlantLayer, Tuft, blocked_by_buildings, evaluate,
-    evaluate_avoiding, evaluate_surface_fill, lawn_area, lawn_scatter, lawn_scatter_blended,
-    lawn_scatter_within,
+    evaluate_avoiding, evaluate_avoiding_numbered, evaluate_surface_fill, lawn_area, lawn_scatter,
+    lawn_scatter_blended, lawn_scatter_within,
+};
+pub use playback::{
+    Animation, ClipTarget, Flash, FlashDrop, Life, MAX_FLASHES, MAX_STORED_FLASHES, Play, Playback,
+    Spot, clip_index,
 };
 pub use presets::{PlantingPreset, planting_presets};
 pub use project::{
@@ -106,5 +114,5 @@ pub use tiers::Tiers;
 pub use underlay::{Placement as UnderlayPlacement, Underlay};
 pub use viewpoint::{Viewpoint, interpolate};
 pub use wall_photo::WallPhoto;
-pub use water::{Sea, WaterKind, keep_dry};
+pub use water::{Sea, WaterKind, keep_dry, keep_dry_numbered};
 pub use weather::{WEATHERS, Weather};

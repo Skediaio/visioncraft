@@ -56,7 +56,14 @@ struct Material {
     relief: vec4<f32>,     // x parallax depth of the height map (m; 0 off), yz true north's direction on the ground (x, z; unit), w puddles may form (0/1)
     aging: vec4<f32>,      // how strongly dirt, moss, wear and rain streaks show (0..1 each; all 0 off)
 }
-@group(1) @binding(0) var<uniform> material: Material;
+// Every material's parameters in one table (lib.rs `Renderer::materials`), by row: 0 the
+// endless ground's own, then one per material id. Group 1 binding 0 of every texture set is
+// bound to it.
+@group(1) @binding(0) var<storage, read> materials: array<Material>;
+// The material of the surface being shaded: each fragment stage that reads it loads it first
+// (`load_material`). Its values are not uniform (a batch spans several materials), so nothing
+// branches on it around derivatives or implicit-level sampling.
+var<private> material: Material;
 // Absent maps are bound to a 1x1 white texture (a neutral factor).
 @group(1) @binding(1) var base_tex: texture_2d<f32>;
 @group(1) @binding(2) var normal_tex: texture_2d<f32>;
@@ -73,16 +80,21 @@ struct Material {
 @group(1) @binding(12) var ao_smp: sampler;
 
 struct Draw {
-    mesh: vec4<u32>, // x mesh id (for the face highlight)
+    // x mesh id (for the face highlight), y the material's row in the table, z a dissolve's
+    // progress (impostor.wgsl `lod_fade`), w unused. x and y are FROM_INSTANCE when the draw's
+    // instances carry them (a batch, lib.rs `Gather`); any other draw reads them here.
+    data: vec4<u32>,
 }
 @group(2) @binding(0) var<uniform> draw: Draw;
+const FROM_INSTANCE: u32 = 0xFFFFFFFFu;
 
 @group(3) @binding(0) var shadow_map: texture_depth_2d_array;
 @group(3) @binding(1) var shadow_sampler: sampler_comparison;
 @group(3) @binding(2) var occlusion: texture_2d<f32>; // half (or full) res: r ambient occlusion, g contact shadow
 @group(3) @binding(3) var linear_depth: texture_2d<f32>;
-// The scene mirrored about the water plane (reflection pass), pre-exposed HDR.
-@group(3) @binding(4) var planar_reflection: texture_2d<f32>;
+// The scene mirrored about a water plane (the reflection passes), pre-exposed HDR: one layer
+// per plane with a planar reflection this frame (`water_plane_at`).
+@group(3) @binding(4) var planar_reflection: texture_2d_array<f32>;
 // A photo's previous sample, pre-exposed HDR (1x1 outside photos and without screen-space
 // reflections): the bounce light's source; with those, the opaque scene before the glass.
 @group(3) @binding(5) var previous_hdr: texture_2d<f32>;
@@ -109,8 +121,38 @@ fn animated_world(position: vec3<f32>, wind: vec2<f32>, m: mat4x4<f32>, animate:
     return origin + wind_sway(wind_state(), p - origin, origin, wind.x, wind.y, m[0].w);
 }
 
+// The instance's matrix. Its last row is constant (0, 0, 0, 1): `m0.w` carries the plant's sway
+// frequency (`animated_world`), and a gathered instance's `m1.w` and `m2.w` the bits of its
+// material's row and its mesh id (lib.rs `Gather`); a pool instance has zeros there.
 fn model(m0: vec4<f32>, m1: vec4<f32>, m2: vec4<f32>, m3: vec4<f32>) -> mat4x4<f32> {
-    return mat4x4<f32>(m0, m1, m2, m3);
+    return mat4x4<f32>(m0, vec4<f32>(m1.xyz, 0.0), vec4<f32>(m2.xyz, 0.0), vec4<f32>(m3.xyz, 1.0));
+}
+
+fn instance_material(m1: vec4<f32>) -> u32 {
+    return bitcast<u32>(m1.w);
+}
+
+fn instance_mesh(m2: vec4<f32>) -> u32 {
+    return bitcast<u32>(m2.w);
+}
+
+// The material of the draw's surface, for the pipelines without a draw slot (the cutout depth
+// pre-pass, the cutout shadow pass, the impostor bake): every instance carries its own.
+fn load_instance_material(id: u32) {
+    material = materials[id];
+}
+
+// The material of the draw's surface, for the pipelines with a draw slot (group 2): a batch
+// over several materials takes it from each instance, any other draw from its slot.
+fn load_material(id: u32) {
+    let row = draw.data.y;
+    material = materials[select(id, row, row != FROM_INSTANCE)];
+}
+
+// The mesh id of the draw's surface (the face highlight): the instance's when it carries one.
+fn mesh_of(id: u32) -> u32 {
+    let per_draw = draw.data.x;
+    return select(id, per_draw, per_draw != FROM_INSTANCE);
 }
 
 // Normals with the cofactor matrix, correct for any invertible model matrix
@@ -148,6 +190,7 @@ struct DepthOut {
     @builtin(position) @invariant clip: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) world: vec3<f32>,
+    @location(2) @interpolate(flat) material_id: u32,
 }
 
 @vertex
@@ -157,6 +200,7 @@ fn vs_depth(v: DepthIn) -> DepthOut {
     out.clip = g.view_proj * vec4<f32>(world, 1.0);
     out.uv = v.uv;
     out.world = world;
+    out.material_id = instance_material(v.m1);
     return out;
 }
 
@@ -181,6 +225,7 @@ fn edge_fade(world: vec3<f32>, dir: vec3<f32>) -> f32 {
 // sample mask turns early depth testing off on some GPUs.
 @fragment
 fn fs_depth_cutout_1x(in: DepthOut) {
+    load_instance_material(in.material_id);
     // Derivatives first, in uniform control flow (no early return before them).
     let a = cutout_alpha(in.uv) * edge_fade(in.world, normalize(to_eye(in.world)));
     let soft = edge_coverage(in.uv, in.world);
@@ -193,14 +238,14 @@ fn fs_depth_cutout_1x(in: DepthOut) {
 
 // The samples of the pixel at `in.clip.xy` (its centre) that a cutout covers; 0 for none.
 fn depth_cutout_mask(in: DepthOut) -> u32 {
+    load_instance_material(in.material_id);
     let a = cutout_alpha(in.uv) * edge_fade(in.world, normalize(to_eye(in.world)));
+    // The cutout's share of the samples first (a derivative): `edge_coverage` may return from a
+    // branch on the material, and nothing takes derivatives after that.
+    let cut = alpha_samples(a, material.alpha.x);
     let soft = edge_coverage(in.uv, in.world);
     // A soft edge covers `soft` of the samples; any other cutout as alpha to coverage.
-    let n = select(
-        alpha_samples(a, material.alpha.x),
-        u32(round(soft * f32(SAMPLES))),
-        soft >= 0.0,
-    );
+    let n = select(cut, u32(round(soft * f32(SAMPLES))), soft >= 0.0);
     return select(sample_run(n, u32(ign_sampled(in.clip.xy) * f32(SAMPLES))), 0u, n == 0u);
 }
 
@@ -251,7 +296,13 @@ fn sample_run(n: u32, start: u32) -> u32 {
 // Alpha to coverage: how many samples a cutout alpha `a` covers, the alpha
 // sharpened to a one-pixel ramp across the cutoff (Golus 2017).
 fn alpha_samples(a: f32, cutoff: f32) -> u32 {
-    let sharp = (a - cutoff) / max(fwidth(a), 1e-4) + 0.5;
+    return alpha_samples_over(a, max(fwidth(a), 1e-4), cutoff);
+}
+
+// `alpha_samples` with the alpha's derivative width taken by the caller (in uniform control
+// flow: where it is branched on, the material may be the instance's).
+fn alpha_samples_over(a: f32, width: f32, cutoff: f32) -> u32 {
+    let sharp = (a - cutoff) / width + 0.5;
     return u32(clamp(round(sharp * f32(SAMPLES)), 0.0, f32(SAMPLES)));
 }
 
@@ -271,6 +322,7 @@ fn vs_shadow(v: DepthIn) -> DepthOut {
     out.clip = cascade.view_proj * vec4<f32>(world, 1.0);
     out.uv = v.uv;
     out.world = world;
+    out.material_id = instance_material(v.m1);
     return out;
 }
 
@@ -278,6 +330,7 @@ fn vs_shadow(v: DepthIn) -> DepthOut {
 // fade.
 @fragment
 fn fs_shadow_cutout(in: DepthOut) {
+    load_instance_material(in.material_id);
     if cutout_alpha(in.uv) < material.alpha.x {
         discard;
     }
@@ -317,6 +370,9 @@ struct Varying {
     @location(1) normal: vec3<f32>,
     @location(2) @interpolate(flat) face: u32,
     @location(3) uv: vec2<f32>,
+    // What the instance carries (`model`): its material's row and its mesh id.
+    @location(4) @interpolate(flat) material_id: u32,
+    @location(5) @interpolate(flat) mesh_id: u32,
 }
 
 @vertex
@@ -329,6 +385,8 @@ fn vs_main(v: VertexIn) -> Varying {
     out.normal = world_normal(m, v.normal);
     out.face = v.face;
     out.uv = v.uv;
+    out.material_id = instance_material(v.m1);
+    out.mesh_id = instance_mesh(v.m2);
     return out;
 }
 
@@ -561,10 +619,25 @@ fn environment(r: vec3<f32>, roughness: f32) -> vec3<f32> {
     return textureSampleLevel(env_map, env_sampler, r, roughness * g.time.z).rgb * g.night.w;
 }
 
-// One cascade with hardware 2x2 PCF taps: 3x3 of them (smooth 4x4-texel
-// footprint) on HIGH, 2x2 at +-0.75 texel (3x3-texel footprint, less than
-// half the cost) below. -1 when the point is outside this cascade's map
-// (cascades refreshed every other frame lag the camera by a frame).
+// One cascade of the sun's shadow map, filtered as the quality asks (lib.rs `ShadowFilter`,
+// `g.options.x` the taps):
+// - 1 tap: one hardware comparison (a 2x2 bilinear footprint): the hard edge.
+// - 4 and 9 taps: a 2x2 grid at +-0.75 texel and a 3x3 grid at -1.5, 0, +1.5 texels. Fixed,
+//   texel-sized kernels, as ever: each comparison tap covers 2 texels, so a grid spaced wider
+//   than about 1.5 texels is no longer gap-free and shows stacked copies of the edge. They do
+//   not depend on the penumbra's radius.
+// - 16 taps: a Vogel disk (r = sqrt((i + 0.5) / 16), the golden angle 2.399963 apart) over
+//   `g.shadow_filter.x` metres in the world, the same in every cascade, turned by the
+//   interleaved gradient noise of its place in the shadow map (common.wgsl `ign_sampled`: turned
+//   again per photo sample, so a photo averages the grain away and a still is the same every
+//   time); each tap is compared against the receiver plane's own depth where it lands
+//   (`shadow_disk`). With `g.shadow_filter.y` 1 it is PCSS instead: the same disk, as wide as
+//   the receiver's distance to its occluders makes the penumbra (`shadow_blockers`), at least
+//   half a texel, at most `g.shadow_filter.x` metres.
+// Under FAST_SHADING (lib.rs compiles MEDIUM and LOW's shaders with it: register pressure on
+// integrated GPUs) only the 1- and 4-tap paths exist, and lib.rs writes 4 there for 9 and 16.
+// -1 when the point is outside this cascade's map (cascades refreshed every other frame lag
+// the camera by a frame).
 // Normal offset: Holbert, "Saying Goodbye to Shadow Acne", GDC 2011 poster;
 // the slope-scaled raster bias is in the shadow pipeline.
 fn cascade_shadow(c: u32, world: vec3<f32>, n: vec3<f32>, nol: f32) -> f32 {
@@ -574,8 +647,104 @@ fn cascade_shadow(c: u32, world: vec3<f32>, n: vec3<f32>, nol: f32) -> f32 {
     if any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0)) || p.z > 1.0 {
         return -1.0;
     }
+    let taps = g.options.x;
+    if taps < 1.5 {
+        return textureSampleCompareLevel(shadow_map, shadow_sampler, uv, i32(c), p.z);
+    }
     var sum = 0.0;
-    if !FAST_SHADING && g.options.x > 4.5 {
+    if !FAST_SHADING && taps > 12.5 {
+        // The disk's radius in this cascade's texels: the penumbra asked for, at least 1.5
+        // texels (wide enough to be softer than the grids) and at most 6 (16 comparison taps, a
+        // 2x2-texel footprint each, still cover it); beyond 6 texels the penumbra stops growing
+        // in this cascade.
+        let spread = clamp(g.shadow_filter.x / g.texel[c], 1.5, 6.0);
+        // The disk's turn comes from the interleaved gradient noise of the lookup's place in the
+        // map, two cells per texel: in the world, so the grain stays on the ground while the
+        // camera moves. (From the fragment's pixel it would be fixed to the screen and swim
+        // over the ground in a walkthrough: there is no temporal antialiasing to average it.)
+        let turn = 6.2831853 * ign_sampled(uv * g.shadow.y * 2.0);
+        // Each tap is compared against the depth of the receiver's own plane where the tap
+        // lands, a quarter texel less (Isidoro, "Shadow Mapping: GPU-based Tips and
+        // Techniques", GDC 2006). Against the receiver's depth `p.z` itself, the taps of a
+        // slope towards the light shade the surface (stripes on lit ground); slackened by the
+        // worst case, `r * tan(theta)` at every tap, the taps away from the light let a caster's
+        // depth past and lift real shadows off the ground (a wall's shadow leaves its base at a
+        // low sun). The plane is taken from the geometric normal, never from derivatives: this
+        // runs in non-uniform control flow.
+        // The cascade matrix is an orthographic projection after a rotation (shadow.rs `fit`),
+        // so the rows of its linear part A are orthogonal, scaled axes `a_i` (WGSL matrices are
+        // column-major: row i is `vec3<f32>(M[0][i], M[1][i], M[2][i])`). Light clip coords are
+        // `q = A x + b`, with `uv = (q.x * 0.5 + 0.5, 0.5 - q.y * 0.5)` and depth `q.z`. The
+        // receiver plane `n . dx = 0` has the normal `m = A^-T n` in clip space,
+        // `m_i = dot(a_i, n) / dot(a_i, a_i)`. A tap `o` from `uv` moves `dq = (2 du, -2 dv)` in
+        // clip x and y, and the plane's depth changes `-(m.x * dq.x + m.y * dq.y) / m.z`:
+        // `k = -m.xy / m.z`, `dz = dot(k, dq)`, the depth to compare `p.z + dz`.
+        let light_vp = g.cascades[c];
+        let a0 = vec3<f32>(light_vp[0].x, light_vp[1].x, light_vp[2].x);
+        let a1 = vec3<f32>(light_vp[0].y, light_vp[1].y, light_vp[2].y);
+        let a2 = vec3<f32>(light_vp[0].z, light_vp[1].z, light_vp[2].z);
+        // The depth row: a metre along the light is `dz_per_m` of depth (glam `orthographic_rh`:
+        // depth 0 at the near plane, growing away from the light).
+        let dz_per_m = length(a2);
+        let plane_n = vec3<f32>(
+            dot(a0, n) / dot(a0, a0),
+            dot(a1, n) / dot(a1, a1),
+            dot(a2, n) / dot(a2, a2),
+        );
+        // `a2` points away from the light, so `plane_n.z` has the opposite sign of `n . sun`:
+        // a receiver facing the light has `plane_n.z < 0`. Edge-on, the slope is clamped as the
+        // worst-case bias was (tan 4): at most 4 m of depth per metre in the light's plane. A
+        // metre there is `1 / |a0|` in clip x or y (the cascade is square) and `dz_per_m` in
+        // depth, so `|plane_n.xy| / |plane_n.z| <= 4 * dz_per_m / |a0|`.
+        let slope_max = 4.0 * dz_per_m / length(a0);
+        let facing = plane_n.z < 0.0;
+        let plane_z = -select(1.0, max(-plane_n.z, length(plane_n.xy) / slope_max), facing);
+        // A receiver facing away from the light gets no plane: its taps take `p.z`.
+        let k = select(vec2<f32>(0.0), -plane_n.xy / plane_z, facing);
+        // The map holds the depth of its texels' centres, and a tap lies between them.
+        let small = 0.25 * g.texel[c] * dz_per_m;
+        if g.shadow_filter.y > 0.5 {
+            // Percentage-closer soft shadows (Fernando, "Percentage-Closer Soft Shadows", NVIDIA,
+            // SIGGRAPH 2005 sketch): the penumbra is as wide as the receiver's distance to its
+            // occluders makes it, so a shadow is sharp where its caster meets the ground and
+            // softens further away, as a real sun's, about twice as fast: the disc as drawn
+            // (`sky::SUN_DISC_RADIUS`, 0.5 degrees) is about twice the real sun's angular radius
+            // (0.267 degrees), so the penumbrae are about twice as wide as real ones. In three
+            // steps.
+            // 1. The blocker search: the mean depth of the occluders over the disk, here as wide
+            //    as the penumbra can get, read from the map's raw depths.
+            let search = clamp(g.shadow_filter.x / g.texel[c], 1.5, 6.0);
+            let blocker = shadow_blockers(c, uv, p.z, k, small, search, turn);
+            //    Nothing between the receiver and the sun: lit, without the filter pass.
+            if blocker < 0.0 {
+                return 1.0;
+            }
+            // 2. The penumbra, in metres across the light: the receiver's distance to the
+            //    blockers along the light (depth grows away from it: `p.z - blocker`, over the
+            //    depth of a metre) times the tangent of the sun's angular radius (`g.sun_light.w`
+            //    is its cosine), at most the filter's radius.
+            let tan_sun = sqrt(max(1.0 - g.sun_light.w * g.sun_light.w, 0.0)) / g.sun_light.w;
+            let w = clamp((p.z - blocker) / dz_per_m * tan_sun, 0.0, g.shadow_filter.x);
+            // 3. The filter pass: the disk over that penumbra, in this cascade's texels, never
+            //    narrower than half a texel and at most 6 (beyond that it stops growing in this
+            //    cascade, as the plain disk does). The plain disk's floor of 1.5 texels is too
+            //    wide: where a caster meets its shadow the penumbra is millimetres, and with it
+            //    the contact stayed as soft as the plain disk (a wall's foot, a low sun: 43 % of
+            //    lit ground in the row under the base, where the umbra is 34 %). Without any floor
+            //    this pass is the one bilinear comparison, with its texels' stair steps, until the
+            //    penumbra reaches a texel of the cascade, at 0.87 % of the distance along the
+            //    light: 2.3 m from it with 2 cm texels, 10 m with 9 cm ones. Not only at the
+            //    contact. So half a texel: of the floors tried (0.5, 0.75) the one that leaves
+            //    the contact as clean as no floor. With 0.75 the rows under a wall's base still
+            //    passed (34 % of lit ground), but the base's own row lightened from the umbra to
+            //    about 39 %, the soft contact line coming back; with 0.5 those rows are pixel
+            //    for pixel what no floor draws, and the edges further out still get a disk
+            //    instead of the one tap. Where the floor holds, the 16 taps fall within a texel.
+            return shadow_disk(c, uv, p.z, k, small, clamp(w / g.texel[c], 0.5, 6.0), turn);
+        }
+        return shadow_disk(c, uv, p.z, k, small, spread, turn);
+    }
+    if !FAST_SHADING && taps > 8.5 {
         for (var y = -1; y <= 1; y++) {
             for (var x = -1; x <= 1; x++) {
                 let o = vec2<f32>(f32(x), f32(y)) * g.shadow.z * 1.5;
@@ -589,6 +758,63 @@ fn cascade_shadow(c: u32, world: vec3<f32>, n: vec3<f32>, nol: f32) -> f32 {
         sum += textureSampleCompareLevel(shadow_map, shadow_sampler, uv + o, i32(c), p.z);
     }
     return sum * 0.25;
+}
+
+// Tap `i` of the 16-tap Vogel disk of `cascade_shadow`: `spread` shadow texels wide, turned by
+// `turn`; its offset from the lookup, in uv.
+fn disk_offset(i: u32, spread: f32, turn: f32) -> vec2<f32> {
+    let r_texels = sqrt((f32(i) + 0.5) / 16.0) * spread;
+    let a = f32(i) * 2.399963 + turn;
+    return vec2<f32>(cos(a), sin(a)) * (r_texels * g.shadow.z);
+}
+
+// The receiver plane's change of depth at a tap `o` (in uv) from the lookup: `k` as
+// `cascade_shadow` takes it from the plane (the uv's y runs against the clip's y).
+fn plane_dz(o: vec2<f32>, k: vec2<f32>) -> f32 {
+    return dot(k, vec2<f32>(2.0 * o.x, -2.0 * o.y));
+}
+
+// The 16-tap filter over the turned Vogel disk of `spread` texels: every tap compared against
+// the receiver plane's own depth where it lands, a quarter texel less (`cascade_shadow`).
+fn shadow_disk(c: u32, uv: vec2<f32>, z: f32, k: vec2<f32>, small: f32, spread: f32, turn: f32) -> f32 {
+    var sum = 0.0;
+    for (var i = 0u; i < 16u; i++) {
+        let o = disk_offset(i, spread, turn);
+        let dz = plane_dz(o, k);
+        sum += textureSampleCompareLevel(shadow_map, shadow_sampler, uv + o, i32(c), z + dz - small);
+    }
+    return sum / 16.0;
+}
+
+// PCSS's blocker search (Fernando, "Percentage-Closer Soft Shadows", NVIDIA, SIGGRAPH 2005
+// sketch): the mean depth of the occluders over the 16-tap disk of `search` texels round a
+// receiver at `uv`, depth `z`, read from the map texel by texel (raw depths, clamped to the
+// map), or -1 where there is none. A tap is an occluder when its depth lies before the
+// receiver's plane where the tap lands, a quarter texel less: exactly what the filter's tap
+// there is compared against (`shadow_disk`), so a receiver that slopes is not its own occluder.
+// The search is sparse: 16 point loads over up to 6 texels. A caster one or two texels wide in
+// the map (a pole, a branch, a fence in a far cascade) covers little of that disk, and the 16
+// points can all miss it. The receiver then has no blocker and reads fully lit, where the one
+// comparison would have shadowed it: holes in a thin caster's shadow and penumbra, a known
+// artefact of PCSS. In a still they stay; a photo, many frames averaged, evens them out.
+fn shadow_blockers(c: u32, uv: vec2<f32>, z: f32, k: vec2<f32>, small: f32, search: f32, turn: f32) -> f32 {
+    let dims = textureDimensions(shadow_map);
+    var sum = 0.0;
+    var count = 0.0;
+    for (var i = 0u; i < 16u; i++) {
+        let o = disk_offset(i, search, turn);
+        let dz = plane_dz(o, k);
+        let t = clamp(vec2<i32>((uv + o) * vec2<f32>(dims)), vec2<i32>(0), vec2<i32>(dims) - 1);
+        let stored = textureLoad(shadow_map, t, i32(c), 0);
+        if stored < z + dz - small {
+            sum += stored;
+            count += 1.0;
+        }
+    }
+    if count == 0.0 {
+        return -1.0;
+    }
+    return sum / count;
 }
 
 // The sun's visibility at `world`: the cascades' shadow times the clouds' (common.wgsl
@@ -704,11 +930,11 @@ fn triplanar(world: vec3<f32>, dwx: vec3<f32>, dwy: vec3<f32>, n: vec3<f32>, inv
     return l;
 }
 
-fn uv_lookup(uv: vec2<f32>) -> Lookup {
+fn uv_lookup(uv: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>) -> Lookup {
     var l: Lookup;
     l.uv[0] = uv;
-    l.dx[0] = dpdx(uv);
-    l.dy[0] = dpdy(uv);
+    l.dx[0] = dx;
+    l.dy[0] = dy;
     l.weight = vec3<f32>(1.0, 0.0, 0.0);
     return l;
 }
@@ -718,11 +944,8 @@ fn uv_lookup(uv: vec2<f32>) -> Lookup {
 // tangents: Schüler, "Normal Mapping without Precomputed Tangents", ShaderX5
 // (2006) and his 2013 follow-up. WGSL's dpdy runs down the framebuffer, so
 // both screen derivatives along y are negated to keep the frame's handedness.
-fn uv_normal(tn: vec3<f32>, n: vec3<f32>, world: vec3<f32>, uv: vec2<f32>) -> vec3<f32> {
-    let dp1 = dpdx(world);
-    let dp2 = -dpdy(world);
-    let duv1 = dpdx(uv);
-    let duv2 = -dpdy(uv);
+// With the derivatives taken by the caller, in uniform control flow.
+fn uv_normal(tn: vec3<f32>, n: vec3<f32>, dp1: vec3<f32>, dp2: vec3<f32>, duv1: vec2<f32>, duv2: vec2<f32>) -> vec3<f32> {
     let dp2perp = cross(dp2, n);
     let dp1perp = cross(n, dp1);
     let t = dp2perp * duv1.x + dp1perp * duv2.x;
@@ -888,11 +1111,33 @@ struct Surface {
     puddle: f32,         // 0..1: how far puddles may form here when it is wet (0 on lawns, leaves, glass; wet.wgsl)
 }
 
+// The pixel's derivatives, taken by a fragment entry point in uniform control flow, before
+// anything branches on the material: a batch spans materials, so a material's values are not
+// uniform, and derivatives may not be taken after a branch on them (`shade`, `surface`).
+struct Derivs {
+    dwx: vec3<f32>,
+    dwy: vec3<f32>,
+    duvx: vec2<f32>,
+    duvy: vec2<f32>,
+    // length(fwidth(normalize(normal))): how fast the normal turns on screen (glass).
+    curvature: f32,
+}
+
+fn derivs(in: Varying) -> Derivs {
+    return Derivs(
+        dpdx(in.world),
+        dpdy(in.world),
+        dpdx(in.uv),
+        dpdy(in.uv),
+        length(fwidth(normalize(in.normal))),
+    );
+}
+
 // Base colour, normal and the occlusion / roughness / metallic maps, for
 // either projection. Called from uniform control flow (it takes derivatives). `ground`: the
 // endless ground's entry points, the only ones that paint the surroundings (a constant at each
 // call, so the other entry points compile without that code).
-fn surface(in: Varying, front: bool, ground: bool) -> Surface {
+fn surface(in: Varying, front: bool, ground: bool, d: Derivs) -> Surface {
     var s: Surface;
     var n = normalize(in.normal);
     // Double-sided: back faces shade with the flipped normal, except foliage,
@@ -902,14 +1147,17 @@ fn surface(in: Varying, front: bool, ground: bool) -> Surface {
         n = -n;
     }
     s.geometric = n;
-    let dwx = dpdx(in.world);
-    let dwy = dpdy(in.world);
+    // The derivatives `shade`'s caller took (`Derivs`).
+    let dwx = d.dwx;
+    let dwy = d.dwy;
+    let duvx = d.duvx;
+    let duvy = d.duvy;
     let triplanar_on = material.alpha.y > 0.0;
     var l: Lookup;
     if triplanar_on {
         l = triplanar(in.world, dwx, dwy, n, material.alpha.y);
     } else {
-        l = uv_lookup(in.uv);
+        l = uv_lookup(in.uv, duvx, duvy);
     }
     // Absent maps are skipped (uniform branches), not sampled as white.
     let bits = material.flags.x;
@@ -950,7 +1198,7 @@ fn surface(in: Varying, front: bool, ground: bool) -> Surface {
         } else {
             var tn = decode_normal(textureSampleGrad(normal_tex, normal_smp, l.uv[0], l.dx[0], l.dy[0]));
             tn = vec3<f32>(tn.xy * relief, tn.z);
-            s.n = uv_normal(tn, n, in.world, in.uv);
+            s.n = uv_normal(tn, n, dwx, -dwy, duvx, -duvy);
         }
     }
     s.emissive = material.emissive.rgb;
@@ -1180,15 +1428,15 @@ struct Shaded {
 // The full opaque shading model. `screen_effects`: use the screen-space AO
 // and contact shadows (not for transparent surfaces, which are not in the
 // depth pre-pass).
-fn shade(in: Varying, front: bool, screen_effects: bool, ground: bool) -> Shaded {
+fn shade(in: Varying, front: bool, screen_effects: bool, ground: bool, d: Derivs) -> Shaded {
+    var s = surface(in, front, ground, d);
     // Glass drawn as an opaque pane (the water's reflection): what the glass passes show, its
     // reflection over the dim room behind it, so the reflected house matches the house.
     if material.alpha.z == 1.0 && g.time.w < 0.5 {
-        let t = glass_terms(in);
+        let t = glass_terms(in, d.curvature);
         let room = t.transmitted * ROOM_ALBEDO * sh_irradiance(normalize(in.normal)) / PI;
         return Shaded(apply_fog(t.reflected + room, in.world), 1.0, false);
     }
-    var s = surface(in, front, ground);
     // Leaves, and the branches among them (both tagged by the app).
     s.ao *= crown_sky(in.face);
     // Standard surfaces age (no glass, water or leaves).
@@ -1273,7 +1521,7 @@ fn light(in: Varying, surf: Surface, foliage: bool, weathering: f32, aging: Agin
         s.n = normalize(mix(s.n, s.geometric, snow * 0.8));
     }
     var base = s.base.rgb;
-    if in.face == g.highlight.y && draw.mesh.x == g.highlight.x {
+    if in.face == g.highlight.y && mesh_of(in.mesh_id) == g.highlight.x {
         base = mix(base, vec3<f32>(0.25, 0.55, 1.0), 0.35);
     }
     // Wet surfaces and puddles (wet.wgsl): the wetness here and the puddle on it, and a puddle's
@@ -1727,10 +1975,11 @@ fn photo_bounce(p: vec3<f32>, n: vec3<f32>, pixel: vec2<f32>, ao: f32, occ: SkyO
 
 @fragment
 fn fs_main(in: Varying, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    load_material(in.material_id);
     if scratch_floor_taken() {
         return scratch_floor(in.clip);
     }
-    let shaded = shade(in, front, true, false);
+    let shaded = shade(in, front, true, false, derivs(in));
     return vec4<f32>(shaded.color, select(1.0, 0.0, shaded.emits));
 }
 
@@ -1956,6 +2205,9 @@ fn vs_ground(@builtin(vertex_index) vi: u32) -> Varying {
     out.normal = normalize(vec3<f32>(-sx, e, -sz));
     out.face = GROUND_FACE;
     out.uv = world.xz;
+    // No instance: the material and the mesh come from the ground's draw slot.
+    out.material_id = 0u;
+    out.mesh_id = 0u;
     return out;
 }
 
@@ -1976,6 +2228,7 @@ const EARTH_RADIUS_M: f32 = 6.36e6;
 
 @fragment
 fn fs_ground(in_raw: Varying) -> @location(0) vec4<f32> {
+    load_material(in_raw.material_id);
     if scratch_floor_taken() {
         return scratch_floor(in_raw.clip);
     }
@@ -1996,7 +2249,7 @@ fn fs_ground(in_raw: Varying) -> @location(0) vec4<f32> {
             in.world = g.camera.xyz + normalize(ray) * horizon_m;
         }
     }
-    let c = shade(in, true, false, true).color;
+    let c = shade(in, true, false, true, derivs(in)).color;
     if is_ortho() {
         return vec4<f32>(c, 1.0);
     }
@@ -2037,10 +2290,11 @@ fn fs_ground(in_raw: Varying) -> @location(0) vec4<f32> {
 
 // The scene seen in the water plane: drawn with the mirrored camera (lib.rs
 // writes a second globals block), cut at the water height (a clip plane done
-// by discard), alpha-tested cutouts, no screen-space effects. Shading comes
+// by discard), alpha-tested cutouts, no screen-space effects. The cutout's derivative comes
 // first and the discard last, so derivatives stay in uniform control flow.
 @fragment
 fn fs_reflect(in: Varying, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    load_material(in.material_id);
     if scratch_floor_taken() {
         return scratch_floor(in.clip);
     }
@@ -2050,6 +2304,7 @@ fn fs_reflect(in: Varying, @builtin(front_facing) front: bool) -> @location(0) v
 // The endless ground in the reflection.
 @fragment
 fn fs_reflect_ground(in: Varying, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    load_material(in.material_id);
     if scratch_floor_taken() {
         return scratch_floor(in.clip);
     }
@@ -2057,8 +2312,8 @@ fn fs_reflect_ground(in: Varying, @builtin(front_facing) front: bool) -> @locati
 }
 
 fn reflected(in: Varying, front: bool, ground: bool) -> vec4<f32> {
-    let shaded = shade(in, front, false, ground);
     let a = cutout_alpha(in.uv);
+    let shaded = shade(in, front, false, ground, derivs(in));
     if (g.reflection.z > 0.5 && in.world.y < g.reflection.w) || (material.alpha.x > 0.0 && a < material.alpha.x) {
         discard;
     }
@@ -2101,8 +2356,9 @@ struct GlassTerms {
     transmitted: vec3<f32>,
 }
 
-fn glass_terms(in: Varying) -> GlassTerms {
-    let curvature = length(fwidth(normalize(in.normal)));
+// `curvature`: length(fwidth(normalize(in.normal))), from the caller's `Derivs` (taken in uniform
+// control flow: the branch that leads here is on the material, which may be the instance's).
+fn glass_terms(in: Varying, curvature: f32) -> GlassTerms {
     let v = normalize(to_eye(in.world));
     var n = normalize(in.normal);
     if dot(n, v) < 0.0 {
@@ -2173,13 +2429,19 @@ fn glass_terms(in: Varying) -> GlassTerms {
 // the ray's reach; 0 where the ray leaves the screen or meets nothing (the sky): the caller's
 // estimate stands there.
 fn screen_reflection(world: vec3<f32>, r: vec3<f32>) -> vec4<f32> {
+    return screen_reflection_within(world, r, SSR_REACH_M, g.ssr.z);
+}
+
+// `screen_reflection` with its own reach (m) and most steps: water without a planar pass
+// (`water`) marches half as far, half as many steps.
+fn screen_reflection_within(world: vec3<f32>, r: vec3<f32>, reach_m: f32, most_steps: f32) -> vec4<f32> {
     if g.ssr.x < 0.5 {
         return vec4<f32>(0.0);
     }
     let size = vec2<f32>(textureDimensions(linear_depth));
     let v0 = (g.view * vec4<f32>(world, 1.0)).xyz;
     let vr = (g.view * vec4<f32>(r, 0.0)).xyz;
-    var reach = SSR_REACH_M;
+    var reach = reach_m;
     if vr.z > 1e-4 {
         reach = min(reach, (-0.1 - v0.z) / vr.z);
     }
@@ -2193,7 +2455,7 @@ fn screen_reflection(world: vec3<f32>, r: vec3<f32>) -> vec4<f32> {
     let k1 = 1.0 / h1.w;
     let p0 = (h0.xy * k0 * vec2<f32>(0.5, -0.5) + 0.5) * size;
     let p1 = (h1.xy * k1 * vec2<f32>(0.5, -0.5) + 0.5) * size;
-    let steps = min(max(abs(p1.x - p0.x), abs(p1.y - p0.y)) / g.ssr.y, g.ssr.z);
+    let steps = min(max(abs(p1.x - p0.x), abs(p1.y - p0.y)) / g.ssr.y, most_steps);
     if steps < 1.0 {
         return vec4<f32>(0.0);
     }
@@ -2246,26 +2508,32 @@ const SSR_REACH_M: f32 = 40.0;
 // Pass 1: what shows through (multiplied into the target).
 @fragment
 fn fs_glass_transmit(in: Varying) -> @location(0) vec4<f32> {
+    load_material(in.material_id);
     if scratch_floor_taken() {
         return scratch_floor(in.clip);
     }
+    // The glass's curvature (a derivative) before the branch below.
+    let curvature = length(fwidth(normalize(in.normal)));
     if g.time.w > 0.5 {
         return vec4<f32>(0.65); // clay: a pale veil
     }
-    return vec4<f32>(glass_terms(in).transmitted, 1.0);
+    return vec4<f32>(glass_terms(in, curvature).transmitted, 1.0);
 }
 
 // Pass 2: the reflection, plus the haze in front of the pane in proportion
 // to how much the pane blocks.
 @fragment
 fn fs_glass_reflect(in: Varying, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    load_material(in.material_id);
     if scratch_floor_taken() {
         return scratch_floor(in.clip);
     }
+    // The derivatives before the branch below (their functions take none of their own).
+    let d = derivs(in);
     if g.time.w > 0.5 {
-        return vec4<f32>(shade(in, front, false, false).color * 0.35, 0.0);
+        return vec4<f32>(shade(in, front, false, false, d).color * 0.35, 0.0);
     }
-    let t = glass_terms(in);
+    let t = glass_terms(in, d.curvature);
     let block = 1.0 - dot(t.transmitted, vec3<f32>(1.0 / 3.0));
     let c = fog_premultiplied(vec4<f32>(t.reflected, block), in.world);
     return vec4<f32>(c.rgb, 0.0);
@@ -2296,6 +2564,23 @@ fn wave_slope(p: vec2<f32>) -> vec2<f32> {
     return a + rot * b * 2.03 * 0.5;
 }
 
+// The water plane whose planar reflection covers a surface at `height`: its entry in
+// `g.reflection_planes` (on, and the nearest within 5 cm of the surface: water.rs `MATCH_M`,
+// keeping planes 10 cm apart), else -1.
+fn water_plane_at(height: f32) -> i32 {
+    var best = -1;
+    var nearest = 0.05;
+    for (var i = 0; i < 4; i++) {
+        let p = g.reflection_planes[i];
+        let d = abs(height - p.x);
+        if p.z > 0.5 && d < nearest {
+            best = i;
+            nearest = d;
+        }
+    }
+    return best;
+}
+
 // Fraction of light left after `path` metres through water of turbidity
 // 0..1 (Beer-Lambert with an absorption coefficient from 0.25 to 3 per
 // metre); lib.rs has the same curve (`water_transmittance`) for tests.
@@ -2309,9 +2594,11 @@ fn water_transmittance(path: f32, turbidity: f32) -> f32 {
 // absorption: the water path length comes from the linear depth of the
 // opaque scene below (shallow edges clear, deep water takes base_color.rgb,
 // the deep colour; base_color.a is the turbidity), with a soft fade where
-// the water meets the shore. The reflection is the planar reflection pass
-// when it rendered this water's plane, distorted by the ripples' slope,
-// otherwise the environment cube.
+// the water meets the shore. The reflection is the planar reflection layer
+// of this water's plane when it has one (`water_plane_at`), distorted by the
+// ripples' slope, otherwise (with screen-space reflections on) the opaque
+// scene of the frame along the reflected ray where it shows, and the
+// environment cube where it does not.
 fn water(in: Varying) -> vec4<f32> {
     let eye_vec = to_eye(in.world);
     let dist = length(eye_vec);
@@ -2336,17 +2623,30 @@ fn water(in: Varying) -> vec4<f32> {
     let f = f_schlick(nov, vec3<f32>(0.02)).r;
     let r = reflect(-v, n);
     var reflected: vec3<f32>;
-    if g.reflection.x > 0.5 && abs(in.world.y - g.reflection.y) < 0.05 {
+    let plane = water_plane_at(in.world.y);
+    if plane >= 0 {
         // The ripples' tilt in view space shifts the lookup, less with distance.
         let tilt = (g.view * vec4<f32>(n.x, 0.0, n.z, 0.0)).xy;
         let size = vec2<f32>(textureDimensions(planar_reflection));
         let uv = in.clip.xy * g.viewport.zw + tilt * vec2<f32>(1.0, -1.0) * 0.6 / max(depth, 1.0);
-        reflected = textureSampleLevel(planar_reflection, env_sampler, clamp(uv, 0.5 / size, 1.0 - 0.5 / size), 0.0).rgb;
+        reflected = textureSampleLevel(
+            planar_reflection,
+            env_sampler,
+            clamp(uv, 0.5 / size, 1.0 - 0.5 / size),
+            i32(g.reflection_planes[plane].y),
+            0.0,
+        ).rgb;
     } else {
         // A garden pond reflects hedges, walls and trees near the horizon,
         // not sky: the cube's reflection is darkened towards the horizon (a
         // crude local-horizon term), which also lets the ripples show.
-        reflected = environment(r, 0.04) * mix(0.3, 1.0, smoothstep(0.02, 0.4, r.y));
+        let cube = environment(r, 0.04) * mix(0.3, 1.0, smoothstep(0.02, 0.4, r.y));
+        // Without a planar pass (water.rs), and with screen-space reflections
+        // on, the opaque scene of this frame along the rippled reflected ray
+        // (the glass's march, half as far and half as many steps), fading to
+        // the cube towards the screen's edges and where it meets nothing.
+        let ssr = screen_reflection_within(in.world, r, SSR_REACH_M * 0.5, g.ssr.z * 0.5);
+        reflected = mix(cube, ssr.rgb, ssr.a);
     }
     let l = g.sun_dir.xyz;
     let nol = max(dot(n, l), 0.0);
@@ -2380,19 +2680,21 @@ fn water(in: Varying) -> vec4<f32> {
 // Premultiplied alpha out (blend: One, OneMinusSrcAlpha).
 @fragment
 fn fs_transparent(in: Varying, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    load_material(in.material_id);
     if scratch_floor_taken() {
         return scratch_floor(in.clip);
     }
-    // Branches on uniforms only, so shade() may take derivatives.
+    // The derivatives before the branches on the material (not uniform: a batch spans materials).
+    let d = derivs(in);
     let kind = material.alpha.z;
     if g.time.w > 0.5 {
         // Clay: water as a pale matte surface (glass has its own passes).
-        return vec4<f32>(shade(in, front, false, false).color, 1.0);
+        return vec4<f32>(shade(in, front, false, false, d).color, 1.0);
     }
     if kind > 1.5 {
         return water(in);
     }
-    let shaded = shade(in, front, false, false);
+    let shaded = shade(in, front, false, false, d);
     let alpha = clamp(shaded.alpha, 0.0, 1.0);
     return vec4<f32>(shaded.color * alpha, alpha);
 }

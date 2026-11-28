@@ -1161,6 +1161,7 @@ fn build() -> Vec<Species> {
             petiole_m: 0.45,
             trunk_radius_m: 0.13,
             lean_deg: 6.0,
+            ..PalmParams::default()
         }),
         leaf(
             FanFrond,

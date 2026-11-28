@@ -968,6 +968,14 @@ impl AssetStore {
         self.memory.lock().ok()?.get(path).cloned()
     }
 
+    /// The bytes of a library file on disk beneath the library folder (the native window reads
+    /// them for `query.clips`; a file that is not there is `None`).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn library_file(&self, file: &str) -> Option<Vec<u8>> {
+        safe_path(file).ok()?;
+        std::fs::read(self.base.join(file)).ok()
+    }
+
     /// Drops a file asked for and not yet being fetched (a fetch under way finishes).
     pub fn cancel(&self, path: &str) {
         self.cancelled.borrow_mut().push(path.to_string());
@@ -1034,6 +1042,14 @@ impl AssetStore {
 
     pub fn untrack(&mut self, key: &Key) {
         self.lru.remove(key);
+    }
+
+    /// Evicts `key` as memory pressure would (for tests of what outlives an eviction).
+    #[cfg(test)]
+    pub fn evict(&mut self, key: Key) {
+        self.lru.remove(&key);
+        self.stats.evictions += 1;
+        self.evicted.push(key);
     }
 
     /// Things the owner must release (GLB models evicted for memory).
