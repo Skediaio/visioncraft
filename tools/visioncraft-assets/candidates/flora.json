@@ -1105,6 +1105,11 @@
    "leaf_autumn": null,
    "bark": null
   },
+  "stipellula-capensis": {
+   "leaf": null,
+   "leaf_autumn": null,
+   "bark": null
+  },
   "weigela-florida": {
    "leaf": [
     "LeafSet003",
@@ -1300,6 +1305,11 @@
     "LeafSet025",
     "shape"
    ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "alhagi-maurorum": {
+   "leaf": null,
    "leaf_autumn": null,
    "bark": null
   },

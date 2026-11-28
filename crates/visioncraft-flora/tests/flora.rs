@@ -1136,3 +1136,83 @@ fn the_date_palm_is_a_tall_column_under_an_open_crown() {
     assert_eq!(get_param(&p, "flowers.shape"), Some(15.0));
     assert_eq!(stubs(&generate(&p, 7, Lod::Lod0), 1.0), 0);
 }
+
+/// The dry roadside plants: camelthorn, a low grey-green thicket of several stems with leaves a
+/// centimetre long, pink flowers in summer and bare in winter; the Mediterranean needle grass, a
+/// straw-coloured clump 30-60 cm tall with awned plumes that stands dry all year. Both within
+/// their stated sizes from several seeds, and neighbours that differ.
+#[test]
+fn dry_roadside_plants_stay_small() {
+    let camel = Species::by_id("alhagi-maurorum").expect("camelthorn");
+    let grass = Species::by_id("stipellula-capensis").expect("needle grass");
+    assert_eq!(camel.category, Category::Shrub);
+    assert_eq!(grass.category, Category::Grass);
+    assert!(
+        (camel.params.leaves.leaf_m - 0.01).abs() < 1e-6,
+        "1 cm leaves"
+    );
+    let Form::Tussock(g) = &grass.params.form else {
+        panic!("a tussock grass")
+    };
+    assert!(g.fans > 0 && g.plumes > 0);
+    let Form::Branching(b) = &camel.params.form else {
+        panic!("a shrub")
+    };
+    assert!(b.stems >= 5, "stems from its creeping rootstock");
+    let (mut camel_tops, mut grass_tops) = (Vec::new(), Vec::new());
+    for seed in 1..=6 {
+        for lod in Lod::ALL {
+            let m = generate(&camel.params, seed, lod);
+            check_mesh(&m, camel.params.budget.triangles(lod), "camelthorn").unwrap();
+            let (lo, hi) = m.bounds();
+            assert!(
+                (0.5..=1.2).contains(&hi[1]),
+                "camelthorn seed {seed} {lod:?}: {} m",
+                hi[1]
+            );
+            assert!(lo[1] >= -0.05);
+            let m = generate(&grass.params, seed, lod);
+            check_mesh(&m, grass.params.budget.triangles(lod), "needle grass").unwrap();
+            assert!(
+                (0.3..=0.6).contains(&height(&m)),
+                "needle grass seed {seed} {lod:?}: {} m",
+                height(&m)
+            );
+            if lod == Lod::Lod1 {
+                camel_tops.push(generate(&camel.params, seed, lod).bounds().1[1]);
+                grass_tops.push(height(&m));
+            }
+        }
+    }
+    let spread = |v: &[f32]| {
+        v.iter().cloned().fold(0.0, f32::max) / v.iter().cloned().fold(f32::MAX, f32::min)
+    };
+    assert!(
+        spread(&camel_tops) > 1.06,
+        "camelthorn heights {camel_tops:?}"
+    );
+    assert!(spread(&grass_tops) > 1.06, "grass heights {grass_tops:?}");
+    // Straw: a pale khaki, both red and green well above blue.
+    let c = grass.params.leaves.colour;
+    assert!(
+        c[0] > 0.65 && c[0] > c[2] + 0.2 && c[1] > c[2] + 0.12,
+        "{c:?}"
+    );
+    // Camelthorn flowers in summer and is bare in winter; the grass stands dry all year, its
+    // plumes in the summer and autumn pictures.
+    let of = |s: &Species, month: u8, material| {
+        generate_in_season(&s.params, 3, Lod::Lod0, Season { month }).triangles_of(material)
+    };
+    assert!(of(camel, 7, Material::Flower) > 0 && of(camel, 1, Material::Flower) == 0);
+    assert!(
+        of(camel, 1, Material::Foliage) * 5 < of(camel, 7, Material::Foliage),
+        "in leaf in January"
+    );
+    // (In flower its plumes take the place of some blades: the tint is what must not change.)
+    assert_eq!(
+        generate_in_season(&grass.params, 3, Lod::Lod0, Season { month: 1 }).foliage_tint,
+        [1.0; 3]
+    );
+    assert!(of(grass, 1, Material::Foliage) > 0);
+    assert!(of(grass, 7, Material::Flower) > 0 && of(grass, 10, Material::Flower) > 0);
+}

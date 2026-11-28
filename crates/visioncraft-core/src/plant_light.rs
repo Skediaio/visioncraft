@@ -94,6 +94,7 @@ pub const LIGHT: &[(&str, Light)] = &[
     ("clematis-wall", SUN_PART), ("parthenocissus-wall", ANY),
     ("solanum-lycopersicum", SUN), ("lactuca-sativa", SUN_PART), ("rheum-rhabarbarum", SUN_PART),
     ("fragaria-patch", SUN_PART), ("nymphaea-patch", SUN), ("iris-pseudacorus", SUN_PART),
+    ("alhagi-maurorum", SUN), ("stipellula-capensis", SUN),
 ];
 
 /// The light a species wants, with where it comes from.

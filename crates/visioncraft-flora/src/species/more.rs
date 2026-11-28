@@ -2164,4 +2164,76 @@ pub(super) fn build(v: &mut Vec<Species>) {
         flower(F::Lily, [0.98, 0.85, 0.15], [0.6, 0.4, 0.1], 0.1, 1.0),
         green_stem,
     ));
+
+    // ---- dry roadsides and desert steppe (Iraq) ----
+    // Camelthorn, the grey-green thicket of roadsides, canal banks and fallow ground from Iraq
+    // to India: "a heavily branched, gray-green thicket with long spines along the branches",
+    // growing "up to 0.9 metres tall" from rhizomes, with "deciduous leaves [that] are oval to
+    // egg-shaped, up to 1 centimetre long" and "small, bright pink to maroon pea flowers"
+    // (Wikipedia, "Alhagi maurorum"). Several stems from its creeping rootstock, sparse small
+    // leaves on thorny branchlets (density 1.4 of the 2.2 a garden shrub carries), and pink
+    // flowers from June to August.
+    v.push(sp(
+        "alhagi-maurorum",
+        "Camelthorn",
+        "Alhagi maurorum",
+        Shrub,
+        0.9,
+        1.3,
+        false,
+        &[6, 7, 8],
+        Sun,
+        // Stems that branch low and spread (a short leader, branches from a tenth of each
+        // stem), so no bare stems show under the bush.
+        shrub(
+            9,
+            32.0,
+            0.14,
+            0.014,
+            0.35,
+            0.02,
+            Hemispherical,
+            [
+                lv(8, 0.4, 50.0, 137.5, 1, -10.0, 8.0, -0.3, 4, 0.6, 0.1),
+                lv(4, 0.45, 40.0, 137.5, 1, 0.0, 8.0, -0.2, 2, 0.5, 0.2),
+                NO,
+            ],
+            2,
+            0.1,
+        ),
+        leaf(
+            Ovate,
+            0.01,
+            0.6,
+            0.0,
+            [0.46, 0.54, 0.42],
+            [0.6, 0.55, 0.38],
+            0.2,
+            1.4,
+        ),
+        flower(F::Raceme, [0.85, 0.42, 0.6], [0.55, 0.55, 0.4], 0.06, 0.15),
+        bark(B::Stem, [0.5, 0.55, 0.42], [0.42, 0.38, 0.3]),
+    ));
+    // The twisted-awned speargrass that covers desert edges and road shoulders of Iraq and the
+    // Gulf in spring and stands dry after: "Tufted annual 10-30 (-55) cm high" with leaf blades
+    // "1-4 mm wide" and a contracted panicle "3-15 cm long, very untidy when mature" (World
+    // Flora Online, "Stipa capensis"); "Culms decumbent; 10-30 cm long ... Leaf-blades
+    // involute; 5-15 cm long; 1-1.5 mm wide; glaucous" (GrassBase, via Kew's Plants of the
+    // World Online). As it stands most of the year, straw to pale khaki, in clumps: the foliage
+    // to 20 cm and the awned panicles on to 45 cm.
+    v.push(sp(
+        "stipellula-capensis",
+        "Mediterranean needle grass",
+        "Stipellula capensis",
+        Grass,
+        0.45,
+        0.5,
+        true,
+        &[4, 5, 6, 7, 8, 9, 10],
+        Sun,
+        grass(60, 10, 0.0015, 0.04, 5.0, 60.0, 0.8, 0.45, 20, 0.1, 25.0),
+        blade([0.74, 0.66, 0.47], [0.74, 0.66, 0.47]),
+        flower(F::Plume, [0.8, 0.72, 0.56], [0.68, 0.58, 0.4], 0.06, 1.0),
+        bark(B::Stem, [0.72, 0.64, 0.46], [0.62, 0.54, 0.38]),
+    ));
 }

@@ -160,6 +160,8 @@ pub const GROWTH: &[(&str, Grower, f32, f32, f32, f32)] = &[
     ("fragaria-patch", GroundCover, 0.2, 0.6, 3.0, 0.5),
     ("nymphaea-patch", GroundCover, 0.12, 1.2, 3.0, 0.5),
     ("iris-pseudacorus", Perennial, 1.2, 0.8, 3.0, 0.5),
+    ("alhagi-maurorum", Shrub, 0.9, 1.3, 3.0, 2.0),
+    ("stipellula-capensis", Grass, 0.45, 0.5, 1.0, 0.5),
 ];
 
 /// The growth data of an asset (`flora:<id>`), else a guess from its size: a plant taller than
