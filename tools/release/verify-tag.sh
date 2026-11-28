@@ -63,8 +63,11 @@ case "$version" in
 esac
 
 if [ "$prerelease" = false ]; then
-  git rev-parse --verify --quiet origin/main > /dev/null || fail "origin/main not found: git fetch origin main"
-  if git merge-base --is-ancestor "$commit" origin/main; then
+  # The exact ref, and its SHA: looked up by its short name, a tag called origin/main would be
+  # found before the remote-tracking branch.
+  main="$(git show-ref --verify refs/remotes/origin/main 2>/dev/null)" \
+    || fail "origin/main not found: git fetch origin main"
+  if git merge-base --is-ancestor "$commit" "${main%% *}"; then
     :
   elif [ -n "$tag" ]; then
     fail "$tag is not on origin/main: a release tag must be reachable from it (a pre-release may be on any branch)"
