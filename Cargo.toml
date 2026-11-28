@@ -5,7 +5,7 @@ members = ["crates/*", "apps/*", "tools/*", "examples/*"]
 exclude = ["examples/models"]
 
 [workspace.package]
-version = "0.0.0"
+version = "0.1.0"
 edition = "2024"
 license = "MIT"
 publish = false
