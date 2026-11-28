@@ -41,12 +41,22 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: ${{ inputs.tag || '' }}
+          # The tag itself, else the ref of the run. Given a `ref`, checkout does not compare
+          # the tag object with the commit it points at and fetch `+<commit>:refs/tags/<tag>`,
+          # which would turn an annotated tag into a lightweight one (see the next step).
+          ref: ${{ inputs.tag || github.ref }}
           # The whole history: is the tagged commit on main, and which tag came before it.
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: stable
+      # The annotated tag object as it is on the remote: verify-tag.sh reads the release title
+      # from its message. No `^{}`, so the tag is not peeled to its commit.
+      - name: Fetch the tag itself
+        if: ${{ inputs.tag || github.ref_type == 'tag' }}
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: git fetch --force origin "+refs/tags/${TAG}:refs/tags/${TAG}"
       # The tag is annotated and named after the workspace version, and a release tag is on
       # main. Fails first, before anything is built. Prints tag, version, commit, title and
       # prerelease as outputs.
