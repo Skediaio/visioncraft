@@ -4,6 +4,13 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The release pipeline runs this same gate on the tagged commit (release.yml). `ref` is
+  # then the commit to check out; empty, it is the commit that triggered the workflow.
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        required: false
 
 # Third-party actions are pinned by commit SHA, with their version in the comment. To bump
 # one, replace the SHA and the comment together.
@@ -18,6 +25,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.ref || '' }}
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           # This pin has no default for the toolchain, so it is named.

@@ -1,0 +1,13 @@
+[package]
+name = "release-notes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Release tool: the notes of a release from its Conventional Commits and the git tags the workspace pins."
+
+[lints]
+workspace = true
+
+# No dependencies: git walks the history, and the notes are plain text.
+[dependencies]

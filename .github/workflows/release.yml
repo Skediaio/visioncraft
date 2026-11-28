@@ -1,0 +1,224 @@
+name: release
+
+# Cuts a release from a version tag (docs/releasing.md). A pushed `v*` tag runs the whole
+# pipeline and publishes. `workflow_dispatch` rehearses it: with dry_run, the default, nothing
+# is published and the artefacts stay as workflow artifacts.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The tag to release, vX.Y.Z or a pre-release such as v0.1.0-rc.1. Empty: rehearse the commit this run is started on."
+        type: string
+        required: false
+      dry_run:
+        description: Build, checksum and write the notes, but publish nothing.
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+# Two runs for one tag would race on the release.
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.ref.outputs.tag }}
+      version: ${{ steps.ref.outputs.version }}
+      commit: ${{ steps.ref.outputs.commit }}
+      title: ${{ steps.ref.outputs.title }}
+      prerelease: ${{ steps.ref.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.tag || '' }}
+          # The whole history: is the tagged commit on main, and which tag came before it.
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+      # The tag is annotated and named after the workspace version, and a release tag is on
+      # main. Fails first, before anything is built. Prints tag, version, commit, title and
+      # prerelease as outputs.
+      - name: Verify the tag
+        id: ref
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          DRY_RUN: ${{ inputs.dry_run != false }}
+        run: |
+          tag="$INPUT_TAG"
+          # Started without a tag: on a pushed tag, or dispatched from one, that is the tag.
+          if [ -z "$tag" ] && [[ "$GITHUB_REF" == refs/tags/* ]]; then tag="$GITHUB_REF_NAME"; fi
+          tools/release/verify-tag.sh "$tag" >> "$GITHUB_OUTPUT"
+
+  gate:
+    needs: verify
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ needs.verify.outputs.commit }}
+
+  build-desktop:
+    needs: [verify, gate]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.verify.outputs.commit }}
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+          targets: x86_64-unknown-linux-gnu
+      - uses: Swatinem/rust-cache@2201cc584a476d1b508be977bbe4b7d1c7a52e9c # v2.9.3
+      - name: Native system libraries (eframe, rfd, wgpu)
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev libxcb1-dev libgtk-3-dev libudev-dev
+      - name: Build
+        run: cargo build --release --locked -p visioncraft-cli -p visioncraft --target x86_64-unknown-linux-gnu
+      - name: Package
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          name="visioncraft-desktop-$VERSION-x86_64-unknown-linux-gnu"
+          mkdir -p "stage/$name" dist
+          cp target/x86_64-unknown-linux-gnu/release/visioncraft target/x86_64-unknown-linux-gnu/release/visioncraft-cli LICENSE README.md ATTRIBUTION.md "stage/$name/"
+          tar -C stage -czf "dist/$name.tar.gz" "$name"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: package-desktop
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  build-web:
+    needs: [verify, gate]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.verify.outputs.commit }}
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@2201cc584a476d1b508be977bbe4b7d1c7a52e9c # v2.9.3
+      - name: Install Trunk
+        run: cargo install trunk --locked --version 0.22.1
+      # A real build for the browser: CI only checks that the wasm target compiles.
+      - name: Build
+        working-directory: apps/visioncraft
+        run: trunk build --release --locked
+      - name: Package
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          name="visioncraft-web-$VERSION-wasm32-unknown-unknown"
+          mkdir -p "stage/$name" dist
+          cp -R apps/visioncraft/dist/. "stage/$name/"
+          tar -C stage -czf "dist/$name.tar.gz" "$name"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: package-web
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  # The source without assets/: the library is built from its sources, never shipped.
+  build-source:
+    needs: [verify, gate]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.verify.outputs.commit }}
+      - name: Package
+        env:
+          COMMIT: ${{ needs.verify.outputs.commit }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          name="visioncraft-source-$VERSION-any"
+          mkdir dist
+          mapfile -t entries < <(git ls-tree --name-only "$COMMIT" | grep -vx assets)
+          git archive --format=tar.gz --prefix="$name/" --output="dist/$name.tar.gz" "$COMMIT" -- "${entries[@]}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: package-source
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  checksums:
+    needs: [build-desktop, build-web, build-source]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: package-*
+          path: dist
+          merge-multiple: true
+      - name: SHA256SUMS
+        working-directory: dist
+        run: |
+          sha256sum *.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sha256sums
+          path: dist/SHA256SUMS
+          if-no-files-found: error
+
+  notes:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.verify.outputs.commit }}
+          # The notes are the commits since the previous tag.
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@2201cc584a476d1b508be977bbe4b7d1c7a52e9c # v2.9.3
+      - name: Notes
+        env:
+          # The tag when there is one, else the rehearsed commit.
+          REF: ${{ needs.verify.outputs.tag || needs.verify.outputs.commit }}
+        run: |
+          mkdir dist
+          cargo run --quiet --locked -p release-notes -- "$REF" > dist/RELEASE_NOTES.md
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: notes
+          path: dist/RELEASE_NOTES.md
+          if-no-files-found: error
+
+  # All or nothing: it runs only when every job before it succeeded. A rehearsal (dry_run)
+  # skips it: the artefacts stay as workflow artifacts.
+  publish:
+    needs: [verify, checksums, notes]
+    if: ${{ inputs.dry_run != true }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.verify.outputs.tag }}
+          TITLE: ${{ needs.verify.outputs.title }}
+          PRERELEASE: ${{ needs.verify.outputs.prerelease }}
+        run: |
+          flags=()
+          if [ "$PRERELEASE" = true ]; then flags+=(--prerelease); fi
+          gh release create "$TAG" --verify-tag --title="$TITLE" --notes-file dist/RELEASE_NOTES.md "${flags[@]}" dist/*.tar.gz dist/SHA256SUMS
