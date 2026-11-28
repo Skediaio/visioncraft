@@ -514,13 +514,13 @@ dependencies = [
 
 [[package]]
 name = "craft3d-brep"
-version = "0.1.3"
-source = "git+https://github.com/johancoppens/3dcraft?tag=v0.1.3#58bfc60461e56717b70a7658f7252a4409828d92"
+version = "0.3.0"
+source = "git+https://github.com/johancoppens/3dcraft?tag=v0.3.0#c6b7609dfa22c6e6caae75806efab56c6e908a37"
 
 [[package]]
 name = "craft3d-doc"
-version = "0.1.3"
-source = "git+https://github.com/johancoppens/3dcraft?tag=v0.1.3#58bfc60461e56717b70a7658f7252a4409828d92"
+version = "0.3.0"
+source = "git+https://github.com/johancoppens/3dcraft?tag=v0.3.0#c6b7609dfa22c6e6caae75806efab56c6e908a37"
 dependencies = [
  "craft3d-expr",
  "craft3d-math",
@@ -529,16 +529,16 @@ dependencies = [
 
 [[package]]
 name = "craft3d-expr"
-version = "0.1.3"
-source = "git+https://github.com/johancoppens/3dcraft?tag=v0.1.3#58bfc60461e56717b70a7658f7252a4409828d92"
+version = "0.3.0"
+source = "git+https://github.com/johancoppens/3dcraft?tag=v0.3.0#c6b7609dfa22c6e6caae75806efab56c6e908a37"
 dependencies = [
  "craft3d-math",
 ]
 
 [[package]]
 name = "craft3d-fcstdread"
-version = "0.1.3"
-source = "git+https://github.com/johancoppens/3dcraft?tag=v0.1.3#58bfc60461e56717b70a7658f7252a4409828d92"
+version = "0.3.0"
+source = "git+https://github.com/johancoppens/3dcraft?tag=v0.3.0#c6b7609dfa22c6e6caae75806efab56c6e908a37"
 dependencies = [
  "craft3d-brep",
  "craft3d-geom",
@@ -550,8 +550,8 @@ dependencies = [
 
 [[package]]
 name = "craft3d-font"
-version = "0.1.3"
-source = "git+https://github.com/johancoppens/3dcraft?tag=v0.1.3#58bfc60461e56717b70a7658f7252a4409828d92"
+version = "0.3.0"
+source = "git+https://github.com/johancoppens/3dcraft?tag=v0.3.0#c6b7609dfa22c6e6caae75806efab56c6e908a37"
 dependencies = [
  "libm",
  "ttf-parser",
@@ -559,8 +559,8 @@ dependencies = [
 
 [[package]]
 name = "craft3d-format"
-version = "0.1.3"
-source = "git+https://github.com/johancoppens/3dcraft?tag=v0.1.3#58bfc60461e56717b70a7658f7252a4409828d92"
+version = "0.3.0"
+source = "git+https://github.com/johancoppens/3dcraft?tag=v0.3.0#c6b7609dfa22c6e6caae75806efab56c6e908a37"
 dependencies = [
  "craft3d-doc",
  "craft3d-zipstore",
@@ -570,16 +570,16 @@ dependencies = [
 
 [[package]]
 name = "craft3d-geom"
-version = "0.1.3"
-source = "git+https://github.com/johancoppens/3dcraft?tag=v0.1.3#58bfc60461e56717b70a7658f7252a4409828d92"
+version = "0.3.0"
+source = "git+https://github.com/johancoppens/3dcraft?tag=v0.3.0#c6b7609dfa22c6e6caae75806efab56c6e908a37"
 dependencies = [
  "craft3d-math",
 ]
 
 [[package]]
 name = "craft3d-kernel"
-version = "0.1.3"
-source = "git+https://github.com/johancoppens/3dcraft?tag=v0.1.3#58bfc60461e56717b70a7658f7252a4409828d92"
+version = "0.3.0"
+source = "git+https://github.com/johancoppens/3dcraft?tag=v0.3.0#c6b7609dfa22c6e6caae75806efab56c6e908a37"
 dependencies = [
  "craft3d-geom",
  "craft3d-math",
@@ -588,16 +588,16 @@ dependencies = [
 
 [[package]]
 name = "craft3d-math"
-version = "0.1.3"
-source = "git+https://github.com/johancoppens/3dcraft?tag=v0.1.3#58bfc60461e56717b70a7658f7252a4409828d92"
+version = "0.3.0"
+source = "git+https://github.com/johancoppens/3dcraft?tag=v0.3.0#c6b7609dfa22c6e6caae75806efab56c6e908a37"
 dependencies = [
  "libm",
 ]
 
 [[package]]
 name = "craft3d-regen"
-version = "0.1.3"
-source = "git+https://github.com/johancoppens/3dcraft?tag=v0.1.3#58bfc60461e56717b70a7658f7252a4409828d92"
+version = "0.3.0"
+source = "git+https://github.com/johancoppens/3dcraft?tag=v0.3.0#c6b7609dfa22c6e6caae75806efab56c6e908a37"
 dependencies = [
  "craft3d-doc",
  "craft3d-expr",
@@ -614,21 +614,21 @@ dependencies = [
 
 [[package]]
 name = "craft3d-solve"
-version = "0.1.3"
-source = "git+https://github.com/johancoppens/3dcraft?tag=v0.1.3#58bfc60461e56717b70a7658f7252a4409828d92"
+version = "0.3.0"
+source = "git+https://github.com/johancoppens/3dcraft?tag=v0.3.0#c6b7609dfa22c6e6caae75806efab56c6e908a37"
 dependencies = [
  "craft3d-math",
 ]
 
 [[package]]
 name = "craft3d-step"
-version = "0.1.3"
-source = "git+https://github.com/johancoppens/3dcraft?tag=v0.1.3#58bfc60461e56717b70a7658f7252a4409828d92"
+version = "0.3.0"
+source = "git+https://github.com/johancoppens/3dcraft?tag=v0.3.0#c6b7609dfa22c6e6caae75806efab56c6e908a37"
 
 [[package]]
 name = "craft3d-stepread"
-version = "0.1.3"
-source = "git+https://github.com/johancoppens/3dcraft?tag=v0.1.3#58bfc60461e56717b70a7658f7252a4409828d92"
+version = "0.3.0"
+source = "git+https://github.com/johancoppens/3dcraft?tag=v0.3.0#c6b7609dfa22c6e6caae75806efab56c6e908a37"
 dependencies = [
  "craft3d-geom",
  "craft3d-math",
@@ -638,8 +638,8 @@ dependencies = [
 
 [[package]]
 name = "craft3d-tess"
-version = "0.1.3"
-source = "git+https://github.com/johancoppens/3dcraft?tag=v0.1.3#58bfc60461e56717b70a7658f7252a4409828d92"
+version = "0.3.0"
+source = "git+https://github.com/johancoppens/3dcraft?tag=v0.3.0#c6b7609dfa22c6e6caae75806efab56c6e908a37"
 dependencies = [
  "craft3d-geom",
  "craft3d-math",
@@ -648,8 +648,8 @@ dependencies = [
 
 [[package]]
 name = "craft3d-topo"
-version = "0.1.3"
-source = "git+https://github.com/johancoppens/3dcraft?tag=v0.1.3#58bfc60461e56717b70a7658f7252a4409828d92"
+version = "0.3.0"
+source = "git+https://github.com/johancoppens/3dcraft?tag=v0.3.0#c6b7609dfa22c6e6caae75806efab56c6e908a37"
 dependencies = [
  "craft3d-geom",
  "craft3d-math",
@@ -657,8 +657,8 @@ dependencies = [
 
 [[package]]
 name = "craft3d-zipstore"
-version = "0.1.3"
-source = "git+https://github.com/johancoppens/3dcraft?tag=v0.1.3#58bfc60461e56717b70a7658f7252a4409828d92"
+version = "0.3.0"
+source = "git+https://github.com/johancoppens/3dcraft?tag=v0.3.0#c6b7609dfa22c6e6caae75806efab56c6e908a37"
 
 [[package]]
 name = "crc32fast"

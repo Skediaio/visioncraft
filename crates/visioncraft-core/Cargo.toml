@@ -10,15 +10,15 @@ workspace = true
 
 [dependencies]
 # 3dcraft (MIT): reading .3dcraft, rebuilding its history into B-rep bodies, meshing them.
-craft3d-format = { git = "https://github.com/johancoppens/3dcraft", tag = "v0.1.3" }
-craft3d-doc = { git = "https://github.com/johancoppens/3dcraft", tag = "v0.1.3" }
-craft3d-regen = { git = "https://github.com/johancoppens/3dcraft", tag = "v0.1.3" }
-craft3d-tess = { git = "https://github.com/johancoppens/3dcraft", tag = "v0.1.3" }
-craft3d-topo = { git = "https://github.com/johancoppens/3dcraft", tag = "v0.1.3" }
+craft3d-format = { git = "https://github.com/johancoppens/3dcraft", tag = "v0.3.0" }
+craft3d-doc = { git = "https://github.com/johancoppens/3dcraft", tag = "v0.3.0" }
+craft3d-regen = { git = "https://github.com/johancoppens/3dcraft", tag = "v0.3.0" }
+craft3d-tess = { git = "https://github.com/johancoppens/3dcraft", tag = "v0.3.0" }
+craft3d-topo = { git = "https://github.com/johancoppens/3dcraft", tag = "v0.3.0" }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 # 3dcraft's ZIP reader (stored and deflated entries, pure Rust): for `.mcmat`.
-craft3d-zipstore = { git = "https://github.com/johancoppens/3dcraft", tag = "v0.1.3" }
+craft3d-zipstore = { git = "https://github.com/johancoppens/3dcraft", tag = "v0.3.0" }
 # ISC: ear clipping triangulation of the shape outlines.
 earcutr = "0.5"
 # MIT OR Zlib OR Apache-2.0, pure Rust: compresses the terrain arrays in the project JSON.
