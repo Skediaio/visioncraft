@@ -23,6 +23,7 @@ written here unless the licence column says otherwise.
 | `crates/visioncraft-render/src/coverage.rs`, `coverage_per_sample.wgsl` | The finding and the remedy of 3dcraft v0.1.2 (`crates/gpu/src/variant.rs`): naga writes a sample-mask output as a scalar, which Vulkan forbids, so stages run per sample on Vulkan; written anew for this renderer's stages | MIT |
 | `crates/visioncraft-core/src/examples/villa.3dcraft` | The showcase villa, `docs/showcase/villa.3dcraft`, Johan Coppens; the estate example's house, unchanged | MIT |
 | `crates/visioncraft-core/src/examples/beach-house.3dcraft` | Made for this project: generated with `craft3d-cli` v0.1.1 from `examples/models/beach-house/generate.py`; no 3DCraft sample is reused | MIT |
+| `crates/visioncraft-core/tests/data/plane-cut-house.3dcraft` | 3DCraft's own fixture of format version 78, `crates/format/tests/fixtures/versions/v78.3dcraft` at tag v0.3.0 (Johan Coppens; written by its `craft3d-cli`), copied unchanged | MIT |
 
 ## From other open-source code
 

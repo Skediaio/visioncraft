@@ -1,11 +1,21 @@
 //! `tests/data/plate.3dcraft`: written by hand for this crate (format version 69, modelled on
 //! 3dcraft's `crates/format/tests/fixtures/versions/v21.3dcraft`): sketch F1 on xy, a 40 x 20 mm
 //! rectangle (lines e5..e8), extruded by F2 "Plate" by the variable `height` = 10 mm.
+//!
+//! `tests/data/plane-cut-house.3dcraft`: 3dcraft's own fixture of format version 78 (what 0.3.0
+//! saves), copied unchanged from `crates/format/tests/fixtures/versions/v78.3dcraft` at tag
+//! v0.3.0 (MIT, Johan Coppens): written by its `craft3d-cli`, never by hand. A block "House"
+//! 40 x 30 x 20 mm is cut by three planes in one feature, "Roof" (`feature.planeCut`, the reason
+//! for version 78): two slopes rising 8 over 15 from eaves at z = 12 mm to a ridge at y = 15 mm,
+//! z = 20 mm, and the side x = 0 moved in by 2 mm. "Upper" is a kept copy of it, cut below
+//! z = 6 mm. In closed form: Roof 38 x (30 x 12 + 30 x 8 / 2) = 18 240 mm3, Upper
+//! 18 240 - 38 x 30 x 6 = 11 400 mm3.
 
 use std::collections::BTreeSet;
 use visioncraft_core::{ImportedModel, import_3dcraft, import_obj};
 
 const PLATE: &[u8] = include_bytes!("data/plate.3dcraft");
+const PLANE_CUT_HOUSE: &[u8] = include_bytes!("data/plane-cut-house.3dcraft");
 
 fn bbox(model: &ImportedModel) -> ([f32; 3], [f32; 3]) {
     let mut lo = [f32::MAX; 3];
@@ -74,6 +84,130 @@ fn plate_imports_with_named_faces_in_metres() {
     assert_eq!(model.bodies[0].triangles, 0..model.triangles.len() as u32);
     assert!(model.warnings.is_empty());
     assert_eq!(face_names(&model), expected_names());
+}
+
+fn bodies(model: &ImportedModel) -> Vec<(String, String)> {
+    model
+        .bodies
+        .iter()
+        .map(|b| (b.id.clone(), b.name.clone()))
+        .collect()
+}
+
+fn body_faces(model: &ImportedModel, body: u32) -> BTreeSet<String> {
+    model
+        .faces
+        .iter()
+        .filter(|f| f.body == body)
+        .map(|f| f.name.clone())
+        .collect()
+}
+
+/// The volume a body's triangles enclose, in m3, positive when they wind counter-clockwise seen
+/// from outside (the promise of `ImportedModel::triangles`; the turn to Y up is a rotation).
+fn volume(model: &ImportedModel, body: u32) -> f64 {
+    let b = &model.bodies[body as usize];
+    let p = |i: u32| model.positions[i as usize].map(f64::from);
+    let range = b.triangles.start as usize..b.triangles.end as usize;
+    model.triangles[range]
+        .iter()
+        .map(|t| {
+            let (a, b, c) = (p(t[0]), p(t[1]), p(t[2]));
+            (a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0])
+                + a[2] * (b[0] * c[1] - b[1] * c[0]))
+                / 6.0
+        })
+        .sum()
+}
+
+#[test]
+fn a_format_78_design_opens() {
+    // The 3dcraft crates at v0.1.3 refused it: "this file has format version 78, and this build
+    // of 3DCraft reads up to version 69: a newer 3DCraft is needed to open it".
+    let model = import_3dcraft(PLANE_CUT_HOUSE).unwrap();
+    assert!(model.warnings.is_empty(), "{:?}", model.warnings);
+    assert_eq!(
+        bodies(&model),
+        [("F3".into(), "Roof".into()), ("F4".into(), "Upper".into())]
+    );
+    assert_eq!(model.faces.len(), 14);
+    // The faces the cuts left are named after their plane; the ones kept keep the name they had.
+    let kept = [
+        "F1:face(2)",
+        "F1:face(3)",
+        "F1:face(5)",
+        "F3:cut(6)",
+        "F3:cut(5)",
+        "F3:cut(7)",
+    ];
+    assert_eq!(
+        body_faces(&model, 0),
+        [
+            "F3:copy(0)/F1:face(0)",
+            "F3:copy(0)/F1:face(2)",
+            "F3:copy(0)/F1:face(3)",
+            "F3:copy(0)/F1:face(5)",
+            "F3:cut(6)",
+            "F3:cut(5)",
+            "F3:cut(7)",
+        ]
+        .map(String::from)
+        .into()
+    );
+    let mut upper: BTreeSet<String> = kept.iter().map(|f| format!("F4:copy(0)/{f}")).collect();
+    upper.insert("F4:cut(1)".into());
+    assert_eq!(body_faces(&model, 1), upper);
+    // 3dcraft is Z up; (x, y, z) -> (x, z, -y), in metres: x 2..40 mm, y 0..20 mm (z 0..20).
+    assert_close(model.bodies[0].bounds[0], [0.002, 0.0, -0.03]);
+    assert_close(model.bodies[0].bounds[1], [0.04, 0.02, 0.0]);
+    assert_close(model.bodies[1].bounds[0], [0.002, 0.006, -0.03]);
+    assert_close(model.bodies[1].bounds[1], [0.04, 0.02, 0.0]);
+    // Each body: 7 faces, 10 vertices, 15 edges, so 2 x 15 - 2 x 7 = 16 triangles, and no point
+    // is added inside a face.
+    assert_eq!(model.bodies[0].triangles, 0..16);
+    assert_eq!(model.bodies[1].triangles, 16..32);
+    assert_eq!(model.triangle_faces.len(), 32);
+    assert!(
+        (volume(&model, 0) - 18.24e-6).abs() < 1e-9,
+        "{}",
+        volume(&model, 0)
+    );
+    assert!(
+        (volume(&model, 1) - 11.4e-6).abs() < 1e-9,
+        "{}",
+        volume(&model, 1)
+    );
+}
+
+#[test]
+fn a_newer_format_is_refused_by_its_number() {
+    // VisionCraft keeps no version of its own: the 3dcraft crates read up to theirs, and say so.
+    assert_eq!(craft3d_format::FORMAT_VERSION, 78);
+    let entries = craft3d_zipstore::read_stored(PLANE_CUT_HOUSE).unwrap();
+    let manifest = entries
+        .iter()
+        .find(|e| e.name == "manifest.json")
+        .unwrap()
+        .data;
+    let newer = String::from_utf8_lossy(manifest).replacen(
+        "\"format_version\": 78",
+        "\"format_version\": 79",
+        1,
+    );
+    assert!(
+        newer.contains("\"format_version\": 79"),
+        "the manifest is pretty JSON"
+    );
+    let bytes = craft3d_zipstore::write_stored(&[("manifest.json", newer.as_bytes())]).unwrap();
+    let err = import_3dcraft(&bytes).unwrap_err().to_string();
+    assert!(
+        err.contains("format version 79")
+            && err.contains(&format!(
+                "reads up to version {}",
+                craft3d_format::FORMAT_VERSION
+            )),
+        "{err}"
+    );
 }
 
 #[test]
