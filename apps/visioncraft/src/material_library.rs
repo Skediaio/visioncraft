@@ -61,7 +61,8 @@ pub struct Overlay {
     pub gloss: f32,
 }
 
-fn spec_of_entry(m: &LibMaterial) -> TexSpec {
+/// The maps of a library material as a texture spec (library paths).
+pub(crate) fn spec_of_entry(m: &LibMaterial) -> TexSpec {
     let lib = |p: &Option<String>| p.clone().map(TexSrc::Lib);
     TexSpec {
         base: lib(&m.maps.basecolor),

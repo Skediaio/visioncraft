@@ -4,7 +4,7 @@ use crate::project::Project;
 use crate::session::{CommandError, Session, bad, parse};
 use crate::shape::Shape;
 use crate::spec::{ParamType as T, param, spec};
-use crate::terrain::{BrushStroke, MAX_LAYERS, Terrain, TerrainError, apply_stroke};
+use crate::terrain::{BrushStroke, LayerDetail, MAX_LAYERS, Terrain, TerrainError, apply_stroke};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -96,6 +96,23 @@ pub(super) fn register(s: &mut Session) {
             json!({"index": 1, "material": "soil"}),
         ),
         set_layer_material,
+    );
+    s.register_with_spec(
+        spec(
+            "terrain.set_layer_detail",
+            "Set Layer Detail Texture",
+            "Gives a terrain layer a second, finer detail texture over its own maps: tiled once per `tile_m` metres, modulating the layer's colour (and its normal when the texture has a normal map) by `strength`, at full strength near the eye and faded out by `fade_m`, projected triplanar on steep ground so it does not stretch. A large field or desert then neither blurs up close nor repeats from afar. `texture` is a texture or material id the library resolves (a project material, or a library material's id: its colour and normal maps). Without `texture` the layer's detail is removed, and no other field may be given then. The detail keeps the layer's own brightness (the texture is taken relative to its mean). Costs up to two samples more per layer near the camera.",
+            vec![
+                param("layer", T::Integer, "Terrain layer index, from 0.").required(),
+                param("texture", T::String, "Texture or material id of the detail (its colour and normal maps). Left out: the detail is removed."),
+                param("tile_m", T::Number, "One repeat of the detail per this many metres, 0.01..1000.").unit("m").default(json!(1.0)),
+                param("strength", T::Number, "0..1: how strongly the detail modulates the layer.").default(json!(0.5)),
+                param("fade_m", T::Number, "Distance to the eye at which the detail has faded out (full up to 0.6 of it), 0.1..100000.").unit("m").default(json!(30.0)),
+            ],
+            "{layer, texture, tile_m, strength, fade_m} as set; null when removed",
+            json!({"layer": 1, "texture": "gravel", "tile_m": 0.5, "strength": 0.6, "fade_m": 20}),
+        ),
+        set_layer_detail,
     );
     s.register_with_spec(
         spec(
@@ -284,6 +301,56 @@ fn set_layer_material(project: &mut Project, params: &Value) -> Result<Value, Co
         .ok_or_else(|| bad("no such layer"))?;
     layer.material = p.material;
     Ok(Value::Null)
+}
+
+/// What `terrain.set_layer_detail` assumes for a field that is not given.
+const DETAIL_TILE_M: f32 = 1.0;
+const DETAIL_STRENGTH: f32 = 0.5;
+const DETAIL_FADE_M: f32 = 30.0;
+
+fn set_layer_detail(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct P {
+        layer: usize,
+        texture: Option<String>,
+        tile_m: Option<f32>,
+        strength: Option<f32>,
+        fade_m: Option<f32>,
+    }
+    let p: P = parse(params)?;
+    let t = edit(project)?;
+    let count = t.layers.len();
+    let layer = t.layers.get_mut(p.layer).ok_or_else(|| {
+        fail(format!(
+            "no terrain layer {} (the terrain has {count} layers)",
+            p.layer
+        ))
+    })?;
+    let Some(texture) = p.texture else {
+        if p.tile_m.is_some() || p.strength.is_some() || p.fade_m.is_some() {
+            return Err(bad(
+                "without `texture` the layer's detail is removed: give no tile_m, strength or fade_m then",
+            ));
+        }
+        layer.detail = None;
+        return Ok(Value::Null);
+    };
+    let detail = LayerDetail {
+        texture,
+        tile_m: p.tile_m.unwrap_or(DETAIL_TILE_M),
+        strength: p.strength.unwrap_or(DETAIL_STRENGTH),
+        fade_m: p.fade_m.unwrap_or(DETAIL_FADE_M),
+    };
+    detail.validate().map_err(terr)?;
+    layer.detail = Some(detail.clone());
+    Ok(json!({
+        "layer": p.layer,
+        "texture": detail.texture,
+        "tile_m": detail.tile_m,
+        "strength": detail.strength,
+        "fade_m": detail.fade_m,
+    }))
 }
 
 fn stroke(project: &mut Project, params: &Value) -> Result<Value, CommandError> {
@@ -488,7 +555,26 @@ fn import_heights(project: &mut Project, params: &Value) -> Result<Value, Comman
 #[cfg(test)]
 mod tests {
     use crate::Session;
-    use serde_json::json;
+    use serde_json::{Value, json};
+
+    /// JSON values alike, numbers to within an f32 (a detail's fields are f32: 0.7 round-trips as
+    /// 0.699999988).
+    fn nearly(a: &serde_json::Value, b: &serde_json::Value) -> bool {
+        use serde_json::Value;
+        match (a, b) {
+            (Value::Number(x), Value::Number(y)) => {
+                (x.as_f64().unwrap_or(0.0) - y.as_f64().unwrap_or(0.0)).abs() < 1e-5
+            }
+            (Value::Object(x), Value::Object(y)) => {
+                x.len() == y.len()
+                    && x.iter()
+                        .all(|(k, v)| y.get(k).is_some_and(|w| nearly(v, w)))
+            }
+            (Value::String(x), Value::String(y)) => x == y,
+            (Value::Null, Value::Null) => true,
+            _ => false,
+        }
+    }
 
     /// The estate's basin on its 1 m terrain: a carve alone says it holds no water; the pond
     /// command fills it level, edges it, and the lawn round it ends at the water's own edge.
@@ -556,5 +642,130 @@ mod tests {
             .is_null(),
             "water lies over it now"
         );
+    }
+
+    /// `terrain.set_layer_detail` sets a layer's detail (the defaults filled in), it reads back
+    /// from the project, without `texture` it clears the detail, every range error names its
+    /// field, and it is one undo step each way.
+    #[test]
+    fn a_layer_detail_is_set_read_back_cleared_and_undone() {
+        let mut s = Session::new(Default::default());
+        s.run(
+            "terrain.create",
+            json!({"origin": [0, 0], "width_m": 10, "depth_m": 10, "base_material": "lawn"}),
+        )
+        .unwrap();
+        s.run("terrain.add_layer", json!({"material": "gravel"}))
+            .unwrap();
+        let detail =
+            json!({"layer": 0, "texture": "sand", "tile_m": 0.5, "strength": 0.6, "fade_m": 20});
+        let read = |s: &Session| {
+            serde_json::to_value(&s.project().terrain.as_deref().unwrap().layers).unwrap()[0]["detail"].clone()
+        };
+        assert_eq!(read(&s), Value::Null, "no detail to begin with");
+        let r = s.run("terrain.set_layer_detail", detail.clone()).unwrap();
+        assert!(
+            nearly(
+                &r,
+                &json!({"layer": 0, "texture": "sand", "tile_m": 0.5, "strength": 0.6, "fade_m": 20.0})
+            ),
+            "{r}"
+        );
+        assert!(
+            nearly(
+                &read(&s),
+                &json!({"texture": "sand", "tile_m": 0.5, "strength": 0.6, "fade_m": 20.0})
+            ),
+            "{}",
+            read(&s)
+        );
+        // The defaults.
+        let r = s
+            .run(
+                "terrain.set_layer_detail",
+                json!({"layer": 0, "texture": "gravel"}),
+            )
+            .unwrap();
+        assert!(
+            nearly(
+                &r,
+                &json!({"layer": 0, "texture": "gravel", "tile_m": 1.0, "strength": 0.5, "fade_m": 30.0})
+            ),
+            "{r}"
+        );
+        // Setting the same again changes nothing: no undo step, no revision.
+        let (rev, can_undo) = (s.revision(), s.can_undo());
+        s.run(
+            "terrain.set_layer_detail",
+            json!({"layer": 0, "texture": "gravel"}),
+        )
+        .unwrap();
+        assert_eq!((s.revision(), s.can_undo()), (rev, can_undo));
+        // Clearing.
+        assert!(
+            s.run("terrain.set_layer_detail", json!({"layer": 0}))
+                .unwrap()
+                .is_null()
+        );
+        assert_eq!(read(&s), Value::Null);
+        assert!(s.undo());
+        assert_eq!(read(&s)["texture"], "gravel");
+        assert!(s.undo());
+        assert_eq!(read(&s)["texture"], "sand");
+        assert!(s.redo());
+        assert!(s.redo());
+        assert_eq!(read(&s), Value::Null);
+        // Two redos brought the cleared detail back; every range error names its field and
+        // changes nothing.
+        assert_eq!(read(&s), Value::Null);
+        for (field, value) in [
+            ("tile_m", json!(0.0)),
+            ("tile_m", json!(2000.0)),
+            ("strength", json!(1.01)),
+            ("strength", json!(-0.2)),
+            ("fade_m", json!(0.0)),
+        ] {
+            let mut p = detail.clone();
+            p[field] = value.clone();
+            let e = s
+                .run("terrain.set_layer_detail", p)
+                .unwrap_err()
+                .to_string();
+            assert!(e.contains(field), "{field}={value}: {e}");
+        }
+        // No such layer; no texture named; a clear takes no other field; no terrain.
+        let e = s
+            .run(
+                "terrain.set_layer_detail",
+                json!({"layer": 5, "texture": "sand"}),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("layer 5") && e.contains("2 layers"), "{e}");
+        let e = s
+            .run(
+                "terrain.set_layer_detail",
+                json!({"layer": 0, "texture": ""}),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("texture"), "{e}");
+        let e = s
+            .run(
+                "terrain.set_layer_detail",
+                json!({"layer": 0, "strength": 0.5}),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("texture") && e.contains("strength"), "{e}");
+        s.run("terrain.remove", json!({})).unwrap();
+        let e = s
+            .run(
+                "terrain.set_layer_detail",
+                json!({"layer": 0, "texture": "sand"}),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("no terrain"), "{e}");
     }
 }

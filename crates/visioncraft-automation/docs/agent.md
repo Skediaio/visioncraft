@@ -1578,6 +1578,7 @@ dense crown at 0.3 is dark.
   {"id": "terrain.set_auto", "params": {}},
   {"id": "terrain.set_tiling", "params": {"hex": true}},
   {"id": "terrain.set_cover", "params": {}},
+  {"id": "terrain.set_layer_detail", "params": {"layer": 0, "texture": "lawn", "tile_m": 0.5, "strength": 0.6, "fade_m": 20}},
   {"id": "rock.scatter", "params": {"outline": [[0, 0], [80, 0], [80, 60], [0, 60]], "density_per_100m2": 2.5, "seed": 4}},
   {"id": "rock.add", "params": {"position": [36, 22], "size_m": 3.2, "shape": "outcrop", "yaw_deg": 20, "seed": 2}},
   {"id": "deadwood.scatter", "params": {"planting": "g1", "density_per_100m2": 1.5, "seed": 2}},
@@ -1602,6 +1603,15 @@ layers blend by their height maps, so rock pokes up through the grass where its 
 instead of fading in. `terrain.set_tiling {"hex": true}` hex-tiles every layer's maps seen from
 above, each hexagon shifted and turned at random, so no repeat of a tile shows over a field (three
 samples per layer instead of one).
+
+`terrain.set_layer_detail` gives one layer a second, finer detail texture over its own maps (as a
+landscape's detail textures do): `texture` is a texture or material id the library resolves (a
+project material, or a library material's id: its colour and normal maps), tiled once per `tile_m`
+metres, modulating the layer by `strength` (0..1) at full strength near the eye and faded out by
+`fade_m`, projected triplanar on steep ground so it does not stretch. The recipe above gives the
+lawn its own maps half a metre apart, so the grass near the camera shows blades rather than a
+blur; the detail keeps the layer's brightness (the texture is taken relative to its mean). Without
+`texture` the detail is removed; `document.inspect` lists each layer's under `terrain.detail`.
 
 `rock.add` places one rock (`boulder`, `slab`, `outcrop` or `cobble`, `size_m` its width, a
 `seed` for its variant), generated with fracture faces and a rough surface, or a CC0 scan with

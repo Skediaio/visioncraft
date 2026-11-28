@@ -109,7 +109,7 @@ pub use sky::Sun;
 pub use stats::{RenderStats, TARGET_MS, ULTRA_HEADROOM, WaterItem, WaterSurface, suggest_quality};
 pub use still::Still;
 pub use still::{FOCUS_RANGE, Focus, Lens, Photo, lens_point, lens_view, pixel_jitter};
-pub use terrain::{TerrainChunk, TerrainLayer};
+pub use terrain::{TerrainChunk, TerrainDetail, TerrainLayer};
 pub use texture::{ColorSpace, TextureDesc, TextureId, mip_count};
 pub use tonemap::{ColorGrade, WhiteBalance};
 pub use underlay::UnderlayQuad;
