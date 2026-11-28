@@ -16,25 +16,32 @@
 // (Heitz & Neyret, "High-Performance By-Example Noise using a Histogram-Preserving Blending
 // Operator", HPG 2018; Mikkelsen, "Practical Real-Time Hex-Tiling", JCGT 11(3), 2022). The turned
 // copies' normals are turned back by the same angle.
+// Detail textures (per layer, terrain.set_layer_detail): a finer map over a layer's own near the
+// eye (`terrain_detail`), so a field or a desert neither blurs up close nor repeats from afar.
 // Module: common.wgsl + scene.wgsl + this file (group 1 is the terrain's
-// own layout, bindings 13-17, so it never collides with the material's).
+// own layout, bindings 13-19, so it never collides with the material's).
 
 struct TerrainLayer {
     color: vec4<f32>,  // rgb linear base colour factor, a added to the roughness
     params: vec4<f32>, // x roughness, y 1 / scale (m), z macro variation, w normal map strength
     extra: vec4<f32>,  // x puddles may form on this layer (0/1; 0 on lawns), y hex tiling (0/1)
+    detail: vec4<f32>, // x 1 / detail tile (m), y detail strength, z fade distance (m), w flags: 1 a detail, 2 a normal map
 }
 
 struct Terrain {
     layers: array<TerrainLayer, 8>,
     edge: vec4<f32>,   // terrain bounds in world x, z: min x, min z, max x, max z
     ground: vec4<f32>, // rgb ground albedo, w width of the blend band (0: none)
+    detail: vec4<f32>, // x any layer has a detail (0/1), y the farthest fade distance (m), zw spare
 }
 @group(1) @binding(13) var<uniform> terrain: Terrain;
 @group(1) @binding(14) var terrain_base: texture_2d_array<f32>;
 @group(1) @binding(15) var terrain_normal: texture_2d_array<f32>;
 @group(1) @binding(16) var terrain_orm: texture_2d_array<f32>;
 @group(1) @binding(17) var terrain_smp: sampler;
+// The layers' detail maps (colour, normal), one array layer per terrain layer.
+@group(1) @binding(18) var terrain_detail_base: texture_2d_array<f32>;
+@group(1) @binding(19) var terrain_detail_normal: texture_2d_array<f32>;
 
 struct TerrainIn {
     @location(0) position: vec3<f32>,
@@ -105,6 +112,104 @@ fn terrain_normal_sample(l: Lookup, n: vec3<f32>, layer: i32, relief: f32) -> ve
 }
 
 const HEIGHT_DEPTH: f32 = 0.2;
+
+// ---- detail textures ----
+
+// The whiteout blend (as terrain_normal_sample) of a tangent-space normal onto `n` in the
+// projection's frame (t image right, b image up): with a flat `tn` it gives `n` back.
+fn whiteout(tn: vec3<f32>, n: vec3<f32>, t: vec3<f32>, b: vec3<f32>) -> vec3<f32> {
+    let axis = cross(t, b);
+    let base = vec3<f32>(dot(n, t), dot(n, b), dot(n, axis));
+    let w = vec3<f32>(tn.xy + base.xy, tn.z * base.z);
+    return w.x * t + w.y * b + w.z * axis;
+}
+
+// The layers' detail textures (terrain.set_layer_detail) over what the layers drew (`s` so far):
+// `blend` is each layer's height-blend weight from the layer loop and `k` its normaliser, so a
+// layer's share is blend * k. A detail weighs strength x share x (1 - smoothstep(0.6 fade, fade,
+// distance to the eye)), as Unreal's landscape detail textures and Unity's terrain detail maps
+// fade. The map is taken relative to its own mean (the array's top mip): the layer keeps its
+// brightness whatever map is chosen, and only the map's detail modulates the colour (0..4 times).
+// Steep ground projects it triplanar like the layer's own maps, so it does not stretch, and the
+// detail normal perturbs the shaded normal by the whiteout blend, its slope scaled by the total
+// weight. Nothing runs when no layer has a detail or the eye is past the farthest fade: with
+// explicit gradients and levels the samples need no derivatives, so the branches may be as they
+// are. A project without a detail shades exactly as before.
+fn terrain_detail(
+    world: vec3<f32>,
+    dwx: vec3<f32>,
+    dwy: vec3<f32>,
+    n: vec3<f32>,
+    steep: bool,
+    blend: array<f32, 8>,
+    k: f32,
+    s: ptr<function, Surface>,
+) {
+    if terrain.detail.x < 0.5 {
+        return;
+    }
+    let dist = length(to_eye(world));
+    if dist >= terrain.detail.y {
+        return;
+    }
+    var amount: array<f32, 8>;
+    var total = 0.0;
+    for (var i = 0; i < 8; i++) {
+        let d = terrain.layers[i].detail;
+        if blend[i] > 0.0 && d.w >= 1.0 {
+            amount[i] = blend[i] * k * d.y * (1.0 - smoothstep(d.z * 0.6, d.z, dist));
+            total += amount[i];
+        }
+    }
+    if total < 1e-4 {
+        return;
+    }
+    // The projections and their frames follow the normal, so they are the same for every layer.
+    var frame = triplanar(world, dwx, dwy, n, 1.0);
+    if !steep {
+        frame.weight = vec3<f32>(0.0, 1.0, 0.0);
+    }
+    let mean_lod = f32(textureNumLevels(terrain_detail_base) - 1u);
+    var factor = vec3<f32>(0.0);
+    // The detail normals per projection, weighted, and the weights.
+    var tn: array<vec3<f32>, 3>;
+    var nw = vec3<f32>(0.0);
+    for (var i = 0; i < 8; i++) {
+        if amount[i] > 0.0 {
+            let d = terrain.layers[i].detail;
+            let l = triplanar(world, dwx, dwy, n, d.x);
+            let mean = textureSampleLevel(terrain_detail_base, terrain_smp, vec2<f32>(0.5), i, mean_lod).rgb;
+            for (var p = 0; p < 3; p++) {
+                if frame.weight[p] > 0.0 {
+                    let w = amount[i] * frame.weight[p];
+                    let c = textureSampleGrad(terrain_detail_base, terrain_smp, l.uv[p], i, l.dx[p], l.dy[p]).rgb;
+                    factor += w * clamp(c / max(mean, vec3<f32>(1e-3)), vec3<f32>(0.0), vec3<f32>(4.0));
+                    if d.w >= 2.0 {
+                        tn[p] += decode_normal(textureSampleGrad(terrain_detail_normal, terrain_smp, l.uv[p], i, l.dx[p], l.dy[p])) * w;
+                        nw[p] += w;
+                    }
+                }
+            }
+        }
+    }
+    let a = min(total, 1.0);
+    (*s).base = vec4<f32>((*s).base.rgb * mix(vec3<f32>(1.0), factor / total, a), (*s).base.a);
+    var nsum = vec3<f32>(0.0);
+    var perturbed = false;
+    for (var p = 0; p < 3; p++) {
+        if nw[p] > 0.0 {
+            // The layers' mean detail normal, its slope scaled by their total weight here.
+            let scale = min(nw[p], 1.0);
+            let xy = (tn[p] / nw[p]).xy * scale;
+            let d = vec3<f32>(xy, sqrt(max(1.0 - dot(xy, xy), 0.0)));
+            nsum += whiteout(d, (*s).n, frame.t[p], frame.b[p]) * frame.weight[p];
+            perturbed = true;
+        }
+    }
+    if perturbed {
+        (*s).n = normalize(nsum);
+    }
+}
 
 // ---- hex tiling ----
 
@@ -258,10 +363,13 @@ fn terrain_surface(in: TerrainVarying) -> Surface {
     var variation = 0.0;
     var puddles = 0.0;
     var total = 0.0;
+    // Each layer's height-blend weight, for its detail texture (terrain_detail).
+    var blend: array<f32, 8>;
     for (var i = 0; i < 8; i++) {
         if weights[i] > 0.004 {
             let b = max(orm[i].a + weights[i] - (top - HEIGHT_DEPTH), 0.0);
             if b > 0.0 {
+                blend[i] = b;
                 let layer = terrain.layers[i];
                 let l = layer_lookup(in.world, dwx, dwy, n, layer.params.y, steep);
                 if !steep && layer.extra.y > 0.5 {
@@ -289,6 +397,7 @@ fn terrain_surface(in: TerrainVarying) -> Surface {
     s.ao = mix(1.0, ao * k, 0.6);
     s.emissive = vec3<f32>(0.0);
     s.puddle = puddles * k;
+    terrain_detail(in.world, dwx, dwy, n, steep, blend, k, &s);
     s = macro_variation(s, in.world, variation * k);
     // The outer band blends into the infinite ground: no border.
     if terrain.ground.w > 0.0 {
