@@ -1035,6 +1035,11 @@
     "shape"
    ]
   },
+  "phoenix-dactylifera": {
+   "leaf": null,
+   "leaf_autumn": null,
+   "bark": null
+  },
   "forsythia": {
    "leaf": [
     "LeafSet003",
@@ -1097,6 +1102,11 @@
     "LeafSet003",
     "shape"
    ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "stipellula-capensis": {
+   "leaf": null,
    "leaf_autumn": null,
    "bark": null
   },
@@ -1295,6 +1305,11 @@
     "LeafSet025",
     "shape"
    ],
+   "leaf_autumn": null,
+   "bark": null
+  },
+  "alhagi-maurorum": {
+   "leaf": null,
    "leaf_autumn": null,
    "bark": null
   },

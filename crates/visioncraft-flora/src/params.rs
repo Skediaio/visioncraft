@@ -260,6 +260,17 @@ pub struct PalmParams {
     pub trunk_radius_m: f32,
     /// Lean of the trunk, degrees.
     pub lean_deg: f32,
+    /// Trunk radius under the crown relative to the base: 1.25 where the old leaf bases cling
+    /// (Chusan palm), 1 a date palm's even column.
+    pub trunk_top_ratio: f32,
+    /// Elevation of the youngest fronds above horizontal, degrees (positive: rising).
+    pub elev_young_deg: f32,
+    /// Elevation of the oldest fronds, degrees (negative: hanging below horizontal).
+    pub elev_old_deg: f32,
+    /// How much more the oldest frond's blade arches over than the youngest's, degrees.
+    pub arch_deg: f32,
+    /// Offshoots standing round the foot (date palm suckers).
+    pub suckers: u16,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
@@ -415,7 +426,8 @@ pub struct LeafParams {
     pub shape: LeafShape,
     /// Length of one leaf (a whole compound leaf or frond for those shapes), metres.
     pub leaf_m: f32,
-    /// Width / length of a simple leaf (or leaflet).
+    /// Width / length of a simple leaf (or leaflet). A feather frond's leaflets take it as
+    /// their spread (1: the drawing's standard).
     pub aspect: f32,
     /// Edge serration amplitude, 0..1.
     pub serration: f32,
@@ -468,6 +480,9 @@ pub enum FlowerShape {
     Raceme,
     /// Six tepals around a central trumpet (daffodil).
     Trumpet,
+    /// A bunch of oval fruits hanging on strands from one stalk (date palm), attached at the
+    /// bottom of its cell: the card hangs it downwards.
+    Bunch,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -505,6 +520,8 @@ pub enum BarkPattern {
     Stem,
     /// Scaly plates of spruce and fir.
     Scaly,
+    /// Diamond-shaped studs of persistent leaf bases in spiral rows (date palm).
+    LeafBases,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -610,6 +627,11 @@ impl Default for PalmParams {
             petiole_m: 0.5,
             trunk_radius_m: 0.15,
             lean_deg: 5.0,
+            trunk_top_ratio: 1.25,
+            elev_young_deg: 70.0,
+            elev_old_deg: -25.0,
+            arch_deg: 0.0,
+            suckers: 0,
         }
     }
 }
@@ -864,6 +886,11 @@ impl PlantParams {
                 c.range("palm.petiole_m", p.petiole_m, 0.0, 5.0);
                 c.range("palm.trunk_radius_m", p.trunk_radius_m, 0.02, 1.0);
                 c.range("palm.lean_deg", p.lean_deg, 0.0, 45.0);
+                c.range("palm.trunk_top_ratio", p.trunk_top_ratio, 0.5, 2.0);
+                c.range("palm.elev_young_deg", p.elev_young_deg, 0.0, 89.0);
+                c.range("palm.elev_old_deg", p.elev_old_deg, -89.0, 0.0);
+                c.range("palm.arch_deg", p.arch_deg, 0.0, 120.0);
+                c.count("palm.suckers", p.suckers as u32, 0, 12);
             }
             Form::Clipped(k) => {
                 if let ClipShape::HedgeSegment { length_m } = k.shape {

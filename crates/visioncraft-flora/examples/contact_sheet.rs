@@ -3,8 +3,14 @@
 //! tiled into contact sheets. Also dumps each leaf atlas and bark texture and prints triangle
 //! counts and generation times.
 //!
-//! `cargo run --release -p visioncraft-flora --example contact_sheet -- [out_dir]`
+//! `cargo run --release -p visioncraft-flora --example contact_sheet -- [out_dir] [species id ...]`
+//!
+//! With species ids only those are drawn, and a `stages` sheet shows each of them at four ages
+//! (mature, a half, a quarter and a tenth) in one frame shared by the tall ones (3 m and more)
+//! and another by the small ones, so their trunks and crowns can be compared at one scale.
+//! `CONTACT_PANEL` sets a panel's side in pixels (256).
 
+use std::sync::OnceLock;
 use std::time::Instant;
 
 use visioncraft_flora::{
@@ -12,7 +18,17 @@ use visioncraft_flora::{
     species, textures,
 };
 
-const PANEL: usize = 256;
+static PANEL: OnceLock<usize> = OnceLock::new();
+
+/// A panel's side in pixels.
+fn panel() -> usize {
+    *PANEL.get_or_init(|| {
+        std::env::var("CONTACT_PANEL")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(256)
+    })
+}
 const SS: usize = 2;
 const ROWS_PER_SHEET: usize = 4;
 const LABEL_H: usize = 14;
@@ -128,7 +144,7 @@ fn render(
     frame: Frame,
     label_lod: usize,
 ) -> Canvas {
-    let n = PANEL * SS;
+    let n = panel() * SS;
     let sky = match view {
         View::Side => [0.86, 0.89, 0.92],
         View::Top => [0.78, 0.8, 0.74],
@@ -250,9 +266,9 @@ fn render(
         }
     }
     // Downsample.
-    let mut out = Canvas::new(PANEL, PANEL, sky);
-    for y in 0..PANEL {
-        for x in 0..PANEL {
+    let mut out = Canvas::new(panel(), panel(), sky);
+    for y in 0..panel() {
+        for x in 0..panel() {
             let mut acc = [0.0; 3];
             for sy in 0..SS {
                 for sx in 0..SS {
@@ -262,18 +278,18 @@ fn render(
                     }
                 }
             }
-            out.rgb[y * PANEL + x] = acc.map(|a| a / (SS * SS) as f32);
+            out.rgb[y * panel() + x] = acc.map(|a| a / (SS * SS) as f32);
         }
     }
     // Panel border and LOD digit.
-    for i in 0..PANEL {
+    for i in 0..panel() {
         out.set(i as i64, 0, [0.5; 3]);
         out.set(0, i as i64, [0.5; 3]);
     }
     draw_text(
         &mut out,
         &format!("{label_lod}"),
-        PANEL - 12,
+        panel() - 12,
         4,
         2,
         [0.1, 0.1, 0.1],
@@ -333,11 +349,25 @@ fn draw_text(c: &mut Canvas, s: &str, x: usize, y: usize, scale: usize, col: [f3
 }
 
 fn main() {
-    let out = std::env::args()
-        .nth(1)
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let out = args
+        .first()
+        .cloned()
         .unwrap_or_else(|| "target/flora-preview".to_string());
+    let only: Vec<&str> = args.iter().skip(1).map(String::as_str).collect();
     std::fs::create_dir_all(&out).expect("output dir");
-    let lib = species();
+    let all = species();
+    for id in &only {
+        assert!(
+            all.iter().any(|s| s.id == *id),
+            "no species `{id}`: {}",
+            all.iter().map(|s| s.id).collect::<Vec<_>>().join(", ")
+        );
+    }
+    let lib: Vec<_> = all
+        .iter()
+        .filter(|s| only.is_empty() || only.contains(&s.id))
+        .collect();
     let mut rows: Vec<Canvas> = Vec::new();
     let mut winter_rows: Vec<Canvas> = Vec::new();
     println!(
@@ -395,19 +425,19 @@ fn main() {
             ms[2],
             tex_ms
         );
-        let mut row = Canvas::new(PANEL * 6, PANEL + LABEL_H, [1.0; 3]);
+        let mut row = Canvas::new(panel() * 6, panel() + LABEL_H, [1.0; 3]);
         draw_text(&mut row, &format!("{i}"), 4, 2, 2, [0.0; 3]);
         for (vi, view) in [View::Side, View::Top].into_iter().enumerate() {
             let frame = frame_for(&meshes[0], view);
             for (li, m) in meshes.iter().enumerate() {
                 let p = render(m, &tex, view, frame, li);
-                row.blit(&p, (vi * 3 + li) * PANEL, LABEL_H);
+                row.blit(&p, (vi * 3 + li) * panel(), LABEL_H);
             }
         }
         rows.push(row);
         // Seasons for deciduous plants: January, April, July, October (LOD0 and LOD2 side).
         if s.params.deciduous {
-            let mut wrow = Canvas::new(PANEL * 6, PANEL + LABEL_H, [1.0; 3]);
+            let mut wrow = Canvas::new(panel() * 6, panel() + LABEL_H, [1.0; 3]);
             draw_text(&mut wrow, &format!("{i}"), 4, 2, 2, [0.0; 3]);
             let frame = frame_for(&meshes[0], View::Side);
             for (k, (month, lod)) in [
@@ -423,22 +453,66 @@ fn main() {
             {
                 let m = generate_in_season(&s.params, 7, lod, Season { month });
                 let p = render(&m, &tex, View::Side, frame, month as usize);
-                wrow.blit(&p, k * PANEL, LABEL_H);
+                wrow.blit(&p, k * panel(), LABEL_H);
             }
             winter_rows.push(wrow);
         }
     }
     let save_sheets = |rows: &[Canvas], name: &str| {
         for (k, chunk) in rows.chunks(ROWS_PER_SHEET).enumerate() {
-            let mut sheet = Canvas::new(PANEL * 6, chunk.len() * (PANEL + LABEL_H), [1.0; 3]);
+            let mut sheet = Canvas::new(panel() * 6, chunk.len() * (panel() + LABEL_H), [1.0; 3]);
             for (r, row) in chunk.iter().enumerate() {
-                sheet.blit(row, 0, r * (PANEL + LABEL_H));
+                sheet.blit(row, 0, r * (panel() + LABEL_H));
             }
             sheet.save(&format!("{out}/{name}_{k:02}.png"));
         }
     };
     save_sheets(&rows, "sheet");
     save_sheets(&winter_rows, "seasons");
+
+    // The asked-for species at four ages, the tall ones in one frame and the small ones in
+    // another: every panel of a frame at the same scale.
+    if !only.is_empty() {
+        for (name, tall) in [("stages", true), ("stages_small", false)] {
+            let group: Vec<&visioncraft_flora::Species> = lib
+                .iter()
+                .copied()
+                .filter(|s| (s.mature_height_m >= 3.0) == tall)
+                .collect();
+            if group.is_empty() {
+                continue;
+            }
+            let (mut x0, mut y1) = (f32::MAX, 1.9f32);
+            for s in &group {
+                let (lo, hi) = generate(&s.params, 7, Lod::Lod0).bounds();
+                x0 = x0.min(lo[0] - HUMAN_X_GAP - 0.55);
+                y1 = y1.max(hi[1]);
+            }
+            let frame = square((x0, -x0 - 2.0 * HUMAN_X_GAP, -0.05, y1));
+            let mut sheet = Canvas::new(4 * panel(), group.len() * (panel() + LABEL_H), [1.0; 3]);
+            for (r, s) in group.iter().enumerate() {
+                let tex = textures(&s.params);
+                let n = all.iter().position(|a| a.id == s.id).unwrap();
+                draw_text(
+                    &mut sheet,
+                    &format!("{n}"),
+                    4,
+                    r * (panel() + LABEL_H) + 2,
+                    2,
+                    [0.0; 3],
+                );
+                for (k, age) in [1.0, 0.5, 0.25, 0.1].into_iter().enumerate() {
+                    let mut p = s.params.clone();
+                    p.age = age;
+                    // The panel's digit is the age in percent.
+                    let m = generate(&p, 7, Lod::Lod0);
+                    let q = render(&m, &tex, View::Side, frame, (age * 100.0) as usize);
+                    sheet.blit(&q, k * panel(), r * (panel() + LABEL_H));
+                }
+            }
+            sheet.save(&format!("{out}/{name}.png"));
+        }
+    }
 
     // Hedge segments tiled three in a row, side and top.
     let mut hedge_rows = Vec::new();
@@ -448,7 +522,7 @@ fn main() {
         .filter(|(_, s)| s.category == Category::Hedge)
     {
         let tex = textures(&s.params);
-        let mut row = Canvas::new(PANEL * 6, PANEL + LABEL_H, [1.0; 3]);
+        let mut row = Canvas::new(panel() * 6, panel() + LABEL_H, [1.0; 3]);
         draw_text(&mut row, &format!("{i}"), 4, 2, 2, [0.0; 3]);
         for (li, lod) in Lod::ALL.into_iter().enumerate() {
             let mut joined = PlantMesh::default();
@@ -476,7 +550,7 @@ fn main() {
             for (vi, view) in [View::Side, View::Top].into_iter().enumerate() {
                 let frame = frame_for(&joined, view);
                 let p = render(&joined, &tex, view, frame, li);
-                row.blit(&p, (vi * 3 + li) * PANEL, LABEL_H);
+                row.blit(&p, (vi * 3 + li) * panel(), LABEL_H);
             }
         }
         hedge_rows.push(row);

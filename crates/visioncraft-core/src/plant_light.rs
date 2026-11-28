@@ -74,7 +74,7 @@ pub const LIGHT: &[(&str, Light)] = &[
     ("robinia-pseudoacacia", SUN), ("pyrus-communis", SUN), ("prunus-domestica", SUN),
     ("ficus-carica", SUN), ("ginkgo-biloba", SUN_PART), ("liquidambar-styraciflua", SUN),
     ("larix-decidua", SUN), ("cupressocyparis-hedge", SUN_PART), ("pinus-mugo", SUN),
-    ("phoenix-canariensis", SUN),
+    ("phoenix-canariensis", SUN), ("phoenix-dactylifera", SUN),
     ("forsythia", SUN_PART), ("syringa-vulgaris", SUN), ("sambucus-nigra", SUN_PART),
     ("ilex-aquifolium", ANY), ("viburnum-opulus", SUN_PART), ("photinia-red-robin", SUN_PART),
     ("spiraea-vanhouttei", SUN), ("weigela-florida", SUN), ("mahonia-aquifolium", PART_SHADE),
@@ -94,6 +94,7 @@ pub const LIGHT: &[(&str, Light)] = &[
     ("clematis-wall", SUN_PART), ("parthenocissus-wall", ANY),
     ("solanum-lycopersicum", SUN), ("lactuca-sativa", SUN_PART), ("rheum-rhabarbarum", SUN_PART),
     ("fragaria-patch", SUN_PART), ("nymphaea-patch", SUN), ("iris-pseudacorus", SUN_PART),
+    ("alhagi-maurorum", SUN), ("stipellula-capensis", SUN),
 ];
 
 /// The light a species wants, with where it comes from.
