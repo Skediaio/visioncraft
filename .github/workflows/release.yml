@@ -3,6 +3,8 @@ name: release
 # Cuts a release from a version tag (docs/releasing.md). A pushed `v*` tag runs the whole
 # pipeline and publishes. `workflow_dispatch` rehearses it: with dry_run, the default, nothing
 # is published and the artefacts stay as workflow artifacts.
+#
+# No checkout keeps the token: it is used by the `publish` job alone, through `gh`.
 
 on:
   push:
@@ -47,11 +49,13 @@ jobs:
           ref: ${{ inputs.tag || github.ref }}
           # The whole history: is the tagged commit on main, and which tag came before it.
           fetch-depth: 0
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: stable
       # The annotated tag object as it is on the remote: verify-tag.sh reads the release title
-      # from its message. No `^{}`, so the tag is not peeled to its commit.
+      # from its message. No `^{}`, so the tag is not peeled to its commit. Anonymous: the
+      # checkout keeps no credentials, and the repository is public.
       - name: Fetch the tag itself
         if: ${{ inputs.tag || github.ref_type == 'tag' }}
         env:
@@ -84,6 +88,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ needs.verify.outputs.commit }}
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: stable
@@ -114,6 +119,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ needs.verify.outputs.commit }}
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: stable
@@ -147,6 +153,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ needs.verify.outputs.commit }}
+          persist-credentials: false
       - name: Package
         env:
           COMMIT: ${{ needs.verify.outputs.commit }}
@@ -191,6 +198,7 @@ jobs:
           ref: ${{ needs.verify.outputs.commit }}
           # The notes are the commits since the previous tag.
           fetch-depth: 0
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: stable
