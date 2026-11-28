@@ -198,8 +198,9 @@ fn terrain_detail(
     var perturbed = false;
     for (var p = 0; p < 3; p++) {
         if nw[p] > 0.0 {
-            // The layers' mean detail normal, its slope scaled by their total weight here.
-            let scale = min(nw[p], 1.0);
+            // The layers' mean detail normal, its slope scaled by their total weight here. `nw`
+            // holds that weight times the projection's; the projection's is applied below.
+            let scale = min(nw[p] / frame.weight[p], 1.0);
             let xy = (tn[p] / nw[p]).xy * scale;
             let d = vec3<f32>(xy, sqrt(max(1.0 - dot(xy, xy), 0.0)));
             nsum += whiteout(d, (*s).n, frame.t[p], frame.b[p]) * frame.weight[p];
