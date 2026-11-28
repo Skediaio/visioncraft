@@ -51,6 +51,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.ref || '' }}
       - uses: EmbarkStudios/cargo-deny-action@bf6969bd3a28ab1842040f7b8c52369e73543eba # v2.1.5
         with:
           command: check
