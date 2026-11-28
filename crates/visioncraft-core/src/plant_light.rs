@@ -74,7 +74,7 @@ pub const LIGHT: &[(&str, Light)] = &[
     ("robinia-pseudoacacia", SUN), ("pyrus-communis", SUN), ("prunus-domestica", SUN),
     ("ficus-carica", SUN), ("ginkgo-biloba", SUN_PART), ("liquidambar-styraciflua", SUN),
     ("larix-decidua", SUN), ("cupressocyparis-hedge", SUN_PART), ("pinus-mugo", SUN),
-    ("phoenix-canariensis", SUN),
+    ("phoenix-canariensis", SUN), ("phoenix-dactylifera", SUN),
     ("forsythia", SUN_PART), ("syringa-vulgaris", SUN), ("sambucus-nigra", SUN_PART),
     ("ilex-aquifolium", ANY), ("viburnum-opulus", SUN_PART), ("photinia-red-robin", SUN_PART),
     ("spiraea-vanhouttei", SUN), ("weigela-florida", SUN), ("mahonia-aquifolium", PART_SHADE),

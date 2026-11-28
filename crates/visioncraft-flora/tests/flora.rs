@@ -229,10 +229,23 @@ fn golden_hashes() {
         ("hosta", Lod::Lod1, 0x3575_a1dc_73c0_cd88),
         ("carpinus-hedge", Lod::Lod2, 0xc567_f698_a41b_6c32),
         ("picea-abies", Lod::Lod1, 0x9762_4c2a_a435_0689),
+        // The palms, pinned before the date palm's parameters were added: they must not move.
+        (
+            "trachycarpus-fortunei",
+            Lod::Lod0,
+            0xca1c_b203_48d9_5e7c_u64,
+        ),
+        ("phoenix-canariensis", Lod::Lod0, 0xe43e_f2e1_4243_5672),
+        ("phoenix-canariensis", Lod::Lod2, 0x804a_2b12_fae0_8a90),
     ] {
         let s = lib.iter().find(|s| s.id == id).unwrap();
-        let h = fnv(&generate(&s.params, 1234, lod));
-        println!("golden {id} {lod:?} = {h:#018x}");
+        let m = generate(&s.params, 1234, lod);
+        let h = fnv(&m);
+        println!(
+            "golden {id} {lod:?} = {h:#018x} ({} vertices, {} triangles)",
+            m.positions.len(),
+            m.triangle_count()
+        );
         got.push((id, h, want));
     }
     for (id, h, want) in got {
@@ -904,4 +917,222 @@ fn grown(s: &visioncraft_flora::Species) -> bool {
         s.params.budget,
         BudgetClass::LargeTree | BudgetClass::SmallTree
     ) && matches!(&s.params.form, Form::Branching(b) if b.levels[2].count > 0)
+}
+/// Positions of a material's vertices.
+fn of_material<'a>(m: &'a PlantMesh, material: Material) -> impl Iterator<Item = [f32; 3]> + 'a {
+    m.parts
+        .iter()
+        .filter(move |p| p.material == material)
+        .flat_map(move |p| &m.indices[p.index_range.start as usize..p.index_range.end as usize])
+        .map(move |&i| m.positions[i as usize])
+}
+
+/// A ring of a trunk.
+struct Ring {
+    radius: f32,
+    x: f32,
+    z: f32,
+}
+
+/// The trunk's rings up to three quarters of the plant's height, lowest first: its bark
+/// vertices near the plant's axis (so not its offshoots, below 0.5 m), each ring by its
+/// middle and radius. Every corner counts once.
+fn trunk_rings(m: &PlantMesh) -> Vec<Ring> {
+    let top = m.bounds().1[1];
+    let mut pts: Vec<[f32; 3]> = of_material(m, Material::Bark)
+        .filter(|p| p[1] >= 0.5 && p[1] <= 0.75 * top)
+        .filter(|p| (p[0] * p[0] + p[2] * p[2]).sqrt() < 0.8)
+        .collect();
+    pts.sort_by(|a, b| a[1].total_cmp(&b[1]));
+    let mut rings: Vec<Vec<[f32; 3]>> = Vec::new();
+    for q in pts {
+        let same = |r: &[f32; 3]| {
+            (r[0] - q[0]).abs() < 1e-4 && (r[1] - q[1]).abs() < 1e-4 && (r[2] - q[2]).abs() < 1e-4
+        };
+        match rings.last_mut() {
+            // A ring's corner is indexed by several triangles, and the ring's closing corner
+            // lands a hair off its first one: one point per corner.
+            Some(r) if q[1] - r[0][1] < 0.05 => {
+                if !r.iter().any(same) {
+                    r.push(q);
+                }
+            }
+            _ => rings.push(vec![q]),
+        }
+    }
+    rings
+        .iter()
+        // A ring has its sides' corners; stray points near the axis are the fronds' petioles.
+        .filter(|r| r.len() >= 5)
+        .map(|r| {
+            let n = r.len() as f32;
+            let c = r
+                .iter()
+                .fold([0.0; 3], |a, q| [a[0] + q[0], a[1] + q[1], a[2] + q[2]]);
+            let c = c.map(|v| v / n);
+            let radius = r
+                .iter()
+                .map(|q| ((q[0] - c[0]).powi(2) + (q[2] - c[2]).powi(2)).sqrt())
+                .fold(0.0, f32::max);
+            Ring {
+                radius,
+                x: c[0],
+                z: c[2],
+            }
+        })
+        .collect()
+}
+
+/// Where a palm's fronds attach: the top of its trunk (the apex over its highest ring).
+fn trunk_top(m: &PlantMesh) -> f32 {
+    let rings = trunk_rings(m);
+    let top = rings.last().expect("trunk rings");
+    of_material(m, Material::Bark)
+        .filter(|p| ((p[0] - top.x).powi(2) + (p[2] - top.z).powi(2)).sqrt() < 0.06)
+        .map(|p| p[1])
+        .fold(0.0, f32::max)
+}
+
+/// How far a palm's lowest frond hangs below where the fronds attach (foliage above `from`
+/// m, so not its offshoots).
+fn hang(m: &PlantMesh, from: f32) -> f32 {
+    let lowest = of_material(m, Material::Foliage)
+        .map(|p| p[1])
+        .filter(|y| *y > from)
+        .fold(f32::MAX, f32::min);
+    trunk_top(m) - lowest
+}
+
+/// The date palm: 15-25 m on a column 30-40 cm across that is as wide under the crown as at
+/// the foot, under a crown more open than the Canary Island palm's (fewer, slimmer fronds on a
+/// taller trunk) whose oldest fronds hang further; offshoots at the foot of a palm old enough
+/// for them, and bunches of dates hanging under the crown in the months they ripen only.
+#[test]
+fn the_date_palm_is_a_tall_column_under_an_open_crown() {
+    let date = Species::by_id("phoenix-dactylifera").expect("date palm");
+    let canary = Species::by_id("phoenix-canariensis").unwrap();
+    let Form::Palm(dp) = &date.params.form else {
+        panic!("not a palm")
+    };
+    let Form::Palm(cp) = &canary.params.form else {
+        panic!("not a palm")
+    };
+    assert!(dp.fronds < cp.fronds && dp.arch_deg > 0.0 && dp.suckers > 0);
+    assert!(
+        dp.trunk_radius_m / date.params.height_m < 0.4 * cp.trunk_radius_m / canary.params.height_m
+    );
+    for lod in Lod::ALL {
+        let d = generate(&date.params, 7, lod);
+        check_mesh(&d, date.params.budget.triangles(lod), "date palm").unwrap();
+        let (lo, hi) = d.bounds();
+        assert!(
+            (15.0..=25.0).contains(&hi[1]),
+            "date palm {lod:?}: {} m tall",
+            hi[1]
+        );
+        assert!(lo[1] >= -0.05, "date palm {lod:?}: below ground {}", lo[1]);
+        // 30-40 cm across at the foot and well under the crown: the trunk's even column.
+        let rings = trunk_rings(&d);
+        // (The far level's trunk has two rings above its foot.)
+        assert!(rings.len() >= 2, "{lod:?}: {} trunk rings", rings.len());
+        let (foot, under) = (rings[0].radius, rings[rings.len() / 2].radius);
+        assert!(
+            (0.15..=0.2).contains(&foot),
+            "{lod:?}: trunk {foot} m in radius at the foot"
+        );
+        assert!(
+            (0.15..=0.2).contains(&under),
+            "{lod:?}: trunk {under} m in radius under the crown"
+        );
+    }
+    let m = generate(&date.params, 7, Lod::Lod0);
+    let c = generate(&canary.params, 7, Lod::Lod0);
+    // Its oldest fronds hang most of a frond's length below where they attach, more than
+    // twice as far as the Canary palm's for their length.
+    let (hang_date, hang_canary) = (hang(&m, 2.0), hang(&c, 2.0));
+    let frond = |s: &Species| {
+        let Form::Palm(p) = &s.params.form else {
+            panic!()
+        };
+        p.petiole_m + p.blade_m
+    };
+    assert!(
+        hang_date > 0.75 * frond(date),
+        "{hang_date} m below where the fronds attach"
+    );
+    assert!(
+        hang_date / frond(date) > 1.7 * hang_canary / frond(canary),
+        "{hang_date} vs {hang_canary}"
+    );
+    // Its fronds are drawn slimmer than the Canary palm's.
+    assert!(date.params.leaves.aspect < canary.params.leaves.aspect - 0.05);
+    // Offshoots: wood at the foot beyond the trunk (a stub is under 0.36 of the palm's age in
+    // metres: the lowest petioles of a young palm are higher), of a palm old enough for them,
+    // on the near levels only.
+    let stubs = |m: &PlantMesh, age: f32| {
+        let trunk_r = 1.2 * dp.trunk_radius_m * age + 0.03;
+        of_material(m, Material::Bark)
+            .filter(|p| p[1] < 0.36 * age && (p[0] * p[0] + p[2] * p[2]).sqrt() > trunk_r)
+            .count()
+    };
+    assert!(stubs(&m, 1.0) > 20, "offshoots at the foot");
+    assert_eq!(
+        stubs(&generate(&date.params, 7, Lod::Lod2), 1.0),
+        0,
+        "offshoots on the far level"
+    );
+    for age in [0.1, 0.2] {
+        let mut young = date.params.clone();
+        young.age = age;
+        assert_eq!(young.validate(), Ok(()));
+        assert_eq!(
+            stubs(&generate(&young, 7, Lod::Lod0), age),
+            0,
+            "offshoots at age {age}"
+        );
+    }
+    // A young palm is a tuft on a short trunk: well under half the mature height.
+    let mut young = date.params.clone();
+    young.age = 0.2;
+    let y = generate(&young, 7, Lod::Lod0);
+    assert!(
+        height(&y) < 0.4 * height(&m),
+        "{} vs {}",
+        height(&y),
+        height(&m)
+    );
+    // The dates hang well under the crown. They show from August to October, and so in the
+    // summer picture (June stands for its season) and the autumn one; not in spring or winter.
+    let bunches = |month: u8| generate_in_season(&date.params, 7, Lod::Lod0, Season { month });
+    for month in [6u8, 8, 9, 10, 11] {
+        let b = bunches(month);
+        assert!(
+            b.triangles_of(Material::Flower) > 0,
+            "no dates in month {month}"
+        );
+        let top = b.bounds().1[1];
+        let highest = of_material(&b, Material::Flower)
+            .map(|p| p[1])
+            .fold(0.0, f32::max);
+        assert!(highest < top - 3.0, "dates up to {highest} of {top}");
+        assert_eq!(
+            check_mesh(&b, date.params.budget.triangles(Lod::Lod0), "dates"),
+            Ok(())
+        );
+    }
+    for month in [12u8, 1, 2, 3, 4, 5] {
+        assert_eq!(
+            bunches(month).triangles_of(Material::Flower),
+            0,
+            "dates in month {month}"
+        );
+    }
+    // And the schema reaches the new parameters.
+    let mut p = date.params.clone();
+    assert!(set_param(&mut p, "palm.suckers", 0.0) && set_param(&mut p, "palm.arch_deg", 50.0));
+    assert_eq!(get_param(&p, "palm.suckers"), Some(0.0));
+    assert_eq!(get_param(&p, "palm.arch_deg"), Some(50.0));
+    assert_eq!(get_param(&p, "bark.pattern"), Some(8.0));
+    assert_eq!(get_param(&p, "flowers.shape"), Some(15.0));
+    assert_eq!(stubs(&generate(&p, 7, Lod::Lod0), 1.0), 0);
 }

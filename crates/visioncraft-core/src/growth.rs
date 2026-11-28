@@ -106,6 +106,8 @@ pub const GROWTH: &[(&str, Grower, f32, f32, f32, f32)] = &[
     ("cupressocyparis-hedge", Clipped, 2.5, 0.9, 6.0, 2.0),
     ("pinus-mugo", Conifer, 1.5, 2.5, 25.0, 6.0),
     ("phoenix-canariensis", Palm, 10.0, 8.0, 40.0, 6.0),
+    // Slow-growing: a palm planted as an offshoot at six years is still a tuft on a short trunk.
+    ("phoenix-dactylifera", Palm, 20.0, 10.0, 60.0, 6.0),
     ("forsythia", Shrub, 2.5, 2.5, 5.0, 3.0),
     ("syringa-vulgaris", Shrub, 4.0, 3.0, 10.0, 3.0),
     ("sambucus-nigra", Shrub, 5.0, 4.0, 6.0, 3.0),

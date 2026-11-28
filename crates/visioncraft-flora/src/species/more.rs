@@ -665,6 +665,7 @@ pub(super) fn build(v: &mut Vec<Species>) {
             petiole_m: 0.6,
             trunk_radius_m: 0.4,
             lean_deg: 2.0,
+            ..PalmParams::default()
         }),
         leaf(
             FeatherFrond,
@@ -678,6 +679,53 @@ pub(super) fn build(v: &mut Vec<Species>) {
         ),
         None,
         bark(B::Scaly, [0.5, 0.42, 0.33], [0.3, 0.25, 0.2]),
+    ));
+    // The date palm of the oases and roadsides of Iraq: a columnar trunk "of a diameter of
+    // 30-40 cm, tall even more than 30 m, on which remain, for long time, the bases of the
+    // dried up leaves", with "pinnate [leaves], about 4-5 m long, with rigid leaflets, of a
+    // greyish-green colour" (Monaco Nature Encyclopedia, "Phoenix dactylifera"); 15-40 m tall
+    // and single or clustered (Wikipedia, "Phoenix dactylifera", "Date palm"). Its trunk is
+    // one width all the way up and it differs from the Canary Island palm by its offshoots and
+    // its taller trunk (FAO, "Date Palm Cultivation", ch. 3). A cultivated palm holds 100-125
+    // green leaves (ibid.); one grown dry by a road holds far fewer, and the picture wants the
+    // open crown: 30 fronds of 4.2 m, the oldest hanging below the horizontal, a short skirt of
+    // dead fronds (old leaves "are not shed"), three offshoots at the foot, and orange dates
+    // hanging under the crown from August (they ripen "from bright red to bright yellow").
+    v.push(sp(
+        "phoenix-dactylifera",
+        "Date palm",
+        "Phoenix dactylifera",
+        Palm,
+        20.0,
+        10.0,
+        true,
+        &[8, 9, 10],
+        Sun,
+        Form::Palm(PalmParams {
+            fronds: 30,
+            dead_fronds: 4,
+            blade_m: 4.2,
+            petiole_m: 1.0,
+            trunk_radius_m: 0.18,
+            lean_deg: 2.0,
+            trunk_top_ratio: 1.0,
+            elev_young_deg: 75.0,
+            elev_old_deg: -60.0,
+            arch_deg: 35.0,
+            suckers: 3,
+        }),
+        leaf(
+            FeatherFrond,
+            4.2,
+            0.9,
+            0.0,
+            [0.44, 0.54, 0.4],
+            [0.44, 0.54, 0.4],
+            4.2,
+            1.0,
+        ),
+        flower(F::Bunch, [0.88, 0.5, 0.12], [0.5, 0.32, 0.14], 0.8, 8.0),
+        bark(B::LeafBases, [0.52, 0.45, 0.35], [0.31, 0.26, 0.2]),
     ));
 
     // ---- shrubs ----
