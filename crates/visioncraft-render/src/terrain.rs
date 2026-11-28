@@ -279,10 +279,16 @@ impl TerrainGpu {
         let textures: [wgpu::Texture; 3] =
             std::array::from_fn(|i| array_texture(device, LAYER_SIZE, count, ARRAY_FORMATS[i]));
         // The layers' detail maps: white and flat for a layer without a detail, so a lookup
-        // there would change nothing (the shader skips it anyway).
+        // there would change nothing (the shader skips it anyway). With no detail on any
+        // layer they are 1x1, so a terrain without detail costs no extra memory.
+        let detail_size = if layers.iter().any(|l| l.detail.is_some()) {
+            LAYER_SIZE
+        } else {
+            1
+        };
         let detail: [wgpu::Texture; 2] = [
-            array_texture(device, LAYER_SIZE, count, ARRAY_FORMATS[0]),
-            array_texture(device, LAYER_SIZE, count, ARRAY_FORMATS[1]),
+            array_texture(device, detail_size, count, ARRAY_FORMATS[0]),
+            array_texture(device, detail_size, count, ARRAY_FORMATS[1]),
         ];
         let mut encoder = device.create_command_encoder(&Default::default());
         for (k, layer) in layers.iter().enumerate() {
@@ -334,7 +340,9 @@ impl TerrainGpu {
             &self.sampler,
         );
         self.layers = layers.to_vec();
-        self.bytes = 5 * crate::texture::mip_bytes(LAYER_SIZE, LAYER_SIZE, 4) * count as u64;
+        self.bytes = (3 * crate::texture::mip_bytes(LAYER_SIZE, LAYER_SIZE, 4)
+            + 2 * crate::texture::mip_bytes(detail_size, detail_size, 4))
+            * count as u64;
         Ok(())
     }
 
