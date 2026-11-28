@@ -614,14 +614,24 @@ fn every_recipe_of_the_guide_runs() {
                 assert!(wall > 0.2 && wall < 0.5, "{report}");
             }
             44 => {
-                // The hillside gets its four automatic layers; rocks and deadwood are placed.
+                // The hillside gets its four automatic layers, the lawn a detail texture
+                // (tile 0.5 m, faded out by 20 m); rocks and deadwood are placed.
                 assert_eq!(results[5]["result"]["added_layers"], 4, "{report}");
+                let detail = &results[8]["result"];
+                assert_eq!(
+                    (detail["layer"].as_u64(), detail["texture"].as_str()),
+                    (Some(0), Some("lawn")),
+                    "{report}"
+                );
+                for (k, v) in [("tile_m", 0.5), ("strength", 0.6), ("fade_m", 20.0)] {
+                    assert!((detail[k].as_f64().unwrap() - v).abs() < 1e-5, "{report}");
+                }
                 assert!(
-                    results[8]["result"]["count"].as_u64().unwrap() > 10,
+                    results[9]["result"]["count"].as_u64().unwrap() > 10,
                     "{report}"
                 );
                 assert!(
-                    results[10]["result"]["count"].as_u64().unwrap() > 3,
+                    results[11]["result"]["count"].as_u64().unwrap() > 3,
                     "{report}"
                 );
             }
