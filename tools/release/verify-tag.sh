@@ -47,7 +47,7 @@ else
 fi
 
 versions="$(
-  cd "$checkout"
+  cd "$checkout" || { echo "cannot enter $checkout to read the manifests" >&2; exit 1; }
   cargo metadata --no-deps --format-version 1 | jq -r '.packages[].version' | sort -u
 )"
 [ "$(echo "$versions" | wc -l)" = 1 ] \
