@@ -9,7 +9,7 @@ written here unless the licence column says otherwise.
 
 | Where | Origin | Licence |
 |---|---|---|
-| `crates/visioncraft-core/Cargo.toml` | `craft3d-format`, `-doc`, `-regen`, `-tess`, `-topo`, `-zipstore` as git dependencies, tag `v0.1.3` | MIT |
+| `crates/visioncraft-core/Cargo.toml` | `craft3d-format`, `-doc`, `-regen`, `-tess`, `-topo`, `-zipstore` as git dependencies, tag `v0.3.0` | MIT |
 | `crates/visioncraft-automation/Cargo.toml` | `craft3d-doc` (SHA-256) as git dependency | MIT |
 | `crates/visioncraft-core/src/import.rs` | Ported in outline from `crates/engine/src/scene.rs` | MIT |
 | `crates/visioncraft-automation/src/fields.rs` | Ported from `crates/automation/src/fields.rs` | MIT |
